@@ -436,21 +436,20 @@ def sync_all(
     # Scan project folders on disk
     disk_project_ids = scan_projects()
 
-    # Get existing projects from database
-    db_project_ids = set(Project.objects.values_list("id", flat=True))
+    # Update stale flag for all projects: stale = working directory no longer exists on disk.
+    # (directory=None means not yet resolved from session data → not stale)
+    for project in Project.objects.only("id", "directory", "stale"):
+        should_be_stale = project.directory is not None and not os.path.isdir(project.directory)
+        if project.stale != should_be_stale:
+            project.stale = should_be_stale
+            project.save(update_fields=["stale"])
+        if should_be_stale:
+            stats["projects_stale"] += 1
 
     # Note: projects are NOT created eagerly here. They are created lazily
     # inside sync_project() only when they contain at least one session with content.
     # This avoids polluting the project list with empty project folders
     # (e.g. folders left behind after Claude sublimates old sessions).
-
-    # Mark stale projects (exist in DB but not on disk)
-    stale_project_ids = db_project_ids - disk_project_ids
-    if stale_project_ids:
-        Project.objects.filter(id__in=stale_project_ids, stale=False).update(
-            stale=True
-        )
-        stats["projects_stale"] += len(stale_project_ids)
 
     # Sync each project on disk
     projects_to_sync = sorted(disk_project_ids)

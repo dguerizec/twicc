@@ -15,6 +15,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Hide sessions without any user message from session listings and project session counts (sessions created by launching Claude Code but never sending a message)
 - Refactor Session database indexes: replace two separate indexes with a combined `(project, type, -mtime)` index and a conditional index for visible sessions
 
+### Fixed
+
+- Fix stale detection for projects whose Claude folder (`~/.claude/projects/`) was removed but working directory still exists (e.g. after session sublimation)
+
 ## [1.0.2] - 2026-02-28
 
 ### Added

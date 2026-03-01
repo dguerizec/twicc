@@ -258,15 +258,14 @@ async def sync_project_and_broadcast(
     polluting the project list with empty folders (e.g. folders left behind
     after Claude sublimates old sessions).
 
-    This handler only updates the stale flag on existing projects:
-    - Folder deleted → mark as stale
-    - Folder (re)appeared → mark as not stale
+    This handler only updates the stale flag on existing projects.
+    Stale is based on working directory existence, not Claude folder.
     """
     project = await get_project_by_id(path.name)
     if project is None:
         return
 
-    should_be_stale = change_type == Change.deleted
+    should_be_stale = project.directory is not None and not os.path.isdir(project.directory)
     if project.stale != should_be_stale:
         project.stale = should_be_stale
         await sync_to_async(project.save)(update_fields=["stale"])
