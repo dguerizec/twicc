@@ -243,14 +243,30 @@ function switchToTabAndCollapse(panel) {
 function onTabShow(event) {
     const panel = event.detail?.name
     if (!panel) return
-
-    // Toggle navigator when re-clicking the terminal tab
-    if (panel === 'terminal' && activeTabId.value === 'terminal') {
-        terminalPanelRef.value?.toggleNavigator()
-        return
-    }
-
     switchToTab(panel)
+}
+
+/**
+ * Handle click on the terminal tab button.
+ * wa-tab-show doesn't fire when re-clicking an already-active tab,
+ * so we intercept the click to toggle the shell navigator.
+ */
+function onTerminalTabClick() {
+    if (activeTabId.value === 'terminal') {
+        terminalPanelRef.value?.toggleNavigator()
+    }
+}
+
+/**
+ * Handle click on the terminal tab button in compact mode.
+ * Same toggle behavior, but also collapses the compact header.
+ */
+function onCompactTerminalTabClick() {
+    if (activeTabId.value === 'terminal') {
+        terminalPanelRef.value?.toggleNavigator()
+    } else {
+        switchToTabAndCollapse('terminal')
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -492,7 +508,7 @@ function handleNeedsTitle() {
                             :appearance="activeTabId === 'terminal' ? 'outlined' : 'plain'"
                             :variant="activeTabId === 'terminal' ? 'brand' : 'neutral'"
                             size="small"
-                            @click="switchToTabAndCollapse('terminal')"
+                            @click="onCompactTerminalTabClick"
                         >Terminal</wa-button>
                     </div>
 
@@ -579,6 +595,7 @@ function handleNeedsTitle() {
                     :appearance="activeTabId === 'terminal' ? 'outlined' : 'plain'"
                     :variant="activeTabId === 'terminal' ? 'brand' : 'neutral'"
                     size="small"
+                    @click="onTerminalTabClick"
                 >
                     Terminal
                 </wa-button>
