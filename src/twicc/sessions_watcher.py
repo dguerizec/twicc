@@ -18,7 +18,7 @@ from watchfiles import Change, awatch
 from twicc.compute import cache_agent_prompt, compute_item_cost_and_usage, compute_item_metadata, \
     compute_item_metadata_live, create_agent_link_from_subagent, create_agent_link_from_tool_result, \
     create_agent_link_from_tool_use, create_tool_result_link_live, ensure_project_directory, ensure_project_git_root, \
-    extract_item_timestamp, \
+    extract_item_timestamp, resolve_git_from_cwd, \
     extract_text_from_content, extract_title_from_user_message, get_cached_agent_prompt, get_message_content, \
     get_project_git_root, is_agent_link_done, \
     is_tool_result_item, load_project_directories, \
@@ -776,6 +776,14 @@ def sync_session_items(session: Session, file_path: Path) -> tuple[list[int], li
                         session.git_directory = item.git_directory
                         session.git_branch = item.git_branch
                     break
+
+            # Fallback: if no item provided git info, try resolving from the session's cwd.
+            # This handles sessions where the agent only uses Bash (no Read/Edit/Write/Grep/Glob),
+            # so resolve_git_for_item has no file paths to work with.
+            if not session.git_directory and session.cwd:
+                cwd_git = resolve_git_from_cwd(session.cwd)
+                if cwd_git:
+                    session.git_directory, session.git_branch = cwd_git
 
             is_new_session = session.created_at is None and first_timestamp is not None
             if is_new_session:

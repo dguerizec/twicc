@@ -161,6 +161,22 @@ def ensure_project_git_root(project_id: str, directory: str | None = None) -> No
     _project_git_roots[project_id] = git_root
 
 
+def resolve_git_from_cwd(cwd: str) -> tuple[str, str] | None:
+    """
+    Resolve git directory and branch from a working directory path.
+
+    Public wrapper around _resolve_git_from_path for use by the watcher
+    as a fallback when no tool_use paths provide git resolution.
+
+    Args:
+        cwd: An absolute directory path (session's current working directory)
+
+    Returns:
+        (git_directory, git_branch) tuple, or None if no .git found
+    """
+    return _resolve_git_from_path(cwd)
+
+
 def update_project_total_cost(project_id: str) -> None:
     """
     Recalculate and save a project's total_cost.
@@ -1459,6 +1475,14 @@ def compute_session_metadata(session_id: str, result_queue) -> None:
     # Note: costs (self_cost, subagents_cost, total_cost) are NOT included here.
     # They are recalculated from SessionItem data in the main process after items are written,
     # using Session.recalculate_costs(). This avoids order-of-processing issues with subagents.
+    # Fallback: if no item provided git info, try resolving from the session's cwd.
+    # This handles sessions where the agent only uses Bash (no Read/Edit/Write/Grep/Glob),
+    # so resolve_git_for_item has no file paths to work with.
+    if not last_resolved_git_directory and last_cwd:
+        cwd_git = _resolve_git_from_path(last_cwd)
+        if cwd_git:
+            last_resolved_git_directory, last_resolved_git_branch = cwd_git
+
     result_queue.put(orjson.dumps({
         'type': 'session_complete',
         'session_id': session_id,
