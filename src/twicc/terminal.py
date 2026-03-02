@@ -453,6 +453,37 @@ def load_tmux_presets(project_dir: str) -> list[dict]:
     return presets
 
 
+# ── tmux window monitor ──────────────────────────────────────────────────
+
+# Polling interval for detecting external window changes (close, rename, etc.)
+_WINDOW_POLL_INTERVAL = 2  # seconds
+
+
+async def _tmux_window_monitor(session_id: str, send, cwd: str) -> None:
+    """Periodically check for tmux window changes and push updates.
+
+    Detects when windows are created or destroyed externally (e.g., shell
+    exits, user closes a pane) and sends an updated window list to the
+    frontend so the tab bar / dropdown stays in sync.
+    """
+    # Initialize with current state to avoid a duplicate update on first poll
+    prev_windows = await asyncio.to_thread(tmux_list_windows, session_id)
+    try:
+        while True:
+            await asyncio.sleep(_WINDOW_POLL_INTERVAL)
+            win_list = await asyncio.to_thread(tmux_list_windows, session_id)
+            if win_list != prev_windows:
+                prev_windows = win_list
+                presets = await asyncio.to_thread(load_tmux_presets, cwd)
+                await send({"type": "websocket.send",
+                            "text": json.dumps({"type": "windows", "windows": win_list,
+                                                "presets": presets})})
+    except asyncio.CancelledError:
+        return
+    except Exception:
+        return
+
+
 # ── Raw ASGI WebSocket application ────────────────────────────────────────
 
 async def terminal_application(scope, receive, send):
@@ -638,10 +669,19 @@ async def terminal_application(scope, receive, send):
 
     recv_task = asyncio.create_task(receive_loop())
 
+    # ── tmux window monitor (detects external changes like shell exit) ──
+    monitor_task = None
+    if use_tmux:
+        monitor_task = asyncio.create_task(_tmux_window_monitor(session_id, send, cwd))
+
     try:
         # Wait for either the PTY to die or the client to disconnect
+        tasks = [sender_task, recv_task]
+        if monitor_task:
+            tasks.append(monitor_task)
+
         done, pending = await asyncio.wait(
-            [sender_task, recv_task],
+            tasks,
             return_when=asyncio.FIRST_COMPLETED,
         )
 
@@ -664,4 +704,10 @@ async def terminal_application(scope, receive, send):
         logger.exception("Error in terminal WebSocket for session %s", session_id)
     finally:
         # ── Cleanup ───────────────────────────────────────────────────
+        if monitor_task and not monitor_task.done():
+            monitor_task.cancel()
+            try:
+                await monitor_task
+            except asyncio.CancelledError:
+                pass
         cleanup_pty(master_fd, child_pid)
