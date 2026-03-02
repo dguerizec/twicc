@@ -249,7 +249,7 @@ def get_process_config(backend_port: int, frontend_port: int) -> dict:
     return {
         "front": {
             "name": "Frontend (Vite)",
-            "cmd": ["npm", "run", "dev", "--", "--port", str(frontend_port)],
+            "cmd": ["npm", "run", "dev", "--", "--host", "--port", str(frontend_port)],
             "cwd": PROJECT_ROOT / "frontend",
             "log": LOGS_DIR / "frontend.log",
             "pid": PIDS_DIR / "frontend.pid",
