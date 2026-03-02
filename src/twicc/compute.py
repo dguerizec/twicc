@@ -126,6 +126,10 @@ def ensure_project_git_root(project_id: str, directory: str | None = None) -> No
     - When project.directory changes (from ensure_project_directory)
     - When a session gets git info but project.git_root is still None
 
+    Always resolves from the filesystem (bypasses the path cache) to detect
+    newly initialized git repos. For example, a project directory may not
+    have had a .git when first synced, but one could be created later.
+
     Args:
         project_id: The project ID
         directory: The project directory to resolve from. If None, uses cached/DB value.
@@ -139,6 +143,11 @@ def ensure_project_git_root(project_id: str, directory: str | None = None) -> No
                 return
         if not directory:
             return
+
+    # Invalidate the path resolution cache for this directory so we get a
+    # fresh result from the filesystem. A .git may have been created (or
+    # removed) since the last resolution.
+    _git_resolution_cache.pop(directory, None)
 
     result = _resolve_git_from_path(directory)
     git_root = result[0] if result else None
