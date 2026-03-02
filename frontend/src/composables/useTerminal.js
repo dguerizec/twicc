@@ -161,6 +161,10 @@ export function useTerminal(sessionId) {
             if (terminal) {
                 wsSend({ type: 'resize', cols: terminal.cols, rows: terminal.rows })
             }
+            // Fetch the window list so the tab bar / dropdown appears immediately
+            if (shouldUseTmux()) {
+                wsSend({ type: 'list_windows' })
+            }
         }
 
         ws.onmessage = (event) => {
@@ -490,6 +494,13 @@ export function useTerminal(sessionId) {
     }
 
     /**
+     * Focus the xterm.js terminal (e.g. after selecting a window from a dropdown).
+     */
+    function focusTerminal() {
+        terminal?.focus()
+    }
+
+    /**
      * Toggle the shell navigator visibility.
      */
     function toggleNavigator() {
@@ -565,7 +576,7 @@ export function useTerminal(sessionId) {
     })
 
     return {
-        containerRef, isConnected, started, start, reconnect, sendInput,
+        containerRef, isConnected, started, start, reconnect, sendInput, focusTerminal,
         windows, presets, showNavigator, listWindows, createWindow, selectWindow, toggleNavigator,
     }
 }
