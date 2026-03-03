@@ -1,13 +1,17 @@
-"""Authentication middleware.
+"""Authentication and CSRF middleware.
 
 When TWICC_PASSWORD_HASH is set, all requests (except login, static files)
 require either an authenticated session or a valid API token. Unauthenticated
 requests get a 401 response.
 
 When TWICC_PASSWORD_HASH is empty/unset, all requests pass through (no protection).
+
+OriginCheckMiddleware provides CSRF protection by verifying the Origin header
+on mutation requests (POST, PUT, PATCH, DELETE).
 """
 
 import logging
+from urllib.parse import urlparse
 
 from django.conf import settings
 from django.http import JsonResponse
@@ -15,6 +19,9 @@ from django.http import JsonResponse
 from twicc.auth.token import extract_bearer_token, verify_api_token
 
 logger = logging.getLogger(__name__)
+
+# HTTP methods that mutate state and need CSRF protection
+UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
 # Paths that are always accessible (no auth required)
 PUBLIC_PATHS = (
@@ -63,6 +70,54 @@ class PasswordAuthMiddleware:
             return JsonResponse(
                 {"error": "Authentication required"},
                 status=401,
+            )
+
+        return self.get_response(request)
+
+
+class OriginCheckMiddleware:
+    """CSRF protection via Origin header validation.
+
+    For unsafe HTTP methods (POST, PUT, PATCH, DELETE), rejects requests
+    whose Origin header doesn't match the request's Host. This prevents
+    cross-site form submissions and cross-origin fetch from other tabs.
+
+    Requests authenticated via Bearer token bypass this check — they are
+    programmatic API clients, not browser sessions vulnerable to CSRF.
+    """
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        if request.method not in UNSAFE_METHODS:
+            return self.get_response(request)
+
+        # Bearer-authenticated requests are not CSRF-vulnerable
+        bearer_token = extract_bearer_token(request)
+        if bearer_token and verify_api_token(bearer_token):
+            return self.get_response(request)
+
+        origin = request.META.get("HTTP_ORIGIN")
+        if not origin:
+            # No Origin header — same-origin form posts and older browsers
+            # may omit it.  Allow, since SameSite=Lax cookies already block
+            # the main cross-site vector.
+            return self.get_response(request)
+
+        # Compare origin's host:port to the request's Host header
+        parsed = urlparse(origin)
+        origin_netloc = parsed.netloc  # e.g. "localhost:3500"
+        request_host = request.get_host()  # e.g. "localhost:3500"
+
+        if origin_netloc != request_host:
+            logger.warning(
+                "CSRF rejected: Origin %s does not match Host %s for %s %s",
+                origin, request_host, request.method, request.path,
+            )
+            return JsonResponse(
+                {"error": "Cross-origin request rejected"},
+                status=403,
             )
 
         return self.get_response(request)
