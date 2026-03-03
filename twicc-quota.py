@@ -293,11 +293,19 @@ async def run(args: argparse.Namespace) -> None:
         print("or set TWICC_API_TOKEN in your .env file.", file=sys.stderr)
         sys.exit(1)
 
-    # Build WebSocket URL with subscribe filter for efficiency
-    ws_url = f"ws://{host}:{port}/ws/?token={token}&subscribe=usage_updated"
+    # Build WebSocket URL with subscribe filter (token is sent as first message,
+    # not in the URL, to avoid leaking it in server access logs).
+    ws_url = f"ws://{host}:{port}/ws/?subscribe=usage_updated"
 
     try:
         async with websockets.connect(ws_url) as ws:
+            # First-message token authentication
+            await ws.send(json.dumps({"type": "authenticate", "token": token}))
+            auth_response = json.loads(await ws.recv())
+            if auth_response.get("type") == "auth_failure":
+                print("Error: Authentication failed. Check your API token.", file=sys.stderr)
+                sys.exit(1)
+
             while True:
                 raw = await ws.recv()
                 msg = json.loads(raw)
@@ -323,11 +331,11 @@ async def run(args: argparse.Namespace) -> None:
                 if not args.watch:
                     return
 
-    except websockets.exceptions.InvalidStatusCode as e:
-        if e.status_code == 403:
+    except websockets.exceptions.ConnectionClosedError as e:
+        if e.code == 4001:
             print("Error: Authentication failed. Check your API token.", file=sys.stderr)
         else:
-            print(f"Error: WebSocket connection failed (HTTP {e.status_code})", file=sys.stderr)
+            print(f"Error: WebSocket connection closed (code {e.code})", file=sys.stderr)
         sys.exit(1)
     except ConnectionRefusedError:
         print(f"Error: Cannot connect to TwiCC at {host}:{port}. Is it running?", file=sys.stderr)

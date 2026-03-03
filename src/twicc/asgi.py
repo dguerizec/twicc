@@ -396,33 +396,18 @@ class UpdatesConsumer(AsyncJsonWebsocketConsumer):
         When set, only messages whose ``type`` matches the list are sent.
         When absent, all messages are sent (backward compatible).
         """
-        # Check authentication if password protection is enabled
+        # Check authentication if password protection is enabled.
+        # Session (cookie) auth is checked here. Token auth is deferred to the
+        # first message to avoid leaking the token in access logs / URLs.
+        self._authenticated = False
         if settings.TWICC_PASSWORD_HASH:
-            # Check API token from query parameter first
-            token_authenticated = False
-            token_value = params.get("token")
-            if token_value:
-                from twicc.auth.token import verify_api_token
-                token_authenticated = verify_api_token(token_value)
-
-            if not token_authenticated:
-                session = self.scope.get("session", {})
-                # Session.get() triggers a synchronous DB load, so we must
-                # wrap it with sync_to_async in this async consumer.
-                is_authenticated = await sync_to_async(session.get)("authenticated")
-                if not is_authenticated:
-                    logger.warning("WebSocket connection rejected: not authenticated")
-                    # Accept first so we can send a message and a close code.
-                    # Closing before accept causes the close code to be lost
-                    # (the WebSocket handshake is never completed).
-                    await self.accept()
-                    # Send an auth_failure message as a fallback: some proxies
-                    # (notably Vite's dev proxy via node-http-proxy) may strip
-                    # the WebSocket close code, delivering 1006 instead of 4001.
-                    # The client handles both the message and the close code.
-                    await self.send_json({"type": "auth_failure"})
-                    await self.close(code=WS_CLOSE_AUTH_FAILURE)
-                    return
+            session = self.scope.get("session", {})
+            is_authenticated = await sync_to_async(session.get)("authenticated")
+            if is_authenticated:
+                self._authenticated = True
+        else:
+            # No password configured — always authenticated
+            self._authenticated = True
 
         # Parse optional subscribe filter from query string
         query_string = self.scope.get("query_string", b"").decode()
@@ -439,6 +424,26 @@ class UpdatesConsumer(AsyncJsonWebsocketConsumer):
         await self.channel_layer.group_add("updates", self.channel_name)
         await self.accept()
 
+        if not self._authenticated:
+            # Not authenticated via session cookie — wait for a first-message
+            # token auth.  Start an auth timeout: if no valid authenticate
+            # message arrives within 10 seconds, close the connection.
+            self._auth_timeout_task = asyncio.get_event_loop().call_later(
+                10, lambda: asyncio.ensure_future(self._auth_timeout())
+            )
+            return
+
+        # Authenticated — send initial data immediately
+        await self._send_initial_data()
+
+    async def _auth_timeout(self):
+        """Close the connection if token auth didn't arrive in time."""
+        if not self._authenticated:
+            await self.send_json({"type": "auth_failure"})
+            await self.close(code=WS_CLOSE_AUTH_FAILURE)
+
+    async def _send_initial_data(self):
+        """Send initial data to an authenticated client."""
         # Send server version to the client (used for auto-reload on version change)
         if self._should_send("server_version"):
             await self.send_json({"type": "server_version", "version": settings.APP_VERSION})
@@ -505,6 +510,7 @@ class UpdatesConsumer(AsyncJsonWebsocketConsumer):
         """Handle incoming messages from clients.
 
         Supported message types:
+        - authenticate: first-message token auth for programmatic clients
         - ping: heartbeat, responds with pong
         - send_message: send a message to a Claude session (creates new or resumes existing)
         - kill_process: kill a running Claude process
@@ -513,6 +519,28 @@ class UpdatesConsumer(AsyncJsonWebsocketConsumer):
         - update_synced_settings: update synced settings and broadcast to all clients
         """
         msg_type = content.get("type")
+
+        # Handle first-message token authentication
+        if msg_type == "authenticate":
+            from twicc.auth.token import verify_api_token
+            token = content.get("token", "")
+            if verify_api_token(token):
+                self._authenticated = True
+                # Cancel the auth timeout
+                if hasattr(self, "_auth_timeout_task"):
+                    self._auth_timeout_task.cancel()
+                await self.send_json({"type": "authenticated"})
+                await self._send_initial_data()
+            else:
+                await self.send_json({"type": "auth_failure"})
+                await self.close(code=WS_CLOSE_AUTH_FAILURE)
+            return
+
+        # Reject all other messages if not authenticated
+        if not self._authenticated:
+            await self.send_json({"type": "auth_failure"})
+            await self.close(code=WS_CLOSE_AUTH_FAILURE)
+            return
 
         if msg_type == "ping":
             await self.send_json({"type": "pong"})
@@ -968,6 +996,8 @@ class UpdatesConsumer(AsyncJsonWebsocketConsumer):
         whose type is in the filter are forwarded. Otherwise all messages
         are sent (default behavior for the TwiCC web UI).
         """
+        if not self._authenticated:
+            return
         data = event["data"]
         if not self._should_send(data.get("type", "")):
             return

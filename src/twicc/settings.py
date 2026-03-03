@@ -43,6 +43,7 @@ if DEBUG:
 
 MIDDLEWARE = [
     "django.contrib.sessions.middleware.SessionMiddleware",
+    "twicc.auth.middleware.OriginCheckMiddleware",
     "twicc.auth.middleware.PasswordAuthMiddleware",
 ]
 
