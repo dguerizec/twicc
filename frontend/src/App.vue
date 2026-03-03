@@ -193,6 +193,7 @@ body {
     color: var(--nv-fg, var(--nv-global-fg));
     -webkit-tap-highlight-color: transparent;
     position: relative;
+    align-self: flex-start;
 }
 
 /* Add separator line below title in notifications */
