@@ -572,6 +572,12 @@ async def _tmux_window_monitor(session_id: str, send, cwd: str) -> None:
 
 # ── Raw ASGI WebSocket application ────────────────────────────────────────
 
+
+async def _receive_one(receive):
+    """Await a single ASGI receive message (wrapper for wait_for)."""
+    return await receive()
+
+
 async def terminal_application(scope, receive, send):
     """Raw ASGI WebSocket handler for terminal sessions.
 
@@ -589,24 +595,43 @@ async def terminal_application(scope, receive, send):
         return
 
     # ── Authentication ────────────────────────────────────────────────
+    # Session (cookie) auth is checked here. Token auth is deferred to a
+    # first-message handshake to avoid leaking the token in access logs.
+    authenticated = False
     if settings.TWICC_PASSWORD_HASH:
-        # Check API token from query parameter first
-        qs_auth = parse_qs(scope.get("query_string", b"").decode("utf-8", errors="replace"))
-        token_value = qs_auth.get("token", [None])[0]
-        token_authenticated = False
-        if token_value:
-            from twicc.auth.token import verify_api_token
-            token_authenticated = verify_api_token(token_value)
+        session = scope.get("session", {})
+        is_authenticated = await sync_to_async(session.get)("authenticated")
+        if is_authenticated:
+            authenticated = True
+    else:
+        authenticated = True
 
-        if not token_authenticated:
-            session = scope.get("session", {})
-            is_authenticated = await sync_to_async(session.get)("authenticated")
-            if not is_authenticated:
-                logger.warning("Terminal WebSocket rejected: not authenticated")
-                await send({"type": "websocket.accept"})
-                await send({"type": "websocket.send", "text": json.dumps({"type": "auth_failure"})})
-                await send({"type": "websocket.close", "code": WS_CLOSE_AUTH_FAILURE})
-                return
+    if not authenticated:
+        # Accept and wait for a first-message token auth
+        await send({"type": "websocket.accept"})
+        try:
+            auth_msg = await asyncio.wait_for(
+                _receive_one(receive), timeout=10,
+            )
+        except asyncio.TimeoutError:
+            auth_msg = None
+
+        if auth_msg and auth_msg["type"] == "websocket.receive":
+            try:
+                data = json.loads(auth_msg.get("text", "{}"))
+                if data.get("type") == "authenticate":
+                    from twicc.auth.token import verify_api_token
+                    if verify_api_token(data.get("token", "")):
+                        authenticated = True
+                        await send({"type": "websocket.send", "text": json.dumps({"type": "authenticated"})})
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        if not authenticated:
+            logger.warning("Terminal WebSocket rejected: not authenticated")
+            await send({"type": "websocket.send", "text": json.dumps({"type": "auth_failure"})})
+            await send({"type": "websocket.close", "code": WS_CLOSE_AUTH_FAILURE})
+            return
 
     # ── Resolve working directory and session state ──────────────────
     session_id = scope["url_route"]["kwargs"]["session_id"]

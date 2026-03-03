@@ -87,6 +87,7 @@ async function toggleTokenVisibility() {
         tokenVisible.value = true
     } else {
         tokenVisible.value = false
+        authStore.apiToken = null
     }
 }
 
@@ -386,6 +387,7 @@ function resetTitleSystemPrompt() {
 function onPopoverShow() {
     tokenVisible.value = false
     regenerateConfirm.value = false
+    authStore.apiToken = null
     syncSwitchState()
     notificationSettingsRef.value?.sync()
 }
@@ -726,7 +728,7 @@ function onPopoverShow() {
                                 {{ regenerateConfirm ? 'Confirm?' : 'Regenerate' }}
                             </wa-button>
                         </div>
-                        <span class="setting-group-hint">Use as <code>Authorization: Bearer &lt;token&gt;</code> for HTTP or <code>?token=&lt;token&gt;</code> for WebSocket.</span>
+                        <span class="setting-group-hint">Use as <code>Authorization: Bearer &lt;token&gt;</code> for HTTP. WebSocket: send <code>{"type":"authenticate","token":"…"}</code> as first message.</span>
                     </div>
                 </section>
             </div>
