@@ -105,23 +105,35 @@ class OriginCheckMiddleware:
             # the main cross-site vector.
             return self.get_response(request)
 
-        # Build the set of acceptable hosts from the request.
-        # Behind a reverse proxy, Host may be the internal address while
-        # X-Forwarded-Host carries the external domain.
+        # Build the set of acceptable hostnames from the request.
+        # Behind a tunnel/proxy (e.g. Cloudflare), the Host header may be
+        # the internal address (localhost:3500) while Origin has the external
+        # domain. We collect all known hostnames to compare against.
         parsed = urlparse(origin)
-        origin_netloc = parsed.netloc  # e.g. "twicc.guerizec.net"
+        origin_host = parsed.hostname  # e.g. "twicc.guerizec.net" (no port)
 
-        allowed_hosts = {request.get_host()}
+        # Start with the request's Host (strip port for comparison)
+        request_host = request.get_host().rsplit(":", 1)[0]
+        allowed_hosts = {request_host}
+
+        # Add X-Forwarded-Host if present (reverse proxy)
         forwarded_host = request.META.get("HTTP_X_FORWARDED_HOST")
         if forwarded_host:
-            # X-Forwarded-Host may contain multiple hosts (comma-separated)
             for host in forwarded_host.split(","):
-                allowed_hosts.add(host.strip())
+                allowed_hosts.add(host.strip().rsplit(":", 1)[0])
 
-        if origin_netloc not in allowed_hosts:
+        # Add Referer hostname as fallback (tunnels like Cloudflare may not
+        # set X-Forwarded-Host but always pass the Referer)
+        referer = request.META.get("HTTP_REFERER")
+        if referer:
+            referer_parsed = urlparse(referer)
+            if referer_parsed.hostname:
+                allowed_hosts.add(referer_parsed.hostname)
+
+        if origin_host not in allowed_hosts:
             logger.warning(
-                "CSRF rejected: Origin %s does not match hosts %s for %s %s",
-                origin, allowed_hosts, request.method, request.path,
+                "CSRF rejected: Origin host %s does not match allowed hosts %s for %s %s",
+                origin_host, allowed_hosts, request.method, request.path,
             )
             return JsonResponse(
                 {"error": "Cross-origin request rejected"},
