@@ -1012,7 +1012,6 @@ defineExpose({
     align-items: center;
     justify-content: center;
     gap: var(--wa-space-s);
-    min-height: 200px;
     color: var(--wa-color-text-quiet);
     font-size: var(--wa-font-size-l);
 }
@@ -1037,7 +1036,6 @@ defineExpose({
     }
 }
 .session-footer:has(.pending-request-form.expanded) {
-    background: red;
     position: static;
 }
 

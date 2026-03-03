@@ -26,6 +26,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Limit project selector and new-session dropdown heights to 50vh with scrolling when too many projects exist
 - Disable diff editor compact mode so hidden unchanged regions can always be expanded (the compact widget had no interactivity)
 - Add `domReadOnly` to Monaco editors when read-only, preventing the mobile keyboard from appearing on tap
+- Ensure enough space for the virtual keyboard on draft session screens on mobile
 
 ## [1.0.2] - 2026-02-28
 
