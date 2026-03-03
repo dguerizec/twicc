@@ -105,15 +105,35 @@ class OriginCheckMiddleware:
             # the main cross-site vector.
             return self.get_response(request)
 
-        # Compare origin's host:port to the request's Host header
+        # Build the set of acceptable hostnames from the request.
+        # Behind a tunnel/proxy (e.g. Cloudflare), the Host header may be
+        # the internal address (localhost:3500) while Origin has the external
+        # domain. We collect all known hostnames to compare against.
         parsed = urlparse(origin)
-        origin_netloc = parsed.netloc  # e.g. "localhost:3500"
-        request_host = request.get_host()  # e.g. "localhost:3500"
+        origin_host = parsed.hostname  # e.g. "twicc.guerizec.net" (no port)
 
-        if origin_netloc != request_host:
+        # Start with the request's Host (strip port for comparison)
+        request_host = request.get_host().rsplit(":", 1)[0]
+        allowed_hosts = {request_host}
+
+        # Add X-Forwarded-Host if present (reverse proxy)
+        forwarded_host = request.META.get("HTTP_X_FORWARDED_HOST")
+        if forwarded_host:
+            for host in forwarded_host.split(","):
+                allowed_hosts.add(host.strip().rsplit(":", 1)[0])
+
+        # Add Referer hostname as fallback (tunnels like Cloudflare may not
+        # set X-Forwarded-Host but always pass the Referer)
+        referer = request.META.get("HTTP_REFERER")
+        if referer:
+            referer_parsed = urlparse(referer)
+            if referer_parsed.hostname:
+                allowed_hosts.add(referer_parsed.hostname)
+
+        if origin_host not in allowed_hosts:
             logger.warning(
-                "CSRF rejected: Origin %s does not match Host %s for %s %s",
-                origin, request_host, request.method, request.path,
+                "CSRF rejected: Origin host %s does not match allowed hosts %s for %s %s",
+                origin_host, allowed_hosts, request.method, request.path,
             )
             return JsonResponse(
                 {"error": "Cross-origin request rejected"},
