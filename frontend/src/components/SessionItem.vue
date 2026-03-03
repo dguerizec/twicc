@@ -12,8 +12,8 @@ const dataStore = useDataStore()
 
 const props = defineProps({
     content: {
-        type: String,
-        required: true
+        type: Object,
+        default: null
     },
     kind: {
         type: String,
@@ -84,17 +84,8 @@ function toggleBlockDetailed() {
 // Toggle for showing raw JSON
 const showJson = ref(false)
 
-// Parse JSON content
-const parsedContent = computed(() => {
-    try {
-        return JSON.parse(props.content)
-    } catch {
-        return { error: 'Invalid JSON', raw: props.content }
-    }
-})
-
 // Get the entry type from parsed JSON (for unknown kind display)
-const entryType = computed(() => parsedContent.value?.type || 'unknown')
+const entryType = computed(() => props.content?.type || 'unknown')
 
 // Track collapsed state for JSON view
 const collapsedPaths = ref(new Set())
@@ -163,7 +154,7 @@ function toggleJsonView() {
             <AppTooltip :for="`line-number-${sessionId}-${lineNum}`">Line number</AppTooltip>
             <div class="json-tree">
                 <JsonViewer
-                    :data="parsedContent"
+                    :data="content"
                     :path="'root'"
                     :collapsed-paths="collapsedPaths"
                     @toggle="toggleCollapse"
@@ -175,7 +166,7 @@ function toggleJsonView() {
         <template v-else>
             <Message
                 v-if="kind === 'user_message' || kind === 'assistant_message'"
-                :data="parsedContent"
+                :data="content"
                 :role="kind === 'user_message' ? 'user' : 'assistant'"
                 :project-id="projectId"
                 :session-id="sessionId"
@@ -189,7 +180,7 @@ function toggleJsonView() {
             />
             <Message
                 v-else-if="kind === 'content_items'"
-                :data="parsedContent"
+                :data="content"
                 role="items"
                 :project-id="projectId"
                 :session-id="sessionId"
@@ -198,16 +189,16 @@ function toggleJsonView() {
             />
             <ApiError
                 v-else-if="kind === 'api_error'"
-                :data="parsedContent"
+                :data="content"
             />
             <CustomTitle
                 v-else-if="entryType === 'custom-title'"
-                :custom-title="parsedContent.customTitle"
+                :custom-title="content.customTitle"
             />
             <UnknownEntry
                 v-else
                 :type="entryType"
-                :data="parsedContent"
+                :data="content"
             />
         </template>
     </div>

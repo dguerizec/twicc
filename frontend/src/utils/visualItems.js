@@ -1,6 +1,7 @@
 // frontend/src/utils/visualItems.js
 
 import { DISPLAY_LEVEL, DISPLAY_MODE } from '../constants'
+import { getParsedContent, setParsedContent } from './parsedContent'
 
 /**
  * Compute visual items list from session items based on display mode and expanded groups.
@@ -44,6 +45,25 @@ export function computeVisualItems(items, mode, expandedGroups = [], isAssistant
     if (!items || items.length === 0) return []
 
     const result = []
+
+    // Helper to build visual items.
+    // Forwards the parsed content cache from the source item so that
+    // getParsedContent() on the visual item hits cache immediately.
+    // Extras override or extend the base properties (isGroupHead, isExpanded, etc.).
+    const makeVisualItem = (item, extras) => {
+        const vi = {
+            lineNum: item.line_num,
+            content: item.content,
+            kind: item.kind,
+            groupHead: item.group_head ?? null,
+            groupTail: item.group_tail ?? null,
+            ...extras
+        }
+        const parsed = getParsedContent(item)
+        if (parsed !== null) setParsedContent(vi, parsed)
+        return vi
+    }
+
     const expandedSet = new Set(expandedGroups) // Convert to Set for O(1) lookup
 
     // Build a set of line_nums that are ALWAYS items
@@ -126,26 +146,14 @@ export function computeVisualItems(items, mode, expandedGroups = [], isAssistant
 
             if (item.kind === 'user_message') {
                 // User messages always pass through
-                result.push({
-                    lineNum: item.line_num,
-                    content: item.content,
-                    kind: item.kind,
-                    groupHead: null,
-                    groupTail: null
-                })
+                result.push(makeVisualItem(item, { groupHead: null, groupTail: null }))
             } else if (blockId == null) {
                 // Non-user item before any user_message (edge case): skip in conversation mode
                 continue
             } else if (isDetailed) {
                 // Block is in detailed mode: show non-user items with normal-mode filtering
                 if (item.display_level == null || item.display_level !== DISPLAY_LEVEL.DEBUG_ONLY) {
-                    const visualItem = {
-                        lineNum: item.line_num,
-                        content: item.content,
-                        kind: item.kind,
-                        groupHead: item.group_head ?? null,
-                        groupTail: item.group_tail ?? null
-                    }
+                    const visualItem = makeVisualItem(item)
                     // First visible non-user item of this block gets the toggle
                     // (only if the block has 2+ visible items, otherwise toggle is useless)
                     if (!togglePlaced.has(blockId) && (blockVisibleCount.get(blockId) || 0) > 1) {
@@ -156,13 +164,7 @@ export function computeVisualItems(items, mode, expandedGroups = [], isAssistant
                 }
             } else if (item.line_num < 0 || (item.kind === 'assistant_message' && keptAssistantLineNums.has(item.line_num))) {
                 // Non-detailed mode: show synthetic items and kept assistant_messages
-                const visualItem = {
-                    lineNum: item.line_num,
-                    content: item.content,
-                    kind: item.kind,
-                    groupHead: null,
-                    groupTail: null
-                }
+                const visualItem = makeVisualItem(item, { groupHead: null, groupTail: null })
                 // First visible non-user item of this block gets the toggle
                 // (only if the block has 2+ visible items, otherwise toggle is useless)
                 if (!togglePlaced.has(blockId) && (blockVisibleCount.get(blockId) || 0) > 1) {
@@ -180,39 +182,21 @@ export function computeVisualItems(items, mode, expandedGroups = [], isAssistant
         if (item.display_level == null) {
             // In debug mode, show anyway; in other modes, skip
             if (mode === DISPLAY_MODE.DEBUG) {
-                result.push({
-                    lineNum: item.line_num,
-                    content: item.content,
-                    kind: item.kind,
-                    groupHead: item.group_head ?? null,
-                    groupTail: item.group_tail ?? null
-                })
+                result.push(makeVisualItem(item))
             }
             continue
         }
 
         // Debug mode: show everything
         if (mode === DISPLAY_MODE.DEBUG) {
-            result.push({
-                lineNum: item.line_num,
-                content: item.content,
-                kind: item.kind,
-                groupHead: item.group_head ?? null,
-                groupTail: item.group_tail ?? null
-            })
+            result.push(makeVisualItem(item))
             continue
         }
 
         // Normal mode: show levels 1 and 2, hide level 3
         if (mode === DISPLAY_MODE.NORMAL) {
             if (item.display_level !== DISPLAY_LEVEL.DEBUG_ONLY) {
-                result.push({
-                    lineNum: item.line_num,
-                    content: item.content,
-                    kind: item.kind,
-                    groupHead: item.group_head ?? null,
-                    groupTail: item.group_tail ?? null
-                })
+                result.push(makeVisualItem(item))
             }
             // level 3: skip entirely
             continue
@@ -221,13 +205,7 @@ export function computeVisualItems(items, mode, expandedGroups = [], isAssistant
         // Simplified mode: groups are collapsible
         if (item.display_level === DISPLAY_LEVEL.ALWAYS) {
             // Level 1 (ALWAYS): always visible, but may have group participation
-            const visualItem = {
-                lineNum: item.line_num,
-                content: item.content,
-                kind: item.kind,
-                groupHead: item.group_head ?? null,
-                groupTail: item.group_tail ?? null
-            }
+            const visualItem = makeVisualItem(item)
 
             // Check if this ALWAYS has a connected prefix (group_head points to previous item)
             if (item.group_head != null) {
@@ -255,38 +233,21 @@ export function computeVisualItems(items, mode, expandedGroups = [], isAssistant
 
             if (isOwnGroupHead) {
                 // This COLLAPSIBLE starts a group (may end on ALWAYS prefix or be pure COLLAPSIBLE)
-                result.push({
-                    lineNum: item.line_num,
-                    content: item.content,
-                    kind: item.kind,
-                    groupHead: item.group_head ?? null,
-                    groupTail: item.group_tail ?? null,
+                result.push(makeVisualItem(item, {
                     isGroupHead: true,
                     isExpanded: isExpanded,
                     groupSize: groupSizes.get(item.group_head) || 0
-                })
+                }))
             } else if (groupHeadIsAlways) {
                 // This COLLAPSIBLE is part of a group started by an ALWAYS's suffix
                 // Only show if that group is expanded
                 if (isExpanded) {
-                    result.push({
-                        lineNum: item.line_num,
-                        content: item.content,
-                        kind: item.kind,
-                        groupHead: item.group_head ?? null,
-                        groupTail: item.group_tail ?? null
-                    })
+                    result.push(makeVisualItem(item))
                 }
                 // else: hidden (group collapsed, toggle is in the ALWAYS's suffix)
             } else if (isExpanded) {
                 // Regular group member, show if expanded
-                result.push({
-                    lineNum: item.line_num,
-                    content: item.content,
-                    kind: item.kind,
-                    groupHead: item.group_head ?? null,
-                    groupTail: item.group_tail ?? null
-                })
+                result.push(makeVisualItem(item))
             }
             // else: hidden (group collapsed)
         }

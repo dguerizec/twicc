@@ -6,6 +6,7 @@ import { INITIAL_ITEMS_COUNT } from '../constants'
 import { isSupportedMimeType, MAX_FILE_SIZE } from '../utils/fileUtils'
 import { toast } from '../composables/useToast'
 import { apiFetch } from '../utils/api'
+import { getParsedContent, hasContent } from '../utils/parsedContent'
 import VirtualScroller from './VirtualScroller.vue'
 import SessionItem from './SessionItem.vue'
 import FetchErrorPanel from './FetchErrorPanel.vue'
@@ -698,7 +699,7 @@ function onScrollerUpdate({ startIndex, endIndex, visibleStartIndex, visibleEndI
     const lineNumsToLoad = []
     for (let i = bufferedStart; i <= bufferedEnd; i++) {
         const visualItem = visItems[i]
-        if (visualItem && !visualItem.content) {
+        if (visualItem && !hasContent(visualItem)) {
             lineNumsToLoad.push(visualItem.lineNum)
         }
     }
@@ -879,7 +880,7 @@ defineExpose({
         >
             <template #default="{ item, index }">
                 <!-- Placeholder (no content loaded yet) -->
-                <div v-if="!item.content" :style="{ minHeight: MIN_ITEM_SIZE + 'px' }"></div>
+                <div v-if="!hasContent(item)" :style="{ minHeight: MIN_ITEM_SIZE + 'px' }"></div>
 
                 <!-- Group head: show toggle (+ item content if expanded) -->
                 <template v-else-if="item.isGroupHead">
@@ -890,7 +891,7 @@ defineExpose({
                     />
                     <SessionItem
                         v-if="item.isExpanded"
-                        :content="item.content"
+                        :content="getParsedContent(item)"
                         :kind="item.kind"
                         :synthetic-kind="item.syntheticKind || null"
                         :project-id="projectId"
@@ -903,7 +904,7 @@ defineExpose({
                 <!-- Regular item (including ALWAYS with prefix/suffix): show item content -->
                 <SessionItem
                     v-else
-                    :content="item.content"
+                    :content="getParsedContent(item)"
                     :kind="item.kind"
                     :synthetic-kind="item.syntheticKind || null"
                     :project-id="projectId"

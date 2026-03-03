@@ -25,6 +25,7 @@ import { processFile, mediasToSdkFormat } from '../utils/fileUtils'
 import { generateUUID } from '../utils/crypto'
 import { debounce } from '../utils/debounce'
 import { apiFetch } from '../utils/api'
+import { getParsedContent, setParsedContent, clearParsedContent, hasContent } from '../utils/parsedContent'
 // Note: respondToPendingRequest is imported lazily to avoid circular dependency
 // (data.js ↔ useWebSocket.js)
 
@@ -74,7 +75,13 @@ export const useDataStore = defineStore('data', {
         // Server data
         projects: {},       // { id: { id, sessions_count, mtime, stale } }
         sessions: {},       // { id: { id, project_id, last_line, mtime, stale } }
-        sessionItems: {},   // { sessionId: [{ line_num, content }, ...] } - line_num is 1-based
+        // Session items indexed by session ID.
+        // { sessionId: [{ line_num, content, display_level, ... }] } - line_num is 1-based
+        //
+        // ⚠️  IMPORTANT: Never access item.content directly for parsing.
+        // Use getParsedContent(item) from utils/parsedContent.js instead.
+        // Use hasContent(item) to check if content is available.
+        sessionItems: {},
 
         // Process state for active Claude processes
         // { sessionId: { state: 'starting'|'assistant_turn'|'user_turn'|'dead', error?: string } }
@@ -561,8 +568,8 @@ export const useDataStore = defineStore('data', {
                     if (existingItem.kind === 'user_message' || existingItem.kind === 'assistant_message') {
                         const hadGroupTail = existingItem.group_tail != null
                         const willHaveGroupTail = update.group_tail != null
-                        if (!hadGroupTail && willHaveGroupTail && existingItem.content) {
-                            this._migrateInternalSuffixToExternal(sessionId, update.line_num, existingItem.content)
+                        if (!hadGroupTail && willHaveGroupTail && hasContent(existingItem)) {
+                            this._migrateInternalSuffixToExternal(sessionId, update.line_num, existingItem)
                         }
                     }
 
@@ -624,21 +631,17 @@ export const useDataStore = defineStore('data', {
          *
          * @param {string} sessionId
          * @param {number} lineNum - The line_num of the ALWAYS item
-         * @param {string} contentString - The raw JSON content of the item
+         * @param {Object} item - The session item object
          * @private
          */
-        _migrateInternalSuffixToExternal(sessionId, lineNum, contentString) {
+        _migrateInternalSuffixToExternal(sessionId, lineNum, item) {
             // Check if there are any internal expanded groups for this item
             const itemInternalGroups = this.localState.sessionInternalExpandedGroups[sessionId]?.[lineNum]
             if (!itemInternalGroups?.length) return
 
             // Parse content to find the suffix boundaries
-            let parsed
-            try {
-                parsed = JSON.parse(contentString)
-            } catch {
-                return
-            }
+            const parsed = getParsedContent(item)
+            if (!parsed) return
 
             const content = parsed?.message?.content
             if (!Array.isArray(content) || content.length === 0) return
@@ -1088,43 +1091,43 @@ export const useDataStore = defineStore('data', {
                 for (let i = items.length - 1; i >= 0; i--) {
                     const item = items[i]
                     if (item.kind !== 'assistant_message' && item.kind !== 'content_items') break
-                    try {
-                        const parsed = JSON.parse(item.content)
-                        const contentArray = parsed?.message?.content
-                        if (!Array.isArray(contentArray) || contentArray.length === 0) break
-                        const lastContent = contentArray[contentArray.length - 1]
-                        if (lastContent.type === 'tool_use') {
-                            toolUse = lastContent
-                            break
-                        }
-                        // If every entry is a tool_result, skip this item and keep looking
-                        if (contentArray.every(c => c.type === 'tool_result')) {
-                            toolUseCompleted = true
-                            continue
-                        }
-                        // Otherwise (text, image, etc.) stop searching
+                    const parsed = getParsedContent(item)
+                    if (!parsed) break
+                    const contentArray = parsed?.message?.content
+                    if (!Array.isArray(contentArray) || contentArray.length === 0) break
+                    const lastContent = contentArray[contentArray.length - 1]
+                    if (lastContent.type === 'tool_use') {
+                        toolUse = lastContent
                         break
-                    } catch { break }
+                    }
+                    // If every entry is a tool_result, skip this item and keep looking
+                    if (contentArray.every(c => c.type === 'tool_result')) {
+                        toolUseCompleted = true
+                        continue
+                    }
+                    // Otherwise (text, image, etc.) stop searching
+                    break
                 }
 
                 workingMessage = {
                     line_num: lineNum,
-                    content: JSON.stringify({
-                        type: 'assistant',
-                        syntheticKind,
-                        toolUse,
-                        toolUseCompleted,
-                        message: {
-                            role: 'assistant',
-                            content: []
-                        }
-                    }),
+                    content: null,
                     kind: 'assistant_message',
                     syntheticKind,
                     display_level: DISPLAY_LEVEL.ALWAYS,
                     group_head: null,
                     group_tail: null,
                 }
+                setParsedContent(workingMessage, {
+                    type: 'assistant',
+                    syntheticKind,
+                    toolUse,
+                    toolUseCompleted,
+                    message: {
+                        role: 'assistant',
+                        content: []
+                    }
+                })
                 allItems = allItems === items ? [...items, workingMessage] : [...allItems, workingMessage]
             }
 
@@ -1173,22 +1176,24 @@ export const useDataStore = defineStore('data', {
             const { lineNum, kind: syntheticKind } = SYNTHETIC_ITEM.OPTIMISTIC_USER_MESSAGE
             // Store as sessionItem format (snake_case) since it's injected into
             // the items array before computeVisualItems processes it.
-            this.localState.optimisticMessages[sessionId] = {
+            const optimisticItem = {
                 line_num: lineNum,
-                content: JSON.stringify({
-                    type: 'user',
-                    syntheticKind,
-                    message: {
-                        role: 'user',
-                        content: [{ type: 'text', text }]
-                    }
-                }),
+                content: null,
                 kind: 'user_message',
                 syntheticKind,
                 display_level: DISPLAY_LEVEL.ALWAYS,
                 group_head: null,
                 group_tail: null
             }
+            setParsedContent(optimisticItem, {
+                type: 'user',
+                syntheticKind,
+                message: {
+                    role: 'user',
+                    content: [{ type: 'text', text }]
+                }
+            })
+            this.localState.optimisticMessages[sessionId] = optimisticItem
             this.recomputeVisualItems(sessionId)
         },
 
@@ -1379,8 +1384,9 @@ export const useDataStore = defineStore('data', {
             for (const item of items) {
                 const index = item.line_num - 1  // line_num is 1-based
                 if (sessionItemsArray[index]) {
-                    // Update content
+                    // Update content and invalidate parsed content cache
                     sessionItemsArray[index].content = item.content
+                    clearParsedContent(sessionItemsArray[index])
                     // Also update metadata in case it was computed after initial load
                     if (item.display_level != null) {
                         sessionItemsArray[index].display_level = item.display_level

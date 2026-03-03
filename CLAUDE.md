@@ -185,6 +185,17 @@ Draft sessions, messages, and media attachments are persisted to IndexedDB (via 
 
 Large session item lists use a custom virtual scroller (`useVirtualScroll.js`, `VirtualScroller.vue`). Items go through a visual pipeline: raw items → `computeVisualItems()` (applies display mode, group expansion) → rendered in the scroller.
 
+### Session Item Content Access
+
+**IMPORTANT:** In the frontend, never access `item.content` (the raw JSON string) directly for parsing. Always use the helpers from `frontend/src/utils/parsedContent.js`:
+
+- **`getParsedContent(item)`** — Returns the parsed content object. Parses lazily on first access and caches with `markRaw()`. Works on both session items and visual items.
+- **`setParsedContent(item, parsed)`** — Sets parsed content explicitly on an item. Use for synthetic items (no raw content string) or to forward a cached result to a new object.
+- **`clearParsedContent(item)`** — Invalidates the cached parsed content (e.g., when `item.content` changes).
+- **`hasContent(item)`** — Returns `true` if the item has content available (raw string or set via `setParsedContent()`). Use this instead of `!!item.content` for placeholder detection, since synthetic items have parsed content but no `content` string.
+
+Direct `JSON.parse(item.content)` is forbidden — it bypasses the cache and wastes CPU on repeated parsing. Direct access to the internal `_parsedContent` field is also forbidden — always use the functions above.
+
 ## Web Awesome Components
 
 **Version:** Web Awesome 3.1. Since version 3, **native** browser events are no longer prefixed with `wa-` (e.g., `@click`, `@focus`, `@input`). However, **custom** Web Awesome events still use the `wa-` prefix (e.g., `@wa-show`, `@wa-hide`, `@wa-after-show`).

@@ -74,23 +74,9 @@ getAllSessions: (state) => {
 
 ---
 
-### 1.4 🔴 `recomputeVisualItems` — Parsing JSON et reconstruction d'objets fréquents
+### 1.4 ✅ ~~`recomputeVisualItems` — Parsing JSON et reconstruction d'objets fréquents~~
 
-**Fichier:** `data.js:954-1057`
-
-```js
-// Ligne 998 dans la boucle backward pour trouver le tool_use
-const parsed = JSON.parse(item.content)
-// Ligne 1018
-content: JSON.stringify({...})
-```
-
-**Problème:** `recomputeVisualItems` est appelé très fréquemment (chaque nouveau message WebSocket, chaque toggle de groupe, chaque changement de processState). À chaque appel, il :
-1. Parcourt tous les items en arrière en faisant `JSON.parse()` sur chaque item assistant
-2. Crée un `JSON.stringify()` pour le workingMessage synthétique
-3. Appelle `computeVisualItems()` qui fait 1-3 passes sur tous les items (voir 2.1)
-
-**Impact:** Pour une session avec 200+ items, c'est significatif, surtout combiné avec les mises à jour fréquentes du process_state via WebSocket.
+**Résolu** par le lazy parsed content caching (`parsedContent.js`). Les `JSON.parse()` dans le backward walk passent par `getParsedContent()` (cache sur l'item). Le `JSON.stringify()` pour le workingMessage synthétique est remplacé par `setParsedContent()`.
 
 ---
 
@@ -152,23 +138,9 @@ const positions = computed(() => {
 
 ---
 
-### 2.3 🟠 `SessionItem.vue` — `JSON.parse` dans un computed à chaque render
+### 2.3 ✅ ~~`SessionItem.vue` — `JSON.parse` dans un computed à chaque render~~
 
-**Fichier:** `SessionItem.vue:87-93`
-
-```js
-const parsedContent = computed(() => {
-    try {
-        return JSON.parse(props.content)
-    } catch {
-        return { error: 'Invalid JSON', raw: props.content }
-    }
-})
-```
-
-**Problème:** À chaque fois que les props changent (ce qui inclut le re-rendu du parent), `parsedContent` est recalculé avec un `JSON.parse()`. Comme `content` est un string JSONL qui peut contenir des messages volumineux (tool results, code, etc.), ce parsing est coûteux.
-
-**Note:** Le computed de Vue met en cache tant que `props.content` ne change pas, donc c'est acceptable si les props sont stables. Mais si le parent re-rend sans que le content change réellement (ce qui arrive avec le virtual scroller), le computed sera ré-évalué inutilement.
+**Résolu** par le lazy parsed content caching. `SessionItem.vue` reçoit maintenant une prop `content` de type Object (déjà parsé via `getParsedContent()`). Plus aucun `JSON.parse` dans le composant.
 
 ---
 
@@ -361,11 +333,11 @@ Le code contient aussi plusieurs excellents patterns de performance qu'il faut s
 | 🔴 Critique | Timer 1s dans SessionList | Re-rendu global chaque seconde |
 | 🔴 Critique | Appels multiples getProcessState/getPendingRequest par session item dans template | ×10 par item × 30 visibles × 1/s |
 | 🔴 Critique | getProjectSessions/getAllSessions non-cachés | O(n log n) à chaque accès réactif |
-| 🔴 Critique | recomputeVisualItems avec JSON.parse/stringify fréquent | Parsing coûteux à chaque WS message |
+| ✅ ~~Critique~~ | ~~recomputeVisualItems avec JSON.parse/stringify fréquent~~ | ~~Parsing coûteux à chaque WS message~~ |
 | 🔴 Critique | recomputeAllVisualItems sur toutes les sessions | N × recompute au changement de mode |
 | 🟠 Important | computeVisualItems multi-passes avec allocations | O(n) × 3 passes par recompute |
 | 🟠 Important | positions computed recalculé intégralement | O(n) à chaque mesure de hauteur |
-| 🟠 Important | SessionItem JSON.parse dans computed | Parsing de gros JSON par item |
+| ✅ ~~Important~~ | ~~SessionItem JSON.parse dans computed~~ | ~~Parsing de gros JSON par item~~ |
 | 🟠 Important | getProjects tri à chaque invalidation | O(n log n) fréquent |
 | 🟡 Modéré | Settings watcher deep:true inutile | Traversal récursif superflu |
 | 🟡 Modéré | VirtualScroller renderedItems nouvelles refs | Possible re-rendu de slots |
