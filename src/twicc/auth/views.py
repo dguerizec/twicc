@@ -14,6 +14,8 @@ import logging
 import os
 import re
 import secrets
+import time
+from collections import defaultdict
 
 import orjson
 from django.conf import settings
@@ -22,6 +24,47 @@ from django.http import JsonResponse
 from twicc.paths import get_env_path
 
 logger = logging.getLogger(__name__)
+
+
+# ── Rate limiter for login brute-force protection ─────────────────────────
+
+# Per-IP tracking of failed login attempts
+_login_attempts: dict[str, list[float]] = defaultdict(list)
+
+# Max failed attempts before throttling
+_MAX_ATTEMPTS = 5
+# Time window in seconds (failed attempts older than this are forgotten)
+_WINDOW_SECONDS = 300  # 5 minutes
+# Lockout duration after exceeding max attempts
+_LOCKOUT_SECONDS = 60
+
+
+def _check_rate_limit(ip: str) -> int | None:
+    """Check if an IP is rate-limited.
+
+    Returns None if allowed, or the number of seconds to wait if blocked.
+    """
+    now = time.monotonic()
+    attempts = _login_attempts[ip]
+
+    # Prune old attempts outside the window
+    _login_attempts[ip] = [t for t in attempts if now - t < _WINDOW_SECONDS]
+    attempts = _login_attempts[ip]
+
+    if len(attempts) >= _MAX_ATTEMPTS:
+        last_attempt = attempts[-1]
+        wait = int(_LOCKOUT_SECONDS - (now - last_attempt))
+        if wait > 0:
+            return wait
+        # Lockout expired — clear and allow
+        _login_attempts[ip] = []
+
+    return None
+
+
+def _record_failed_attempt(ip: str) -> None:
+    """Record a failed login attempt for rate limiting."""
+    _login_attempts[ip].append(time.monotonic())
 
 
 def _hash_password(password: str) -> str:
@@ -71,6 +114,17 @@ def login(request):
     if not settings.TWICC_PASSWORD_HASH:
         return JsonResponse({"error": "No password configured"}, status=400)
 
+    ip = request.META.get("REMOTE_ADDR", "unknown")
+
+    # Rate limit check
+    wait = _check_rate_limit(ip)
+    if wait is not None:
+        logger.warning("Login rate-limited for %s (%ds remaining)", ip, wait)
+        return JsonResponse(
+            {"error": f"Too many attempts. Try again in {wait}s."},
+            status=429,
+        )
+
     try:
         data = orjson.loads(request.body)
     except orjson.JSONDecodeError:
@@ -82,10 +136,14 @@ def login(request):
     # Constant-time comparison to prevent timing attacks
     if hmac.compare_digest(password_hash, settings.TWICC_PASSWORD_HASH):
         request.session["authenticated"] = True
-        logger.info("Successful login from %s", request.META.get("REMOTE_ADDR"))
+        # Clear failed attempts on success
+        _login_attempts.pop(ip, None)
+        logger.info("Successful login from %s", ip)
         return JsonResponse({"authenticated": True})
     else:
-        logger.warning("Failed login attempt from %s", request.META.get("REMOTE_ADDR"))
+        _record_failed_attempt(ip)
+        remaining = _MAX_ATTEMPTS - len(_login_attempts[ip])
+        logger.warning("Failed login attempt from %s (%d attempts left)", ip, max(0, remaining))
         return JsonResponse({"error": "Invalid password"}, status=401)
 
 
