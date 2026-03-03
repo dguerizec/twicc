@@ -19,6 +19,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Hide sessions without any user message from session listings and project session counts (sessions created by launching Claude Code but never sending a message)
 - Refactor Session database indexes: replace two separate indexes with a combined `(project, type, -mtime)` index and a conditional index for visible sessions
 - Refactor git resolution: cache-free filesystem reads in the live watcher (detects branch switches and new repos immediately), CWD fallback for Bash-only sessions, session git propagation moved from item-level to session-level, post-batch validation of git state (detects branch changes and deleted repos after Bash commands)
+- Lazy-render wa-details content: tool use inputs/results, thinking blocks, and unknown entries are now only mounted when expanded (v-if on open state), saving significant CPU/memory on long conversations
 
 ### Fixed
 

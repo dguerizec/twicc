@@ -1,4 +1,5 @@
 <script setup>
+import { ref } from 'vue'
 import JsonHumanView from '../JsonHumanView.vue'
 
 defineProps({
@@ -12,23 +13,27 @@ defineProps({
     }
 })
 
+// Lazy rendering: content is only mounted when wa-details is open
+const isOpen = ref(false)
 </script>
 
 <template>
-    <wa-details class="item-details unknown-entry" icon-placement="start">
+    <wa-details class="item-details unknown-entry" icon-placement="start" @wa-show="isOpen = true" @wa-hide="isOpen = false">
         <span slot="summary" class="items-details-summary">
             <strong class="items-details-summary-name">Unhandled event</strong>
             <span class="items-details-summary-separator"> — </span>
             <span class="items-details-summary-description">{{ type }}</span>
         </span>
-        <div v-if="data" class="unknown-data">
-            <JsonHumanView
-                :value="data"
-            />
-        </div>
-        <div v-else class="unknown-no-data">
-            No data available
-        </div>
+        <template v-if="isOpen">
+            <div v-if="data" class="unknown-data">
+                <JsonHumanView
+                    :value="data"
+                />
+            </div>
+            <div v-else class="unknown-no-data">
+                No data available
+            </div>
+        </template>
     </wa-details>
 </template>
 

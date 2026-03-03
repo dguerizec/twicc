@@ -50,6 +50,9 @@ const POLLING_DELAY_MS = 3000
 // Template ref for the result details element
 const resultDetailsRef = ref(null)
 
+// Lazy rendering: content is only mounted when wa-details is open
+const isOpen = ref(false)
+
 // Tool result state
 const resultState = ref('idle') // 'idle' | 'loading' | 'loaded' | 'error'
 const resultData = ref(null)
@@ -162,6 +165,7 @@ function onResultClose() {
  * Stops polling to avoid unnecessary requests.
  */
 function onToolUseClose() {
+    isOpen.value = false
     stopPolling()
 }
 
@@ -170,6 +174,7 @@ function onToolUseClose() {
  * If the result section is already open and has no data, triggers a fetch/poll.
  */
 function onToolUseOpen() {
+    isOpen.value = true
     // Check if result details is open (wa-details has an 'open' property)
     const isResultOpen = resultDetailsRef.value?.open === true
 
@@ -541,38 +546,40 @@ function navigateToSubagent(agentId) {
                 </wa-button>
             </template>
         </span>
-        <div v-if="displayInput" class="tool-input">
-            <JsonHumanView
-                :value="displayInput"
-            />
-        </div>
-        <div v-else class="tool-no-input">
-            No input parameters
-        </div>
-        <wa-details ref="resultDetailsRef" class="tool-result" @wa-show="onResultOpen" @wa-hide="onResultClose">
-            <span slot="summary">Result</span>
-            <div class="tool-result-content">
-                <div v-if="resultState === 'loading'" class="tool-result-loading">
-                    <wa-spinner></wa-spinner>
-                    <span>Loading result...</span>
-                </div>
-                <div v-else-if="resultState === 'error'" class="tool-result-error">
-                    Error loading result: {{ resultError }}
-                </div>
-                <div v-else-if="resultState === 'loaded' && !displayResult && isPolling" class="tool-result-polling">
-                    <wa-spinner></wa-spinner>
-                    <span>Result not yet available. Checking again shortly...</span>
-                </div>
-                <div v-else-if="resultState === 'loaded' && !displayResult" class="tool-result-empty">
-                    No result available
-                </div>
-                <div v-else-if="resultState === 'loaded' && displayResult" class="tool-result-data">
-                    <JsonHumanView
-                        :value="displayResult"
-                    />
-                </div>
+        <template v-if="isOpen">
+            <div v-if="displayInput" class="tool-input">
+                <JsonHumanView
+                    :value="displayInput"
+                />
             </div>
-        </wa-details>
+            <div v-else class="tool-no-input">
+                No input parameters
+            </div>
+            <wa-details ref="resultDetailsRef" class="tool-result" @wa-show="onResultOpen" @wa-hide="onResultClose">
+                <span slot="summary">Result</span>
+                <div class="tool-result-content">
+                    <div v-if="resultState === 'loading'" class="tool-result-loading">
+                        <wa-spinner></wa-spinner>
+                        <span>Loading result...</span>
+                    </div>
+                    <div v-else-if="resultState === 'error'" class="tool-result-error">
+                        Error loading result: {{ resultError }}
+                    </div>
+                    <div v-else-if="resultState === 'loaded' && !displayResult && isPolling" class="tool-result-polling">
+                        <wa-spinner></wa-spinner>
+                        <span>Result not yet available. Checking again shortly...</span>
+                    </div>
+                    <div v-else-if="resultState === 'loaded' && !displayResult" class="tool-result-empty">
+                        No result available
+                    </div>
+                    <div v-else-if="resultState === 'loaded' && displayResult" class="tool-result-data">
+                        <JsonHumanView
+                            :value="displayResult"
+                        />
+                    </div>
+                </div>
+            </wa-details>
+        </template>
     </wa-details>
 </template>
 
