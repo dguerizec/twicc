@@ -61,6 +61,65 @@ const diffSideBySideSwitch = ref(null)
 const editorWordWrapSwitch = ref(null)
 const notificationSettingsRef = ref(null)
 
+// API Token state
+const tokenVisible = ref(false)
+const tokenCopied = ref(false)
+const regenerateConfirm = ref(false)
+let copiedTimeout = null
+
+// Show API token section only when a token is configured
+const showApiToken = computed(() => authStore.hasApiToken)
+
+// The displayed token value (masked or real)
+const displayedToken = computed(() => {
+    if (!tokenVisible.value || !authStore.apiToken) {
+        return '••••••••••••••••••••••••••••••••'
+    }
+    return authStore.apiToken
+})
+
+async function toggleTokenVisibility() {
+    if (!tokenVisible.value) {
+        // Lazy-load token on first reveal
+        if (!authStore.apiToken) {
+            await authStore.fetchApiToken()
+        }
+        tokenVisible.value = true
+    } else {
+        tokenVisible.value = false
+    }
+}
+
+async function copyToken() {
+    if (!authStore.apiToken) {
+        await authStore.fetchApiToken()
+    }
+    if (authStore.apiToken) {
+        try {
+            await navigator.clipboard.writeText(authStore.apiToken)
+            tokenCopied.value = true
+            clearTimeout(copiedTimeout)
+            copiedTimeout = setTimeout(() => { tokenCopied.value = false }, 2000)
+        } catch {
+            // Clipboard API not available
+        }
+    }
+}
+
+async function handleRegenerateToken() {
+    if (!regenerateConfirm.value) {
+        regenerateConfirm.value = true
+        // Auto-reset confirmation after 3 seconds
+        setTimeout(() => { regenerateConfirm.value = false }, 3000)
+        return
+    }
+    regenerateConfirm.value = false
+    const result = await authStore.regenerateApiToken()
+    if (result.success) {
+        tokenVisible.value = true
+    }
+}
+
 // Settings from store
 const displayMode = computed(() => store.getDisplayMode)
 const fontSize = computed(() => store.getFontSize)
@@ -325,6 +384,8 @@ function resetTitleSystemPrompt() {
  * Called when popover opens - sync switch states.
  */
 function onPopoverShow() {
+    tokenVisible.value = false
+    regenerateConfirm.value = false
     syncSwitchState()
     notificationSettingsRef.value?.sync()
 }
@@ -620,6 +681,54 @@ function onPopoverShow() {
                         <span class="setting-group-hint">Tmux sessions are destroyed when Claude sessions are archived.</span>
                     </div>
                 </section>
+
+                <!-- API Token Section -->
+                <section v-if="showApiToken" class="settings-section">
+                    <h3 class="settings-section-title">API Token</h3>
+                    <div class="setting-group">
+                        <label class="setting-group-label">Bearer token</label>
+                        <wa-input
+                            :value.prop="displayedToken"
+                            :type="tokenVisible ? 'text' : 'password'"
+                            size="small"
+                            readonly
+                            class="api-token-input"
+                        ></wa-input>
+                        <div class="api-token-actions">
+                            <wa-button
+                                variant="neutral"
+                                appearance="outlined"
+                                size="small"
+                                :disabled="authStore.apiTokenLoading"
+                                @click="toggleTokenVisibility"
+                            >
+                                <wa-icon :name="tokenVisible ? 'eye-slash' : 'eye'" slot="prefix"></wa-icon>
+                                {{ tokenVisible ? 'Hide' : 'Show' }}
+                            </wa-button>
+                            <wa-button
+                                variant="neutral"
+                                appearance="outlined"
+                                size="small"
+                                :disabled="authStore.apiTokenLoading"
+                                @click="copyToken"
+                            >
+                                <wa-icon :name="tokenCopied ? 'check' : 'clipboard'" slot="prefix"></wa-icon>
+                                {{ tokenCopied ? 'Copied!' : 'Copy' }}
+                            </wa-button>
+                            <wa-button
+                                :variant="regenerateConfirm ? 'danger' : 'neutral'"
+                                :appearance="regenerateConfirm ? 'filled' : 'outlined'"
+                                size="small"
+                                :disabled="authStore.apiTokenLoading"
+                                @click="handleRegenerateToken"
+                            >
+                                <wa-icon name="arrows-rotate" slot="prefix"></wa-icon>
+                                {{ regenerateConfirm ? 'Confirm?' : 'Regenerate' }}
+                            </wa-button>
+                        </div>
+                        <span class="setting-group-hint">Use as <code>Authorization: Bearer &lt;token&gt;</code> for HTTP or <code>?token=&lt;token&gt;</code> for WebSocket.</span>
+                    </div>
+                </section>
             </div>
         </div>
     </wa-popover>
@@ -709,6 +818,16 @@ function onPopoverShow() {
     font-size: 0.75em;
     color: var(--wa-color-brand);
     vertical-align: middle;
+}
+
+.api-token-input {
+    font-family: var(--wa-font-family-code);
+}
+
+.api-token-actions {
+    display: flex;
+    gap: var(--wa-space-xs);
+    flex-wrap: wrap;
 }
 
 .settings-notice p {
