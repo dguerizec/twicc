@@ -24,6 +24,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Lazy parsed content caching for session items, eliminating redundant JSON parsing
 - Stabilize visual item references across recomputes, so Vue skips re-rendering unchanged items
 - Extract ProcessDuration component and SessionListItem sub-component to eliminate per-second global re-renders and redundant store lookups in session list
+- Update claude-agent-sdk 0.1.44 → 0.1.45 (Claude Code CLI 2.1.59 → 2.1.63)
 
 ### Fixed
 
