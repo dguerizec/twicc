@@ -256,3 +256,25 @@ export function computeVisualItems(items, mode, expandedGroups = [], isAssistant
 
     return result
 }
+
+/**
+ * Shallow-compare two visual items, ignoring the internal _parsedContent cache.
+ * Used by the stabilization layer to decide whether to reuse a cached visual item
+ * (same JS reference → Vue skips re-render) or replace it with the new one.
+ *
+ * @param {Object} a - Previous (cached) visual item
+ * @param {Object} b - Newly computed visual item
+ * @returns {boolean} true if all non-cache properties are identical
+ */
+export function visualItemEqual(a, b) {
+    if (a === b) return true
+    if (!a || !b) return false
+    const keysA = Object.keys(a)
+    const keysB = Object.keys(b)
+    if (keysA.length !== keysB.length) return false
+    for (const key of keysA) {
+        if (key === '_parsedContent') continue
+        if (a[key] !== b[key]) return false
+    }
+    return true
+}

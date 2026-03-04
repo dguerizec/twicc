@@ -3,7 +3,7 @@
 import { defineStore, acceptHMRUpdate } from 'pinia'
 import { toRaw } from 'vue'
 import { getPrefixSuffixBoundaries } from '../utils/contentVisibility'
-import { computeVisualItems } from '../utils/visualItems'
+import { computeVisualItems, visualItemEqual } from '../utils/visualItems'
 import { DISPLAY_LEVEL, DISPLAY_MODE, PROCESS_STATE, SYNTHETIC_ITEM } from '../constants'
 import { useSettingsStore } from './settings'
 import {
@@ -133,6 +133,13 @@ export const useDataStore = defineStore('data', {
             // Visual items - computed from sessionItems, display mode, and expanded groups
             // { sessionId: [{ lineNum, isGroupHead?, isExpanded? }, ...] }
             sessionVisualItems: {},
+
+            // Visual item reference cache - used to stabilize object references
+            // across recomputes so Vue skips re-renders for unchanged items.
+            // { sessionId: Map<lineNum, visualItem> }
+            // Not reactive (plain object + Maps) — only used internally by
+            // recomputeVisualItems, never read by Vue templates.
+            visualItemCache: {},
 
             // Open tabs per session - for tab restoration when returning to a session
             // { sessionId: { tabs: ['main', 'agent-xxx', ...], activeTab: 'agent-xxx' } }
@@ -1019,6 +1026,7 @@ export const useDataStore = defineStore('data', {
             delete this.localState.sessionExpandedGroups[sessionId]
             delete this.localState.sessionInternalExpandedGroups[sessionId]
             delete this.localState.sessionVisualItems[sessionId]
+            delete this.localState.visualItemCache[sessionId]
             delete this.localState.optimisticMessages[sessionId]
             delete this.localState.agentLinks[sessionId]
         },
@@ -1062,6 +1070,7 @@ export const useDataStore = defineStore('data', {
             const items = this.sessionItems[sessionId]
             if (!items && !this.localState.optimisticMessages[sessionId]) {
                 this.localState.sessionVisualItems[sessionId] = []
+                this.localState.visualItemCache[sessionId] = new Map()
                 return
             }
 
@@ -1160,7 +1169,32 @@ export const useDataStore = defineStore('data', {
                 if (vi.lineNum >= 0) break
             }
 
-            this.localState.sessionVisualItems[sessionId] = visualItems
+            // Stabilize visual item references: reuse cached objects when properties
+            // haven't changed, so Vue sees the same reference and skips re-render.
+            const cache = this.localState.visualItemCache[sessionId] || new Map()
+            const newCache = new Map()
+
+            const stableItems = visualItems.map(vi => {
+                const cached = cache.get(vi.lineNum)
+                if (visualItemEqual(cached, vi)) {
+                    // Properties identical — reuse old reference.
+                    // Forward the parsed content from the new computation to the
+                    // cached object in case items were re-parsed (e.g. content loaded).
+                    const parsed = getParsedContent(vi)
+                    if (parsed !== null) setParsedContent(cached, parsed)
+                    newCache.set(vi.lineNum, cached)
+                    return cached
+                }
+                // Changed or new item — use the new object.
+                // Forward parsed content so it's available on the visual item.
+                const parsed = getParsedContent(vi)
+                if (parsed !== null) setParsedContent(vi, parsed)
+                newCache.set(vi.lineNum, vi)
+                return vi
+            })
+
+            this.localState.visualItemCache[sessionId] = newCache
+            this.localState.sessionVisualItems[sessionId] = stableItems
         },
 
         /**
@@ -1510,6 +1544,8 @@ export const useDataStore = defineStore('data', {
          * @param {object} extra - Additional fields: started_at, state_changed_at, memory, error, pending_request, session_title, project_name
          */
         setProcessState(sessionId, projectId, state, extra = {}) {
+            const wasAssistantTurn = this.processStates[sessionId]?.state === PROCESS_STATE.ASSISTANT_TURN
+
             if (state === 'dead') {
                 // Remove dead processes from the map
                 delete this.processStates[sessionId]
@@ -1533,8 +1569,12 @@ export const useDataStore = defineStore('data', {
                 }
             }
 
-            // Recompute visual items (conversation mode depends on process state)
-            this.recomputeVisualItems(sessionId)
+            // Recompute visual items only when isAssistantTurn changes
+            // (controls the synthetic working message and conversation mode filtering)
+            const isAssistantTurn = state === PROCESS_STATE.ASSISTANT_TURN
+            if (wasAssistantTurn !== isAssistantTurn) {
+                this.recomputeVisualItems(sessionId)
+            }
         },
 
         /**

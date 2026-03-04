@@ -100,7 +100,7 @@ recomputeAllVisualItems() {
 
 ## 2. Problèmes importants
 
-### 2.1 🟠 `computeVisualItems` (`visualItems.js`) — Multi-passes coûteux
+### 2.1 ⚪ `computeVisualItems` (`visualItems.js`) — Multi-passes coûteux — **Négligeable**
 
 **Fichier:** `utils/visualItems.js`
 
@@ -111,9 +111,11 @@ En mode conversation, `computeVisualItems` fait :
 
 Chaque appel crée de nouvelles structures (`new Set()`, `new Map()`, nouveaux objets pour chaque visual item). C'est un coût O(n) qui s'additionne avec les appels fréquents à `recomputeVisualItems`.
 
+**Reclassé négligeable :** Le coût JS pur (3 × O(n) sur des primitives et Map/Set) est sous la milliseconde pour des milliers d'items. Depuis la stabilisation des références de visual items, ce calcul ne provoque plus de re-renders Vue inutiles — seuls les items réellement modifiés sont re-rendus. Optimiser davantage (append incrémental, splice pour les groupes) ajouterait beaucoup de complexité pour un gain à peine mesurable.
+
 ---
 
-### 2.2 🟠 `positions` computed dans `useVirtualScroll.js` — Recalcul total à chaque changement de hauteur
+### 2.2 ⚪ `positions` computed dans `useVirtualScroll.js` — Recalcul total à chaque changement de hauteur — **Négligeable**
 
 **Fichier:** `useVirtualScroll.js:129-138`
 
@@ -134,7 +136,7 @@ const positions = computed(() => {
 
 **Impact:** Quand des items sont rendus pour la première fois, le ResizeObserver mesure plusieurs items en rafale. Chaque mesure déclenche un recalcul complet de `positions`. Avec un `batchUpdateItemHeights`, le problème est atténué, mais chaque batch cause quand même un recalcul O(n) complet.
 
-**Note:** Le code mentionne explicitement `"For large lists, consider memoization strategies if this becomes a bottleneck"`, ce qui montre que les développeurs sont conscients du problème.
+**Reclassé négligeable :** O(n) itérations de `Map.get()` + somme cumulative + création d'objets simples `{ index, key, top, height }` — sous la milliseconde pour des milliers d'items. `batchUpdateItemHeights` regroupe déjà les mesures par callback ResizeObserver. Ce calcul ne provoque pas de re-renders Vue inutiles (il alimente un binary search et le calcul des spacers). Le commentaire dans le code mentionnant des « memoization strategies » peut être retiré.
 
 ---
 
@@ -182,23 +184,9 @@ watch(
 
 ---
 
-### 3.2 🟡 `VirtualScroller.vue` — `renderedItems` computed crée de nouveaux objets à chaque changement de range
+### 3.2 ✅ ~~`VirtualScroller.vue` — `renderedItems` computed crée de nouveaux objets à chaque changement de range~~
 
-**Fichier:** `VirtualScroller.vue` (dans le computed `renderedItems`)
-
-```js
-const renderedItems = computed(() => {
-    return props.items.slice(start, end).map((item, i) => ({
-        item,
-        index: start + i,
-        ...
-    }))
-})
-```
-
-**Problème:** À chaque changement de `renderRange`, un nouveau tableau d'objets wrapper est créé. Chaque objet est une nouvelle référence, ce qui peut déclencher un re-rendu des slots même si l'item sous-jacent n'a pas changé.
-
-**Impact:** Atténué par le `v-for` avec `:key` qui fait la réconciliation par clé, mais les props des items changent (nouvel objet wrapper).
+**Résolu** par la stabilisation des références de visual items (`recomputeVisualItems`). Les wrappers `{ item, index, key }` sont toujours recréés, mais l'`item` qu'ils contiennent est une référence stabilisée — Vue constate que les props du `SessionItem` n'ont pas changé et skip le re-rendu.
 
 ---
 
@@ -210,7 +198,7 @@ Le computed `expandedInternalGroups` crée un `new Set()` basé sur les données
 
 ---
 
-### 3.4 🟡 `SessionItemsList.vue` — Inline arrow function dans le template
+### 3.4 ⚪ `SessionItemsList.vue` — Inline arrow function dans le template — **Négligeable**
 
 **Fichier:** `SessionItemsList.vue`
 
@@ -220,11 +208,11 @@ Le computed `expandedInternalGroups` crée un `new Set()` basé sur les données
 
 **Problème:** Cette arrow function inline crée une **nouvelle référence de fonction** à chaque re-rendu du composant parent. Comme `VirtualScroller` reçoit une nouvelle prop `itemKey`, cela pourrait invalider des computeds internes du virtual scroller qui dépendent de `itemKey`.
 
-**Impact:** En pratique, `useVirtualScroll` reçoit `itemKey` via les options initiales (pas via un ref), donc l'impact est nul après l'initialisation. Mais c'est un anti-pattern.
+**Reclassé négligeable :** `useVirtualScroll` capture `itemKey` une seule fois à l'initialisation (pas via un ref). La nouvelle référence de fonction sur la prop est ignorée par le composable — impact zéro.
 
 ---
 
-### 3.5 🟡 `ToolUseContent.vue` — Timers de polling multiples
+### 3.5 ⚪ `ToolUseContent.vue` — Timers de polling multiples — **Négligeable**
 
 **Fichier:** `ToolUseContent.vue`
 
@@ -232,20 +220,13 @@ Ce composant utilise des `setInterval` pour :
 1. Poller les résultats d'outils (tool_result)
 2. Poller les liens d'agents (agent_link)
 
-Chaque instance de `ToolUseContent` en attente de résultat a son propre timer. Si 20 tool_uses sont visibles simultanément, ça fait 20 timers actifs. Le composant gère correctement les pauses via KeepAlive (bonne pratique), mais le nombre de timers simultanés peut être élevé.
+**Reclassé négligeable :** Le scénario « 20 timers simultanés » est irréaliste. Le polling ne se déclenche que pour des résultats pendants (conversation active), uniquement sur des `wa-details` ouverts (lazy rendering), et s'arrête dès que le résultat arrive. L'agent link polling est plafonné à 10 tentatives. Le composant gère correctement les pauses via KeepAlive. En navigation sur des sessions historiques, aucun polling n'est actif.
 
 ---
 
-### 3.6 🟡 `setProcessState` dans data store — Déclenche `recomputeVisualItems` à chaque changement d'état
+### 3.6 ✅ ~~`setProcessState` dans data store — Déclenche `recomputeVisualItems` à chaque changement d'état~~
 
-**Fichier:** `data.js` (autour de la ligne 1427)
-
-```js
-// Recompute visual items (conversation mode depends on process state)
-this.recomputeVisualItems(sessionId)
-```
-
-**Problème:** Chaque message WebSocket `process_state` déclenche un `recomputeVisualItems` pour la session. Pendant un `assistant_turn` actif, ces messages arrivent fréquemment (changements de mémoire, etc.), causant des recomputes visuels répétés alors que seule l'info `isAssistantTurn` est pertinente pour les visual items.
+**Résolu** par un guard `isAssistantTurn` dans `setProcessState`. Le recompute n'est déclenché que lorsque le booléen `isAssistantTurn` change réellement (entrée/sortie de `ASSISTANT_TURN`), pas sur chaque transition d'état ou mise à jour de `pending_request`.
 
 ---
 
@@ -335,16 +316,16 @@ Le code contient aussi plusieurs excellents patterns de performance qu'il faut s
 | 🔴 Critique | getProjectSessions/getAllSessions non-cachés | O(n log n) à chaque accès réactif |
 | ✅ ~~Critique~~ | ~~recomputeVisualItems avec JSON.parse/stringify fréquent~~ | ~~Parsing coûteux à chaque WS message~~ |
 | 🔴 Critique | recomputeAllVisualItems sur toutes les sessions | N × recompute au changement de mode |
-| 🟠 Important | computeVisualItems multi-passes avec allocations | O(n) × 3 passes par recompute |
-| 🟠 Important | positions computed recalculé intégralement | O(n) à chaque mesure de hauteur |
+| ⚪ ~~Important~~ | computeVisualItems multi-passes avec allocations | Négligeable (JS pur, sous 1ms) |
+| ⚪ ~~Important~~ | positions computed recalculé intégralement | Négligeable (JS pur, sous 1ms) |
 | ✅ ~~Important~~ | ~~SessionItem JSON.parse dans computed~~ | ~~Parsing de gros JSON par item~~ |
 | 🟠 Important | getProjects tri à chaque invalidation | O(n log n) fréquent |
 | 🟡 Modéré | Settings watcher deep:true inutile | Traversal récursif superflu |
-| 🟡 Modéré | VirtualScroller renderedItems nouvelles refs | Possible re-rendu de slots |
+| ✅ ~~Modéré~~ | ~~VirtualScroller renderedItems nouvelles refs~~ | ~~Possible re-rendu de slots~~ |
 | 🟡 Modéré | ContentList new Set() dans computed | Allocation par évaluation |
-| 🟡 Modéré | Inline arrow function pour itemKey | Nouvelle ref à chaque render |
-| 🟡 Modéré | ToolUseContent timers multiples | N timers simultanés |
-| 🟡 Modéré | setProcessState → recomputeVisualItems systématique | Recompute superflu fréquent |
+| ⚪ ~~Modéré~~ | Inline arrow function pour itemKey | Négligeable (capturé au mount) |
+| ⚪ ~~Modéré~~ | ToolUseContent timers multiples | Négligeable (auto-limité, lazy) |
+| ✅ ~~Modéré~~ | ~~setProcessState → recomputeVisualItems systématique~~ | ~~Recompute superflu fréquent~~ |
 
 ---
 

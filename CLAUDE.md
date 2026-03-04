@@ -185,6 +185,8 @@ Draft sessions, messages, and media attachments are persisted to IndexedDB (via 
 
 Large session item lists use a custom virtual scroller (`useVirtualScroll.js`, `VirtualScroller.vue`). Items go through a visual pipeline: raw items → `computeVisualItems()` (applies display mode, group expansion) → rendered in the scroller.
 
+Visual items are stabilized across recomputes: when `recomputeVisualItems` runs, each new visual item is compared with the cached version (by `lineNum`). If all properties are identical, the old object reference is reused. This means Vue skips re-rendering for unchanged items, even though `computeVisualItems` creates new objects every time.
+
 ### Session Item Content Access
 
 **IMPORTANT:** In the frontend, never access `item.content` (the raw JSON string) directly for parsing. Always use the helpers from `frontend/src/utils/parsedContent.js`:
