@@ -89,12 +89,17 @@ const selectedModel = ref('opus')
 // Get process state for this session
 const processState = computed(() => store.getProcessState(props.sessionId))
 
+// Whether files are currently being processed (encoded/resized) for this session
+const isProcessingFiles = computed(() => store.isProcessingAttachments(props.sessionId))
+
 // Determine if input/button should be disabled
 const isDisabled = computed(() => {
     // Cannot send without a WebSocket connection
     if (!store.wsConnected) return true
     // Cannot send while the initial sync is running (sessions not available yet)
     if (store.isInitialSyncInProgress) return true
+    // Cannot send while files are being processed (encoding, resizing)
+    if (isProcessingFiles.value) return true
     // Disabled during process startup - we allow sending during assistant_turn
     // (Claude Agent SDK supports receiving messages while responding)
     const state = processState.value?.state

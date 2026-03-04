@@ -163,6 +163,11 @@ export const useDataStore = defineStore('data', {
             // Stored separately from draftMessages to avoid rewriting large blobs on each keystroke
             attachments: {},
 
+            // Number of files currently being processed (encoded/resized) per session.
+            // { sessionId: number }
+            // Used to block the send button until all files are ready.
+            processingAttachments: {},
+
             // MRU (Most Recently Used) navigation tracking
             // Ordered array of { path, sessionId } entries, most recent first
             // path: the full route path (e.g. /project/abc/session/xyz/files)
@@ -377,6 +382,11 @@ export const useDataStore = defineStore('data', {
         getAttachmentCount: (state) => (sessionId) => {
             const map = state.localState.attachments[sessionId]
             return map ? map.size : 0
+        },
+
+        // Whether any files are currently being processed (encoded/resized) for a session
+        isProcessingAttachments: (state) => (sessionId) => {
+            return (state.localState.processingAttachments[sessionId] || 0) > 0
         },
 
         // Get display name for a project (uses cache, computes if missing)
@@ -1951,25 +1961,37 @@ export const useDataStore = defineStore('data', {
          * @throws {Error} If validation fails or file cannot be processed
          */
         async addAttachment(sessionId, file) {
-            // Process file (validates and encodes)
-            const media = await processFile(file, sessionId)
+            // Track that a file is being processed (blocks the send button)
+            this.localState.processingAttachments[sessionId] =
+                (this.localState.processingAttachments[sessionId] || 0) + 1
 
-            // Save to IndexedDB
-            await saveDraftMedia(media)
+            try {
+                // Process file (validates and encodes)
+                const media = await processFile(file, sessionId)
 
-            // Update in-memory state
-            if (!this.localState.attachments[sessionId]) {
-                this.localState.attachments[sessionId] = new Map()
+                // Save to IndexedDB
+                await saveDraftMedia(media)
+
+                // Update in-memory state
+                if (!this.localState.attachments[sessionId]) {
+                    this.localState.attachments[sessionId] = new Map()
+                }
+                this.localState.attachments[sessionId].set(media.id, media)
+
+                // Update draft message with media ID (for order preservation)
+                const draft = await getDraftMessage(sessionId) || {}
+                draft.mediaIds = draft.mediaIds || []
+                draft.mediaIds.push(media.id)
+                await saveDraftMessage(sessionId, draft)
+
+                return media
+            } finally {
+                // Decrement counter (whether success or failure)
+                this.localState.processingAttachments[sessionId]--
+                if (this.localState.processingAttachments[sessionId] <= 0) {
+                    delete this.localState.processingAttachments[sessionId]
+                }
             }
-            this.localState.attachments[sessionId].set(media.id, media)
-
-            // Update draft message with media ID (for order preservation)
-            const draft = await getDraftMessage(sessionId) || {}
-            draft.mediaIds = draft.mediaIds || []
-            draft.mediaIds.push(media.id)
-            await saveDraftMessage(sessionId, draft)
-
-            return media
         },
 
         /**
