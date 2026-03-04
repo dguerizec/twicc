@@ -1,5 +1,6 @@
 <script setup>
 import { computed, ref, watch, onUnmounted } from 'vue'
+import { AGENT_TOOL_NAMES } from '../../constants'
 
 const props = defineProps({
     toolUse: {
@@ -34,8 +35,8 @@ const toolAction = computed(() => {
     if (!props.toolUse?.name) return null
     const name = props.toolUse.name
 
-    // Task tool (agent): derive label from subagent_type input
-    if (name.toLowerCase() === 'task') {
+    // Agent tool (Task or Agent): derive label from subagent_type input
+    if (AGENT_TOOL_NAMES.has(name)) {
         const subtype = props.toolUse.input?.subagent_type?.toLowerCase()
         if (subtype && TASK_SUBAGENT_LABELS[subtype]) {
             return TASK_SUBAGENT_LABELS[subtype]

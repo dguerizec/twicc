@@ -81,6 +81,12 @@ export const DEFAULT_MAX_CACHED_SESSIONS = 20
 export const MAX_CONTEXT_TOKENS = 200_000
 
 /**
+ * Tool names that spawn subagent sessions.
+ * "Task" is the legacy name, "Agent" is the new one — both behave identically.
+ */
+export const AGENT_TOOL_NAMES = new Set(['Task', 'Agent'])
+
+/**
  * Display level values for session items (matches backend ItemDisplayLevel enum).
  * - ALWAYS: Always shown in all modes
  * - COLLAPSIBLE: Shown in Normal, grouped in Simplified

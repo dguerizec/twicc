@@ -20,6 +20,7 @@ from typing import Any, NamedTuple
 import xmltodict
 from django.conf import settings
 from django.core.exceptions import MultipleObjectsReturned
+from django.db.models import Q
 
 from twicc.core.enums import ItemDisplayLevel, ItemKind
 from twicc.core.models import AgentLink, Project, Session, SessionItem, SessionType, ToolResultLink
@@ -28,6 +29,9 @@ from twicc.core.pricing import (
     calculate_line_context_usage,
     extract_model_info,
 )
+
+# Tool names that spawn subagent sessions (Task is the legacy name, Agent is the new one)
+AGENT_TOOL_NAMES = frozenset({'Task', 'Agent'})
 
 # Content types considered user-visible (for display_level and kind computation)
 VISIBLE_CONTENT_TYPES = ('text', 'document', 'image')
@@ -638,9 +642,9 @@ def is_tool_result_item(parsed_json: dict) -> bool:
 
 def get_task_tool_uses(parsed_json: dict) -> list[str]:
     """
-    Extract tool_use IDs from "Task" tool calls in an assistant message.
+    Extract tool_use IDs from agent tool calls in an assistant message.
 
-    Returns a list of tool_use IDs for tool_use items where name="Task".
+    Returns a list of tool_use IDs for tool_use items where name is "Task" or "Agent".
     """
     content = get_message_content_list(parsed_json, "assistant")
     if content is None:
@@ -650,7 +654,7 @@ def get_task_tool_uses(parsed_json: dict) -> list[str]:
         for item in content
         if isinstance(item, dict)
         and item.get('type') == 'tool_use'
-        and item.get('name') == 'Task'
+        and item.get('name') in AGENT_TOOL_NAMES
         and item.get('id')
     ]
 
@@ -1632,19 +1636,19 @@ def create_agent_link_from_tool_result(session_id: str, item: SessionItem, parse
 
 def _extract_task_tool_use_prompts(content: list) -> list[tuple[str, str]]:
     """
-    Extract (tool_use_id, prompt) pairs from Task tool_use items in content.
+    Extract (tool_use_id, prompt) pairs from agent tool_use items in content.
 
     Args:
         content: The content array from an assistant message
 
     Returns:
-        List of (tool_use_id, prompt) tuples for all Task tool_uses found
+        List of (tool_use_id, prompt) tuples for all agent tool_uses found (Task or Agent)
     """
     results = []
     for item in content:
         if not isinstance(item, dict):
             continue
-        if item.get('type') != 'tool_use' or item.get('name') != 'Task':
+        if item.get('type') != 'tool_use' or item.get('name') not in AGENT_TOOL_NAMES:
             continue
         tu_id = item.get('id')
         inputs = item.get('input', {})
@@ -1721,11 +1725,11 @@ def create_agent_link_from_subagent(
 
     agent_prompt = agent_prompt.strip()
 
-    # Search for Task tool_use items in parent session, most recent first
-    # We look for items containing '"name":"Task"' to narrow the search
+    # Search for agent tool_use items in parent session, most recent first
+    # We look for items containing '"name":"Task"' or '"name":"Agent"' to narrow the search
     candidates = SessionItem.objects.filter(
+        Q(content__contains='"name":"Task"') | Q(content__contains='"name":"Agent"'),
         session_id=parent_session_id,
-        content__contains='"name":"Task"',
     ).order_by('-line_num')
 
     for index, candidate in enumerate(candidates.iterator(chunk_size=20)):
@@ -1783,12 +1787,12 @@ def create_agent_link_from_tool_use(
     if content is None:
         return
 
-    # Collect all (tool_use_id, prompt) pairs from Task tool_uses in this message
+    # Collect all (tool_use_id, prompt) pairs from agent tool_uses in this message
     task_prompts: list[tuple[str, str]] = []
     for content_item in content:
         if not isinstance(content_item, dict):
             continue
-        if content_item.get('type') != 'tool_use' or content_item.get('name') != 'Task':
+        if content_item.get('type') != 'tool_use' or content_item.get('name') not in AGENT_TOOL_NAMES:
             continue
         tu_id = content_item.get('id')
         inputs = content_item.get('input', {})

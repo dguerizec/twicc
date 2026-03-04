@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useDataStore } from '../../../stores/data'
 import { apiFetch } from '../../../utils/api'
 import { getIconUrl, getFileIconId } from '../../../utils/fileIcons'
+import { AGENT_TOOL_NAMES } from '../../../constants'
 import JsonHumanView from '../../JsonHumanView.vue'
 
 const route = useRoute()
@@ -345,8 +346,8 @@ const displayInput = computed(() => {
 
 // --- View Agent button for Task tool_use ---
 
-// Is this a Task tool_use?
-const isTask = computed(() => props.name === 'Task')
+// Is this an agent tool_use? (Task or Agent)
+const isTask = computed(() => AGENT_TOOL_NAMES.has(props.name))
 
 // Task tool: display subagent_type instead of "Task"
 // "silent-failure-hunter" → "Silent failure hunter"
@@ -355,7 +356,7 @@ function capitalize(str) {
 }
 
 const taskDisplayName = computed(() => {
-    if (!isTask.value || !props.input?.subagent_type) return null
+    if (!isTask.value || !props.input?.subagent_type || props.input.subagent_type === 'general-purpose') return null
     const sat = props.input.subagent_type
     const colonIdx = sat.indexOf(':')
     if (colonIdx >= 0) {
