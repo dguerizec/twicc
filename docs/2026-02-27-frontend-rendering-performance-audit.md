@@ -52,7 +52,7 @@ getAllSessions: (state) => {
 
 ---
 
-### 1.5 🔴 `recomputeAllVisualItems` — Recompute sur TOUTES les sessions
+### 1.5 ⚪ ~~`recomputeAllVisualItems` — Recompute sur TOUTES les sessions~~ — **Négligeable**
 
 **Fichier:** `data.js:1063-1067`
 
@@ -64,9 +64,7 @@ recomputeAllVisualItems() {
 },
 ```
 
-**Problème:** Appelé quand le display mode change (settings watcher). Si 50 sessions ont leurs items chargés, ça signifie 50× `recomputeVisualItems`. La plupart de ces sessions ne sont pas visibles à ce moment.
-
-**Suggestion:** Invalider un flag et recomputer lazily uniquement quand la session est affichée.
+**Reclassé négligeable :** Appelé uniquement quand le display mode change — une action utilisateur explicite extrêmement rare (quelques fois par session utilisateur au maximum). Le coût ponctuel de N × `recomputeVisualItems` est acceptable pour un événement aussi peu fréquent. Ajouter un système d'invalidation lazy (flag + recompute à l'affichage) introduirait de la complexité pour un gain imperceptible.
 
 ---
 
@@ -118,41 +116,25 @@ const positions = computed(() => {
 
 ---
 
-### 2.4 🟠 `getProjects` getter — Tri O(n log n) à chaque accès
+### 2.4 ⚪ ~~`getProjects` getter — Tri O(n log n) à chaque accès~~ — **Négligeable**
 
-**Fichier:** `data.js:167`
+**Fichier:** `data.js:195`
 
 ```js
 getProjects: (state) => Object.values(state.projects).sort((a, b) => b.mtime - a.mtime),
 ```
 
-**Problème:** Ce getter Pinia retourne directement un résultat (pas une fonction), donc Pinia **le met en cache**. Cependant, il est invalidé à chaque mutation de `state.projects`. Or `updateProject` est appelé fréquemment (WebSocket `project_updated`), et chaque appel invalide ce getter et déclenche un nouveau `Object.values().sort()`.
-
-**Impact modéré** : le nombre de projets est généralement petit (<50), donc le tri est rapide. Mais c'est un pattern à surveiller.
+**Reclassé négligeable :** Ce getter Pinia est mémorisé automatiquement. Il n'est invalidé que quand `mtime` change réellement (Vue traque les propriétés accédées dans le comparateur de sort). `$patch` avec deep merge ne déclenche pas de réactivité si les valeurs sont identiques. Le sort O(n log n) sur < 50 projets est sous la microseconde. Les 7 consommateurs downstream (filtres, reduce) sont également triviaux et le diffing Vue empêche tout re-rendu DOM superflu.
 
 ---
 
 ## 3. Problèmes modérés
 
-### 3.1 🟡 Settings store — Watcher `{ deep: true }` sur objet reconstruit
+### 3.1 ⚪ ~~Settings store — Watcher `{ deep: true }` sur objet reconstruit~~ — **Négligeable**
 
-**Fichier:** `settings.js:444-473`
+**Fichier:** `settings.js:496-529`
 
-```js
-watch(
-    () => ({
-        displayMode: store.displayMode,
-        fontSize: store.fontSize,
-        // ... 20+ propriétés
-    }),
-    (newSettings) => { saveSettings(newSettings) },
-    { deep: true }
-)
-```
-
-**Problème:** Le source du watch crée un **nouvel objet** à chaque évaluation (à chaque changement de n'importe quelle propriété du store). Le `{ deep: true }` est techniquement inutile ici puisque toutes les propriétés sont des primitives (strings, booleans, numbers), et le watch se déclenchera déjà car la référence de l'objet change.
-
-**Impact:** Faible en pratique (les settings changent rarement), mais c'est un anti-pattern. Le `deep: true` ajoute un traversal récursif inutile de l'objet.
+**Reclassé négligeable :** Le `{ deep: true }` est en fait **nécessaire** avec ce pattern. Le getter retourne un nouvel objet à chaque évaluation (nouvelle référence) — sans `deep: true`, le callback se déclencherait à chaque évaluation du getter (car `oldRef !== newRef`). Le `deep: true` force Vue à comparer propriété par propriété, et comme les 24 propriétés sont toutes des primitives, le callback ne se déclenche que sur un changement réel. L'overhead du deep compare sur 24 primitives (24 comparaisons `===`) est négligeable. De plus, les settings ne changent que sur action utilisateur explicite (UI) ou sync WebSocket au connect — extrêmement rare.
 
 ---
 
@@ -162,11 +144,11 @@ watch(
 
 ---
 
-### 3.3 🟡 `ContentList.vue` — `expandedInternalGroups` crée un `new Set()` à chaque accès
+### 3.3 ⚪ ~~`ContentList.vue` — `expandedInternalGroups` crée un `new Set()` à chaque accès~~ — **Négligeable**
 
 **Fichier:** `ContentList.vue`
 
-Le computed `expandedInternalGroups` crée un `new Set()` basé sur les données du store à chaque évaluation. Comme il est utilisé dans le template pour chaque groupe interne, cela peut s'accumuler.
+**Reclassé négligeable :** Le computed n'est invalidé que sur clic utilisateur (toggle de groupe interne) ou migration rare d'items — jamais par le scroll, les nouveaux items, ou le display mode. Le Set contient 0 ou 1 élément en pratique (la majorité des messages ont 0 internal groups). `new Set([])` est instantané. Le consommateur unique (`visibleItems`) doit de toute façon recalculer quand les groupes changent. Aucune interaction avec le virtual scroller ou la pipeline de visual items.
 
 ---
 
@@ -204,54 +186,27 @@ Ce composant utilise des `setInterval` pour :
 
 ## 4. Problèmes mineurs
 
-### 4.1 🔵 `notifyProcessStateChange` instancie `useSettingsStore()` à chaque appel
+### 4.1 ⚪ ~~`notifyProcessStateChange` instancie `useSettingsStore()` à chaque appel~~ — **Négligeable**
 
-**Fichier:** `useWebSocket.js:147`
-
-```js
-function notifyProcessStateChange(msg, previousState, route) {
-    const settings = useSettingsStore()
-    // ...
-}
-```
-
-Appeler `useSettingsStore()` dans une fonction non-composable est un anti-pattern Vue, mais Pinia le gère grâce au singleton pattern. L'impact est négligeable (simple lookup). Il serait plus propre de le cacher au niveau module.
+Anti-pattern Vue (appel de `useSettingsStore()` dans une fonction non-composable), mais Pinia le gère via singleton. Simple lookup, impact nul.
 
 ---
 
-### 4.2 🔵 `SessionList.vue` — `getSessionDisplayName` est une fonction normale, pas un computed
+### 4.2 ⚪ ~~`SessionList.vue` — `getSessionDisplayName` est une fonction normale, pas un computed~~ — **Négligeable**
 
-C'est appelé dans le template via `{{ getSessionDisplayName(session) }}`, ce qui est réévalué à chaque re-rendu. L'impact est négligeable car c'est une opération triviale.
-
----
-
-### 4.3 🔵 `getProjectDisplayName` getter — Mutation dans un getter
-
-**Fichier:** `data.js:349-377`
-
-```js
-getProjectDisplayName: (state) => (projectId) => {
-    // ...
-    // Cache it
-    state.localState.projectDisplayNames[projectId] = displayName
-    return displayName
-}
-```
-
-Ce getter **mute le state** en écrivant dans le cache. C'est un anti-pattern Pinia (les getters devraient être purs). En pratique, ça fonctionne mais peut causer des boucles de réactivité dans certains cas.
+Opération triviale (accès à quelques propriétés). Depuis l'extraction dans `SessionListItem`, le re-rendu est scopé à l'item individuel.
 
 ---
 
-### 4.4 🔵 `App.vue` — `toastTheme` computed crée un nouvel objet
+### 4.3 ⚪ ~~`getProjectDisplayName` getter — Mutation dans un getter~~ — **Négligeable**
 
-```js
-const toastTheme = computed(() => ({
-    '--toastify-color-light': '...',
-    // ...
-}))
-```
+Anti-pattern Pinia (mutation de state dans un getter), mais le cache `localState.projectDisplayNames` est un objet non-réactif dans `localState` qui n'est pas traqué par les consommateurs du getter. Aucune boucle de réactivité observée en pratique.
 
-Crée un nouvel objet à chaque changement de thème. Impact quasi nul car le thème change rarement.
+---
+
+### 4.4 ⚪ ~~`App.vue` — `toastTheme` computed crée un nouvel objet~~ — **Négligeable**
+
+Le thème change extrêmement rarement (action utilisateur). Impact quasi nul.
 
 ---
 
@@ -287,14 +242,14 @@ Le code contient aussi plusieurs excellents patterns de performance qu'il faut s
 | ✅ ~~Critique~~ | ~~Appels multiples getProcessState/getPendingRequest par session item dans template~~ | ~~×10 par item × 30 visibles × 1/s~~ |
 | ⚪ ~~Critique~~ | ~~getProjectSessions/getAllSessions non-cachés~~ | Négligeable (sous 1ms, déclenché uniquement sur changement réel) |
 | ✅ ~~Critique~~ | ~~recomputeVisualItems avec JSON.parse/stringify fréquent~~ | ~~Parsing coûteux à chaque WS message~~ |
-| 🔴 Critique | recomputeAllVisualItems sur toutes les sessions | N × recompute au changement de mode |
+| ⚪ ~~Critique~~ | recomputeAllVisualItems sur toutes les sessions | Négligeable (display mode change extrêmement rare, action utilisateur explicite) |
 | ⚪ ~~Important~~ | computeVisualItems multi-passes avec allocations | Négligeable (JS pur, sous 1ms) |
 | ⚪ ~~Important~~ | positions computed recalculé intégralement | Négligeable (JS pur, sous 1ms) |
 | ✅ ~~Important~~ | ~~SessionItem JSON.parse dans computed~~ | ~~Parsing de gros JSON par item~~ |
-| 🟠 Important | getProjects tri à chaque invalidation | O(n log n) fréquent |
-| 🟡 Modéré | Settings watcher deep:true inutile | Traversal récursif superflu |
+| ⚪ ~~Important~~ | getProjects tri à chaque invalidation | Négligeable (< 50 items, mémorisé, invalidé uniquement sur changement réel de mtime) |
+| ⚪ ~~Modéré~~ | Settings watcher deep:true | Négligeable (deep:true nécessaire ici, 24 primitives, changements rares) |
 | ✅ ~~Modéré~~ | ~~VirtualScroller renderedItems nouvelles refs~~ | ~~Possible re-rendu de slots~~ |
-| 🟡 Modéré | ContentList new Set() dans computed | Allocation par évaluation |
+| ⚪ ~~Modéré~~ | ContentList new Set() dans computed | Négligeable (0-1 items, invalidé uniquement sur clic utilisateur) |
 | ⚪ ~~Modéré~~ | Inline arrow function pour itemKey | Négligeable (capturé au mount) |
 | ⚪ ~~Modéré~~ | ToolUseContent timers multiples | Négligeable (auto-limité, lazy) |
 | ✅ ~~Modéré~~ | ~~setProcessState → recomputeVisualItems systématique~~ | ~~Recompute superflu fréquent~~ |
