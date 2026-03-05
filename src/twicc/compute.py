@@ -834,8 +834,10 @@ def compute_item_kind(parsed_json: dict) -> ItemKind | None:
         content = get_message_content(parsed_json)
         text = extract_text_from_content(content)
 
-        # Commands are shown as user messages
-        if text is not None and extract_command(text):
+        # Commands are shown as user messages (except /clear which is system)
+        if text is not None and (command := extract_command(text)):
+            if command.name == '/clear':
+                return ItemKind.SYSTEM
             return ItemKind.USER_MESSAGE
 
         # Meta messages are not user messages
