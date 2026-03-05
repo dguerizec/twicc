@@ -355,7 +355,7 @@ const description = computed(() => {
         return filePath
     }
     // Special tools have their own summary rendering
-    if (isSkill.value || isGrep.value || isGlob.value || isTodoWrite.value) return null
+    if (isSkill.value || isGrep.value || isGlob.value || isTodoWrite.value || isWebFetch.value || isWebSearch.value) return null
     return props.input?.description || null
 })
 
@@ -404,6 +404,20 @@ const isGlob = computed(() => props.name === 'Glob')
 const globPattern = computed(() => {
     if (!isGlob.value) return null
     return props.input?.pattern || null
+})
+
+// --- WebFetch tool summary ---
+const isWebFetch = computed(() => props.name === 'WebFetch')
+const webFetchUrl = computed(() => {
+    if (!isWebFetch.value) return null
+    return props.input?.url || null
+})
+
+// --- WebSearch tool summary ---
+const isWebSearch = computed(() => props.name === 'WebSearch')
+const webSearchQuery = computed(() => {
+    if (!isWebSearch.value) return null
+    return props.input?.query || null
 })
 
 // --- TodoWrite tool summary ---
@@ -611,6 +625,16 @@ function navigateToSubagent(agentId) {
                     <span class="items-details-summary-separator"> — </span>
                     <span class="items-details-summary-description"><code>{{ globPattern }}</code></span>
                 </template>
+                <!-- WebFetch tool: show URL as a link -->
+                <template v-else-if="webFetchUrl">
+                    <span class="items-details-summary-separator"> — </span>
+                    <a :href="webFetchUrl" target="_blank" rel="noopener noreferrer nofollow" class="items-details-summary-description items-details-summary-link" @click.stop>{{ webFetchUrl }}<wa-icon name="arrow-up-right-from-square" class="items-details-summary-link-icon"></wa-icon></a>
+                </template>
+                <!-- WebSearch tool: show query -->
+                <template v-else-if="webSearchQuery">
+                    <span class="items-details-summary-separator"> — </span>
+                    <span class="items-details-summary-description">{{ webSearchQuery }}</span>
+                </template>
                 <!-- TodoWrite tool: show progress description -->
                 <template v-else-if="todoDescription">
                     <template v-for="(part, i) in todoDescription" :key="i">
@@ -751,6 +775,20 @@ wa-details {
     font-size: 1em;
     background: var(--wa-color-neutral-fill-quiet);
     border-radius: var(--wa-border-radius-s);
+}
+
+.items-details-summary-link {
+    color: inherit;
+    text-decoration: none;
+    &:hover {
+        text-decoration: underline;
+    }
+}
+
+.items-details-summary-link-icon {
+    font-size: var(--wa-font-size-2xs);
+    margin-left: var(--wa-space-3xs);
+    opacity: 0.6;
 }
 
 .tool-input {
