@@ -496,9 +496,6 @@ def sync_session_items(session: Session, file_path: Path) -> tuple[list[int], li
     if session.mtime == file_mtime:
         return [], []
 
-    new_line_nums: set[int] = set()
-    modified_line_nums: set[int] = set()
-
     with open(file_path, "r", encoding="utf-8") as f:
         # Seek to last known position
         f.seek(session.last_offset)
@@ -514,309 +511,315 @@ def sync_session_items(session: Session, file_path: Path) -> tuple[list[int], li
         # Split into lines (filter out empty lines)
         lines = [line for line in new_content.split("\n") if line.strip()]
 
-        if lines:
-            # Create SessionItem objects for bulk insert
-            items_to_create: list[tuple[SessionItem, dict]] = []
-            current_line_num = session.last_line
+        # Capture file position and save offset+mtime immediately to release the file
+        new_offset = f.tell()
 
-            # Track title updates (session_id -> title)
-            session_title_updates: dict[str, str] = {}
-            # Track if we've already set initial title for this session (from first user message ever)
-            initial_title_needs_set = session.title is None
+    session.last_offset = new_offset
+    session.mtime = file_mtime
 
-            # Track first timestamp in this batch (for session.created_at)
-            first_timestamp: datetime | None = None
+    if not lines:
+        session.save(update_fields=["last_offset", "mtime"])
+        return [], []
 
-            # Track last seen values for runtime environment fields
-            first_cwd: str | None = None  # First cwd in this batch
-            last_cwd: str | None = None
-            last_cwd_git_branch: str | None = None
-            last_model: str | None = None
+    # Create SessionItem objects for bulk insert
+    items_to_create: list[tuple[SessionItem, dict]] = []
+    current_line_num = session.last_line
 
-            # For subagents: track if we need to create the link between the agent and the parent session tool use
-            subagent_needs_link = (
-                session.type == SessionType.SUBAGENT
-                and session.parent_session_id
-                and not is_agent_link_done(session.parent_session_id, session.id)
-            )
+    # Track title updates (session_id -> title)
+    session_title_updates: dict[str, str] = {}
+    # Track if we've already set initial title for this session (from first user message ever)
+    initial_title_needs_set = session.title is None
 
-            # Load existing message_ids for deduplication of cost computation
-            seen_message_ids: set[str] = set(
-                SessionItem.objects.filter(
-                    session_id=session.id,
-                    message_id__isnull=False,
-                ).values_list('message_id', flat=True)
-            )
+    # Track first timestamp in this batch (for session.created_at)
+    first_timestamp: datetime | None = None
 
-            for line in lines:
-                line = line.strip()
-                if not line:
-                    line = "{}"
-                current_line_num += 1
-                item = SessionItem(
-                    session=session,
-                    line_num=current_line_num,
-                    content=line,
-                )
-                try:
-                    parsed = orjson.loads(line)
-                except orjson.JSONDecodeError:
-                    parsed = {}
+    # Track last seen values for runtime environment fields
+    first_cwd: str | None = None  # First cwd in this batch
+    last_cwd: str | None = None
+    last_cwd_git_branch: str | None = None
+    last_model: str | None = None
 
-                # Transform task-notification XML into standard tool_result format
-                new_content = transform_task_notification(parsed)
-                if new_content is not None:
-                    item.content = new_content
+    # For subagents: track if we need to create the link between the agent and the parent session tool use
+    subagent_needs_link = (
+        session.type == SessionType.SUBAGENT
+        and session.parent_session_id
+        and not is_agent_link_done(session.parent_session_id, session.id)
+    )
 
-                # Pre-compute display_level (no group info yet)
-                metadata = compute_item_metadata(parsed)
-                item.display_level = metadata['display_level']
-                item.kind = metadata['kind']
+    # Load existing message_ids for deduplication of cost computation
+    seen_message_ids: set[str] = set(
+        SessionItem.objects.filter(
+            session_id=session.id,
+            message_id__isnull=False,
+        ).values_list('message_id', flat=True)
+    )
 
-                # Extract timestamp
-                item.timestamp = extract_item_timestamp(parsed)
-                if first_timestamp is None and item.timestamp is not None:
-                    first_timestamp = item.timestamp
+    for line in lines:
+        line = line.strip()
+        if not line:
+            line = "{}"
+        current_line_num += 1
+        item = SessionItem(
+            session=session,
+            line_num=current_line_num,
+            content=line,
+        )
+        try:
+            parsed = orjson.loads(line)
+        except orjson.JSONDecodeError:
+            parsed = {}
 
-                # Compute cost and context usage (with deduplication)
-                compute_item_cost_and_usage(item, parsed, seen_message_ids)
+        # Transform task-notification XML into standard tool_result format
+        new_content = transform_task_notification(parsed)
+        if new_content is not None:
+            item.content = new_content
 
-                items_to_create.append((item, parsed))
+        # Pre-compute display_level (no group info yet)
+        metadata = compute_item_metadata(parsed)
+        item.display_level = metadata['display_level']
+        item.kind = metadata['kind']
 
-                # Extract runtime environment fields (keep last non-null value)
-                if cwd := parsed.get('cwd'):
-                    if first_cwd is None:
-                        first_cwd = cwd
-                    last_cwd = cwd
-                if cwd_git_branch := parsed.get('gitBranch'):
-                    last_cwd_git_branch = cwd_git_branch
-                if (message := parsed.get('message')) and isinstance(message, dict):
-                    if model := message.get('model'):
-                        last_model = model
+        # Extract timestamp
+        item.timestamp = extract_item_timestamp(parsed)
+        if first_timestamp is None and item.timestamp is not None:
+            first_timestamp = item.timestamp
 
-                # Handle title extraction
-                if item.kind == ItemKind.USER_MESSAGE and initial_title_needs_set:
-                    # First user message in this batch: set initial title
-                    title = extract_title_from_user_message(parsed)
-                    if title:
-                        session_title_updates[session.id] = title
-                        initial_title_needs_set = False
+        # Compute cost and context usage (with deduplication)
+        compute_item_cost_and_usage(item, parsed, seen_message_ids)
 
-                # For subagents: create agent link from first user_message
-                if subagent_needs_link and (agent_id := parsed.get('agentId')):
-                    prompt = get_cached_agent_prompt(session.parent_session_id, agent_id)
-                    if not prompt:
-                        # try to get from db
-                        if (first_user_message := session.items.filter(kind=ItemKind.USER_MESSAGE).first()) is not None:
-                            try:
-                                first_user_message_parsed = orjson.loads(first_user_message.content)
-                            except orjson.JSONDecodeError:
-                                pass
-                            else:
-                                prompt = extract_text_from_content(get_message_content(first_user_message_parsed))
-                        if not prompt:
-                            # not in db so we may be the first one
-                            if item.kind == ItemKind.USER_MESSAGE:
-                                content = get_message_content(parsed)
-                                prompt = extract_text_from_content(content)
+        items_to_create.append((item, parsed))
 
-                        if prompt:
-                            cache_agent_prompt(session.parent_session_id, agent_id, prompt)
-                            if create_agent_link_from_subagent(
-                                parent_session_id=session.parent_session_id,
-                                agent_id=agent_id,
-                                agent_prompt=prompt,
-                            ):
+        # Extract runtime environment fields (keep last non-null value)
+        if cwd := parsed.get('cwd'):
+            if first_cwd is None:
+                first_cwd = cwd
+            last_cwd = cwd
+        if cwd_git_branch := parsed.get('gitBranch'):
+            last_cwd_git_branch = cwd_git_branch
+        if (message := parsed.get('message')) and isinstance(message, dict):
+            if model := message.get('model'):
+                last_model = model
 
-                                subagent_needs_link = False
+        # Handle title extraction
+        if item.kind == ItemKind.USER_MESSAGE and initial_title_needs_set:
+            # First user message in this batch: set initial title
+            title = extract_title_from_user_message(parsed)
+            if title:
+                session_title_updates[session.id] = title
+                initial_title_needs_set = False
 
-                if item.kind == ItemKind.CUSTOM_TITLE:
-                    # Custom title: update the target session's title
-                    custom_title = parsed.get('customTitle')
-                    target_session_id = parsed.get('sessionId', session.id)
-                    if custom_title and isinstance(custom_title, str):
-                        session_title_updates[target_session_id] = custom_title
-
-            # Bulk create all items
-            items_only = [item for item, _ in items_to_create]
-            SessionItem.objects.bulk_create(items_only, ignore_conflicts=True)
-
-            # Track line_nums of new items
-            new_line_nums = {item.line_num for item in items_only}
-
-            # Second pass: compute group membership, tool_result links, and update cost/usage/timestamp fields
-            for item, parsed in items_to_create:
-                # Build the update dict for this item (includes cost/usage/timestamp fields)
-                update_fields = {
-                    'message_id': item.message_id,
-                    'cost': item.cost,
-                    'context_usage': item.context_usage,
-                    'timestamp': item.timestamp,
-                }
-
-                # Group membership for COLLAPSIBLE and ALWAYS items
-                if item.display_level in (ItemDisplayLevel.COLLAPSIBLE, ItemDisplayLevel.ALWAYS):
-                    item_modified_lines = compute_item_metadata_live(session.id, item, parsed)
-                    modified_line_nums.update(item_modified_lines)
-                    update_fields['group_head'] = item.group_head
-                    update_fields['group_tail'] = item.group_tail
-                    update_fields['git_directory'] = item.git_directory
-                    update_fields['git_branch'] = item.git_branch
-
-                # Update the item in DB with all computed fields
-                SessionItem.objects.filter(
-                    session=session,
-                    line_num=item.line_num
-                ).update(**update_fields)
-
-                # Tool result links (tool_result items are DEBUG_ONLY)
-                if is_tool_result_item(parsed):
-                    create_tool_result_link_live(session.id, item, parsed)
-                    # Also check for agent links (Task tool_result with agentId)
-                    create_agent_link_from_tool_result(session.id, item, parsed)
-
-                # For parent sessions: check if this assistant message contains Task tool_use(s)
-                # and try to link them to existing subagents (handles the race condition where
-                # the subagent was synced before this Task tool_use existed).
-                # Note: Task tool_uses are often in CONTENT_ITEMS lines (streaming splits
-                # the text and tool_use into separate lines, and tool_use-only lines have
-                # no visible content so they're classified as CONTENT_ITEMS, not ASSISTANT_MESSAGE).
-                if session.type == SessionType.SESSION and item.kind in (ItemKind.ASSISTANT_MESSAGE, ItemKind.CONTENT_ITEMS):
-                    create_agent_link_from_tool_use(session.id, item, parsed)
-
-            # Check if project needs git_root resolution
-            # (a session item resolved git info but project has no git_root yet)
-            if any(item.git_directory for item, _ in items_to_create) and get_project_git_root(session.project_id) is None:
-                ensure_project_git_root(session.project_id)
-
-            # Apply title updates
-            for target_session_id, title in session_title_updates.items():
-                Session.objects.filter(id=target_session_id).update(title=title)
-                # If updating the current session, update the object too
-                if target_session_id == session.id:
-                    session.title = title
-
-            # Update session tracking fields
-            session.last_line = current_line_num
-
-            # Recompute user_message_count using the optimized index
-            session.user_message_count = SessionItem.objects.filter(
-                session=session,
-                kind=ItemKind.USER_MESSAGE
-            ).count()
-
-            # Update session cost and context usage from the new items
-            # Find last context_usage among new items (most recent non-null value)
-            for item, _ in reversed(items_to_create):
-                if item.context_usage is not None:
-                    session.context_usage = item.context_usage
-                    break
-
-            # Recalculate costs from DB (idempotent)
-            session.recalculate_costs()
-
-            # Update runtime environment fields if changed
-            if last_cwd and last_cwd != session.cwd:
-                # Update project directory only on first sync (when session.cwd was None)
-                # The first cwd of a session is the project directory (where Claude Code was launched)
-                # Only for real sessions, not subagents (which may be launched from a different directory)
-                if session.cwd is None and first_cwd and session.type == SessionType.SESSION:
-                    ensure_project_directory(session.project_id, first_cwd)
-                session.cwd = last_cwd
-            if last_cwd_git_branch and last_cwd_git_branch != session.cwd_git_branch:
-                session.cwd_git_branch = last_cwd_git_branch
-            if last_model and last_model != session.model:
-                session.model = last_model
-
-            # Update resolved git directory/branch from the latest item that has one
-            # (items are processed in order, so the last one wins)
-            for item, _ in reversed(items_to_create):
-                if item.git_directory:
-                    if item.git_directory != session.git_directory or item.git_branch != session.git_branch:
-                        session.git_directory = item.git_directory
-                        session.git_branch = item.git_branch
-                    break
-
-            # Fallback: if no item provided git info, try resolving from the session's cwd.
-            # This handles sessions where the agent only uses Bash (no tool_use with file paths),
-            # so resolve_git_for_item has nothing to work with.
-            if not session.git_directory and session.cwd:
-                cwd_git = resolve_git_from_path(session.cwd, use_cache=False)
-                if cwd_git:
-                    session.git_directory, session.git_branch = cwd_git
-
-            # Validate git state: verify git_directory still exists on disk and refresh branch.
-            # This catches Bash commands that modify git state (git checkout, worktree deletion, etc.).
-            if session.git_directory:
-                if os.path.isdir(session.git_directory):
-                    # Directory exists: refresh branch from HEAD in case of git checkout
-                    head_path = os.path.join(session.git_directory, '.git', 'HEAD')
-                    if not os.path.isfile(head_path):
-                        # Worktree: .git is a file, read gitdir path to find HEAD
-                        git_file = os.path.join(session.git_directory, '.git')
-                        if os.path.isfile(git_file):
-                            try:
-                                with open(git_file, 'r') as f:
-                                    content = f.read().strip()
-                                if content.startswith('gitdir: '):
-                                    head_path = os.path.join(content[len('gitdir: '):], 'HEAD')
-                            except OSError:
-                                head_path = None
-                        else:
-                            head_path = None
-                    if head_path:
-                        branch = read_head_branch(head_path)
-                        if branch and branch != session.git_branch:
-                            session.git_branch = branch
-                else:
-                    # git_directory no longer exists: re-resolve through fallback chain
-                    resolved = None
-                    if session.cwd and os.path.isdir(session.cwd):
-                        resolved = resolve_git_from_path(session.cwd, use_cache=False)
-                    if not resolved:
-                        project_git_root = get_project_git_root(session.project_id)
-                        if project_git_root and os.path.isdir(project_git_root):
-                            # Already a resolved git root, re-read branch from it
-                            head_path = os.path.join(project_git_root, '.git', 'HEAD')
-                            branch = read_head_branch(head_path)
-                            if branch:
-                                resolved = (project_git_root, branch)
-                    if not resolved:
-                        project_directory = get_project_directory(session.project_id)
-                        if project_directory and os.path.isdir(project_directory):
-                            resolved = resolve_git_from_path(project_directory, use_cache=False)
-                    if resolved:
-                        session.git_directory, session.git_branch = resolved
+        # For subagents: create agent link from first user_message
+        if subagent_needs_link and (agent_id := parsed.get('agentId')):
+            prompt = get_cached_agent_prompt(session.parent_session_id, agent_id)
+            if not prompt:
+                # try to get from db
+                if (first_user_message := session.items.filter(kind=ItemKind.USER_MESSAGE).first()) is not None:
+                    try:
+                        first_user_message_parsed = orjson.loads(first_user_message.content)
+                    except orjson.JSONDecodeError:
+                        pass
                     else:
-                        session.git_directory = None
-                        session.git_branch = None
+                        prompt = extract_text_from_content(get_message_content(first_user_message_parsed))
+                if not prompt:
+                    # not in db so we may be the first one
+                    if item.kind == ItemKind.USER_MESSAGE:
+                        content = get_message_content(parsed)
+                        prompt = extract_text_from_content(content)
 
-            is_new_session = session.created_at is None and first_timestamp is not None
-            if is_new_session:
-                session.created_at = first_timestamp
+                if prompt:
+                    cache_agent_prompt(session.parent_session_id, agent_id, prompt)
+                    if create_agent_link_from_subagent(
+                        parent_session_id=session.parent_session_id,
+                        agent_id=agent_id,
+                        agent_prompt=prompt,
+                    ):
 
-            # Recalculate activity counters for affected days (only items that contribute)
-            affected_days = {
-                item.timestamp.date()
-                for item, _ in items_to_create
-                if item.timestamp and (item.kind == ItemKind.USER_MESSAGE or item.cost)
-            }
-            if is_new_session and session.type == SessionType.SESSION and first_timestamp:
-                affected_days.add(first_timestamp.date())
+                        subagent_needs_link = False
 
-        # Update offset to end of file
-        session.last_offset = f.tell()
-        session.mtime = file_mtime
-        session.save(update_fields=["last_offset", "last_line", "mtime", "user_message_count", "context_usage", "self_cost", "subagents_cost", "total_cost", "cwd", "cwd_git_branch", "git_directory", "git_branch", "model", "created_at"])
+        if item.kind == ItemKind.CUSTOM_TITLE:
+            # Custom title: update the target session's title
+            custom_title = parsed.get('customTitle')
+            target_session_id = parsed.get('sessionId', session.id)
+            if custom_title and isinstance(custom_title, str):
+                session_title_updates[target_session_id] = custom_title
 
-        # Recalculate activities after session.save (needs created_at in DB for session_count)
-        if lines:
-            from twicc.core.models import PeriodicActivity
-            PeriodicActivity.recalculate_for_days(session.project_id, affected_days)
+    # Bulk create all items
+    items_only = [item for item, _ in items_to_create]
+    SessionItem.objects.bulk_create(items_only, ignore_conflicts=True)
 
-        # If this is a subagent, propagate cost to parent session
-        if session.type == SessionType.SUBAGENT and session.parent_session_id:
-            _update_parent_session_costs(session.parent_session_id)
+    # Track line_nums of new and updated items
+    new_line_nums: set[int] = {item.line_num for item in items_only}
+    modified_line_nums: set[int] = set()
+
+    # Second pass: compute group membership, tool_result links, and update cost/usage/timestamp fields
+    for item, parsed in items_to_create:
+        # Build the update dict for this item (includes cost/usage/timestamp fields)
+        update_fields = {
+            'message_id': item.message_id,
+            'cost': item.cost,
+            'context_usage': item.context_usage,
+            'timestamp': item.timestamp,
+        }
+
+        # Group membership for COLLAPSIBLE and ALWAYS items
+        if item.display_level in (ItemDisplayLevel.COLLAPSIBLE, ItemDisplayLevel.ALWAYS):
+            item_modified_lines = compute_item_metadata_live(session.id, item, parsed)
+            modified_line_nums.update(item_modified_lines)
+            update_fields['group_head'] = item.group_head
+            update_fields['group_tail'] = item.group_tail
+            update_fields['git_directory'] = item.git_directory
+            update_fields['git_branch'] = item.git_branch
+
+        # Update the item in DB with all computed fields
+        SessionItem.objects.filter(
+            session=session,
+            line_num=item.line_num
+        ).update(**update_fields)
+
+        # Tool result links (tool_result items are DEBUG_ONLY)
+        if is_tool_result_item(parsed):
+            create_tool_result_link_live(session.id, item, parsed)
+            # Also check for agent links (Task tool_result with agentId)
+            create_agent_link_from_tool_result(session.id, item, parsed)
+
+        # For parent sessions: check if this assistant message contains Task tool_use(s)
+        # and try to link them to existing subagents (handles the race condition where
+        # the subagent was synced before this Task tool_use existed).
+        # Note: Task tool_uses are often in CONTENT_ITEMS lines (streaming splits
+        # the text and tool_use into separate lines, and tool_use-only lines have
+        # no visible content so they're classified as CONTENT_ITEMS, not ASSISTANT_MESSAGE).
+        if session.type == SessionType.SESSION and item.kind in (ItemKind.ASSISTANT_MESSAGE, ItemKind.CONTENT_ITEMS):
+            create_agent_link_from_tool_use(session.id, item, parsed)
+
+    # Check if project needs git_root resolution
+    # (a session item resolved git info but project has no git_root yet)
+    if any(item.git_directory for item, _ in items_to_create) and get_project_git_root(session.project_id) is None:
+        ensure_project_git_root(session.project_id)
+
+    # Apply title updates
+    for target_session_id, title in session_title_updates.items():
+        Session.objects.filter(id=target_session_id).update(title=title)
+        # If updating the current session, update the object too
+        if target_session_id == session.id:
+            session.title = title
+
+    # Update session tracking fields
+    session.last_line = current_line_num
+
+    # Recompute user_message_count using the optimized index
+    session.user_message_count = SessionItem.objects.filter(
+        session=session,
+        kind=ItemKind.USER_MESSAGE
+    ).count()
+
+    # Update session cost and context usage from the new items
+    # Find last context_usage among new items (most recent non-null value)
+    for item, _ in reversed(items_to_create):
+        if item.context_usage is not None:
+            session.context_usage = item.context_usage
+            break
+
+    # Recalculate costs from DB (idempotent)
+    session.recalculate_costs()
+
+    # Update runtime environment fields if changed
+    if last_cwd and last_cwd != session.cwd:
+        # Update project directory only on first sync (when session.cwd was None)
+        # The first cwd of a session is the project directory (where Claude Code was launched)
+        # Only for real sessions, not subagents (which may be launched from a different directory)
+        if session.cwd is None and first_cwd and session.type == SessionType.SESSION:
+            ensure_project_directory(session.project_id, first_cwd)
+        session.cwd = last_cwd
+    if last_cwd_git_branch and last_cwd_git_branch != session.cwd_git_branch:
+        session.cwd_git_branch = last_cwd_git_branch
+    if last_model and last_model != session.model:
+        session.model = last_model
+
+    # Update resolved git directory/branch from the latest item that has one
+    # (items are processed in order, so the last one wins)
+    for item, _ in reversed(items_to_create):
+        if item.git_directory:
+            if item.git_directory != session.git_directory or item.git_branch != session.git_branch:
+                session.git_directory = item.git_directory
+                session.git_branch = item.git_branch
+            break
+
+    # Fallback: if no item provided git info, try resolving from the session's cwd.
+    # This handles sessions where the agent only uses Bash (no tool_use with file paths),
+    # so resolve_git_for_item has nothing to work with.
+    if not session.git_directory and session.cwd:
+        cwd_git = resolve_git_from_path(session.cwd, use_cache=False)
+        if cwd_git:
+            session.git_directory, session.git_branch = cwd_git
+
+    # Validate git state: verify git_directory still exists on disk and refresh branch.
+    # This catches Bash commands that modify git state (git checkout, worktree deletion, etc.).
+    if session.git_directory:
+        if os.path.isdir(session.git_directory):
+            # Directory exists: refresh branch from HEAD in case of git checkout
+            head_path = os.path.join(session.git_directory, '.git', 'HEAD')
+            if not os.path.isfile(head_path):
+                # Worktree: .git is a file, read gitdir path to find HEAD
+                git_file = os.path.join(session.git_directory, '.git')
+                if os.path.isfile(git_file):
+                    try:
+                        with open(git_file, 'r') as f:
+                            content = f.read().strip()
+                        if content.startswith('gitdir: '):
+                            head_path = os.path.join(content[len('gitdir: '):], 'HEAD')
+                    except OSError:
+                        head_path = None
+                else:
+                    head_path = None
+            if head_path:
+                branch = read_head_branch(head_path)
+                if branch and branch != session.git_branch:
+                    session.git_branch = branch
+        else:
+            # git_directory no longer exists: re-resolve through fallback chain
+            resolved = None
+            if session.cwd and os.path.isdir(session.cwd):
+                resolved = resolve_git_from_path(session.cwd, use_cache=False)
+            if not resolved:
+                project_git_root = get_project_git_root(session.project_id)
+                if project_git_root and os.path.isdir(project_git_root):
+                    # Already a resolved git root, re-read branch from it
+                    head_path = os.path.join(project_git_root, '.git', 'HEAD')
+                    branch = read_head_branch(head_path)
+                    if branch:
+                        resolved = (project_git_root, branch)
+            if not resolved:
+                project_directory = get_project_directory(session.project_id)
+                if project_directory and os.path.isdir(project_directory):
+                    resolved = resolve_git_from_path(project_directory, use_cache=False)
+            if resolved:
+                session.git_directory, session.git_branch = resolved
+            else:
+                session.git_directory = None
+                session.git_branch = None
+
+    is_new_session = session.created_at is None and first_timestamp is not None
+    if is_new_session:
+        session.created_at = first_timestamp
+
+    # Recalculate activity counters for affected days (only items that contribute)
+    affected_days = {
+        item.timestamp.date()
+        for item, _ in items_to_create
+        if item.timestamp and (item.kind == ItemKind.USER_MESSAGE or item.cost)
+    }
+    if is_new_session and session.type == SessionType.SESSION and first_timestamp:
+        affected_days.add(first_timestamp.date())
+
+    session.save(update_fields=["last_offset", "last_line", "mtime", "user_message_count", "context_usage", "self_cost", "subagents_cost", "total_cost", "cwd", "cwd_git_branch", "git_directory", "git_branch", "model", "created_at"])
+
+    # Recalculate activities after session.save (needs created_at in DB for session_count)
+    from twicc.core.models import PeriodicActivity
+    PeriodicActivity.recalculate_for_days(session.project_id, affected_days)
+
+    # If this is a subagent, propagate cost to parent session
+    if session.type == SessionType.SUBAGENT and session.parent_session_id:
+        _update_parent_session_costs(session.parent_session_id)
 
     # Exclude new items from modified_line_nums
     return sorted(new_line_nums), sorted(modified_line_nums - new_line_nums)
