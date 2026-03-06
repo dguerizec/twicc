@@ -26,7 +26,7 @@ from twicc.paths import get_env_path
 # These variables cause Claude Code to think it's already running inside an SDK
 # session, preventing interactive use from TwiCC's terminal.
 for _key in list(os.environ):
-    if _key.startswith("CLAUDE_"):
+    if _key.startswith("CLAUDE_") or _key == "CLAUDECODE":
         del os.environ[_key]
 
 # Load .env from the data directory (~/.twicc/.env or $TWICC_DATA_DIR/.env)

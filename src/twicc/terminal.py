@@ -157,7 +157,7 @@ def spawn_pty(cwd: str) -> tuple[int, int]:
         # backend process. Without this, Claude Code launched from this terminal
         # would think it's already inside an SDK session.
         for key in list(os.environ):
-            if key.startswith("CLAUDE_"):
+            if key.startswith("CLAUDE_") or key == "CLAUDECODE":
                 del os.environ[key]
 
         # Exec the shell as a login shell (prefix argv[0] with -)
@@ -204,7 +204,7 @@ def spawn_tmux_pty(cwd: str, session_id: str) -> tuple[int, int]:
         os.environ.pop("TMUX", None)
         # Remove Claude Code env vars (same reason as in spawn_pty)
         for key in list(os.environ):
-            if key.startswith("CLAUDE_"):
+            if key.startswith("CLAUDE_") or key == "CLAUDECODE":
                 del os.environ[key]
 
         os.execvp(tmux_path, [
