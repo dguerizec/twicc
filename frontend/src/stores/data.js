@@ -1067,8 +1067,8 @@ export const useDataStore = defineStore('data', {
          * @param {string} sessionId
          */
         recomputeVisualItems(sessionId) {
-            const items = this.sessionItems[sessionId]
-            if (!items && !this.localState.optimisticMessages[sessionId]) {
+            const items = this.sessionItems[sessionId] || []
+            if (!items.length && !this.localState.optimisticMessages[sessionId]) {
                 this.localState.sessionVisualItems[sessionId] = []
                 this.localState.visualItemCache[sessionId] = new Map()
                 return
