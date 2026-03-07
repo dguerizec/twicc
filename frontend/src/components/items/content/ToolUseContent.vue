@@ -564,7 +564,7 @@ function navigateToSubagent() {
                 <template v-else-if="todoDescription">
                     <template v-for="(part, i) in todoDescription" :key="i">
                         <span class="items-details-summary-separator"> — </span>
-                        <span class="items-details-summary-description">{{ part.text }}<wa-icon v-if="part.status === 'completed'" name="check" class="todo-icon todo-icon-completed"></wa-icon></span>
+                        <span class="items-details-summary-description" :class="{ 'no-wrap': !part.status }">{{ part.text }}<wa-icon v-if="part.status === 'completed'" name="check" class="todo-icon todo-icon-completed"></wa-icon></span>
                     </template>
                 </template>
             </span>
@@ -678,11 +678,6 @@ wa-details.with-right-part {
         flex: 1;
         min-width: 0; /* Allow text wrapping */
     }
-
-    .items-details-summary-description {
-        /* Description can wrap on multiple lines */
-        word-wrap: break-word;
-    }
 }
 
 wa-details {
@@ -691,6 +686,15 @@ wa-details {
         align-items: center;
         gap: var(--wa-space-xs);
         max-width: 100%; /* Constrain to parent width so text can wrap */
+    }
+
+    .items-details-summary-description {
+        /* Description can wrap on multiple lines */
+        word-wrap: break-word;
+
+        &.no-wrap {
+            white-space: nowrap;
+        }
     }
 }
 
