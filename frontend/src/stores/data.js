@@ -153,8 +153,8 @@ export const useDataStore = defineStore('data', {
 
             // Bash tool states - maps tool_use_id to { resultCount, completedAt }
             // { sessionId: { toolUseId: { resultCount, completedAt } } }
-            // Populated by fetchBashToolStates on session load and WS bash_tool_state
-            bashToolStates: {},
+            // Populated by fetchToolStates on session load and WS tool_state
+            toolStates: {},
 
             // Project display names cache - computed from name, directory, or id
             // { projectId: displayName }
@@ -365,17 +365,17 @@ export const useDataStore = defineStore('data', {
             state.localState.sessionOpenTabs[sessionId] || null,
 
         // Get cached agent link for a tool_id in a session
-        // Returns: agentId (string) or undefined (not in cache)
+        // Returns: { agentId, isBackground } or undefined (not in cache)
         getAgentLink: (state) => (sessionId, toolId) => {
             const sessionLinks = state.localState.agentLinks[sessionId]
             if (!sessionLinks) return undefined
             return sessionLinks[toolId]
         },
 
-        // Get bash tool state for a tool_use_id in a session
+        // Get tool state for a tool_use_id in a session
         // Returns: { resultCount, completedAt } or null
-        getBashToolState: (state) => (sessionId, toolUseId) => {
-            const sessionStates = state.localState.bashToolStates[sessionId]
+        getToolState: (state) => (sessionId, toolUseId) => {
+            const sessionStates = state.localState.toolStates[sessionId]
             if (!sessionStates) return null
             return sessionStates[toolUseId] || null
         },
@@ -1042,7 +1042,7 @@ export const useDataStore = defineStore('data', {
             delete this.localState.visualItemCache[sessionId]
             delete this.localState.optimisticMessages[sessionId]
             delete this.localState.agentLinks[sessionId]
-            delete this.localState.bashToolStates[sessionId]
+            delete this.localState.toolStates[sessionId]
             // Remove synthetic process state if this is a subagent
             if (this.processStates[sessionId]?.synthetic) {
                 delete this.processStates[sessionId]
@@ -1575,13 +1575,14 @@ export const useDataStore = defineStore('data', {
          * @param {string} sessionId - The session ID
          * @param {string} toolId - The tool_use_id
          * @param {string} agentId - The agent ID (only cache when found)
+         * @param {boolean} isBackground - Whether the agent runs in background
          */
-        setAgentLink(sessionId, toolId, agentId) {
+        setAgentLink(sessionId, toolId, agentId, isBackground = false) {
             if (!agentId) return // Only cache found agents
             if (!this.localState.agentLinks[sessionId]) {
                 this.localState.agentLinks[sessionId] = {}
             }
-            this.localState.agentLinks[sessionId][toolId] = agentId
+            this.localState.agentLinks[sessionId][toolId] = { agentId, isBackground }
         },
 
         /**
@@ -1593,29 +1594,29 @@ export const useDataStore = defineStore('data', {
         },
 
         /**
-         * Set bash tool state for a tool_use_id in a session.
+         * Set tool state for a tool_use_id in a session.
          * @param {string} sessionId - The session ID
          * @param {string} toolUseId - The tool_use_id
          * @param {number} resultCount - The number of tool_results received
          * @param {string|null} completedAt - ISO timestamp of the latest tool_result
          */
-        setBashToolState(sessionId, toolUseId, resultCount, completedAt) {
-            if (!this.localState.bashToolStates[sessionId]) {
-                this.localState.bashToolStates[sessionId] = {}
+        setToolState(sessionId, toolUseId, resultCount, completedAt) {
+            if (!this.localState.toolStates[sessionId]) {
+                this.localState.toolStates[sessionId] = {}
             }
-            this.localState.bashToolStates[sessionId][toolUseId] = { resultCount, completedAt }
+            this.localState.toolStates[sessionId][toolUseId] = { resultCount, completedAt }
         },
 
         /**
-         * Fetch bash tool states for a session from the API.
-         * Populates the bashToolStates cache.
+         * Fetch tool states for a session from the API.
+         * Populates the toolStates cache.
          *
          * @param {string} projectId - The project ID
          * @param {string} sessionId - The session ID
          */
-        async fetchBashToolStates(projectId, sessionId) {
+        async fetchToolStates(projectId, sessionId) {
             try {
-                const url = `/api/projects/${projectId}/sessions/${sessionId}/bash-tool-states/`
+                const url = `/api/projects/${projectId}/sessions/${sessionId}/tool-states/`
                 const response = await apiFetch(url)
                 if (!response.ok) return
 
@@ -1628,10 +1629,10 @@ export const useDataStore = defineStore('data', {
                             completedAt: state.completed_at,
                         }
                     }
-                    this.localState.bashToolStates[sessionId] = states
+                    this.localState.toolStates[sessionId] = states
                 }
             } catch (error) {
-                console.error('Failed to fetch bash tool states:', error)
+                console.error('Failed to fetch tool states:', error)
             }
         },
 
@@ -1704,10 +1705,13 @@ export const useDataStore = defineStore('data', {
                 const agents = await response.json()
 
                 for (const agent of agents) {
-                    // Populate agent link cache (tool_use_id → agent_id mapping)
-                    this.setAgentLink(sessionId, agent.tool_use_id, agent.agent_id)
+                    this.setAgentLink(sessionId, agent.tool_use_id, agent.agent_id, agent.is_background)
 
-                    if (!agent.is_done) {
+                    // Create synthetic process state if agent is not done yet
+                    const toolState = this.localState.toolStates[sessionId]?.[agent.tool_use_id]
+                    const resultCount = toolState?.resultCount || 0
+                    const requiredCount = agent.is_background ? 2 : 1
+                    if (resultCount < requiredCount) {
                         const startedAtUnix = agent.started_at ? new Date(agent.started_at).getTime() / 1000 : null
                         this.setSyntheticProcessState(agent.agent_id, projectId, startedAtUnix)
                     }

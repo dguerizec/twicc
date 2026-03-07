@@ -5,7 +5,7 @@ import { useDataStore } from '../../../stores/data'
 import { apiFetch } from '../../../utils/api'
 import { getIconUrl, getFileIconId } from '../../../utils/fileIcons'
 import { getLanguageFromPath } from '../../../utils/languages'
-import { AGENT_TOOL_NAMES, PROCESS_STATE } from '../../../constants'
+import { AGENT_TOOL_NAMES, isTrackedTool } from '../../../constants'
 import { getTodoDescription, isValidTodos } from '../../../utils/todoList'
 import JsonHumanView from '../../JsonHumanView.vue'
 import MarkdownContent from '../../MarkdownContent.vue'
@@ -429,29 +429,30 @@ const displayInput = computed(() => {
     return Object.keys(rest).length > 0 ? rest : null
 })
 
-// --- Bash tool spinner ---
+// --- Tool running state (unified for all tracked tools) ---
 
-const isBash = computed(() => props.name === 'Bash')
-const isBashBackground = computed(() => isBash.value && !!props.input?.run_in_background)
-const bashToolState = computed(() => isBash.value ? dataStore.getBashToolState(props.sessionId, props.toolId) : null)
-const isBashRunning = computed(() => {
-    if (!isBash.value) return false
-    const resultCount = bashToolState.value?.resultCount || 0
-    const requiredCount = isBashBackground.value ? 2 : 1
-    return resultCount < requiredCount
-})
+const isTask = computed(() => AGENT_TOOL_NAMES.has(props.name))
+const isTracked = computed(() => isTrackedTool(props.name))
+const isBackground = computed(() => !!props.input?.run_in_background)
+const toolState = computed(() => isTracked.value ? dataStore.getToolState(props.sessionId, props.toolId) : null)
+
 // Unix timestamp (seconds) for ProcessDuration — from the JSONL item timestamp
-const bashStartedAt = computed(() => {
-    if (!isBash.value || !props.timestamp) return null
+const toolStartedAt = computed(() => {
+    if (!props.timestamp) return null
     return new Date(props.timestamp).getTime() / 1000
 })
-// Unique ID for the bash spinner (for tooltip targeting)
-const bashSpinnerId = computed(() => `bash-spinner-${props.toolId}`)
+
+// --- Tool running spinner (for all tracked tools except Agent/Task which have their own UI) ---
+
+const isToolRunning = computed(() => {
+    if (!isTracked.value || isTask.value) return false
+    const resultCount = toolState.value?.resultCount || 0
+    const requiredCount = isBackground.value ? 2 : 1
+    return resultCount < requiredCount
+})
+const toolSpinnerId = computed(() => `tool-spinner-${props.toolId}`)
 
 // --- View Agent button for Task tool_use ---
-
-// Is this an agent tool_use? (Task or Agent)
-const isTask = computed(() => AGENT_TOOL_NAMES.has(props.name))
 
 // Task tool: display subagent_type instead of "Task"
 // "silent-failure-hunter" → "Silent failure hunter"
@@ -474,16 +475,17 @@ const taskDisplayName = computed(() => {
 
 // Agent link: reactive lookup from the store cache.
 // The cache is populated by fetchSubagentsState (on session load) and
-// by the WS subagent_state_changed handler — no polling needed.
-const agentId = computed(() => dataStore.getAgentLink(props.sessionId, props.toolId))
+// by the WS agent_link_created handler — no polling needed.
+// Returns { agentId, isBackground } or undefined.
+const agentLink = computed(() => dataStore.getAgentLink(props.sessionId, props.toolId))
+const agentId = computed(() => agentLink.value?.agentId)
 
-// Is the agent currently running? (has a synthetic process state in assistant_turn)
-const agentProcessState = computed(() => {
-    if (!agentId.value) return null
-    const ps = dataStore.processStates[agentId.value]
-    return (ps?.synthetic && ps.state === PROCESS_STATE.ASSISTANT_TURN) ? ps : null
+const isAgentRunning = computed(() => {
+    if (!isTask.value || !agentId.value) return false
+    const resultCount = toolState.value?.resultCount || 0
+    const requiredCount = (agentLink.value?.isBackground) ? 2 : 1
+    return resultCount < requiredCount
 })
-const isAgentRunning = computed(() => !!agentProcessState.value)
 
 // Unique ID for the View Agent button (for tooltip targeting)
 const viewAgentButtonId = computed(() => `view-agent-${props.toolId}`)
@@ -506,7 +508,7 @@ function navigateToSubagent() {
 </script>
 
 <template>
-    <wa-details class="item-details tool-use" :class="{'with-right-part' : (isTask && !parentSessionId) || isBashRunning}" icon-placement="start" @wa-show.self="onToolUseOpen" @wa-hide.self="onToolUseClose">
+    <wa-details class="item-details tool-use" :class="{'with-right-part' : (isTask && !parentSessionId) || isToolRunning}" icon-placement="start" @wa-show.self="onToolUseOpen" @wa-hide.self="onToolUseClose">
         <span slot="summary" class="items-details-summary">
             <span class="items-details-summary-left">
                 <strong v-if="taskDisplayName" class="items-details-summary-name">{{ taskDisplayName.name }}<span v-if="taskDisplayName.namespace" class="items-details-summary-quiet"> ({{ taskDisplayName.namespace }})</span></strong>
@@ -574,8 +576,8 @@ function navigateToSubagent() {
                 <wa-spinner v-if="!agentId" class="agent-starting-spinner"></wa-spinner>
                 <!-- Agent started: View Agent button (with pulsing robot if still running) -->
                 <template v-else>
-                    <AppTooltip v-if="isAgentRunning && agentProcessState.state_changed_at" :for="viewAgentButtonId">
-                        Agent running for <ProcessDuration :state-changed-at="agentProcessState.state_changed_at" />
+                    <AppTooltip v-if="isAgentRunning && toolStartedAt" :for="viewAgentButtonId">
+                        Agent running for <ProcessDuration :state-changed-at="toolStartedAt" />
                     </AppTooltip>
                     <wa-button
                         :id="viewAgentButtonId"
@@ -589,12 +591,12 @@ function navigateToSubagent() {
                     </wa-button>
                 </template>
             </template>
-            <!-- Bash tool running spinner -->
-            <template v-if="isBashRunning">
-                <AppTooltip v-if="bashStartedAt" :for="bashSpinnerId">
-                    Running for <ProcessDuration :state-changed-at="bashStartedAt" />
+            <!-- Tool running spinner (Bash, WebFetch, MCP, etc.) -->
+            <template v-if="isToolRunning">
+                <AppTooltip v-if="toolStartedAt" :for="toolSpinnerId">
+                    Running for <ProcessDuration :state-changed-at="toolStartedAt" />
                 </AppTooltip>
-                <wa-spinner :id="bashSpinnerId" class="bash-running-spinner"></wa-spinner>
+                <wa-spinner :id="toolSpinnerId" class="tool-running-spinner"></wa-spinner>
             </template>
         </span>
         <template v-if="isOpen">
@@ -660,7 +662,7 @@ wa-details.with-right-part {
         wa-button {
             margin-block: -1rem;
         }
-        .agent-starting-spinner, .bash-running-spinner {
+        .agent-starting-spinner, .tool-running-spinner {
             font-size: 1.2em;
         }
         .agent-starting-spinner {

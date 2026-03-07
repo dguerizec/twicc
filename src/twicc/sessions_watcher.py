@@ -16,7 +16,7 @@ from channels.layers import get_channel_layer
 from django.conf import settings
 from watchfiles import Change, awatch
 
-from twicc.compute import AgentLinkUpdate, BashToolUpdate, cache_agent_prompt, compute_item_cost_and_usage, \
+from twicc.compute import AgentLinkUpdate, ToolResultUpdate, cache_agent_prompt, compute_item_cost_and_usage, \
     compute_item_metadata, \
     compute_item_metadata_live, create_agent_link_from_subagent, create_agent_link_from_tool_result, \
     create_agent_link_from_tool_use, create_tool_result_link_live, ensure_project_directory, ensure_project_git_root, \
@@ -197,24 +197,6 @@ def check_file_has_content_async(file_path: Path) -> bool:
 
 
 @sync_to_async
-def sync_session_items_async(
-    session: Session, file_path: Path
-) -> tuple[list[int], list[int], list[AgentLinkUpdate], list[BashToolUpdate]]:
-    """Synchronize session items from a JSONL file (async wrapper).
-
-    The session must already be saved to the database.
-
-    Returns:
-        A tuple of:
-        - List of line_nums of new items added (sorted)
-        - List of line_nums of pre-existing items whose metadata was updated (sorted)
-        - List of AgentLinkUpdates to broadcast
-        - List of BashToolUpdates to broadcast
-    """
-    return sync_session_items(session, file_path)
-
-
-@sync_to_async
 def get_session_items(session: Session, line_nums: list[int]) -> list[dict]:
     """Get full session items (with content) by line_nums."""
     if not line_nums:
@@ -356,7 +338,7 @@ async def sync_and_broadcast(
         pending_model = pop_pending_selected_model(parsed.session_id)
         session = await create_session(parsed, project, parent_session, permission_mode=pending_mode, selected_model=pending_model)
 
-    new_line_nums, modified_line_nums, agent_link_updates, bash_tool_updates = await sync_session_items_async(session, path)
+    new_line_nums, modified_line_nums, agent_link_updates, tool_result_updates = await sync_session_items(session, path)
 
     if new_line_nums:
         # Refresh session to get computed values
@@ -402,24 +384,22 @@ async def sync_and_broadcast(
                 "project": serialize_project(project),
             })
 
-            # Broadcast agent link state changes (subagent started/completed)
+            # Broadcast agent link state changes (subagent linked)
             for update in agent_link_updates:
                 await broadcast_message(channel_layer, {
-                    "type": "subagent_state_changed",
+                    "type": "agent_link_created",
                     "parent_session_id": update.parent_session_id,
                     "agent_session_id": update.agent_id,
                     "tool_use_id": update.tool_use_id,
-                    "project_id": parsed.project_id,
-                    "is_done": update.is_done,
                     "is_background": update.is_background,
                     "started_at": update.started_at.isoformat() if update.started_at else None,
-                    "completed_at": update.completed_at.isoformat() if update.completed_at else None,
+                    "project_id": parsed.project_id,
                 })
 
-            # Broadcast bash tool state changes
-            for update in bash_tool_updates:
+            # Broadcast tool result state changes
+            for update in tool_result_updates:
                 await broadcast_message(channel_layer, {
-                    "type": "bash_tool_state",
+                    "type": "tool_state",
                     "session_id": update.session_id,
                     "tool_use_id": update.tool_use_id,
                     "result_count": update.result_count,
@@ -499,9 +479,10 @@ async def start_watcher() -> None:
                 logger.exception("Error processing watcher change %s on %s", change_type, path_str)
 
 
+@sync_to_async
 def sync_session_items(
     session: Session, file_path: Path
-) -> tuple[list[int], list[int], list[AgentLinkUpdate], list[BashToolUpdate]]:
+) -> tuple[list[int], list[int], list[AgentLinkUpdate], list[ToolResultUpdate]]:
     """
     Synchronize session items from a JSONL file.
 
@@ -517,7 +498,7 @@ def sync_session_items(
         - List of line_nums of new items added (sorted)
         - List of line_nums of pre-existing items whose metadata was updated (sorted)
         - List of AgentLinkUpdate for agent state changes to broadcast
-        - List of BashToolUpdate for bash tool state changes to broadcast
+        - List of ToolResultUpdate for tool completion state changes to broadcast
     """
     if not file_path.exists():
         return [], [], [], []
@@ -574,8 +555,8 @@ def sync_session_items(
 
     # Track agent link updates to broadcast after processing
     agent_link_updates: list[AgentLinkUpdate] = []
-    # Track bash tool updates to broadcast after processing
-    bash_tool_updates: list[BashToolUpdate] = []
+    # Track tool result updates to broadcast after processing
+    tool_result_updates: list[ToolResultUpdate] = []
 
     # For subagents: track if we need to create the link between the agent and the parent session tool use
     subagent_needs_link = (
@@ -717,11 +698,9 @@ def sync_session_items(
 
         # Tool result links (tool_result items are DEBUG_ONLY)
         if is_tool_result_item(parsed):
-            agent_update, bash_update = create_tool_result_link_live(session.id, item, parsed)
-            if agent_update:
-                agent_link_updates.append(agent_update)
-            if bash_update:
-                bash_tool_updates.append(bash_update)
+            tool_result_update = create_tool_result_link_live(session.id, item, parsed)
+            if tool_result_update:
+                tool_result_updates.append(tool_result_update)
             # Also check for agent links (Task tool_result with agentId)
             if update := create_agent_link_from_tool_result(session.id, item, parsed):
                 agent_link_updates.append(update)
@@ -866,7 +845,7 @@ def sync_session_items(
         _update_parent_session_costs(session.parent_session_id)
 
     # Exclude new items from modified_line_nums
-    return sorted(new_line_nums), sorted(modified_line_nums - new_line_nums), agent_link_updates, bash_tool_updates
+    return sorted(new_line_nums), sorted(modified_line_nums - new_line_nums), agent_link_updates, tool_result_updates
 
 
 def _update_parent_session_costs(parent_session_id: str) -> None:

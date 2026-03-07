@@ -25,7 +25,7 @@ urlpatterns = [
     path("api/projects/<str:project_id>/sessions/<str:session_id>/items/metadata/", views.session_items_metadata),
     path("api/projects/<str:project_id>/sessions/<str:session_id>/items/<int:line_num>/tool-results/<str:tool_id>/", views.tool_results),
     path("api/projects/<str:project_id>/sessions/<str:session_id>/subagents/", views.subagents_state),
-    path("api/projects/<str:project_id>/sessions/<str:session_id>/bash-tool-states/", views.bash_tool_states),
+    path("api/projects/<str:project_id>/sessions/<str:session_id>/tool-states/", views.tool_states),
     # Subagent routes (same views, with parent_session_id for validation)
     path("api/projects/<str:project_id>/sessions/<str:parent_session_id>/subagent/<str:session_id>/", views.session_detail),
     path("api/projects/<str:project_id>/sessions/<str:parent_session_id>/subagent/<str:session_id>/items/", views.session_items),

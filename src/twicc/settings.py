@@ -128,7 +128,7 @@ LOGGING = {
 }
 
 # Display levels computation
-CURRENT_COMPUTE_VERSION = 56  # Bump when display rules change to trigger recomputation
+CURRENT_COMPUTE_VERSION = 59  # Bump when display rules change to trigger recomputation
 
 # Process auto-stop timeouts (in seconds)
 # Processes are automatically stopped if they remain in a state for too long

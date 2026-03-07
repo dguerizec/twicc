@@ -375,29 +375,31 @@ export function useWebSocket() {
                 notifyProcessStateChange(msg, previousProcessState, route)
                 break
             }
-            case 'subagent_state_changed': {
-                // Update synthetic process state for a subagent.
-                // The parent session manages these states — no tab-open check needed.
+            case 'agent_link_created': {
+                // New agent link created — populate cache and create synthetic process state
                 const agentSessionId = msg.agent_session_id
-                const existingState = store.processStates[agentSessionId]
-
-                // Populate agent link cache (tool_use_id → agent_id mapping)
                 if (msg.tool_use_id && msg.parent_session_id) {
-                    store.setAgentLink(msg.parent_session_id, msg.tool_use_id, agentSessionId)
+                    store.setAgentLink(msg.parent_session_id, msg.tool_use_id, agentSessionId, msg.is_background)
                 }
+                // Agent just linked → create synthetic process state
+                const startedAtUnix = msg.started_at ? new Date(msg.started_at).getTime() / 1000 : null
+                store.setSyntheticProcessState(agentSessionId, msg.project_id, startedAtUnix)
+                break
+            }
+            case 'tool_state': {
+                // Update tool state for spinner/running display
+                store.setToolState(msg.session_id, msg.tool_use_id, msg.result_count, msg.completed_at)
 
-                if (msg.is_done) {
-                    store.removeSyntheticProcessState(agentSessionId)
-                } else {
-                    const startedAtUnix = msg.started_at ? new Date(msg.started_at).getTime() / 1000 : null
-                    store.setSyntheticProcessState(agentSessionId, msg.project_id, startedAtUnix)
+                // For agent tools: remove synthetic process state when done
+                const agentLink = store.getAgentLink(msg.session_id, msg.tool_use_id)
+                if (agentLink) {
+                    const requiredCount = agentLink.isBackground ? 2 : 1
+                    if (msg.result_count >= requiredCount) {
+                        store.removeSyntheticProcessState(agentLink.agentId)
+                    }
                 }
                 break
             }
-            case 'bash_tool_state':
-                // Update bash tool state for spinner display
-                store.setBashToolState(msg.session_id, msg.tool_use_id, msg.result_count, msg.completed_at)
-                break
             case 'active_processes':
                 // Initialize process states from server on connection
                 store.setActiveProcesses(msg.processes)

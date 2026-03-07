@@ -31,18 +31,16 @@ from twicc.core.pricing import (
 )
 
 class AgentLinkUpdate(NamedTuple):
-    """Describes an AgentLink change to broadcast to the frontend."""
+    """Describes a new AgentLink creation to broadcast to the frontend."""
     parent_session_id: str
     agent_id: str
     tool_use_id: str
-    is_done: bool
     is_background: bool
     started_at: datetime | None
-    completed_at: datetime | None
 
 
-class BashToolUpdate(NamedTuple):
-    """Describes a Bash tool completion state change to broadcast to the frontend."""
+class ToolResultUpdate(NamedTuple):
+    """Describes a tool completion state change to broadcast to the frontend."""
     session_id: str
     tool_use_id: str
     result_count: int
@@ -51,6 +49,15 @@ class BashToolUpdate(NamedTuple):
 
 # Tool names that spawn subagent sessions (Task is the legacy name, Agent is the new one)
 AGENT_TOOL_NAMES = frozenset({'Task', 'Agent'})
+
+# Tool names whose completion state is tracked via ToolResultUpdate.
+# Also includes any tool whose name starts with 'mcp__' (MCP tools).
+TRACKED_TOOL_NAMES = frozenset({'Bash', 'WebFetch', 'WebSearch', 'Computer'}) | AGENT_TOOL_NAMES
+
+
+def is_tracked_tool(tool_name: str) -> bool:
+    """Check if a tool's completion state should be tracked."""
+    return tool_name in TRACKED_TOOL_NAMES or tool_name.startswith('mcp__')
 
 # Content types considered user-visible (for display_level and kind computation)
 VISIBLE_CONTENT_TYPES = ('text', 'document', 'image')
@@ -1453,10 +1460,8 @@ def compute_session_metadata(session_id: str, result_queue) -> None:
 
     # Map tool_use_id → (line_num, tool_name) of the item containing the tool_use
     tool_use_map: dict[str, tuple[int, str]] = {}
-    # Map tool_use_id → (line_num, is_background, timestamp) for Task tool_uses (to link to agents)
-    task_tool_use_map: dict[str, tuple[int, bool, datetime | None]] = {}
-    # Map tool_use_id → latest tool_result timestamp (for agent completed_at)
-    tool_result_timestamps: dict[str, datetime] = {}
+    # Map tool_use_id → line_num for Task tool_uses (to link to agents)
+    task_tool_use_map: dict[str, int] = {}
 
     # Track if we've set the initial title from first user message
     initial_title_set = False
@@ -1585,10 +1590,6 @@ def compute_session_metadata(session_id: str, result_queue) -> None:
                 'tool_name': tu_name,
                 'tool_result_at': item.timestamp,
             })
-            # Track the latest tool_result timestamp per tool_use_id (for agent completed_at)
-            if item.timestamp:
-                tool_result_timestamps[tool_result_ref] = item.timestamp
-
         # Check if this is a Task tool_result with agentId and create agent link
         if agent_info := get_tool_result_agent_info(parsed):
             tu_id, agent_id = agent_info
@@ -1652,19 +1653,6 @@ def compute_session_metadata(session_id: str, result_queue) -> None:
     flush_items(items_to_update)
     flush_tool_result_links(tool_result_links_to_create)
     flush_agent_links(agent_links_to_create)
-
-    # Compute result_count and completed_at for each agent link from tool_result_links
-    if all_agent_links and all_tool_result_links:
-        from collections import Counter
-        result_counts = Counter(d['tool_use_id'] for d in all_tool_result_links)
-        for agent_link in all_agent_links:
-            tu_id = agent_link['tool_use_id']
-            count = result_counts.get(tu_id, 0)
-            agent_link['result_count'] = count
-            is_background = agent_link.get('is_background', False)
-            is_done = count >= (2 if is_background else 1)
-            if is_done and tu_id in tool_result_timestamps:
-                agent_link['completed_at'] = tool_result_timestamps[tu_id]
 
     # user_message_count is already tracked as a simple counter (incremented for each USER_MESSAGE)
 
@@ -1753,22 +1741,20 @@ def _find_open_group_head(session_id: str, before_line_num: int) -> int | None:
 
 def create_tool_result_link_live(
     session_id: str, item: SessionItem, parsed_json: dict
-) -> tuple[AgentLinkUpdate | None, BashToolUpdate | None]:
+) -> ToolResultUpdate | None:
     """
     Create a ToolResultLink for a tool_result item during live sync.
 
     Searches the session for the item containing the matching tool_use
     and creates the link entry.
 
-    Returns a tuple of:
-    - AgentLinkUpdate if an associated AgentLink was modified, None otherwise.
-    - BashToolUpdate if a Bash tool_use result count changed, None otherwise.
+    Returns a ToolResultUpdate if the tool is tracked (Bash/Task/Agent), None otherwise.
     """
     from twicc.core.models import ToolResultLink
 
     tool_use_id = get_tool_result_id(parsed_json)
     if not tool_use_id:
-        return None, None
+        return None
 
     # Find candidates by text search (LIKE), ordered most recent first.
     # The tool_use_id string could appear in text content (e.g. assistant mentioning it),
@@ -1796,69 +1782,26 @@ def create_tool_result_link_live(
                 defaults={'tool_name': tool_name, 'tool_result_at': item.timestamp},
             )
             if not created:
-                return None, None
+                return None
 
-            agent_update = _increment_agent_link_result_count(session_id, tool_use_id, item.timestamp)
-
-            # Check if this is a Bash tool_use and emit a BashToolUpdate
-            bash_update = None
-            if tool_name == 'Bash':
+            # Emit ToolResultUpdate for tracked tools (Bash, Agent, WebFetch, MCP, etc.)
+            if is_tracked_tool(tool_name):
                 links = ToolResultLink.objects.filter(
                     session_id=session_id,
                     tool_use_id=tool_use_id,
                 )
                 result_count = links.count()
                 max_timestamp = links.order_by('-tool_result_at').values_list('tool_result_at', flat=True).first()
-                bash_update = BashToolUpdate(
+                return ToolResultUpdate(
                     session_id=session_id,
                     tool_use_id=tool_use_id,
                     result_count=result_count,
                     completed_at=max_timestamp,
                 )
 
-            return agent_update, bash_update
+            return None
 
-    return None, None
-
-
-def _increment_agent_link_result_count(session_id: str, tool_use_id: str, result_timestamp: datetime | None) -> AgentLinkUpdate | None:
-    """Increment result_count on the AgentLink matching this tool_use_id, if any.
-
-    Also sets completed_at when the agent transitions to done (result_count reaches
-    the required threshold: 1 for non-background, 2 for background agents).
-
-    Returns an AgentLinkUpdate if the link was modified, None otherwise.
-    """
-    from twicc.core.models import AgentLink
-
-    link = AgentLink.objects.filter(
-        session_id=session_id,
-        tool_use_id=tool_use_id,
-    ).first()
-    if not link:
-        return None
-
-    new_count = link.result_count + 1
-    link.result_count = new_count
-    update_fields = ['result_count']
-
-    # Set completed_at when the agent transitions to done
-    required = 2 if link.is_background else 1
-    if new_count >= required and result_timestamp and not link.completed_at:
-        link.completed_at = result_timestamp
-        update_fields.append('completed_at')
-
-    link.save(update_fields=update_fields)
-
-    return AgentLinkUpdate(
-        parent_session_id=session_id,
-        agent_id=link.agent_id,
-        tool_use_id=link.tool_use_id,
-        is_done=link.is_done,
-        is_background=link.is_background,
-        started_at=link.started_at,
-        completed_at=link.completed_at,
-    )
+    return None
 
 
 def create_agent_link_from_tool_result(session_id: str, item: SessionItem, parsed_json: dict) -> AgentLinkUpdate | None:
@@ -1919,10 +1862,8 @@ def create_agent_link_from_tool_result(session_id: str, item: SessionItem, parse
                         parent_session_id=session_id,
                         agent_id=agent_id,
                         tool_use_id=tool_use_id,
-                        is_done=obj.is_done,
                         is_background=is_background,
                         started_at=candidate.timestamp,
-                        completed_at=None,
                     )
             except MultipleObjectsReturned:  # defensive mode
                 pass
@@ -2050,10 +1991,8 @@ def create_agent_link_from_subagent(
                             parent_session_id=parent_session_id,
                             agent_id=agent_id,
                             tool_use_id=tu_id,
-                            is_done=False,
                             is_background=is_background,
                             started_at=candidate.timestamp,
-                            completed_at=None,
                         )
                 except MultipleObjectsReturned:  # defensive mode
                     continue
@@ -2148,10 +2087,8 @@ def create_agent_link_from_tool_use(
                             parent_session_id=session_id,
                             agent_id=subagent.id,
                             tool_use_id=tu_id,
-                            is_done=False,
                             is_background=is_background,
                             started_at=item.timestamp,
-                            completed_at=None,
                         ))
                 except MultipleObjectsReturned:
                     pass

@@ -393,14 +393,15 @@ watch([() => props.sessionId, session], async ([newSessionId, newSession]) => {
     if (isFirstLoad) {
         await loadSessionData(lastLine)
 
+        // Fetch tool states first (needed by fetchSubagentsState to determine agent running status)
+        await store.fetchToolStates(props.projectId, newSessionId)
+
         // For parent sessions, fetch all subagent states.
         // Populates the agent link cache (tool_use_id → agent_id) for View Agent buttons,
         // and creates synthetic process states for agents still running.
         if (!props.parentSessionId) {
             store.fetchSubagentsState(props.projectId, newSessionId)
         }
-        // Fetch bash tool states for spinner display (for both sessions and subagents)
-        store.fetchBashToolStates(props.projectId, newSessionId)
     }
 
     // Skip DOM-manipulating scroll when inactive (KeepAlive deactivated)

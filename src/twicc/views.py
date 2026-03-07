@@ -515,15 +515,13 @@ def tool_results(request, project_id, session_id, line_num, tool_id, parent_sess
 def subagents_state(request, project_id, session_id):
     """GET /api/projects/<id>/sessions/<session_id>/subagents/
 
-    Returns the state of all subagents for a session as a flat list.
-    Each entry contains agent_id, tool_use_id, is_done, is_background, started_at, completed_at.
+    Returns the agent links for a session: tool_use_id → agent_id mappings.
     """
     try:
         session = Session.objects.get(id=session_id, project_id=project_id)
     except Session.DoesNotExist:
         raise Http404("Session not found")
 
-    # Reject if the session is itself a subagent
     if session.parent_session_id is not None:
         raise Http404("Session not found")
 
@@ -532,21 +530,19 @@ def subagents_state(request, project_id, session_id):
         {
             "agent_id": link.agent_id,
             "tool_use_id": link.tool_use_id,
-            "is_done": link.is_done,
             "is_background": link.is_background,
             "started_at": link.started_at.isoformat() if link.started_at else None,
-            "completed_at": link.completed_at.isoformat() if link.completed_at else None,
         }
         for link in links
     ]
     return JsonResponse(result, safe=False)
 
 
-def bash_tool_states(request, project_id, session_id):
-    """GET /api/projects/<id>/sessions/<session_id>/bash-tool-states/
+def tool_states(request, project_id, session_id):
+    """GET /api/projects/<id>/sessions/<session_id>/tool-states/
 
-    Returns the completion state of each Bash tool_use in the session:
-    result_count and completed_at (max tool_result timestamp).
+    Returns the completion state of each tracked tool_use (Bash, Task, Agent)
+    in the session: result_count and completed_at (max tool_result timestamp).
 
     Response: {"tools": {"toolu_xxx": {"result_count": 2, "completed_at": "..."}, ...}}
     """
@@ -555,21 +551,25 @@ def bash_tool_states(request, project_id, session_id):
     except Session.DoesNotExist:
         raise Http404("Session not found")
 
-    from django.db.models import Count, Max
+    from django.db.models import Count, Max, Q
+    from twicc.compute import TRACKED_TOOL_NAMES
 
-    qs = (
-        ToolResultLink.objects
-        .filter(session=session, tool_name="Bash")
-        .values("tool_use_id")
-        .annotate(result_count=Count("id"), completed_at=Max("tool_result_at"))
+    links = (
+        ToolResultLink.objects.filter(
+            Q(tool_name__in=TRACKED_TOOL_NAMES) | Q(tool_name__startswith='mcp__'),
+            session=session,
+        )
+        .values('tool_use_id')
+        .annotate(result_count=Count('id'), completed_at=Max('tool_result_at'))
     )
-    tools = {
-        row["tool_use_id"]: {
-            "result_count": row["result_count"],
-            "completed_at": row["completed_at"].isoformat() if row["completed_at"] else None,
+
+    tools = {}
+    for entry in links:
+        tools[entry['tool_use_id']] = {
+            'result_count': entry['result_count'],
+            'completed_at': entry['completed_at'].isoformat() if entry['completed_at'] else None,
         }
-        for row in qs
-    }
+
     return JsonResponse({"tools": tools})
 
 

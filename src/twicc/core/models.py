@@ -444,21 +444,7 @@ class AgentLink(models.Model):
     tool_use_id = models.CharField(max_length=255)  # The specific Task tool_use ID
     agent_id = models.CharField(max_length=255)  # The subagent ID
     is_background = models.BooleanField(default=False)  # True if run_in_background was set on the Task tool_use
-    result_count = models.PositiveSmallIntegerField(default=0)  # Number of ToolResultLinks for this tool_use_id
     started_at = models.DateTimeField(null=True, blank=True)  # Timestamp of the Task tool_use item
-    completed_at = models.DateTimeField(null=True, blank=True)  # Timestamp of the tool_result that made is_done true
-
-    @property
-    def is_done(self) -> bool:
-        """Agent is done when enough tool results have been received."""
-        return self.result_count >= (2 if self.is_background else 1)
-
-    @property
-    def duration(self) -> float | None:
-        """Duration in seconds between start and completion, or None if not yet complete."""
-        if self.started_at and self.completed_at:
-            return (self.completed_at - self.started_at).total_seconds()
-        return None
 
     class Meta:
         indexes = [
