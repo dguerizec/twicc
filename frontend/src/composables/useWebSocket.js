@@ -322,14 +322,16 @@ export function useWebSocket() {
                 const existingSession = store.getSession(msg.session.id)
                 if (existingSession?.draft) {
                     // Draft session confirmed by the backend — update with real data.
-                    // Preserve locally-set title if the backend doesn't have one.
+                    // Preserve locally-set title if it differs from what the backend has.
                     // This handles the race condition where the user sets a title via
                     // the rename dialog (needs-title flow) before the first session_updated
                     // arrives: the dialog stores the title locally, but the backend never
                     // received it (title wasn't in the send_message payload). We keep it
                     // in the store to avoid a visual flash, then persist it via API.
+                    // Note: we compare against backend title (not just check for null)
+                    // because the backend may already have a default title (first user message).
                     const localTitle = existingSession.title
-                    const hasOrphanedLocalTitle = localTitle && !msg.session.title
+                    const hasOrphanedLocalTitle = localTitle && localTitle !== msg.session.title
                     store.updateSession({
                         ...msg.session,
                         draft: false,
