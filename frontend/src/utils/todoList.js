@@ -91,14 +91,12 @@ export function getTodoDescription(todos) {
         ]
     }
 
-    // Case 3: no in_progress, some completed → show last completed + next pending
+    // Case 3: no in_progress, some completed → show last completed
     if (completedCount > 0) {
         const lastCompleted = findLast(todos, t => t.status === 'completed')
-        const nextPending = todos.find(t => t.status === 'pending')
         return [
             { text: `${completedCount}/${total}` },
-            { text: `done: ${getLabel(lastCompleted)}`, status: 'completed' },
-            { text: `next: ${getLabel(nextPending)}`, status: 'pending' },
+            { text: getLabel(lastCompleted), status: 'completed' },
         ]
     }
 
