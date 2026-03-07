@@ -1,4 +1,6 @@
 <script setup>
+import { getDetail } from '../../../utils/todoList'
+
 defineProps({
     todos: {
         type: Array,
@@ -31,7 +33,7 @@ defineProps({
                 class="todo-item-icon todo-item-icon-pending"
                 variant="regular"
             ></wa-icon>
-            <span class="todo-item-text">{{ todo.content }}</span>
+            <span class="todo-item-text">{{ getDetail(todo) }}</span>
         </li>
     </ol>
 </template>

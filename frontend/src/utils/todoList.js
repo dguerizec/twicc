@@ -3,6 +3,45 @@
  */
 
 /**
+ * Validate that todos has the expected format.
+ *
+ * Must be a non-empty array of objects where every entry has:
+ *  - `status` (string)
+ *  - at least one of `content` or `activeForm` (string)
+ *
+ * All-or-nothing: if any single entry is invalid, the whole list is invalid.
+ *
+ * @param {*} todos
+ * @returns {boolean}
+ */
+export function isValidTodos(todos) {
+    if (!Array.isArray(todos) || todos.length === 0) return false
+    return todos.every(t =>
+        t != null && typeof t === 'object' &&
+        typeof t.status === 'string' &&
+        (typeof t.content === 'string' || typeof t.activeForm === 'string')
+    )
+}
+
+/**
+ * Get the display label for a todo entry, preferring `activeForm` with fallback to `content`.
+ * @param {{content?: string, activeForm?: string}} todo
+ * @returns {string}
+ */
+function getLabel(todo) {
+    return todo.activeForm || todo.content
+}
+
+/**
+ * Get the detail text for a todo entry, preferring `content` with fallback to `activeForm`.
+ * @param {{content?: string, activeForm?: string}} todo
+ * @returns {string}
+ */
+export function getDetail(todo) {
+    return todo.content || todo.activeForm
+}
+
+/**
  * Build a description from a TodoWrite todos array.
  *
  * Returns an array of part objects to be joined with a separator (e.g. " — "),
@@ -11,21 +50,27 @@
  * Each part has:
  *  - text: the display string
  *  - status (optional): 'completed' | 'in_progress' | 'pending' — present only on
- *    parts that display an activeForm, used to render a colored icon after the text.
+ *    parts that display a label, used to render a colored icon after the text.
+ *  - invalid (optional): true if the todos data is malformed.
  *
  * Rules (in priority order):
+ *  0. Invalid format → [{ text: "Invalid todo list", invalid: true }]
  *  1. Empty / missing array → null
  *  2. All completed → [{ text: "Task completed" }] or [{ text: "All x tasks completed" }]
- *  3. At least one in_progress → [{ text: "x/n" }, { text: activeForm, status: "in_progress" }]
+ *  3. At least one in_progress → [{ text: "x/n" }, { text: label, status: "in_progress" }]
  *  4. No in_progress, some completed + some pending →
  *     [{ text: "x/n" }, { text: "done: …", status: "completed" }, { text: "next: …", status: "pending" }]
  *  5. All pending → [{ text: "n tasks" }, { text: "next: …", status: "pending" }]
  *
- * @param {Array<{content: string, status: string, activeForm: string}>} todos
- * @returns {Array<{text: string, status?: string}>|null}
+ * @param {*} todos
+ * @returns {Array<{text: string, status?: string, invalid?: boolean}>|null}
  */
 export function getTodoDescription(todos) {
-    if (!todos || todos.length === 0) return null
+    if (!todos || (Array.isArray(todos) && todos.length === 0)) return null
+
+    if (!isValidTodos(todos)) {
+        return [{ text: 'Invalid todo list', invalid: true }]
+    }
 
     const total = todos.length
     const completedCount = todos.filter(t => t.status === 'completed').length
@@ -42,7 +87,7 @@ export function getTodoDescription(todos) {
     if (lastInProgress) {
         return [
             { text: `${completedCount + 1}/${total}` },
-            { text: lastInProgress.activeForm, status: 'in_progress' },
+            { text: getLabel(lastInProgress), status: 'in_progress' },
         ]
     }
 
@@ -52,8 +97,8 @@ export function getTodoDescription(todos) {
         const nextPending = todos.find(t => t.status === 'pending')
         return [
             { text: `${completedCount}/${total}` },
-            { text: `done: ${lastCompleted.activeForm}`, status: 'completed' },
-            { text: `next: ${nextPending.activeForm}`, status: 'pending' },
+            { text: `done: ${getLabel(lastCompleted)}`, status: 'completed' },
+            { text: `next: ${getLabel(nextPending)}`, status: 'pending' },
         ]
     }
 
@@ -61,7 +106,7 @@ export function getTodoDescription(todos) {
     const firstPending = todos[0]
     return [
         { text: total === 1 ? '1 task' : `${total} tasks` },
-        { text: `next: ${firstPending.activeForm}`, status: 'pending' },
+        { text: `next: ${getLabel(firstPending)}`, status: 'pending' },
     ]
 }
 

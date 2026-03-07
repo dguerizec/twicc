@@ -6,7 +6,7 @@ import { apiFetch } from '../../../utils/api'
 import { getIconUrl, getFileIconId } from '../../../utils/fileIcons'
 import { getLanguageFromPath } from '../../../utils/languages'
 import { AGENT_TOOL_NAMES } from '../../../constants'
-import { getTodoDescription } from '../../../utils/todoList'
+import { getTodoDescription, isValidTodos } from '../../../utils/todoList'
 import JsonHumanView from '../../JsonHumanView.vue'
 import MarkdownContent from '../../MarkdownContent.vue'
 import TodoContent from './TodoContent.vue'
@@ -429,6 +429,7 @@ const toolSearchQuery = computed(() => {
 
 // --- TodoWrite tool summary ---
 const isTodoWrite = computed(() => props.name === 'TodoWrite')
+const todosValid = computed(() => isTodoWrite.value && isValidTodos(props.input?.todos))
 const todoDescription = computed(() => {
     if (!isTodoWrite.value) return null
     return getTodoDescription(props.input?.todos)
@@ -670,7 +671,7 @@ function navigateToSubagent(agentId) {
             </template>
         </span>
         <template v-if="isOpen">
-            <TodoContent v-if="isTodoWrite && input?.todos" :todos="input.todos" />
+            <TodoContent v-if="isTodoWrite && todosValid" :todos="input.todos" />
             <div v-else-if="displayInput" class="tool-input">
                 <JsonHumanView
                     :value="displayInput"
@@ -679,7 +680,7 @@ function navigateToSubagent(agentId) {
             <div v-else class="tool-no-input">
                 No input parameters
             </div>
-            <wa-details v-if="!isTodoWrite" ref="resultDetailsRef" class="tool-result" @wa-show="onResultOpen" @wa-hide="onResultClose">
+            <wa-details v-if="!isTodoWrite || !todosValid" ref="resultDetailsRef" class="tool-result" @wa-show="onResultOpen" @wa-hide="onResultClose">
                 <span slot="summary">Result</span>
                 <div class="tool-result-content">
                     <div v-if="resultState === 'loading'" class="tool-result-loading">

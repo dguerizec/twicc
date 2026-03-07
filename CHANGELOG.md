@@ -11,6 +11,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Properly handle results from agents running in background
 - Handle `Agent` tool type as an alias for `Task`
 - Handle display of TodoWrite tool
+- Handle invalid TodoWrite tool input gracefully (invalid format shows JSON fallback)
 - Syntax-highlighted code display for Read tool results
 - Show URL for WebFetch and search query for WebSearch/ToolSearch in tool use summaries
 - Include file attachments in optimistic user messages for instant display
