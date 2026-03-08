@@ -5,12 +5,18 @@ import { useContainerBreakpoint } from '../composables/useContainerBreakpoint'
 import FileTreePanel from './FileTreePanel.vue'
 import FilePane from './FilePane.vue'
 
+const emit = defineEmits(['root-changed'])
+
 const props = defineProps({
     projectId: {
         type: String,
         default: null,
     },
     sessionId: {
+        type: String,
+        default: null,
+    },
+    syncedGitDir: {
         type: String,
         default: null,
     },
@@ -141,8 +147,34 @@ watch(availableRoots, (roots) => {
 function handleRootSelect(key) {
     if (key !== selectedRootKey.value && !missingRoots.value.has(key)) {
         selectedRootKey.value = key
+        // Emit the path for cross-tab sync.
+        // Always emit regardless of key — when git root and project directory
+        // are the same path, the merged entry has key 'project' but its path
+        // is still a valid git root that the Git tab can sync to.
+        const root = availableRoots.value.find(r => r.key === key)
+        if (root) {
+            emit('root-changed', root.path)
+        }
     }
 }
+
+/**
+ * Programmatically select the root whose path matches the given git directory.
+ * Used for cross-tab synchronization (Git tab → Files tab).
+ * Does NOT emit 'root-changed' to avoid infinite loops.
+ */
+function setRootByPath(path) {
+    if (!path) return
+    const root = availableRoots.value.find(r => r.path === path)
+    if (root && root.key !== selectedRootKey.value && !missingRoots.value.has(root.key)) {
+        selectedRootKey.value = root.key
+    }
+}
+
+// Sync from Git tab: when the synced git directory changes, select the matching root
+watch(() => props.syncedGitDir, (path) => {
+    if (path) setRootByPath(path)
+})
 
 // ─── Display options ─────────────────────────────────────────────────────────
 
@@ -466,7 +498,7 @@ async function revealFile(absolutePath) {
     return !!found
 }
 
-defineExpose({ revealFile })
+defineExpose({ revealFile, setRootByPath })
 </script>
 
 <template>
@@ -518,6 +550,7 @@ defineExpose({ revealFile })
                         type="checkbox"
                         :value="'root:' + root.key"
                         :checked="selectedRootKey === root.key"
+                        :data-root-selected="selectedRootKey === root.key ? 'true' : 'false'"
                         :disabled="missingRoots.has(root.key)"
                     >
                         <div>{{ root.label }}</div>
@@ -682,5 +715,16 @@ defineExpose({ revealFile })
 .root-missing {
     font-size: var(--wa-font-size-xs);
     color: var(--wa-color-danger-fill-loud);
+}
+
+/* Force-sync the checkmark visual on root selector items via CSS ::part().
+   Same fix as GitPanel: the wa-dropdown-item's internal `checked` property
+   can get desynced from Vue's reactive state after makeSelection() toggles it.
+   The data-root-selected HTML attribute stays in sync with Vue's state. */
+wa-dropdown-item[data-root-selected="true"]::part(checkmark) {
+    visibility: visible;
+}
+wa-dropdown-item[data-root-selected="false"]::part(checkmark) {
+    visibility: hidden;
 }
 </style>

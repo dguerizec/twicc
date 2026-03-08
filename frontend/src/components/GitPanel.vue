@@ -15,6 +15,8 @@ import FileTreePanel from './FileTreePanel.vue'
 import FilePane from './FilePane.vue'
 import { searchTreeFiles } from '../utils/treeSearch'
 
+const emit = defineEmits(['root-changed'])
+
 const props = defineProps({
     projectId: {
         type: String,
@@ -25,6 +27,14 @@ const props = defineProps({
         required: true,
     },
     gitDirectory: {
+        type: String,
+        default: null,
+    },
+    projectGitRoot: {
+        type: String,
+        default: null,
+    },
+    syncedGitDir: {
         type: String,
         default: null,
     },
@@ -44,6 +54,98 @@ const props = defineProps({
 
 const settingsStore = useSettingsStore()
 const refreshButtonId = useId()
+const gitDirButtonId = useId()
+
+// ---------------------------------------------------------------------------
+// Git root selector
+// ---------------------------------------------------------------------------
+
+/**
+ * Available git roots for the directory selector.
+ * Only includes paths that are actual git repositories.
+ * When session git_directory and project git_root are the same, they are merged.
+ */
+const availableGitRoots = computed(() => {
+    const sessionGit = props.gitDirectory
+    const projectGit = props.projectGitRoot
+
+    // Same path — merge into one entry
+    if (sessionGit && projectGit && sessionGit === projectGit) {
+        return [{ key: 'git', label: 'Git root', path: sessionGit }]
+    }
+
+    const roots = []
+    if (sessionGit) {
+        roots.push({ key: 'session-git', label: 'Session git root', path: sessionGit })
+    }
+    if (projectGit && projectGit !== sessionGit) {
+        roots.push({ key: 'project-git', label: 'Project git root', path: projectGit })
+    }
+    return roots
+})
+
+const selectedRootKey = ref(null)
+
+/**
+ * Set of root keys whose directories no longer exist on disk.
+ * Populated when fetchGitLog receives a 404 for a root directory.
+ * Used to disable the corresponding dropdown items.
+ */
+const missingRoots = ref(new Set())
+
+/**
+ * The currently active git directory path, derived from the selected root.
+ */
+const effectiveGitDirectory = computed(() => {
+    const roots = availableGitRoots.value
+    if (!roots.length) return null
+    const selected = roots.find(r => r.key === selectedRootKey.value)
+    return selected ? selected.path : roots[0].path
+})
+
+// Reset selection when the available roots change (e.g. new session)
+watch(availableGitRoots, (roots) => {
+    if (!roots.length) {
+        selectedRootKey.value = null
+        return
+    }
+    // Keep current selection if still valid
+    if (selectedRootKey.value && roots.find(r => r.key === selectedRootKey.value)) return
+    // Default to first
+    selectedRootKey.value = roots[0].key
+}, { immediate: true })
+
+function handleRootSelect(key) {
+    if (key !== selectedRootKey.value && !missingRoots.value.has(key)) {
+        selectedRootKey.value = key
+        // Emit the path for cross-tab sync
+        const root = availableGitRoots.value.find(r => r.key === key)
+        if (root) {
+            emit('root-changed', root.path)
+        }
+    }
+}
+
+/**
+ * Handler for the overlay header git directory dropdown's wa-select event.
+ * Extracts the selected item's value and delegates to handleRootSelect.
+ */
+function onGitDirDropdownSelect(event) {
+    const value = event.detail?.item?.value
+    if (value) {
+        handleRootSelect(value)
+    }
+}
+
+// Sync from Files tab: when the synced git directory changes, select the matching root.
+// Does NOT emit 'root-changed' to avoid infinite loops.
+watch(() => props.syncedGitDir, (path) => {
+    if (!path) return
+    const root = availableGitRoots.value.find(r => r.path === path)
+    if (root && root.key !== selectedRootKey.value && !missingRoots.value.has(root.key)) {
+        selectedRootKey.value = root.key
+    }
+})
 
 // ─── Mobile breakpoint detection ─────────────────────────────────────────────
 // Uses a ResizeObserver on .main-content instead of a viewport media query,
@@ -64,6 +166,19 @@ const apiPrefix = computed(() => {
     }
     return `/api/projects/${props.projectId}/sessions/${props.sessionId}`
 })
+
+/**
+ * Query string fragment for the git_dir parameter.
+ * Returns '&git_dir=...' or '?git_dir=...' ready to append to URLs,
+ * but only when a non-default root is selected (to avoid unnecessary params).
+ * Use appendGitDir(url) helper instead of using this directly.
+ */
+function appendGitDir(url) {
+    const dir = effectiveGitDirectory.value
+    if (!dir) return url
+    const sep = url.includes('?') ? '&' : '?'
+    return `${url}${sep}git_dir=${encodeURIComponent(dir)}`
+}
 
 // ---------------------------------------------------------------------------
 // State
@@ -210,7 +325,7 @@ watch(selectedCommit, async (commit) => {
 
     commitFilesLoading.value = true
     try {
-        const url = `${apiPrefix.value}/git-commit-files/${commit.hash}/`
+        const url = appendGitDir(`${apiPrefix.value}/git-commit-files/${commit.hash}/`)
         const res = await apiFetch(url)
 
         if (res.ok) {
@@ -239,6 +354,8 @@ const selectedFile = computed(() => fileTreePanelRef.value?.selectedFile ?? null
 function handleOptionsSelect(value) {
     if (value === 'show-untracked') {
         showUntracked.value = !showUntracked.value
+    } else if (value?.startsWith('root:')) {
+        handleRootSelect(value.slice(5))
     }
 }
 
@@ -332,7 +449,7 @@ watch(displayTree, (tree) => {
 async function refreshIndexFiles() {
     commitFilesLoading.value = true
     try {
-        const url = `${apiPrefix.value}/git-index-files/`
+        const url = appendGitDir(`${apiPrefix.value}/git-index-files/`)
         const res = await apiFetch(url)
         if (res.ok) {
             const data = await res.json()
@@ -367,8 +484,8 @@ const diffSideBySide = ref(settingsStore.isDiffSideBySide)
 /** Absolute file path for the selected file (needed by FilePane for language detection and save). */
 const selectedFilePath = computed(() => {
     if (!selectedFile.value) return null
-    if (props.gitDirectory) {
-        return `${props.gitDirectory}/${selectedFile.value}`
+    if (effectiveGitDirectory.value) {
+        return `${effectiveGitDirectory.value}/${selectedFile.value}`
     }
     return selectedFile.value
 })
@@ -386,9 +503,9 @@ async function fetchDiff(file) {
     try {
         let url
         if (isViewingIndex.value) {
-            url = `${apiPrefix.value}/git-index-file-diff/?path=${encodeURIComponent(file)}`
+            url = appendGitDir(`${apiPrefix.value}/git-index-file-diff/?path=${encodeURIComponent(file)}`)
         } else {
-            url = `${apiPrefix.value}/git-commit-file-diff/${selectedCommit.value.hash}/?path=${encodeURIComponent(file)}`
+            url = appendGitDir(`${apiPrefix.value}/git-commit-file-diff/${selectedCommit.value.hash}/?path=${encodeURIComponent(file)}`)
         }
 
         const res = await apiFetch(url)
@@ -430,9 +547,9 @@ const colours = computed(() =>
 const apiUrl = computed(() => {
     const base = `${apiPrefix.value}/git-log/`
     if (selectedBranch.value) {
-        return `${base}?branch=${encodeURIComponent(selectedBranch.value)}`
+        return appendGitDir(`${base}?branch=${encodeURIComponent(selectedBranch.value)}`)
     }
-    return base
+    return appendGitDir(base)
 })
 
 async function fetchGitLog() {
@@ -441,13 +558,28 @@ async function fetchGitLog() {
 
     // First fetch is always unfiltered (--all) so we get the full branch list
     // and current branch. We'll select the right branch and re-fetch if needed.
-    const base = `${apiPrefix.value}/git-log/`
+    const base = appendGitDir(`${apiPrefix.value}/git-log/`)
 
     try {
         const res = await apiFetch(base)
 
         if (!res.ok) {
             const data = await res.json().catch(() => ({}))
+
+            // If the directory was not found, mark this root as missing
+            // and automatically fall back to the other root when possible.
+            if (res.status === 404 && selectedRootKey.value) {
+                missingRoots.value = new Set([...missingRoots.value, selectedRootKey.value])
+                const fallback = availableGitRoots.value.find(
+                    r => r.key !== selectedRootKey.value && !missingRoots.value.has(r.key)
+                )
+                if (fallback) {
+                    selectedRootKey.value = fallback.key
+                    // The watcher on effectiveGitDirectory will re-trigger fetchGitLog
+                    return
+                }
+            }
+
             error.value = data.error || `Request failed (${res.status})`
             return
         }
@@ -513,6 +645,32 @@ async function refreshGitLog() {
         refreshing.value = false
     }
 }
+
+// ---------------------------------------------------------------------------
+// Re-fetch when git root changes
+// ---------------------------------------------------------------------------
+
+watch(effectiveGitDirectory, (newDir, oldDir) => {
+    if (!oldDir || !newDir || newDir === oldDir) return
+    if (!started.value) return
+
+    // Full reset of all git state
+    entries.value = []
+    currentBranch.value = ''
+    headCommitHash.value = ''
+    selectedBranch.value = ''
+    selectedCommit.value = null
+    indexFilesData.value = null
+    commitFilesData.value = null
+    diffData.value = null
+    diffError.value = null
+    branches.value = []
+    hasMore.value = false
+    filterText.value = ''
+
+    // Re-fetch everything from scratch
+    fetchGitLog()
+})
 
 // ---------------------------------------------------------------------------
 // Lazy init + auto-refresh when the tab becomes active
@@ -669,6 +827,20 @@ watch(isMobile, (mobile) => {
 // rendered once git data has loaded. Watch the owner ref so reparenting
 // runs as soon as the conditional block appears in the DOM.
 watch(treeOwnerRef, (el) => {
+    // When the v-if/v-else chain toggles (e.g. loading → content), the owner div
+    // is destroyed and recreated. The old treeNode/contentNode references become
+    // stale — they point to DOM elements from a destroyed Vue component instance.
+    // Without this reset, reparentNodes would skip grabbing the new elements
+    // (because treeNode is already set) and leave the old dead DOM visible
+    // while the new working component stays hidden in the owner div.
+    if (treeNode && treeNode.parentElement) {
+        treeNode.remove()
+    }
+    if (contentNode && contentNode.parentElement) {
+        contentNode.remove()
+    }
+    treeNode = null
+    contentNode = null
     if (el) nextTick(() => reparentNodes(isMobile.value))
 })
 
@@ -751,6 +923,24 @@ onMounted(() => {
                             >
                                 Show untracked files
                             </wa-dropdown-item>
+                            <wa-divider></wa-divider>
+                            <wa-dropdown-item disabled class="dropdown-header">
+                                Git directory:
+                            </wa-dropdown-item>
+                            <wa-dropdown-item
+                                v-for="root in availableGitRoots"
+                                :key="root.key"
+                                type="checkbox"
+                                :value="'root:' + root.key"
+                                :checked="selectedRootKey === root.key"
+                                :data-root-selected="selectedRootKey === root.key ? 'true' : 'false'"
+                                :disabled="missingRoots.has(root.key)"
+                            >
+                                <div>{{ root.label }}</div>
+                                <div class="root-path">{{ root.path }}</div>
+                                <div v-if="missingRoots.has(root.key)" class="root-missing">Directory no longer exists</div>
+                            </wa-dropdown-item>
+                            <wa-divider></wa-divider>
                         </template>
                     </FileTreePanel>
                 </div>
@@ -828,6 +1018,35 @@ onMounted(() => {
                 <div v-if="gitLogOpen" class="gitlog-overlay">
                     <!-- Overlay header -->
                     <div class="gitlog-overlay-header">
+                        <!-- Git directory selector -->
+                        <wa-dropdown class="git-dir-dropdown" @wa-select="onGitDirDropdownSelect">
+                            <wa-button
+                                slot="trigger"
+                                :id="gitDirButtonId"
+                                variant="neutral"
+                                appearance="filled-outlined"
+                                size="small"
+                                caret
+                            >
+                                <wa-icon name="folder"></wa-icon>
+                            </wa-button>
+                            <wa-dropdown-item disabled class="dropdown-header">
+                                <small>Git directory:</small>
+                            </wa-dropdown-item>
+                            <wa-dropdown-item
+                                v-for="root in availableGitRoots"
+                                :key="root.key"
+                                :value="root.key"
+                                :disabled="missingRoots.has(root.key)"
+                            >
+                                <wa-icon slot="icon" name="check" :style="{ visibility: root.key === selectedRootKey ? 'visible' : 'hidden' }"></wa-icon>
+                                {{ root.label }}
+                                <div class="root-path">{{ root.path }}</div>
+                                <div v-if="missingRoots.has(root.key)" class="root-missing">Directory no longer exists</div>
+                            </wa-dropdown-item>
+                        </wa-dropdown>
+                        <AppTooltip :for="gitDirButtonId">Switch git directory</AppTooltip>
+
                         <wa-select
                             v-if="branches.length"
                             size="small"
@@ -1060,6 +1279,48 @@ wa-callout {
     flex-shrink: 0;
     padding: var(--wa-space-3xs) var(--wa-space-xs);
     border-bottom: 1px solid var(--wa-color-surface-border);
+}
+
+/* Git directory dropdown */
+
+.git-dir-dropdown {
+    flex-shrink: 0;
+
+    wa-button::part(base) {
+        padding: var(--wa-space-3xs) var(--wa-space-2xs);
+    }
+}
+
+.dropdown-header {
+    font-weight: var(--wa-font-weight-semibold);
+    opacity: 0.7;
+}
+
+.root-path {
+    font-size: var(--wa-font-size-2xs);
+    color: var(--wa-color-text-quiet);
+    margin-top: var(--wa-space-3xs);
+    word-break: break-all;
+}
+
+.root-missing {
+    font-size: var(--wa-font-size-xs);
+    color: var(--wa-color-danger-fill-loud);
+}
+
+/* Force-sync the checkmark visual on root selector items via CSS ::part().
+   The wa-dropdown-item's internal `checked` property (a Lit reactive property)
+   can get desynced from Vue's reactive state: the web component's makeSelection()
+   toggles `checked` directly, and Vue's VNode diffing may later skip re-setting
+   it when old/new VNode values are identical. The `data-root-selected` HTML
+   attribute is immune to this issue (nothing external modifies it), so we use
+   it to override the shadow DOM's :state(checked)-based visibility.
+   Only root items carry this attribute; other checkboxes are unaffected. */
+wa-dropdown-item[data-root-selected="true"]::part(checkmark) {
+    visibility: visible;
+}
+wa-dropdown-item[data-root-selected="false"]::part(checkmark) {
+    visibility: hidden;
 }
 
 .branch-select {

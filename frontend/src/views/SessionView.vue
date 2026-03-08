@@ -78,15 +78,44 @@ onDeactivated(() => {
 
 provide('sessionActive', readonly(isActive))
 
+// ─── Cross-tab root directory sync (Files ↔ Git) ─────────────────────────────
+
+/**
+ * Shared git directory path for synchronizing root selection between
+ * the Files tab and the Git tab.
+ * Updated when the user manually selects a git root in either panel.
+ * Each panel watches this via prop and selects the matching root,
+ * without re-emitting (preventing infinite loops).
+ */
+const syncedGitDirPath = ref(null)
+
+function onRootChanged(path) {
+    syncedGitDirPath.value = path
+}
+
 // ─── Cross-tab file reveal (Git → Files) ─────────────────────────────────────
 
 /**
  * Switch to the Files tab and reveal a specific file.
  * Provided to descendant components (e.g., FilePane in the Git panel).
  *
+ * Before revealing, ensures the Files tab root matches the Git tab's
+ * current git directory (handles the case where Files tab was on a
+ * non-git root like "Project directory").
+ *
  * @param {string} absolutePath — the absolute filesystem path to reveal
  */
 async function viewFileInFilesTab(absolutePath) {
+    // Ensure the Files tab root can reach the file.
+    // Determine the git root that contains this file path and switch to it.
+    const gitDir = session.value?.git_directory
+    const projectGitRoot = store.getProject(session.value?.project_id)?.git_root
+    const matchingRoot = [gitDir, projectGitRoot].find(
+        root => root && absolutePath.startsWith(root + '/')
+    )
+    if (matchingRoot) {
+        filesPanelRef.value?.setRootByPath(matchingRoot)
+    }
     switchToTab('files')
     // Wait for the tab panel to become active and the FilesPanel to be ready
     await nextTick()
@@ -603,21 +632,26 @@ function handleNeedsTitle() {
                     ref="filesPanelRef"
                     :project-id="session?.project_id"
                     :session-id="session?.id"
+                    :synced-git-dir="syncedGitDirPath"
                     :git-directory="session?.git_directory"
                     :project-git-root="store.getProject(session?.project_id)?.git_root"
                     :project-directory="store.getProject(session?.project_id)?.directory"
                     :active="isActive && activeTabId === 'files'"
                     :is-draft="session?.draft === true"
+                    @root-changed="onRootChanged"
                 />
             </wa-tab-panel>
             <wa-tab-panel v-if="hasGitRepo" name="git">
                 <GitPanel
                     :project-id="session?.project_id"
                     :session-id="session?.id"
-                    :git-directory="session?.git_directory || store.getProject(session?.project_id)?.git_root"
+                    :synced-git-dir="syncedGitDirPath"
+                    :git-directory="session?.git_directory"
+                    :project-git-root="store.getProject(session?.project_id)?.git_root"
                     :initial-branch="session?.git_branch || ''"
                     :active="isActive && activeTabId === 'git'"
                     :is-draft="session?.draft === true"
+                    @root-changed="onRootChanged"
                 />
             </wa-tab-panel>
             <wa-tab-panel name="terminal">

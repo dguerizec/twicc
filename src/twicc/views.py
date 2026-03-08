@@ -727,36 +727,12 @@ def git_log(request, project_id, session_id=None):
     # Optional branch filter from query string
     branch_filter = request.GET.get("branch", "")
 
-    # Resolve git directory:
-    # 1. Session has explicit git info (from tool_use), if the directory still exists
-    # 2. Fallback to project.git_root (e.g. worktree deleted, branch removed, or
-    #    session hasn't interacted with files yet, or draft session)
-    git_directory = None
-
-    if session_id:
-        try:
-            session = Session.objects.get(id=session_id, project_id=project_id)
-        except Session.DoesNotExist:
-            raise Http404("Session not found")
-
-        # Only regular sessions (not subagents)
-        if session.parent_session_id is not None:
-            raise Http404("Session not found")
-
-        if session.git_directory and os.path.isdir(session.git_directory):
-            git_directory = session.git_directory
-
-    if not git_directory:
-        # Fallback: use project.git_root
-        try:
-            project = Project.objects.get(id=project_id)
-        except Project.DoesNotExist:
-            raise Http404("Project not found")
-
-        if project.git_root and os.path.isdir(project.git_root):
-            git_directory = project.git_root
-
-    if not git_directory:
+    # Resolve git directory using the shared helper.
+    # An optional ?git_dir= query param lets the frontend request a specific root.
+    requested_git_dir = request.GET.get("git_dir")
+    try:
+        git_directory = _resolve_session_git_directory(project_id, session_id, requested_git_dir=requested_git_dir)
+    except Http404:
         return JsonResponse({"error": "No git repository found"}, status=404)
 
     # Always resolve branch dynamically from the git directory at request time,
@@ -773,18 +749,23 @@ def git_log(request, project_id, session_id=None):
     return JsonResponse(result)
 
 
-def _resolve_session_git_directory(project_id, session_id=None):
+def _resolve_session_git_directory(project_id, session_id=None, *, requested_git_dir=None):
     """Resolve the git directory for a session or project.
 
     Resolution order:
-    1. Session git_directory (from tool_use analysis), if directory still exists
-    2. Project git_root (resolved from project directory walking up)
+    1. If ``requested_git_dir`` is provided, validate it matches one of the
+       known roots (session git_directory or project git_root) and use it.
+    2. Session git_directory (from tool_use analysis), if directory still exists
+    3. Project git_root (resolved from project directory walking up)
 
     When session_id is None (project-level, e.g. draft sessions), only the
     project git_root is used.
 
     Returns the git_directory path or raises Http404.
     """
+    session_git = None
+    project_git = None
+
     if session_id:
         try:
             session = Session.objects.get(id=session_id, project_id=project_id)
@@ -796,16 +777,31 @@ def _resolve_session_git_directory(project_id, session_id=None):
             raise Http404("Session not found")
 
         if session.git_directory and os.path.isdir(session.git_directory):
-            return session.git_directory
+            session_git = session.git_directory
 
-    # Fallback: use project.git_root
+    # Always fetch project (needed for requested_git_dir validation)
     try:
         project = Project.objects.get(id=project_id)
     except Project.DoesNotExist:
         raise Http404("Project not found")
 
     if project.git_root and os.path.isdir(project.git_root):
-        return project.git_root
+        project_git = project.git_root
+
+    # If a specific directory was requested, validate it against known roots
+    if requested_git_dir:
+        allowed = {d for d in (session_git, project_git) if d}
+        if requested_git_dir in allowed:
+            return requested_git_dir
+        # Requested directory is not among known/existing roots — reject with 404
+        # so the frontend can mark it as missing and fall back to another root.
+        raise Http404("No git repository found")
+
+    # Default resolution: session git first, then project git
+    if session_git:
+        return session_git
+    if project_git:
+        return project_git
 
     raise Http404("No git repository found")
 
@@ -825,7 +821,8 @@ def git_index_files(request, project_id, session_id=None):
     """
     from twicc.git import get_index_files
 
-    git_directory = _resolve_session_git_directory(project_id, session_id)
+    requested_git_dir = request.GET.get("git_dir")
+    git_directory = _resolve_session_git_directory(project_id, session_id, requested_git_dir=requested_git_dir)
     result = get_index_files(git_directory)
 
     return JsonResponse(result, safe=False)
@@ -849,7 +846,8 @@ def git_commit_files(request, project_id, commit_hash, session_id=None):
     """
     from twicc.git import GitError, get_commit_files
 
-    git_directory = _resolve_session_git_directory(project_id, session_id)
+    requested_git_dir = request.GET.get("git_dir")
+    git_directory = _resolve_session_git_directory(project_id, session_id, requested_git_dir=requested_git_dir)
 
     try:
         result = get_commit_files(git_directory, commit_hash)
@@ -882,7 +880,8 @@ def git_index_file_diff(request, project_id, session_id=None):
     if not file_path:
         return JsonResponse({"error": "Missing 'path' query parameter"}, status=400)
 
-    git_directory = _resolve_session_git_directory(project_id, session_id)
+    requested_git_dir = request.GET.get("git_dir")
+    git_directory = _resolve_session_git_directory(project_id, session_id, requested_git_dir=requested_git_dir)
     result = get_index_file_diff(git_directory, file_path)
 
     if result.get("error"):
@@ -914,7 +913,8 @@ def git_commit_file_diff(request, project_id, commit_hash, session_id=None):
     if not file_path:
         return JsonResponse({"error": "Missing 'path' query parameter"}, status=400)
 
-    git_directory = _resolve_session_git_directory(project_id, session_id)
+    requested_git_dir = request.GET.get("git_dir")
+    git_directory = _resolve_session_git_directory(project_id, session_id, requested_git_dir=requested_git_dir)
     result = get_commit_file_diff(git_directory, commit_hash, file_path)
 
     if result.get("error"):
