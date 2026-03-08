@@ -650,7 +650,7 @@ class ClaudeProcess:
             # Handle error and transition to DEAD state. Do not re-raise as the
             # spec requires process errors to be logged and reported, never propagated.
             # The error is communicated to the frontend via WebSocket broadcast.
-            await self._handle_error(f"Failed to start process: {e}")
+            await self._handle_error(f"Failed to start process: {e}", exc=e)
 
     async def set_permission_mode(self, mode: str) -> None:
         """Change permission mode on the live SDK client.
@@ -765,7 +765,7 @@ class ClaudeProcess:
             # Handle error and transition to DEAD state. Do not re-raise as the
             # spec requires process errors to be logged and reported, never propagated.
             # The error is communicated to the frontend via WebSocket broadcast.
-            await self._handle_error(f"Failed to send message: {e}")
+            await self._handle_error(f"Failed to send message: {e}", exc=e)
 
     async def kill(self, reason: str = "manual") -> None:
         """Terminate the process gracefully.
@@ -860,21 +860,23 @@ class ClaudeProcess:
             # Normal cancellation during shutdown
             raise
         except ClaudeSDKError as e:
-            await self._handle_error(f"SDK error: {e}")
+            await self._handle_error(f"SDK error: {e}", exc=e)
         except Exception as e:
-            await self._handle_error(f"Unexpected error in message loop: {e}")
+            await self._handle_error(f"Unexpected error in message loop: {e}", exc=e)
 
-    async def _handle_error(self, error_message: str) -> None:
+    async def _handle_error(self, error_message: str, exc: Exception | None = None) -> None:
         """Handle an error by transitioning to DEAD state.
 
         Args:
             error_message: Description of what went wrong
+            exc: Optional exception that caused the error (logged with full traceback)
         """
         logger.error(
             "Process %s for session %s died: %s",
             self.project_id,
             self.session_id,
             error_message,
+            exc_info=exc,
         )
 
         # Cancel any pending request Future to avoid asyncio warnings
