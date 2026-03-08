@@ -5,7 +5,7 @@ import { useRouter } from 'vue-router'
 import { useSettingsStore } from '../stores/settings'
 import { useDataStore } from '../stores/data'
 import { useAuthStore } from '../stores/auth'
-import { DISPLAY_MODE, THEME_MODE, SESSION_TIME_FORMAT, DEFAULT_TITLE_SYSTEM_PROMPT, DEFAULT_MAX_CACHED_SESSIONS, PERMISSION_MODE, PERMISSION_MODE_LABELS, PERMISSION_MODE_DESCRIPTIONS, PERMISSION_MODE_ICONS, PERMISSION_MODE_COLORS, MODEL, MODEL_LABELS, MODEL_ICONS, MODEL_COLORS, EFFORT, EFFORT_LABELS, EFFORT_ICONS, EFFORT_COLORS, THINKING, THINKING_LABELS, THINKING_ICONS, THINKING_COLORS } from '../constants'
+import { DISPLAY_MODE, THEME_MODE, SESSION_TIME_FORMAT, DEFAULT_TITLE_SYSTEM_PROMPT, DEFAULT_MAX_CACHED_SESSIONS, PERMISSION_MODE, PERMISSION_MODE_LABELS, PERMISSION_MODE_DESCRIPTIONS, MODEL, MODEL_LABELS, EFFORT, EFFORT_LABELS, THINKING, THINKING_LABELS } from '../constants'
 import NotificationSettings from './NotificationSettings.vue'
 import AppTooltip from './AppTooltip.vue'
 
@@ -81,30 +81,24 @@ const permissionModeOptions = Object.values(PERMISSION_MODE).map(value => ({
     value,
     label: PERMISSION_MODE_LABELS[value],
     description: PERMISSION_MODE_DESCRIPTIONS[value],
-    icon: PERMISSION_MODE_ICONS[value],
-    color: PERMISSION_MODE_COLORS[value],
 }))
 
 // Model options for the select
 const modelOptions = Object.values(MODEL).map(value => ({
     value,
     label: MODEL_LABELS[value],
-    icon: MODEL_ICONS[value],
-    color: MODEL_COLORS[value],
 }))
 
 // Effort options for the select
 const effortOptions = Object.values(EFFORT).map(value => ({
     value,
     label: EFFORT_LABELS[value],
-    icon: EFFORT_ICONS[value],
-    color: EFFORT_COLORS[value],
 }))
 
 // Thinking options for the select (use string values for wa-select compatibility)
 const thinkingOptions = [
-    { value: 'true', label: THINKING_LABELS[true], icon: THINKING_ICONS[true], color: THINKING_COLORS[true] },
-    { value: 'false', label: THINKING_LABELS[false], icon: THINKING_ICONS[false], color: THINKING_COLORS[false] },
+    { value: 'true', label: THINKING_LABELS[true] },
+    { value: 'false', label: THINKING_LABELS[false] },
 ]
 
 /**
@@ -367,13 +361,8 @@ function onPopoverShow() {
                                 :value="option.value"
                                 :label="option.label"
                             >
-                                <span class="select-option">
-                                    <wa-icon :name="option.icon" variant="classic" :style="{ color: option.color }"></wa-icon>
-                                    <span>
-                                        <span>{{ option.label }}</span>
-                                        <span class="option-description">{{ option.description }}</span>
-                                    </span>
-                                </span>
+                                <span>{{ option.label }}</span>
+                                <span class="option-description">{{ option.description }}</span>
                             </wa-option>
                         </wa-select>
                         <wa-switch
@@ -394,10 +383,7 @@ function onPopoverShow() {
                                 :key="option.value"
                                 :value="option.value"
                             >
-                                <span class="select-option">
-                                    <wa-icon :name="option.icon" variant="classic" :style="{ color: option.color }"></wa-icon>
-                                    <span>{{ option.label }}</span>
-                                </span>
+                                {{ option.label }}
                             </wa-option>
                         </wa-select>
                         <wa-switch
@@ -418,10 +404,7 @@ function onPopoverShow() {
                                 :key="option.value"
                                 :value="option.value"
                             >
-                                <span class="select-option">
-                                    <wa-icon :name="option.icon" variant="classic" :style="{ color: option.color }"></wa-icon>
-                                    <span>{{ option.label }}</span>
-                                </span>
+                                {{ option.label }}
                             </wa-option>
                         </wa-select>
                         <wa-switch
@@ -442,10 +425,7 @@ function onPopoverShow() {
                                 :key="option.value"
                                 :value="option.value"
                             >
-                                <span class="select-option">
-                                    <wa-icon :name="option.icon" variant="classic" :style="{ color: option.color }"></wa-icon>
-                                    <span>{{ option.label }}</span>
-                                </span>
+                                {{ option.label }}
                             </wa-option>
                         </wa-select>
                         <wa-switch
@@ -658,16 +638,6 @@ function onPopoverShow() {
 
     wa-button {
         align-self: end;
-    }
-}
-
-.select-option {
-    display: flex;
-    align-items: baseline;
-    gap: var(--wa-space-s);
-    wa-icon {
-        position: relative;
-        top: var(--wa-space-3xs);
     }
 }
 

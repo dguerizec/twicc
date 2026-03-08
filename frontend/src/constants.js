@@ -178,7 +178,7 @@ export const PERMISSION_MODE_LABELS = {
     [PERMISSION_MODE.ACCEPT_EDITS]: 'Accept Edits',
     [PERMISSION_MODE.PLAN]: 'Plan',
     [PERMISSION_MODE.DONT_ASK]: "Don't Ask",
-    [PERMISSION_MODE.BYPASS]: 'Bypass',
+    [PERMISSION_MODE.BYPASS]: 'Bypass permissions',
 }
 
 /**
@@ -190,28 +190,6 @@ export const PERMISSION_MODE_DESCRIPTIONS = {
     [PERMISSION_MODE.PLAN]: 'Read-only: Claude can analyze but not modify files',
     [PERMISSION_MODE.DONT_ASK]: 'Auto-denies tools unless pre-approved via permission rules',
     [PERMISSION_MODE.BYPASS]: 'Skips all permission prompts',
-}
-
-/**
- * FontAwesome icon names for each permission mode (classic/solid style).
- */
-export const PERMISSION_MODE_ICONS = {
-    [PERMISSION_MODE.DEFAULT]: 'shield-halved',
-    [PERMISSION_MODE.ACCEPT_EDITS]: 'pen-to-square',
-    [PERMISSION_MODE.PLAN]: 'eye',
-    [PERMISSION_MODE.DONT_ASK]: 'lock',
-    [PERMISSION_MODE.BYPASS]: 'triangle-exclamation',
-}
-
-/**
- * Accent colors for each permission mode icon.
- */
-export const PERMISSION_MODE_COLORS = {
-    [PERMISSION_MODE.DEFAULT]: '#3b82f6',
-    [PERMISSION_MODE.ACCEPT_EDITS]: '#22c55e',
-    [PERMISSION_MODE.PLAN]: '#06b6d4',
-    [PERMISSION_MODE.DONT_ASK]: '#f59e0b',
-    [PERMISSION_MODE.BYPASS]: '#ef4444',
 }
 
 /**
@@ -231,22 +209,6 @@ export const DEFAULT_MODEL = MODEL.OPUS
 export const MODEL_LABELS = {
     [MODEL.OPUS]: 'Opus',
     [MODEL.SONNET]: 'Sonnet',
-}
-
-/**
- * FontAwesome icon names for each model (classic/solid style).
- */
-export const MODEL_ICONS = {
-    [MODEL.OPUS]: 'star',
-    [MODEL.SONNET]: 'bolt',
-}
-
-/**
- * Accent colors for each model icon.
- */
-export const MODEL_COLORS = {
-    [MODEL.OPUS]: '#e0a526',
-    [MODEL.SONNET]: '#9b59b6',
 }
 
 /**
@@ -274,27 +236,9 @@ export const EFFORT_LABELS = {
  * Display input text for each effort level (shown in the collapsed select).
  */
 export const EFFORT_DISPLAY_LABELS = {
-    [EFFORT.LOW]: 'Low',
-    [EFFORT.MEDIUM]: 'Medium',
-    [EFFORT.HIGH]: 'High',
-}
-
-/**
- * FontAwesome icon names for each effort level (classic/solid style).
- */
-export const EFFORT_ICONS = {
-    [EFFORT.LOW]: 'gauge',
-    [EFFORT.MEDIUM]: 'gauge',
-    [EFFORT.HIGH]: 'gauge-high',
-}
-
-/**
- * Accent colors for each effort level icon.
- */
-export const EFFORT_COLORS = {
-    [EFFORT.LOW]: '#94a3b8',
-    [EFFORT.MEDIUM]: '#3b82f6',
-    [EFFORT.HIGH]: '#f59e0b',
+    [EFFORT.LOW]: 'Low effort',
+    [EFFORT.MEDIUM]: 'Medium effort',
+    [EFFORT.HIGH]: 'High effort',
 }
 
 /**
@@ -312,7 +256,7 @@ export const DEFAULT_THINKING = THINKING.ENABLED
  * Human-friendly labels for each thinking mode.
  */
 export const THINKING_LABELS = {
-    [THINKING.ENABLED]: 'Enabled',
+    [THINKING.ENABLED]: 'Adaptive',
     [THINKING.DISABLED]: 'Disabled',
 }
 
@@ -322,22 +266,6 @@ export const THINKING_LABELS = {
 export const THINKING_DISPLAY_LABELS = {
     [THINKING.ENABLED]: 'Thinking',
     [THINKING.DISABLED]: 'No thinking',
-}
-
-/**
- * FontAwesome icon names for each thinking mode (classic/solid style).
- */
-export const THINKING_ICONS = {
-    [THINKING.ENABLED]: 'brain',
-    [THINKING.DISABLED]: 'brain',
-}
-
-/**
- * Accent colors for each thinking mode icon.
- */
-export const THINKING_COLORS = {
-    [THINKING.ENABLED]: '#a855f7',
-    [THINKING.DISABLED]: '#94a3b8',
 }
 
 /**

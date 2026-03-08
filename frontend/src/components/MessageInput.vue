@@ -8,7 +8,7 @@ import { sendWsMessage, notifyUserDraftUpdated } from '../composables/useWebSock
 import { useVisualViewport } from '../composables/useVisualViewport'
 import { isSupportedMimeType, MAX_FILE_SIZE, SUPPORTED_IMAGE_TYPES, draftMediaToMediaItem } from '../utils/fileUtils'
 import { toast } from '../composables/useToast'
-import { PERMISSION_MODE, PERMISSION_MODE_LABELS, PERMISSION_MODE_DESCRIPTIONS, PERMISSION_MODE_ICONS, PERMISSION_MODE_COLORS, MODEL, MODEL_LABELS, MODEL_ICONS, MODEL_COLORS, EFFORT, EFFORT_LABELS, EFFORT_DISPLAY_LABELS, EFFORT_ICONS, EFFORT_COLORS, THINKING, THINKING_DISPLAY_LABELS, THINKING_ICONS, THINKING_COLORS } from '../constants'
+import { PERMISSION_MODE, PERMISSION_MODE_LABELS, PERMISSION_MODE_DESCRIPTIONS, MODEL, MODEL_LABELS, EFFORT, EFFORT_LABELS, EFFORT_DISPLAY_LABELS, THINKING_LABELS, THINKING_DISPLAY_LABELS } from '../constants'
 import MediaThumbnailGroup from './MediaThumbnailGroup.vue'
 import AppTooltip from './AppTooltip.vue'
 
@@ -45,10 +45,7 @@ const messageText = ref('')
 const textareaRef = ref(null)
 const fileInputRef = ref(null)
 const attachButtonId = useId()
-const modelSelectId = useId()
-const effortSelectId = useId()
-const thinkingSelectId = useId()
-const permissionSelectId = useId()
+const settingsButtonId = useId()
 
 // Attachments for this session
 const attachments = computed(() => store.getAttachments(props.sessionId))
@@ -62,48 +59,33 @@ const permissionModeOptions = Object.values(PERMISSION_MODE).map(value => ({
     value,
     label: PERMISSION_MODE_LABELS[value],
     description: PERMISSION_MODE_DESCRIPTIONS[value],
-    icon: PERMISSION_MODE_ICONS[value],
-    color: PERMISSION_MODE_COLORS[value],
 }))
 
 // Model options for the dropdown
 const modelOptions = Object.values(MODEL).map(value => ({
     value,
     label: MODEL_LABELS[value],
-    icon: MODEL_ICONS[value],
-    color: MODEL_COLORS[value],
 }))
 
 // Effort options for the dropdown
 const effortOptions = Object.values(EFFORT).map(value => ({
     value,
     label: EFFORT_LABELS[value],
-    displayLabel: EFFORT_DISPLAY_LABELS[value],
-    icon: EFFORT_ICONS[value],
-    color: EFFORT_COLORS[value],
 }))
 
 // Thinking options for the dropdown (use string values for wa-select compatibility)
 const thinkingOptions = [
-    { value: 'true', label: THINKING_DISPLAY_LABELS[true], icon: THINKING_ICONS[true], color: THINKING_COLORS[true] },
-    { value: 'false', label: THINKING_DISPLAY_LABELS[false], icon: THINKING_ICONS[false], color: THINKING_COLORS[false] },
+    { value: 'true', label: THINKING_LABELS[true] },
+    { value: 'false', label: THINKING_LABELS[false] },
 ]
 
-// Dynamic icon and color for the selected model (shown in the select's start slot)
-const selectedModelIcon = computed(() => MODEL_ICONS[selectedModel.value] || 'star')
-const selectedModelColor = computed(() => MODEL_COLORS[selectedModel.value] || 'inherit')
-
-// Dynamic icon and color for the selected permission mode (shown in the select's start slot)
-const selectedPermissionIcon = computed(() => PERMISSION_MODE_ICONS[selectedPermissionMode.value] || 'shield-halved')
-const selectedPermissionColor = computed(() => PERMISSION_MODE_COLORS[selectedPermissionMode.value] || 'inherit')
-
-// Dynamic icon and color for the selected effort (shown in the select's start slot)
-const selectedEffortIcon = computed(() => EFFORT_ICONS[selectedEffort.value] || 'gauge')
-const selectedEffortColor = computed(() => EFFORT_COLORS[selectedEffort.value] || 'inherit')
-
-// Dynamic icon and color for the selected thinking mode (shown in the select's start slot)
-const selectedThinkingIcon = computed(() => THINKING_ICONS[selectedThinking.value] || 'brain')
-const selectedThinkingColor = computed(() => THINKING_COLORS[selectedThinking.value] || 'inherit')
+// Summary text for the settings button (labels joined with middle dot)
+const settingsSummary = computed(() => [
+    MODEL_LABELS[selectedModel.value],
+    EFFORT_DISPLAY_LABELS[selectedEffort.value],
+    THINKING_DISPLAY_LABELS[selectedThinking.value],
+    PERMISSION_MODE_LABELS[selectedPermissionMode.value],
+].join(' · '))
 
 // Selected permission mode for the current session
 const selectedPermissionMode = ref('default')
@@ -836,127 +818,81 @@ async function handleReset() {
             </div>
 
             <div class="message-input-actions">
-                <!-- Model selector -->
-                <wa-select
-                    :id="modelSelectId"
-                    :value.prop="selectedModel"
-                    @change="selectedModel = $event.target.value"
+                <!-- Settings summary button + popover -->
+                <wa-button
+                    :id="settingsButtonId"
+                    appearance="plain"
+                    variant="neutral"
                     size="small"
-                    class="option-select model-select"
-                    :disabled="isModelDisabled"
-                    placement="top"
+                    class="settings-button"
                 >
-                    <wa-icon
-                        slot="start"
-                        :name="selectedModelIcon"
-                        variant="classic"
-                        :style="{ color: selectedModelColor }"
-                    ></wa-icon>
-                    <wa-option
-                        v-for="option in modelOptions"
-                        :key="option.value"
-                        :value="option.value"
-                    >
-                        <span class="select-option">
-                            <wa-icon :name="option.icon" variant="classic" :style="{ color: option.color }"></wa-icon>
-                            <span class="model-label">{{ option.label }}</span>
-                        </span>
-                    </wa-option>
-                </wa-select>
-                <AppTooltip :for="modelSelectId">Model selection. Can only be changed on your turn.</AppTooltip>
-
-                <!-- Effort selector -->
-                <wa-select
-                    :id="effortSelectId"
-                    :value.prop="selectedEffort"
-                    @change="selectedEffort = $event.target.value"
-                    size="small"
-                    class="option-select effort-select"
-                    :disabled="isEffortThinkingDisabled"
+                    <wa-icon name="gear"></wa-icon><span>{{ settingsSummary }}</span>
+                </wa-button>
+                <wa-popover
+                    :for="settingsButtonId"
                     placement="top"
+                    class="settings-popover"
                 >
-                    <wa-icon
-                        slot="start"
-                        :name="selectedEffortIcon"
-                        variant="classic"
-                        :style="{ color: selectedEffortColor }"
-                    ></wa-icon>
-                    <wa-option
-                        v-for="option in effortOptions"
-                        :key="option.value"
-                        :value="option.value"
-                        :label="option.displayLabel"
-                    >
-                        <span class="select-option">
-                            <wa-icon :name="option.icon" variant="classic" :style="{ color: option.color }"></wa-icon>
-                            <span>{{ option.label }}</span>
-                        </span>
-                    </wa-option>
-                </wa-select>
-                <AppTooltip :for="effortSelectId">Effort level. Cannot be changed while a process is running.</AppTooltip>
-
-                <!-- Thinking selector -->
-                <wa-select
-                    :id="thinkingSelectId"
-                    :value.prop="String(selectedThinking)"
-                    @change="selectedThinking = $event.target.value === 'true'"
-                    size="small"
-                    class="option-select thinking-select"
-                    :disabled="isEffortThinkingDisabled"
-                    placement="top"
-                >
-                    <wa-icon
-                        slot="start"
-                        :name="selectedThinkingIcon"
-                        variant="classic"
-                        :style="{ color: selectedThinkingColor }"
-                    ></wa-icon>
-                    <wa-option
-                        v-for="option in thinkingOptions"
-                        :key="option.value"
-                        :value="option.value"
-                        :label="option.label"
-                    >
-                        <span class="select-option">
-                            <wa-icon :name="option.icon" variant="classic" :style="{ color: option.color }"></wa-icon>
-                            <span>{{ option.label }}</span>
-                        </span>
-                    </wa-option>
-                </wa-select>
-                <AppTooltip :for="thinkingSelectId">Extended thinking. Cannot be changed while a process is running.</AppTooltip>
-
-                <!-- Permission mode selector -->
-                <wa-select
-                    :id="permissionSelectId"
-                    :value.prop="selectedPermissionMode"
-                    @change="selectedPermissionMode = $event.target.value"
-                    size="small"
-                    class="option-select permission-mode-select"
-                    :disabled="isDisabled"
-                    placement="top"
-                >
-                    <wa-icon
-                        slot="start"
-                        :name="selectedPermissionIcon"
-                        variant="classic"
-                        :style="{ color: selectedPermissionColor }"
-                    ></wa-icon>
-                    <wa-option
-                        v-for="option in permissionModeOptions"
-                        :key="option.value"
-                        :value="option.value"
-                        :label="option.label"
-                    >
-                        <span class="select-option">
-                            <wa-icon :name="option.icon" variant="classic" :style="{ color: option.color }"></wa-icon>
-                            <span>
-                                <span>{{ option.label }}</span>
-                                <span class="option-description">{{ option.description }}</span>
-                            </span>
-                        </span>
-                    </wa-option>
-                </wa-select>
-                <AppTooltip :for="permissionSelectId">Permission mode. Can be changed at any time, even while Claude is working.</AppTooltip>
+                    <div class="settings-panel">
+                        <div class="setting-row">
+                            <label class="setting-label">Model</label>
+                            <wa-select
+                                :value.prop="selectedModel"
+                                @change="selectedModel = $event.target.value"
+                                size="small"
+                                :disabled="isModelDisabled"
+                            >
+                                <wa-option v-for="option in modelOptions" :key="option.value" :value="option.value">
+                                    {{ option.label }}
+                                </wa-option>
+                            </wa-select>
+                            <span class="setting-help">Can only be changed on your turn.</span>
+                        </div>
+                        <div class="setting-row">
+                            <label class="setting-label">Effort</label>
+                            <wa-select
+                                :value.prop="selectedEffort"
+                                @change="selectedEffort = $event.target.value"
+                                size="small"
+                                :disabled="isEffortThinkingDisabled"
+                            >
+                                <wa-option v-for="option in effortOptions" :key="option.value" :value="option.value">
+                                    {{ option.label }}
+                                </wa-option>
+                            </wa-select>
+                            <span class="setting-help">Cannot be changed while a process is running.</span>
+                        </div>
+                        <div class="setting-row">
+                            <label class="setting-label">Thinking</label>
+                            <wa-select
+                                :value.prop="String(selectedThinking)"
+                                @change="selectedThinking = $event.target.value === 'true'"
+                                size="small"
+                                :disabled="isEffortThinkingDisabled"
+                            >
+                                <wa-option v-for="option in thinkingOptions" :key="option.value" :value="option.value" :label="option.label">
+                                    {{ option.label }}
+                                </wa-option>
+                            </wa-select>
+                            <span class="setting-help">Cannot be changed while a process is running.</span>
+                        </div>
+                        <div class="setting-row">
+                            <label class="setting-label">Permission</label>
+                            <wa-select
+                                :value.prop="selectedPermissionMode"
+                                @change="selectedPermissionMode = $event.target.value"
+                                size="small"
+                                :disabled="isDisabled"
+                            >
+                                <wa-option v-for="option in permissionModeOptions" :key="option.value" :value="option.value" :label="option.label">
+                                    <span>{{ option.label }}</span>
+                                    <span class="option-description">{{ option.description }}</span>
+                                </wa-option>
+                            </wa-select>
+                            <span class="setting-help">Can be changed at any time, even while Claude is working.</span>
+                        </div>
+                    </div>
+                </wa-popover>
 
                 <!-- Cancel button for draft sessions -->
                 <wa-button
@@ -1043,74 +979,63 @@ body.sidebar-closed .message-input-toolbar {
     }
 }
 
-.option-select {
-    .select-option {
-        display: flex;
-        align-items: baseline;
-        gap: var(--wa-space-s);
-        wa-icon {
-            position: relative;
-            top: var(--wa-space-3xs);
-        }
+.settings-button {
+    wa-icon {
+        display: none;
     }
-    .option-description {
-        display: block;
+    min-width: 0;
+    flex-shrink: 1;
+    &::part(label) {
+        white-space: wrap;
+        font-weight: normal;
         font-size: var(--wa-font-size-s);
-        color: var(--wa-color-text-quiet);
-    }
-    &::part(combobox) {
-        padding-inline: var(--wa-space-xs);
-    }
-    &::part(expand-icon) {
-        margin-inline-start: var(--wa-space-2xs);;
-    }
-    &:deep(> wa-icon)  {
-        margin-inline-end: var(--wa-space-2xs);
     }
 }
 
-.model-select {
-    &::part(display-input) {
-        max-width: 3rem;
-    }
-    &::part(listbox) {
-        width: 8rem;
-    }
+.settings-popover {
+    --max-width: 95vw;
+    --arrow-size: 12px;
 }
-.effort-select {
-    &::part(display-input) {
-        max-width: 3.5rem;
-    }
-    &::part(listbox) {
-        width: 8.5rem;
-    }
+
+.settings-panel {
+    display: flex;
+    flex-direction: column;
+    gap: var(--wa-space-m);
 }
-.thinking-select {
-    &::part(display-input) {
-        max-width: 5rem;
-    }
-    &::part(listbox) {
-        width: 10rem;
-    }
+
+.setting-row {
+    display: flex;
+    flex-direction: column;
+    gap: var(--wa-space-2xs);
 }
-.permission-mode-select {
-    &::part(display-input) {
-        max-width: 5.5rem;
-    }
-    &::part(listbox) {
-        width: 16rem;
-    }
+
+.setting-label {
+    font-size: var(--wa-font-size-s);
+    font-weight: var(--wa-font-weight-semibold);
+}
+
+.setting-help {
+    font-size: var(--wa-font-size-xs);
+    color: var(--wa-color-text-quiet);
+}
+
+.option-description {
+    display: block;
+    font-size: var(--wa-font-size-s);
+    color: var(--wa-color-text-quiet);
 }
 
 .message-input-actions {
     display: flex;
     gap: var(--wa-space-s);
-    flex-shrink: 0;
-    flex-wrap: wrap;
-    max-width: calc(100% - 7rem);
+    flex-shrink: 1;
+    min-width: 0;
+    align-items: center;
     justify-content: flex-end;
+    max-width: calc(100% - 6rem);
 
     .cancel-button, .reset-button, .send-button {
+        flex-shrink: 0;
         wa-icon {
             display: none;
         }
@@ -1120,30 +1045,19 @@ body.sidebar-closed .message-input-toolbar {
     }
 }
 
-/* On mobile, only show icons */
+/* On narrow widths, show only icons for action buttons */
 @container message-input (width < 35rem) {
-    .option-select {
-        &::part(display-input) {
-            display: none;
-        }
-        &::part(combobox) {
-            padding-inline: var(--wa-space-s);
-        }
-        &:deep(> wa-icon)  {
-            margin-inline-end: 0;
-        }
-        &::part(expand-icon) {
-            display: none;
-        }
-    }
-    .permission-mode-select {
-        &::part(listbox) {
-            translate: -13.5rem 0;
-        }
-    }
     .message-input-actions {
+        .settings-button {
+            &::part(label) {
+                line-height: 1.1;
+            }
+            &::part(base) {
+                padding-inline: var(--wa-space-2xs);
+            }
+        }
+
         gap: var(--wa-space-2xs);
-        max-width: calc(100% - 6rem);
 
         .cancel-button, .reset-button, .send-button {
             &::part(base) {
@@ -1156,6 +1070,21 @@ body.sidebar-closed .message-input-toolbar {
 
             & > span {
                 display: none;
+            }
+        }
+    }
+}
+@container message-input (width < 24rem) {
+    .message-input-actions {
+        .settings-button {
+            wa-icon {
+                display: block;
+            }
+            & > span {
+                display: none;
+            }
+            &::part(base) {
+                padding-inline: var(--wa-space-s);
             }
         }
     }
