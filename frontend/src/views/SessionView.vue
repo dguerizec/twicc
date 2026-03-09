@@ -1,7 +1,10 @@
 <script setup>
-import { computed, watch, ref, readonly, provide, onActivated, onDeactivated, nextTick } from 'vue'
+import { computed, watch, ref, readonly, provide, onActivated, onDeactivated, onBeforeUnmount, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useDataStore } from '../stores/data'
+import { useCommandRegistry } from '../composables/useCommandRegistry'
+import { killProcess } from '../composables/useWebSocket'
+import { PROCESS_STATE } from '../constants'
 import SessionHeader from '../components/SessionHeader.vue'
 import SessionItemsList from '../components/SessionItemsList.vue'
 import SessionContent from '../components/SessionContent.vue'
@@ -13,6 +16,7 @@ import AppTooltip from '../components/AppTooltip.vue'
 const route = useRoute()
 const router = useRouter()
 const store = useDataStore()
+const { registerCommands, unregisterCommands } = useCommandRegistry()
 
 // Reference to session header for opening rename dialog
 const sessionHeaderRef = ref(null)
@@ -63,6 +67,9 @@ onActivated(() => {
     // Start observing compact tab overflow
     startCompactTabsObserver()
 
+    // Register contextual session commands in the command palette
+    registerSessionCommands()
+
     // Restore last active tab from store (KeepAlive preserves component state,
     // but the route is global — navigating to a session always lands on /session/:id
     // which maps to 'main'. If the user was on a different tab, restore it.)
@@ -74,6 +81,9 @@ onDeactivated(() => {
 
     // Stop observing compact tab overflow
     stopCompactTabsObserver()
+
+    // Unregister contextual session commands from the command palette
+    unregisterCommands(SESSION_COMMAND_IDS)
 })
 
 provide('sessionActive', readonly(isActive))
@@ -433,6 +443,132 @@ watch(activeTabId, (newTabId) => {
 function handleNeedsTitle() {
     sessionHeaderRef.value?.openRenameDialog({ showHint: true })
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Command palette: contextual session commands
+// ═══════════════════════════════════════════════════════════════════════════
+
+const SESSION_COMMAND_IDS = [
+    'session.rename',
+    'session.archive',
+    'session.unarchive',
+    'session.pin',
+    'session.unpin',
+    'session.stop',
+    'session.delete-draft',
+    'session.focus-input',
+]
+
+function registerSessionCommands() {
+    registerCommands([
+        {
+            id: 'session.rename',
+            label: 'Rename Session',
+            icon: 'pencil',
+            category: 'session',
+            when: () => {
+                const s = store.getSession(sessionId.value)
+                return !!s && !s.draft
+            },
+            action: () => sessionHeaderRef.value?.openRenameDialog(),
+        },
+        {
+            id: 'session.archive',
+            label: 'Archive Session',
+            icon: 'box-archive',
+            category: 'session',
+            when: () => {
+                const s = store.getSession(sessionId.value)
+                return !!s && !s.draft && !s.archived
+            },
+            action: async () => {
+                const ps = store.getProcessState(sessionId.value)
+                if (ps && ps.state !== PROCESS_STATE.DEAD && !ps.synthetic) {
+                    killProcess(sessionId.value)
+                }
+                await store.setSessionArchived(projectId.value, sessionId.value, true)
+            },
+        },
+        {
+            id: 'session.unarchive',
+            label: 'Unarchive Session',
+            icon: 'box-open',
+            category: 'session',
+            when: () => {
+                const s = store.getSession(sessionId.value)
+                return !!s && !!s.archived
+            },
+            action: () => store.setSessionArchived(projectId.value, sessionId.value, false),
+        },
+        {
+            id: 'session.pin',
+            label: 'Pin Session',
+            icon: 'thumbtack',
+            category: 'session',
+            when: () => {
+                const s = store.getSession(sessionId.value)
+                return !!s && !s.pinned
+            },
+            action: () => store.setSessionPinned(projectId.value, sessionId.value, true),
+        },
+        {
+            id: 'session.unpin',
+            label: 'Unpin Session',
+            icon: 'thumbtack',
+            category: 'session',
+            when: () => {
+                const s = store.getSession(sessionId.value)
+                return !!s && !!s.pinned
+            },
+            action: () => store.setSessionPinned(projectId.value, sessionId.value, false),
+        },
+        {
+            id: 'session.stop',
+            label: 'Stop Process',
+            icon: 'stop',
+            category: 'session',
+            when: () => {
+                const ps = store.getProcessState(sessionId.value)
+                return !!ps && ps.state !== PROCESS_STATE.DEAD && !ps.synthetic
+            },
+            action: () => killProcess(sessionId.value),
+        },
+        {
+            id: 'session.delete-draft',
+            label: 'Delete Draft',
+            icon: 'trash',
+            category: 'session',
+            when: () => {
+                const s = store.getSession(sessionId.value)
+                return !!s && !!s.draft
+            },
+            action: () => {
+                store.deleteDraftSession(sessionId.value)
+                if (isAllProjectsMode.value) {
+                    router.push({ name: 'projects-all' })
+                } else {
+                    router.push({ name: 'project', params: { projectId: projectId.value } })
+                }
+            },
+        },
+        {
+            id: 'session.focus-input',
+            label: 'Focus Message Input',
+            icon: 'keyboard',
+            category: 'session',
+            action: () => {
+                const textarea = document.querySelector('.session-view .message-input wa-textarea')
+                if (textarea) {
+                    textarea.focus()
+                }
+            },
+        },
+    ])
+}
+
+onBeforeUnmount(() => {
+    unregisterCommands(SESSION_COMMAND_IDS)
+})
 </script>
 
 <template>

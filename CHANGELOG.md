@@ -14,6 +14,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Option to remove a project's name from the edit dialog
 - Directory picker in the project creation dialog
 - Track cron jobs on running sessions: prevent auto-stop timeout and show clock icon when crons are active
+- Command palette (Ctrl+K / Cmd+K) for quick access to navigation, actions, and settings
 
 ### Changed
 

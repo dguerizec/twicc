@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref, onMounted, onUnmounted } from 'vue'
+import { computed, ref, onMounted, onUnmounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
 import { useDataStore } from '../stores/data'
 import { useStartupPolling } from '../composables/useStartupPolling'
@@ -48,13 +48,22 @@ async function handleRetry() {
     await store.loadHomeData()
 }
 
+// Open the new project dialog (triggered by command palette custom event)
+function openNewProjectDialog() {
+    createDialogRef.value?.open()
+}
+
 // Allow native page scroll on HomeView (the root has overflow:hidden for
 // ProjectView/SessionView which manage their own internal scroll panels).
 onMounted(() => {
     document.documentElement.style.overflowY = 'auto'
+    window.addEventListener('twicc:open-new-project-dialog', openNewProjectDialog)
 })
 onUnmounted(() => {
     document.documentElement.style.overflowY = ''
+})
+onBeforeUnmount(() => {
+    window.removeEventListener('twicc:open-new-project-dialog', openNewProjectDialog)
 })
 </script>
 

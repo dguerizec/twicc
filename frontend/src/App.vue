@@ -1,6 +1,6 @@
 <script setup>
-import { onMounted, watch, computed } from 'vue'
-import { useRoute } from 'vue-router'
+import { ref, onMounted, onBeforeUnmount, watch, computed } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { Notivue, Notification, lightTheme, slateTheme } from 'notivue'
 import { useWebSocket, versionMismatchDetected } from './composables/useWebSocket'
 import { useDataStore } from './stores/data'
@@ -9,8 +9,12 @@ import { useAuthStore } from './stores/auth'
 import { THEME_MODE } from './constants'
 import ConnectionIndicator from './components/ConnectionIndicator.vue'
 import CustomNotification from './components/CustomNotification.vue'
+import CommandPalette from './components/CommandPalette.vue'
+import { initStaticCommands } from './commands/staticCommands'
 
 const route = useRoute()
+const router = useRouter()
+initStaticCommands(router)
 const authStore = useAuthStore()
 
 const isAuthenticated = computed(() => !authStore.needsLogin)
@@ -51,6 +55,24 @@ watch(versionMismatchDetected, (mismatch) => {
     }
 })
 
+// ─── Command Palette (Ctrl+K / Cmd+K) ───────────────────────────────────
+const commandPaletteRef = ref(null)
+
+function handleGlobalKeydown(e) {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+        e.preventDefault()
+        e.stopPropagation()
+        commandPaletteRef.value?.open()
+    }
+}
+
+onMounted(() => {
+    document.addEventListener('keydown', handleGlobalKeydown, { capture: true })
+})
+onBeforeUnmount(() => {
+    document.removeEventListener('keydown', handleGlobalKeydown, { capture: true })
+})
+
 // Notivue theme - inverted for contrast (dark theme when app is light, and vice-versa)
 const toastTheme = computed(() => {
     const isDark = settingsStore.getEffectiveTheme === THEME_MODE.DARK
@@ -81,6 +103,7 @@ const toastTheme = computed(() => {
     </div>
 
     <ConnectionIndicator v-if="!isLoginPage && !isConnecting" :status="wsStatus" />
+    <CommandPalette ref="commandPaletteRef" />
     <div class="app-container">
         <router-view />
     </div>

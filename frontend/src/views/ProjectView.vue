@@ -1,8 +1,9 @@
 <script setup>
-import { computed, ref, watch, onMounted, onUnmounted, provide } from 'vue'
+import { computed, ref, watch, onMounted, onUnmounted, onBeforeUnmount, provide } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useDataStore, ALL_PROJECTS_ID } from '../stores/data'
 import { useSettingsStore } from '../stores/settings'
+import { useCommandRegistry } from '../composables/useCommandRegistry'
 import { useStartupPolling } from '../composables/useStartupPolling'
 import SessionList from '../components/SessionList.vue'
 import FetchErrorPanel from '../components/FetchErrorPanel.vue'
@@ -21,6 +22,7 @@ const route = useRoute()
 const router = useRouter()
 const store = useDataStore()
 const settingsStore = useSettingsStore()
+const { registerCommands, unregisterCommands } = useCommandRegistry()
 
 // Poll home data during startup so sparklines and project stats update
 // as sessions are indexed by background compute.
@@ -532,6 +534,45 @@ onMounted(() => {
     } else {
         updateSidebarClosedClass(!sidebarState.open)
     }
+
+    // Register contextual commands in the command palette
+    registerCommands([
+        {
+            id: 'ui.toggle-sidebar',
+            label: 'Toggle Sidebar',
+            icon: 'table-columns',
+            category: 'ui',
+            action: () => {
+                const checkbox = document.getElementById('sidebar-toggle-state')
+                if (checkbox) {
+                    checkbox.checked = !checkbox.checked
+                    checkbox.dispatchEvent(new Event('change'))
+                }
+            },
+        },
+        {
+            id: 'ui.focus-search',
+            label: 'Focus Session Search',
+            icon: 'magnifying-glass',
+            category: 'ui',
+            action: () => {
+                searchInputRef.value?.focus()
+            },
+        },
+    ])
+
+    // Listen for the custom event to open the new project dialog
+    window.addEventListener('twicc:open-new-project-dialog', openNewProjectDialog)
+})
+
+// Open the new project dialog (triggered by command palette custom event)
+function openNewProjectDialog() {
+    createProjectDialogRef.value?.open()
+}
+
+onBeforeUnmount(() => {
+    unregisterCommands(['ui.toggle-sidebar', 'ui.focus-search'])
+    window.removeEventListener('twicc:open-new-project-dialog', openNewProjectDialog)
 })
 
 // Guard flag to ignore reposition events triggered by width restore after auto-collapse
