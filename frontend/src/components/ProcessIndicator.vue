@@ -8,6 +8,9 @@
  * - user_turn: check icon (green)
  * - dead: warning triangle (red)
  *
+ * When `hasActiveCrons` is true and state is user_turn, shows a clock icon
+ * instead of the check to indicate scheduled cron work is pending.
+ *
  * The `animateStates` prop controls which states have a pulse animation.
  */
 import { computed } from 'vue'
@@ -38,20 +41,38 @@ const props = defineProps({
         type: Array,
         default: () => ['assistant_turn'],
         validator: (value) => value.every(s => ['starting', 'assistant_turn', 'user_turn', 'dead'].includes(s))
-    }
+    },
+    /**
+     * Whether the process has active cron jobs.
+     * - user_turn: shows clock icon instead of check
+     * - assistant_turn: alternates between robot and clock
+     */
+    hasActiveCrons: {
+        type: Boolean,
+        default: false,
+    },
 })
 
 /**
- * Get the icon name for a process state.
+ * Get the base icon name for a process state (without cron consideration).
  */
-function getIconName(state) {
-    switch (state) {
+const baseIconName = computed(() => {
+    switch (props.state) {
         case 'assistant_turn': return 'robot'
         case 'user_turn': return 'check'
         case 'dead': return 'triangle-exclamation'
         default: return null
     }
-}
+})
+
+/**
+ * The effective icon to display.
+ * user_turn + active crons: clock replaces check.
+ */
+const effectiveIconName = computed(() => {
+    if (props.state === 'user_turn' && props.hasActiveCrons) return 'clock'
+    return baseIconName.value
+})
 
 /**
  * Check if the current state should be animated.
@@ -83,7 +104,7 @@ const stateColor = computed(() => PROCESS_STATE_COLORS[props.state] || PROCESS_S
             v-else
             class="process-indicator__icon"
             :class="{ 'process-indicator--animate': shouldAnimate(state) }"
-            :name="getIconName(state)"
+            :name="effectiveIconName"
         ></wa-icon>
     </div>
 </template>
@@ -142,4 +163,5 @@ const stateColor = computed(() => PROCESS_STATE_COLORS[props.state] || PROCESS_S
     0%, 100% { opacity: 1; }
     50% { opacity: 0.4; }
 }
+
 </style>

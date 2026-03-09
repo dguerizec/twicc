@@ -69,6 +69,28 @@ class PendingRequest:
     permission_suggestions: list[dict] | None = None
 
 
+class ActiveCronInfo(NamedTuple):
+    """Information about an active cron job tracked on a process.
+
+    Tracked via PostToolUse hooks on CronCreate/CronDelete. Used by the timeout
+    monitor to avoid auto-stopping processes that have scheduled work pending.
+
+    Attributes:
+        id: Cron job identifier (from CronCreate response)
+        cron_expr: 5-field cron expression in local time
+        recurring: True for recurring jobs, False for one-shot
+        created_at: Unix timestamp when the cron was created
+        next_fire: Unix timestamp of the next fire time (one-shot crons only).
+            None for recurring crons (they fire on schedule until deleted or expired).
+    """
+
+    id: str
+    cron_expr: str
+    recurring: bool
+    created_at: float
+    next_fire: float | None = None
+
+
 class ProcessState(StrEnum):
     """State of a Claude process in its lifecycle.
 
@@ -113,6 +135,7 @@ class ProcessInfo(NamedTuple):
     memory_rss: int | None = None
     kill_reason: str | None = None
     pending_request: PendingRequest | None = None
+    active_crons: list[ActiveCronInfo] = []
 
     @property
     def memory_rss_human(self) -> str | None:
@@ -154,4 +177,15 @@ def serialize_process_info(info: ProcessInfo) -> dict:
         }
         if info.pending_request.permission_suggestions:
             data["pending_request"]["permission_suggestions"] = info.pending_request.permission_suggestions
+    if info.active_crons:
+        data["active_crons"] = [
+            {
+                "id": cron.id,
+                "cron_expr": cron.cron_expr,
+                "recurring": cron.recurring,
+                "created_at": cron.created_at,
+                "next_fire": cron.next_fire,
+            }
+            for cron in info.active_crons
+        ]
     return data

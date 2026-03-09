@@ -122,6 +122,12 @@ const formattedModel = computed(() => {
 // Process state for current session
 const processState = computed(() => store.getProcessState(props.sessionId))
 
+/** Whether the process has active cron jobs. */
+const hasActiveCrons = computed(() => processState.value?.active_crons?.length > 0)
+
+/** Number of active cron jobs (for tooltip). */
+const activeCronCount = computed(() => processState.value?.active_crons?.length || 0)
+
 /**
  * Get the color for a process state.
  * @param {string} state
@@ -326,6 +332,7 @@ defineExpose({
                     v-if="processState"
                     class="compact-process-indicator"
                     :state="processState.state"
+                    :has-active-crons="hasActiveCrons"
                     size="small"
                     :animate-states="animateStates"
                 />
@@ -444,10 +451,11 @@ defineExpose({
                     <ProcessIndicator
                         :id="`session-header-${sessionId}-process-indicator`"
                         :state="processState.state"
+                        :has-active-crons="hasActiveCrons"
                         size="small"
                         :animate-states="animateStates"
                     />
-                    <AppTooltip :for="`session-header-${sessionId}-process-indicator`">Claude Code state: {{ PROCESS_STATE_NAMES[processState.state] }}</AppTooltip>
+                    <AppTooltip :for="`session-header-${sessionId}-process-indicator`">Claude Code state: {{ PROCESS_STATE_NAMES[processState.state] }}<template v-if="activeCronCount"> ({{ activeCronCount }} active cron{{ activeCronCount > 1 ? 's' : '' }})</template></AppTooltip>
 
                     <wa-button
                         v-if="canStopProcess"

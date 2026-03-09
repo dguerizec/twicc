@@ -57,6 +57,12 @@ const processState = computed(() => store.getProcessState(props.session.id))
 /** Pending request for this session — single lookup. */
 const pendingRequest = computed(() => store.getPendingRequest(props.session.id))
 
+/** Whether the process has active cron jobs. */
+const hasActiveCrons = computed(() => processState.value?.active_crons?.length > 0)
+
+/** Number of active cron jobs (for tooltip). */
+const activeCronCount = computed(() => processState.value?.active_crons?.length || 0)
+
 /** Project for this session — single lookup. */
 const project = computed(() => store.getProject(props.session.project_id))
 
@@ -229,11 +235,12 @@ function handleMenuSelect(event) {
                     v-if="compactView && !session.draft && processState && !pendingRequest"
                     :id="`compact-process-indicator-${session.id}`"
                     :state="processState.state"
+                    :has-active-crons="hasActiveCrons"
                     size="small"
                     :animate-states="animateStates"
                     class="compact-process-indicator"
                 />
-                <AppTooltip v-if="compactView && !session.draft && processState && !pendingRequest" :for="`compact-process-indicator-${session.id}`">Claude Code state: {{ PROCESS_STATE_NAMES[processState.state] }}</AppTooltip>
+                <AppTooltip v-if="compactView && !session.draft && processState && !pendingRequest" :for="`compact-process-indicator-${session.id}`">Claude Code state: {{ PROCESS_STATE_NAMES[processState.state] }}<template v-if="activeCronCount"> ({{ activeCronCount }} active cron{{ activeCronCount > 1 ? 's' : '' }})</template></AppTooltip>
             </div>
             <!-- Project badge line (hidden in compact mode, dot is shown inline instead) -->
             <ProjectBadge v-if="!compactView && showProjectName" :project-id="session.project_id" class="session-project" />
@@ -269,10 +276,11 @@ function handleMenuSelect(event) {
                     <ProcessIndicator
                         :id="`process-indicator-${session.id}`"
                         :state="processState.state"
+                        :has-active-crons="hasActiveCrons"
                         size="small"
                         :animate-states="animateStates"
                     />
-                    <AppTooltip :for="`process-indicator-${session.id}`">Claude Code state: {{ PROCESS_STATE_NAMES[processState.state] }}</AppTooltip>
+                    <AppTooltip :for="`process-indicator-${session.id}`">Claude Code state: {{ PROCESS_STATE_NAMES[processState.state] }}<template v-if="activeCronCount"> ({{ activeCronCount }} active cron{{ activeCronCount > 1 ? 's' : '' }})</template></AppTooltip>
                 </span>
             </div>
             <!-- Meta row (not shown for draft sessions, hidden in compact mode) -->

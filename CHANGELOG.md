@@ -13,6 +13,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Git root selector in the Git tab (in sync with the one in the Files tab)
 - Option to remove a project's name from the edit dialog
 - Directory picker in the project creation dialog
+- Track cron jobs on running sessions: prevent auto-stop timeout and show clock icon when crons are active
 
 ### Changed
 

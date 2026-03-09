@@ -24,7 +24,7 @@ from claude_agent_sdk import (
 )
 
 from .sdk_logger import patch_client as patch_client_for_logging
-from .states import PendingRequest, ProcessInfo, ProcessState, get_process_memory
+from .states import ActiveCronInfo, PendingRequest, ProcessInfo, ProcessState, get_process_memory
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +40,10 @@ async def _dummy_hook(input_data: dict, tool_use_id: str, context: Any) -> dict:
     all tool uses unconditionally (actual permission logic is in can_use_tool).
     """
     return {"continue_": True}
+
+
+# Maximum age of a recurring cron before it auto-expires (matches Claude CLI behavior)
+RECURRING_CRON_MAX_AGE = 3 * 24 * 60 * 60  # 3 days in seconds
 
 
 class ClaudeProcess:
@@ -103,6 +107,7 @@ class ClaudeProcess:
         self._pending_request: PendingRequest | None = None
         self._pending_request_future: asyncio.Future[PermissionResultAllow | PermissionResultDeny] | None = None
         self._get_last_session_slug = get_last_session_slug
+        self._active_crons: dict[str, ActiveCronInfo] = {}
 
         logger.debug(
             "ClaudeProcess created for session %s, project %s, cwd=%s, permission_mode=%s, model=%s, effort=%s, thinking=%s",
@@ -181,6 +186,100 @@ class ClaudeProcess:
         """The active pending request, if Claude is waiting for user input."""
         return self._pending_request
 
+    @property
+    def has_active_crons(self) -> bool:
+        """Check if the process has any active (non-expired) cron jobs.
+
+        Used by the timeout monitor to skip auto-stop for processes with pending
+        scheduled work. Recurring crons expire after RECURRING_CRON_MAX_AGE (3 days,
+        matching CLI behavior). One-shot crons expire after their fire time passes.
+        """
+        now = time.time()
+        for cron in self._active_crons.values():
+            if cron.recurring:
+                if now - cron.created_at < RECURRING_CRON_MAX_AGE:
+                    return True
+            else:
+                if cron.next_fire is not None and now < cron.next_fire:
+                    return True
+        return False
+
+    @property
+    def active_crons(self) -> list[ActiveCronInfo]:
+        """Get the list of currently active (non-expired) cron jobs."""
+        now = time.time()
+        result = []
+        for cron in self._active_crons.values():
+            if cron.recurring:
+                if now - cron.created_at < RECURRING_CRON_MAX_AGE:
+                    result.append(cron)
+            elif cron.next_fire is not None and now < cron.next_fire:
+                result.append(cron)
+        return result
+
+    def _handle_cron_tool_event(self, input_data: dict) -> None:
+        """Process a CronCreate or CronDelete PostToolUse event.
+
+        Updates the internal _active_crons dict based on the tool execution.
+        Called from the PostToolUse hook closure registered in start().
+
+        Args:
+            input_data: The PostToolUseHookInput dict from the SDK, containing
+                tool_name, tool_input, and tool_response.
+        """
+        tool_name = input_data.get("tool_name")
+        tool_input = input_data.get("tool_input", {})
+        tool_response = input_data.get("tool_response")
+
+        if tool_name == "CronCreate" and isinstance(tool_response, dict):
+            job_id = tool_response.get("id")
+            if not job_id:
+                return
+
+            cron_expr = tool_input.get("cron", "")
+            recurring = tool_response.get("recurring", True)
+            created_at = time.time()
+
+            # For one-shot crons, compute the next fire time from the cron expression
+            next_fire = None
+            if not recurring:
+                try:
+                    from datetime import datetime
+
+                    from cronsim import CronSim
+                    it = CronSim(cron_expr, datetime.fromtimestamp(created_at))
+                    next_fire = next(it).timestamp()
+                except Exception:
+                    logger.warning(
+                        "Failed to parse cron expression '%s' for session %s, "
+                        "treating as recurring (conservative)",
+                        cron_expr,
+                        self.session_id,
+                    )
+                    recurring = True
+
+            self._active_crons[job_id] = ActiveCronInfo(
+                id=job_id,
+                cron_expr=cron_expr,
+                recurring=recurring,
+                created_at=created_at,
+                next_fire=next_fire,
+            )
+            logger.info(
+                "Cron job tracked for session %s: id=%s, cron=%s, recurring=%s, next_fire=%s",
+                self.session_id,
+                job_id,
+                cron_expr,
+                recurring,
+                next_fire,
+            )
+
+        elif tool_name == "CronDelete" and isinstance(tool_response, dict):
+            job_id = tool_response.get("id") or tool_input.get("id")
+            if job_id and job_id in self._active_crons:
+                del self._active_crons[job_id]
+                logger.info("Cron job untracked for session %s: id=%s", self.session_id, job_id)
+
     def get_info(self) -> ProcessInfo:
         """Get an immutable snapshot of the process state."""
         # Don't query memory for dead processes - the subprocess no longer exists
@@ -197,6 +296,7 @@ class ClaudeProcess:
             memory_rss=memory_rss,
             kill_reason=self.kill_reason,
             pending_request=self._pending_request,
+            active_crons=self.active_crons,
         )
 
     def get_permission_suggestions(
@@ -589,6 +689,12 @@ class ClaudeProcess:
             elif self.thinking_enabled is False:
                 thinking_config = ThinkingConfigDisabled(type="disabled")
 
+            # PostToolUse hook for cron tracking — closure captures self so the
+            # hook can update this process instance's _active_crons dict.
+            async def _on_cron_tool(input_data: dict, tool_use_id: str | None, context: Any) -> dict:
+                self._handle_cron_tool_event(input_data)
+                return {"continue_": True}
+
             options = ClaudeAgentOptions(
                 cwd=self.cwd,
                 permission_mode=self.permission_mode,
@@ -597,7 +703,10 @@ class ClaudeProcess:
                 thinking=thinking_config,
                 setting_sources=["user", "project", "local"],
                 can_use_tool=self._handle_pending_request,
-                hooks={"PreToolUse": [HookMatcher(matcher=None, hooks=[_dummy_hook])]},
+                hooks={
+                    "PreToolUse": [HookMatcher(matcher=None, hooks=[_dummy_hook])],
+                    "PostToolUse": [HookMatcher(matcher="CronCreate|CronDelete", hooks=[_on_cron_tool])],
+                },
                 stderr=self._log_stderr,
                 extra_args={
                     "chrome": None

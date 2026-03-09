@@ -1802,6 +1802,7 @@ export const useDataStore = defineStore('data', {
                     memory: extra.memory || null,
                     error: extra.error || null,
                     pending_request: extra.pending_request || null,
+                    active_crons: extra.active_crons || null,
                     session_title: extra.session_title || null,
                     project_name: extra.project_name || null,
                 }
@@ -1841,6 +1842,7 @@ export const useDataStore = defineStore('data', {
                         memory: p.memory || null,
                         error: p.error || null,
                         pending_request: p.pending_request || null,
+                        active_crons: p.active_crons || null,
                         session_title: p.session_title || null,
                         project_name: p.project_name || null,
                     }

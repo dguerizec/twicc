@@ -476,6 +476,7 @@ export function useWebSocket() {
                     memory: msg.memory,
                     error: msg.error,
                     pending_request: msg.pending_request,
+                    active_crons: msg.active_crons,
                     session_title: msg.session_title,
                     project_name: msg.project_name,
                 })

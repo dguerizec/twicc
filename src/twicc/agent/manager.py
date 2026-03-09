@@ -566,6 +566,11 @@ class ProcessManager:
             if process.pending_request is not None:
                 continue
 
+            # Don't timeout processes with active cron jobs — the CLI has
+            # scheduled work pending that would be lost if we kill the process.
+            if process.has_active_crons:
+                continue
+
             timeout: int | None = None
             reason: str | None = None
             reference_time: float | None = None
