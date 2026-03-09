@@ -57,14 +57,12 @@ const editingShortcut = computed(() => settingsStore.getTerminalShortcuts[editin
 
 function openConfigDialog(index) {
     editingSlotIndex.value = index
-    configDialogRef.value?.open()
+    const shortcut = settingsStore.getTerminalShortcuts[index] || { label: '', sequence: '', showOnDesktop: false }
+    configDialogRef.value?.open(shortcut)
 }
 
 function onConfigSave(shortcut) {
     settingsStore.setTerminalShortcut(editingSlotIndex.value, shortcut)
-    // Close the dialog via the exposed ref
-    const dialog = configDialogRef.value?.$refs?.dialogRef
-    if (dialog) dialog.open = false
 }
 
 function onConfigClose() {

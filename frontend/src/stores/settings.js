@@ -2,7 +2,7 @@
 // Persistent settings store with localStorage + backend sync for global settings
 
 import { defineStore, acceptHMRUpdate } from 'pinia'
-import { watch } from 'vue'
+import { watch, nextTick } from 'vue'
 import { DEFAULT_DISPLAY_MODE, DEFAULT_THEME_MODE, DEFAULT_SESSION_TIME_FORMAT, DEFAULT_TITLE_SYSTEM_PROMPT, DEFAULT_MAX_CACHED_SESSIONS, DEFAULT_PERMISSION_MODE, DEFAULT_MODEL, DEFAULT_EFFORT, DEFAULT_THINKING, DEFAULT_CLAUDE_IN_CHROME, DEFAULT_TERMINAL_SHORTCUTS, MAX_TERMINAL_SHORTCUTS, DISPLAY_MODE, THEME_MODE, SESSION_TIME_FORMAT, PERMISSION_MODE, MODEL, EFFORT, SYNCED_SETTINGS_KEYS } from '../constants'
 import { NOTIFICATION_SOUNDS } from '../utils/notificationSounds'
 // Note: useDataStore is imported lazily to avoid circular dependency (settings.js ↔ data.js)
@@ -563,7 +563,12 @@ export const useSettingsStore = defineStore('settings', {
                     }
                 }
             }
-            this._isApplyingRemoteSettings = false
+            // Reset guard on next tick so the async synced-settings watcher
+            // still sees it as true and skips re-sending to the backend.
+            // Without this, assigning array/object values (e.g. terminalShortcuts)
+            // creates new references that trigger the deep watcher, causing a
+            // ping-pong loop: client → backend → broadcast → client → ...
+            nextTick(() => { this._isApplyingRemoteSettings = false })
         },
 
         /**
