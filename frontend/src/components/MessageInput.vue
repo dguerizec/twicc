@@ -12,6 +12,7 @@ import { PERMISSION_MODE, PERMISSION_MODE_LABELS, PERMISSION_MODE_DESCRIPTIONS, 
 import MediaThumbnailGroup from './MediaThumbnailGroup.vue'
 import AppTooltip from './AppTooltip.vue'
 import FilePickerPopup from './FilePickerPopup.vue'
+import SlashCommandPickerPopup from './SlashCommandPickerPopup.vue'
 
 // Track visual viewport height for mobile keyboard handling
 useVisualViewport()
@@ -52,6 +53,9 @@ const textareaAnchorId = useId()
 // File picker popup state (@ mention)
 const filePickerRef = ref(null)
 const atCursorPosition = ref(null)  // cursor position right after the '@' character
+
+// Slash command picker popup state (/ at start)
+const slashPickerRef = ref(null)
 
 // Attachments for this session
 const attachments = computed(() => store.getAttachments(props.sessionId))
@@ -466,19 +470,27 @@ function adjustTextareaHeight() {
 /**
  * Handle textarea input event.
  * Detects '@' insertion to trigger the file picker popup.
+ * Detects '/' at position 0 to trigger the slash command picker popup.
  * Also notifies the server that the user is actively drafting (debounced).
  */
 function onInput(event) {
     const newText = event.target.value
     const oldText = messageText.value
 
-    // Detect single '@' character insertion to trigger file picker
-    if (!filePickerRef.value?.isOpen && newText.length === oldText.length + 1) {
+    // Detect single character insertion
+    if (newText.length === oldText.length + 1) {
         const inner = textareaRef.value?.shadowRoot?.querySelector('textarea')
         const cursorPos = inner?.selectionStart
-        if (cursorPos > 0 && newText[cursorPos - 1] === '@') {
+
+        // Detect '@' to trigger file picker
+        if (!filePickerRef.value?.isOpen && cursorPos > 0 && newText[cursorPos - 1] === '@') {
             atCursorPosition.value = cursorPos  // right after the '@'
             nextTick(() => filePickerRef.value?.open())
+        }
+
+        // Detect '/' at position 0 (first character of the message) to trigger slash command picker
+        if (!slashPickerRef.value?.isOpen && cursorPos === 1 && newText[0] === '/') {
+            nextTick(() => slashPickerRef.value?.open())
         }
     }
 
@@ -527,6 +539,37 @@ async function onFilePickerSelect(relativePath) {
  */
 function onFilePickerClose() {
     atCursorPosition.value = null
+    textareaRef.value?.focus()
+}
+
+/**
+ * Handle slash command selection from the slash command picker popup.
+ * Replaces the entire textarea content with the selected command text.
+ */
+async function onSlashCommandSelect(commandText) {
+    messageText.value = commandText
+
+    // Force update the web component and inner textarea
+    if (textareaRef.value) {
+        textareaRef.value.value = commandText
+        const inner = textareaRef.value.shadowRoot?.querySelector('textarea')
+        if (inner) {
+            inner.value = commandText
+            const newPos = commandText.length
+            inner.setSelectionRange(newPos, newPos)
+        }
+    }
+
+    await nextTick()
+    textareaRef.value?.focus()
+    adjustTextareaHeight()
+}
+
+/**
+ * Handle slash command picker popup close (without selection).
+ * Returns focus to the textarea.
+ */
+function onSlashCommandPickerClose() {
     textareaRef.value?.focus()
 }
 
@@ -828,6 +871,15 @@ async function handleReset() {
             :anchor-id="textareaAnchorId"
             @select="onFilePickerSelect"
             @close="onFilePickerClose"
+        />
+
+        <!-- Slash command picker popup triggered by / at start -->
+        <SlashCommandPickerPopup
+            ref="slashPickerRef"
+            :project-id="projectId"
+            :anchor-id="textareaAnchorId"
+            @select="onSlashCommandSelect"
+            @close="onSlashCommandPickerClose"
         />
 
         <div class="message-input-toolbar">

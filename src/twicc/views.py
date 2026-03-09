@@ -12,7 +12,7 @@ from django.utils import timezone
 import orjson
 
 from twicc.compute import get_message_content_list
-from twicc.core.models import AgentLink, DailyActivity, Project, Session, SessionItem, SessionType, ToolResultLink, WeeklyActivity
+from twicc.core.models import AgentLink, DailyActivity, Project, Session, SessionItem, SessionType, SlashCommand, ToolResultLink, WeeklyActivity
 from twicc.core.serializers import (
     serialize_project,
     serialize_session,
@@ -213,6 +213,41 @@ def project_detail(request, project_id):
             )
 
     return JsonResponse(serialize_project(project))
+
+
+def slash_commands(request, project_id):
+    """GET /api/projects/<id>/slash-commands/ - Slash commands available for a project.
+
+    Returns global commands (project=NULL) and project-specific commands,
+    sorted by name.
+    """
+    try:
+        Project.objects.get(id=project_id)
+    except Project.DoesNotExist:
+        raise Http404("Project not found")
+
+    from django.db.models import Q
+
+    commands = (
+        SlashCommand.objects
+        .filter(Q(project__isnull=True) | Q(project_id=project_id))
+        .order_by("name")
+        .values("name", "plugin_name", "description", "argument_hint", "source", "project_id")
+    )
+
+    return JsonResponse({
+        "commands": [
+            {
+                "name": cmd["name"],
+                "plugin_name": cmd["plugin_name"],
+                "description": cmd["description"],
+                "argument_hint": cmd["argument_hint"],
+                "source": cmd["source"],
+                "is_global": cmd["project_id"] is None,
+            }
+            for cmd in commands
+        ]
+    })
 
 
 def project_sessions(request, project_id):

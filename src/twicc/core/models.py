@@ -730,3 +730,42 @@ class UsageSnapshot(models.Model):
         if self.seven_day_resets_at is None:
             return None
         return self.seven_day_resets_at - timedelta(days=7)
+
+
+class SlashCommandSource(models.TextChoices):
+    """Origin of a slash command."""
+    COMMANDS_DIR = "commands_dir", "Commands directory"
+    SKILLS_DIR = "skills_dir", "Skills directory"
+    PLUGIN = "plugin", "Plugin"
+
+
+class SlashCommand(models.Model):
+    """A slash command available for use in Claude Code sessions.
+
+    Discovered from the filesystem: user-level commands/skills (~/.claude/),
+    project-level commands/skills (<project>/.claude/), and plugin commands/skills.
+
+    Commands with project=None are global (available for all projects).
+    """
+
+    project = models.ForeignKey(
+        Project,
+        on_delete=models.CASCADE,
+        related_name="slash_commands",
+        null=True,
+        blank=True,  # NULL = global (available for all projects)
+    )
+    name = models.CharField(max_length=200)  # e.g. "commit", "superpowers:brainstorming"
+    source = models.CharField(max_length=20, choices=SlashCommandSource.choices)
+    plugin_name = models.CharField(max_length=100, null=True, blank=True)  # e.g. "superpowers" (when source=plugin)
+    description = models.TextField()
+    argument_hint = models.CharField(max_length=200, null=True, blank=True)  # e.g. "[review-aspects]"
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["project", "name"], name="idx_slash_command_project_name"),
+        ]
+
+    def __str__(self):
+        scope = self.project_id or "global"
+        return f"/{self.name} ({scope})"

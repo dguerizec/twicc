@@ -426,8 +426,8 @@ defineExpose({ open, close, isOpen })
 
 <style scoped>
 .picker-panel {
-    width: min(500px, calc(100vw - 2rem));
-    height: min(400px, 50vh);
+    width: min(40rem, calc(100vw - 1rem));
+    max-height: min(25rem, 80vh);
     display: flex;
     flex-direction: column;
     background: var(--wa-color-surface-default);
