@@ -331,4 +331,5 @@ export const SYNCED_SETTINGS_KEYS = new Set([
     'alwaysApplyDefaultClaudeInChrome',
     'autoUnpinOnArchive',
     'terminalUseTmux',
+    'terminalShortcuts',
 ])

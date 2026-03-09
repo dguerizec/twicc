@@ -288,6 +288,21 @@ function onTerminalTabClick() {
 }
 
 /**
+ * Handle click on the Terminal tab button in compact mode (mobile header).
+ * Toggles config if already on terminal, otherwise switches tab + collapses header.
+ */
+function onTerminalTabClickCompact() {
+    if (activeTabId.value === 'terminal') {
+        onTerminalTabClick()
+        if (sessionHeaderRef.value?.isCompactExpanded) {
+            sessionHeaderRef.value.isCompactExpanded = false
+        }
+    } else {
+        switchToTabAndCollapse('terminal')
+    }
+}
+
+/**
  * Handle tab change event from wa-tab-group.
  * Updates the URL to reflect the new active tab.
  */
@@ -662,7 +677,7 @@ onBeforeUnmount(() => {
                             :appearance="activeTabId === 'terminal' ? 'outlined' : 'plain'"
                             :variant="activeTabId === 'terminal' ? 'brand' : 'neutral'"
                             size="small"
-                            @click="activeTabId === 'terminal' ? onTerminalTabClick() : switchToTabAndCollapse('terminal')"
+                            @click="onTerminalTabClickCompact"
                         >Terminal</wa-button>
                     </div>
 
