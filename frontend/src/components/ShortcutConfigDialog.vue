@@ -119,6 +119,7 @@ function handleSave() {
     if (!label.value.trim() && !sequence.value) {
         // Save as empty (clear the slot)
         emit('save', { label: '', sequence: '', showOnDesktop: false })
+        dialogRef.value.open = false
         return
     }
     if (!sequence.value) {
@@ -130,10 +131,12 @@ function handleSave() {
         sequence: sequence.value,
         showOnDesktop: showOnDesktop.value,
     })
+    dialogRef.value.open = false
 }
 
 function handleClear() {
     emit('save', { label: '', sequence: '', showOnDesktop: false })
+    dialogRef.value.open = false
 }
 
 function handleClose() {
@@ -151,10 +154,11 @@ const sequenceDisplay = computed(() => {
     }).join('')
 })
 
-function open() {
-    label.value = props.shortcut.label
-    sequence.value = props.shortcut.sequence
-    showOnDesktop.value = props.shortcut.showOnDesktop
+function open(shortcutData) {
+    const s = shortcutData || props.shortcut
+    label.value = s.label
+    sequence.value = s.sequence
+    showOnDesktop.value = s.showOnDesktop
     isCapturing.value = false
     error.value = ''
     dialogRef.value.open = true
@@ -191,26 +195,36 @@ defineExpose({ open })
             <div class="field">
                 <label>Shortcut key</label>
                 <div
-                    ref="captureAreaRef"
                     class="capture-area"
                     :class="{ capturing: isCapturing, 'has-value': !!sequence }"
-                    tabindex="0"
-                    @keydown="onKeyCapture"
                     @click="startCapture"
-                    @blur="isCapturing = false"
                 >
-                    <template v-if="isCapturing">
-                        <wa-icon name="keyboard" class="capture-icon"></wa-icon>
-                        Press a key combination...
-                    </template>
-                    <template v-else-if="label">
-                        <span class="captured-label">{{ label }}</span>
-                        <span class="captured-sequence">{{ sequenceDisplay }}</span>
-                    </template>
-                    <template v-else>
-                        <wa-icon name="circle-plus" class="capture-icon"></wa-icon>
-                        Click to capture a key
-                    </template>
+                    <!-- Hidden input to trigger mobile keyboard -->
+                    <input
+                        ref="captureAreaRef"
+                        class="capture-input"
+                        :value="isCapturing ? '' : label"
+                        autocomplete="off"
+                        autocorrect="off"
+                        autocapitalize="off"
+                        spellcheck="false"
+                        @keydown="onKeyCapture"
+                        @blur="isCapturing = false"
+                    />
+                    <div class="capture-display">
+                        <template v-if="isCapturing">
+                            <wa-icon name="keyboard" class="capture-icon"></wa-icon>
+                            Press a key combination...
+                        </template>
+                        <template v-else-if="label">
+                            <span class="captured-label">{{ label }}</span>
+                            <span class="captured-sequence">{{ sequenceDisplay }}</span>
+                        </template>
+                        <template v-else>
+                            <wa-icon name="circle-plus" class="capture-icon"></wa-icon>
+                            Click to capture a key
+                        </template>
+                    </div>
                 </div>
             </div>
 
@@ -265,6 +279,7 @@ defineExpose({ open })
 }
 
 .capture-area {
+    position: relative;
     display: flex;
     align-items: center;
     gap: var(--wa-space-xs);
@@ -279,11 +294,35 @@ defineExpose({ open })
     min-height: 3rem;
 }
 
+/* Hidden input that triggers mobile keyboard when focused */
+.capture-input {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    width: 100%;
+    height: 100%;
+    border: none;
+    padding: 0;
+    margin: 0;
+    font-size: 16px; /* prevents iOS zoom on focus */
+    caret-color: transparent;
+    z-index: 1;
+}
+
+.capture-display {
+    display: flex;
+    align-items: center;
+    gap: var(--wa-space-xs);
+    width: 100%;
+    pointer-events: none;
+    z-index: 0;
+}
+
 .capture-area:hover {
     border-color: var(--wa-color-border-hover);
 }
 
-.capture-area:focus,
+.capture-area:has(.capture-input:focus),
 .capture-area.capturing {
     border-color: var(--wa-color-brand-default);
     border-style: solid;
