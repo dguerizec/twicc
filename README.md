@@ -33,9 +33,13 @@ Then open http://localhost:3500.
 - Browse all your Claude Code projects and sessions
 - View full conversation history with tool use details
 - Start and interact with Claude agents from the browser
+- Handle tool approvals and answer Claude's questions interactively
+- Full control of model, effort, thinking and permissions
+- Command palette (Ctrl+K), slash commands (`/`), and file references (`@`)
 - Track costs and token usage per session
 - Daily activity heatmaps
 - Git integration (log, diffs, file browser)
+- Claude Code status monitoring (via status.claude.com)
 - Optional password protection
 - Real-time updates via WebSocket
 - Fully mobile-friendly interface
