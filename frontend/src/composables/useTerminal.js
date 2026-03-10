@@ -596,9 +596,12 @@ export function useTerminal(sessionId) {
         // Fit immediately
         fitAddon.fit()
 
-        // Intercept Ctrl+Shift+C to copy selection instead of opening DevTools
+        // Intercept custom keyboard shortcuts before xterm processes them
         terminal.attachCustomKeyEventHandler((event) => {
-            if (event.type === 'keydown' && event.ctrlKey && event.shiftKey && event.code === 'KeyC') {
+            if (event.type !== 'keydown') return true
+
+            // Ctrl+Shift+C: copy selection instead of opening DevTools
+            if (event.ctrlKey && event.shiftKey && event.code === 'KeyC') {
                 const selection = terminal.getSelection()
                 if (selection) {
                     navigator.clipboard.writeText(selection)
@@ -606,6 +609,20 @@ export function useTerminal(sessionId) {
                 event.preventDefault()
                 return false
             }
+
+            // Shift+Left / Shift+Right: switch tmux windows (à la Konsole)
+            if (event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey
+                && (event.code === 'ArrowLeft' || event.code === 'ArrowRight')
+                && windows.value.length > 1) {
+                const activeIdx = windows.value.findIndex(w => w.active)
+                if (activeIdx < 0) return true
+                const delta = event.code === 'ArrowLeft' ? -1 : 1
+                const nextIdx = (activeIdx + delta + windows.value.length) % windows.value.length
+                selectWindow(windows.value[nextIdx].name)
+                event.preventDefault()
+                return false
+            }
+
             return true
         })
 

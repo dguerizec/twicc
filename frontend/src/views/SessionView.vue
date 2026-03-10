@@ -285,6 +285,8 @@ function onTerminalTabClick() {
     if (activeTabId.value === 'terminal') {
         terminalPanelRef.value?.toggleNavigator()
     }
+    // Delay focus so it happens after the button's native click-focus
+    setTimeout(() => terminalPanelRef.value?.focusTerminal(), 0)
 }
 
 /**

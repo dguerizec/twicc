@@ -50,7 +50,7 @@ watch(
     { immediate: true },
 )
 
-defineExpose({ toggleNavigator, showNavigator })
+defineExpose({ toggleNavigator, showNavigator, focusTerminal })
 
 // ── Shortcut buttons ─────────────────────────────────────────────────
 
