@@ -73,6 +73,9 @@ onActivated(() => {
     // Register contextual session commands in the command palette
     registerSessionCommands()
 
+    // Tab cycling (Alt+Left / Alt+Right)
+    document.addEventListener('keydown', handleTabCycleKeydown, { capture: true })
+
     // Restore last active tab from store (KeepAlive preserves component state,
     // but the route is global — navigating to a session always lands on /session/:id
     // which maps to 'main'. If the user was on a different tab, restore it.)
@@ -87,6 +90,9 @@ onDeactivated(() => {
 
     // Unregister contextual session commands from the command palette
     unregisterCommands(SESSION_COMMAND_IDS)
+
+    // Tab cycling
+    document.removeEventListener('keydown', handleTabCycleKeydown, { capture: true })
 })
 
 provide('sessionActive', readonly(isActive))
@@ -304,14 +310,57 @@ function onTerminalTabClickCompact() {
     }
 }
 
+// ─── Tab switching (Alt+Shift+1/2/3/4) ───────────────────────────────────
+
+/** Map digit keys to tab IDs. */
+const TAB_KEY_MAP = { '1': 'main', '2': 'files', '3': 'git', '4': 'terminal' }
+
+function handleTabCycleKeydown(e) {
+    if (!e.altKey || !e.shiftKey || !TAB_KEY_MAP[e.key]) return
+    if (!isActive.value) return
+
+    const targetTab = TAB_KEY_MAP[e.key]
+    if (targetTab === 'git' && !hasGitRepo.value) return
+    if (targetTab === activeTabId.value) return
+
+    e.preventDefault()
+    pendingTabFocus = targetTab
+    switchToTab(targetTab)
+}
+
+/** Tab ID that needs focus after the route-driven tab switch completes. */
+let pendingTabFocus = null
+
 /**
  * Handle tab change event from wa-tab-group.
  * Updates the URL to reflect the new active tab.
+ * When triggered by keyboard navigation (Alt+Arrow), focuses the target element
+ * after the wa-tab-panel's Lit update completes (attribute reflection + CSS applied).
  */
 function onTabShow(event) {
     const panel = event.detail?.name
     if (!panel) return
     switchToTab(panel)
+
+    if (pendingTabFocus && panel === pendingTabFocus) {
+        pendingTabFocus = null
+        // wa-tab-panel uses :host([active]) { display: block } — the active attribute
+        // is reflected asynchronously by Lit. Wait for the panel's updateComplete promise
+        // so the panel is visible before focusing.
+        const panelEl = document.querySelector(`.session-view wa-tab-panel[name="${panel}"]`)
+        const doFocus = () => {
+            if (panel === 'terminal') {
+                terminalPanelRef.value?.focusTerminal()
+            } else if (panel === 'main') {
+                document.querySelector('.session-view .message-input wa-textarea')?.focus()
+            }
+        }
+        if (panelEl?.updateComplete) {
+            panelEl.updateComplete.then(doFocus)
+        } else {
+            doFocus()
+        }
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -598,6 +647,7 @@ function registerSessionCommands() {
 
 onBeforeUnmount(() => {
     unregisterCommands(SESSION_COMMAND_IDS)
+    document.removeEventListener('keydown', handleTabCycleKeydown, { capture: true })
 })
 </script>
 
