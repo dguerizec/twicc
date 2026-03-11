@@ -67,6 +67,9 @@ const searchQuery = ref('')
 const activeIndex = ref(0)
 // Which element has focus within the active item: 'list' | 'replace' | 'insert'
 const focusTarget = ref('list')
+// Which item was explicitly clicked/tapped — prevents first-tap-inserts on touch.
+// -1 means no item has been click-confirmed yet.
+const confirmedIndex = ref(-1)
 
 // Tracks the current search "version" — incremented on every search change
 // to discard stale API responses.
@@ -108,6 +111,7 @@ function resetData() {
     fetchingPages.clear()
     totalCount.value = 0
     totalUnfiltered.value = 0
+    confirmedIndex.value = -1
     searchVersion++
 }
 
@@ -272,10 +276,30 @@ function insertActive() {
     if (msg?.text) insertMessage(msg.text)
 }
 
+// ─── Item click (touch support) ──────────────────────────────────────────
+
+/**
+ * Handle click on an item row.
+ * First click: activate the item (shows action buttons).
+ * Second click (item already active): insert at cursor.
+ */
+function onItemClick(item) {
+    if (!item.text) return
+    if (item.index === confirmedIndex.value) {
+        // Already click-confirmed → insert (default action)
+        insertMessage(item.text)
+    } else {
+        // First click: activate and confirm
+        activeIndex.value = item.index
+        confirmedIndex.value = item.index
+    }
+}
+
 // ─── Navigate to index (with fetch if needed) ────────────────────────────
 
 function navigateTo(index) {
     activeIndex.value = index
+    confirmedIndex.value = -1
     scrollToIndex(index)
     ensureVisible(index, index + 1)
 }
@@ -555,7 +579,8 @@ defineExpose({ open, close, isOpen, focusList })
                             class="picker-item"
                             :class="{ active: item.index === activeIndex }"
                             :style="{ transform: `translateY(${item.index * ITEM_HEIGHT}px)` }"
-                            @mouseenter="activeIndex = item.index"
+                            @mouseenter="activeIndex = item.index; confirmedIndex = -1"
+                            @click="onItemClick(item)"
                         >
                             <span class="item-num">{{ (item.original_index ?? item.index) + 1 }}</span>
                             <div v-if="item.text" class="item-text">{{ item.text }}</div>

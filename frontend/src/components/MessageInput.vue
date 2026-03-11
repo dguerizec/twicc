@@ -50,6 +50,7 @@ const fileInputRef = ref(null)
 
 // ── Prompt history picker ─────────────────────────────────────────────────
 const historyPickerRef = ref(null)
+const historyButtonId = useId()
 const attachButtonId = useId()
 const settingsButtonId = useId()
 const textareaAnchorId = useId()
@@ -1047,6 +1048,18 @@ async function handleReset() {
                     <wa-icon name="paperclip"></wa-icon>
                 </wa-button>
                 <AppTooltip :for="attachButtonId">Attach files (images, PDF, text)</AppTooltip>
+
+                <!-- Prompt history button -->
+                <wa-button
+                    variant="neutral"
+                    appearance="plain"
+                    size="small"
+                    :id="historyButtonId"
+                    @click="historyPickerRef?.open()"
+                >
+                    <wa-icon name="clock-rotate-left"></wa-icon>
+                </wa-button>
+                <AppTooltip :for="historyButtonId">Prompt history (Alt+PgUp)</AppTooltip>
 
                 <!-- Attachment badge + popover -->
                 <template v-if="attachmentCount > 0">
