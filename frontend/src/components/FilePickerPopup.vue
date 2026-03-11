@@ -38,7 +38,7 @@ const props = defineProps({
     },
 })
 
-const emit = defineEmits(['select', 'close'])
+const emit = defineEmits(['select', 'close', 'no-results'])
 
 const store = useDataStore()
 
@@ -207,7 +207,14 @@ async function doSearch(query) {
 
 // ─── Open / close ─────────────────────────────────────────────────────────
 
-async function open() {
+/**
+ * Open the file picker popup.
+ * @param {Object} [options]
+ * @param {boolean} [options.focus=true] - Whether to focus the search input.
+ *   Pass false when the caller wants to keep focus (e.g. inline @ trigger
+ *   that forwards keystrokes from the textarea).
+ */
+async function open({ focus = true } = {}) {
     if (isOpen.value) return
 
     // Initialize root selection
@@ -224,10 +231,38 @@ async function open() {
     await nextTick()
     await nextTick()
 
-    // Reset any previous search and focus the search input
+    // Reset any previous search and optionally focus
     fileTreePanelRef.value?.clearSearch(false)
-    fileTreePanelRef.value?.focusSearchInput()
+    if (focus) {
+        fileTreePanelRef.value?.focusSearchInput()
+    }
 }
+
+/**
+ * Set the search query from outside (used by MessageInput to forward
+ * keystrokes typed after '@' while the textarea keeps focus).
+ */
+function setSearchQuery(query) {
+    const panel = fileTreePanelRef.value
+    if (!panel) return
+    // Call the panel's input handler with a synthetic event to trigger debounced search
+    panel.onSearchInput({ target: { value: query } })
+}
+
+// Emit 'no-results' when a search completes with zero matches.
+// This lets the parent (MessageInput) auto-close the popup when
+// the user is clearly not typing a file path after '@'.
+watch(
+    () => fileTreePanelRef.value?.searchResponded,
+    (responded) => {
+        if (responded && isOpen.value) {
+            const total = fileTreePanelRef.value?.searchTotal ?? 0
+            if (total === 0) {
+                emit('no-results')
+            }
+        }
+    },
+)
 
 function close() {
     isOpen.value = false
@@ -345,7 +380,7 @@ onBeforeUnmount(() => {
     document.removeEventListener('click', onDocumentClick, true)
 })
 
-defineExpose({ open, close, isOpen })
+defineExpose({ open, close, isOpen, setSearchQuery })
 </script>
 
 <template>

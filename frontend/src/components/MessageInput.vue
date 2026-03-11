@@ -541,10 +541,21 @@ function onInput(event) {
         const inner = textareaRef.value?.shadowRoot?.querySelector('textarea')
         const cursorPos = inner?.selectionStart
 
-        // Detect '@' to trigger file picker
+        // Detect '@' to trigger file picker (only after a space or at start of text)
         if (!filePickerRef.value?.isOpen && cursorPos > 0 && newText[cursorPos - 1] === '@') {
-            atCursorPosition.value = cursorPos  // right after the '@'
-            nextTick(() => filePickerRef.value?.open())
+            const charBefore = cursorPos >= 2 ? newText[cursorPos - 2] : null
+            if (charBefore === null || charBefore === ' ' || charBefore === '\n') {
+                atCursorPosition.value = cursorPos  // right after the '@'
+                // Open popup without stealing focus — keystrokes stay in the textarea
+                // and are forwarded to the file picker search below.
+                filePickerRef.value?.open({ focus: false })
+            }
+        }
+
+        // Forward text typed after '@' to the file picker search
+        if (filePickerRef.value?.isOpen && atCursorPosition.value != null && cursorPos >= atCursorPosition.value) {
+            const query = newText.slice(atCursorPosition.value, cursorPos)
+            filePickerRef.value.setSearchQuery(query)
         }
 
         // Detect '/' at position 0 (first character of the message) to trigger slash command picker
@@ -554,6 +565,16 @@ function onInput(event) {
     }
 
     messageText.value = newText
+
+    // Close file picker if the user deleted back past the '@' or moved cursor before it
+    if (filePickerRef.value?.isOpen && atCursorPosition.value != null) {
+        const inner = textareaRef.value?.shadowRoot?.querySelector('textarea')
+        const cursorPos = inner?.selectionStart ?? 0
+        if (cursorPos < atCursorPosition.value - 1 || newText[atCursorPosition.value - 1] !== '@') {
+            filePickerRef.value.close()
+        }
+    }
+
     adjustTextareaHeight()
     // Notify server that user is actively preparing a message (debounced)
     // This prevents auto-stop of the process due to inactivity timeout
@@ -562,25 +583,30 @@ function onInput(event) {
 
 /**
  * Handle file selection from the file picker popup.
- * Inserts the relative path right after the '@' character at the recorded position.
+ * Replaces the '@query' text (from '@' through the current cursor position)
+ * with '@relativePath', since the user may have typed search characters
+ * after '@' that should be replaced by the actual path.
  */
 async function onFilePickerSelect(relativePath) {
-    const pos = atCursorPosition.value
-    if (pos != null && pos <= messageText.value.length) {
-        const before = messageText.value.slice(0, pos)
-        const after = messageText.value.slice(pos)
-        // Add a trailing space unless the text after already starts with one
+    const atPos = atCursorPosition.value
+    if (atPos != null) {
+        // Find current cursor position to know how much text after '@' to replace
+        const inner = textareaRef.value?.shadowRoot?.querySelector('textarea')
+        const cursorPos = inner?.selectionStart ?? atPos
+
+        // Replace: everything before '@' + '@path' + everything after cursor
+        const before = messageText.value.slice(0, atPos - 1)  // before the '@' character
+        const after = messageText.value.slice(cursorPos)
         const space = after.startsWith(' ') ? '' : ' '
-        const newText = before + relativePath + space + after
+        const newText = before + '@' + relativePath + space + after
         messageText.value = newText
 
         // Force update the web component and inner textarea
         if (textareaRef.value) {
             textareaRef.value.value = newText
-            const inner = textareaRef.value.shadowRoot?.querySelector('textarea')
             if (inner) {
                 inner.value = newText
-                const newPos = pos + relativePath.length + space.length
+                const newPos = before.length + 1 + relativePath.length + space.length
                 inner.setSelectionRange(newPos, newPos)
             }
         }
@@ -637,6 +663,13 @@ function onSlashCommandPickerClose() {
  * Cmd/Ctrl+Enter submits, Alt+PageUp opens prompt history picker.
  */
 function onKeydown(event) {
+    // Escape closes the file picker if open (keep the '@query' text in textarea)
+    if (event.key === 'Escape' && filePickerRef.value?.isOpen) {
+        event.preventDefault()
+        filePickerRef.value.close()
+        return
+    }
+
     if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
         event.preventDefault()
         handleSend()
@@ -1002,6 +1035,7 @@ async function handleReset() {
             :anchor-id="textareaAnchorId"
             @select="onFilePickerSelect"
             @close="onFilePickerClose"
+            @no-results="filePickerRef?.close()"
         />
 
         <!-- Slash command picker popup triggered by / at start -->
