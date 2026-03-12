@@ -310,20 +310,48 @@ function onTerminalTabClickCompact() {
     }
 }
 
-// ─── Tab switching (Alt+Shift+1/2/3/4) ───────────────────────────────────
+// ─── Tab switching (Alt+Shift+1/2/3/4 or Alt+Shift+Left/Right) ──────────
 
 /** Map digit keys to tab IDs. */
 const TAB_KEY_MAP = { '1': 'main', '2': 'files', '3': 'git', '4': 'terminal' }
 
+/**
+ * Returns the ordered list of currently available tabs, including open subagent tabs.
+ * Order matches the visual layout: Chat → [agents] → Files → [Git] → Terminal.
+ */
+function getAvailableTabs() {
+    const agentTabs = openSubagentTabs.value.map(t => t.id)
+    const tabs = ['main', ...agentTabs, 'files']
+    if (hasGitRepo.value) tabs.push('git')
+    tabs.push('terminal')
+    return tabs
+}
+
 function handleTabCycleKeydown(e) {
-    if (!e.altKey || !e.shiftKey || !TAB_KEY_MAP[e.key]) return
+    if (!e.altKey || !e.shiftKey) return
     if (!isActive.value) return
 
-    const targetTab = TAB_KEY_MAP[e.key]
-    if (targetTab === 'git' && !hasGitRepo.value) return
+    let targetTab
+    if (TAB_KEY_MAP[e.key]) {
+        // Direct tab selection via digit key
+        targetTab = TAB_KEY_MAP[e.key]
+        if (targetTab === 'git' && !hasGitRepo.value) return
+    } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+        // Cycle through tabs with wrap-around (includes agent tabs)
+        const tabs = getAvailableTabs()
+        const currentIndex = tabs.indexOf(activeTabId.value)
+        if (currentIndex === -1) return
+        const direction = e.key === 'ArrowRight' ? 1 : -1
+        const nextIndex = (currentIndex + direction + tabs.length) % tabs.length
+        targetTab = tabs[nextIndex]
+    } else {
+        return
+    }
+
     if (targetTab === activeTabId.value) return
 
     e.preventDefault()
+    e.stopPropagation()   // prevent xterm.js from receiving the key
     pendingTabFocus = targetTab
     switchToTab(targetTab)
 }
