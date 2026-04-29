@@ -1,9 +1,11 @@
 """
 CLI entry point for the TWICC application.
 
-Handles Django setup, migrations, and starts the server with all background
-tasks running concurrently. The server is available immediately; initial sync
-and background compute run as async tasks that broadcast progress via WebSocket.
+Handles Django setup, migrations, and starts the server. All Claude Code
+provider tasks (sync, watcher, compute, pricing, auth, usage, statuspage,
+slash commands, search index, model retirement, cron restart, process
+manager) are owned by ``ClaudeCodeOrchestrator``. The CLI only manages the
+HTTP server lifecycle and cross-provider tasks (e.g. PyPI version check).
 
 Used by:
 - ``uvx twicc`` / ``pip install twicc && twicc``  (via project.scripts)
@@ -15,7 +17,6 @@ import asyncio
 import logging
 import os
 import sys
-import threading
 
 from dotenv import load_dotenv
 
@@ -50,35 +51,8 @@ logging.getLogger("twicc").addHandler(_startup_console)
 # Now we can import Django-dependent modules
 from django.core.management import call_command  # noqa: E402
 
-from twicc.agent import shutdown_process_manager  # noqa: E402
-from twicc.providers.claude_code.background_task import ComputeContext, start_background_compute_task, stop_background_task  # noqa: E402
-from twicc.core.models import Project, Session, SessionType  # noqa: E402
-from twicc.providers.claude_code.initial_sync import scan_projects, scan_sessions, sync_all  # noqa: E402
-from twicc.providers.claude_code.pricing_task import run_initial_price_sync, start_price_sync_task, stop_price_sync_task  # noqa: E402
-from twicc.providers.claude_code.sessions_watcher import start_watcher, stop_watcher  # noqa: E402
-from twicc.startup_progress import broadcast_startup_progress  # noqa: E402
-from twicc.providers.claude_code.auth_task import start_auth_task, stop_auth_task  # noqa: E402
-from twicc.providers.claude_code.usage_task import start_usage_sync_task, stop_usage_sync_task
-from twicc.providers.claude_code.statuspage_task import start_statuspage_task, stop_statuspage_task  # noqa: E402
-from twicc.providers.claude_code.slash_commands_task import start_slash_commands_task, stop_slash_commands_task  # noqa: E402
-from twicc.search import init_search_index, shutdown_search_index  # noqa: E402
-from twicc.providers.claude_code.search_indexing_task import start_search_index_task, stop_search_index_task  # noqa: E402
+from twicc.providers.claude_code.orchestrator import ClaudeCodeOrchestrator  # noqa: E402
 from twicc.version_check_task import start_version_check_task, stop_version_check_task  # noqa: E402
-from twicc.agent.original_file_cache import start_cleanup_task as start_original_file_cache_cleanup, stop_cleanup_task as stop_original_file_cache_cleanup  # noqa: E402
-from twicc.providers.claude_code.model_retirement_task import start_model_retirement_task, stop_model_retirement_task  # noqa: E402
-
-
-def _count_total_sessions() -> int:
-    """Quick filesystem-only count of session files across all projects.
-
-    This scans the projects directory without reading any file contents or
-    touching the database. Used to provide a total for progress reporting
-    before sync_all() starts.
-    """
-    total = 0
-    for project_id in scan_projects():
-        total += len(scan_sessions(project_id))
-    return total
 
 
 async def _cancel_task(task: asyncio.Task, name: str) -> None:
@@ -91,163 +65,23 @@ async def _cancel_task(task: asyncio.Task, name: str) -> None:
     logger.info("%s stopped", name)
 
 
-def _on_watcher_done(task: asyncio.Task) -> None:
-    """Callback fired when the watcher task finishes unexpectedly."""
-    if task.cancelled():
-        return
-    exc = task.exception()
-    if exc is not None:
-        logger.error("Watcher task crashed with exception — file changes will no longer be detected!", exc_info=exc)
-    else:
-        logger.warning("Watcher task ended unexpectedly (no exception) — file changes will no longer be detected")
-
-
 async def run_server(port: int):
-    """Run the ASGI server with all background tasks.
-
-    The server starts immediately. Initial sync and background compute run
-    as concurrent async tasks that broadcast progress via WebSocket.
-
-    Task dependency graph:
-    - initial_sync, initial_price_sync, price_sync, usage_sync: start immediately
-    - watcher: starts after initial_sync completes
-    - background_compute: starts after both initial_sync AND initial_price_sync complete
-    """
+    """Run the ASGI server with all background tasks."""
     import signal
 
     import uvicorn
-    from asgiref.sync import sync_to_async
 
     from twicc.asgi import application
-
-    # --- Dependency signaling events ---
-    sync_done = asyncio.Event()
-    price_done = asyncio.Event()
-
-    # Threading event to cooperatively stop the initial sync thread on shutdown
-    sync_stop_event = threading.Event()
 
     # Set up signal handlers to ensure clean shutdown
     shutdown_event = asyncio.Event()
 
-    # --- Mutable container for tasks created by the orchestrator ---
-    # These may still be None during shutdown if orchestrator hasn't started them yet.
-    deferred = {
-        "watcher_task": None,
-        "compute_task": None,
-        "compute_ctx": None,
-        "price_sync_task": None,
-        "search_indexing_task": None,
-        "cron_restart_task": None,
-    }
+    # Claude Code provider owns its own tasks
+    claude_code = ClaudeCodeOrchestrator()
+    await claude_code.start(shutdown_event)
 
-    # --- Initial sync task ---
-    async def initial_sync_task():
-        """Run sync_all() in a thread with progress broadcasting."""
-        loop = asyncio.get_running_loop()
-
-        # Quick filesystem scan to get total session count for progress bar
-        total_sessions = await asyncio.to_thread(_count_total_sessions)
-
-        # Broadcast initial state (0/N)
-        await broadcast_startup_progress("initial_sync", 0, total_sessions)
-
-        # Progress tracking — the callback is called from the sync thread,
-        # so we use run_coroutine_threadsafe to post to the event loop.
-        progress = {"current": 0}
-
-        def on_session_progress(session_id: str, idx: int, total: int):
-            # idx/total are per-project; we track global progress ourselves
-            progress["current"] += 1
-            asyncio.run_coroutine_threadsafe(
-                broadcast_startup_progress("initial_sync", progress["current"], total_sessions),
-                loop,
-            )
-
-        logger.info("Starting data synchronization...")
-        await asyncio.to_thread(sync_all, on_session_progress=on_session_progress, stop_event=sync_stop_event)
-
-        # Broadcast completion
-        await broadcast_startup_progress("initial_sync", total_sessions, total_sessions, completed=True)
-
-        # Log summary
-        projects_count = await sync_to_async(Project.objects.filter(stale=False).count)()
-        sessions_count = await sync_to_async(
-            Session.objects.filter(stale=False, type=SessionType.SESSION).count
-        )()
-        subagents_count = await sync_to_async(
-            Session.objects.filter(stale=False, type=SessionType.SUBAGENT).count
-        )()
-        logger.info(
-            "Data synchronized (%d projects, %d sessions, %d subagents)",
-            projects_count,
-            sessions_count,
-            subagents_count,
-        )
-
-        sync_done.set()
-
-    # --- Initial price sync task ---
-    async def initial_price_sync_task():
-        """Run initial price sync then signal completion."""
-        await run_initial_price_sync()
-        price_done.set()
-
-    # --- Orchestrator: starts dependent tasks after their prerequisites ---
-    async def orchestrator_task():
-        """Wait for dependencies and start watcher + background compute."""
-        # Initialize search index before watcher starts, so the watcher can
-        # index new items into the search index as they arrive in real time.
-        await sync_done.wait()
-        await asyncio.to_thread(init_search_index)
-        logger.info("Search index initialized (after initial sync)")
-
-        deferred["watcher_task"] = asyncio.create_task(start_watcher())
-        deferred["watcher_task"].add_done_callback(_on_watcher_done)
-        logger.info("Watcher started (after initial sync)")
-
-        # Restart cron jobs from previous process runs.
-        # Must run after watcher is up so that JSONL writes from restarted sessions are detected.
-        from twicc.providers.claude_code.cron_restart import restart_all_session_crons
-        deferred["cron_restart_task"] = asyncio.create_task(
-            restart_all_session_crons(stop_event=shutdown_event)
-        )
-        logger.info("Cron restart task launched")
-
-        # Start background compute and periodic price sync once initial price sync is done.
-        # The periodic price sync task must wait for the initial price sync to avoid
-        # a race condition: both call sync_model_prices() which uses non-atomic
-        # read-then-create, causing UNIQUE constraint violations on concurrent inserts.
-        await price_done.wait()
-        deferred["price_sync_task"] = asyncio.create_task(start_price_sync_task())
-        deferred["compute_ctx"] = ComputeContext()
-        deferred["compute_task"] = asyncio.create_task(
-            start_background_compute_task(deferred["compute_ctx"])
-        )
-        logger.info("Background compute started (after sync + price sync)")
-
-        # Search indexing task starts automatically when background compute finishes
-        # (via done callback). Uses shutdown_event to skip if server is stopping.
-        # Note: init_search_index was already called above (before watcher start).
-        def _on_compute_done(task):
-            if task.cancelled() or shutdown_event.is_set():
-                return
-            deferred["search_indexing_task"] = asyncio.create_task(start_search_index_task())
-            logger.info("Background search indexing started (after compute)")
-
-        deferred["compute_task"].add_done_callback(_on_compute_done)
-
-    # --- Launch all tasks ---
-    sync_task = asyncio.create_task(initial_sync_task())
-    price_init_task = asyncio.create_task(initial_price_sync_task())
-    orch_task = asyncio.create_task(orchestrator_task())
-    usage_sync_task = asyncio.create_task(start_usage_sync_task())
-    auth_check_task = asyncio.create_task(start_auth_task())
+    # Cross-provider tasks
     version_check_task = asyncio.create_task(start_version_check_task())
-    statuspage_task = asyncio.create_task(start_statuspage_task())
-    slash_commands_task = asyncio.create_task(start_slash_commands_task())
-    original_file_cache_task = asyncio.create_task(start_original_file_cache_cleanup())
-    retirement_task = asyncio.create_task(start_model_retirement_task())
 
     # Configure uvicorn
     # log_config=None prevents Uvicorn from installing its own StreamHandlers;
@@ -263,7 +97,7 @@ async def run_server(port: int):
 
     def handle_signal(signum, frame):
         logger.info("Received signal %s, initiating shutdown...", signum)
-        sync_stop_event.set()
+        claude_code.request_stop()
         shutdown_event.set()
         server.should_exit = True
 
@@ -275,88 +109,13 @@ async def run_server(port: int):
     finally:
         logger.info("Server shutdown initiated...")
 
-        # Cancel startup tasks (may already be done)
-        await _cancel_task(sync_task, "Initial sync task")
-        await _cancel_task(price_init_task, "Initial price sync task")
-        await _cancel_task(orch_task, "Orchestrator task")
-
-        # Clean shutdown of watcher (may not have started yet)
-        if deferred["watcher_task"] is not None:
-            logger.info("Stopping watcher...")
-            stop_watcher()
-            await _cancel_task(deferred["watcher_task"], "Watcher")
-        else:
-            logger.info("Watcher was not started, skipping")
-
-        # Clean shutdown of background compute task (may not have started yet)
-        if deferred["compute_task"] is not None:
-            logger.info("Stopping background compute task...")
-            stop_background_task(deferred["compute_ctx"])
-            await _cancel_task(deferred["compute_task"], "Background compute task")
-        else:
-            logger.info("Background compute was not started, skipping")
-
-        # Clean shutdown of price sync task (may not have started yet)
-        if deferred["price_sync_task"] is not None:
-            logger.info("Stopping price sync task...")
-            stop_price_sync_task()
-            await _cancel_task(deferred["price_sync_task"], "Price sync task")
-        else:
-            logger.info("Price sync task was not started, skipping")
-
-        # Clean shutdown of usage sync task
-        logger.info("Stopping usage sync task...")
-        stop_usage_sync_task()
-        await _cancel_task(usage_sync_task, "Usage sync task")
-
-        # Clean shutdown of auth check task
-        logger.info("Stopping auth check task...")
-        stop_auth_task()
-        await _cancel_task(auth_check_task, "Auth check task")
-
-        # Clean shutdown of version check task
+        # Stop cross-provider tasks first
         logger.info("Stopping version check task...")
         stop_version_check_task()
         await _cancel_task(version_check_task, "Version check task")
 
-        # Clean shutdown of statuspage task
-        logger.info("Stopping statuspage task...")
-        stop_statuspage_task()
-        await _cancel_task(statuspage_task, "Statuspage task")
-
-        # Clean shutdown of slash commands task
-        logger.info("Stopping slash commands task...")
-        stop_slash_commands_task()
-        await _cancel_task(slash_commands_task, "Slash commands task")
-
-        # Clean shutdown of original file cache cleanup task
-        stop_original_file_cache_cleanup()
-        await _cancel_task(original_file_cache_task, "Original file cache cleanup")
-
-        # Clean shutdown of model retirement task
-        logger.info("Stopping model retirement task...")
-        stop_model_retirement_task()
-        await _cancel_task(retirement_task, "Model retirement task")
-
-        # Clean shutdown of search index task (may not have started yet)
-        if deferred["search_indexing_task"] is not None:
-            logger.info("Stopping search index task...")
-            stop_search_index_task()
-            await _cancel_task(deferred["search_indexing_task"], "Search index task")
-        else:
-            logger.info("Search index task was not started, skipping")
-        logger.info("Shutting down search index...")
-        await asyncio.to_thread(shutdown_search_index)
-
-        # Clean shutdown of cron restart task (may still be retrying)
-        if deferred["cron_restart_task"] is not None:
-            await _cancel_task(deferred["cron_restart_task"], "Cron restart")
-
-        # Clean shutdown of Claude processes (also stops the internal timeout monitor)
-        # This gracefully terminates any active Claude SDK processes
-        logger.info("Stopping process manager...")
-        await shutdown_process_manager()
-        logger.info("Process manager stopped")
+        # Then let the Claude Code provider tear down its own tasks
+        await claude_code.shutdown()
 
         logger.info("Server shutdown complete")
 
