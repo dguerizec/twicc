@@ -1,10 +1,11 @@
 <script setup>
 import { computed, ref } from 'vue'
+import { PROVIDER } from '../../../constants'
 import { useDataStore } from '../../../stores/data'
 import JsonViewer from '../../json/JsonViewer.vue'
-import Message from './items/Message.vue'
-import ApiError from './items/ApiError.vue'
-import CompactSummary from './items/content/CompactSummary.vue'
+import ClaudeCodeMessage from './items/claude_code/Message.vue'
+import ClaudeCodeApiError from './items/claude_code/ApiError.vue'
+import ClaudeCodeCompactSummary from './items/claude_code/CompactSummary.vue'
 import UnknownEntry from './items/UnknownEntry.vue'
 import AppTooltip from '../../ui/AppTooltip.vue'
 import CodeCommentsIndicator from '../../ui/CodeCommentsIndicator.vue'
@@ -92,6 +93,8 @@ const showJson = ref(false)
 // Get the entry type from parsed JSON (for unknown kind display)
 const entryType = computed(() => props.content?.type || 'unknown')
 
+const sessionProvider = computed(() => dataStore.getSession(props.sessionId)?.provider)
+
 // Track collapsed state for JSON view
 const collapsedPaths = ref(new Set())
 
@@ -171,39 +174,48 @@ function toggleJsonView() {
 
         <!-- Formatted view based on kind -->
         <template v-else>
-            <Message
-                v-if="kind === 'user_message' || kind === 'assistant_message'"
-                :data="content"
-                :role="kind === 'user_message' ? 'user' : 'assistant'"
-                :project-id="projectId"
-                :session-id="sessionId"
-                :parent-session-id="parentSessionId"
-                :line-num="lineNum"
-                :group-head="groupHead"
-                :group-tail="groupTail"
-                :prefix-expanded="prefixExpanded"
-                :suffix-expanded="suffixExpanded"
-                @toggle-suffix="emit('toggle-suffix')"
-            />
-            <Message
-                v-else-if="kind === 'content_items'"
-                :data="content"
-                role="items"
-                :project-id="projectId"
-                :session-id="sessionId"
-                :parent-session-id="parentSessionId"
-                :line-num="lineNum"
-            />
-            <ApiError
-                v-else-if="kind === 'api_error'"
-                :data="content"
-            />
-            <CompactSummary
-                v-else-if="kind === 'compact_summary'"
-                :content="content?.message?.content || ''"
-                :session-id="sessionId"
-                :detail-key="`compact:${lineNum}`"
-            />
+            <template v-if="sessionProvider === PROVIDER.CLAUDE_CODE">
+                <ClaudeCodeMessage
+                    v-if="kind === 'user_message' || kind === 'assistant_message'"
+                    :data="content"
+                    :role="kind === 'user_message' ? 'user' : 'assistant'"
+                    :project-id="projectId"
+                    :session-id="sessionId"
+                    :parent-session-id="parentSessionId"
+                    :line-num="lineNum"
+                    :group-head="groupHead"
+                    :group-tail="groupTail"
+                    :prefix-expanded="prefixExpanded"
+                    :suffix-expanded="suffixExpanded"
+                    @toggle-suffix="emit('toggle-suffix')"
+                />
+                <ClaudeCodeMessage
+                    v-else-if="kind === 'content_items'"
+                    :data="content"
+                    role="items"
+                    :project-id="projectId"
+                    :session-id="sessionId"
+                    :parent-session-id="parentSessionId"
+                    :line-num="lineNum"
+                />
+                <ClaudeCodeApiError
+                    v-else-if="kind === 'api_error'"
+                    :data="content"
+                />
+                <ClaudeCodeCompactSummary
+                    v-else-if="kind === 'compact_summary'"
+                    :content="content?.message?.content || ''"
+                    :session-id="sessionId"
+                    :detail-key="`compact:${lineNum}`"
+                />
+                <UnknownEntry
+                    v-else
+                    :type="entryType"
+                    :data="content"
+                    :session-id="sessionId"
+                    :detail-key="`line:${lineNum}`"
+                />
+            </template>
             <UnknownEntry
                 v-else
                 :type="entryType"

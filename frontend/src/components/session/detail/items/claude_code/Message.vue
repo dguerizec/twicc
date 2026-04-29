@@ -1,8 +1,8 @@
 <script setup>
 import { computed } from 'vue'
-import { SYNTHETIC_ITEM } from '../../../../constants'
-import ContentList from './content/ContentList.vue'
-import WorkingAssistantMessage from './WorkingAssistantMessage.vue'
+import { SYNTHETIC_ITEM } from '../../../../../constants'
+import ContentList from './ContentList.vue'
+import WorkingAssistantMessage from '../WorkingAssistantMessage.vue'
 
 const props = defineProps({
     data: {

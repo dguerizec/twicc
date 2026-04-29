@@ -1,6 +1,6 @@
 <script setup>
 import { computed } from 'vue'
-import { parseApiErrorString, stripAnthropicDocsUrl } from '../../../../utils/errorParsing'
+import { parseApiErrorString, stripAnthropicDocsUrl } from '../../../../../utils/errorParsing'
 
 const props = defineProps({
     data: {
