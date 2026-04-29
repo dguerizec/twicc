@@ -365,11 +365,9 @@ class ClaudeProcess:
             except Exception as e:
                 logger.error("Error in on_cron_deleted callback for session %s: %s", self.session_id, e)
 
-    def get_info(self) -> ProcessInfo:
-        """Get an immutable snapshot of the process state."""
-        # Don't query memory for dead processes - the subprocess no longer exists
-        memory_rss = None if self.state == ProcessState.DEAD else self.get_memory_rss()
-        active_tools = tuple(
+    def _serialize_active_tools(self) -> list[dict]:
+        """Return ``_active_tools`` as a list of dicts ready for transport."""
+        return [
             {
                 "id": tool_use_id,
                 "name": entry["name"],
@@ -377,7 +375,12 @@ class ClaudeProcess:
                 "streaming": entry.get("streaming", False),
             }
             for tool_use_id, entry in self._active_tools.items()
-        )
+        ]
+
+    def get_info(self) -> ProcessInfo:
+        """Get an immutable snapshot of the process state."""
+        # Don't query memory for dead processes - the subprocess no longer exists
+        memory_rss = None if self.state == ProcessState.DEAD else self.get_memory_rss()
         return ProcessInfo(
             session_id=self.session_id,
             project_id=self.project_id,
@@ -390,7 +393,7 @@ class ClaudeProcess:
             memory_rss=memory_rss,
             kill_reason=self.kill_reason,
             pending_requests=self.pending_requests,
-            active_tools=active_tools,
+            active_tools=tuple(self._serialize_active_tools()),
             last_started_tool_id=self._last_started_tool_id,
         )
 
@@ -1395,12 +1398,23 @@ class ClaudeProcess:
                             current_stream_tool_input_raw = ""
                             current_stream_tool_input = {}
                             current_stream_tool_input_cleaned = None
+                            # Track the tool from its very first event so the delta
+                            # handler's "skip if not tracked" guard can distinguish
+                            # late zombie deltas from this tool's normal stream.
+                            self._active_tools[current_stream_tool_id] = {
+                                "name": current_stream_tool_name,
+                                "input": {},
+                                "streaming": True,
+                            }
+                            self._last_started_tool_id = current_stream_tool_id
                             logger.debug(
                                 "[ToolUse block_start index=%s tool=%s id=%s] => START",
                                 block_index, current_stream_tool_name, current_stream_tool_id,
                             )
+                            await self._broadcast_process_tools()
                         case "content_block_delta" if (
                             current_stream_tool_id
+                            and current_stream_tool_id in self._active_tools
                             and isinstance(delta := event.get("delta"), dict)
                             and delta.get("type") == "input_json_delta"
                             and (chunk := delta.get("partial_json"))
@@ -1416,14 +1430,7 @@ class ClaudeProcess:
                                     cleaned = filter_tool_input(current_stream_tool_name, parsed_input)
                                     if cleaned != current_stream_tool_input_cleaned:
                                         current_stream_tool_input_cleaned = cleaned
-                                        is_new = current_stream_tool_id not in self._active_tools
-                                        self._active_tools[current_stream_tool_id] = {
-                                            "name": current_stream_tool_name,
-                                            "input": cleaned,
-                                            "streaming": True,
-                                        }
-                                        if is_new:
-                                            self._last_started_tool_id = current_stream_tool_id
+                                        self._active_tools[current_stream_tool_id]["input"] = cleaned
                                         logger.debug(
                                             "[ToolUse content_block_delta tool=%s id=%s active_tools=%d] => input=%s",
                                             current_stream_tool_name, current_stream_tool_id,
@@ -1534,6 +1541,13 @@ class ClaudeProcess:
                     if not self._first_user_turn_reached:
                         self._first_user_turn_reached = True
                         self._first_turn_done_event.set()
+
+                    # Turn ended — every tool of this turn is finished, so any
+                    # remaining _active_tools entry is stale (typically resurrected
+                    # by a late content_block_delta after its PostToolUse fired).
+                    if self._active_tools:
+                        self._active_tools.clear()
+                        await self._broadcast_process_tools()
 
                     self._set_state(ProcessState.USER_TURN)
                     await self._notify_state_change()
@@ -1732,21 +1746,12 @@ class ClaudeProcess:
     async def _broadcast_process_tools(self) -> None:
         """Broadcast the current list of in-progress tools for the status display."""
         channel_layer = get_channel_layer()
-        tools = [
-            {
-                "id": tool_use_id,
-                "name": entry["name"],
-                "input": entry["input"],
-                "streaming": entry.get("streaming", False),
-            }
-            for tool_use_id, entry in self._active_tools.items()
-        ]
         await channel_layer.group_send(
             "updates",
             {"type": "broadcast", "data": {
                 "type": "process_tools",
                 "session_id": self.session_id,
-                "tools": tools,
+                "tools": self._serialize_active_tools(),
                 "last_started_id": self._last_started_tool_id,
             }},
         )
