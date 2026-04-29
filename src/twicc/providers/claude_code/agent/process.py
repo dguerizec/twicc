@@ -28,7 +28,7 @@ from claude_agent_sdk import (
 from channels.layers import get_channel_layer
 import json_repair
 
-from twicc.claude_plugin import get_plugin_dir
+from twicc.providers.claude_code.agent.plugin import get_plugin_dir
 
 from .sdk_logger import patch_client as patch_client_for_logging
 from .states import PendingRequest, ProcessInfo, ProcessState, get_process_memory
@@ -42,7 +42,7 @@ StateChangeCallback = Callable[["ClaudeProcess"], Coroutine[Any, Any, None]]
 
 def _capture_original_file(input_data: dict, tool_use_id: str) -> None:
     """Read and cache a file's content before it gets modified by Edit/Write."""
-    from twicc.agent.original_file_cache import MAX_FILE_SIZE, cache_original_file
+    from twicc.providers.claude_code.agent.original_file_cache import MAX_FILE_SIZE, cache_original_file
 
     tool_input = input_data.get("tool_input", {})
     file_path = tool_input.get("file_path")

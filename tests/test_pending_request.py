@@ -13,9 +13,9 @@ from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
 # Mock context object with a suggestions attribute (mimics ToolPermissionContext)
 _EMPTY_CONTEXT = SimpleNamespace(suggestions=[])
 
-from twicc.agent.manager import ProcessManager
-from twicc.agent.process import ClaudeProcess
-from twicc.agent.states import (
+from twicc.providers.claude_code.agent.manager import ProcessManager
+from twicc.providers.claude_code.agent.process import ClaudeProcess
+from twicc.providers.claude_code.agent.states import (
     PendingRequest,
     ProcessInfo,
     ProcessState,
@@ -727,7 +727,7 @@ class TestPreToolUseHook:
 
     def test_returns_continue_true_for_non_edit_tools(self):
         """_pre_tool_use_hook() returns {'continue_': True} for tools that don't need capture."""
-        from twicc.agent.process import _pre_tool_use_hook
+        from twicc.providers.claude_code.agent.process import _pre_tool_use_hook
 
         async def run():
             result = await _pre_tool_use_hook(

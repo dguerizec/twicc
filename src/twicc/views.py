@@ -119,7 +119,7 @@ def all_sessions(request):
 
     active_session_ids: list[str] | None = None
     if has_process:
-        from twicc.agent.manager import get_process_manager
+        from twicc.providers.claude_code.agent.manager import get_process_manager
         active_session_ids = [info.session_id for info in get_process_manager().get_active_processes()]
 
     return JsonResponse(_get_sessions_page(
@@ -510,7 +510,7 @@ def session_detail(request, project_id, session_id, parent_session_id=None):
             # Stop process and clean up tmux session if archiving
             if archived:
                 from asgiref.sync import async_to_sync
-                from twicc.agent.manager import get_process_manager
+                from twicc.providers.claude_code.agent.manager import get_process_manager
                 manager = get_process_manager()
                 async_to_sync(manager.kill_process)(session_id, reason="archived")
 

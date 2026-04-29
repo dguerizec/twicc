@@ -20,8 +20,8 @@ import threading
 
 from asgiref.sync import sync_to_async
 
-from twicc.agent import shutdown_process_manager
-from twicc.agent.original_file_cache import (
+from twicc.providers.claude_code.agent import shutdown_process_manager
+from twicc.providers.claude_code.agent.original_file_cache import (
     start_cleanup_task as start_original_file_cache_cleanup,
     stop_cleanup_task as stop_original_file_cache_cleanup,
 )

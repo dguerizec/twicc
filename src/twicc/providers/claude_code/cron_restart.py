@@ -202,8 +202,8 @@ async def restart_session_crons(
     Used identically by startup (restart_all_session_crons) and runtime
     (_restart_crons_for_session in ProcessManager).
     """
-    from twicc.agent.manager import get_process_manager
-    from twicc.agent.states import ProcessState
+    from twicc.providers.claude_code.agent.manager import get_process_manager
+    from twicc.providers.claude_code.agent.states import ProcessState
 
     manager = get_process_manager()
     delays = _retry_delays(initial_delay)

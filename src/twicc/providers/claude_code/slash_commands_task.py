@@ -55,7 +55,7 @@ def _sync_to_database() -> dict[str, int]:
     plugin_entries = read_plugin_entries()
 
     # Add the TwiCC built-in plugin (ships with the package)
-    from twicc.claude_plugin import get_plugin_dir
+    from twicc.providers.claude_code.agent.plugin import get_plugin_dir
 
     plugin_entries.append(PluginEntry(
         plugin_name="twicc",

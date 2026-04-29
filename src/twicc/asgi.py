@@ -23,8 +23,8 @@ from django.urls import path
 
 from claude_agent_sdk.types import PermissionResultAllow, PermissionResultDeny, PermissionRuleValue, PermissionUpdate
 
-from twicc.agent.manager import get_process_manager
-from twicc.agent.states import ProcessInfo, ProcessState, serialize_process_info
+from twicc.providers.claude_code.agent.manager import get_process_manager
+from twicc.providers.claude_code.agent.states import ProcessInfo, ProcessState, serialize_process_info
 from twicc.synced_settings import _settings_lock, prepare_settings_for_client, read_synced_settings, write_synced_settings
 from twicc.workspaces import read_workspaces, write_workspaces
 from twicc.message_snippets import read_message_snippets_config, write_message_snippets_config

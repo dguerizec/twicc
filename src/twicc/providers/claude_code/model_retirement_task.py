@@ -117,7 +117,7 @@ async def _check_and_retire() -> None:
     # - ASSISTANT_TURN: apply_live_settings skips idle changes, so we also
     #   update the session DB row; _apply_pending_settings will pick it up
     #   at the next USER_TURN transition.
-    from twicc.agent.manager import get_process_manager
+    from twicc.providers.claude_code.agent.manager import get_process_manager
     from .model_registry import (
         enforce_effort_max_consistency,
         enforce_effort_xhigh_consistency,

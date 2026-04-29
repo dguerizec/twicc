@@ -18,8 +18,8 @@ from django.conf import settings
 from watchfiles import Change, awatch
 
 import twicc.search as search
-from twicc.agent.manager import get_process_manager
-from twicc.agent.original_file_cache import pop_original_file as _pop_cached_original_file
+from twicc.providers.claude_code.agent.manager import get_process_manager
+from twicc.providers.claude_code.agent.original_file_cache import pop_original_file as _pop_cached_original_file
 from .compute import AgentLinkUpdate, AgentStoppedUpdate, ToolResultUpdate, cache_agent_prompt, \
     check_agent_naturally_stopped, compute_item_cost_and_usage, \
     compute_item_metadata, \
