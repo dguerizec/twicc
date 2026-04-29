@@ -52,6 +52,7 @@ def serialize_session(session):
     return {
         "id": session.id,
         "project_id": session.project_id,
+        "provider": session.provider,  # Backend provider (see Provider enum)
         "parent_session_id": session.parent_session_id,  # None for regular sessions, set for subagents
         "last_line": session.last_line,
         "mtime": session.mtime,

@@ -148,6 +148,14 @@ export const PROCESS_STATE_COLORS = {
 }
 
 /**
+ * Backend provider values (matches backend Provider enum).
+ * Identifies the backend that produced a session.
+ */
+export const PROVIDER = {
+    CLAUDE_CODE: 'claude_code',
+}
+
+/**
  * Permission mode values (matches SDK PermissionMode).
  * Controls how Claude Code handles tool permission prompts.
  */

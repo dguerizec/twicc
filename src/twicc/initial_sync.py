@@ -22,6 +22,7 @@ from twicc.compute import (
     ensure_project_git_root,
     update_project_total_cost,
 )
+from twicc.core.enums import Provider
 from twicc.core.models import Project, Session, SessionItem, SessionType
 
 logger = logging.getLogger(__name__)
@@ -256,6 +257,7 @@ def _sync_session_subagents(
             subagent = Session(
                 id=agent_id,
                 project=project,
+                provider=Provider.CLAUDE_CODE.value,
                 type=SessionType.SUBAGENT,
                 parent_session=session,
                 agent_id=agent_id,
@@ -353,7 +355,12 @@ def sync_project(
                 project = Project.objects.create(id=project_id)
                 stats["project_created"] = 1
 
-            session = Session(id=session_id, project=project, type=SessionType.SESSION)
+            session = Session(
+                id=session_id,
+                project=project,
+                provider=Provider.CLAUDE_CODE.value,
+                type=SessionType.SESSION,
+            )
             session.save()
             stats["sessions_created"] += 1
 

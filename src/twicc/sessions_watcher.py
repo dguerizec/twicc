@@ -32,7 +32,7 @@ from twicc.compute import AgentLinkUpdate, AgentStoppedUpdate, ToolResultUpdate,
     load_project_git_roots, read_head_branch, resolve_git_from_path, \
     transform_local_command_output, transform_task_notification, \
     update_project_metadata as _update_project_metadata_sync
-from twicc.core.enums import ItemDisplayLevel, ItemKind
+from twicc.core.enums import ItemDisplayLevel, ItemKind, Provider
 from twicc.core.models import Project, Session, SessionItem, SessionType
 from twicc.core.serializers import (
     serialize_project,
@@ -171,6 +171,7 @@ def create_session(
         return Session.objects.create(
             id=parsed.session_id,
             project=project,
+            provider=Provider.CLAUDE_CODE.value,
             type=SessionType.SUBAGENT,
             parent_session=parent_session,
             agent_id=parsed.session_id,
@@ -180,6 +181,7 @@ def create_session(
         kwargs = dict(
             id=parsed.session_id,
             project=project,
+            provider=Provider.CLAUDE_CODE.value,
             compute_version=settings.CURRENT_COMPUTE_VERSION,
         )
         if permission_mode is not None:

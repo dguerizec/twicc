@@ -23,3 +23,8 @@ class ItemKind(StrEnum):
     API_ERROR = "api_error"
     COMPACT_SUMMARY = "compact_summary"
     SYSTEM = "system"
+
+
+class Provider(StrEnum):
+    """Backend provider that produced a session."""
+    CLAUDE_CODE = "claude_code"

@@ -4,7 +4,7 @@ import { defineStore, acceptHMRUpdate } from 'pinia'
 import { toRaw } from 'vue'
 import { getPrefixSuffixBoundaries } from '../utils/contentVisibility'
 import { computeVisualItems, visualItemEqual } from '../utils/visualItems'
-import { CONTEXT_MAX, DISPLAY_LEVEL, DISPLAY_MODE, PROCESS_STATE, SYNTHETIC_ITEM } from '../constants'
+import { CONTEXT_MAX, DISPLAY_LEVEL, DISPLAY_MODE, PROCESS_STATE, PROVIDER, SYNTHETIC_ITEM } from '../constants'
 import { getSessionCutoffMs } from '../utils/sessions'
 import { useSettingsStore, modelSupports1m } from './settings'
 import {
@@ -185,7 +185,7 @@ export const useDataStore = defineStore('data', {
     state: () => ({
         // Server data
         projects: {},       // { id: { id, sessions_count, mtime, stale } }
-        sessions: {},       // { id: { id, project_id, last_line, mtime, stale } }
+        sessions: {},       // { id: { id, project_id, provider, last_line, mtime, stale } }
         // Session items indexed by session ID.
         // { sessionId: [{ line_num, content, display_level, ... }] } - line_num is 1-based
         //
@@ -817,6 +817,7 @@ export const useDataStore = defineStore('data', {
             this.sessions[id] = {
                 id,
                 project_id: projectId,
+                provider: PROVIDER.CLAUDE_CODE,
                 title: null,  // null = user hasn't set a title yet, UI will display "New session"
                 mtime: now,
                 last_line: 0,

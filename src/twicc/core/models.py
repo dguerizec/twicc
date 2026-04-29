@@ -266,6 +266,7 @@ class Session(models.Model):
         on_delete=models.CASCADE,
         related_name="sessions",
     )
+    provider = models.CharField(max_length=50)  # Backend provider (see Provider enum)
     last_offset = models.PositiveBigIntegerField(default=0)
     last_line = models.PositiveIntegerField(default=0)
     mtime = models.FloatField(default=0)
