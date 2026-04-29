@@ -21,16 +21,13 @@ from django.conf import settings
 from django.core.asgi import get_asgi_application
 from django.urls import path
 
-from claude_agent_sdk.types import PermissionResultAllow, PermissionResultDeny, PermissionRuleValue, PermissionUpdate
-
 from twicc.providers.claude_code.agent.manager import get_process_manager
 from twicc.providers.claude_code.agent.states import ProcessInfo, ProcessState, serialize_process_info
+from twicc.providers.claude_code.ws import ClaudeCodeWSHandler
 from twicc.synced_settings import _settings_lock, prepare_settings_for_client, read_synced_settings, write_synced_settings
 from twicc.workspaces import read_workspaces, write_workspaces
 from twicc.message_snippets import read_message_snippets_config, write_message_snippets_config
 from twicc.terminal_config import read_terminal_config, write_terminal_config
-from twicc.providers.claude_code.claude_settings_presets import read_claude_settings_presets, write_claude_settings_presets
-from twicc.providers.claude_code.auth import check_and_broadcast as check_claude_auth_and_broadcast, get_auth_message_for_connection
 from twicc.providers.claude_code.usage_task import get_usage_message_for_connection
 from twicc.terminal import terminal_application
 
@@ -39,43 +36,6 @@ logger = logging.getLogger(__name__)
 # WebSocket close code for authentication failure.
 # 4000-4999 range is reserved for application use by the WebSocket spec.
 WS_CLOSE_AUTH_FAILURE = 4001
-
-
-def _permission_update_from_dict(data: dict) -> PermissionUpdate:
-    """Reconstruct a PermissionUpdate from its serialized dict form.
-
-    The SDK's ``PermissionUpdate.to_dict()`` uses camelCase keys (e.g., ``toolName``,
-    ``ruleContent``). This function reverses that conversion back to the dataclass
-    with snake_case field names.
-
-    Args:
-        data: Dictionary as produced by ``PermissionUpdate.to_dict()``
-
-    Returns:
-        A ``PermissionUpdate`` instance ready to pass back to the SDK.
-    """
-    rules = None
-    raw_rules = data.get("rules")
-    if raw_rules is not None:
-        rules = [
-            PermissionRuleValue(
-                tool_name=r["toolName"],
-                # SDK bug workaround: PermissionUpdate.to_dict() serializes None as
-                # "ruleContent": null, but Claude Code CLI's Zod schema rejects null
-                # (expects string | undefined). Using "" instead of None avoids the error.
-                rule_content=r.get("ruleContent") or "",
-            )
-            for r in raw_rules
-        ]
-
-    return PermissionUpdate(
-        type=data["type"],
-        rules=rules,
-        behavior=data.get("behavior"),
-        mode=data.get("mode"),
-        directories=data.get("directories"),
-        destination=data.get("destination"),
-    )
 
 
 @sync_to_async
@@ -102,35 +62,6 @@ def session_exists(session_id: str) -> bool:
     from twicc.core.models import Session
 
     return Session.objects.filter(id=session_id).exists()
-
-
-async def update_session_permission_mode(session_id: str, permission_mode: str) -> None:
-    """Update the permission_mode for an existing session and broadcast the change.
-
-    Skips the DB update and broadcast if the value is already the same.
-    """
-    from twicc.core.models import Session
-    from twicc.core.serializers import serialize_session
-
-    rows = await sync_to_async(
-        Session.objects.filter(id=session_id).exclude(permission_mode=permission_mode).update
-    )(permission_mode=permission_mode)
-    if not rows:
-        return
-
-    session = await sync_to_async(Session.objects.filter(id=session_id).first)()
-    channel_layer = get_channel_layer()
-    await channel_layer.group_send(
-        "updates",
-        {
-            "type": "broadcast",
-            "data": {
-                "type": "session_updated",
-                "session": serialize_session(session),
-            },
-        },
-    )
-    logger.info(f"Session {session_id} updated with permission_mode {permission_mode}")
 
 
 def _get_project_display_name(project) -> str:
@@ -351,7 +282,7 @@ def _resolve_changelog_versions() -> tuple[str, str, bool]:
     return previous, last, show_forced
 
 
-class UpdatesConsumer(AsyncJsonWebsocketConsumer):
+class WSConsumer(AsyncJsonWebsocketConsumer):
     """
     WebSocket consumer for broadcasting real-time updates.
 
@@ -361,7 +292,24 @@ class UpdatesConsumer(AsyncJsonWebsocketConsumer):
     Handles incoming messages:
     - ping: heartbeat, responds with pong
     - send_message: send a message to a Claude session
+
+    Provider-specific inbound messages use a ``"<provider_key>:<action>"``
+    type prefix (e.g. ``claude_code:pending_request_response``) and are
+    routed to the matching handler in ``_provider_handlers``. Each
+    connection instantiates its own handler instances, with this consumer
+    passed in so handlers can call ``send_json``, access the channel
+    layer, etc.
     """
+
+    PROVIDER_HANDLERS: dict[str, type] = {
+        "claude_code": ClaudeCodeWSHandler,
+    }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._provider_handlers: dict[str, object] = {
+            key: cls(self) for key, cls in self.PROVIDER_HANDLERS.items()
+        }
 
     async def connect(self):
         """Accept connection, add to updates group, and send active processes.
@@ -451,11 +399,6 @@ class UpdatesConsumer(AsyncJsonWebsocketConsumer):
             usage_message = await get_usage_message_for_connection()
             await self.send_json(usage_message)
 
-        # Send Claude CLI authentication state to the connecting client
-        if self._should_send("claude_auth_updated"):
-            auth_message = await get_auth_message_for_connection()
-            await self.send_json(auth_message)
-
         # Send synced settings to the connecting client
         if self._should_send("synced_settings_updated"):
             raw_settings = await sync_to_async(read_synced_settings)()
@@ -469,10 +412,6 @@ class UpdatesConsumer(AsyncJsonWebsocketConsumer):
         if self._should_send("message_snippets_updated"):
             message_snippets = await sync_to_async(read_message_snippets_config)()
             await self.send_json({"type": "message_snippets_updated", "config": message_snippets})
-
-        if self._should_send("claude_settings_presets_updated"):
-            presets = await sync_to_async(read_claude_settings_presets)()
-            await self.send_json({"type": "claude_settings_presets_updated", "config": presets})
 
         if self._should_send("workspaces_updated"):
             workspaces = await sync_to_async(read_workspaces)()
@@ -491,12 +430,13 @@ class UpdatesConsumer(AsyncJsonWebsocketConsumer):
             if update_msg:
                 await self.send_json(update_msg)
 
-        # Send Claude Code status if currently not operational
-        if self._should_send("claude_status"):
-            from twicc.providers.claude_code.statuspage_task import get_statuspage_message_for_connection
-            status_msg = get_statuspage_message_for_connection()
-            if status_msg:
-                await self.send_json(status_msg)
+        # Provider-specific on-connect messages (e.g. claude_code:auth_updated,
+        # claude_code:settings_presets_updated, claude_code:anthropic_status).
+        # Each handler yields fully-formed messages with their type already prefixed.
+        for handler in self._provider_handlers.values():
+            async for msg in handler.get_connect_messages():
+                if self._should_send(msg.get("type", "")):
+                    await self.send_json(msg)
 
     async def disconnect(self, close_code):
         """Remove from the updates group on disconnect."""
@@ -505,12 +445,15 @@ class UpdatesConsumer(AsyncJsonWebsocketConsumer):
     async def receive_json(self, content, **kwargs):
         """Handle incoming messages from clients.
 
+        Provider-specific message types use a ``"<provider_key>:<action>"``
+        prefix (e.g. ``claude_code:pending_request_response``) and are
+        routed to the matching provider handler.
+
         Supported message types:
         - ping: heartbeat, responds with pong
         - send_message: send a message to a Claude session (creates new or resumes existing)
         - kill_process: kill a running Claude process
         - stop_agent: gracefully stop a running agent/task
-        - pending_request_response: respond to a pending tool approval or clarifying question
         - suggest_title: request a title suggestion for a session
         - update_synced_settings: update synced settings and broadcast to all clients
         - session_viewed: mark a session as viewed by the user (updates last_viewed_at)
@@ -521,7 +464,6 @@ class UpdatesConsumer(AsyncJsonWebsocketConsumer):
         - validate_usage_dump_path: validate a usage dump file path (write mode) and return result
         - validate_tmux_config_path: validate a tmux config file path and return result
         - changelog_seen: acknowledge that the user has seen the changelog for a version
-        - check_claude_auth: force a fresh check of Claude CLI auth state and broadcast
         """
         msg_type = content.get("type")
 
@@ -539,9 +481,6 @@ class UpdatesConsumer(AsyncJsonWebsocketConsumer):
 
         elif msg_type == "user_draft_updated":
             await self._handle_user_draft_updated(content)
-
-        elif msg_type == "pending_request_response":
-            await self._handle_pending_request_response(content)
 
         elif msg_type == "suggest_title":
             # Fire-and-forget: title generation involves an SDK call (Haiku) with
@@ -561,9 +500,6 @@ class UpdatesConsumer(AsyncJsonWebsocketConsumer):
 
         elif msg_type == "update_message_snippets":
             await self._handle_update_message_snippets(content)
-
-        elif msg_type == "update_claude_settings_presets":
-            await self._handle_update_claude_settings_presets(content)
 
         elif msg_type == "session_viewed":
             await self._handle_session_viewed(content)
@@ -592,10 +528,26 @@ class UpdatesConsumer(AsyncJsonWebsocketConsumer):
         elif msg_type == "changelog_seen":
             await self._handle_changelog_seen(content)
 
-        elif msg_type == "check_claude_auth":
-            # Forced re-check of Claude CLI auth state. The result is broadcast
-            # to the entire "updates" group so every connected client refreshes.
-            await check_claude_auth_and_broadcast(force=True)
+        elif isinstance(msg_type, str) and ":" in msg_type:
+            await self._dispatch_provider_message(msg_type, content)
+
+        else:
+            logger.warning("Unknown WebSocket message type: %r", msg_type)
+
+    async def _dispatch_provider_message(self, msg_type: str, content: dict) -> None:
+        """Route a prefixed message ``"<provider_key>:<action>"`` to the matching handler."""
+        provider_key, _, action = msg_type.partition(":")
+        handler = self._provider_handlers.get(provider_key)
+        if handler is None:
+            logger.warning("No provider handler registered for prefix %r", provider_key)
+            return
+
+        handled = await handler.dispatch(action, content)
+        if not handled:
+            logger.warning(
+                "Provider %r did not handle action %r",
+                provider_key, action,
+            )
 
     async def send_json(self, content, close=False):
         try:
@@ -932,123 +884,6 @@ class UpdatesConsumer(AsyncJsonWebsocketConsumer):
         manager = get_process_manager()
         manager.touch_process_activity(session_id)
 
-    async def _handle_pending_request_response(self, content: dict) -> None:
-        """Handle a pending request response from the user.
-
-        Routes the user's decision (tool approval or clarifying question answer)
-        to the correct process via the ProcessManager.
-
-        Expected content for tool approval:
-        {
-            "type": "pending_request_response",
-            "session_id": "...",
-            "request_id": "...",
-            "request_type": "tool_approval",
-            "decision": "allow" | "deny",
-            "message": "optional reason for deny",
-            "updated_input": { ... }  // optional, for approve with modifications
-            "updated_permissions": [ ... ]  // optional, checked permission suggestions
-        }
-
-        Expected content for ask_user_question:
-        {
-            "type": "pending_request_response",
-            "session_id": "...",
-            "request_id": "...",
-            "request_type": "ask_user_question",
-            "answers": {
-                "question text": "selected label or free text",
-                ...
-            }
-        }
-        """
-        session_id = content.get("session_id")
-        request_type = content.get("request_type")
-        request_id = content.get("request_id")
-
-        if not session_id or not request_type or not request_id:
-            logger.warning(
-                "pending_request_response missing required fields: "
-                "session_id=%s, request_type=%s, request_id=%s",
-                session_id, request_type, request_id,
-            )
-            return
-
-        manager = get_process_manager()
-
-        if request_type == "tool_approval":
-            decision = content.get("decision")
-            if decision == "allow":
-                updated_input = content.get("updated_input")
-
-                # Reconstruct accepted permission suggestions (if any) from the frontend
-                updated_permissions = None
-                raw_permissions = content.get("updated_permissions")
-                if raw_permissions:
-                    updated_permissions = [_permission_update_from_dict(p) for p in raw_permissions]
-
-                response = PermissionResultAllow(
-                    updated_input=updated_input,
-                    updated_permissions=updated_permissions,
-                )
-                logger.debug("Tool approval allowed for session %s with responses=%s", session_id, response)
-            else:
-                message = content.get("message", "User denied this action")
-                response = PermissionResultDeny(message=message)
-
-        elif request_type == "ask_user_question":
-            answers = content.get("answers", {})
-            # Retrieve the original questions from the matching pending request
-            process_info = manager.get_process_info(session_id)
-            matching = None
-            if process_info is not None:
-                matching = next(
-                    (pr for pr in process_info.pending_requests if pr.request_id == request_id),
-                    None,
-                )
-            if matching is None:
-                logger.warning(
-                    "pending_request_response: no pending request %s for session %s",
-                    request_id, session_id,
-                )
-                return
-            original_input = matching.tool_input
-            response = PermissionResultAllow(
-                updated_input={
-                    "questions": original_input.get("questions", []),
-                    "answers": answers,
-                }
-            )
-
-        else:
-            logger.warning(
-                "pending_request_response: unknown request_type %r",
-                request_type,
-            )
-            return
-
-        # Persist setMode suggestions in DB so future resumes use the correct mode
-        if request_type == "tool_approval" and content.get("decision") == "allow":
-            raw_permissions = content.get("updated_permissions")
-            if raw_permissions:
-                for perm in raw_permissions:
-                    if perm.get("type") == "setMode" and perm.get("mode"):
-                        await update_session_permission_mode(session_id, perm["mode"])
-                        logger.info(
-                            "Permission mode updated to %r for session %s (from setMode suggestion)",
-                            perm["mode"],
-                            session_id,
-                        )
-                        break  # Only one setMode should be applied
-
-        resolved = await manager.resolve_pending_request(session_id, request_id, response)
-        if not resolved:
-            logger.warning(
-                "pending_request_response: failed to resolve request %s for session %s "
-                "(no matching pending request or already resolved)",
-                request_id, session_id,
-            )
-
     async def _handle_suggest_title(self, content: dict) -> None:
         """Handle title suggestion request.
 
@@ -1267,16 +1102,6 @@ class UpdatesConsumer(AsyncJsonWebsocketConsumer):
                 },
             },
         )
-
-    async def _handle_update_claude_settings_presets(self, content: dict) -> None:
-        config = content.get("config")
-        if not isinstance(config, dict):
-            return
-        await sync_to_async(write_claude_settings_presets)(config)
-        await self.channel_layer.group_send("updates", {
-            "type": "broadcast",
-            "data": {"type": "claude_settings_presets_updated", "config": config},
-        })
 
     async def _handle_session_viewed(self, content: dict) -> None:
         """Handle session_viewed notification from client.
@@ -1515,7 +1340,7 @@ websocket_urlpatterns = [
     path("ws/terminal/<str:project_id>/<int:terminal_index>/", terminal_application),
     # Terminal with no project (global/workspace context)
     path("ws/terminal/<int:terminal_index>/", terminal_application),
-    path("ws/", UpdatesConsumer.as_asgi()),
+    path("ws/", WSConsumer.as_asgi()),
 ]
 
 # Django ASGI application for HTTP requests

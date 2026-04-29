@@ -126,7 +126,7 @@ export function requestTitleSuggestion(sessionId, prompt = null, systemPrompt) {
  */
 export function respondToPendingRequest(sessionId, requestId, responseData) {
     return sendWsMessage({
-        type: 'pending_request_response',
+        type: 'claude_code:pending_request_response',
         session_id: sessionId,
         request_id: requestId,
         ...responseData,
@@ -315,7 +315,7 @@ export function sendMessageSnippetsConfig(config) {
  * @returns {boolean} - True if message was sent, false if not connected
  */
 export function sendClaudeSettingsPresets(config) {
-    return sendWsMessage({ type: 'update_claude_settings_presets', config })
+    return sendWsMessage({ type: 'claude_code:update_settings_presets', config })
 }
 
 /**
@@ -335,7 +335,7 @@ export function sendChangelogSeen(version) {
  * @returns {boolean} - True if message was sent
  */
 export function sendCheckClaudeAuth() {
-    return sendWsMessage({ type: 'check_claude_auth' })
+    return sendWsMessage({ type: 'claude_code:check_auth' })
 }
 
 // Pending resolve callbacks for usage file validation request-response
@@ -535,7 +535,7 @@ const CLAUDE_STATUS_MESSAGES = {
 }
 
 /**
- * Handle claude_status message from the backend.
+ * Handle claude_code:anthropic_status message from the backend.
  * Shows a persistent toast when Claude Code is not operational,
  * or a resolution toast when it returns to operational.
  * Deduplication is done via localStorage: the toast is only shown if the status
@@ -871,7 +871,7 @@ export function useWebSocket() {
                 store.setUsage(msg.success, msg.reason, msg.usage, computed)
                 break
             }
-            case 'claude_auth_updated':
+            case 'claude_code:auth_updated':
                 // Claude CLI auth state changed (or initial push on WS connect)
                 store.setClaudeAuthenticated(msg.authenticated)
                 break
@@ -921,7 +921,7 @@ export function useWebSocket() {
                     useMessageSnippetsStore().applyConfig(msg.config)
                 })
                 break
-            case 'claude_settings_presets_updated':
+            case 'claude_code:settings_presets_updated':
                 import('../stores/claudeSettingsPresets').then(({ useClaudeSettingsPresetsStore }) => {
                     useClaudeSettingsPresetsStore().applyConfig(msg.config)
                 })
@@ -969,7 +969,7 @@ export function useWebSocket() {
                 store.setLatestVersion(msg.latest_version, msg.release_url)
                 handleUpdateAvailable(msg)
                 break
-            case 'claude_status':
+            case 'claude_code:anthropic_status':
                 store.setClaudeStatus(msg.status)
                 handleClaudeStatus(msg)
                 break

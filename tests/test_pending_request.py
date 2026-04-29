@@ -1069,12 +1069,17 @@ class TestTimeoutExemptionForPendingRequest:
 
 
 class _FakeConsumer:
-    """Minimal stand-in for UpdatesConsumer, sufficient to call _handle_pending_request_response."""
+    """Minimal stand-in exposing ``_handle_pending_request_response`` as a bound method.
+
+    The real handler lives on ``ClaudeCodeWSHandler`` which expects a
+    ``consumer`` instance. The tests don't exercise consumer-side calls,
+    so we bind the unbound method directly onto the fake.
+    """
 
     def __init__(self):
-        from twicc.asgi import UpdatesConsumer
+        from twicc.providers.claude_code.ws import ClaudeCodeWSHandler
         self._handle_pending_request_response = (
-            UpdatesConsumer._handle_pending_request_response.__get__(self, type(self))
+            ClaudeCodeWSHandler._handle_pending_request_response.__get__(self, type(self))
         )
 
 
@@ -1099,7 +1104,7 @@ class TestHandlePendingRequestResponseToolApproval:
 
             consumer = _FakeConsumer()
 
-            with patch("twicc.asgi.get_process_manager", return_value=manager):
+            with patch("twicc.providers.claude_code.ws.get_process_manager", return_value=manager):
                 await consumer._handle_pending_request_response({
                     "type": "pending_request_response",
                     "session_id": "session-A",
@@ -1130,7 +1135,7 @@ class TestHandlePendingRequestResponseToolApproval:
 
             consumer = _FakeConsumer()
 
-            with patch("twicc.asgi.get_process_manager", return_value=manager):
+            with patch("twicc.providers.claude_code.ws.get_process_manager", return_value=manager):
                 await consumer._handle_pending_request_response({
                     "type": "pending_request_response",
                     "session_id": "session-A",
@@ -1159,7 +1164,7 @@ class TestHandlePendingRequestResponseToolApproval:
 
             consumer = _FakeConsumer()
 
-            with patch("twicc.asgi.get_process_manager", return_value=manager):
+            with patch("twicc.providers.claude_code.ws.get_process_manager", return_value=manager):
                 await consumer._handle_pending_request_response({
                     "type": "pending_request_response",
                     "session_id": "session-B",
@@ -1189,7 +1194,7 @@ class TestHandlePendingRequestResponseToolApproval:
 
             consumer = _FakeConsumer()
 
-            with patch("twicc.asgi.get_process_manager", return_value=manager):
+            with patch("twicc.providers.claude_code.ws.get_process_manager", return_value=manager):
                 await consumer._handle_pending_request_response({
                     "type": "pending_request_response",
                     "session_id": "session-B",
@@ -1235,7 +1240,7 @@ class TestHandlePendingRequestResponseAskUserQuestion:
 
             consumer = _FakeConsumer()
 
-            with patch("twicc.asgi.get_process_manager", return_value=manager):
+            with patch("twicc.providers.claude_code.ws.get_process_manager", return_value=manager):
                 await consumer._handle_pending_request_response({
                     "type": "pending_request_response",
                     "session_id": "session-C",
@@ -1284,7 +1289,7 @@ class TestHandlePendingRequestResponseAskUserQuestion:
 
             consumer = _FakeConsumer()
 
-            with patch("twicc.asgi.get_process_manager", return_value=manager):
+            with patch("twicc.providers.claude_code.ws.get_process_manager", return_value=manager):
                 await consumer._handle_pending_request_response({
                     "type": "pending_request_response",
                     "session_id": "session-D",
@@ -1313,7 +1318,7 @@ class TestHandlePendingRequestResponseAskUserQuestion:
 
             consumer = _FakeConsumer()
 
-            with patch("twicc.asgi.get_process_manager", return_value=manager):
+            with patch("twicc.providers.claude_code.ws.get_process_manager", return_value=manager):
                 await consumer._handle_pending_request_response({
                     "type": "pending_request_response",
                     "session_id": "session-E",
@@ -1337,7 +1342,7 @@ class TestHandlePendingRequestResponseEdgeCases:
         async def run():
             consumer = _FakeConsumer()
 
-            with patch("twicc.asgi.get_process_manager") as mock_manager:
+            with patch("twicc.providers.claude_code.ws.get_process_manager") as mock_manager:
                 await consumer._handle_pending_request_response({
                     "type": "pending_request_response",
                     "request_id": "req-X",
@@ -1354,7 +1359,7 @@ class TestHandlePendingRequestResponseEdgeCases:
         async def run():
             consumer = _FakeConsumer()
 
-            with patch("twicc.asgi.get_process_manager") as mock_manager:
+            with patch("twicc.providers.claude_code.ws.get_process_manager") as mock_manager:
                 await consumer._handle_pending_request_response({
                     "type": "pending_request_response",
                     "session_id": "session-X",
@@ -1375,7 +1380,7 @@ class TestHandlePendingRequestResponseEdgeCases:
         async def run():
             consumer = _FakeConsumer()
 
-            with patch("twicc.asgi.get_process_manager") as mock_manager:
+            with patch("twicc.providers.claude_code.ws.get_process_manager") as mock_manager:
                 await consumer._handle_pending_request_response({
                     "type": "pending_request_response",
                     "session_id": "session-X",
@@ -1393,7 +1398,7 @@ class TestHandlePendingRequestResponseEdgeCases:
             manager = ProcessManager()
             consumer = _FakeConsumer()
 
-            with patch("twicc.asgi.get_process_manager", return_value=manager):
+            with patch("twicc.providers.claude_code.ws.get_process_manager", return_value=manager):
                 await consumer._handle_pending_request_response({
                     "type": "pending_request_response",
                     "session_id": "session-X",
@@ -1410,7 +1415,7 @@ class TestHandlePendingRequestResponseEdgeCases:
             manager = ProcessManager()
             consumer = _FakeConsumer()
 
-            with patch("twicc.asgi.get_process_manager", return_value=manager):
+            with patch("twicc.providers.claude_code.ws.get_process_manager", return_value=manager):
                 await consumer._handle_pending_request_response({
                     "type": "pending_request_response",
                     "session_id": "nonexistent-session",
@@ -1436,7 +1441,7 @@ class TestHandlePendingRequestResponseEdgeCases:
 
             consumer = _FakeConsumer()
 
-            with patch("twicc.asgi.get_process_manager", return_value=manager):
+            with patch("twicc.providers.claude_code.ws.get_process_manager", return_value=manager):
                 await consumer._handle_pending_request_response({
                     "type": "pending_request_response",
                     "session_id": "session-F",

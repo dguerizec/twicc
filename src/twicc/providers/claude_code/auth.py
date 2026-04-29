@@ -220,9 +220,9 @@ async def _sdk_throwaway_call() -> None:
 
 
 def _build_auth_message(authenticated: bool) -> dict:
-    """Build the claude_auth_updated message payload."""
+    """Build the claude_code:auth_updated message payload."""
     return {
-        "type": "claude_auth_updated",
+        "type": "claude_code:auth_updated",
         "authenticated": authenticated,
     }
 
@@ -243,7 +243,7 @@ def get_auth_wake_event() -> asyncio.Event:
     return _auth_wake_event
 
 
-async def check_claude_auth_status() -> bool:
+async def check_auth_status() -> bool:
     """
     Run ``claude auth status --json`` and return ``loggedIn``.
 
@@ -305,7 +305,7 @@ async def check_claude_auth_status() -> bool:
 
 async def get_auth_message_for_connection() -> dict:
     """
-    Build a claude_auth_updated message for a single client on WS connect.
+    Build a claude_code:auth_updated message for a single client on WS connect.
 
     Uses the cached state populated by ``auth_task``. If the cache is still
     unknown (very first connection in a fresh process, before the auth_task
@@ -321,7 +321,7 @@ async def get_auth_message_for_connection() -> dict:
 
 async def check_and_broadcast(*, force: bool = False) -> bool:
     """
-    Run a Claude auth status check and broadcast claude_auth_updated on change.
+    Run a Claude auth status check and broadcast claude_code:auth_updated on change.
 
     When ``force`` is True, the message is always broadcast (used to answer
     a manual "Check again" request from the client, where echoing the
@@ -334,7 +334,7 @@ async def check_and_broadcast(*, force: bool = False) -> bool:
     """
     global _last_known_authenticated
 
-    authenticated = await check_claude_auth_status()
+    authenticated = await check_auth_status()
     changed = authenticated != _last_known_authenticated
     _last_known_authenticated = authenticated
 

@@ -206,7 +206,7 @@ export const useDataStore = defineStore('data', {
         // { success: bool, raw: serialized snapshot, computed: computeUsageData() result }
         usage: null,
 
-        // Claude CLI authentication state (from claude_auth_updated messages)
+        // Claude CLI authentication state (from claude_code:auth_updated messages)
         // null = unknown (no message received yet), true/false = known state.
         // Driven by the backend's auth_task (periodic check) and on-connect push.
         claudeAuthenticated: null,
@@ -223,7 +223,7 @@ export const useDataStore = defineStore('data', {
         pendingChangelogVersion: null,  // string, version to show in changelog dialog after app is ready
         previousChangelogVersion: null, // string, previousLastChangelogVersionSeen from backend
         latestVersion: null,            // { version, releaseUrl } or null, from update_available message
-        claudeStatus: 'operational',    // string, from claude_status message
+        claudeStatus: 'operational',    // string, from claude_code:anthropic_status message
 
         // Local UI state (separate from server data to avoid being overwritten)
         localState: {

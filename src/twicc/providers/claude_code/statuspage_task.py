@@ -79,15 +79,15 @@ async def _fetch_claude_code_status() -> ComponentStatus | None:
 
 
 def _build_statuspage_message(status: str) -> dict:
-    """Build the claude_status message payload."""
+    """Build the claude_code:anthropic_status message payload."""
     return {
-        "type": "claude_status",
+        "type": "claude_code:anthropic_status",
         "status": status,
     }
 
 
 async def _broadcast_status_change(status: str) -> None:
-    """Broadcast a claude_status message to all connected WebSocket clients."""
+    """Broadcast a claude_code:anthropic_status message to all connected WebSocket clients."""
     channel_layer = get_channel_layer()
     await channel_layer.group_send(
         "updates",
@@ -99,7 +99,7 @@ async def _broadcast_status_change(status: str) -> None:
 
 
 def get_statuspage_message_for_connection() -> dict | None:
-    """Build a claude_status message if Claude Code is not operational.
+    """Build a claude_code:anthropic_status message if Claude Code is not operational.
 
     Returns the message dict, or None if status is operational or unknown.
     Called by the WebSocket consumer on client connect.
@@ -116,7 +116,7 @@ async def start_statuspage_task() -> None:
     Runs until stop event is set:
     - Checks status immediately on startup
     - Then waits STATUSPAGE_INTERVAL before the next check
-    - Broadcasts claude_status only when the status actually changes
+    - Broadcasts claude_code:anthropic_status only when the status actually changes
     - Handles graceful shutdown via stop event
     """
     global _last_known_status, _last_known_updated_at
