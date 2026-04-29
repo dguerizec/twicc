@@ -177,8 +177,8 @@ const contextMaxOptions = Object.values(CONTEXT_MAX).map(value => ({
 }))
 
 // Default labels for the "Default: xxx" option in each dropdown
-const defaultModelLabel = computed(() => {
-    const model = settingsStore.getDefaultModel
+const claudeCodeDefaultModelLabel = computed(() => {
+    const model = settingsStore.getClaudeCodeDefaultModel
     const registry = getModelRegistry()
     const entry = registry.find(e => e.selectedModel === model)
     if (entry) {
@@ -188,11 +188,11 @@ const defaultModelLabel = computed(() => {
     }
     return getModelLabel(model)
 })
-const defaultContextMaxLabel = computed(() => CONTEXT_MAX_LABELS[settingsStore.getDefaultContextMax])
-const defaultEffortLabel = computed(() => EFFORT_LABELS[settingsStore.getDefaultEffort])
-const defaultThinkingLabel = computed(() => THINKING_LABELS[settingsStore.getDefaultThinking])
-const defaultChromeLabel = computed(() => CLAUDE_IN_CHROME_LABELS[settingsStore.getDefaultClaudeInChrome])
-const defaultPermissionLabel = computed(() => PERMISSION_MODE_LABELS[settingsStore.getDefaultPermissionMode])
+const claudeCodeDefaultContextMaxLabel = computed(() => CONTEXT_MAX_LABELS[settingsStore.getClaudeCodeDefaultContextMax])
+const claudeCodeDefaultEffortLabel = computed(() => EFFORT_LABELS[settingsStore.getClaudeCodeDefaultEffort])
+const claudeCodeDefaultThinkingLabel = computed(() => THINKING_LABELS[settingsStore.getClaudeCodeDefaultThinking])
+const claudeCodeDefaultChromeLabel = computed(() => CLAUDE_IN_CHROME_LABELS[settingsStore.getClaudeCodeDefaultClaudeInChrome])
+const claudeCodeDefaultPermissionLabel = computed(() => PERMISSION_MODE_LABELS[settingsStore.getClaudeCodeDefaultPermissionMode])
 
 // Whether any session setting is explicitly forced (non-null)
 const anySettingForced = computed(() =>
@@ -230,27 +230,27 @@ function restoreSettings() {
 // differs from the global default (and the setting is explicitly set, not null).
 // Model is also marked forced when context_max is explicitly forced to a non-default value.
 const settingsSummaryParts = computed(() => {
-    const effectiveModel = selectedModel.value ?? settingsStore.getDefaultModel
-    const effectiveContextMax = selectedContextMax.value ?? settingsStore.getDefaultContextMax
-    const effectiveEffort = selectedEffort.value ?? settingsStore.getDefaultEffort
-    const effectiveThinking = selectedThinking.value ?? settingsStore.getDefaultThinking
-    const effectiveChrome = selectedClaudeInChrome.value ?? settingsStore.getDefaultClaudeInChrome
-    const effectivePermission = selectedPermissionMode.value ?? settingsStore.getDefaultPermissionMode
+    const effectiveModel = selectedModel.value ?? settingsStore.getClaudeCodeDefaultModel
+    const effectiveContextMax = selectedContextMax.value ?? settingsStore.getClaudeCodeDefaultContextMax
+    const effectiveEffort = selectedEffort.value ?? settingsStore.getClaudeCodeDefaultEffort
+    const effectiveThinking = selectedThinking.value ?? settingsStore.getClaudeCodeDefaultThinking
+    const effectiveChrome = selectedClaudeInChrome.value ?? settingsStore.getClaudeCodeDefaultClaudeInChrome
+    const effectivePermission = selectedPermissionMode.value ?? settingsStore.getClaudeCodeDefaultPermissionMode
 
     const modelLabel = getModelLabel(effectiveModel)
     const modelDisplay = effectiveContextMax === CONTEXT_MAX.EXTENDED
         ? `${modelLabel}[1m]`
         : modelLabel
     // Model part is forced if model or context_max is explicitly set to a non-default value
-    const modelForced = (selectedModel.value !== null && selectedModel.value !== settingsStore.getDefaultModel)
-        || (selectedContextMax.value !== null && selectedContextMax.value !== settingsStore.getDefaultContextMax)
+    const modelForced = (selectedModel.value !== null && selectedModel.value !== settingsStore.getClaudeCodeDefaultModel)
+        || (selectedContextMax.value !== null && selectedContextMax.value !== settingsStore.getClaudeCodeDefaultContextMax)
 
     return [
         { text: modelDisplay, forced: modelForced },
-        { text: EFFORT_DISPLAY_LABELS[effectiveEffort], forced: selectedEffort.value !== null && selectedEffort.value !== settingsStore.getDefaultEffort },
-        { text: THINKING_DISPLAY_LABELS[effectiveThinking], forced: selectedThinking.value !== null && selectedThinking.value !== settingsStore.getDefaultThinking },
-        { text: PERMISSION_MODE_LABELS[effectivePermission], forced: selectedPermissionMode.value !== null && selectedPermissionMode.value !== settingsStore.getDefaultPermissionMode },
-        { text: CLAUDE_IN_CHROME_DISPLAY_LABELS[effectiveChrome], forced: selectedClaudeInChrome.value !== null && selectedClaudeInChrome.value !== settingsStore.getDefaultClaudeInChrome },
+        { text: EFFORT_DISPLAY_LABELS[effectiveEffort], forced: selectedEffort.value !== null && selectedEffort.value !== settingsStore.getClaudeCodeDefaultEffort },
+        { text: THINKING_DISPLAY_LABELS[effectiveThinking], forced: selectedThinking.value !== null && selectedThinking.value !== settingsStore.getClaudeCodeDefaultThinking },
+        { text: PERMISSION_MODE_LABELS[effectivePermission], forced: selectedPermissionMode.value !== null && selectedPermissionMode.value !== settingsStore.getClaudeCodeDefaultPermissionMode },
+        { text: CLAUDE_IN_CHROME_DISPLAY_LABELS[effectiveChrome], forced: selectedClaudeInChrome.value !== null && selectedClaudeInChrome.value !== settingsStore.getClaudeCodeDefaultClaudeInChrome },
     ]
 })
 
@@ -317,13 +317,13 @@ const isStarting = computed(() => processState.value?.state === 'starting')
 // actually picked (or defaulted to). We feed the currently-selected model
 // to the getter so the rule respects the live UI choice, not just the DB.
 const isContextMaxForced = computed(() => {
-    const baseValue = selectedContextMax.value ?? settingsStore.getDefaultContextMax
-    const effectiveModel = selectedModel.value ?? settingsStore.getDefaultModel
+    const baseValue = selectedContextMax.value ?? settingsStore.getClaudeCodeDefaultContextMax
+    const effectiveModel = selectedModel.value ?? settingsStore.getClaudeCodeDefaultModel
     return store.getEffectiveContextMax(props.sessionId, effectiveModel) !== baseValue
 })
 
 const isContextMaxForcedByModel = computed(() => {
-    const effectiveModel = selectedModel.value ?? settingsStore.getDefaultModel
+    const effectiveModel = selectedModel.value ?? settingsStore.getClaudeCodeDefaultModel
     return !modelSupports1m(effectiveModel)
 })
 
@@ -336,19 +336,19 @@ const contextMaxSelectValue = computed(() => {
 })
 
 const isEffortXhighAvailable = computed(() => {
-    const effectiveModel = selectedModel.value ?? settingsStore.getDefaultModel
+    const effectiveModel = selectedModel.value ?? settingsStore.getClaudeCodeDefaultModel
     return modelSupportsEffortXhigh(effectiveModel)
 })
 
 const isEffortMaxAvailable = computed(() => {
-    const effectiveModel = selectedModel.value ?? settingsStore.getDefaultModel
+    const effectiveModel = selectedModel.value ?? settingsStore.getClaudeCodeDefaultModel
     return modelSupportsEffortMax(effectiveModel)
 })
 
 // Watch: auto-reset to 200K when model doesn't support 1M
 watch(isContextMaxForcedByModel, (forced) => {
     if (forced) {
-        const effectiveCtx = selectedContextMax.value ?? settingsStore.getDefaultContextMax
+        const effectiveCtx = selectedContextMax.value ?? settingsStore.getClaudeCodeDefaultContextMax
         if (effectiveCtx === CONTEXT_MAX.EXTENDED) {
             selectedContextMax.value = CONTEXT_MAX.DEFAULT
             activeContextMax.value = CONTEXT_MAX.DEFAULT
@@ -359,7 +359,7 @@ watch(isContextMaxForcedByModel, (forced) => {
 // Watch: cascade-demote Max/xHigh efforts when the new model drops support.
 // Max → xHigh if supported, else High. xHigh → High.
 watch([isEffortMaxAvailable, isEffortXhighAvailable], ([maxOk, xhighOk]) => {
-    const effectiveEffort = selectedEffort.value ?? settingsStore.getDefaultEffort
+    const effectiveEffort = selectedEffort.value ?? settingsStore.getClaudeCodeDefaultEffort
     let target = null
     if (effectiveEffort === EFFORT.MAX && !maxOk) {
         target = xhighOk ? EFFORT.X_HIGH : EFFORT.HIGH
@@ -454,12 +454,12 @@ const hasSettingsChanged = computed(() => hasDropdownsChanged.value)
 // Resolve null → global default for a settings dict (so classify compares concrete values).
 function resolveSettingsDefaults(settings) {
     return {
-        permission_mode: settings.permission_mode ?? settingsStore.getDefaultPermissionMode,
-        selected_model: settings.selected_model ?? settingsStore.getDefaultModel,
-        effort: settings.effort ?? settingsStore.getDefaultEffort,
-        thinking_enabled: settings.thinking_enabled ?? settingsStore.getDefaultThinking,
-        claude_in_chrome: settings.claude_in_chrome ?? settingsStore.getDefaultClaudeInChrome,
-        context_max: settings.context_max ?? settingsStore.getDefaultContextMax,
+        permission_mode: settings.permission_mode ?? settingsStore.getClaudeCodeDefaultPermissionMode,
+        selected_model: settings.selected_model ?? settingsStore.getClaudeCodeDefaultModel,
+        effort: settings.effort ?? settingsStore.getClaudeCodeDefaultEffort,
+        thinking_enabled: settings.thinking_enabled ?? settingsStore.getClaudeCodeDefaultThinking,
+        claude_in_chrome: settings.claude_in_chrome ?? settingsStore.getClaudeCodeDefaultClaudeInChrome,
+        context_max: settings.context_max ?? settingsStore.getClaudeCodeDefaultContextMax,
     }
 }
 
@@ -1524,7 +1524,7 @@ function getSessionGateState() {
         isContextMaxForcedByModel: isContextMaxForcedByModel.value,
         isEffortXhighAvailable: isEffortXhighAvailable.value,
         isEffortMaxAvailable: isEffortMaxAvailable.value,
-        effectiveModel: selectedModel.value ?? settingsStore.getDefaultModel,
+        effectiveModel: selectedModel.value ?? settingsStore.getClaudeCodeDefaultModel,
     }
 }
 
@@ -1768,7 +1768,7 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
                                 size="small"
                                 :disabled="isStarting"
                             >
-                                <wa-option :value="DEFAULT_SENTINEL">Default: {{ defaultModelLabel }}</wa-option>
+                                <wa-option :value="DEFAULT_SENTINEL">Default: {{ claudeCodeDefaultModelLabel }}</wa-option>
                                 <small class="select-group-label">Force to:</small>
                                 <wa-option
                                     v-for="entry in modelRegistryOptions.latest"
@@ -1786,7 +1786,7 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
                                     {{ getModelLabel(entry.selectedModel) }} (until {{ formatRetirementDate(entry.retirementDate) }})
                                 </wa-option>
                             </wa-select>
-                            <a v-if="selectedModel !== null" class="reset-setting-link" @click.prevent="selectedModel = null">Reset to default: {{ defaultModelLabel }}</a>
+                            <a v-if="selectedModel !== null" class="reset-setting-link" @click.prevent="selectedModel = null">Reset to default: {{ claudeCodeDefaultModelLabel }}</a>
                         </div>
 
                         <!-- Context -->
@@ -1798,7 +1798,7 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
                                 size="small"
                                 :disabled="isStarting || isContextMaxForced || isContextMaxForcedByModel"
                             >
-                                <wa-option :value="DEFAULT_SENTINEL">Default: {{ defaultContextMaxLabel }}</wa-option>
+                                <wa-option :value="DEFAULT_SENTINEL">Default: {{ claudeCodeDefaultContextMaxLabel }}</wa-option>
                                 <small class="select-group-label">Force to:</small>
                                 <wa-option v-for="option in contextMaxOptions" :key="option.value" :value="option.value">
                                     {{ option.label }}
@@ -1806,7 +1806,7 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
                             </wa-select>
                             <span v-if="isContextMaxForced" class="setting-help">Forced to 1M: context usage exceeds 85% of 200K.</span>
                             <span v-else-if="isContextMaxForcedByModel" class="setting-help">1M not available for this model version.</span>
-                            <a v-else-if="selectedContextMax !== null" class="reset-setting-link" @click.prevent="selectedContextMax = null">Reset to default: {{ defaultContextMaxLabel }}</a>
+                            <a v-else-if="selectedContextMax !== null" class="reset-setting-link" @click.prevent="selectedContextMax = null">Reset to default: {{ claudeCodeDefaultContextMaxLabel }}</a>
                         </div>
 
                         <!-- Effort -->
@@ -1818,7 +1818,7 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
                                 size="small"
                                 :disabled="isStarting"
                             >
-                                <wa-option :value="DEFAULT_SENTINEL">Default: {{ defaultEffortLabel }}</wa-option>
+                                <wa-option :value="DEFAULT_SENTINEL">Default: {{ claudeCodeDefaultEffortLabel }}</wa-option>
                                 <small class="select-group-label">Force to:</small>
                                 <wa-option
                                     v-for="option in effortOptions"
@@ -1829,7 +1829,7 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
                                     {{ option.label }}{{ ((option.value === EFFORT.X_HIGH && !isEffortXhighAvailable) || (option.value === EFFORT.MAX && !isEffortMaxAvailable)) ? ' (not available)' : '' }}
                                 </wa-option>
                             </wa-select>
-                            <a v-if="selectedEffort !== null" class="reset-setting-link" @click.prevent="selectedEffort = null">Reset to default: {{ defaultEffortLabel }}</a>
+                            <a v-if="selectedEffort !== null" class="reset-setting-link" @click.prevent="selectedEffort = null">Reset to default: {{ claudeCodeDefaultEffortLabel }}</a>
                         </div>
 
                         <!-- Thinking -->
@@ -1841,13 +1841,13 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
                                 size="small"
                                 :disabled="isStarting"
                             >
-                                <wa-option :value="DEFAULT_SENTINEL">Default: {{ defaultThinkingLabel }}</wa-option>
+                                <wa-option :value="DEFAULT_SENTINEL">Default: {{ claudeCodeDefaultThinkingLabel }}</wa-option>
                                 <small class="select-group-label">Force to:</small>
                                 <wa-option v-for="option in thinkingOptions" :key="option.value" :value="option.value">
                                     {{ option.label }}
                                 </wa-option>
                             </wa-select>
-                            <a v-if="selectedThinking !== null" class="reset-setting-link" @click.prevent="selectedThinking = null">Reset to default: {{ defaultThinkingLabel }}</a>
+                            <a v-if="selectedThinking !== null" class="reset-setting-link" @click.prevent="selectedThinking = null">Reset to default: {{ claudeCodeDefaultThinkingLabel }}</a>
                         </div>
 
                         <!-- Permission -->
@@ -1859,14 +1859,14 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
                                 size="small"
                                 :disabled="isStarting"
                             >
-                                <wa-option :value="DEFAULT_SENTINEL">Default: {{ defaultPermissionLabel }}</wa-option>
+                                <wa-option :value="DEFAULT_SENTINEL">Default: {{ claudeCodeDefaultPermissionLabel }}</wa-option>
                                 <small class="select-group-label">Force to:</small>
                                 <wa-option v-for="option in permissionModeOptions" :key="option.value" :value="option.value" :label="option.label">
                                     <span>{{ option.label }}</span>
                                     <span class="option-description">{{ option.description }}</span>
                                 </wa-option>
                             </wa-select>
-                            <a v-if="selectedPermissionMode !== null" class="reset-setting-link" @click.prevent="selectedPermissionMode = null">Reset to default: {{ defaultPermissionLabel }}</a>
+                            <a v-if="selectedPermissionMode !== null" class="reset-setting-link" @click.prevent="selectedPermissionMode = null">Reset to default: {{ claudeCodeDefaultPermissionLabel }}</a>
                         </div>
 
                         <!-- Claude in Chrome -->
@@ -1878,13 +1878,13 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
                                 size="small"
                                 :disabled="isStarting"
                             >
-                                <wa-option :value="DEFAULT_SENTINEL">Default: {{ defaultChromeLabel }}</wa-option>
+                                <wa-option :value="DEFAULT_SENTINEL">Default: {{ claudeCodeDefaultChromeLabel }}</wa-option>
                                 <small class="select-group-label">Force to:</small>
                                 <wa-option v-for="option in claudeInChromeOptions" :key="option.value" :value="option.value">
                                     {{ option.label }}
                                 </wa-option>
                             </wa-select>
-                            <a v-if="selectedClaudeInChrome !== null" class="reset-setting-link" @click.prevent="selectedClaudeInChrome = null">Reset to default: {{ defaultChromeLabel }}</a>
+                            <a v-if="selectedClaudeInChrome !== null" class="reset-setting-link" @click.prevent="selectedClaudeInChrome = null">Reset to default: {{ claudeCodeDefaultChromeLabel }}</a>
                         </div>
                     </div>
                 </wa-popover>

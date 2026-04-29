@@ -691,8 +691,8 @@ export function initStaticCommands(router) {
                 label: entry.latest
                     ? `${getModelLabel(entry.selectedModel)} (latest: ${entry.version})`
                     : `${getModelLabel(entry.selectedModel)} (until ${entry.retirementDate})`,
-                action: () => settings.setDefaultModel(entry.selectedModel),
-                active: settings.defaultModel === entry.selectedModel,
+                action: () => settings.setClaudeCodeDefaultModel(entry.selectedModel),
+                active: settings.claudeCodeDefaultModel === entry.selectedModel,
             })),
         },
         {
@@ -702,15 +702,15 @@ export function initStaticCommands(router) {
             category: 'claude',
             items: () => Object.values(EFFORT)
                 .filter(value => {
-                    if (value === EFFORT.X_HIGH) return modelSupportsEffortXhigh(settings.defaultModel)
-                    if (value === EFFORT.MAX) return modelSupportsEffortMax(settings.defaultModel)
+                    if (value === EFFORT.X_HIGH) return modelSupportsEffortXhigh(settings.claudeCodeDefaultModel)
+                    if (value === EFFORT.MAX) return modelSupportsEffortMax(settings.claudeCodeDefaultModel)
                     return true
                 })
                 .map(value => ({
                     id: value,
                     label: EFFORT_LABELS[value],
-                    action: () => settings.setDefaultEffort(value),
-                    active: settings.defaultEffort === value,
+                    action: () => settings.setClaudeCodeDefaultEffort(value),
+                    active: settings.claudeCodeDefaultEffort === value,
                 })),
         },
         {
@@ -721,8 +721,8 @@ export function initStaticCommands(router) {
             items: () => Object.values(PERMISSION_MODE).map(value => ({
                 id: value,
                 label: PERMISSION_MODE_LABELS[value],
-                action: () => settings.setDefaultPermissionMode(value),
-                active: settings.defaultPermissionMode === value,
+                action: () => settings.setClaudeCodeDefaultPermissionMode(value),
+                active: settings.claudeCodeDefaultPermissionMode === value,
             })),
         },
         {
@@ -731,8 +731,8 @@ export function initStaticCommands(router) {
             icon: 'brain',
             category: 'claude',
             items: () => [
-                { id: 'enabled', label: THINKING_LABELS[THINKING.ENABLED], action: () => settings.setDefaultThinking(THINKING.ENABLED), active: settings.defaultThinking === THINKING.ENABLED },
-                { id: 'disabled', label: THINKING_LABELS[THINKING.DISABLED], action: () => settings.setDefaultThinking(THINKING.DISABLED), active: settings.defaultThinking === THINKING.DISABLED },
+                { id: 'enabled', label: THINKING_LABELS[THINKING.ENABLED], action: () => settings.setClaudeCodeDefaultThinking(THINKING.ENABLED), active: settings.claudeCodeDefaultThinking === THINKING.ENABLED },
+                { id: 'disabled', label: THINKING_LABELS[THINKING.DISABLED], action: () => settings.setClaudeCodeDefaultThinking(THINKING.DISABLED), active: settings.claudeCodeDefaultThinking === THINKING.DISABLED },
             ],
         },
         {
@@ -743,8 +743,8 @@ export function initStaticCommands(router) {
             items: () => Object.values(CONTEXT_MAX).map(value => ({
                 id: String(value),
                 label: CONTEXT_MAX_LABELS[value],
-                action: () => settings.setDefaultContextMax(value),
-                active: settings.defaultContextMax === value,
+                action: () => settings.setClaudeCodeDefaultContextMax(value),
+                active: settings.claudeCodeDefaultContextMax === value,
             })),
         },
         {
@@ -755,8 +755,8 @@ export function initStaticCommands(router) {
             items: () => Object.values(CLAUDE_IN_CHROME).map(value => ({
                 id: String(value),
                 label: CLAUDE_IN_CHROME_LABELS[value],
-                action: () => settings.setDefaultClaudeInChrome(value),
-                active: settings.defaultClaudeInChrome === value,
+                action: () => settings.setClaudeCodeDefaultClaudeInChrome(value),
+                active: settings.claudeCodeDefaultClaudeInChrome === value,
             })),
         },
 

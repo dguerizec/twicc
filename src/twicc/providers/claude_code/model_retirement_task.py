@@ -86,13 +86,19 @@ async def _check_and_retire() -> None:
 
     with _settings_lock:
         current = read_synced_settings()
-        default_model = current.get("defaultModel", SYNCED_SETTINGS_DEFAULTS["defaultModel"])
+        default_model = current.get(
+            "claudeCodeDefaultModel", SYNCED_SETTINGS_DEFAULTS["claudeCodeDefaultModel"]
+        )
         if default_model in retired_models:
-            current["defaultModel"] = retired_models[default_model]
+            current["claudeCodeDefaultModel"] = retired_models[default_model]
             current["_version"] = current.get("_version", 0) + 1
             write_synced_settings(current)
             settings_changed = True
-            logger.info("Updated global defaultModel: %s → %s", default_model, retired_models[default_model])
+            logger.info(
+                "Updated global default model: %s → %s",
+                default_model,
+                retired_models[default_model],
+            )
 
     # Broadcast global settings update if changed
     if settings_changed:

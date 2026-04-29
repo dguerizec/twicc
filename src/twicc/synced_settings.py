@@ -13,6 +13,7 @@ A module-level cache (_cache) keeps the latest known state in memory so that
 backend code can access settings without re-reading the file every time.
 """
 
+import logging
 import os
 import tempfile
 import threading
@@ -20,6 +21,8 @@ import threading
 import orjson
 
 from twicc.paths import get_synced_settings_path
+
+logger = logging.getLogger(__name__)
 
 # Default values for all synced settings (those changeable via the frontend UI).
 # Backend-only keys (e.g. lastChangelogVersionSeen) are NOT included here.
@@ -37,12 +40,12 @@ SYNCED_SETTINGS_DEFAULTS: dict = {
         "about code, keep English technical terms as-is).\n\n"
         "User message:\n{text}"
     ),
-    "defaultPermissionMode": "default",
-    "defaultModel": "opus",
-    "defaultEffort": "medium",
-    "defaultThinking": True,
-    "defaultClaudeInChrome": True,
-    "defaultContextMax": 200_000,
+    "claudeCodeDefaultPermissionMode": "default",
+    "claudeCodeDefaultModel": "opus",
+    "claudeCodeDefaultEffort": "medium",
+    "claudeCodeDefaultThinking": True,
+    "claudeCodeDefaultClaudeInChrome": True,
+    "claudeCodeDefaultContextMax": 200_000,
     "autoUnpinOnArchive": True,
     "terminalUseTmux": True,
     "terminalTmuxConfigPath": "",
@@ -99,12 +102,72 @@ _cache: dict = {}
 _settings_lock = threading.Lock()
 
 
+# Legacy keys to drop unconditionally on read (no longer used).
+_OBSOLETE_SETTINGS_KEYS: tuple[str, ...] = (
+    "alwaysApplyDefaultPermissionMode",
+    "alwaysApplyDefaultModel",
+    "alwaysApplyDefaultEffort",
+    "alwaysApplyDefaultThinking",
+    "alwaysApplyDefaultClaudeInChrome",
+    "alwaysApplyDefaultContextMax",
+)
+
+# Legacy → current key renames applied on read so old settings.json files keep
+# their values across renames. Inline pattern, mirroring loadSettings() in
+# frontend/src/stores/settings.js — no formal migration system.
+_RENAMED_SETTINGS_KEYS: dict[str, str] = {
+    "defaultPermissionMode": "claudeCodeDefaultPermissionMode",
+    "defaultModel": "claudeCodeDefaultModel",
+    "defaultEffort": "claudeCodeDefaultEffort",
+    "defaultThinking": "claudeCodeDefaultThinking",
+    "defaultClaudeInChrome": "claudeCodeDefaultClaudeInChrome",
+    "defaultContextMax": "claudeCodeDefaultContextMax",
+}
+
+
+def _migrate_legacy_settings(file_data: dict) -> bool:
+    """Apply in-place rename/drop transformations to raw settings file data.
+
+    Returns True if anything changed, False otherwise. The caller is responsible
+    for persisting back to disk so legacy keys disappear from settings.json.
+
+    On rename collisions (both old and new key present in the file), the OLD
+    key value wins — the new key is most likely a default value written by an
+    earlier code path before this migration ran, while the old key carries the
+    user's actual choice.
+    """
+    changed = False
+    dropped: list[str] = []
+    renamed: list[str] = []
+    for key in _OBSOLETE_SETTINGS_KEYS:
+        if key in file_data:
+            del file_data[key]
+            dropped.append(key)
+            changed = True
+    for old_key, new_key in _RENAMED_SETTINGS_KEYS.items():
+        if old_key in file_data:
+            # User's old value wins unconditionally — preserves user choice
+            # even if something else already wrote new_key with a default.
+            file_data[new_key] = file_data[old_key]
+            del file_data[old_key]
+            renamed.append(f"{old_key}→{new_key}")
+            changed = True
+    if changed:
+        logger.info(
+            "Migrated synced settings: dropped=%s renamed=%s",
+            dropped or "[]",
+            renamed or "[]",
+        )
+    return changed
+
+
 def read_synced_settings() -> dict:
     """Read synced settings, using the in-memory cache when available.
 
-    On first call, reads settings.json, merges with defaults (defaults for any
-    missing synced keys), and populates the cache.  Subsequent calls return a
-    copy of the cache.
+    On first call, reads settings.json, applies legacy migrations (rename/drop),
+    merges with defaults, and populates the cache. If migrations changed
+    anything, the cleaned data is written back to disk so the legacy keys
+    disappear permanently.
 
     Returns a **copy** so callers can mutate freely without affecting the cache.
     """
@@ -114,8 +177,12 @@ def read_synced_settings() -> dict:
             file_data = orjson.loads(path.read_bytes())
         except (FileNotFoundError, orjson.JSONDecodeError):
             file_data = {}
+        migrated = _migrate_legacy_settings(file_data)
         _cache.update({**SYNCED_SETTINGS_DEFAULTS, **file_data})
         _cache.setdefault("_version", 0)
+        if migrated:
+            # Persist the cleaned data so old keys do not reappear next read.
+            write_synced_settings(_cache.copy())
     return _cache.copy()
 
 

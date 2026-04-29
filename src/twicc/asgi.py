@@ -694,12 +694,12 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
                 from twicc.synced_settings import read_synced_settings
                 defaults = read_synced_settings()
                 effective = {
-                    "permission_mode": permission_mode if permission_mode is not None else defaults.get("defaultPermissionMode", "default"),
-                    "selected_model": selected_model if selected_model is not None else defaults.get("defaultModel", "opus"),
-                    "effort": effort if effort is not None else defaults.get("defaultEffort", "medium"),
-                    "thinking_enabled": thinking_enabled if thinking_enabled is not None else defaults.get("defaultThinking", True),
-                    "claude_in_chrome": claude_in_chrome if claude_in_chrome is not None else defaults.get("defaultClaudeInChrome", True),
-                    "context_max": context_max if context_max is not None else defaults.get("defaultContextMax", 200_000),
+                    "permission_mode": permission_mode if permission_mode is not None else defaults.get("claudeCodeDefaultPermissionMode", "default"),
+                    "selected_model": selected_model if selected_model is not None else defaults.get("claudeCodeDefaultModel", "opus"),
+                    "effort": effort if effort is not None else defaults.get("claudeCodeDefaultEffort", "medium"),
+                    "thinking_enabled": thinking_enabled if thinking_enabled is not None else defaults.get("claudeCodeDefaultThinking", True),
+                    "claude_in_chrome": claude_in_chrome if claude_in_chrome is not None else defaults.get("claudeCodeDefaultClaudeInChrome", True),
+                    "context_max": context_max if context_max is not None else defaults.get("claudeCodeDefaultContextMax", 200_000),
                 }
 
                 # Safety net: auto-upgrade retired models (frontend should have corrected, but just in case)
@@ -752,12 +752,12 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
                 from twicc.synced_settings import read_synced_settings
                 defaults = read_synced_settings()
                 effective = {
-                    "permission_mode": permission_mode if permission_mode is not None else defaults.get("defaultPermissionMode", "default"),
-                    "selected_model": selected_model if selected_model is not None else defaults.get("defaultModel", "opus"),
-                    "effort": effort if effort is not None else defaults.get("defaultEffort", "medium"),
-                    "thinking_enabled": thinking_enabled if thinking_enabled is not None else defaults.get("defaultThinking", True),
-                    "claude_in_chrome": claude_in_chrome if claude_in_chrome is not None else defaults.get("defaultClaudeInChrome", True),
-                    "context_max": context_max if context_max is not None else defaults.get("defaultContextMax", 200_000),
+                    "permission_mode": permission_mode if permission_mode is not None else defaults.get("claudeCodeDefaultPermissionMode", "default"),
+                    "selected_model": selected_model if selected_model is not None else defaults.get("claudeCodeDefaultModel", "opus"),
+                    "effort": effort if effort is not None else defaults.get("claudeCodeDefaultEffort", "medium"),
+                    "thinking_enabled": thinking_enabled if thinking_enabled is not None else defaults.get("claudeCodeDefaultThinking", True),
+                    "claude_in_chrome": claude_in_chrome if claude_in_chrome is not None else defaults.get("claudeCodeDefaultClaudeInChrome", True),
+                    "context_max": context_max if context_max is not None else defaults.get("claudeCodeDefaultContextMax", 200_000),
                 }
 
                 # Safety net: auto-upgrade retired models (frontend should have corrected, but just in case)
@@ -961,23 +961,23 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
                 # Accepted — merge, increment version, write
                 existing.update(synced_settings)
 
-                # Enforce 1M consistency when defaultModel changes
-                if "defaultModel" in synced_settings:
+                # Enforce 1M consistency when claudeCodeDefaultModel changes
+                if "claudeCodeDefaultModel" in synced_settings:
                     from twicc.providers.claude_code.model_registry import (
                         enforce_effort_max_consistency,
                         enforce_effort_xhigh_consistency,
                         selected_model_supports_1m,
                     )
                     from twicc.synced_settings import SYNCED_SETTINGS_DEFAULTS
-                    new_model = existing.get("defaultModel", SYNCED_SETTINGS_DEFAULTS["defaultModel"])
-                    if not selected_model_supports_1m(new_model) and existing.get("defaultContextMax", 200_000) == 1_000_000:
-                        existing["defaultContextMax"] = 200_000
-                    current_effort = existing.get("defaultEffort")
+                    new_model = existing.get("claudeCodeDefaultModel", SYNCED_SETTINGS_DEFAULTS["claudeCodeDefaultModel"])
+                    if not selected_model_supports_1m(new_model) and existing.get("claudeCodeDefaultContextMax", 200_000) == 1_000_000:
+                        existing["claudeCodeDefaultContextMax"] = 200_000
+                    current_effort = existing.get("claudeCodeDefaultEffort")
                     adjusted_effort = enforce_effort_xhigh_consistency(
                         new_model, enforce_effort_max_consistency(new_model, current_effort)
                     )
                     if adjusted_effort != current_effort:
-                        existing["defaultEffort"] = adjusted_effort
+                        existing["claudeCodeDefaultEffort"] = adjusted_effort
 
                 existing["_version"] = current_version + 1
                 write_synced_settings(existing)

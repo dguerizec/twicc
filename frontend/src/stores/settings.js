@@ -51,12 +51,12 @@ export const SETTINGS_SCHEMA = {
     autoUnpinOnArchive: null,
     terminalUseTmux: null,
     terminalTmuxConfigPath: null,
-    defaultPermissionMode: null,
-    defaultModel: null,
-    defaultEffort: null,
-    defaultThinking: null,
-    defaultClaudeInChrome: null,
-    defaultContextMax: null,
+    claudeCodeDefaultPermissionMode: null,
+    claudeCodeDefaultModel: null,
+    claudeCodeDefaultEffort: null,
+    claudeCodeDefaultThinking: null,
+    claudeCodeDefaultClaudeInChrome: null,
+    claudeCodeDefaultContextMax: null,
     waTheme: null,
     waBrand: null,
     usageJsonFileEnabled: null,
@@ -104,12 +104,12 @@ const SETTINGS_VALIDATORS = {
     showActiveAcrossFilters: (v) => typeof v === 'boolean',
     showHiddenFiles: (v) => typeof v === 'boolean',
     showGitIgnoredFiles: (v) => typeof v === 'boolean',
-    defaultPermissionMode: (v) => Object.values(PERMISSION_MODE).includes(v),
-    defaultModel: (v) => typeof v === 'string' && v.length > 0,
-    defaultEffort: (v) => Object.values(EFFORT).includes(v),
-    defaultThinking: (v) => typeof v === 'boolean',
-    defaultClaudeInChrome: (v) => typeof v === 'boolean',
-    defaultContextMax: (v) => Object.values(CONTEXT_MAX).includes(v),
+    claudeCodeDefaultPermissionMode: (v) => Object.values(PERMISSION_MODE).includes(v),
+    claudeCodeDefaultModel: (v) => typeof v === 'string' && v.length > 0,
+    claudeCodeDefaultEffort: (v) => Object.values(EFFORT).includes(v),
+    claudeCodeDefaultThinking: (v) => typeof v === 'boolean',
+    claudeCodeDefaultClaudeInChrome: (v) => typeof v === 'boolean',
+    claudeCodeDefaultContextMax: (v) => Object.values(CONTEXT_MAX).includes(v),
     notifUserTurnSound: (v) => Object.values(NOTIFICATION_SOUNDS).includes(v),
     notifUserTurnBrowser: (v) => typeof v === 'boolean',
     notifPendingRequestSound: (v) => Object.values(NOTIFICATION_SOUNDS).includes(v),
@@ -149,6 +149,30 @@ function loadSettings() {
             // Migrate themeMode → colorScheme
             if (!('colorScheme' in parsed) && 'themeMode' in parsed) {
                 parsed.colorScheme = parsed.themeMode
+            }
+
+            // Migrate Claude Code default settings to claudeCode-prefixed keys.
+            // On collision (both old and new key present), the OLD value wins —
+            // the new key is most likely a default written by an earlier code
+            // path, while the old key carries the user's actual choice.
+            const claudeCodeRenames = {
+                defaultPermissionMode: 'claudeCodeDefaultPermissionMode',
+                defaultModel: 'claudeCodeDefaultModel',
+                defaultEffort: 'claudeCodeDefaultEffort',
+                defaultThinking: 'claudeCodeDefaultThinking',
+                defaultClaudeInChrome: 'claudeCodeDefaultClaudeInChrome',
+                defaultContextMax: 'claudeCodeDefaultContextMax',
+            }
+            const renamed = []
+            for (const [oldKey, newKey] of Object.entries(claudeCodeRenames)) {
+                if (oldKey in parsed) {
+                    parsed[newKey] = parsed[oldKey]
+                    delete parsed[oldKey]
+                    renamed.push(`${oldKey}→${newKey}`)
+                }
+            }
+            if (renamed.length) {
+                console.info('[settings] migrated localStorage keys:', renamed.join(', '))
             }
 
             // Only keep keys that exist in schema and have valid values
@@ -212,9 +236,9 @@ export function getModelRegistry() {
 function resolveRegistryEntry(selectedModel) {
     let entry = selectedModel ? _modelRegistry.find(e => e.selectedModel === selectedModel) : undefined
     if (!entry) {
-        const defaultModel = useSettingsStore().defaultModel
-        if (defaultModel) {
-            entry = _modelRegistry.find(e => e.selectedModel === defaultModel)
+        const claudeCodeDefaultModel = useSettingsStore().claudeCodeDefaultModel
+        if (claudeCodeDefaultModel) {
+            entry = _modelRegistry.find(e => e.selectedModel === claudeCodeDefaultModel)
         }
     }
     return entry
@@ -294,12 +318,12 @@ export const useSettingsStore = defineStore('settings', {
         isShowActiveAcrossFilters: (state) => state.showActiveAcrossFilters,
         isShowHiddenFiles: (state) => state.showHiddenFiles,
         isShowGitIgnoredFiles: (state) => state.showGitIgnoredFiles,
-        getDefaultPermissionMode: (state) => state.defaultPermissionMode,
-        getDefaultModel: (state) => state.defaultModel,
-        getDefaultEffort: (state) => state.defaultEffort,
-        getDefaultThinking: (state) => state.defaultThinking,
-        getDefaultClaudeInChrome: (state) => state.defaultClaudeInChrome,
-        getDefaultContextMax: (state) => state.defaultContextMax,
+        getClaudeCodeDefaultPermissionMode: (state) => state.claudeCodeDefaultPermissionMode,
+        getClaudeCodeDefaultModel: (state) => state.claudeCodeDefaultModel,
+        getClaudeCodeDefaultEffort: (state) => state.claudeCodeDefaultEffort,
+        getClaudeCodeDefaultThinking: (state) => state.claudeCodeDefaultThinking,
+        getClaudeCodeDefaultClaudeInChrome: (state) => state.claudeCodeDefaultClaudeInChrome,
+        getClaudeCodeDefaultContextMax: (state) => state.claudeCodeDefaultContextMax,
         getNotifUserTurnSound: (state) => state.notifUserTurnSound,
         isNotifUserTurnBrowser: (state) => state.notifUserTurnBrowser,
         getNotifPendingRequestSound: (state) => state.notifPendingRequestSound,
@@ -602,42 +626,42 @@ export const useSettingsStore = defineStore('settings', {
         },
 
         /**
-         * Set the default permission mode for new sessions.
+         * Set the default permission mode for new Claude Code sessions.
          * @param {string} mode - One of PERMISSION_MODE values
          */
-        setDefaultPermissionMode(mode) {
-            if (SETTINGS_VALIDATORS.defaultPermissionMode(mode)) {
-                this.defaultPermissionMode = mode
+        setClaudeCodeDefaultPermissionMode(mode) {
+            if (SETTINGS_VALIDATORS.claudeCodeDefaultPermissionMode(mode)) {
+                this.claudeCodeDefaultPermissionMode = mode
             }
         },
 
-        setDefaultModel(model) {
-            if (SETTINGS_VALIDATORS.defaultModel(model)) {
-                this.defaultModel = model
+        setClaudeCodeDefaultModel(model) {
+            if (SETTINGS_VALIDATORS.claudeCodeDefaultModel(model)) {
+                this.claudeCodeDefaultModel = model
             }
         },
 
-        setDefaultEffort(effort) {
-            if (SETTINGS_VALIDATORS.defaultEffort(effort)) {
-                this.defaultEffort = effort
+        setClaudeCodeDefaultEffort(effort) {
+            if (SETTINGS_VALIDATORS.claudeCodeDefaultEffort(effort)) {
+                this.claudeCodeDefaultEffort = effort
             }
         },
 
-        setDefaultThinking(thinking) {
-            if (SETTINGS_VALIDATORS.defaultThinking(thinking)) {
-                this.defaultThinking = thinking
+        setClaudeCodeDefaultThinking(thinking) {
+            if (SETTINGS_VALIDATORS.claudeCodeDefaultThinking(thinking)) {
+                this.claudeCodeDefaultThinking = thinking
             }
         },
 
-        setDefaultClaudeInChrome(enabled) {
-            if (SETTINGS_VALIDATORS.defaultClaudeInChrome(enabled)) {
-                this.defaultClaudeInChrome = enabled
+        setClaudeCodeDefaultClaudeInChrome(enabled) {
+            if (SETTINGS_VALIDATORS.claudeCodeDefaultClaudeInChrome(enabled)) {
+                this.claudeCodeDefaultClaudeInChrome = enabled
             }
         },
 
-        setDefaultContextMax(contextMax) {
-            if (SETTINGS_VALIDATORS.defaultContextMax(contextMax)) {
-                this.defaultContextMax = contextMax
+        setClaudeCodeDefaultContextMax(contextMax) {
+            if (SETTINGS_VALIDATORS.claudeCodeDefaultContextMax(contextMax)) {
+                this.claudeCodeDefaultContextMax = contextMax
             }
         },
 
@@ -890,12 +914,12 @@ export function initSettings() {
             showActiveAcrossFilters: store.showActiveAcrossFilters,
             showHiddenFiles: store.showHiddenFiles,
             showGitIgnoredFiles: store.showGitIgnoredFiles,
-            defaultPermissionMode: store.defaultPermissionMode,
-            defaultModel: store.defaultModel,
-            defaultEffort: store.defaultEffort,
-            defaultThinking: store.defaultThinking,
-            defaultClaudeInChrome: store.defaultClaudeInChrome,
-            defaultContextMax: store.defaultContextMax,
+            claudeCodeDefaultPermissionMode: store.claudeCodeDefaultPermissionMode,
+            claudeCodeDefaultModel: store.claudeCodeDefaultModel,
+            claudeCodeDefaultEffort: store.claudeCodeDefaultEffort,
+            claudeCodeDefaultThinking: store.claudeCodeDefaultThinking,
+            claudeCodeDefaultClaudeInChrome: store.claudeCodeDefaultClaudeInChrome,
+            claudeCodeDefaultContextMax: store.claudeCodeDefaultContextMax,
             notifUserTurnSound: store.notifUserTurnSound,
             notifUserTurnBrowser: store.notifUserTurnBrowser,
             notifPendingRequestSound: store.notifPendingRequestSound,

@@ -963,11 +963,11 @@ function buildSessionSettingsCommands() {
             when: isAvailable,
             items: () => {
                 const current = getSessionSettingValue('selected_model')
-                const defaultModel = settingsStore.getDefaultModel
+                const claudeCodeDefaultModel = settingsStore.getClaudeCodeDefaultModel
                 const registry = getModelRegistry()
-                const defaultEntry = registry.find(e => e.selectedModel === defaultModel)
+                const defaultEntry = registry.find(e => e.selectedModel === claudeCodeDefaultModel)
                 const defaultSuffix = defaultEntry?.latest ? ` (latest: ${defaultEntry.version})` : ''
-                const defaultLabel = `${getModelLabel(defaultModel)}${defaultSuffix}`
+                const defaultLabel = `${getModelLabel(claudeCodeDefaultModel)}${defaultSuffix}`
 
                 const items = [
                     {
@@ -1009,13 +1009,13 @@ function buildSessionSettingsCommands() {
                 const gate = sessionSettingsGate()
                 if (!gate) return []
                 const current = getSessionSettingValue('effort')
-                const defaultEffort = settingsStore.getDefaultEffort
+                const claudeCodeDefaultEffort = settingsStore.getClaudeCodeDefaultEffort
 
                 const items = [
                     {
                         id: '__default__',
                         group: 'default',
-                        label: `Default: ${EFFORT_LABELS[defaultEffort]}`,
+                        label: `Default: ${EFFORT_LABELS[claudeCodeDefaultEffort]}`,
                         action: () => setSessionSettingValue('effort', null),
                         active: current === null,
                     },
@@ -1042,12 +1042,12 @@ function buildSessionSettingsCommands() {
             when: isAvailable,
             items: () => {
                 const current = getSessionSettingValue('thinking_enabled')
-                const defaultThinking = settingsStore.getDefaultThinking
+                const claudeCodeDefaultThinking = settingsStore.getClaudeCodeDefaultThinking
                 return [
                     {
                         id: '__default__',
                         group: 'default',
-                        label: `Default: ${THINKING_LABELS[defaultThinking]}`,
+                        label: `Default: ${THINKING_LABELS[claudeCodeDefaultThinking]}`,
                         action: () => setSessionSettingValue('thinking_enabled', null),
                         active: current === null,
                     },
@@ -1076,13 +1076,13 @@ function buildSessionSettingsCommands() {
             when: isAvailable,
             items: () => {
                 const current = getSessionSettingValue('permission_mode')
-                const defaultPermission = settingsStore.getDefaultPermissionMode
+                const claudeCodeDefaultPermission = settingsStore.getClaudeCodeDefaultPermissionMode
 
                 const items = [
                     {
                         id: '__default__',
                         group: 'default',
-                        label: `Default: ${PERMISSION_MODE_LABELS[defaultPermission]}`,
+                        label: `Default: ${PERMISSION_MODE_LABELS[claudeCodeDefaultPermission]}`,
                         action: () => setSessionSettingValue('permission_mode', null),
                         active: current === null,
                     },
@@ -1111,13 +1111,13 @@ function buildSessionSettingsCommands() {
             },
             items: () => {
                 const current = getSessionSettingValue('context_max')
-                const defaultContext = settingsStore.getDefaultContextMax
+                const claudeCodeDefaultContext = settingsStore.getClaudeCodeDefaultContextMax
 
                 const items = [
                     {
                         id: '__default__',
                         group: 'default',
-                        label: `Default: ${CONTEXT_MAX_LABELS[defaultContext]}`,
+                        label: `Default: ${CONTEXT_MAX_LABELS[claudeCodeDefaultContext]}`,
                         action: () => setSessionSettingValue('context_max', null),
                         active: current === null,
                     },
@@ -1142,13 +1142,13 @@ function buildSessionSettingsCommands() {
             when: isAvailable,
             items: () => {
                 const current = getSessionSettingValue('claude_in_chrome')
-                const defaultChrome = settingsStore.getDefaultClaudeInChrome
+                const claudeCodeDefaultChrome = settingsStore.getClaudeCodeDefaultClaudeInChrome
 
                 const items = [
                     {
                         id: '__default__',
                         group: 'default',
-                        label: `Default: ${CLAUDE_IN_CHROME_LABELS[defaultChrome]}`,
+                        label: `Default: ${CLAUDE_IN_CHROME_LABELS[claudeCodeDefaultChrome]}`,
                         action: () => setSessionSettingValue('claude_in_chrome', null),
                         active: current === null,
                     },

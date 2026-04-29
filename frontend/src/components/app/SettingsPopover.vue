@@ -195,12 +195,12 @@ const titleSystemPrompt = computed(() => store.getTitleSystemPrompt)
 const terminalUseTmux = computed(() => store.isTerminalUseTmux)
 const terminalTmuxConfigPath = computed(() => store.getTerminalTmuxConfigPath)
 const compactSessionList = computed(() => store.isCompactSessionList)
-const defaultPermissionMode = computed(() => store.getDefaultPermissionMode)
-const defaultModel = computed(() => store.getDefaultModel)
-const defaultEffort = computed(() => store.getDefaultEffort)
-const defaultThinking = computed(() => store.getDefaultThinking)
-const defaultClaudeInChrome = computed(() => store.getDefaultClaudeInChrome)
-const defaultContextMax = computed(() => store.getDefaultContextMax)
+const claudeCodeDefaultPermissionMode = computed(() => store.getClaudeCodeDefaultPermissionMode)
+const claudeCodeDefaultModel = computed(() => store.getClaudeCodeDefaultModel)
+const claudeCodeDefaultEffort = computed(() => store.getClaudeCodeDefaultEffort)
+const claudeCodeDefaultThinking = computed(() => store.getClaudeCodeDefaultThinking)
+const claudeCodeDefaultClaudeInChrome = computed(() => store.getClaudeCodeDefaultClaudeInChrome)
+const claudeCodeDefaultContextMax = computed(() => store.getClaudeCodeDefaultContextMax)
 const waTheme = computed(() => store.getWaTheme)
 const waBrand = computed(() => store.getWaBrand)
 const showDiffs = computed(() => store.isShowDiffs)
@@ -323,9 +323,9 @@ function formatRetirementDate(isoDate) {
     })
 }
 
-const defaultModelSupports1m = computed(() => modelSupports1m(defaultModel.value))
-const defaultModelSupportsEffortXhigh = computed(() => modelSupportsEffortXhigh(defaultModel.value))
-const defaultModelSupportsEffortMax = computed(() => modelSupportsEffortMax(defaultModel.value))
+const claudeCodeDefaultModelSupports1m = computed(() => modelSupports1m(claudeCodeDefaultModel.value))
+const claudeCodeDefaultModelSupportsEffortXhigh = computed(() => modelSupportsEffortXhigh(claudeCodeDefaultModel.value))
+const claudeCodeDefaultModelSupportsEffortMax = computed(() => modelSupportsEffortMax(claudeCodeDefaultModel.value))
 
 /**
  * Handle display mode change.
@@ -504,39 +504,39 @@ async function onTmuxConfigPathApply() {
 }
 
 /**
- * Handle default permission mode change.
+ * Handle Claude Code default permission mode change.
  */
-function onDefaultPermissionModeChange(event) {
-    store.setDefaultPermissionMode(event.target.value)
+function onClaudeCodeDefaultPermissionModeChange(event) {
+    store.setClaudeCodeDefaultPermissionMode(event.target.value)
 }
 
-function onDefaultModelChange(event) {
+function onClaudeCodeDefaultModelChange(event) {
     const newModel = event.target.value
-    store.setDefaultModel(newModel)
-    if (!modelSupports1m(newModel) && store.getDefaultContextMax === CONTEXT_MAX.EXTENDED) {
-        store.setDefaultContextMax(CONTEXT_MAX.DEFAULT)
+    store.setClaudeCodeDefaultModel(newModel)
+    if (!modelSupports1m(newModel) && store.getClaudeCodeDefaultContextMax === CONTEXT_MAX.EXTENDED) {
+        store.setClaudeCodeDefaultContextMax(CONTEXT_MAX.DEFAULT)
     }
-    if (store.defaultEffort === EFFORT.MAX && !modelSupportsEffortMax(newModel)) {
-        store.setDefaultEffort(modelSupportsEffortXhigh(newModel) ? EFFORT.X_HIGH : EFFORT.HIGH)
-    } else if (store.defaultEffort === EFFORT.X_HIGH && !modelSupportsEffortXhigh(newModel)) {
-        store.setDefaultEffort(EFFORT.HIGH)
+    if (store.claudeCodeDefaultEffort === EFFORT.MAX && !modelSupportsEffortMax(newModel)) {
+        store.setClaudeCodeDefaultEffort(modelSupportsEffortXhigh(newModel) ? EFFORT.X_HIGH : EFFORT.HIGH)
+    } else if (store.claudeCodeDefaultEffort === EFFORT.X_HIGH && !modelSupportsEffortXhigh(newModel)) {
+        store.setClaudeCodeDefaultEffort(EFFORT.HIGH)
     }
 }
 
-function onDefaultEffortChange(event) {
-    store.setDefaultEffort(event.target.value)
+function onClaudeCodeDefaultEffortChange(event) {
+    store.setClaudeCodeDefaultEffort(event.target.value)
 }
 
-function onDefaultThinkingChange(event) {
-    store.setDefaultThinking(event.target.value === 'true')
+function onClaudeCodeDefaultThinkingChange(event) {
+    store.setClaudeCodeDefaultThinking(event.target.value === 'true')
 }
 
-function onDefaultClaudeInChromeChange(event) {
-    store.setDefaultClaudeInChrome(event.target.value === 'true')
+function onClaudeCodeDefaultClaudeInChromeChange(event) {
+    store.setClaudeCodeDefaultClaudeInChrome(event.target.value === 'true')
 }
 
-function onDefaultContextMaxChange(event) {
-    store.setDefaultContextMax(Number(event.target.value))
+function onClaudeCodeDefaultContextMaxChange(event) {
+    store.setClaudeCodeDefaultContextMax(Number(event.target.value))
 }
 
 /**
@@ -749,8 +749,8 @@ function onChangelogClose() {
                     <div class="setting-group">
                         <label class="setting-group-label">Default permission mode</label>
                         <wa-select
-                            :value.prop="defaultPermissionMode"
-                            @change="onDefaultPermissionModeChange"
+                            :value.prop="claudeCodeDefaultPermissionMode"
+                            @change="onClaudeCodeDefaultPermissionModeChange"
                             size="small"
                         >
                             <wa-option
@@ -767,8 +767,8 @@ function onChangelogClose() {
                     <div class="setting-group">
                         <label class="setting-group-label">Default model</label>
                         <wa-select
-                            :value.prop="defaultModel"
-                            @change="onDefaultModelChange"
+                            :value.prop="claudeCodeDefaultModel"
+                            @change="onClaudeCodeDefaultModelChange"
                             size="small"
                         >
                             <wa-option
@@ -791,42 +791,42 @@ function onChangelogClose() {
                     <div class="setting-group">
                         <label class="setting-group-label">Default context size</label>
                         <wa-select
-                            :value.prop="String(defaultContextMax)"
-                            @change="onDefaultContextMaxChange"
+                            :value.prop="String(claudeCodeDefaultContextMax)"
+                            @change="onClaudeCodeDefaultContextMaxChange"
                             size="small"
                         >
                             <wa-option
                                 v-for="option in contextMaxOptions"
                                 :key="option.value"
                                 :value="option.value"
-                                :disabled="option.value === String(CONTEXT_MAX.EXTENDED) && !defaultModelSupports1m"
+                                :disabled="option.value === String(CONTEXT_MAX.EXTENDED) && !claudeCodeDefaultModelSupports1m"
                             >
-                                {{ option.label }}{{ option.value === String(CONTEXT_MAX.EXTENDED) && !defaultModelSupports1m ? ' (not available)' : '' }}
+                                {{ option.label }}{{ option.value === String(CONTEXT_MAX.EXTENDED) && !claudeCodeDefaultModelSupports1m ? ' (not available)' : '' }}
                             </wa-option>
                         </wa-select>
                     </div>
                     <div class="setting-group">
                         <label class="setting-group-label">Default effort</label>
                         <wa-select
-                            :value.prop="defaultEffort"
-                            @change="onDefaultEffortChange"
+                            :value.prop="claudeCodeDefaultEffort"
+                            @change="onClaudeCodeDefaultEffortChange"
                             size="small"
                         >
                             <wa-option
                                 v-for="option in effortOptions"
                                 :key="option.value"
                                 :value="option.value"
-                                :disabled="(option.value === EFFORT.X_HIGH && !defaultModelSupportsEffortXhigh) || (option.value === EFFORT.MAX && !defaultModelSupportsEffortMax)"
+                                :disabled="(option.value === EFFORT.X_HIGH && !claudeCodeDefaultModelSupportsEffortXhigh) || (option.value === EFFORT.MAX && !claudeCodeDefaultModelSupportsEffortMax)"
                             >
-                                {{ option.label }}{{ ((option.value === EFFORT.X_HIGH && !defaultModelSupportsEffortXhigh) || (option.value === EFFORT.MAX && !defaultModelSupportsEffortMax)) ? ' (not available)' : '' }}
+                                {{ option.label }}{{ ((option.value === EFFORT.X_HIGH && !claudeCodeDefaultModelSupportsEffortXhigh) || (option.value === EFFORT.MAX && !claudeCodeDefaultModelSupportsEffortMax)) ? ' (not available)' : '' }}
                             </wa-option>
                         </wa-select>
                     </div>
                     <div class="setting-group">
                         <label class="setting-group-label">Default thinking</label>
                         <wa-select
-                            :value.prop="String(defaultThinking)"
-                            @change="onDefaultThinkingChange"
+                            :value.prop="String(claudeCodeDefaultThinking)"
+                            @change="onClaudeCodeDefaultThinkingChange"
                             size="small"
                         >
                             <wa-option
@@ -841,8 +841,8 @@ function onChangelogClose() {
                     <div class="setting-group">
                         <label class="setting-group-label">Default Chrome MCP</label>
                         <wa-select
-                            :value.prop="String(defaultClaudeInChrome)"
-                            @change="onDefaultClaudeInChromeChange"
+                            :value.prop="String(claudeCodeDefaultClaudeInChrome)"
+                            @change="onClaudeCodeDefaultClaudeInChromeChange"
                             size="small"
                         >
                             <wa-option

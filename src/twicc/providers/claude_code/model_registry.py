@@ -151,7 +151,10 @@ def _resolve_to_default_model_version() -> ModelVersion | None:
     default).
     """
     from twicc.synced_settings import SYNCED_SETTINGS_DEFAULTS, read_synced_settings
-    default_model = read_synced_settings().get("defaultModel") or SYNCED_SETTINGS_DEFAULTS.get("defaultModel")
+    default_model = (
+        read_synced_settings().get("claudeCodeDefaultModel")
+        or SYNCED_SETTINGS_DEFAULTS.get("claudeCodeDefaultModel")
+    )
     if not default_model:
         return None
     return get_model_version(default_model)

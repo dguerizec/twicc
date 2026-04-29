@@ -413,9 +413,9 @@ export const useDataStore = defineStore('data', {
         getEffectiveContextMax: (state) => (sessionId, overrideModel = undefined) => {
             const session = state.sessions[sessionId]
             const settingsStore = useSettingsStore()
-            const baseValue = session?.context_max ?? settingsStore.getDefaultContextMax
+            const baseValue = session?.context_max ?? settingsStore.getClaudeCodeDefaultContextMax
             if (baseValue !== CONTEXT_MAX.DEFAULT) return baseValue
-            const model = overrideModel !== undefined ? overrideModel : (session?.selected_model ?? settingsStore.getDefaultModel)
+            const model = overrideModel !== undefined ? overrideModel : (session?.selected_model ?? settingsStore.getClaudeCodeDefaultModel)
             if (!modelSupports1m(model)) return baseValue
             if ((session?.context_usage ?? 0) > CONTEXT_MAX.DEFAULT * 0.85) return CONTEXT_MAX.EXTENDED
             return baseValue
