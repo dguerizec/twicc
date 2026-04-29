@@ -546,7 +546,7 @@ def compute_session_metadata(session_id: str, result_queue) -> None:
             if title:
                 session_titles[session_id] = title
                 initial_title_set = True
-        if item.kind == ItemKind.CUSTOM_TITLE:
+        if item.kind == ItemKind.SYSTEM and parsed.get('type') == 'custom-title':
             custom_title = parsed.get('customTitle')
             target_session_id = parsed.get('sessionId', session_id)
             if custom_title and isinstance(custom_title, str):

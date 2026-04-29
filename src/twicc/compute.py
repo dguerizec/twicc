@@ -1126,7 +1126,7 @@ def compute_item_display_level(parsed_json: dict, kind: ItemKind | None) -> int:
     - ALWAYS (1): USER_MESSAGE, ASSISTANT_MESSAGE, API_ERROR kinds
     - COLLAPSIBLE (2): Meta messages, thinking/tool_use only,
                        summaries, file snapshots
-    - DEBUG_ONLY (3): SYSTEM kind, CUSTOM_TITLE kind, standalone tool_result items
+    - DEBUG_ONLY (3): SYSTEM kind, standalone tool_result items
 
     Args:
         parsed_json: Parsed JSON content of the item
@@ -1143,9 +1143,9 @@ def compute_item_display_level(parsed_json: dict, kind: ItemKind | None) -> int:
     if kind in (ItemKind.USER_MESSAGE, ItemKind.ASSISTANT_MESSAGE, ItemKind.API_ERROR, ItemKind.COMPACT_SUMMARY):
         return ItemDisplayLevel.ALWAYS
 
-    # DEBUG_ONLY: SYSTEM kind (system messages, queue-operation, progress, XML commands)
-    # DEBUG_ONLY: CUSTOM_TITLE kind (written by Claude CLI on every resume — very noisy)
-    if kind in (ItemKind.SYSTEM, ItemKind.CUSTOM_TITLE):
+    # DEBUG_ONLY: SYSTEM kind (system messages, queue-operation, progress, XML commands,
+    # custom-title entries written by Claude CLI on every resume — very noisy)
+    if kind == ItemKind.SYSTEM:
         return ItemDisplayLevel.DEBUG_ONLY
 
     # DEBUG_ONLY: Standalone tool_result items (their data is accessed via ToolResultLink)
@@ -1165,8 +1165,7 @@ def compute_item_kind(parsed_json: dict) -> ItemKind | None:
     - USER_MESSAGE: User messages with visible content (text, document, image), not meta
     - ASSISTANT_MESSAGE: Assistant messages with visible content (text, document, image)
     - API_ERROR: System messages with subtype 'api_error', or messages with isApiErrorMessage=true
-    - SYSTEM: System messages (except api_error), queue-operation, progress, summary, file-history-snapshot, last-prompt
-    - CUSTOM_TITLE: Items of type 'custom-title' (session title set by Claude)
+    - SYSTEM: System messages (except api_error), queue-operation, progress, summary, file-history-snapshot, last-prompt, custom-title
 
     Args:
         parsed_json: Parsed JSON content of the item
@@ -1185,12 +1184,8 @@ def compute_item_kind(parsed_json: dict) -> ItemKind | None:
 
     entry_type = parsed_json.get('type')
 
-    # Custom title (session title set by Claude)
-    if entry_type == 'custom-title':
-        return ItemKind.CUSTOM_TITLE
-
-    # System types: system (except api_error), queue-operation, progress, etc.
-    if entry_type in ('queue-operation', 'progress', 'summary', 'file-history-snapshot', 'last-prompt', 'attachment', 'permission-mode'):
+    # System types: system (except api_error), queue-operation, progress, custom-title, etc.
+    if entry_type in ('queue-operation', 'progress', 'summary', 'file-history-snapshot', 'last-prompt', 'attachment', 'permission-mode', 'custom-title'):
         return ItemKind.SYSTEM
 
     if entry_type == 'system':

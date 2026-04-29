@@ -5,7 +5,6 @@ import JsonViewer from '../../json/JsonViewer.vue'
 import Message from './items/Message.vue'
 import ApiError from './items/ApiError.vue'
 import CompactSummary from './items/content/CompactSummary.vue'
-import CustomTitle from './items/CustomTitle.vue'
 import UnknownEntry from './items/UnknownEntry.vue'
 import AppTooltip from '../../ui/AppTooltip.vue'
 import CodeCommentsIndicator from '../../ui/CodeCommentsIndicator.vue'
@@ -204,10 +203,6 @@ function toggleJsonView() {
                 :content="content?.message?.content || ''"
                 :session-id="sessionId"
                 :detail-key="`compact:${lineNum}`"
-            />
-            <CustomTitle
-                v-else-if="entryType === 'custom-title'"
-                :custom-title="content.customTitle"
             />
             <UnknownEntry
                 v-else

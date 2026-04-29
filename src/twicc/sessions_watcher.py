@@ -741,7 +741,7 @@ def sync_session_items(
 
     Also handles session title updates:
     - First USER_MESSAGE sets initial title if not already set
-    - CUSTOM_TITLE items update the title of their target session
+    - SYSTEM items of type 'custom-title' update the title of their target session
 
     Returns:
         A tuple of:
@@ -955,7 +955,7 @@ def sync_session_items(
                         agent_link_updates.append(agent_update)
                         subagent_needs_link = False
 
-        if item.kind == ItemKind.CUSTOM_TITLE:
+        if item.kind == ItemKind.SYSTEM and parsed.get('type') == 'custom-title':
             # Custom title: update the target session's title
             custom_title = parsed.get('customTitle')
             target_session_id = parsed.get('sessionId', session.id)
