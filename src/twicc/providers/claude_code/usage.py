@@ -3,7 +3,7 @@ Usage quota fetching and storage for Claude Code.
 
 Fetches usage data from the Anthropic OAuth usage API endpoint and
 stores snapshots in the database. Credentials access lives in
-``twicc.claude_auth``.
+``.auth``.
 
 Also provides cost estimation for quota periods by summing
 SessionItem costs within the relevant time windows.
@@ -18,7 +18,7 @@ from pathlib import Path
 import httpx
 import orjson
 
-from twicc.claude_auth import get_credentials, refresh_token_via_sdk
+from .auth import get_credentials, refresh_token_via_sdk
 from twicc.core.models import SessionItem, UsageSnapshot
 
 logger = logging.getLogger(__name__)

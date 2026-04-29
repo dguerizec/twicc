@@ -74,7 +74,7 @@ def _collect_restart_data(session_id: str) -> dict | None:
     }
 
     # Enforce model-capability consistency
-    from twicc.model_registry import (
+    from .model_registry import (
         enforce_1m_consistency,
         enforce_effort_max_consistency,
         enforce_effort_xhigh_consistency,

@@ -42,7 +42,7 @@ from urllib.parse import parse_qs
 from asgiref.sync import sync_to_async
 from django.conf import settings
 
-from twicc.env import purge_claude_code_vars
+from twicc.providers.claude_code.env import purge_claude_code_vars
 
 logger = logging.getLogger(__name__)
 

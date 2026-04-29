@@ -25,7 +25,7 @@ from channels.layers import get_channel_layer
 from django.conf import settings
 from twicc.startup_progress import broadcast_startup_progress
 
-# NOTE: Django model imports (twicc.core.models, twicc.compute, twicc.compute_batch,
+# NOTE: Django model imports (twicc.core.models, .compute, .compute_batch,
 # twicc.core.serializers) are intentionally NOT imported at module level.
 # The "spawn" start method re-imports this module in the child process before
 # django.setup() runs. Top-level model imports would trigger AppRegistryNotReady.
@@ -137,7 +137,7 @@ def compute_worker_main(command_queue, result_queue, stop_event) -> None:
     import logging
     worker_logger = logging.getLogger(__name__)
 
-    from twicc.compute_batch import compute_session_metadata
+    from .compute_batch import compute_session_metadata
 
     worker_logger.info("Compute worker process started")
 
@@ -321,7 +321,7 @@ async def consume_compute_results(
     from collections import defaultdict
     from datetime import date as date_cls
 
-    from twicc.compute_batch import apply_session_complete
+    from .compute_batch import apply_session_complete
 
     try:
         # Accumulate affected days per project across multiple sessions
@@ -460,7 +460,7 @@ async def start_background_compute_task(ctx: ComputeContext) -> None:
     Progress logging: Logs progress at 10% intervals during processing.
     """
 
-    from twicc.compute import load_project_directories, load_project_git_roots
+    from .compute import load_project_directories, load_project_git_roots
     from twicc.core.models import Session, SessionType
 
     # Count sessions needing computation

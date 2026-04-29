@@ -42,7 +42,7 @@ def _sync_to_database() -> dict[str, int]:
     Returns a dict with keys: created, updated, deleted, unchanged.
     """
     from twicc.core.models import Project, SlashCommand, SlashCommandSource
-    from twicc.slash_commands import (
+    from .slash_commands import (
         DiscoveredCommand,
         PluginEntry,
         discover_global_commands,

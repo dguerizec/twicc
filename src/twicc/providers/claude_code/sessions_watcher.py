@@ -20,7 +20,7 @@ from watchfiles import Change, awatch
 import twicc.search as search
 from twicc.agent.manager import get_process_manager
 from twicc.agent.original_file_cache import pop_original_file as _pop_cached_original_file
-from twicc.compute import AgentLinkUpdate, AgentStoppedUpdate, ToolResultUpdate, cache_agent_prompt, \
+from .compute import AgentLinkUpdate, AgentStoppedUpdate, ToolResultUpdate, cache_agent_prompt, \
     check_agent_naturally_stopped, compute_item_cost_and_usage, \
     compute_item_metadata, \
     compute_item_metadata_live, create_agent_link_from_subagent, create_agent_link_from_tool_result, \
@@ -405,7 +405,7 @@ async def sync_and_broadcast(
 
         # Create session (regular or subagent)
         # Pop any pending settings set by the WS handler for new sessions
-        from twicc.pending_settings import pop_pending
+        from .pending_settings import pop_pending
 
         pending = pop_pending(parsed.session_id)
         session = await create_session(
@@ -1024,7 +1024,7 @@ def sync_session_items(
         ensure_project_git_root(session.project_id)
 
     # Apply title updates (with protection against CLI stale re-appends)
-    from twicc.titles import check_protected_title, rename_session_in_jsonl
+    from .titles import check_protected_title, rename_session_in_jsonl
 
     for target_session_id, title in session_title_updates.items():
         result = check_protected_title(target_session_id, title)

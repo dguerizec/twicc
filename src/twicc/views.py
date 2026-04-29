@@ -12,7 +12,7 @@ from django.utils import timezone
 import orjson
 
 from twicc import search
-from twicc.compute import get_message_content, get_message_content_list
+from twicc.providers.claude_code.compute import get_message_content, get_message_content_list
 from twicc.core.enums import ItemKind
 from twicc.core.models import AgentLink, DailyActivity, PinMode, Project, Session, SessionItem, SessionType, SlashCommand, ToolResultLink, UsageSnapshot, WeeklyActivity
 from twicc.core.serializers import (
@@ -464,7 +464,7 @@ def session_detail(request, project_id, session_id, parent_session_id=None):
 
         # Handle title update
         if "title" in data:
-            from twicc.titles import protect_title, rename_session_in_jsonl, validate_title
+            from twicc.providers.claude_code.titles import protect_title, rename_session_in_jsonl, validate_title
 
             title, error = validate_title(data["title"])
             if error:
@@ -2046,9 +2046,9 @@ def bootstrap(request):
     terminal config, and message snippets in a single response so the
     frontend doesn't have to wait for the WebSocket connection.
     """
-    from twicc.claude_settings_presets import read_claude_settings_presets
+    from twicc.providers.claude_code.claude_settings_presets import read_claude_settings_presets
     from twicc.message_snippets import read_message_snippets_config
-    from twicc.model_registry import serialize_model_registry
+    from twicc.providers.claude_code.model_registry import serialize_model_registry
     from twicc.synced_settings import CLAUDE_SETTINGS_CATEGORIES, SYNCED_SETTINGS_DEFAULTS, prepare_settings_for_client, read_synced_settings
     from twicc.terminal_config import read_terminal_config
     from twicc.workspaces import read_workspaces

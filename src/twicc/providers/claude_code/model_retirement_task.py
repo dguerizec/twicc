@@ -61,7 +61,7 @@ async def _check_and_retire() -> None:
     """Perform one retirement check cycle."""
     from channels.layers import get_channel_layer
 
-    from twicc.model_registry import MODEL_VERSIONS, get_upgrade_target, is_model_retired
+    from .model_registry import MODEL_VERSIONS, get_upgrade_target, is_model_retired
     from twicc.synced_settings import SYNCED_SETTINGS_DEFAULTS
 
     # Identify all retired non-latest versions
@@ -118,7 +118,7 @@ async def _check_and_retire() -> None:
     #   update the session DB row; _apply_pending_settings will pick it up
     #   at the next USER_TURN transition.
     from twicc.agent.manager import get_process_manager
-    from twicc.model_registry import (
+    from .model_registry import (
         enforce_effort_max_consistency,
         enforce_effort_xhigh_consistency,
         selected_model_supports_1m,
@@ -173,7 +173,7 @@ async def _check_and_retire() -> None:
 
 def _log_upcoming_retirements() -> None:
     """Log a summary of model versions and upcoming retirements at startup."""
-    from twicc.model_registry import MODEL_VERSIONS
+    from .model_registry import MODEL_VERSIONS
 
     today = date_type.today()
     for mv in MODEL_VERSIONS:

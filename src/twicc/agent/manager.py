@@ -689,7 +689,7 @@ class ProcessManager:
         be persisted by the existing PostToolUse hooks.
         """
         from twicc.core.models import SessionCron
-        from twicc.cron_restart import _build_renewal_message
+        from twicc.providers.claude_code.cron_restart import _build_renewal_message
 
         # Snapshot active processes (no lock needed — dict iteration is safe in asyncio)
         processes = list(self._processes.values())
@@ -801,7 +801,7 @@ class ProcessManager:
         After successful cron restart, sends any pending content that was queued
         during a settings-triggered restart (user sent text + startup settings changes).
         """
-        from twicc.cron_restart import restart_session_crons
+        from twicc.providers.claude_code.cron_restart import restart_session_crons
 
         RUNTIME_INITIAL_DELAY = 10  # seconds before first attempt (let API recover)
 
@@ -1042,7 +1042,7 @@ class ProcessManager:
         }
 
         # Enforce 1M consistency
-        from twicc.model_registry import enforce_1m_consistency
+        from twicc.providers.claude_code.model_registry import enforce_1m_consistency
         requested["context_max"] = enforce_1m_consistency(requested["selected_model"], requested["context_max"])
 
         changes = classify_claude_settings_changes(process.get_claude_settings(), requested)
@@ -1164,7 +1164,7 @@ class ProcessManager:
         # On ASSISTANT_TURN, the CLI has created the JSONL file, so we can
         # now write the title that was stored when the draft was sent.
         if state == ProcessState.ASSISTANT_TURN:
-            from twicc.titles import get_pending_title, pop_pending_title, protect_title, rename_session_in_jsonl
+            from twicc.providers.claude_code.titles import get_pending_title, pop_pending_title, protect_title, rename_session_in_jsonl
 
             pending = get_pending_title(process.session_id)
             if pending:
@@ -1177,7 +1177,7 @@ class ProcessManager:
 
         # Update last_stopped_at when process dies, and propagate to recent subagents
         if state == ProcessState.DEAD:
-            from twicc.titles import clear_protected_title, get_protected_title, rename_session_in_jsonl
+            from twicc.providers.claude_code.titles import clear_protected_title, get_protected_title, rename_session_in_jsonl
 
             # Re-write the user-set title at the end of the JSONL so the CLI's
             # tail-scan finds it on the next resume (survives server restarts).

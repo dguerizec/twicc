@@ -29,9 +29,9 @@ from twicc.synced_settings import _settings_lock, prepare_settings_for_client, r
 from twicc.workspaces import read_workspaces, write_workspaces
 from twicc.message_snippets import read_message_snippets_config, write_message_snippets_config
 from twicc.terminal_config import read_terminal_config, write_terminal_config
-from twicc.claude_settings_presets import read_claude_settings_presets, write_claude_settings_presets
-from twicc.claude_auth import check_and_broadcast as check_claude_auth_and_broadcast, get_auth_message_for_connection
-from twicc.usage_task import get_usage_message_for_connection
+from twicc.providers.claude_code.claude_settings_presets import read_claude_settings_presets, write_claude_settings_presets
+from twicc.providers.claude_code.auth import check_and_broadcast as check_claude_auth_and_broadcast, get_auth_message_for_connection
+from twicc.providers.claude_code.usage_task import get_usage_message_for_connection
 from twicc.terminal import terminal_application
 
 logger = logging.getLogger(__name__)
@@ -639,7 +639,7 @@ class UpdatesConsumer(AsyncJsonWebsocketConsumer):
 
         # Send Claude Code status if currently not operational
         if self._should_send("claude_status"):
-            from twicc.statuspage_task import get_statuspage_message_for_connection
+            from twicc.providers.claude_code.statuspage_task import get_statuspage_message_for_connection
             status_msg = get_statuspage_message_for_connection()
             if status_msg:
                 await self.send_json(status_msg)
@@ -807,7 +807,7 @@ class UpdatesConsumer(AsyncJsonWebsocketConsumer):
 
         # Validate title if provided
         if title is not None:
-            from twicc.titles import validate_title
+            from twicc.providers.claude_code.titles import validate_title
 
             validated_title, title_error = validate_title(title)
             if title_error:
@@ -897,7 +897,7 @@ class UpdatesConsumer(AsyncJsonWebsocketConsumer):
                 }
 
                 # Safety net: auto-upgrade retired models (frontend should have corrected, but just in case)
-                from twicc.model_registry import enforce_1m_consistency, get_upgrade_target, is_model_retired
+                from twicc.providers.claude_code.model_registry import enforce_1m_consistency, get_upgrade_target, is_model_retired
                 if is_model_retired(effective["selected_model"]):
                     target = get_upgrade_target(effective["selected_model"])
                     if target:
@@ -925,12 +925,12 @@ class UpdatesConsumer(AsyncJsonWebsocketConsumer):
                 # Session doesn't exist: create new with client-provided ID
                 # Store title as pending if provided (will be written when process is safe)
                 if title:
-                    from twicc.titles import set_pending_title
+                    from twicc.providers.claude_code.titles import set_pending_title
 
                     set_pending_title(session_id, title)
 
                 # Store session settings as pending (will be applied when watcher creates the session row)
-                from twicc.pending_settings import set_pending
+                from twicc.providers.claude_code.pending_settings import set_pending
 
                 set_pending(
                     session_id,
@@ -955,7 +955,7 @@ class UpdatesConsumer(AsyncJsonWebsocketConsumer):
                 }
 
                 # Safety net: auto-upgrade retired models (frontend should have corrected, but just in case)
-                from twicc.model_registry import enforce_1m_consistency, get_upgrade_target, is_model_retired
+                from twicc.providers.claude_code.model_registry import enforce_1m_consistency, get_upgrade_target, is_model_retired
                 if is_model_retired(effective["selected_model"]):
                     target = get_upgrade_target(effective["selected_model"])
                     if target:
@@ -1214,7 +1214,7 @@ class UpdatesConsumer(AsyncJsonWebsocketConsumer):
 
         Always returns the prompt used for generation, so frontend can regenerate.
         """
-        from twicc.title_suggest import (
+        from twicc.providers.claude_code.title_suggest import (
             generate_title,
             get_first_user_message,
         )
@@ -1274,7 +1274,7 @@ class UpdatesConsumer(AsyncJsonWebsocketConsumer):
 
                 # Enforce 1M consistency when defaultModel changes
                 if "defaultModel" in synced_settings:
-                    from twicc.model_registry import (
+                    from twicc.providers.claude_code.model_registry import (
                         enforce_effort_max_consistency,
                         enforce_effort_xhigh_consistency,
                         selected_model_supports_1m,
@@ -1324,7 +1324,7 @@ class UpdatesConsumer(AsyncJsonWebsocketConsumer):
             await self.send_json({"type": "usage_file_validated", "valid": False, "message": "No file path provided"})
             return
 
-        from twicc.usage import validate_usage_file
+        from twicc.providers.claude_code.usage import validate_usage_file
 
         valid, message = await sync_to_async(validate_usage_file)(file_path.strip())
         await self.send_json({"type": "usage_file_validated", "valid": valid, "message": message})
@@ -1336,7 +1336,7 @@ class UpdatesConsumer(AsyncJsonWebsocketConsumer):
             await self.send_json({"type": "usage_dump_path_validated", "valid": False, "message": "No file path provided"})
             return
 
-        from twicc.usage import validate_usage_dump_path
+        from twicc.providers.claude_code.usage import validate_usage_dump_path
 
         valid, message = await sync_to_async(validate_usage_dump_path)(file_path.strip())
         await self.send_json({"type": "usage_dump_path_validated", "valid": valid, "message": message})

@@ -20,7 +20,7 @@ from typing import NamedTuple
 import orjson
 from django.conf import settings
 
-from twicc.compute import (
+from .compute import (
     AGENT_TOOL_NAMES,
     GroupState,
     ItemDisplayLevel,

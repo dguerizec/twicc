@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from twicc.claude_auth import check_and_broadcast, get_auth_wake_event
+from .auth import check_and_broadcast, get_auth_wake_event
 
 logger = logging.getLogger(__name__)
 

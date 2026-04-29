@@ -286,7 +286,7 @@ def reindex_session(session_id: str) -> None:
     """
     import orjson
 
-    from twicc.compute import get_message_content
+    from twicc.providers.claude_code.compute import get_message_content
     from twicc.core.enums import ItemKind
     from twicc.core.models import Session, SessionItem
 

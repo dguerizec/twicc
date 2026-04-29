@@ -24,7 +24,7 @@ from asgiref.sync import sync_to_async
 from django.conf import settings
 
 from twicc import search
-from twicc.compute import get_message_content
+from .compute import get_message_content
 from twicc.core.enums import ItemKind
 from twicc.core.models import Session, SessionType
 from twicc.startup_progress import broadcast_startup_progress

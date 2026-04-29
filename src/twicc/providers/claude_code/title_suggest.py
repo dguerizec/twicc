@@ -8,7 +8,7 @@ from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient, ResultMessage
 
 import orjson
 
-from twicc.compute import extract_text_from_content, get_message_content
+from .compute import extract_text_from_content, get_message_content
 from twicc.core.models import SessionItem
 from twicc.core.enums import ItemKind
 

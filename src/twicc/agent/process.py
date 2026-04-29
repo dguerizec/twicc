@@ -845,7 +845,7 @@ class ClaudeProcess:
         # in slow-poll mode (30s). The SDK is about to create that directory
         # for this session — boost the watcher to 5s so we pick up the new
         # JSONL file quickly.
-        from twicc.sessions_watcher import request_fast_poll
+        from twicc.providers.claude_code.sessions_watcher import request_fast_poll
         request_fast_poll()
 
         try:
@@ -1114,7 +1114,7 @@ class ClaudeProcess:
         Uses the model registry to resolve versioned models to their full SDK
         name, and appends "[1m]" only when the model supports extended context.
         """
-        from twicc.model_registry import resolve_sdk_model
+        from twicc.providers.claude_code.model_registry import resolve_sdk_model
 
         model = selected_model if selected_model is not None else self.selected_model
         ctx = context_max if context_max is not None else self.context_max
@@ -1488,7 +1488,7 @@ class ClaudeProcess:
                     # Flip the global auth state immediately. The credentials file
                     # may still exist on disk, but the SDK has just told us the
                     # token is no longer accepted — that's the authoritative signal.
-                    from twicc.claude_auth import mark_unauthenticated_and_broadcast
+                    from twicc.providers.claude_code.auth import mark_unauthenticated_and_broadcast
                     await mark_unauthenticated_and_broadcast()
                     self._client = None
                     if pid is not None:

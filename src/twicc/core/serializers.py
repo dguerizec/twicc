@@ -11,7 +11,7 @@ from functools import lru_cache
 
 from django.conf import settings
 
-from twicc.pricing import extract_model_info
+from twicc.providers.claude_code.pricing import extract_model_info
 
 
 def serialize_project(project):
@@ -44,7 +44,7 @@ def serialize_session(session):
     This ensures that when a session is created with a custom title, the title
     is immediately visible even before it's written to the JSONL file.
     """
-    from twicc.titles import get_pending_title
+    from twicc.providers.claude_code.titles import get_pending_title
 
     # Use pending title if available, otherwise use the stored title
     title = get_pending_title(session.id) or session.title

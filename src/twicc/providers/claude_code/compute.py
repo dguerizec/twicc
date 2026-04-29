@@ -24,7 +24,7 @@ from django.db.models import Q
 
 from twicc.core.enums import ItemDisplayLevel, ItemKind
 from twicc.core.models import AgentLink, Project, Session, SessionItem, SessionType, ToolResultLink
-from twicc.pricing import (
+from .pricing import (
     calculate_line_cost,
     calculate_line_context_usage,
     extract_model_info,

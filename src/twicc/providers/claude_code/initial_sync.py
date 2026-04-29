@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING
 
 from django.conf import settings
 
-from twicc.compute import (
+from .compute import (
     ensure_project_git_root,
     update_project_total_cost,
 )

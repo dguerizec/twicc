@@ -19,7 +19,7 @@ import threading
 
 from dotenv import load_dotenv
 
-from twicc.env import purge_claude_code_vars
+from twicc.providers.claude_code.env import purge_claude_code_vars
 from twicc.paths import get_env_path
 
 # Clean up Claude Code environment variables that may have been inherited from a
@@ -51,21 +51,21 @@ logging.getLogger("twicc").addHandler(_startup_console)
 from django.core.management import call_command  # noqa: E402
 
 from twicc.agent import shutdown_process_manager  # noqa: E402
-from twicc.background_task import ComputeContext, start_background_compute_task, stop_background_task  # noqa: E402
+from twicc.providers.claude_code.background_task import ComputeContext, start_background_compute_task, stop_background_task  # noqa: E402
 from twicc.core.models import Project, Session, SessionType  # noqa: E402
-from twicc.initial_sync import scan_projects, scan_sessions, sync_all  # noqa: E402
-from twicc.pricing_task import run_initial_price_sync, start_price_sync_task, stop_price_sync_task  # noqa: E402
-from twicc.sessions_watcher import start_watcher, stop_watcher  # noqa: E402
+from twicc.providers.claude_code.initial_sync import scan_projects, scan_sessions, sync_all  # noqa: E402
+from twicc.providers.claude_code.pricing_task import run_initial_price_sync, start_price_sync_task, stop_price_sync_task  # noqa: E402
+from twicc.providers.claude_code.sessions_watcher import start_watcher, stop_watcher  # noqa: E402
 from twicc.startup_progress import broadcast_startup_progress  # noqa: E402
-from twicc.auth_task import start_auth_task, stop_auth_task  # noqa: E402
-from twicc.usage_task import start_usage_sync_task, stop_usage_sync_task
-from twicc.statuspage_task import start_statuspage_task, stop_statuspage_task  # noqa: E402
-from twicc.slash_commands_task import start_slash_commands_task, stop_slash_commands_task  # noqa: E402
+from twicc.providers.claude_code.auth_task import start_auth_task, stop_auth_task  # noqa: E402
+from twicc.providers.claude_code.usage_task import start_usage_sync_task, stop_usage_sync_task
+from twicc.providers.claude_code.statuspage_task import start_statuspage_task, stop_statuspage_task  # noqa: E402
+from twicc.providers.claude_code.slash_commands_task import start_slash_commands_task, stop_slash_commands_task  # noqa: E402
 from twicc.search import init_search_index, shutdown_search_index  # noqa: E402
-from twicc.search_indexing_task import start_search_index_task, stop_search_index_task  # noqa: E402
+from twicc.providers.claude_code.search_indexing_task import start_search_index_task, stop_search_index_task  # noqa: E402
 from twicc.version_check_task import start_version_check_task, stop_version_check_task  # noqa: E402
 from twicc.agent.original_file_cache import start_cleanup_task as start_original_file_cache_cleanup, stop_cleanup_task as stop_original_file_cache_cleanup  # noqa: E402
-from twicc.model_retirement_task import start_model_retirement_task, stop_model_retirement_task  # noqa: E402
+from twicc.providers.claude_code.model_retirement_task import start_model_retirement_task, stop_model_retirement_task  # noqa: E402
 
 
 def _count_total_sessions() -> int:
@@ -208,7 +208,7 @@ async def run_server(port: int):
 
         # Restart cron jobs from previous process runs.
         # Must run after watcher is up so that JSONL writes from restarted sessions are detected.
-        from twicc.cron_restart import restart_all_session_crons
+        from twicc.providers.claude_code.cron_restart import restart_all_session_crons
         deferred["cron_restart_task"] = asyncio.create_task(
             restart_all_session_crons(stop_event=shutdown_event)
         )
