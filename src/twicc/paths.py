@@ -24,6 +24,7 @@ worktree root so each worktree gets its own DB, logs, and .env.
 """
 
 import os
+import re
 from pathlib import Path
 
 # Environment variable name to override the data directory
@@ -106,6 +107,18 @@ def get_workspaces_path() -> Path:
 
 def get_claude_settings_presets_path() -> Path:
     return get_data_dir() / "claude-settings-presets.json"
+
+
+def path_to_project_id(path: str) -> str:
+    """Convert a filesystem path to a Claude Code project ID.
+
+    Pure function: replaces each non-alphanumeric character with a dash,
+    matching Claude Code's convention for naming subfolders of
+    ~/.claude/projects/. The caller is responsible for resolving and
+    normalizing the path beforehand (e.g. via os.path.realpath) if a
+    canonical ID is required.
+    """
+    return re.sub(r'[^a-zA-Z0-9]', '-', path)
 
 
 def ensure_data_dirs() -> None:

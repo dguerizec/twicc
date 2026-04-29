@@ -1,7 +1,6 @@
 """API views and SPA catch-all for serving the frontend."""
 
 import os
-import re
 from bisect import bisect_left
 from datetime import datetime, timedelta
 
@@ -22,6 +21,7 @@ from twicc.core.serializers import (
     serialize_session_item,
     serialize_session_item_metadata,
 )
+from twicc.paths import path_to_project_id
 
 # Number of sessions to return per page
 # Set high (1000) to effectively load all sessions at once for most users,
@@ -202,7 +202,7 @@ def _create_project(request):
             )
 
     # 2. Generate project ID: all non-alphanumeric chars become dashes
-    project_id = re.sub(r'[^a-zA-Z0-9]', '-', resolved)
+    project_id = path_to_project_id(resolved)
 
     # 3. Check project doesn't already exist
     if Project.objects.filter(id=project_id).exists():
