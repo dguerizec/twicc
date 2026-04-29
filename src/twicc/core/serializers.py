@@ -11,7 +11,7 @@ from functools import lru_cache
 
 from django.conf import settings
 
-from twicc.core.pricing import extract_model_info
+from twicc.pricing import extract_model_info
 
 
 def serialize_project(project):

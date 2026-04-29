@@ -13,7 +13,7 @@ def main() -> None:
 
     from twicc.core.models import UsageSnapshot
     from twicc.core.serializers import serialize_usage_snapshot
-    from twicc.core.usage import compute_period_costs
+    from twicc.usage import compute_period_costs
 
     snapshot = UsageSnapshot.objects.first()  # ordered by -fetched_at
     if snapshot is None:

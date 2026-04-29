@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from twicc.core.pricing import sync_model_prices
+from twicc.pricing import sync_model_prices
 
 logger = logging.getLogger(__name__)
 

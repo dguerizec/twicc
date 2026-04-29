@@ -16,7 +16,7 @@ from channels.layers import get_channel_layer
 
 from twicc.core.models import UsageSnapshot
 from twicc.core.serializers import serialize_usage_snapshot
-from twicc.core.usage import compute_period_costs, fetch_and_save_usage
+from twicc.usage import compute_period_costs, fetch_and_save_usage
 
 logger = logging.getLogger(__name__)
 

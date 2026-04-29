@@ -1488,7 +1488,7 @@ class ClaudeProcess:
                     # Flip the global auth state immediately. The credentials file
                     # may still exist on disk, but the SDK has just told us the
                     # token is no longer accepted — that's the authoritative signal.
-                    from twicc.core.auth import mark_unauthenticated_and_broadcast
+                    from twicc.claude_auth import mark_unauthenticated_and_broadcast
                     await mark_unauthenticated_and_broadcast()
                     self._client = None
                     if pid is not None:

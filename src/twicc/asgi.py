@@ -30,7 +30,7 @@ from twicc.workspaces import read_workspaces, write_workspaces
 from twicc.message_snippets import read_message_snippets_config, write_message_snippets_config
 from twicc.terminal_config import read_terminal_config, write_terminal_config
 from twicc.claude_settings_presets import read_claude_settings_presets, write_claude_settings_presets
-from twicc.core.auth import check_and_broadcast as check_claude_auth_and_broadcast, get_auth_message_for_connection
+from twicc.claude_auth import check_and_broadcast as check_claude_auth_and_broadcast, get_auth_message_for_connection
 from twicc.usage_task import get_usage_message_for_connection
 from twicc.terminal import terminal_application
 
@@ -1324,7 +1324,7 @@ class UpdatesConsumer(AsyncJsonWebsocketConsumer):
             await self.send_json({"type": "usage_file_validated", "valid": False, "message": "No file path provided"})
             return
 
-        from twicc.core.usage import validate_usage_file
+        from twicc.usage import validate_usage_file
 
         valid, message = await sync_to_async(validate_usage_file)(file_path.strip())
         await self.send_json({"type": "usage_file_validated", "valid": valid, "message": message})
@@ -1336,7 +1336,7 @@ class UpdatesConsumer(AsyncJsonWebsocketConsumer):
             await self.send_json({"type": "usage_dump_path_validated", "valid": False, "message": "No file path provided"})
             return
 
-        from twicc.core.usage import validate_usage_dump_path
+        from twicc.usage import validate_usage_dump_path
 
         valid, message = await sync_to_async(validate_usage_dump_path)(file_path.strip())
         await self.send_json({"type": "usage_dump_path_validated", "valid": valid, "message": message})
