@@ -43,9 +43,9 @@ const dialogLabel = computed(() => {
 const modelOptions = computed(() => {
     const registry = getModelRegistry() || []
     return registry.map((entry) => {
-        const baseLabel = getModelLabel(entry.selectedModel)
+        const baseLabel = getModelLabel(entry.selected_model)
         return {
-            value: entry.selectedModel,
+            value: entry.selected_model,
             label: entry.latest ? `${baseLabel} (latest)` : baseLabel,
         }
     })

@@ -687,12 +687,12 @@ export function initStaticCommands(router) {
             icon: 'robot',
             category: 'claude',
             items: () => getModelRegistry().map(entry => ({
-                id: entry.selectedModel,
+                id: entry.selected_model,
                 label: entry.latest
-                    ? `${getModelLabel(entry.selectedModel)} (latest: ${entry.version})`
-                    : `${getModelLabel(entry.selectedModel)} (until ${entry.retirementDate})`,
-                action: () => settings.setClaudeCodeDefaultModel(entry.selectedModel),
-                active: settings.claudeCodeDefaultModel === entry.selectedModel,
+                    ? `${getModelLabel(entry.selected_model)} (latest: ${entry.version})`
+                    : `${getModelLabel(entry.selected_model)} (until ${entry.retirement_date})`,
+                action: () => settings.setClaudeCodeDefaultModel(entry.selected_model),
+                active: settings.claudeCodeDefaultModel === entry.selected_model,
             })),
         },
         {

@@ -7,17 +7,21 @@ provider helpers registry.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterable
+from datetime import date
 from functools import lru_cache
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, ClassVar, NamedTuple
 
 import orjson
 
-from twicc.core.enums import ItemKind
+from twicc.core.enums import ItemKind, Provider
 from twicc.providers.helpers import (
     AgentSettingCategory,
+    AgentSettings,
     BaseProviderHelpers,
     IndexableMessage,
+    ModelVersion,
     TitleValidationResult,
     UserMessage,
 )
@@ -28,6 +32,15 @@ from .titles import rename_session_in_jsonl, validate_title
 
 if TYPE_CHECKING:
     from twicc.core.models import SessionItem
+
+logger = logging.getLogger(__name__)
+
+
+class ClaudeCodeModelExtra(NamedTuple):
+    """Capability flags carried in :attr:`ModelVersion.provider_extra` for Claude Code."""
+    supports_1m: bool
+    supports_effort_xhigh: bool
+    supports_effort_max: bool
 
 
 @lru_cache(maxsize=32)
@@ -53,6 +66,8 @@ def serialize_model(model: str | None) -> dict | None:
 
 class ClaudeCodeHelpers(BaseProviderHelpers):
     """Helpers for sessions produced by the Claude Code CLI / SDK."""
+
+    provider: ClassVar[Provider] = Provider.CLAUDE_CODE
 
     SYNCED_SETTINGS_DEFAULTS: ClassVar[dict] = {
         "claudeCodeDefaultPermissionMode": "default",
@@ -95,6 +110,185 @@ class ClaudeCodeHelpers(BaseProviderHelpers):
         "claude_in_chrome": "claudeCodeDefaultClaudeInChrome",
         "context_max": "claudeCodeDefaultContextMax",
     }
+
+    # ------------------------------------------------------------------
+    # Model registry — supported model versions
+    #
+    # The ``selected_model`` value stored in settings and session DB
+    # fields uses:
+    # - bare alias for latest: ``"opus"``, ``"sonnet"``
+    # - versioned alias for non-latest: ``"opus-4.5"``, ``"sonnet-4.5"``
+    #
+    # When communicating with the SDK, latest aliases are passed as-is
+    # (the CLI resolves them), while versioned aliases are resolved to
+    # their ``full_name``.
+    #
+    # Deprecations: https://platform.claude.com/docs/en/about-claude/model-deprecations
+    # ------------------------------------------------------------------
+
+    MODEL_VERSIONS: ClassVar[list[ModelVersion]] = [
+        ModelVersion(
+            provider=Provider.CLAUDE_CODE,
+            model="opus", version="4.7", full_name="claude-opus-4-7",
+            retirement_date=None,  # to set when sonnet 4.8 is released (retire 2027-04-16)
+            latest=True,
+            provider_extra=ClaudeCodeModelExtra(
+                supports_1m=True, supports_effort_xhigh=True, supports_effort_max=True,
+            ),
+        ),
+        ModelVersion(
+            provider=Provider.CLAUDE_CODE,
+            model="opus", version="4.6", full_name="claude-opus-4-6",
+            retirement_date=date(2027, 2, 5),
+            latest=False,
+            provider_extra=ClaudeCodeModelExtra(
+                supports_1m=True, supports_effort_xhigh=False, supports_effort_max=True,
+            ),
+        ),
+        ModelVersion(
+            provider=Provider.CLAUDE_CODE,
+            model="opus", version="4.5", full_name="claude-opus-4-5-20251101",
+            retirement_date=date(2026, 11, 24),
+            latest=False,
+            provider_extra=ClaudeCodeModelExtra(
+                supports_1m=False, supports_effort_xhigh=False, supports_effort_max=False,
+            ),
+        ),
+        ModelVersion(
+            provider=Provider.CLAUDE_CODE,
+            model="sonnet", version="4.6", full_name="claude-sonnet-4-6",
+            retirement_date=None,  # to set when sonnet 4.7 is released (retire 2027-02-17)
+            latest=True,
+            provider_extra=ClaudeCodeModelExtra(
+                supports_1m=True, supports_effort_xhigh=False, supports_effort_max=True,
+            ),
+        ),
+        ModelVersion(
+            provider=Provider.CLAUDE_CODE,
+            model="sonnet", version="4.5", full_name="claude-sonnet-4-5-20250929",
+            retirement_date=date(2026, 9, 29),
+            latest=False,
+            provider_extra=ClaudeCodeModelExtra(
+                supports_1m=False, supports_effort_xhigh=False, supports_effort_max=False,
+            ),
+        ),
+    ]
+
+    def find_model(self, identifier: str) -> ModelVersion | None:
+        """Look up a Claude Code model by its ``selected_model`` alias.
+
+        Accepts both bare aliases (``"opus"``) and versioned aliases
+        (``"opus-4.5"``). For bare aliases, returns the latest version
+        of that family; for versioned aliases, the entry whose
+        ``model`` and ``version`` match.
+        """
+        if "-" in identifier:
+            model, version = identifier.split("-", 1)
+            for mv in self.MODEL_VERSIONS:
+                if mv.model == model and mv.version == version:
+                    return mv
+            return None
+        for mv in self.MODEL_VERSIONS:
+            if mv.model == identifier and mv.latest:
+                return mv
+        return None
+
+    def _resolve_to_default_model_version(self) -> ModelVersion | None:
+        """Return the :class:`ModelVersion` for the synced default model.
+
+        Used by capability checks as a defensive fallback when the
+        caller passes ``None`` or an unknown model. Returns ``None``
+        if the synced default itself is missing or unknown.
+        """
+        from twicc.synced_settings import SYNCED_SETTINGS_DEFAULTS, read_synced_settings
+        default_model = (
+            read_synced_settings().get("claudeCodeDefaultModel")
+            or SYNCED_SETTINGS_DEFAULTS.get("claudeCodeDefaultModel")
+        )
+        if not default_model:
+            return None
+        return self.find_model(default_model)
+
+    def resolve_sdk_model(self, selected_model: str | None, context_max: int) -> str | None:
+        """Resolve a ``selected_model`` + ``context_max`` to the SDK model string.
+
+        - Latest aliases (``"opus"``, ``"sonnet"``) are passed through (the CLI resolves them).
+        - Versioned aliases (``"opus-4.5"``) are resolved to their ``full_name``.
+        - Appends ``"[1m]"`` when ``context_max`` is 1M and the model supports it.
+
+        Returns ``None`` for an empty input.
+        """
+        if not selected_model:
+            return None
+        mv = self.find_model(selected_model)
+        if mv is None:
+            logger.warning("Unknown model '%s', passing through to SDK", selected_model)
+            base = selected_model
+            supports_1m = True
+        elif mv.latest:
+            base = mv.model
+            supports_1m = mv.provider_extra.supports_1m
+        else:
+            base = mv.full_name
+            supports_1m = mv.provider_extra.supports_1m
+        if context_max == 1_000_000 and supports_1m:
+            return f"{base}[1m]"
+        return base
+
+    def selected_model_supports_1m(self, selected_model: str | None) -> bool:
+        """Return ``True`` if the model (or the synced default fallback) supports 1M context."""
+        mv = self.find_model(selected_model) if selected_model else None
+        if mv is None:
+            mv = self._resolve_to_default_model_version()
+        return bool(mv and mv.provider_extra.supports_1m)
+
+    def selected_model_supports_effort_xhigh(self, selected_model: str | None) -> bool:
+        """Return ``True`` if the model (or default fallback) supports the ``"xhigh"`` effort level."""
+        mv = self.find_model(selected_model) if selected_model else None
+        if mv is None:
+            mv = self._resolve_to_default_model_version()
+        return bool(mv and mv.provider_extra.supports_effort_xhigh)
+
+    def selected_model_supports_effort_max(self, selected_model: str | None) -> bool:
+        """Return ``True`` if the model (or default fallback) supports the ``"max"`` effort level."""
+        mv = self.find_model(selected_model) if selected_model else None
+        if mv is None:
+            mv = self._resolve_to_default_model_version()
+        return bool(mv and mv.provider_extra.supports_effort_max)
+
+    def enforce_agent_settings_consistency(self, settings: AgentSettings) -> AgentSettings:
+        """Auto-upgrade retired model, then normalise capability rules.
+
+        Pipeline:
+        1. Delegates to :meth:`BaseProviderHelpers.enforce_agent_settings_consistency`
+           to substitute a retired ``selected_model`` with its successor.
+        2. Caps ``context_max`` to 200K when the (post-upgrade) model
+           doesn't support 1M context.
+        3. Demotes ``effort == "max"`` to ``"xhigh"`` (or ``"high"`` if
+           xhigh is also unsupported), then ``effort == "xhigh"`` to
+           ``"high"`` when unsupported.
+        """
+        settings = super().enforce_agent_settings_consistency(settings)
+
+        model = settings.selected_model
+        context_max = settings.context_max
+        effort = settings.effort
+
+        if context_max == 1_000_000 and not self.selected_model_supports_1m(model):
+            context_max = 200_000
+
+        if effort == "max" and not self.selected_model_supports_effort_max(model):
+            effort = "xhigh" if self.selected_model_supports_effort_xhigh(model) else "high"
+        if effort == "xhigh" and not self.selected_model_supports_effort_xhigh(model):
+            effort = "high"
+
+        if context_max == settings.context_max and effort == settings.effort:
+            return settings
+        return settings._replace(context_max=context_max, effort=effort)
+
+    def serialize_model_extra(self, mv: ModelVersion) -> dict:
+        """Expose Claude Code's :class:`ClaudeCodeModelExtra` flags on the wire."""
+        return mv.provider_extra._asdict()
 
     def get_user_messages(self, items: Iterable[SessionItem]) -> list[UserMessage]:
         from twicc.search import extract_indexable_text
@@ -165,7 +359,6 @@ class ClaudeCodeHelpers(BaseProviderHelpers):
 
     def get_bootstrap_data(self) -> dict:
         from .claude_settings_presets import read_claude_settings_presets
-        from .model_registry import serialize_model_registry
 
         return {
             "agent_settings_presets": read_claude_settings_presets(),
@@ -173,5 +366,5 @@ class ClaudeCodeHelpers(BaseProviderHelpers):
                 category.value: keys
                 for category, keys in self.AGENT_SETTINGS_CATEGORIES.items()
             },
-            "model_registry": serialize_model_registry(),
+            "model_registry": self.serialize_model_registry(),
         }

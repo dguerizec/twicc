@@ -773,18 +773,18 @@ function onChangelogClose() {
                         >
                             <wa-option
                                 v-for="entry in modelRegistryOptions.latest"
-                                :key="entry.selectedModel"
-                                :value="entry.selectedModel"
+                                :key="entry.selected_model"
+                                :value="entry.selected_model"
                             >
-                                {{ getModelLabel(entry.selectedModel) }} (latest: {{ entry.version }})
+                                {{ getModelLabel(entry.selected_model) }} (latest: {{ entry.version }})
                             </wa-option>
                             <wa-divider v-if="modelRegistryOptions.older.length"></wa-divider>
                             <wa-option
                                 v-for="entry in modelRegistryOptions.older"
-                                :key="entry.selectedModel"
-                                :value="entry.selectedModel"
+                                :key="entry.selected_model"
+                                :value="entry.selected_model"
                             >
-                                {{ getModelLabel(entry.selectedModel) }} (until {{ formatRetirementDate(entry.retirementDate) }})
+                                {{ getModelLabel(entry.selected_model) }} (until {{ formatRetirementDate(entry.retirement_date) }})
                             </wa-option>
                         </wa-select>
                     </div>

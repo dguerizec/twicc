@@ -18,9 +18,9 @@ Concrete providers live in ``providers/<name>/helpers.py`` and subclass
 from __future__ import annotations
 
 from collections.abc import Iterable
-from datetime import datetime
+from datetime import date, datetime
 from enum import StrEnum
-from typing import TYPE_CHECKING, ClassVar, NamedTuple
+from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple
 
 from twicc.core.enums import Provider
 
@@ -113,8 +113,33 @@ class AgentSettings(NamedTuple):
         )
 
 
+class ModelVersion(NamedTuple):
+    """A single supported model version, contributed by one provider.
+
+    ``provider`` identifies the provider that owns the entry. ``model``
+    is the family alias (e.g. ``"opus"``), ``version`` the short version
+    string (e.g. ``"4.7"``), ``full_name`` the full SDK identifier
+    (e.g. ``"claude-opus-4-7"``). ``retirement_date`` is ``None`` for
+    the current default of its family. ``latest`` is ``True`` for the
+    one entry per ``(provider, model)`` line currently considered the
+    default. ``provider_extra`` is a provider-specific NamedTuple
+    carrying capability flags or other metadata that doesn't generalise
+    cross-provider — for Claude Code this is
+    :class:`ClaudeCodeModelExtra`.
+    """
+    provider: Provider
+    model: str
+    version: str
+    full_name: str
+    retirement_date: date | None
+    latest: bool
+    provider_extra: Any
+
+
 class BaseProviderHelpers:
     """Abstract per-provider helpers."""
+
+    provider: ClassVar[Provider]
 
     # Provider-specific entries to merge into ``SYNCED_SETTINGS_DEFAULTS``.
     # Keys must be namespaced (e.g. ``claudeCodeDefault*``) to avoid clashes
@@ -138,6 +163,11 @@ class BaseProviderHelpers:
     # used as fallback when the session-level value is unset. Drives
     # :meth:`resolve_agent_settings`. Each provider defines its own mapping.
     AGENT_SETTINGS_FIELDS_MAPPING: ClassVar[dict[str, str]] = {}
+
+    # Supported model versions for this provider. Each provider exposes
+    # its own list; the cross-provider registry aggregates them via the
+    # :class:`ProviderHelpersRegistry`.
+    MODEL_VERSIONS: ClassVar[list[ModelVersion]] = []
 
     def resolve_agent_settings(self, source: AgentSettings) -> AgentSettings:
         """Return the effective per-agent settings, with synced defaults as fallback.
@@ -242,6 +272,139 @@ class BaseProviderHelpers:
         Default implementation contributes nothing.
         """
         return {}
+
+    # ------------------------------------------------------------------
+    # Model registry
+    # ------------------------------------------------------------------
+
+    def find_model(self, identifier: str) -> ModelVersion | None:
+        """Look up a :class:`ModelVersion` in :attr:`MODEL_VERSIONS` by ``identifier``.
+
+        Default implementation matches against ``ModelVersion.full_name``.
+        Providers whose user-facing identifier diverges from the SDK
+        full name (e.g. Claude Code uses aliases like ``"opus"`` and
+        ``"opus-4.5"``) override this to handle their own semantics.
+        """
+        for mv in self.MODEL_VERSIONS:
+            if mv.full_name == identifier:
+                return mv
+        return None
+
+    def is_model_retired(self, identifier: str) -> bool:
+        """Return ``True`` when the model identified by ``identifier`` is past its retirement date."""
+        mv = self.find_model(identifier)
+        if mv is None or mv.retirement_date is None:
+            return False
+        return date.today() > mv.retirement_date
+
+    def get_upgrade_target(self, identifier: str) -> str | None:
+        """Return the identifier of the next-up version in the same model family.
+
+        Looks within :attr:`MODEL_VERSIONS` for entries with the same
+        ``(provider, model)`` and a strictly higher ``version``, picking
+        the closest higher one. Returns the bare alias (``mv.model``)
+        when the upgrade target is the latest in its family, otherwise
+        the versioned alias (``"{model}-{version}"``). Returns ``None``
+        when no upgrade is possible. Provider helpers may override this
+        if their identifier scheme is not the alias-based one assumed
+        here.
+        """
+        mv = self.find_model(identifier)
+        if mv is None:
+            return None
+
+        def parse(version: str) -> list[int]:
+            return [int(p) for p in version.split(".")]
+
+        family = sorted(
+            (v for v in self.MODEL_VERSIONS if v.provider == mv.provider and v.model == mv.model),
+            key=lambda v: parse(v.version),
+        )
+        current = parse(mv.version)
+        for candidate in family:
+            if parse(candidate.version) > current:
+                return candidate.model if candidate.latest else f"{candidate.model}-{candidate.version}"
+        return None
+
+    def enforce_agent_settings_consistency(self, settings: AgentSettings) -> AgentSettings:
+        """Return ``settings`` normalised against this provider's rules.
+
+        Generic call sites (consumer, cron restart, retirement task)
+        invoke this once on a settings bundle to make every field
+        mutually valid given the chosen model. The base implementation
+        only enforces the cross-provider rule that's always meaningful:
+        if ``selected_model`` is retired, substitute it with its
+        :meth:`get_upgrade_target` successor. Providers whose models
+        carry capability flags override this to add their own rules
+        (typically: call ``super()`` for the auto-upgrade, then demote
+        ``context_max`` / ``effort`` against the resolved model's
+        capabilities).
+        """
+        selected = settings.selected_model
+        if selected and self.is_model_retired(selected):
+            target = self.get_upgrade_target(selected)
+            if target:
+                settings = settings._replace(selected_model=target)
+        return settings
+
+    def selected_model_value(self, mv: ModelVersion) -> str:
+        """Return the round-trip identifier for ``mv``.
+
+        This is the value carried in ``Session.selected_model``, in WS
+        ``send_message`` payloads, and in the front's model dropdowns.
+        Each provider's helpers can override to fit its own naming
+        convention; the default — ``mv.model`` for the latest version
+        of a family, ``"{model}-{version}"`` otherwise — is what most
+        providers will want.
+
+        The point of having a single ``selected_model`` field on every
+        serialised entry is that the front consumes the registry the
+        same way regardless of provider.
+        """
+        return mv.model if mv.latest else f"{mv.model}-{mv.version}"
+
+    def serialize_model_extra(self, mv: ModelVersion) -> dict:
+        """Return the serialised form of ``mv.provider_extra``.
+
+        Default implementation returns an empty dict (provider has no
+        extra fields). Providers whose ``provider_extra`` carries
+        capability flags or other metadata override to expose them on
+        the wire — e.g. Claude Code returns the ``supports_*`` flags.
+        """
+        return {}
+
+    def serialize_model_registry(self) -> list[dict]:
+        """Serialize :attr:`MODEL_VERSIONS` for the bootstrap payload.
+
+        Each entry is the ``_asdict()`` of the :class:`ModelVersion``
+        with ``retirement_date`` rendered as an ISO date string.
+        ``provider_extra`` is replaced by the dict produced by
+        :meth:`serialize_model_extra` so each provider controls the
+        wire shape of its own extras. A ``selected_model`` field — the
+        round-trip identifier produced by :meth:`selected_model_value`
+        — is added on every entry so the front can consume the
+        registry uniformly across providers. ``provider`` is kept on
+        each entry so consumers can treat the entry as self-describing
+        even when it travels outside the per-provider nesting.
+
+        Entries are sorted with latest versions first (by family name),
+        then non-latest by version descending then family name — the
+        natural order for a model-picker dropdown.
+        """
+        latest: list[dict] = []
+        non_latest: list[dict] = []
+        for mv in self.MODEL_VERSIONS:
+            entry = mv._asdict()
+            entry["provider"] = mv.provider.value
+            entry["retirement_date"] = (
+                mv.retirement_date.isoformat() if mv.retirement_date else None
+            )
+            entry["provider_extra"] = self.serialize_model_extra(mv)
+            entry["selected_model"] = self.selected_model_value(mv)
+            (latest if mv.latest else non_latest).append(entry)
+        latest.sort(key=lambda e: e["model"])
+        non_latest.sort(key=lambda e: ([-int(p) for p in e["version"].split(".")], e["model"]))
+        return latest + non_latest
 
 
 class ProviderHelpersRegistry:

@@ -968,15 +968,10 @@ class ClaudeAgentManager(BaseAgentManager):
             return
 
         provider_helpers = get_provider_helpers(Provider.CLAUDE_CODE)
-        # Resolve effective settings (null → global default)
-        requested_settings = provider_helpers.resolve_agent_settings(
-            AgentSettings.from_session(session),
-        )
-
-        # Enforce 1M consistency
-        from twicc.providers.claude_code.model_registry import enforce_1m_consistency
-        requested_settings = requested_settings._replace(
-            context_max=enforce_1m_consistency(requested_settings.selected_model, requested_settings.context_max),
+        # Resolve effective settings (null → global default), then enforce
+        # provider-specific capability rules
+        requested_settings = provider_helpers.enforce_agent_settings_consistency(
+            provider_helpers.resolve_agent_settings(AgentSettings.from_session(session)),
         )
 
         changes = provider_helpers.classify_agent_settings_changes(

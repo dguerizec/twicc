@@ -965,7 +965,7 @@ function buildSessionSettingsCommands() {
                 const current = getSessionSettingValue('selected_model')
                 const claudeCodeDefaultModel = settingsStore.getClaudeCodeDefaultModel
                 const registry = getModelRegistry()
-                const defaultEntry = registry.find(e => e.selectedModel === claudeCodeDefaultModel)
+                const defaultEntry = registry.find(e => e.selected_model === claudeCodeDefaultModel)
                 const defaultSuffix = defaultEntry?.latest ? ` (latest: ${defaultEntry.version})` : ''
                 const defaultLabel = `${getModelLabel(claudeCodeDefaultModel)}${defaultSuffix}`
 
@@ -980,20 +980,20 @@ function buildSessionSettingsCommands() {
                 ]
                 for (const entry of registry.filter(e => e.latest)) {
                     items.push({
-                        id: entry.selectedModel,
+                        id: entry.selected_model,
                         group: 'latest',
-                        label: `${getModelLabel(entry.selectedModel)} (latest: ${entry.version})`,
-                        action: () => setSessionSettingValue('selected_model', entry.selectedModel),
-                        active: current === entry.selectedModel,
+                        label: `${getModelLabel(entry.selected_model)} (latest: ${entry.version})`,
+                        action: () => setSessionSettingValue('selected_model', entry.selected_model),
+                        active: current === entry.selected_model,
                     })
                 }
                 for (const entry of registry.filter(e => !e.latest)) {
                     items.push({
-                        id: entry.selectedModel,
+                        id: entry.selected_model,
                         group: 'older',
-                        label: `${getModelLabel(entry.selectedModel)} (until ${formatRetirementDate(entry.retirementDate)})`,
-                        action: () => setSessionSettingValue('selected_model', entry.selectedModel),
-                        active: current === entry.selectedModel,
+                        label: `${getModelLabel(entry.selected_model)} (until ${formatRetirementDate(entry.retirement_date)})`,
+                        action: () => setSessionSettingValue('selected_model', entry.selected_model),
+                        active: current === entry.selected_model,
                     })
                 }
                 return items

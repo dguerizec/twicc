@@ -1019,11 +1019,11 @@ class ClaudeAgent(BaseAgent):
         Uses the model registry to resolve versioned models to their full SDK
         name, and appends "[1m]" only when the model supports extended context.
         """
-        from twicc.providers.claude_code.model_registry import resolve_sdk_model
+        from twicc.providers.helpers import get_provider_helpers
 
         model = selected_model if selected_model is not None else self.agent_settings.selected_model
         ctx = context_max if context_max is not None else self.agent_settings.context_max
-        return resolve_sdk_model(model, ctx)
+        return get_provider_helpers(Provider.CLAUDE_CODE).resolve_sdk_model(model, ctx)
 
     @property
     def sdk_model(self) -> str | None:

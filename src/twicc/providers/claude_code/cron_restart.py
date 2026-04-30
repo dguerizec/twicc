@@ -57,22 +57,9 @@ def _collect_restart_data(session_id: str) -> dict | None:
         logger.warning("Cron restart for session %s: cwd '%s' does not exist on disk", session_id, cwd)
         return None
 
-    settings = get_provider_helpers(Provider.CLAUDE_CODE).resolve_agent_settings(
-        AgentSettings.from_session(session),
-    )
-
-    # Enforce model-capability consistency
-    from .model_registry import (
-        enforce_1m_consistency,
-        enforce_effort_max_consistency,
-        enforce_effort_xhigh_consistency,
-    )
-    settings = settings._replace(
-        context_max=enforce_1m_consistency(settings.selected_model, settings.context_max),
-        effort=enforce_effort_xhigh_consistency(
-            settings.selected_model,
-            enforce_effort_max_consistency(settings.selected_model, settings.effort),
-        ),
+    helpers = get_provider_helpers(Provider.CLAUDE_CODE)
+    agent_settings = helpers.enforce_agent_settings_consistency(
+        helpers.resolve_agent_settings(AgentSettings.from_session(session)),
     )
 
     return {
@@ -83,7 +70,7 @@ def _collect_restart_data(session_id: str) -> dict | None:
             {"cron_expr": c.cron_expr, "recurring": c.recurring, "prompt": c.prompt}
             for c in active_crons
         ],
-        "settings": settings,
+        "settings": agent_settings,
     }
 
 

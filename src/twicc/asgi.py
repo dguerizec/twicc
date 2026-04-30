@@ -702,7 +702,7 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
             )
             return
 
-        manager = get_claude_agent_manager()
+        manager = get_agent_manager_registry().get(provider)
         # Per-session settings: ``None`` means "use global default", any
         # explicit value means "forced for this session". The bundle of
         # field names is the cross-provider :class:`AgentSettings`.
@@ -743,16 +743,9 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
                 # (null → global default, so the process gets concrete values)
                 effective_agent_settings = helpers.resolve_agent_settings(agent_settings)
 
-                # Safety net: auto-upgrade retired models (frontend should have corrected, but just in case)
-                from twicc.providers.claude_code.model_registry import enforce_1m_consistency, get_upgrade_target, is_model_retired
-                if is_model_retired(effective_agent_settings.selected_model):
-                    target = get_upgrade_target(effective_agent_settings.selected_model)
-                    if target:
-                        effective_agent_settings = effective_agent_settings._replace(selected_model=target)
-                # Enforce 1M consistency
-                effective_agent_settings = effective_agent_settings._replace(
-                    context_max=enforce_1m_consistency(effective_agent_settings.selected_model, effective_agent_settings.context_max),
-                )
+                # Auto-upgrade retired models + enforce provider capability rules
+                # (single safety net — front should have corrected, but just in case)
+                effective_agent_settings = helpers.enforce_agent_settings_consistency(effective_agent_settings)
 
                 # Session exists: send message to it
                 await manager.send_to_session(
@@ -786,16 +779,9 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
                 # Resolve effective values for process creation
                 effective_agent_settings = helpers.resolve_agent_settings(agent_settings)
 
-                # Safety net: auto-upgrade retired models (frontend should have corrected, but just in case)
-                from twicc.providers.claude_code.model_registry import enforce_1m_consistency, get_upgrade_target, is_model_retired
-                if is_model_retired(effective_agent_settings.selected_model):
-                    target = get_upgrade_target(effective_agent_settings.selected_model)
-                    if target:
-                        effective_agent_settings = effective_agent_settings._replace(selected_model=target)
-                # Enforce 1M consistency
-                effective_agent_settings = effective_agent_settings._replace(
-                    context_max=enforce_1m_consistency(effective_agent_settings.selected_model, effective_agent_settings.context_max),
-                )
+                # Auto-upgrade retired models + enforce provider capability rules
+                # (single safety net — front should have corrected, but just in case)
+                effective_agent_settings = helpers.enforce_agent_settings_consistency(effective_agent_settings)
 
                 await manager.create_session(
                     session_id, project_id, cwd, text,
@@ -988,23 +974,25 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
                 # Accepted — merge, increment version, write
                 existing.update(synced_settings)
 
-                # Enforce 1M consistency when claudeCodeDefaultModel changes
+                # Enforce provider rules when claudeCodeDefaultModel changes
+                # (auto-upgrade retired model + cap context_max / demote effort)
                 if "claudeCodeDefaultModel" in synced_settings:
-                    from twicc.providers.claude_code.model_registry import (
-                        enforce_effort_max_consistency,
-                        enforce_effort_xhigh_consistency,
-                        selected_model_supports_1m,
-                    )
                     from twicc.synced_settings import SYNCED_SETTINGS_DEFAULTS
-                    new_model = existing.get("claudeCodeDefaultModel", SYNCED_SETTINGS_DEFAULTS["claudeCodeDefaultModel"])
-                    if not selected_model_supports_1m(new_model) and existing.get("claudeCodeDefaultContextMax", 200_000) == 1_000_000:
-                        existing["claudeCodeDefaultContextMax"] = 200_000
-                    current_effort = existing.get("claudeCodeDefaultEffort")
-                    adjusted_effort = enforce_effort_xhigh_consistency(
-                        new_model, enforce_effort_max_consistency(new_model, current_effort)
+                    cc_helpers = get_provider_helpers(Provider.CLAUDE_CODE)
+                    candidate = AgentSettings(
+                        selected_model=existing.get(
+                            "claudeCodeDefaultModel", SYNCED_SETTINGS_DEFAULTS["claudeCodeDefaultModel"],
+                        ),
+                        context_max=existing.get("claudeCodeDefaultContextMax", 200_000),
+                        effort=existing.get("claudeCodeDefaultEffort"),
                     )
-                    if adjusted_effort != current_effort:
-                        existing["claudeCodeDefaultEffort"] = adjusted_effort
+                    adjusted = cc_helpers.enforce_agent_settings_consistency(candidate)
+                    if adjusted.selected_model != candidate.selected_model:
+                        existing["claudeCodeDefaultModel"] = adjusted.selected_model
+                    if adjusted.context_max != candidate.context_max:
+                        existing["claudeCodeDefaultContextMax"] = adjusted.context_max
+                    if adjusted.effort != candidate.effort:
+                        existing["claudeCodeDefaultEffort"] = adjusted.effort
 
                 existing["_version"] = current_version + 1
                 write_synced_settings(existing)

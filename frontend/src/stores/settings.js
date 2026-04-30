@@ -234,11 +234,11 @@ export function getModelRegistry() {
  * (e.g. during boot before the registry has been populated).
  */
 function resolveRegistryEntry(selectedModel) {
-    let entry = selectedModel ? _modelRegistry.find(e => e.selectedModel === selectedModel) : undefined
+    let entry = selectedModel ? _modelRegistry.find(e => e.selected_model === selectedModel) : undefined
     if (!entry) {
         const claudeCodeDefaultModel = useSettingsStore().claudeCodeDefaultModel
         if (claudeCodeDefaultModel) {
-            entry = _modelRegistry.find(e => e.selectedModel === claudeCodeDefaultModel)
+            entry = _modelRegistry.find(e => e.selected_model === claudeCodeDefaultModel)
         }
     }
     return entry
@@ -246,17 +246,17 @@ function resolveRegistryEntry(selectedModel) {
 
 export function modelSupports1m(selectedModel) {
     const entry = resolveRegistryEntry(selectedModel)
-    return entry ? entry.supports1m : false  // last-resort default: conservative
+    return entry ? entry.provider_extra.supports_1m : false  // last-resort default: conservative
 }
 
 export function modelSupportsEffortXhigh(selectedModel) {
     const entry = resolveRegistryEntry(selectedModel)
-    return entry ? entry.supportsEffortXhigh : false  // last-resort default: conservative
+    return entry ? entry.provider_extra.supports_effort_xhigh : false  // last-resort default: conservative
 }
 
 export function modelSupportsEffortMax(selectedModel) {
     const entry = resolveRegistryEntry(selectedModel)
-    return entry ? entry.supportsEffortMax : false  // last-resort default: conservative
+    return entry ? entry.provider_extra.supports_effort_max : false  // last-resort default: conservative
 }
 
 /**
@@ -265,9 +265,9 @@ export function modelSupportsEffortMax(selectedModel) {
  */
 export function getRetiredModelUpgrade(selectedModel) {
     if (!selectedModel) return null
-    const entry = _modelRegistry.find(e => e.selectedModel === selectedModel)
-    if (!entry || entry.latest || !entry.retirementDate) return null
-    if (new Date(entry.retirementDate + 'T00:00:00') >= new Date()) return null
+    const entry = _modelRegistry.find(e => e.selected_model === selectedModel)
+    if (!entry || entry.latest || !entry.retirement_date) return null
+    if (new Date(entry.retirement_date + 'T00:00:00') >= new Date()) return null
     // Find next higher version in same family
     const family = _modelRegistry
         .filter(e => e.model === entry.model)
@@ -280,7 +280,7 @@ export function getRetiredModelUpgrade(selectedModel) {
     for (const candidate of family) {
         const cp = candidate.version.split('.').map(Number)
         if (cp[0] > currentParts[0] || (cp[0] === currentParts[0] && (cp[1] ?? 0) > (currentParts[1] ?? 0))) {
-            return candidate.selectedModel
+            return candidate.selected_model
         }
     }
     return null

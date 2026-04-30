@@ -180,7 +180,7 @@ const contextMaxOptions = Object.values(CONTEXT_MAX).map(value => ({
 const claudeCodeDefaultModelLabel = computed(() => {
     const model = settingsStore.getClaudeCodeDefaultModel
     const registry = getModelRegistry()
-    const entry = registry.find(e => e.selectedModel === model)
+    const entry = registry.find(e => e.selected_model === model)
     if (entry) {
         return entry.latest
             ? `${getModelLabel(model)} (latest: ${entry.version})`
@@ -1773,18 +1773,18 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
                                 <small class="select-group-label">Force to:</small>
                                 <wa-option
                                     v-for="entry in modelRegistryOptions.latest"
-                                    :key="entry.selectedModel"
-                                    :value="entry.selectedModel"
+                                    :key="entry.selected_model"
+                                    :value="entry.selected_model"
                                 >
-                                    {{ getModelLabel(entry.selectedModel) }} (latest: {{ entry.version }})
+                                    {{ getModelLabel(entry.selected_model) }} (latest: {{ entry.version }})
                                 </wa-option>
                                 <wa-divider v-if="modelRegistryOptions.older.length"></wa-divider>
                                 <wa-option
                                     v-for="entry in modelRegistryOptions.older"
-                                    :key="entry.selectedModel"
-                                    :value="entry.selectedModel"
+                                    :key="entry.selected_model"
+                                    :value="entry.selected_model"
                                 >
-                                    {{ getModelLabel(entry.selectedModel) }} (until {{ formatRetirementDate(entry.retirementDate) }})
+                                    {{ getModelLabel(entry.selected_model) }} (until {{ formatRetirementDate(entry.retirement_date) }})
                                 </wa-option>
                             </wa-select>
                             <a v-if="selectedModel !== null" class="reset-setting-link" @click.prevent="selectedModel = null">Reset to default: {{ claudeCodeDefaultModelLabel }}</a>

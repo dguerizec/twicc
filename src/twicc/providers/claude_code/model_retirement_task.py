@@ -61,17 +61,20 @@ async def _check_and_retire() -> None:
     """Perform one retirement check cycle."""
     from channels.layers import get_channel_layer
 
-    from .model_registry import MODEL_VERSIONS, get_upgrade_target, is_model_retired
+    from twicc.core.enums import Provider
+    from twicc.providers.helpers import get_provider_helpers
     from twicc.synced_settings import SYNCED_SETTINGS_DEFAULTS
+
+    helpers = get_provider_helpers(Provider.CLAUDE_CODE)
 
     # Identify all retired non-latest versions
     retired_models: dict[str, str] = {}  # old selected_model → new selected_model
-    for mv in MODEL_VERSIONS:
+    for mv in helpers.MODEL_VERSIONS:
         if mv.retirement_date is None:
             continue
         selected = f"{mv.model}-{mv.version}"
-        if is_model_retired(selected):
-            target = get_upgrade_target(selected)
+        if helpers.is_model_retired(selected):
+            target = helpers.get_upgrade_target(selected)
             if target:
                 retired_models[selected] = target
 
@@ -124,11 +127,6 @@ async def _check_and_retire() -> None:
     #   update the session DB row; _apply_pending_settings will pick it up
     #   at the next USER_TURN transition.
     from twicc.providers.claude_code.agent.manager import get_claude_agent_manager
-    from .model_registry import (
-        enforce_effort_max_consistency,
-        enforce_effort_xhigh_consistency,
-        selected_model_supports_1m,
-    )
 
     manager = get_claude_agent_manager()
     # NOTE: ClaudeAgentManager doesn't expose a public get_all_agents() method.
@@ -139,26 +137,23 @@ async def _check_and_retire() -> None:
             continue
         old_model = process_settings.selected_model
         new_model = retired_models[old_model]
-        ctx = process_settings.context_max
-        if ctx == 1_000_000 and not selected_model_supports_1m(new_model):
-            ctx = 200_000
+        # Substitute the new model, then let the helpers cap context_max /
+        # demote effort if the new model has lower capabilities.
+        adjusted_settings = helpers.enforce_agent_settings_consistency(
+            process_settings._replace(selected_model=new_model),
+        )
         # Update session DB so _apply_pending_settings picks it up if in ASSISTANT_TURN
         from twicc.core.models import Session
         session_updates: dict[str, object] = {"selected_model": new_model}
-        adjusted_effort = enforce_effort_xhigh_consistency(
-            new_model, enforce_effort_max_consistency(new_model, process_settings.effort)
-        )
-        if adjusted_effort != process_settings.effort:
-            session_updates["effort"] = adjusted_effort
+        if adjusted_settings.effort != process_settings.effort:
+            session_updates["effort"] = adjusted_settings.effort
         await asyncio.to_thread(
             lambda sid=process.session_id, upd=session_updates: (
                 Session.objects.filter(id=sid).update(**upd)
             )
         )
         try:
-            await process.apply_live_settings(
-                process_settings._replace(selected_model=new_model, context_max=ctx),
-            )
+            await process.apply_live_settings(adjusted_settings)
             logger.info("Upgraded active process %s: %s → %s", process.session_id, old_model, new_model)
         except Exception:
             logger.exception("Failed to apply retirement upgrade to process %s", process.session_id)
@@ -182,10 +177,11 @@ async def _check_and_retire() -> None:
 
 def _log_upcoming_retirements() -> None:
     """Log a summary of model versions and upcoming retirements at startup."""
-    from .model_registry import MODEL_VERSIONS
+    from twicc.core.enums import Provider
+    from twicc.providers.helpers import get_provider_helpers
 
     today = date_type.today()
-    for mv in MODEL_VERSIONS:
+    for mv in get_provider_helpers(Provider.CLAUDE_CODE).MODEL_VERSIONS:
         if mv.retirement_date is None:
             continue
         days_left = (mv.retirement_date - today).days
