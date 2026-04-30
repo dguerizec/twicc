@@ -20,7 +20,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from datetime import datetime
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple
+from typing import TYPE_CHECKING, ClassVar, NamedTuple
 
 from twicc.core.enums import Provider
 
@@ -40,7 +40,7 @@ class AgentSettingCategory(StrEnum):
     STARTUP = "startup"
 
 if TYPE_CHECKING:
-    from twicc.core.models import SessionItem
+    from twicc.core.models import Session, SessionItem
 
 
 class TitleValidationResult(NamedTuple):
@@ -71,6 +71,48 @@ class IndexableMessage(NamedTuple):
     timestamp: datetime | None
 
 
+class AgentSettings(NamedTuple):
+    """The compact bundle of per-session agent settings, shared across providers.
+
+    Each field corresponds to a column on the ``Session`` ORM model and, in
+    raw form, may be ``None`` to mean "not overridden by the user — fall
+    back to the synced (global) default". After being passed through
+    :meth:`BaseProviderHelpers.resolve_agent_settings`, all fields hold
+    concrete values ready to be handed to a provider's agent factory.
+
+    The set of fields is intentionally generic: every provider receives
+    the full bundle and decides what to do with each — for example,
+    ``claude_in_chrome`` is meaningful for Claude Code only, but the
+    field still travels in the bundle so its absence does not require a
+    provider-specific signature.
+
+    The list is closed (no surprise extra fields) and grows only by
+    explicit edit of this class. Mutate via :meth:`_replace`.
+    """
+    permission_mode: str | None = None
+    selected_model: str | None = None
+    effort: str | None = None
+    thinking_enabled: bool | None = None
+    claude_in_chrome: bool | None = None
+    context_max: int | None = None
+
+    @classmethod
+    def from_session(cls, session: "Session") -> "AgentSettings":
+        """Build an :class:`AgentSettings` from a ``Session`` row's columns.
+
+        ``None`` values are preserved (they mean "use the synced default"
+        downstream, in :meth:`BaseProviderHelpers.resolve_agent_settings`).
+        """
+        return cls(
+            permission_mode=session.permission_mode,
+            selected_model=session.selected_model,
+            effort=session.effort,
+            thinking_enabled=session.thinking_enabled,
+            claude_in_chrome=session.claude_in_chrome,
+            context_max=session.context_max,
+        )
+
+
 class BaseProviderHelpers:
     """Abstract per-provider helpers."""
 
@@ -97,35 +139,36 @@ class BaseProviderHelpers:
     # :meth:`resolve_agent_settings`. Each provider defines its own mapping.
     AGENT_SETTINGS_FIELDS_MAPPING: ClassVar[dict[str, str]] = {}
 
-    def resolve_agent_settings(self, source: dict | Any) -> dict:
+    def resolve_agent_settings(self, source: AgentSettings) -> AgentSettings:
         """Return the effective per-agent settings, with synced defaults as fallback.
 
-        ``source`` is either a dict of override values (e.g. fields parsed
-        from a WebSocket message) or any object exposing the per-agent
-        setting field names as attributes (typically a ``Session`` row). For
-        each field listed in :attr:`AGENT_SETTINGS_FIELDS_MAPPING`, the
-        explicit value wins if non-``None``; otherwise the corresponding
-        synced settings default is used, with the helper's own
+        For each field of :class:`AgentSettings`, the explicit override
+        in ``source`` wins if non-``None``; otherwise the corresponding
+        synced settings default is used (looked up via
+        :attr:`AGENT_SETTINGS_FIELDS_MAPPING`), with the helper's own
         :attr:`SYNCED_SETTINGS_DEFAULTS` as a last-resort fallback.
+        Fields not listed in the mapping (i.e. unsupported by this
+        provider) are returned as ``None``.
         """
         from twicc.synced_settings import read_synced_settings
 
         synced = read_synced_settings()
-        is_dict = isinstance(source, dict)
-        result: dict = {}
-        for field, default_key in self.AGENT_SETTINGS_FIELDS_MAPPING.items():
-            value = source.get(field) if is_dict else getattr(source, field, None)
+        resolved: dict = {}
+        for field in AgentSettings._fields:
+            value = getattr(source, field)
             if value is None:
-                value = synced.get(default_key, self.SYNCED_SETTINGS_DEFAULTS.get(default_key))
-            result[field] = value
-        return result
+                default_key = self.AGENT_SETTINGS_FIELDS_MAPPING.get(field)
+                if default_key is not None:
+                    value = synced.get(default_key, self.SYNCED_SETTINGS_DEFAULTS.get(default_key))
+            resolved[field] = value
+        return AgentSettings(**resolved)
 
     def classify_agent_settings_changes(
         self,
-        current: dict,
-        requested: dict,
+        current: AgentSettings,
+        requested: AgentSettings,
     ) -> dict[AgentSettingCategory, list[str]]:
-        """Return per-category lists of keys that differ between ``current`` and ``requested``.
+        """Return per-category lists of fields that differ between ``current`` and ``requested``.
 
         Default implementation derives the per-category diff from
         :attr:`AGENT_SETTINGS_CATEGORIES`. Categories with no changes return an
@@ -134,10 +177,10 @@ class BaseProviderHelpers:
         result: dict[AgentSettingCategory, list[str]] = {
             category: [] for category in self.AGENT_SETTINGS_CATEGORIES
         }
-        for category, keys in self.AGENT_SETTINGS_CATEGORIES.items():
-            for key in keys:
-                if current.get(key) != requested.get(key):
-                    result[category].append(key)
+        for category, fields in self.AGENT_SETTINGS_CATEGORIES.items():
+            for field in fields:
+                if getattr(current, field) != getattr(requested, field):
+                    result[category].append(field)
         return result
 
     def get_user_messages(self, items: Iterable[SessionItem]) -> list[UserMessage]:

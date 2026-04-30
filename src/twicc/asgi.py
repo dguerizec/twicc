@@ -26,6 +26,7 @@ from twicc.agent.registry import get_agent_manager_registry
 from twicc.core.enums import Provider
 from twicc.providers.claude_code.agent.manager import get_claude_agent_manager
 from twicc.providers.claude_code.ws import ClaudeCodeWSHandler
+from twicc.providers.helpers import AgentSettings, get_provider_helpers
 from twicc.synced_settings import _settings_lock, prepare_settings_for_client, read_synced_settings, write_synced_settings
 from twicc.workspaces import read_workspaces, write_workspaces
 from twicc.message_snippets import read_message_snippets_config, write_message_snippets_config
@@ -56,14 +57,17 @@ def get_project_directory(project_id: str) -> str | None:
 
 
 @sync_to_async
-def session_exists(session_id: str) -> bool:
-    """Check if a session exists in the database.
+def get_session_provider(session_id: str) -> str | None:
+    """Return the provider string of a session if it exists, ``None`` otherwise.
 
-    Returns True if the session exists, False otherwise.
+    Used by the send_message handler to resolve which provider owns the
+    session: an existing session's provider is authoritative; for a brand
+    new session, the caller falls back to the ``provider`` field in the
+    incoming WebSocket payload.
     """
     from twicc.core.models import Session
 
-    return Session.objects.filter(id=session_id).exists()
+    return Session.objects.filter(id=session_id).values_list("provider", flat=True).first()
 
 
 def _get_project_display_name(project) -> str:
@@ -597,13 +601,6 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
         title = content.get("title")  # Optional, only for new sessions
         images = content.get("images")  # Optional: SDK ImageBlockParam list
         documents = content.get("documents")  # Optional: SDK DocumentBlockParam list
-        # Claude session settings: null = use global default, explicit value = forced
-        permission_mode = content.get("permission_mode")
-        selected_model = content.get("selected_model")
-        effort = content.get("effort")
-        thinking_enabled = content.get("thinking_enabled")
-        claude_in_chrome = content.get("claude_in_chrome")
-        context_max = content.get("context_max")
 
         # Validate required fields (text is allowed to be empty for settings-only updates)
         if not session_id or not project_id:
@@ -620,27 +617,76 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
             )
             return
 
+        # Resolve the provider that owns this session: an existing session's
+        # provider is authoritative; for a brand new session, the front must
+        # tell us via the ``provider`` field in the payload.
+        existing_provider = await get_session_provider(session_id)
+        exists = existing_provider is not None
+        if exists:
+            try:
+                provider = Provider(existing_provider)
+            except ValueError:
+                logger.error(
+                    "send_message: session %s has unknown provider %r",
+                    session_id, existing_provider,
+                )
+                await self.send_json(
+                    {
+                        "type": "error",
+                        "message": f"Session {session_id} has an unknown provider",
+                    }
+                )
+                return
+        else:
+            provider_value = content.get("provider")
+            if not provider_value:
+                logger.warning(
+                    "send_message: missing 'provider' for new session %s",
+                    session_id,
+                )
+                await self.send_json(
+                    {
+                        "type": "error",
+                        "message": "send_message for a new session requires a 'provider' field",
+                    }
+                )
+                return
+            try:
+                provider = Provider(provider_value)
+            except ValueError:
+                logger.warning(
+                    "send_message: unknown provider %r for new session %s",
+                    provider_value, session_id,
+                )
+                await self.send_json(
+                    {
+                        "type": "error",
+                        "message": f"Unknown provider: {provider_value!r}",
+                    }
+                )
+                return
+
+        helpers = get_provider_helpers(provider)
+
         # Validate title if provided
         if title is not None:
-            from twicc.providers.claude_code.titles import validate_title
-
-            validated_title, title_error = validate_title(title)
-            if title_error:
+            title_result = helpers.validate_title(title)
+            if title_result.error:
                 logger.warning(
                     "send_message: invalid title for session %s: %s",
                     session_id,
-                    title_error,
+                    title_result.error,
                 )
                 await self.send_json(
                     {
                         "type": "invalid_title",
                         "session_id": session_id,
                         "title": title,
-                        "error": title_error,
+                        "error": title_result.error,
                     }
                 )
                 return
-            title = validated_title
+            title = title_result.title
 
         # Get project directory from database
         cwd = await get_project_directory(project_id)
@@ -656,27 +702,22 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
             )
             return
 
-        # Check if session exists to determine whether to create new or resume
-        exists = await session_exists(session_id)
-
         manager = get_claude_agent_manager()
-        settings_fields = {
-            "permission_mode": permission_mode,
-            "selected_model": selected_model,
-            "effort": effort,
-            "thinking_enabled": thinking_enabled,
-            "claude_in_chrome": claude_in_chrome,
-            "context_max": context_max,
-        }
+        # Per-session settings: ``None`` means "use global default", any
+        # explicit value means "forced for this session". The bundle of
+        # field names is the cross-provider :class:`AgentSettings`.
+        agent_settings = AgentSettings(**{
+            field: content.get(field) for field in AgentSettings._fields
+        })
         try:
             if exists:
-                # Save all Claude session settings to DB in one query.
+                # Save all session settings to DB in one query.
                 # Values are null (use global default) or explicit (forced).
                 from twicc.core.models import Session
                 from twicc.core.serializers import serialize_session
                 await sync_to_async(
                     Session.objects.filter(id=session_id).update
-                )(**settings_fields)
+                )(**agent_settings._asdict())
                 # Broadcast session update so all clients see the new settings
                 session_obj = await sync_to_async(Session.objects.filter(id=session_id).first)()
                 if session_obj:
@@ -700,22 +741,23 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
 
                 # Resolve effective values for the process manager
                 # (null → global default, so the process gets concrete values)
-                from twicc.providers.helpers import get_provider_helpers as _get_helpers
-                effective = _get_helpers(Provider.CLAUDE_CODE).resolve_agent_settings(settings_fields)
+                effective_agent_settings = helpers.resolve_agent_settings(agent_settings)
 
                 # Safety net: auto-upgrade retired models (frontend should have corrected, but just in case)
                 from twicc.providers.claude_code.model_registry import enforce_1m_consistency, get_upgrade_target, is_model_retired
-                if is_model_retired(effective["selected_model"]):
-                    target = get_upgrade_target(effective["selected_model"])
+                if is_model_retired(effective_agent_settings.selected_model):
+                    target = get_upgrade_target(effective_agent_settings.selected_model)
                     if target:
-                        effective["selected_model"] = target
+                        effective_agent_settings = effective_agent_settings._replace(selected_model=target)
                 # Enforce 1M consistency
-                effective["context_max"] = enforce_1m_consistency(effective["selected_model"], effective["context_max"])
+                effective_agent_settings = effective_agent_settings._replace(
+                    context_max=enforce_1m_consistency(effective_agent_settings.selected_model, effective_agent_settings.context_max),
+                )
 
                 # Session exists: send message to it
                 await manager.send_to_session(
                     session_id, project_id, cwd, text,
-                    **effective,
+                    settings=effective_agent_settings,
                     images=images, documents=documents,
                 )
             else:
@@ -737,34 +779,27 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
                     set_pending_title(session_id, title)
 
                 # Store session settings as pending (will be applied when watcher creates the session row)
-                from twicc.providers.claude_code.pending_settings import set_pending
+                from twicc.pending_agent_settings import set_pending_agent_settings
 
-                set_pending(
-                    session_id,
-                    permission_mode=permission_mode,
-                    selected_model=selected_model,
-                    effort=effort,
-                    thinking_enabled=thinking_enabled,
-                    claude_in_chrome=claude_in_chrome,
-                    context_max=context_max,
-                )
+                set_pending_agent_settings(session_id, agent_settings)
 
                 # Resolve effective values for process creation
-                from twicc.providers.helpers import get_provider_helpers as _get_helpers
-                effective = _get_helpers(Provider.CLAUDE_CODE).resolve_agent_settings(settings_fields)
+                effective_agent_settings = helpers.resolve_agent_settings(agent_settings)
 
                 # Safety net: auto-upgrade retired models (frontend should have corrected, but just in case)
                 from twicc.providers.claude_code.model_registry import enforce_1m_consistency, get_upgrade_target, is_model_retired
-                if is_model_retired(effective["selected_model"]):
-                    target = get_upgrade_target(effective["selected_model"])
+                if is_model_retired(effective_agent_settings.selected_model):
+                    target = get_upgrade_target(effective_agent_settings.selected_model)
                     if target:
-                        effective["selected_model"] = target
+                        effective_agent_settings = effective_agent_settings._replace(selected_model=target)
                 # Enforce 1M consistency
-                effective["context_max"] = enforce_1m_consistency(effective["selected_model"], effective["context_max"])
+                effective_agent_settings = effective_agent_settings._replace(
+                    context_max=enforce_1m_consistency(effective_agent_settings.selected_model, effective_agent_settings.context_max),
+                )
 
                 await manager.create_session(
                     session_id, project_id, cwd, text,
-                    **effective,
+                    settings=effective_agent_settings,
                     images=images, documents=documents,
                 )
         except RuntimeError as e:

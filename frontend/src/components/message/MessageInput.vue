@@ -1266,6 +1266,7 @@ async function handleSend() {
         type: 'send_message',
         session_id: props.sessionId,
         project_id: props.projectId,
+        provider: session.value?.provider,
         text: text,
         // Settings: null = use global default, explicit value = forced for this session
         permission_mode: selectedPermissionMode.value,

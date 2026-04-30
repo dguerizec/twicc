@@ -31,6 +31,7 @@ import json_repair
 from twicc.agent import AgentInfo, AgentState, BaseAgent, PendingRequest, StateChangeCallback
 from twicc.core.enums import Provider
 from twicc.providers.claude_code.agent.plugin import get_plugin_dir
+from twicc.providers.helpers import AgentSettings
 
 from .sdk_logger import patch_client as patch_client_for_logging
 from .tool_label_filter import filter_tool_input
@@ -91,15 +92,10 @@ class ClaudeAgent(BaseAgent):
         session_id: str,
         project_id: str,
         cwd: str,
-        permission_mode: str,
-        selected_model: str | None,
-        effort: str | None,
-        thinking_enabled: bool | None,
+        settings: AgentSettings,
         get_session_slug: Callable[[str], Coroutine[Any, Any, str | None]],
         on_cron_created: CronCreatedCallback,
         on_cron_deleted: CronDeletedCallback,
-        claude_in_chrome: bool = False,
-        context_max: int = 200_000,
     ) -> None:
         """Initialize a Claude agent wrapper.
 
@@ -107,27 +103,19 @@ class ClaudeAgent(BaseAgent):
             session_id: The session to resume
             project_id: The TwiCC project this belongs to
             cwd: Working directory for Claude operations
-            permission_mode: SDK permission mode (e.g., "default", "bypassPermissions")
-            selected_model: SDK model shorthand (e.g., "opus", "sonnet") or None for default
-            effort: SDK effort level (e.g., "low", "medium", "high", "max") or None for default
-            thinking_enabled: Whether extended thinking is enabled (True=adaptive, False=disabled) or None
+            settings: Per-session agent settings (already resolved against
+                synced defaults). Each field is unpacked onto ``self`` so
+                the rest of the agent code keeps using the individual
+                attributes; mutations via ``set_permission_mode`` /
+                ``apply_live_settings`` update those attributes in place.
             get_session_slug: Async callback that retrieves the slug stored on the
                 Session model. Takes a session_id and returns the slug string or None.
-            claude_in_chrome: Whether the built-in Chrome MCP is activated (default False)
-            context_max: Maximum context window size in tokens (200_000 or 1_000_000)
             on_cron_created: Async callback fired when a CronCreate PostToolUse event occurs.
                 Receives (session_id, cron_id, cron_expr, recurring, prompt, created_at, next_fire).
             on_cron_deleted: Async callback fired when a CronDelete PostToolUse event occurs.
                 Receives (session_id, cron_id).
         """
-        super().__init__(session_id, project_id, cwd)
-
-        self.permission_mode = permission_mode
-        self.selected_model = selected_model
-        self.effort = effort
-        self.thinking_enabled = thinking_enabled
-        self.claude_in_chrome = claude_in_chrome
-        self.context_max = context_max
+        super().__init__(session_id, project_id, cwd, agent_settings=settings)
 
         self._client: ClaudeSDKClient | None = None
         self._interrupting = False  # Set when interrupt() is called, suppresses error toast
@@ -149,16 +137,11 @@ class ClaudeAgent(BaseAgent):
         self._old_runs_purged = False                   # True after old ProcessRuns are purged at first USER_TURN
 
         logger.debug(
-            "ClaudeAgent created for session %s, project %s, cwd=%s, permission_mode=%s, model=%s, effort=%s, thinking=%s, chrome=%s, context_max=%s",
+            "ClaudeAgent created for session %s, project %s, cwd=%s, settings=%s",
             session_id,
             project_id,
             cwd,
-            permission_mode,
-            selected_model,
-            effort,
-            thinking_enabled,
-            claude_in_chrome,
-            context_max,
+            settings,
         )
 
     def _log_stderr(self, line: str) -> None:
@@ -171,17 +154,6 @@ class ClaudeAgent(BaseAgent):
             self.session_id,
             line.rstrip(),
         )
-
-    def get_claude_settings(self) -> dict:
-        """Return the current Claude session settings as a dict for comparison."""
-        return {
-            "permission_mode": self.permission_mode,
-            "selected_model": self.selected_model,
-            "effort": self.effort,
-            "thinking_enabled": self.thinking_enabled,
-            "claude_in_chrome": self.claude_in_chrome,
-            "context_max": self.context_max,
-        }
 
     def get_pid(self) -> int | None:
         """Get the PID of the underlying Claude CLI subprocess.
@@ -802,9 +774,9 @@ class ClaudeAgent(BaseAgent):
             # Create options - either resume existing session or create new with custom ID
             # Build thinking config from boolean flag
             thinking_config = None
-            if self.thinking_enabled is True:
+            if self.agent_settings.thinking_enabled is True:
                 thinking_config = ThinkingConfigAdaptive(type="adaptive", display="summarized")
-            elif self.thinking_enabled is False:
+            elif self.agent_settings.thinking_enabled is False:
                 thinking_config = ThinkingConfigDisabled(type="disabled")
 
             # PostToolUse hook for cron tracking — closure captures self so the
@@ -847,7 +819,7 @@ class ClaudeAgent(BaseAgent):
 
             extra_args: dict[str, str | None] = {
                 "allow-dangerously-skip-permissions": None,
-                ("chrome" if self.claude_in_chrome else "no-chrome"): None
+                ("chrome" if self.agent_settings.claude_in_chrome else "no-chrome"): None
             }
 
             options = ClaudeAgentOptions(
@@ -856,9 +828,9 @@ class ClaudeAgent(BaseAgent):
                     "preset": "claude_code",  # Use Claude Code's system prompt
                 },
                 cwd=self.cwd,
-                permission_mode=self.permission_mode,
+                permission_mode=self.agent_settings.permission_mode,
                 model=self.sdk_model,
-                effort=self.effort,
+                effort=self.agent_settings.effort,
                 thinking=thinking_config,
                 setting_sources=["user", "project", "local"],
                 plugins=[{"type": "local", "path": str(get_plugin_dir())}],
@@ -951,7 +923,7 @@ class ClaudeAgent(BaseAgent):
             self.session_id,
         )
         await self._client.set_permission_mode(mode)
-        self.permission_mode = mode
+        self.agent_settings = self.agent_settings._replace(permission_mode=mode)
 
     async def stop_agent(self, agent_id: str) -> None:
         """Stop a running agent/task via the SDK.
@@ -1025,8 +997,8 @@ class ClaudeAgent(BaseAgent):
         Calls the SDK's set_model() method with the full SDK model string
         (including "[1m]" suffix for extended context if applicable).
 
-        Note: this does NOT update self.selected_model or self.context_max.
-        The caller (apply_live_settings) is responsible for updating those.
+        Note: this does NOT update ``self.agent_settings``. The caller
+        (apply_live_settings) is responsible for that.
 
         Raises:
             RuntimeError: If the process is not started
@@ -1049,8 +1021,8 @@ class ClaudeAgent(BaseAgent):
         """
         from twicc.providers.claude_code.model_registry import resolve_sdk_model
 
-        model = selected_model if selected_model is not None else self.selected_model
-        ctx = context_max if context_max is not None else self.context_max
+        model = selected_model if selected_model is not None else self.agent_settings.selected_model
+        ctx = context_max if context_max is not None else self.agent_settings.context_max
         return resolve_sdk_model(model, ctx)
 
     @property
@@ -1099,35 +1071,32 @@ class ClaudeAgent(BaseAgent):
         """Check if a message is an ack from a settings control request (not real assistant activity)."""
         return ClaudeAgent._is_permission_mode_change_ack(msg) or ClaudeAgent._is_model_change_ack(msg)
 
-    async def apply_live_settings(
-        self,
-        permission_mode: str,
-        selected_model: str | None,
-        context_max: int,
-    ) -> None:
+    async def apply_live_settings(self, settings: AgentSettings) -> None:
         """Apply live and idle setting changes to the live SDK client.
 
-        Compares the requested values with the current values and calls the SDK
-        methods only when they differ.
+        Of the bundled :class:`AgentSettings`, only the fields that
+        Claude Code classifies as live or idle are consulted here:
+        ``permission_mode`` (live, applicable in any state), and
+        ``selected_model`` + ``context_max`` (idle, applicable during
+        USER_TURN). Other fields are ignored — they're either
+        startup-only (handled by a restart elsewhere) or not consumed
+        by the SDK on a live client.
 
-        Permission mode (live): can be changed in any active state.
-        Model + context_max (idle): can only be changed during USER_TURN.
-        Context_max is handled by rebuilding the sdk_model string.
-
-        Args:
-            permission_mode: Desired permission mode
-            selected_model: Desired model shorthand, or None
-            context_max: Desired context window size (200_000 or 1_000_000)
+        The SDK methods are called only when the requested value
+        differs from the current one. Context_max is folded into the
+        ``sdk_model`` string when set_model is called.
         """
-        if permission_mode != self.permission_mode:
-            await self.set_permission_mode(permission_mode)
+        if settings.permission_mode != self.agent_settings.permission_mode:
+            await self.set_permission_mode(settings.permission_mode)
 
         if self.state == AgentState.USER_TURN:
-            new_sdk_model = self._build_sdk_model(selected_model, context_max)
+            new_sdk_model = self._build_sdk_model(settings.selected_model, settings.context_max)
             if new_sdk_model != self.sdk_model:
                 await self.set_model(new_sdk_model)
-                self.selected_model = selected_model
-                self.context_max = context_max
+                self.agent_settings = self.agent_settings._replace(
+                    selected_model=settings.selected_model,
+                    context_max=settings.context_max,
+                )
 
     async def send(
         self,
@@ -1246,7 +1215,6 @@ class ClaudeAgent(BaseAgent):
         current_stream_tool_id: str | None = None
         current_stream_tool_name: str | None = None
         current_stream_tool_input_raw: str = ""
-        current_stream_tool_input: dict | None = None
         current_stream_tool_input_cleaned: dict | None = None
 
         try:
@@ -1326,7 +1294,6 @@ class ClaudeAgent(BaseAgent):
                             and (current_stream_tool_id := block.get("id"))
                         ):
                             current_stream_tool_input_raw = ""
-                            current_stream_tool_input = {}
                             current_stream_tool_input_cleaned = None
                             # Track the tool from its very first event so the delta
                             # handler's "skip if not tracked" guard can distinguish
@@ -1356,7 +1323,6 @@ class ClaudeAgent(BaseAgent):
                                 logger.exception(f"Failed to parse tool input: {exc}")
                             else:
                                 if isinstance(parsed_input, dict):
-                                    current_stream_tool_input = parsed_input
                                     cleaned = filter_tool_input(current_stream_tool_name, parsed_input)
                                     if cleaned != current_stream_tool_input_cleaned:
                                         current_stream_tool_input_cleaned = cleaned
@@ -1384,7 +1350,6 @@ class ClaudeAgent(BaseAgent):
                             current_stream_tool_id = None
                             current_stream_tool_name = None
                             current_stream_tool_input_raw = ""
-                            current_stream_tool_input = None
                             current_stream_tool_input_cleaned = None
 
                 elif (
@@ -1685,4 +1650,3 @@ class ClaudeAgent(BaseAgent):
                 "last_started_id": self._last_started_tool_id,
             }},
         )
-

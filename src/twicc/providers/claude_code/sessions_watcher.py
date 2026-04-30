@@ -20,6 +20,7 @@ from watchfiles import Change, awatch
 import twicc.search as search
 from twicc.providers.claude_code.agent.manager import get_claude_agent_manager
 from twicc.providers.claude_code.agent.original_file_cache import pop_original_file as _pop_cached_original_file
+from twicc.providers.helpers import AgentSettings
 from .compute import AgentLinkUpdate, AgentStoppedUpdate, ToolResultUpdate, cache_agent_prompt, \
     check_agent_naturally_stopped, compute_item_cost_and_usage, \
     compute_item_metadata, \
@@ -151,19 +152,14 @@ def create_session(
     parsed: ParsedPath,
     project: Project,
     parent_session: Session | None = None,
-    permission_mode: str | None = None,
-    selected_model: str | None = None,
-    effort: str | None = None,
-    thinking_enabled: bool | None = None,
-    claude_in_chrome: bool | None = None,
-    context_max: int | None = None,
+    agent_settings: AgentSettings | None = None,
 ) -> Session:
     """Create a session or subagent in the database.
 
-    For subagents, parent_session must be provided.
-    If permission_mode, selected_model, effort, thinking_enabled, claude_in_chrome,
-    or context_max is provided, it overrides the default.
-    Returns the created session.
+    For subagents, ``parent_session`` must be provided. When
+    ``agent_settings`` is provided, each non-``None`` field populates
+    the matching column on the new ``Session`` row; the rest stay at
+    the model's column default.
     """
     if parsed.type == SessionType.SUBAGENT:
         if parent_session is None:
@@ -177,26 +173,17 @@ def create_session(
             agent_id=parsed.session_id,
             compute_version=settings.CURRENT_COMPUTE_VERSION,
         )
-    else:
-        kwargs = dict(
-            id=parsed.session_id,
-            project=project,
-            provider=Provider.CLAUDE_CODE,
-            compute_version=settings.CURRENT_COMPUTE_VERSION,
-        )
-        if permission_mode is not None:
-            kwargs["permission_mode"] = permission_mode
-        if selected_model is not None:
-            kwargs["selected_model"] = selected_model
-        if effort is not None:
-            kwargs["effort"] = effort
-        if thinking_enabled is not None:
-            kwargs["thinking_enabled"] = thinking_enabled
-        if claude_in_chrome is not None:
-            kwargs["claude_in_chrome"] = claude_in_chrome
-        if context_max is not None:
-            kwargs["context_max"] = context_max
-        return Session.objects.create(**kwargs)
+    kwargs: dict = dict(
+        id=parsed.session_id,
+        project=project,
+        provider=Provider.CLAUDE_CODE,
+        compute_version=settings.CURRENT_COMPUTE_VERSION,
+    )
+    if agent_settings is not None:
+        for field, value in agent_settings._asdict().items():
+            if value is not None:
+                kwargs[field] = value
+    return Session.objects.create(**kwargs)
 
 
 @sync_to_async
@@ -394,7 +381,7 @@ async def sync_and_broadcast(
     # Track whether this session was just created via TwiCC (had pending settings).
     # Used below to broadcast an early session_updated even before the user message
     # appears in the JSONL, so the frontend can drop the draft flag immediately.
-    pending = {}
+    pending_agent_settings: AgentSettings | None = None
 
     if session is None:
         # New file - check if it has content before creating
@@ -405,17 +392,11 @@ async def sync_and_broadcast(
 
         # Create session (regular or subagent)
         # Pop any pending settings set by the WS handler for new sessions
-        from .pending_settings import pop_pending
+        from twicc.pending_agent_settings import pop_pending_agent_settings
 
-        pending = pop_pending(parsed.session_id)
+        pending_agent_settings = pop_pending_agent_settings(parsed.session_id)
         session = await create_session(
-            parsed, project, parent_session,
-            permission_mode=pending.get("permission_mode"),
-            selected_model=pending.get("selected_model"),
-            effort=pending.get("effort"),
-            thinking_enabled=pending.get("thinking_enabled"),
-            claude_in_chrome=pending.get("claude_in_chrome"),
-            context_max=pending.get("context_max"),
+            parsed, project, parent_session, agent_settings=pending_agent_settings,
         )
 
     old_title = session.title
@@ -431,7 +412,7 @@ async def sync_and_broadcast(
         # Exception: TwiCC-initiated sessions (identified by having had pending
         # settings) get an early session_updated so the frontend drops the draft
         # flag immediately, without waiting for the user message to appear in JSONL.
-        if session.user_message_count > 0 or pending:
+        if session.user_message_count > 0 or pending_agent_settings is not None:
             await broadcast_message(channel_layer, {
                 "type": "session_updated",
                 "session": serialize_session(session),

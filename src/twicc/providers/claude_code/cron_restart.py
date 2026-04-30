@@ -40,7 +40,7 @@ def _collect_restart_data(session_id: str) -> dict | None:
     """
     from twicc.core.enums import Provider
     from twicc.core.models import Session, SessionCron
-    from twicc.providers.helpers import get_provider_helpers
+    from twicc.providers.helpers import AgentSettings, get_provider_helpers
 
     active_crons = list(SessionCron.active_for_session(session_id))
     if not active_crons:
@@ -57,16 +57,9 @@ def _collect_restart_data(session_id: str) -> dict | None:
         logger.warning("Cron restart for session %s: cwd '%s' does not exist on disk", session_id, cwd)
         return None
 
-    data = {
-        "session_id": session_id,
-        "project_id": session.project_id,
-        "cwd": cwd,
-        "crons_data": [
-            {"cron_expr": c.cron_expr, "recurring": c.recurring, "prompt": c.prompt}
-            for c in active_crons
-        ],
-        **get_provider_helpers(Provider.CLAUDE_CODE).resolve_agent_settings(session),
-    }
+    settings = get_provider_helpers(Provider.CLAUDE_CODE).resolve_agent_settings(
+        AgentSettings.from_session(session),
+    )
 
     # Enforce model-capability consistency
     from .model_registry import (
@@ -74,12 +67,24 @@ def _collect_restart_data(session_id: str) -> dict | None:
         enforce_effort_max_consistency,
         enforce_effort_xhigh_consistency,
     )
-    data["context_max"] = enforce_1m_consistency(data["selected_model"], data["context_max"])
-    data["effort"] = enforce_effort_xhigh_consistency(
-        data["selected_model"], enforce_effort_max_consistency(data["selected_model"], data["effort"])
+    settings = settings._replace(
+        context_max=enforce_1m_consistency(settings.selected_model, settings.context_max),
+        effort=enforce_effort_xhigh_consistency(
+            settings.selected_model,
+            enforce_effort_max_consistency(settings.selected_model, settings.effort),
+        ),
     )
 
-    return data
+    return {
+        "session_id": session_id,
+        "project_id": session.project_id,
+        "cwd": cwd,
+        "crons_data": [
+            {"cron_expr": c.cron_expr, "recurring": c.recurring, "prompt": c.prompt}
+            for c in active_crons
+        ],
+        "settings": settings,
+    }
 
 
 async def restart_all_session_crons(stop_event: asyncio.Event) -> None:

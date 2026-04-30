@@ -20,6 +20,8 @@ from .agent import ClaudeAgent
 if TYPE_CHECKING:
     from datetime import datetime
 
+    from twicc.providers.helpers import AgentSettings
+
 logger = logging.getLogger(__name__)
 
 
@@ -96,12 +98,7 @@ class ClaudeAgentManager(BaseAgentManager):
         project_id: str,
         cwd: str,
         text: str,
-        permission_mode: str = "default",
-        selected_model: str | None = None,
-        effort: str | None = None,
-        thinking_enabled: bool | None = None,
-        claude_in_chrome: bool = True,
-        context_max: int = 200_000,
+        settings: AgentSettings,
         *,
         images: list[dict] | None = None,
         documents: list[dict] | None = None,
@@ -140,15 +137,6 @@ class ClaudeAgentManager(BaseAgentManager):
 
             has_content = bool(text) or bool(images) or bool(documents)
 
-            requested_settings = {
-                "permission_mode": permission_mode,
-                "selected_model": selected_model,
-                "effort": effort,
-                "thinking_enabled": thinking_enabled,
-                "claude_in_chrome": claude_in_chrome,
-                "context_max": context_max,
-            }
-
             if session_id in self._agents:
                 agent = self._agents[session_id]
 
@@ -159,7 +147,7 @@ class ClaudeAgentManager(BaseAgentManager):
 
                 elif agent.state == AgentState.USER_TURN:
                     changes = provider_helpers.classify_agent_settings_changes(
-                        agent.get_claude_settings(), requested_settings,
+                        agent.agent_settings, settings,
                     )
                     has_startup_changes = bool(changes[AgentSettingCategory.STARTUP])
 
@@ -190,7 +178,7 @@ class ClaudeAgentManager(BaseAgentManager):
                             pending = self._pending_after_restart.pop(session_id, None)
                             await self._start_agent(
                                 session_id, project_id, cwd, pending["text"],
-                                resume=True, **requested_settings,
+                                resume=True, settings=settings,
                                 images=pending.get("images"),
                                 documents=pending.get("documents"),
                             )
@@ -198,9 +186,7 @@ class ClaudeAgentManager(BaseAgentManager):
                         return
                     else:
                         # Only live/idle changes → apply on the live agent
-                        await agent.apply_live_settings(
-                            permission_mode, selected_model, context_max,
-                        )
+                        await agent.apply_live_settings(settings)
                         if has_content:
                             await agent.send(text, images=images, documents=documents)
                         return
@@ -209,8 +195,8 @@ class ClaudeAgentManager(BaseAgentManager):
                     # During assistant_turn: apply live (permission) immediately,
                     # send text if any. Idle/startup changes are saved to DB by
                     # the caller and will be checked on next USER_TURN transition.
-                    if permission_mode != agent.permission_mode:
-                        await agent.set_permission_mode(permission_mode)
+                    if settings.permission_mode != agent.agent_settings.permission_mode:
+                        await agent.set_permission_mode(settings.permission_mode)
                     if has_content:
                         await agent.send(text, images=images, documents=documents)
                     return
@@ -230,7 +216,7 @@ class ClaudeAgentManager(BaseAgentManager):
             # Create and start new agent with resume
             await self._start_agent(
                 session_id, project_id, cwd, text, resume=True,
-                **requested_settings,
+                settings=settings,
                 images=images, documents=documents,
             )
 
@@ -240,12 +226,7 @@ class ClaudeAgentManager(BaseAgentManager):
         project_id: str,
         cwd: str,
         text: str,
-        permission_mode: str = "default",
-        selected_model: str | None = None,
-        effort: str | None = None,
-        thinking_enabled: bool | None = None,
-        claude_in_chrome: bool = True,
-        context_max: int = 200_000,
+        settings: AgentSettings,
         *,
         images: list[dict] | None = None,
         documents: list[dict] | None = None,
@@ -276,9 +257,7 @@ class ClaudeAgentManager(BaseAgentManager):
             # Create and start new agent without resume
             await self._start_agent(
                 session_id, project_id, cwd, text, resume=False,
-                permission_mode=permission_mode, selected_model=selected_model,
-                effort=effort, thinking_enabled=thinking_enabled,
-                claude_in_chrome=claude_in_chrome, context_max=context_max,
+                settings=settings,
                 images=images, documents=documents,
             )
 
@@ -371,27 +350,17 @@ class ClaudeAgentManager(BaseAgentManager):
         project_id: str,
         cwd: str,
         *,
-        permission_mode: str,
-        selected_model: str | None,
-        effort: str | None,
-        thinking_enabled: bool | None,
-        claude_in_chrome: bool,
-        context_max: int,
+        settings: AgentSettings,
     ) -> ClaudeAgent:
         """Build a ClaudeAgent wired to this manager's cron callbacks."""
         return ClaudeAgent(
             session_id=session_id,
             project_id=project_id,
             cwd=cwd,
-            permission_mode=permission_mode,
-            selected_model=selected_model,
-            effort=effort,
-            thinking_enabled=thinking_enabled,
+            settings=settings,
             get_session_slug=get_session_slug,
             on_cron_created=self._on_cron_created,
             on_cron_deleted=self._on_cron_deleted,
-            claude_in_chrome=claude_in_chrome,
-            context_max=context_max,
         )
 
     async def _start_agent(
@@ -401,12 +370,7 @@ class ClaudeAgentManager(BaseAgentManager):
         cwd: str,
         text: str,
         resume: bool,
-        permission_mode: str = "default",
-        selected_model: str | None = None,
-        effort: str | None = None,
-        thinking_enabled: bool | None = None,
-        claude_in_chrome: bool = True,
-        context_max: int = 200_000,
+        settings: AgentSettings,
         *,
         images: list[dict] | None = None,
         documents: list[dict] | None = None,
@@ -422,12 +386,7 @@ class ClaudeAgentManager(BaseAgentManager):
         )
         agent = await self._create_agent(
             session_id, project_id, cwd,
-            permission_mode=permission_mode,
-            selected_model=selected_model,
-            effort=effort,
-            thinking_enabled=thinking_enabled,
-            claude_in_chrome=claude_in_chrome,
-            context_max=context_max,
+            settings=settings,
         )
         await self._register_and_start(
             agent, text, resume=resume, images=images, documents=documents,
@@ -1000,7 +959,7 @@ class ClaudeAgentManager(BaseAgentManager):
         - No changes → no-op
         """
         from twicc.core.models import Session
-        from twicc.providers.helpers import AgentSettingCategory, get_provider_helpers
+        from twicc.providers.helpers import AgentSettingCategory, AgentSettings, get_provider_helpers
 
         session = await asyncio.to_thread(
             Session.objects.filter(id=agent.session_id).first
@@ -1010,14 +969,18 @@ class ClaudeAgentManager(BaseAgentManager):
 
         provider_helpers = get_provider_helpers(Provider.CLAUDE_CODE)
         # Resolve effective settings (null → global default)
-        requested = provider_helpers.resolve_agent_settings(session)
+        requested_settings = provider_helpers.resolve_agent_settings(
+            AgentSettings.from_session(session),
+        )
 
         # Enforce 1M consistency
         from twicc.providers.claude_code.model_registry import enforce_1m_consistency
-        requested["context_max"] = enforce_1m_consistency(requested["selected_model"], requested["context_max"])
+        requested_settings = requested_settings._replace(
+            context_max=enforce_1m_consistency(requested_settings.selected_model, requested_settings.context_max),
+        )
 
         changes = provider_helpers.classify_agent_settings_changes(
-            agent.get_claude_settings(), requested,
+            agent.agent_settings, requested_settings,
         )
         if not any(changes.values()):
             return
@@ -1041,7 +1004,7 @@ class ClaudeAgentManager(BaseAgentManager):
                 pending = self._pending_after_restart.pop(agent.session_id)
                 await self._start_agent(
                     agent.session_id, agent.project_id, agent.cwd,
-                    pending["text"], resume=True, **requested,
+                    pending["text"], resume=True, settings=requested_settings,
                     images=pending.get("images"), documents=pending.get("documents"),
                 )
         else:
@@ -1052,11 +1015,7 @@ class ClaudeAgentManager(BaseAgentManager):
                 changes[AgentSettingCategory.LIVE],
                 changes[AgentSettingCategory.IDLE],
             )
-            await agent.apply_live_settings(
-                requested["permission_mode"],
-                requested["selected_model"],
-                requested["context_max"],
-            )
+            await agent.apply_live_settings(requested_settings)
 
 
 def get_claude_agent_manager() -> ClaudeAgentManager:

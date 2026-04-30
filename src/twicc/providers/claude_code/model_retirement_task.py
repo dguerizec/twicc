@@ -134,20 +134,21 @@ async def _check_and_retire() -> None:
     # NOTE: ClaudeAgentManager doesn't expose a public get_all_agents() method.
     # We need to iterate over manager._agents.values() which gives ClaudeAgent instances.
     for process in list(manager._agents.values()):
-        if process.selected_model not in retired_models:
+        process_settings = process.agent_settings
+        if process_settings.selected_model not in retired_models:
             continue
-        old_model = process.selected_model
+        old_model = process_settings.selected_model
         new_model = retired_models[old_model]
-        ctx = process.context_max
+        ctx = process_settings.context_max
         if ctx == 1_000_000 and not selected_model_supports_1m(new_model):
             ctx = 200_000
         # Update session DB so _apply_pending_settings picks it up if in ASSISTANT_TURN
         from twicc.core.models import Session
         session_updates: dict[str, object] = {"selected_model": new_model}
         adjusted_effort = enforce_effort_xhigh_consistency(
-            new_model, enforce_effort_max_consistency(new_model, process.effort)
+            new_model, enforce_effort_max_consistency(new_model, process_settings.effort)
         )
-        if adjusted_effort != process.effort:
+        if adjusted_effort != process_settings.effort:
             session_updates["effort"] = adjusted_effort
         await asyncio.to_thread(
             lambda sid=process.session_id, upd=session_updates: (
@@ -155,7 +156,9 @@ async def _check_and_retire() -> None:
             )
         )
         try:
-            await process.apply_live_settings(process.permission_mode, new_model, ctx)
+            await process.apply_live_settings(
+                process_settings._replace(selected_model=new_model, context_max=ctx),
+            )
             logger.info("Upgraded active process %s: %s → %s", process.session_id, old_model, new_model)
         except Exception:
             logger.exception("Failed to apply retirement upgrade to process %s", process.session_id)

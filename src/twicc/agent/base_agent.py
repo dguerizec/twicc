@@ -14,11 +14,14 @@ import asyncio
 import logging
 import time
 from collections.abc import Callable, Coroutine
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from twicc.core.enums import Provider
 
 from .states import AgentInfo, AgentState, get_process_memory
+
+if TYPE_CHECKING:
+    from twicc.providers.helpers import AgentSettings
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +43,13 @@ class BaseAgent:
     # Provider key (e.g. ``Provider.CLAUDE_CODE``). Subclasses must override.
     provider: ClassVar[Provider]
 
-    def __init__(self, session_id: str, project_id: str, cwd: str) -> None:
+    def __init__(
+        self,
+        session_id: str,
+        project_id: str,
+        cwd: str,
+        agent_settings: AgentSettings,
+    ) -> None:
         # Fail fast if the subclass forgot to set its provider key. Without
         # this guard, the missing attribute would only surface deep inside
         # the first ``get_info()`` call as an opaque ``AttributeError``.
@@ -53,6 +62,11 @@ class BaseAgent:
         self.session_id = session_id
         self.project_id = project_id
         self.cwd = cwd
+
+        # Per-session agent settings as a single typed bundle. Mutate via
+        # ``_replace`` so the assignment site is the only place a setting
+        # changes (no scattered ``self.permission_mode = ...`` writes).
+        self.agent_settings = agent_settings
 
         self.state: AgentState = AgentState.STARTING
         self.previous_state: AgentState | None = None
