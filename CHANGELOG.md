@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## Unreleased
 
+### Changed
+
+- Bump `claude-agent-sdk` from 0.1.69 to 0.1.71 (bundled Claude Code CLI: 2.1.121 → 2.1.123)
+
 ### Fixed
 
 - Better handling of Write tool calls in "Claude is..."
