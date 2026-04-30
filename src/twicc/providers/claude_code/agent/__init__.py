@@ -1,28 +1,15 @@
 """
-Agent module for managing Claude processes.
+Claude Code agent module.
 
-This module provides the infrastructure for running Claude processes that enable
-bidirectional communication with Claude Code via the SDK.
+Provides the infrastructure for running Claude Code SDK agents that enable
+bidirectional communication with Claude Code from TwiCC.
 """
 
-from .manager import ProcessManager, get_process_manager, shutdown_process_manager
-from .process import ClaudeProcess
-from .states import (
-    ProcessInfo,
-    ProcessState,
-    format_bytes,
-    get_process_memory,
-    serialize_process_info,
-)
+from .agent import ClaudeAgent
+from .manager import ClaudeAgentManager, get_claude_agent_manager
 
 __all__ = [
-    "ClaudeProcess",
-    "ProcessInfo",
-    "ProcessManager",
-    "ProcessState",
-    "format_bytes",
-    "get_process_manager",
-    "get_process_memory",
-    "serialize_process_info",
-    "shutdown_process_manager",
+    "ClaudeAgent",
+    "ClaudeAgentManager",
+    "get_claude_agent_manager",
 ]

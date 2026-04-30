@@ -21,8 +21,9 @@ from django.conf import settings
 from django.core.asgi import get_asgi_application
 from django.urls import path
 
-from twicc.providers.claude_code.agent.manager import get_process_manager
-from twicc.providers.claude_code.agent.states import ProcessInfo, ProcessState, serialize_process_info
+from twicc.agent import AgentInfo, serialize_agent_info
+from twicc.agent.registry import get_agent_manager_registry
+from twicc.providers.claude_code.agent.manager import get_claude_agent_manager
 from twicc.providers.claude_code.ws import ClaudeCodeWSHandler
 from twicc.synced_settings import _settings_lock, prepare_settings_for_client, read_synced_settings, write_synced_settings
 from twicc.workspaces import read_workspaces, write_workspaces
@@ -165,10 +166,10 @@ async def _enrich_with_active_crons(message: dict, session_id: str) -> None:
         message["active_crons"] = crons
 
 
-async def broadcast_process_state(info: ProcessInfo) -> None:
+async def broadcast_process_state(info: AgentInfo) -> None:
     """Broadcast a process state change to all connected clients.
 
-    This is the callback registered with ProcessManager to handle
+    This is the callback registered with the agent manager to handle
     state change notifications.
 
     When transitioning out of assistant_turn (e.g. to user_turn or dead),
@@ -177,11 +178,11 @@ async def broadcast_process_state(info: ProcessInfo) -> None:
     before the frontend learns that the turn ended. This prevents a brief flash
     of an intermediate assistant message in conversation display mode.
     """
-    # if info.previous_state == ProcessState.ASSISTANT_TURN and info.state != ProcessState.ASSISTANT_TURN:
+    # if info.previous_state == AgentState.ASSISTANT_TURN and info.state != AgentState.ASSISTANT_TURN:
     #     await asyncio.sleep(1)
 
     channel_layer = get_channel_layer()
-    message = serialize_process_info(info)
+    message = serialize_agent_info(info)
     message["type"] = "process_state"
 
     # Enrich with active crons from the database
@@ -368,15 +369,16 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
                 msg["show_changelog_for_version"] = settings.APP_VERSION
             await self.send_json(msg)
 
-        # Set up broadcast callback on ProcessManager (idempotent, safe to call multiple times)
-        manager = get_process_manager()
-        manager.set_broadcast_callback(broadcast_process_state)
+        # Set up broadcast callback on every provider's agent manager
+        # (idempotent, safe to call multiple times)
+        registry = get_agent_manager_registry()
+        registry.set_broadcast_callback(broadcast_process_state)
 
         # Send current active processes to the connecting client,
         # enriched with session titles, project names, and active crons.
         if self._should_send("active_processes"):
-            processes = manager.get_active_processes()
-            serialized = [serialize_process_info(p) for p in processes]
+            processes = registry.get_active_agents()
+            serialized = [serialize_agent_info(p) for p in processes]
             if serialized:
                 display_info = await get_bulk_session_and_project_display(serialized)
                 for proc in serialized:
@@ -650,7 +652,7 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
         # Check if session exists to determine whether to create new or resume
         exists = await session_exists(session_id)
 
-        manager = get_process_manager()
+        manager = get_claude_agent_manager()
         try:
             if exists:
                 # Save all Claude session settings to DB in one query.
@@ -685,7 +687,7 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
                 # If no text/attachments and no process is running, we're done:
                 # settings are saved to DB and broadcast, nothing to send.
                 has_content = bool(text) or bool(images) or bool(documents)
-                has_process = manager.get_process_info(session_id) is not None
+                has_process = manager.get_agent_info(session_id) is not None
                 if not has_content and not has_process:
                     return
 
@@ -817,8 +819,8 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
             )
             return
 
-        manager = get_process_manager()
-        killed = await manager.kill_process(session_id, reason="manual")
+        registry = get_agent_manager_registry()
+        killed = await registry.kill_agent(session_id, reason="manual")
 
         if not killed:
             # Process not found or not in killable state - not an error, just log
@@ -852,7 +854,7 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
             )
             return
 
-        manager = get_process_manager()
+        manager = get_claude_agent_manager()
         stopped = await manager.stop_agent(session_id, agent_id)
 
         if not stopped:
@@ -881,8 +883,7 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
             # Silent ignore - this is a fire-and-forget notification
             return
 
-        manager = get_process_manager()
-        manager.touch_process_activity(session_id)
+        get_agent_manager_registry().touch_agent_activity(session_id)
 
     async def _handle_suggest_title(self, content: dict) -> None:
         """Handle title suggestion request.

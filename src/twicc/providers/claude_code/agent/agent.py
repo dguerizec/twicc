@@ -1,5 +1,5 @@
 """
-Claude process wrapper for a single SDK client instance.
+Claude Code agent: wraps a single SDK client instance for one TwiCC session.
 """
 
 import asyncio
@@ -28,16 +28,14 @@ from claude_agent_sdk import (
 from channels.layers import get_channel_layer
 import json_repair
 
+from twicc.agent import AgentInfo, AgentState, BaseAgent, PendingRequest, StateChangeCallback
+from twicc.core.enums import Provider
 from twicc.providers.claude_code.agent.plugin import get_plugin_dir
 
 from .sdk_logger import patch_client as patch_client_for_logging
-from .states import PendingRequest, ProcessInfo, ProcessState, get_process_memory
 from .tool_label_filter import filter_tool_input
 
 logger = logging.getLogger(__name__)
-
-# Type alias for the state change callback
-StateChangeCallback = Callable[["ClaudeProcess"], Coroutine[Any, Any, None]]
 
 
 def _capture_original_file(input_data: dict, tool_use_id: str) -> None:
@@ -78,20 +76,15 @@ CronDeletedCallback = Callable[
 ]
 
 
-class ClaudeProcess:
-    """Wraps a single Claude SDK client for one session.
+class ClaudeAgent(BaseAgent):
+    """Claude Code SDK agent for a single TwiCC session.
 
-    This class manages the lifecycle of a Claude process, handling connection,
-    message sending, and state tracking. It is designed to be completely isolated
-    so that any errors in the Claude process never propagate to crash the server.
-
-    Attributes:
-        session_id: The Claude session identifier
-        project_id: The TwiCC project identifier
-        state: Current process state
-        last_activity: Unix timestamp of last activity
-        error: Error message if the process died due to error
+    Manages the lifecycle of a Claude SDK client (connection, message sending,
+    state tracking). Designed to be completely isolated so that any errors in
+    the SDK never propagate to crash the server.
     """
+
+    provider = Provider.CLAUDE_CODE.value
 
     def __init__(
         self,
@@ -108,7 +101,7 @@ class ClaudeProcess:
         claude_in_chrome: bool = False,
         context_max: int = 200_000,
     ) -> None:
-        """Initialize a Claude process wrapper.
+        """Initialize a Claude agent wrapper.
 
         Args:
             session_id: The session to resume
@@ -127,28 +120,18 @@ class ClaudeProcess:
             on_cron_deleted: Async callback fired when a CronDelete PostToolUse event occurs.
                 Receives (session_id, cron_id).
         """
-        self.session_id = session_id
-        self.project_id = project_id
-        self.cwd = cwd
+        super().__init__(session_id, project_id, cwd)
+
         self.permission_mode = permission_mode
         self.selected_model = selected_model
         self.effort = effort
         self.thinking_enabled = thinking_enabled
         self.claude_in_chrome = claude_in_chrome
         self.context_max = context_max
-        self.state = ProcessState.STARTING
-        self.previous_state: ProcessState | None = None
-        self.started_at = time.time()
-        self.state_changed_at = self.started_at
-        self.last_activity = self.started_at
-        self.error: str | None = None
-        self.kill_reason: str | None = None
 
         self._client: ClaudeSDKClient | None = None
         self._interrupting = False  # Set when interrupt() is called, suppresses error toast
-        self._dead_event = asyncio.Event()  # Set when state transitions to DEAD
         self._message_loop_task: asyncio.Task[None] | None = None
-        self._state_change_callback: StateChangeCallback | None = None
         # Concurrent pending requests: the CLI can run multiple concurrency-safe tools
         # in parallel within the same assistant turn (e.g., Read + Glob), each with its
         # own can_use_tool callback. Both dicts are keyed by request_id (UUID).
@@ -164,10 +147,9 @@ class ClaudeProcess:
         self._first_turn_done_event = asyncio.Event()  # Set on first USER_TURN or DEAD
         self._first_user_turn_reached = False           # True only if USER_TURN was reached (not DEAD)
         self._old_runs_purged = False                   # True after old ProcessRuns are purged at first USER_TURN
-        self.process_run = None                         # ProcessRun model instance, set by ProcessManager
 
         logger.debug(
-            "ClaudeProcess created for session %s, project %s, cwd=%s, permission_mode=%s, model=%s, effort=%s, thinking=%s, chrome=%s, context_max=%s",
+            "ClaudeAgent created for session %s, project %s, cwd=%s, permission_mode=%s, model=%s, effort=%s, thinking=%s, chrome=%s, context_max=%s",
             session_id,
             project_id,
             cwd,
@@ -188,21 +170,6 @@ class ClaudeProcess:
             "Claude stderr for session %s: %s",
             self.session_id,
             line.rstrip(),
-        )
-
-    def _set_state(self, new_state: ProcessState) -> None:
-        """Update state with DEBUG logging."""
-        old_state = self.state
-        self.previous_state = old_state
-        self.state = new_state
-        self.state_changed_at = time.time()
-        if new_state == ProcessState.DEAD:
-            self._dead_event.set()
-        logger.debug(
-            "State transition for session %s: %s -> %s",
-            self.session_id,
-            old_state.value,
-            new_state.value,
         )
 
     def get_claude_settings(self) -> dict:
@@ -236,20 +203,6 @@ class ClaudeProcess:
             if process is None:
                 return None
             return getattr(process, "pid", None)
-        except Exception:
-            return None
-
-    def get_memory_rss(self) -> int | None:
-        """Get RSS memory usage of the Claude CLI subprocess.
-
-        Returns:
-            Memory usage in bytes, or None if unavailable
-        """
-        try:
-            pid = self.get_pid()
-            if pid is None:
-                return None
-            return get_process_memory(pid)
         except Exception:
             return None
 
@@ -377,21 +330,13 @@ class ClaudeProcess:
             for tool_use_id, entry in self._active_tools.items()
         ]
 
-    def get_info(self) -> ProcessInfo:
-        """Get an immutable snapshot of the process state."""
-        # Don't query memory for dead processes - the subprocess no longer exists
-        memory_rss = None if self.state == ProcessState.DEAD else self.get_memory_rss()
-        return ProcessInfo(
-            session_id=self.session_id,
-            project_id=self.project_id,
-            state=self.state,
-            previous_state=self.previous_state,
-            started_at=self.started_at,
-            state_changed_at=self.state_changed_at,
-            last_activity=self.last_activity,
-            error=self.error,
-            memory_rss=memory_rss,
-            kill_reason=self.kill_reason,
+    def get_info(self) -> AgentInfo:
+        """Get an immutable snapshot of the agent state.
+
+        Extends the base snapshot with Claude-specific fields (pending requests,
+        active tools and the most recently started tool id).
+        """
+        return super().get_info()._replace(
             pending_requests=self.pending_requests,
             active_tools=tuple(self._serialize_active_tools()),
             last_started_tool_id=self._last_started_tool_id,
@@ -724,7 +669,7 @@ class ClaudeProcess:
     ) -> bool:
         """Resolve a specific pending request with the user's response.
 
-        Called by ProcessManager when a WebSocket response arrives from the frontend.
+        Called by ClaudeAgentManager when a WebSocket response arrives from the frontend.
         The request_id identifies which pending request the response is for, so that
         concurrent permission asks (e.g., parallel Read + Glob) are routed correctly.
 
@@ -963,7 +908,7 @@ class ClaudeProcess:
             )
 
             # Transition to assistant turn
-            self._set_state(ProcessState.ASSISTANT_TURN)
+            self._set_state(AgentState.ASSISTANT_TURN)
             self.last_activity = time.time()
             await self._notify_state_change()
 
@@ -1047,21 +992,6 @@ class ClaudeProcess:
         logger.info("Interrupting session %s", self.session_id)
         await self._client.interrupt()
 
-    async def wait_for_dead(self, timeout: float = 30.0) -> bool:
-        """Wait for the process to reach DEAD state.
-
-        Args:
-            timeout: Maximum seconds to wait
-
-        Returns:
-            True if the process is dead, False if timeout expired
-        """
-        try:
-            await asyncio.wait_for(self._dead_event.wait(), timeout)
-            return True
-        except asyncio.TimeoutError:
-            return False
-
     async def interrupt_or_kill(self, reason: str) -> None:
         """Try to interrupt the process gracefully, fall back to kill.
 
@@ -1072,7 +1002,7 @@ class ClaudeProcess:
         Args:
             reason: Reason for stopping (e.g., "manual", "apply-settings")
         """
-        if self.state in (ProcessState.ASSISTANT_TURN, ProcessState.STARTING):
+        if self.state in (AgentState.ASSISTANT_TURN, AgentState.STARTING):
             try:
                 self.kill_reason = reason
                 await self.interrupt()
@@ -1167,7 +1097,7 @@ class ClaudeProcess:
     @staticmethod
     def _is_settings_change_ack(msg: object) -> bool:
         """Check if a message is an ack from a settings control request (not real assistant activity)."""
-        return ClaudeProcess._is_permission_mode_change_ack(msg) or ClaudeProcess._is_model_change_ack(msg)
+        return ClaudeAgent._is_permission_mode_change_ack(msg) or ClaudeAgent._is_model_change_ack(msg)
 
     async def apply_live_settings(
         self,
@@ -1192,7 +1122,7 @@ class ClaudeProcess:
         if permission_mode != self.permission_mode:
             await self.set_permission_mode(permission_mode)
 
-        if self.state == ProcessState.USER_TURN:
+        if self.state == AgentState.USER_TURN:
             new_sdk_model = self._build_sdk_model(selected_model, context_max)
             if new_sdk_model != self.sdk_model:
                 await self.set_model(new_sdk_model)
@@ -1219,7 +1149,7 @@ class ClaudeProcess:
         if self._client is None:
             raise RuntimeError("Process not started")
 
-        if self.state not in (ProcessState.USER_TURN, ProcessState.ASSISTANT_TURN):
+        if self.state not in (AgentState.USER_TURN, AgentState.ASSISTANT_TURN):
             raise RuntimeError(f"Cannot send message in state {self.state}")
 
         logger.debug("Sending message to session %s", self.session_id)
@@ -1227,8 +1157,8 @@ class ClaudeProcess:
         try:
             # Only transition and notify if we're not already in ASSISTANT_TURN
             # (if this case, Claude will queue the message, we stay in ASSISTANT_TURN)
-            if self.state != ProcessState.ASSISTANT_TURN:
-                self._set_state(ProcessState.ASSISTANT_TURN)
+            if self.state != AgentState.ASSISTANT_TURN:
+                self._set_state(AgentState.ASSISTANT_TURN)
                 self.last_activity = time.time()
                 await self._notify_state_change()
 
@@ -1255,7 +1185,7 @@ class ClaudeProcess:
             "Kill requested for session %s (reason: %s)", self.session_id, reason
         )
 
-        if self.state == ProcessState.DEAD:
+        if self.state == AgentState.DEAD:
             logger.debug("Session %s already dead, skipping kill", self.session_id)
             return
 
@@ -1285,7 +1215,7 @@ class ClaudeProcess:
             await self._kill_system_process(pid)
 
         # Update state
-        self._set_state(ProcessState.DEAD)
+        self._set_state(AgentState.DEAD)
         self.last_activity = time.time()
         self._first_turn_done_event.set()  # Unblock any waiters (cron restart)
         await self._notify_state_change()
@@ -1487,7 +1417,7 @@ class ClaudeProcess:
                     )
                     self._cancel_pending_request_future()
                     pid = self.get_pid()
-                    self._set_state(ProcessState.DEAD)
+                    self._set_state(AgentState.DEAD)
                     self.kill_reason = "auth_required"
                     self.last_activity = time.time()
                     self._first_turn_done_event.set()
@@ -1515,7 +1445,7 @@ class ClaudeProcess:
                                 msg.subtype,
                             )
                             self._cancel_pending_request_future()
-                            self._set_state(ProcessState.DEAD)
+                            self._set_state(AgentState.DEAD)
                             self.last_activity = time.time()
                             self._first_turn_done_event.set()
                             await self._notify_state_change()
@@ -1549,19 +1479,19 @@ class ClaudeProcess:
                         self._active_tools.clear()
                         await self._broadcast_process_tools()
 
-                    self._set_state(ProcessState.USER_TURN)
+                    self._set_state(AgentState.USER_TURN)
                     await self._notify_state_change()
 
                 elif self._is_compacting_status(msg):
                     # CLI is compacting context — notify frontend to show "compacting" label
                     await self._broadcast_process_label("compacting")
 
-                elif self.state != ProcessState.ASSISTANT_TURN:
+                elif self.state != AgentState.ASSISTANT_TURN:
                     # Enforce assistant state if another message came after the ResultMessage.
                     # Skip ack messages from control requests (set_permission_mode, set_model)
                     # as they don't represent real assistant activity.
                     if not self._is_settings_change_ack(msg):
-                        self._set_state(ProcessState.ASSISTANT_TURN)
+                        self._set_state(AgentState.ASSISTANT_TURN)
                         await self._notify_state_change()
 
         except asyncio.CancelledError:
@@ -1570,7 +1500,7 @@ class ClaudeProcess:
         except (ClaudeSDKError, Exception) as e:
             # If the process was already killed intentionally (apply-settings, manual, shutdown),
             # the message loop error is expected (CLI exiting) — don't treat it as an error.
-            if self.state == ProcessState.DEAD and self.kill_reason and self.kill_reason != "error":
+            if self.state == AgentState.DEAD and self.kill_reason and self.kill_reason != "error":
                 logger.debug(
                     "Message loop ended after intentional kill for session %s (kill_reason=%s): %s",
                     self.session_id, self.kill_reason, e,
@@ -1600,7 +1530,7 @@ class ClaudeProcess:
         # Get PID BEFORE dropping the client reference
         pid = self.get_pid()
 
-        self._set_state(ProcessState.DEAD)
+        self._set_state(AgentState.DEAD)
         self.error = error_message
         self.kill_reason = "error"
         self.last_activity = time.time()
@@ -1756,14 +1686,3 @@ class ClaudeProcess:
             }},
         )
 
-    async def _notify_state_change(self) -> None:
-        """Invoke the state change callback if set."""
-        if self._state_change_callback is not None:
-            try:
-                await self._state_change_callback(self)
-            except Exception as e:
-                logger.error(
-                    "Error in state change callback for session %s: %s",
-                    self.session_id,
-                    e,
-                )

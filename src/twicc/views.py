@@ -47,7 +47,7 @@ def _get_sessions_page(
         unread_only: If True, include sessions with unread content (last_new_content_at
             set AND later than last_viewed_at, or last_viewed_at null) in the union.
         active_session_ids: If not None, include sessions whose id is in this list
-            (typically ProcessManager's active process session ids) in the union.
+            (typically the agent manager's active session ids) in the union.
 
     When more than one "sticky" flag (pinned_only / unread_only / active_session_ids)
     is set, the results are the UNION of the matching sessions — callers passing
@@ -119,8 +119,8 @@ def all_sessions(request):
 
     active_session_ids: list[str] | None = None
     if has_process:
-        from twicc.providers.claude_code.agent.manager import get_process_manager
-        active_session_ids = [info.session_id for info in get_process_manager().get_active_processes()]
+        from twicc.agent.registry import get_agent_manager_registry
+        active_session_ids = [info.session_id for info in get_agent_manager_registry().get_active_agents()]
 
     return JsonResponse(_get_sessions_page(
         None,
@@ -510,9 +510,8 @@ def session_detail(request, project_id, session_id, parent_session_id=None):
             # Stop process and clean up tmux session if archiving
             if archived:
                 from asgiref.sync import async_to_sync
-                from twicc.providers.claude_code.agent.manager import get_process_manager
-                manager = get_process_manager()
-                async_to_sync(manager.kill_process)(session_id, reason="archived")
+                from twicc.agent.registry import get_agent_manager_registry
+                async_to_sync(get_agent_manager_registry().kill_agent)(session_id, reason="archived")
 
                 from twicc.terminal import kill_all_tmux_terminals
                 kill_all_tmux_terminals(f"s:{session_id}")

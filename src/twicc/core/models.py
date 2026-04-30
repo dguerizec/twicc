@@ -815,7 +815,7 @@ class UsageSnapshot(models.Model):
 class ProcessRun(models.Model):
     """Tracks a Claude process execution for cron lifecycle management.
 
-    Each ClaudeProcess gets a ProcessRun row when created. SessionCron rows
+    Each Process gets a ProcessRun row when created. SessionCron rows
     reference their ProcessRun via CASCADE — deleting a process run deletes its crons.
     Orphan process runs (from crashed TwiCC instances) are detected and handled at startup.
 

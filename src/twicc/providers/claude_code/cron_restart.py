@@ -3,7 +3,7 @@ Cron restart: re-launch Claude sessions that had active cron jobs.
 
 Called at TwiCC startup (restart_all_session_crons) and at runtime when a
 process with active crons dies from a non-manual cause (_restart_crons_for_session
-in ProcessManager). Both paths use the same restart_session_crons() function.
+in ClaudeAgentManager). Both paths use the same restart_session_crons() function.
 """
 
 import asyncio
@@ -200,12 +200,12 @@ async def restart_session_crons(
     crons have expired (nothing left to restart).
 
     Used identically by startup (restart_all_session_crons) and runtime
-    (_restart_crons_for_session in ProcessManager).
+    (_restart_crons_for_session in ClaudeAgentManager).
     """
-    from twicc.providers.claude_code.agent.manager import get_process_manager
-    from twicc.providers.claude_code.agent.states import ProcessState
+    from twicc.agent import AgentState
+    from twicc.providers.claude_code.agent.manager import get_claude_agent_manager
 
-    manager = get_process_manager()
+    manager = get_claude_agent_manager()
     delays = _retry_delays(initial_delay)
     attempt = 0
 
@@ -243,7 +243,7 @@ async def restart_session_crons(
         try:
             await manager.send_to_session(**restart_data, text=message, cancel_cron_restart=False)
 
-            process = manager._processes.get(session_id)
+            process = manager._agents.get(session_id)
             if process is None:
                 logger.warning(
                     "Cron restart for session %s: process not found after send_to_session (attempt %d)",
@@ -251,7 +251,7 @@ async def restart_session_crons(
                 )
                 continue
 
-            if process.state == ProcessState.DEAD:
+            if process.state == AgentState.DEAD:
                 logger.warning(
                     "Cron restart for session %s: process died immediately (attempt %d)",
                     session_id, attempt,
@@ -269,7 +269,7 @@ async def restart_session_crons(
                     "Cron restart for session %s: timeout waiting for USER_TURN (attempt %d)",
                     session_id, attempt,
                 )
-                await manager.kill_process(session_id, reason="cron_restart_timeout")
+                await manager.kill_agent(session_id, reason="cron_restart_timeout")
                 continue
 
             if process._first_user_turn_reached:

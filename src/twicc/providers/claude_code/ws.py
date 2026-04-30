@@ -24,7 +24,7 @@ from claude_agent_sdk.types import (
     PermissionUpdate,
 )
 
-from twicc.providers.claude_code.agent.manager import get_process_manager
+from twicc.providers.claude_code.agent.manager import get_claude_agent_manager
 from twicc.providers.claude_code.auth import (
     check_and_broadcast as check_auth_and_broadcast,
     get_auth_message_for_connection,
@@ -174,7 +174,7 @@ class ClaudeCodeWSHandler:
         """Handle a pending request response from the user.
 
         Routes the user's decision (tool approval or clarifying question answer)
-        to the correct process via the ProcessManager.
+        to the correct agent via the ClaudeAgentManager.
 
         Expected content for tool approval:
         {
@@ -212,7 +212,7 @@ class ClaudeCodeWSHandler:
             )
             return
 
-        manager = get_process_manager()
+        manager = get_claude_agent_manager()
 
         if request_type == "tool_approval":
             decision = content.get("decision")
@@ -237,7 +237,7 @@ class ClaudeCodeWSHandler:
         elif request_type == "ask_user_question":
             answers = content.get("answers", {})
             # Retrieve the original questions from the matching pending request
-            process_info = manager.get_process_info(session_id)
+            process_info = manager.get_agent_info(session_id)
             matching = None
             if process_info is not None:
                 matching = next(

@@ -5,7 +5,7 @@ Owns the lifecycle of every async/background task that belongs to the Claude
 Code provider: initial JSONL sync, pricing, sessions watcher, background
 metadata compute, search index, auth/usage/statuspage/slash-commands polling,
 model retirement, cron restart, original file cache cleanup, and the
-ProcessManager that wraps the Claude Agent SDK.
+ClaudeAgentManager that wraps the Claude Agent SDK.
 
 The CLI server entry point (``twicc.cli.run``) instantiates this class and
 delegates start/shutdown of all Claude Code tasks to it. Cross-provider tasks
@@ -20,7 +20,7 @@ import threading
 
 from asgiref.sync import sync_to_async
 
-from twicc.providers.claude_code.agent import shutdown_process_manager
+from twicc.providers.claude_code.agent import get_claude_agent_manager
 from twicc.providers.claude_code.agent.original_file_cache import (
     start_cleanup_task as start_original_file_cache_cleanup,
     stop_cleanup_task as stop_original_file_cache_cleanup,
@@ -245,10 +245,10 @@ class ClaudeCodeOrchestrator:
         if self._cron_restart_task is not None:
             await _cancel_task(self._cron_restart_task, "Cron restart")
 
-        # Process manager (Claude SDK)
-        logger.info("Stopping process manager...")
-        await shutdown_process_manager()
-        logger.info("Process manager stopped")
+        # Claude agent manager (Claude SDK)
+        logger.info("Stopping Claude agent manager...")
+        await get_claude_agent_manager().shutdown()
+        logger.info("Claude agent manager stopped")
 
     # ------------------------------------------------------------------
     # Internal task coroutines

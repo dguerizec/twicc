@@ -1,29 +1,25 @@
 """
-Process manager for tracking and managing all active Claude processes.
+Claude Code agent manager: tracks and manages all active Claude Code agents.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-import time
-from collections.abc import Callable, Coroutine
-from typing import Any
+from typing import TYPE_CHECKING
 
 from django.conf import settings
 
 from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
 
-from .process import ClaudeProcess
-from .states import ProcessInfo, ProcessState
+from twicc.agent import AgentInfo, AgentState, BaseAgent, BaseAgentManager
+
+from .agent import ClaudeAgent
+
+if TYPE_CHECKING:
+    from datetime import datetime
 
 logger = logging.getLogger(__name__)
-
-# Global process manager instance (singleton pattern)
-_process_manager: ProcessManager | None = None
-
-# Type alias for the broadcast callback
-BroadcastCallback = Callable[[ProcessInfo], Coroutine[Any, Any, None]]
 
 
 def _get_session_slug_sync(session_id: str) -> str | None:
@@ -51,18 +47,16 @@ async def get_session_slug(session_id: str) -> str | None:
     return await asyncio.to_thread(_get_session_slug_sync, session_id)
 
 
-class ProcessManager:
-    """Manages all active Claude processes.
+class ClaudeAgentManager(BaseAgentManager):
+    """Manages all active Claude Code agents.
 
-    This singleton-like class tracks active processes and provides methods to
-    send messages (with auto-resume), list processes, and shut down gracefully.
-
-    The manager does not write to the database - it only tracks in-memory state.
-    Process content is handled by the JSONL watcher which reads files written
-    by Claude.
+    Inherits the registry, lifecycle and timeout monitor from BaseAgentManager
+    and adds Claude-specific behavior: settings hot-reload, cron lifecycle,
+    title flushing, subagent propagation, and a separate cron-expiry monitor
+    that runs alongside the timeout monitor.
 
     Typical usage:
-        manager = ProcessManager()
+        manager = ClaudeAgentManager()
 
         # Send a message to an existing session
         await manager.send_to_session(session_id, project_id, cwd, "Hello")
@@ -70,42 +64,30 @@ class ProcessManager:
         # Create a new session
         await manager.create_session(session_id, project_id, cwd, "Hello")
 
-        # Get active processes
-        processes = manager.get_active_processes()
+        # Get active agents
+        agents = manager.get_active_agents()
 
-        # Shutdown all processes
+        # Shutdown all
         await manager.shutdown()
     """
 
-    # Interval for timeout monitoring: 30 seconds
-    # Frequent enough to catch the 1-minute STARTING timeout accurately
-    TIMEOUT_MONITOR_INTERVAL = 30
+    # Cron expiry check cadence (seconds). Detects recurring crons auto-deleted
+    # by the CLI after their 7-day window without forcing a tighter timeout loop.
+    CRON_EXPIRY_MONITOR_INTERVAL = 60
 
     def __init__(self) -> None:
-        """Initialize the process manager with empty state."""
-        self._processes: dict[str, ClaudeProcess] = {}  # session_id -> process
-        self._lock = asyncio.Lock()
-        self._broadcast_callback: BroadcastCallback | None = None
-        self._timeout_monitor_task: asyncio.Task[None] | None = None
+        super().__init__()
         self._cron_expiry_monitor_task: asyncio.Task[None] | None = None
-        self._stop_event: asyncio.Event | None = None
         self._cron_restart_tasks: dict[str, asyncio.Task[None]] = {}  # session_id -> restart task
         # Pending content to send after a settings-triggered restart completes.
         # Stored when the user sends text + startup settings changes during USER_TURN:
-        # the process must be killed and restarted, and this content is sent after
-        # cron restart (if any) or directly with the new process.
+        # the agent must be killed and restarted, and this content is sent after
+        # cron restart (if any) or directly with the new agent.
         self._pending_after_restart: dict[str, dict] = {}  # session_id -> {text, images, documents}
 
-    def set_broadcast_callback(self, callback: BroadcastCallback) -> None:
-        """Set the callback for broadcasting state changes.
-
-        This callback is invoked whenever a process state changes, allowing
-        the caller to broadcast updates via WebSocket.
-
-        Args:
-            callback: Async function that receives ProcessInfo and broadcasts it
-        """
-        self._broadcast_callback = callback
+    # ------------------------------------------------------------------
+    # Public API (Claude-specific signatures)
+    # ------------------------------------------------------------------
 
     async def send_to_session(
         self,
@@ -126,8 +108,8 @@ class ProcessManager:
     ) -> None:
         """Send a message to an existing session, applying settings changes as needed.
 
-        If no active process exists for this session, a new one is created
-        with the resume option to continue the existing conversation.
+        If no active agent exists for this session, a new one is created with
+        the resume option to continue the existing conversation.
 
         Messages can be sent during USER_TURN (normal) or ASSISTANT_TURN
         (Claude reads them inline during work).
@@ -135,14 +117,14 @@ class ProcessManager:
         Settings are classified into categories:
         - live (permission_mode): applied immediately in any state
         - idle (selected_model, context_max): applied during USER_TURN via set_model()
-        - startup (effort, thinking_enabled, claude_in_chrome): require process stop
+        - startup (effort, thinking_enabled, claude_in_chrome): require agent stop
 
-        When startup settings change during USER_TURN, the process is killed
+        When startup settings change during USER_TURN, the agent is killed
         (reason="apply-settings") and restarted. During ASSISTANT_TURN, the
         changes are saved to DB and applied on the next USER_TURN transition.
 
         Raises:
-            RuntimeError: If the process cannot be started or message cannot be sent
+            RuntimeError: If the agent cannot be started or message cannot be sent
         """
         from twicc.synced_settings import classify_claude_settings_changes
 
@@ -164,30 +146,27 @@ class ProcessManager:
                 "context_max": context_max,
             }
 
-            if session_id in self._processes:
-                process = self._processes[session_id]
+            if session_id in self._agents:
+                agent = self._agents[session_id]
 
-                if process.state == ProcessState.DEAD:
-                    # Dead process, clean it up and create new one
-                    logger.debug(
-                        "Removing dead process for session %s",
-                        session_id,
-                    )
-                    del self._processes[session_id]
+                if agent.state == AgentState.DEAD:
+                    # Dead agent, clean it up and create a new one
+                    logger.debug("Removing dead agent for session %s", session_id)
+                    del self._agents[session_id]
 
-                elif process.state == ProcessState.USER_TURN:
+                elif agent.state == AgentState.USER_TURN:
                     changes = classify_claude_settings_changes(
-                        process.get_claude_settings(), requested_settings,
+                        agent.get_claude_settings(), requested_settings,
                     )
                     has_startup_changes = bool(changes["startup"])
 
                     if has_startup_changes:
                         # Startup settings changed → must kill and restart
                         logger.info(
-                            "Startup settings changed for session %s (%s), killing process",
+                            "Startup settings changed for session %s (%s), killing agent",
                             session_id, changes["startup"],
                         )
-                        has_crons = await self._session_has_crons(process)
+                        has_crons = await self._session_has_crons(agent)
                         will_restart = has_content or has_crons
                         if has_content:
                             self._pending_after_restart[session_id] = {
@@ -196,17 +175,17 @@ class ProcessManager:
                         # _on_state_change(DEAD) fires once DEAD is reached:
                         # - if has_crons: launches cron restart task (which will
                         #   also send pending text after success)
-                        # - cleans up process from _processes
-                        await process.interrupt_or_kill(reason="apply-settings")
+                        # - cleans up agent from _agents
+                        await agent.interrupt_or_kill(reason="apply-settings")
                         if will_restart:
                             # Broadcast "starting" so the frontend blocks interaction
-                            await self._broadcast_process_state(
-                                session_id, project_id, ProcessState.STARTING,
+                            await self._broadcast_agent_state(
+                                session_id, project_id, AgentState.STARTING,
                             )
                         # If no crons and has content → start directly
                         if not has_crons and has_content:
                             pending = self._pending_after_restart.pop(session_id, None)
-                            await self._start_process(
+                            await self._start_agent(
                                 session_id, project_id, cwd, pending["text"],
                                 resume=True, **requested_settings,
                                 images=pending.get("images"),
@@ -215,38 +194,38 @@ class ProcessManager:
                         # If has_crons → cron restart task handles it
                         return
                     else:
-                        # Only live/idle changes → apply on the live process
-                        await process.apply_live_settings(
+                        # Only live/idle changes → apply on the live agent
+                        await agent.apply_live_settings(
                             permission_mode, selected_model, context_max,
                         )
                         if has_content:
-                            await process.send(text, images=images, documents=documents)
+                            await agent.send(text, images=images, documents=documents)
                         return
 
-                elif process.state == ProcessState.ASSISTANT_TURN:
+                elif agent.state == AgentState.ASSISTANT_TURN:
                     # During assistant_turn: apply live (permission) immediately,
                     # send text if any. Idle/startup changes are saved to DB by
                     # the caller and will be checked on next USER_TURN transition.
-                    if permission_mode != process.permission_mode:
-                        await process.set_permission_mode(permission_mode)
+                    if permission_mode != agent.permission_mode:
+                        await agent.set_permission_mode(permission_mode)
                     if has_content:
-                        await process.send(text, images=images, documents=documents)
+                        await agent.send(text, images=images, documents=documents)
                     return
 
                 else:
-                    # Process starting - cannot send yet
+                    # Agent starting - cannot send yet
                     raise RuntimeError(
-                        f"Cannot send message: process is in state {process.state}"
+                        f"Cannot send message: agent is in state {agent.state}"
                     )
 
-            # No live process — text is required to start a new one
+            # No live agent — text is required to start a new one
             if not text:
                 raise RuntimeError(
-                    "Cannot start a new process without a message"
+                    "Cannot start a new agent without a message"
                 )
 
-            # Create and start new process with resume
-            await self._start_process(
+            # Create and start new agent with resume
+            await self._start_agent(
                 session_id, project_id, cwd, text, resume=True,
                 **requested_settings,
                 images=images, documents=documents,
@@ -275,32 +254,144 @@ class ProcessManager:
         the --session-id flag.
 
         Raises:
-            RuntimeError: If a process already exists for this session_id
+            RuntimeError: If an agent already exists for this session_id
         """
         async with self._lock:
-            if session_id in self._processes:
-                process = self._processes[session_id]
-                if process.state != ProcessState.DEAD:
+            if session_id in self._agents:
+                agent = self._agents[session_id]
+                if agent.state != AgentState.DEAD:
                     raise RuntimeError(
                         f"Session {session_id} already exists and is active"
                     )
-                # Dead process, clean it up
+                # Dead agent, clean it up
                 logger.debug(
-                    "Removing dead process for session %s before creating new",
+                    "Removing dead agent for session %s before creating new",
                     session_id,
                 )
-                del self._processes[session_id]
+                del self._agents[session_id]
 
-            # Create and start new process without resume
-            await self._start_process(
+            # Create and start new agent without resume
+            await self._start_agent(
                 session_id, project_id, cwd, text, resume=False,
                 permission_mode=permission_mode, selected_model=selected_model,
                 effort=effort, thinking_enabled=thinking_enabled,
                 claude_in_chrome=claude_in_chrome, context_max=context_max,
-                images=images, documents=documents
+                images=images, documents=documents,
             )
 
-    async def _start_process(
+    async def discard_active_tool(self, session_id: str, tool_use_id: str) -> bool:
+        """Discard an active-tool entry on the matching agent. Returns True
+        when an entry was actually removed. Used by the JSONL watcher to clean
+        up tools that never produced a PostToolUse/PostToolUseFailure (CLI-side
+        validation rejections).
+        """
+        agent = self._agents.get(session_id)
+        if agent is None:
+            return False
+        return await agent.discard_active_tool(tool_use_id)
+
+    async def stop_agent(self, session_id: str, agent_id: str) -> bool:
+        """Stop a running background agent (subagent task) by its agent ID.
+
+        Verifies that the subagent belongs to the given session, then calls
+        stop_task on the session's main agent.
+
+        Args:
+            session_id: The parent session that spawned this subagent
+            agent_id: The agent ID (same as task_id for the SDK)
+
+        Returns:
+            True if stop_task was called, False if not found or not valid
+        """
+        from twicc.core.models import Session
+
+        # Verify the subagent exists and belongs to the given session
+        exists = await asyncio.to_thread(
+            lambda: Session.objects.filter(
+                agent_id=agent_id, parent_session_id=session_id
+            ).exists()
+        )
+        if not exists:
+            logger.debug(
+                "stop_agent: no subagent %s found for session %s", agent_id, session_id
+            )
+            return False
+
+        agent = self._agents.get(session_id)
+        if not agent or agent.state == AgentState.DEAD:
+            logger.debug("stop_agent: no running agent for session %s", session_id)
+            return False
+
+        try:
+            await agent.stop_agent(agent_id)
+            return True
+        except Exception as e:
+            logger.warning(
+                "stop_agent: failed to stop subagent %s in session %s: %s",
+                agent_id, session_id, e,
+            )
+            return False
+
+    async def resolve_pending_request(
+        self,
+        session_id: str,
+        request_id: str,
+        response: PermissionResultAllow | PermissionResultDeny,
+    ) -> bool:
+        """Resolve a specific pending request on an agent.
+
+        Routes the user's response to the correct agent based on session_id and
+        the specific in-flight request based on request_id. Multiple permission
+        asks can be concurrent within one session (parallel concurrency-safe tools),
+        so request_id is required to disambiguate.
+
+        Args:
+            session_id: The session to resolve
+            request_id: UUID of the pending request to resolve
+            response: The permission result to send to the SDK
+
+        Returns:
+            True if resolved, False if no matching agent or no matching request
+        """
+        agent = self._agents.get(session_id)
+        if agent is None:
+            return False
+        return agent.resolve_pending_request(request_id, response)
+
+    # ------------------------------------------------------------------
+    # Factory + lifecycle helper (Claude-specific kwargs)
+    # ------------------------------------------------------------------
+
+    async def _create_agent(
+        self,
+        session_id: str,
+        project_id: str,
+        cwd: str,
+        *,
+        permission_mode: str,
+        selected_model: str | None,
+        effort: str | None,
+        thinking_enabled: bool | None,
+        claude_in_chrome: bool,
+        context_max: int,
+    ) -> ClaudeAgent:
+        """Build a ClaudeAgent wired to this manager's cron callbacks."""
+        return ClaudeAgent(
+            session_id=session_id,
+            project_id=project_id,
+            cwd=cwd,
+            permission_mode=permission_mode,
+            selected_model=selected_model,
+            effort=effort,
+            thinking_enabled=thinking_enabled,
+            get_session_slug=get_session_slug,
+            on_cron_created=self._on_cron_created,
+            on_cron_deleted=self._on_cron_deleted,
+            claude_in_chrome=claude_in_chrome,
+            context_max=context_max,
+        )
+
+    async def _start_agent(
         self,
         session_id: str,
         project_id: str,
@@ -317,235 +408,47 @@ class ProcessManager:
         images: list[dict] | None = None,
         documents: list[dict] | None = None,
     ) -> None:
-        """Create and start a new Claude process.
+        """Create and start a new Claude agent.
 
-        This is the common implementation for both send_to_session (resume=True)
-        and create_session (resume=False).
-
-        Must be called while holding self._lock.
+        Common implementation for both send_to_session (resume=True) and
+        create_session (resume=False). Must be called while holding self._lock.
         """
         logger.debug(
-            "Creating process for session %s, project %s (resume=%s)",
-            session_id,
-            project_id,
-            resume,
+            "Creating agent for session %s, project %s (resume=%s)",
+            session_id, project_id, resume,
         )
-        process = ClaudeProcess(
-            session_id=session_id,
-            project_id=project_id,
-            cwd=cwd,
+        agent = await self._create_agent(
+            session_id, project_id, cwd,
             permission_mode=permission_mode,
             selected_model=selected_model,
             effort=effort,
             thinking_enabled=thinking_enabled,
-            get_session_slug=get_session_slug,
-            on_cron_created=self._on_cron_created,
-            on_cron_deleted=self._on_cron_deleted,
             claude_in_chrome=claude_in_chrome,
             context_max=context_max,
         )
-        self._processes[session_id] = process
-
-        # Update lifecycle timestamps: every process start (new or resume) is a session start
-        from django.utils import timezone as dj_timezone
-        from twicc.core.models import ProcessRun as ProcessRunModel, Session
-        now = dj_timezone.now()
-
-        # Create ProcessRun in DB and attach to process.
-        # session_id is a plain CharField (not FK), so this works even for new sessions
-        # that don't have a Session row yet.
-        process_run = await asyncio.to_thread(
-            lambda: ProcessRunModel.objects.create(
-                session_id=session_id,
-                started_at=now,
-            )
-        )
-        process.process_run = process_run
-
-        await asyncio.to_thread(
-            lambda: Session.objects.filter(id=session_id).update(
-                last_started_at=now, last_updated_at=now
-            )
-        )
-        await self._broadcast_session_updated(session_id)
-
-        # Broadcast the starting state before starting
-        await self._on_state_change(process)
-
-        # Start the process. If it fails, it transitions to DEAD state and
-        # broadcasts the error via the callback - it does not raise exceptions.
-        await process.start(
-            text, self._on_state_change, resume=resume,
-            images=images, documents=documents
+        await self._register_and_start(
+            agent, text, resume=resume, images=images, documents=documents,
         )
 
-        # Ensure timeout monitor is running (starts lazily on first process)
-        self._ensure_timeout_monitor_running()
+    # ------------------------------------------------------------------
+    # Hooks (overrides of BaseAgentManager)
+    # ------------------------------------------------------------------
 
-    def get_active_processes(self) -> list[ProcessInfo]:
-        """Get information about all active (non-dead) processes.
-
-        Returns:
-            List of ProcessInfo snapshots for active processes
-        """
-        return [
-            process.get_info()
-            for process in self._processes.values()
-            if process.state != ProcessState.DEAD
-        ]
-
-    def get_process_info(self, session_id: str) -> ProcessInfo | None:
-        """Get information about a specific process.
-
-        Args:
-            session_id: The session identifier to look up
-
-        Returns:
-            ProcessInfo if found, None otherwise
-        """
-        process = self._processes.get(session_id)
-        if process is None:
-            return None
-        return process.get_info()
-
-    async def discard_active_tool(self, session_id: str, tool_use_id: str) -> bool:
-        """Discard an active-tool entry on the matching process. Returns True
-        when an entry was actually removed. Used by the JSONL watcher to clean
-        up tools that never produced a PostToolUse/PostToolUseFailure (CLI-side
-        validation rejections).
-        """
-        process = self._processes.get(session_id)
-        if process is None:
-            return False
-        return await process.discard_active_tool(tool_use_id)
-
-    async def kill_process(self, session_id: str, reason: str = "manual") -> bool:
-        """Stop a specific process by session ID.
-
-        Tries to interrupt the CLI gracefully first (so it can finalize JSONL
-        writes), then falls back to an OS-level kill if that doesn't work.
-
-        Processes in any state except DEAD can be stopped - this includes
-        USER_TURN since the process still consumes memory even when idle.
-
-        Args:
-            session_id: The session identifier of the process to stop
-            reason: Reason for stopping (e.g., "manual", "timeout")
-
-        Returns:
-            True if a process was killed, False if not found or already dead
-        """
-        async with self._lock:
-            process = self._processes.get(session_id)
-            if process is None:
-                logger.debug("kill_process: session %s not found", session_id)
-                return False
-
-            # Already dead, nothing to do
-            if process.state == ProcessState.DEAD:
-                logger.debug(
-                    "kill_process: session %s already dead",
-                    session_id,
-                )
-                return False
-
-            logger.info(
-                "Stopping process for session %s (reason: %s)", session_id, reason
-            )
-            await process.interrupt_or_kill(reason=reason)
-            return True
-
-    async def stop_agent(self, session_id: str, agent_id: str) -> bool:
-        """Stop a running background agent by its agent ID.
-
-        Verifies that the agent belongs to the given session, then calls
-        stop_task on the session's process.
-
-        Args:
-            session_id: The parent session that spawned this agent
-            agent_id: The agent ID (same as task_id for the SDK)
-
-        Returns:
-            True if stop_task was called, False if not found or not valid
-        """
-        from twicc.core.models import Session
-
-        # Verify the agent exists and belongs to the given session
-        exists = await asyncio.to_thread(
-            lambda: Session.objects.filter(
-                agent_id=agent_id, parent_session_id=session_id
-            ).exists()
+    def _start_extra_monitors(self) -> None:
+        """Launch the cron expiry monitor alongside the base timeout monitor."""
+        if not settings.CRON_AUTO_RESTART:
+            logger.debug("Cron expiry monitor skipped (TWICC_NO_CRON_RESTART is set)")
+            return
+        if self._cron_expiry_monitor_task is not None and not self._cron_expiry_monitor_task.done():
+            return
+        self._cron_expiry_monitor_task = asyncio.create_task(
+            self._run_cron_expiry_monitor(),
+            name="cron-expiry-monitor",
         )
-        if not exists:
-            logger.debug(
-                "stop_agent: no agent %s found for session %s", agent_id, session_id
-            )
-            return False
+        logger.debug("Started cron expiry monitor task")
 
-        process = self._processes.get(session_id)
-        if not process or process.state == ProcessState.DEAD:
-            logger.debug("stop_agent: no running process for session %s", session_id)
-            return False
-
-        try:
-            await process.stop_agent(agent_id)
-            return True
-        except Exception as e:
-            logger.warning(
-                "stop_agent: failed to stop agent %s in session %s: %s",
-                agent_id,
-                session_id,
-                e,
-            )
-            return False
-
-    async def resolve_pending_request(
-        self,
-        session_id: str,
-        request_id: str,
-        response: PermissionResultAllow | PermissionResultDeny,
-    ) -> bool:
-        """Resolve a specific pending request on a process.
-
-        Routes the user's response to the correct process based on session_id and
-        the specific in-flight request based on request_id. Multiple permission
-        asks can be concurrent within one session (parallel concurrency-safe tools),
-        so request_id is required to disambiguate.
-
-        Args:
-            session_id: The session to resolve
-            request_id: UUID of the pending request to resolve
-            response: The permission result to send to the SDK
-
-        Returns:
-            True if resolved, False if no matching process or no matching request
-        """
-        process = self._processes.get(session_id)
-        if process is None:
-            return False
-        return process.resolve_pending_request(request_id, response)
-
-    async def shutdown(self, timeout: float = 5.0) -> None:
-        """Shutdown all active processes and the timeout monitor.
-
-        This is called during server shutdown. It attempts graceful termination
-        but does not wait indefinitely for Claude to finish responding.
-
-        Args:
-            timeout: Maximum seconds to wait for processes to terminate
-        """
-        # Stop the timeout monitor task first
-        if self._stop_event is not None:
-            self._stop_event.set()
-
-        if self._timeout_monitor_task is not None:
-            self._timeout_monitor_task.cancel()
-            try:
-                await self._timeout_monitor_task
-            except asyncio.CancelledError:
-                pass
-            self._timeout_monitor_task = None
-
+    async def _stop_extra_monitors(self) -> None:
+        """Cancel the cron expiry monitor."""
         if self._cron_expiry_monitor_task is not None:
             self._cron_expiry_monitor_task.cancel()
             try:
@@ -554,111 +457,281 @@ class ProcessManager:
                 pass
             self._cron_expiry_monitor_task = None
 
-        # Cancel all cron restart tasks — TwiCC is shutting down.
-        # ProcessRuns stay in DB for restart_all_session_crons() on next startup.
+    async def _pre_shutdown_extra(self) -> None:
+        """Cancel runtime cron restart tasks before agents are interrupted.
+
+        ProcessRuns stay in the DB so ``restart_all_session_crons`` can pick
+        them up on the next TwiCC startup.
+        """
         if self._cron_restart_tasks:
             logger.info("Cancelling %d cron restart task(s)", len(self._cron_restart_tasks))
             for session_id in list(self._cron_restart_tasks):
                 self._cancel_cron_restart_task(session_id)
 
-        async with self._lock:
-            if not self._processes:
-                return
+    async def _check_agent_timeout(
+        self, agent: BaseAgent, current_time: float,
+    ) -> tuple[str, float, int] | None:
+        """State-aware timeout policy with cron- and pending-request- skipping.
 
-            logger.info(
-                "Shutting down %d active Claude processes", len(self._processes)
+        Skips agents that are waiting on a user response (pending_requests) or
+        that have active crons (the CLI has scheduled work that would be lost
+        if we kill the agent). Otherwise applies per-state timeouts:
+
+        - STARTING: ``PROCESS_TIMEOUT_STARTING`` (default 60s) — stuck startup.
+        - USER_TURN: ``PROCESS_TIMEOUT_USER_TURN`` (default 15min) — idle.
+        - ASSISTANT_TURN: ``PROCESS_TIMEOUT_ASSISTANT_TURN`` (default 2h) for
+          inactivity, plus an absolute ``PROCESS_TIMEOUT_ASSISTANT_TURN_ABSOLUTE``
+          (default 6h) safety cap.
+        """
+        # Don't timeout agents waiting for user input.
+        if agent.pending_requests:
+            return None
+
+        # Don't timeout agents with active cron jobs.
+        try:
+            from twicc.core.models import SessionCron
+            has_crons = await asyncio.to_thread(
+                lambda sid=agent.session_id: SessionCron.has_active_for_session(sid)
+            )
+            if has_crons:
+                return None
+        except Exception as e:
+            logger.error(
+                "Error checking active crons for session %s: %s",
+                agent.session_id, e,
             )
 
-            # Interrupt all processes (with kill fallback), in parallel
-            shutdown_tasks = [
-                asyncio.create_task(
-                    process.interrupt_or_kill(reason="shutdown"),
-                    name=f"shutdown-{session_id}",
-                )
-                for session_id, process in self._processes.items()
-            ]
+        if agent.state == AgentState.STARTING:
+            timeout = getattr(settings, "PROCESS_TIMEOUT_STARTING", 60)
+            elapsed = current_time - agent.state_changed_at
+            if elapsed > timeout:
+                return ("timeout_starting", elapsed, timeout)
+            return None
 
-            if shutdown_tasks:
-                done, pending = await asyncio.wait(
-                    shutdown_tasks, timeout=timeout,
-                )
-                for task in pending:
-                    task.cancel()
+        if agent.state == AgentState.USER_TURN:
+            timeout = getattr(settings, "PROCESS_TIMEOUT_USER_TURN", 15 * 60)
+            elapsed = current_time - agent.last_activity
+            if elapsed > timeout:
+                return ("timeout_user_turn", elapsed, timeout)
+            return None
 
-            # Clear all processes
-            self._processes.clear()
-            logger.info("All Claude processes shut down")
+        if agent.state == AgentState.ASSISTANT_TURN:
+            inactivity_timeout = getattr(
+                settings, "PROCESS_TIMEOUT_ASSISTANT_TURN", 2 * 60 * 60
+            )
+            absolute_timeout = getattr(
+                settings, "PROCESS_TIMEOUT_ASSISTANT_TURN_ABSOLUTE", 6 * 60 * 60
+            )
 
-    def _ensure_timeout_monitor_running(self) -> None:
-        """Start the timeout monitor task if not already running.
+            inactivity_elapsed = current_time - agent.last_activity
+            absolute_elapsed = current_time - agent.state_changed_at
 
-        Called when a process is started to ensure monitoring is active.
-        The task runs until shutdown() is called.
+            # Absolute takes precedence for the reason.
+            if absolute_elapsed > absolute_timeout:
+                return ("timeout_assistant_turn_absolute", absolute_elapsed, absolute_timeout)
+            if inactivity_elapsed > inactivity_timeout:
+                return ("timeout_assistant_turn", inactivity_elapsed, inactivity_timeout)
+            return None
+
+        return None
+
+    async def _on_state_change(self, agent: BaseAgent) -> None:
+        """Handle state changes: titles, settings hot-reload, cron lifecycle.
+
+        Concurrency model:
+        This callback is invoked in two contexts:
+        1. Synchronously from send_message() when start()/send() fails - the lock is
+           already held by send_message(), so we must not try to acquire it again.
+        2. Asynchronously from the message loop background task when Claude finishes
+           or an error occurs - the lock is NOT held.
+
+        For dead agent cleanup, we do NOT acquire the lock because:
+        - In context 1, we'd deadlock (the lock is already held)
+        - In context 2, the cleanup is effectively atomic in asyncio (no await between
+          the check and delete operations, so no preemption)
+        - The identity check (is agent) ensures we only delete the exact instance
         """
-        if self._timeout_monitor_task is not None and not self._timeout_monitor_task.done():
-            return  # Already running
+        # Snapshot the state at entry. This is critical because _apply_pending_settings
+        # may kill() the agent (changing agent.state to DEAD) while we're handling
+        # a USER_TURN callback. Using the snapshot ensures each callback invocation only
+        # runs the logic for the state it was called with.
+        info = agent.get_info()
+        state = info.state
 
-        self._stop_event = asyncio.Event()
-        self._timeout_monitor_task = asyncio.create_task(
-            self._run_timeout_monitor(),
-            name="process-timeout-monitor",
+        logger.debug(
+            "State change callback triggered for session %s: state=%s",
+            info.session_id, state.value,
         )
-        logger.debug("Started process timeout monitor task")
 
-        # Start cron expiry monitor alongside timeout monitor
-        from django.conf import settings
-
-        if not settings.CRON_AUTO_RESTART:
-            logger.debug("Cron expiry monitor skipped (TWICC_NO_CRON_RESTART is set)")
-        elif self._cron_expiry_monitor_task is None or self._cron_expiry_monitor_task.done():
-            self._cron_expiry_monitor_task = asyncio.create_task(
-                self._run_cron_expiry_monitor(),
-                name="cron-expiry-monitor",
-            )
-            logger.debug("Started cron expiry monitor task")
-
-    async def _run_timeout_monitor(self) -> None:
-        """Background task that monitors process timeouts and auto-stops idle processes.
-
-        Runs until stop event is set. Checks all active processes every 30 seconds
-        and kills those that exceed their state-specific timeout:
-        - STARTING: 1 minute (stuck during startup)
-        - USER_TURN: 15 minutes (idle, waiting for user)
-        - ASSISTANT_TURN: 2 hours inactivity or 6 hours absolute
-        """
-        logger.info("Process timeout monitor started")
-
-        while self._stop_event is not None and not self._stop_event.is_set():
+        # First USER_TURN: purge old ProcessRuns for this session (cascade deletes their crons).
+        # Done BEFORE broadcasting so that _enrich_with_active_crons sees the correct cron count
+        # (without this, crons from the old run + new run would both appear in the broadcast).
+        # Uses _old_runs_purged flag because _first_user_turn_reached is already True at this point
+        # (set in _run_message_loop before _notify_state_change is called).
+        # Systematic for all agents — no-op if no old process runs exist (DELETE affects 0 rows).
+        if (
+            state == AgentState.USER_TURN
+            and not agent._old_runs_purged
+            and agent.process_run is not None
+        ):
+            agent._old_runs_purged = True
+            current_run_id = agent.process_run.pk
             try:
-                killed = await self.check_and_stop_timed_out_processes()
-
-                if killed:
+                from twicc.core.models import ProcessRun as ProcessRunModel
+                deleted_count, _ = await asyncio.to_thread(
+                    lambda: ProcessRunModel.objects.filter(
+                        session_id=agent.session_id
+                    ).exclude(pk=current_run_id).delete()
+                )
+                if deleted_count:
                     logger.info(
-                        "Auto-stopped %d timed out process(es): %s",
-                        len(killed),
-                        ", ".join(killed),
+                        "Purged %d old process run(s) for session %s (current: %s)",
+                        deleted_count, agent.session_id, current_run_id,
                     )
+            except Exception as e:
+                logger.error("Error purging old process runs for session %s: %s", agent.session_id, e)
+
+        # Broadcast state change (base helper handles missing callback)
+        await self._broadcast_info(info)
+
+        # --- Check for pending settings changes on USER_TURN transition ---
+        # When settings are changed during ASSISTANT_TURN, they are saved to DB
+        # but not applied to the agent. On each USER_TURN transition, we compare
+        # DB settings with agent settings and apply/restart as needed.
+        if state == AgentState.USER_TURN:
+            try:
+                await self._apply_pending_settings(agent)
+            except Exception as e:
+                logger.error("Error applying pending settings for session %s: %s", agent.session_id, e)
+
+        # Flush pending title for draft→real sessions.
+        # On ASSISTANT_TURN, the CLI has created the JSONL file, so we can
+        # now write the title that was stored when the draft was sent.
+        if state == AgentState.ASSISTANT_TURN:
+            from twicc.providers.claude_code.titles import get_pending_title, pop_pending_title, protect_title, rename_session_in_jsonl
+
+            pending = get_pending_title(agent.session_id)
+            if pending:
+                try:
+                    await asyncio.to_thread(rename_session_in_jsonl, agent.session_id, pending)
+                    pop_pending_title(agent.session_id)
+                    protect_title(agent.session_id, pending)
+                except Exception as e:
+                    logger.error("Error flushing pending title for session %s: %s", agent.session_id, e)
+
+        # Update last_stopped_at when agent dies, and propagate to recent subagents
+        if state == AgentState.DEAD:
+            from twicc.providers.claude_code.titles import clear_protected_title, get_protected_title, rename_session_in_jsonl
+
+            # Re-write the user-set title at the end of the JSONL so the CLI's
+            # tail-scan finds it on the next resume (survives server restarts).
+            protected = get_protected_title(agent.session_id)
+            if protected:
+                try:
+                    await asyncio.to_thread(rename_session_in_jsonl, agent.session_id, protected)
+                except Exception as e:
+                    logger.warning("Failed to re-write title on DEAD for session %s: %s", agent.session_id, e)
+
+            clear_protected_title(agent.session_id)
+
+            try:
+                from django.utils import timezone as dj_timezone
+                from twicc.core.models import Session
+                now = dj_timezone.now()
+
+                # Get the previous cutoff BEFORE updating, to find subagents started in this run
+                session = await asyncio.to_thread(Session.objects.filter(id=agent.session_id).first)
+                previous_cutoff = session.cutoff if session else None
+
+                await asyncio.to_thread(
+                    lambda: Session.objects.filter(id=agent.session_id).update(
+                        last_stopped_at=now, last_updated_at=now
+                    )
+                )
+                await self._broadcast_session_updated(agent.session_id)
+
+                # Propagate last_stopped_at to subagents started after the previous cutoff
+                if session is not None:
+                    subagent_filter = Session.objects.filter(parent_session_id=agent.session_id)
+                    if previous_cutoff is not None:
+                        subagent_filter = subagent_filter.filter(last_started_at__gte=previous_cutoff)
+                    subagent_ids = await asyncio.to_thread(
+                        lambda: list(subagent_filter.values_list('id', flat=True))
+                    )
+                    if subagent_ids:
+                        await asyncio.to_thread(
+                            lambda: Session.objects.filter(id__in=subagent_ids).update(
+                                last_stopped_at=now, last_updated_at=now
+                            )
+                        )
+                        for subagent_id in subagent_ids:
+                            await self._broadcast_session_updated(subagent_id)
 
             except Exception as e:
-                logger.error("Error in process timeout monitor: %s", e, exc_info=True)
+                logger.error("Error updating last_stopped_at for session %s: %s", agent.session_id, e)
 
-            # Wait for the next check interval (or until stop event is set)
-            try:
-                await asyncio.wait_for(
-                    self._stop_event.wait(), timeout=self.TIMEOUT_MONITOR_INTERVAL
-                )
-            except asyncio.TimeoutError:
-                # Timeout means it's time to check again
-                pass
+            # ProcessRun lifecycle cleanup on agent death
+            if agent.process_run is not None:
+                should_delete_run = False
 
-        logger.info("Process timeout monitor stopped")
+                if agent.kill_reason == "manual":
+                    # User explicitly stopped → delete process run (cascade deletes crons)
+                    should_delete_run = True
+                elif not agent._first_user_turn_reached:
+                    # Died before first USER_TURN (failed cron restart, early crash, etc.)
+                    # Delete current process run to discard partial crons, keep old runs for retry
+                    should_delete_run = True
+                else:
+                    # Died after USER_TURN (old runs already purged). Keep only if it has crons.
+                    has_crons = await asyncio.to_thread(lambda: agent.process_run.crons.exists())
+                    if not has_crons:
+                        should_delete_run = True
 
-    CRON_EXPIRY_MONITOR_INTERVAL = 60  # Check every 60 seconds
+                if should_delete_run:
+                    try:
+                        run_pk = agent.process_run.pk
+                        await asyncio.to_thread(lambda: agent.process_run.delete())
+                        agent.process_run = None
+                        logger.info(
+                            "Deleted process run %s for session %s (kill_reason=%s, user_turn_reached=%s)",
+                            run_pk, agent.session_id, agent.kill_reason, agent._first_user_turn_reached,
+                        )
+                    except Exception as e:
+                        logger.error("Error deleting process run for session %s: %s", agent.session_id, e)
+
+                # --- Auto-restart crons for non-manual, non-shutdown deaths ---
+                # should_delete_run is False ⟹ agent had active crons and died
+                # after USER_TURN. Launch a background restart task.
+                if (
+                    not should_delete_run
+                    and agent.kill_reason not in ("manual", "shutdown")
+                    and settings.CRON_AUTO_RESTART
+                    and agent.session_id not in self._cron_restart_tasks
+                    and self._stop_event is not None
+                    and not self._stop_event.is_set()
+                ):
+                    task = asyncio.create_task(
+                        self._restart_crons_for_session(agent.session_id),
+                        name=f"cron-restart-{agent.session_id}",
+                    )
+                    self._cron_restart_tasks[agent.session_id] = task
+                    logger.info(
+                        "Launched runtime cron restart task for session %s (kill_reason=%s)",
+                        agent.session_id, agent.kill_reason,
+                    )
+
+        # Clean up dead agent from registry. No lock needed - see docstring for concurrency model.
+        if state == AgentState.DEAD:
+            self._cleanup_dead(agent)
+
+    # ------------------------------------------------------------------
+    # Cron expiry monitor
+    # ------------------------------------------------------------------
 
     async def _run_cron_expiry_monitor(self) -> None:
         """Background task that detects recurring crons auto-deleted by the CLI after 7 days.
 
-        Runs every 60 seconds. For each active process, checks if any recurring crons
+        Runs every 60 seconds. For each active agent, checks if any recurring crons
         have passed their computed expiry time (last_fire + jitter + margin).
         """
         logger.info("Cron expiry monitor started")
@@ -671,7 +744,7 @@ class ProcessManager:
 
             try:
                 await asyncio.wait_for(
-                    self._stop_event.wait(), timeout=self.CRON_EXPIRY_MONITOR_INTERVAL
+                    self._stop_event.wait(), timeout=self.CRON_EXPIRY_MONITOR_INTERVAL,
                 )
             except asyncio.TimeoutError:
                 pass
@@ -679,9 +752,9 @@ class ProcessManager:
         logger.info("Cron expiry monitor stopped")
 
     async def _check_expired_crons(self) -> None:
-        """Check all active processes for expired recurring crons.
+        """Check all active agents for expired recurring crons.
 
-        Only checks processes in USER_TURN state: this guarantees the last cron fire
+        Only checks agents in USER_TURN state: this guarantees the last cron fire
         has completed (Claude is no longer working on the cron's prompt).
 
         When expired crons are found, they are deleted from the DB and a message is
@@ -691,20 +764,20 @@ class ProcessManager:
         from twicc.core.models import SessionCron
         from twicc.providers.claude_code.cron_restart import _build_renewal_message
 
-        # Snapshot active processes (no lock needed — dict iteration is safe in asyncio)
-        processes = list(self._processes.values())
+        # Snapshot active agents (no lock needed — dict iteration is safe in asyncio)
+        agents = list(self._agents.values())
 
-        for process in processes:
-            if process.state != ProcessState.USER_TURN:
+        for agent in agents:
+            if agent.state != AgentState.USER_TURN:
                 continue
             try:
-                expired = await asyncio.to_thread(process.get_expired_recurring_crons)
+                expired = await asyncio.to_thread(agent.get_expired_recurring_crons)
                 if not expired:
                     continue
 
                 logger.info(
                     "Session %s has %d expired recurring cron(s): %s",
-                    process.session_id,
+                    agent.session_id,
                     len(expired),
                     ", ".join(c.cron_id for c in expired),
                 )
@@ -729,56 +802,31 @@ class ProcessManager:
                 )
                 logger.info(
                     "Deleted %d expired cron(s) from DB for session %s",
-                    len(expired_ids), process.session_id,
+                    len(expired_ids), agent.session_id,
                 )
 
                 # Send message to Claude asking to recreate the crons
                 try:
-                    await process.send(message)
+                    await agent.send(message)
                     logger.info(
                         "Sent cron renewal message to session %s for %d cron(s)",
-                        process.session_id, len(crons_data),
+                        agent.session_id, len(crons_data),
                     )
                 except Exception as e:
                     logger.error(
                         "Failed to send cron renewal message to session %s: %s",
-                        process.session_id, e,
+                        agent.session_id, e,
                     )
 
             except Exception as e:
                 logger.error(
                     "Error checking expired crons for session %s: %s",
-                    process.session_id, e,
+                    agent.session_id, e,
                 )
 
-    def touch_process_activity(self, session_id: str) -> bool:
-        """Update last_activity timestamp for a process.
-
-        Called when the user is actively preparing a message (typing, adding images, etc.)
-        to prevent the process from being auto-stopped due to inactivity timeout.
-
-        Works for processes in USER_TURN or ASSISTANT_TURN state.
-
-        Args:
-            session_id: The session identifier
-
-        Returns:
-            True if the process was found and updated, False otherwise
-        """
-        process = self._processes.get(session_id)
-        if process is None:
-            return False
-
-        if process.state not in (ProcessState.USER_TURN, ProcessState.ASSISTANT_TURN):
-            return False
-
-        process.last_activity = time.time()
-        logger.debug(
-            "Touched last_activity for session %s (state=%s)",
-            session_id,
-            process.state.value,
-        )
-        return True
+    # ------------------------------------------------------------------
+    # Cron restart helpers
+    # ------------------------------------------------------------------
 
     def _cancel_cron_restart_task(self, session_id: str) -> bool:
         """Cancel a running cron restart task for a session.
@@ -814,10 +862,10 @@ class ProcessManager:
             # After successful cron restart, send pending content if any
             pending = self._pending_after_restart.pop(session_id, None)
             if pending and pending.get("text"):
-                process = self._processes.get(session_id)
-                if process and process.state == ProcessState.USER_TURN:
+                agent = self._agents.get(session_id)
+                if agent and agent.state == AgentState.USER_TURN:
                     logger.info("Sending pending text after cron restart for session %s", session_id)
-                    await process.send(
+                    await agent.send(
                         pending["text"],
                         images=pending.get("images"),
                         documents=pending.get("documents"),
@@ -829,97 +877,15 @@ class ProcessManager:
             logger.error("Cron restart task failed for session %s: %s", session_id, e, exc_info=True)
         finally:
             self._cron_restart_tasks.pop(session_id, None)
+            # Drop any queued pending content too: if we got here without
+            # successfully sending it (cancel/error/no-USER_TURN), we cannot
+            # send it later — keeping the entry around would just leak and
+            # potentially overwrite a future legitimate queue.
+            self._pending_after_restart.pop(session_id, None)
 
-    async def check_and_stop_timed_out_processes(self) -> list[str]:
-        """Check all active processes and kill those that exceeded their timeout.
-
-        Timeout rules based on process state:
-        - STARTING: Uses state_changed_at (stuck during startup)
-        - USER_TURN: Uses last_activity (idle, waiting for user)
-        - ASSISTANT_TURN: Uses last_activity (no activity from Claude)
-
-        Returns:
-            List of session_ids that were killed due to timeout
-        """
-        current_time = time.time()
-        killed: list[str] = []
-
-        # Take a snapshot to avoid modification during iteration
-        processes_snapshot = list(self._processes.items())
-
-        for session_id, process in processes_snapshot:
-            # Don't timeout processes waiting for user input
-            if process.pending_requests:
-                continue
-
-            # Don't timeout processes with active cron jobs — the CLI has
-            # scheduled work pending that would be lost if we kill the process.
-            try:
-                from twicc.core.models import SessionCron
-                has_crons = await asyncio.to_thread(
-                    lambda sid=session_id: SessionCron.has_active_for_session(sid)
-                )
-                if has_crons:
-                    continue
-            except Exception as e:
-                logger.error("Error checking active crons for session %s: %s", session_id, e)
-
-            timeout: int | None = None
-            reason: str | None = None
-            reference_time: float | None = None
-
-            if process.state == ProcessState.STARTING:
-                # For STARTING, use state_changed_at (when it entered STARTING)
-                timeout = getattr(settings, "PROCESS_TIMEOUT_STARTING", 60)
-                reason = "timeout_starting"
-                reference_time = process.state_changed_at
-            elif process.state == ProcessState.USER_TURN:
-                # For USER_TURN, use last_activity (effectively same as state_changed_at)
-                timeout = getattr(settings, "PROCESS_TIMEOUT_USER_TURN", 15 * 60)
-                reason = "timeout_user_turn"
-                reference_time = process.last_activity
-            elif process.state == ProcessState.ASSISTANT_TURN:
-                # For ASSISTANT_TURN, check both inactivity and absolute duration
-                inactivity_timeout = getattr(
-                    settings, "PROCESS_TIMEOUT_ASSISTANT_TURN", 2 * 60 * 60
-                )
-                absolute_timeout = getattr(
-                    settings, "PROCESS_TIMEOUT_ASSISTANT_TURN_ABSOLUTE", 6 * 60 * 60
-                )
-
-                inactivity_elapsed = current_time - process.last_activity
-                absolute_elapsed = current_time - process.state_changed_at
-
-                # Check absolute timeout first (takes precedence for the reason)
-                if absolute_elapsed > absolute_timeout:
-                    timeout = absolute_timeout
-                    reason = "timeout_assistant_turn_absolute"
-                    reference_time = process.state_changed_at
-                elif inactivity_elapsed > inactivity_timeout:
-                    timeout = inactivity_timeout
-                    reason = "timeout_assistant_turn"
-                    reference_time = process.last_activity
-                else:
-                    continue
-            else:
-                # DEAD - nothing to do
-                continue
-
-            elapsed = current_time - reference_time
-
-            if elapsed > timeout:
-                logger.info(
-                    "Auto-stopping process %s: state=%s, elapsed=%.1fs, timeout=%ds",
-                    session_id,
-                    process.state.value,
-                    elapsed,
-                    timeout,
-                )
-                # kill_process acquires the lock, so we call it outside snapshot iteration
-                if await self.kill_process(session_id, reason=reason):
-                    killed.append(session_id)
-
-        return killed
+    # ------------------------------------------------------------------
+    # Cron persistence callbacks (passed to ClaudeAgent)
+    # ------------------------------------------------------------------
 
     async def _on_cron_created(
         self,
@@ -935,8 +901,8 @@ class ProcessManager:
         from twicc.core.models import SessionCron
 
         # Associate cron with the current process run (if any)
-        process = self._processes.get(session_id)
-        process_run = process.process_run if process else None
+        agent = self._agents.get(session_id)
+        process_run = agent.process_run if agent else None
 
         await asyncio.to_thread(
             lambda: SessionCron.objects.create(
@@ -954,7 +920,7 @@ class ProcessManager:
             "Persisted cron %s for session %s (process run: %s)",
             cron_id, session_id, process_run.pk if process_run else None,
         )
-        await self._broadcast_process_state(session_id)
+        await self._broadcast_agent_state(session_id)
 
     async def _on_cron_deleted(self, session_id: str, cron_id: str) -> None:
         """Delete a cron job from the database and broadcast the update."""
@@ -967,35 +933,40 @@ class ProcessManager:
             logger.info("Deleted cron %s for session %s", cron_id, session_id)
         else:
             logger.debug("Cron %s not found in DB for session %s (may already be deleted)", cron_id, session_id)
-        await self._broadcast_process_state(session_id)
+        await self._broadcast_agent_state(session_id)
 
     @staticmethod
-    async def _session_has_crons(process: ClaudeProcess) -> bool:
-        """Check if a process has active crons (via its ProcessRun)."""
-        if process.process_run is None:
+    async def _session_has_crons(agent: ClaudeAgent) -> bool:
+        """Check if an agent has active crons (via its ProcessRun)."""
+        if agent.process_run is None:
             return False
-        return await asyncio.to_thread(lambda: process.process_run.crons.exists())
+        return await asyncio.to_thread(lambda: agent.process_run.crons.exists())
 
-    async def _broadcast_process_state(
+    # ------------------------------------------------------------------
+    # Synthetic state broadcast (for restart "starting" notifications)
+    # ------------------------------------------------------------------
+
+    async def _broadcast_agent_state(
         self,
         session_id: str,
         project_id: str | None = None,
-        override_state: ProcessState | None = None,
+        override_state: AgentState | None = None,
     ) -> None:
-        """Trigger a process state broadcast for a session.
+        """Trigger an agent state broadcast for a session.
 
-        When override_state is provided, broadcasts a synthetic ProcessInfo
-        with that state (useful for broadcasting "starting" after a kill).
-        Otherwise broadcasts the current process state (used after cron changes).
+        When override_state is provided, broadcasts a synthetic AgentInfo with
+        that state (useful for broadcasting "starting" after a kill). Otherwise
+        broadcasts the current agent state (used after cron changes).
         """
         if self._broadcast_callback is None:
             return
         try:
             if override_state is not None and project_id is not None:
                 now = asyncio.get_event_loop().time()
-                info = ProcessInfo(
+                info = AgentInfo(
                     session_id=session_id,
                     project_id=project_id,
+                    provider=ClaudeAgent.provider,
                     state=override_state,
                     previous_state=None,
                     started_at=now,
@@ -1004,18 +975,22 @@ class ProcessManager:
                 )
                 await self._broadcast_callback(info)
             else:
-                process = self._processes.get(session_id)
-                if process:
-                    await self._broadcast_callback(process.get_info())
+                agent = self._agents.get(session_id)
+                if agent:
+                    await self._broadcast_callback(agent.get_info())
         except Exception as e:
-            logger.error("Error broadcasting process state for session %s: %s", session_id, e)
+            logger.error("Error broadcasting agent state for session %s: %s", session_id, e)
 
-    async def _apply_pending_settings(self, process: ClaudeProcess) -> None:
-        """Check DB settings vs process settings and apply/restart on USER_TURN.
+    # ------------------------------------------------------------------
+    # Settings hot-reload
+    # ------------------------------------------------------------------
 
-        Called from _on_state_change when a process transitions to USER_TURN.
+    async def _apply_pending_settings(self, agent: ClaudeAgent) -> None:
+        """Check DB settings vs agent settings and apply/restart on USER_TURN.
+
+        Called from _on_state_change when an agent transitions to USER_TURN.
         Compares the session's stored settings (potentially updated during
-        ASSISTANT_TURN) with the process's current settings.
+        ASSISTANT_TURN) with the agent's current settings.
 
         - Idle changes (model, context) → apply live via set_model()
         - Startup changes (effort, thinking, chrome) → kill + restart/cron restart
@@ -1025,7 +1000,7 @@ class ProcessManager:
         from twicc.synced_settings import classify_claude_settings_changes, read_synced_settings
 
         session = await asyncio.to_thread(
-            Session.objects.filter(id=process.session_id).first
+            Session.objects.filter(id=agent.session_id).first
         )
         if session is None:
             return
@@ -1045,29 +1020,29 @@ class ProcessManager:
         from twicc.providers.claude_code.model_registry import enforce_1m_consistency
         requested["context_max"] = enforce_1m_consistency(requested["selected_model"], requested["context_max"])
 
-        changes = classify_claude_settings_changes(process.get_claude_settings(), requested)
+        changes = classify_claude_settings_changes(agent.get_claude_settings(), requested)
         if not any(changes.values()):
             return
 
         if changes["startup"]:
             # Startup settings changed → kill and let cron restart / pending handle it
             logger.info(
-                "Pending startup settings for session %s (%s), killing process on USER_TURN",
-                process.session_id, changes["startup"],
+                "Pending startup settings for session %s (%s), killing agent on USER_TURN",
+                agent.session_id, changes["startup"],
             )
-            has_crons = await self._session_has_crons(process)
-            has_pending = process.session_id in self._pending_after_restart
+            has_crons = await self._session_has_crons(agent)
+            has_pending = agent.session_id in self._pending_after_restart
             will_restart = has_crons or has_pending
-            await process.interrupt_or_kill(reason="apply-settings")
+            await agent.interrupt_or_kill(reason="apply-settings")
             if will_restart:
-                await self._broadcast_process_state(
-                    process.session_id, process.project_id, ProcessState.STARTING,
+                await self._broadcast_agent_state(
+                    agent.session_id, agent.project_id, AgentState.STARTING,
                 )
             # If no crons but has pending text → start directly
             if not has_crons and has_pending:
-                pending = self._pending_after_restart.pop(process.session_id)
-                await self._start_process(
-                    process.session_id, process.project_id, process.cwd,
+                pending = self._pending_after_restart.pop(agent.session_id)
+                await self._start_agent(
+                    agent.session_id, agent.project_id, agent.cwd,
                     pending["text"], resume=True, **requested,
                     images=pending.get("images"), documents=pending.get("documents"),
                 )
@@ -1075,265 +1050,24 @@ class ProcessManager:
             # Only live/idle changes → apply via SDK methods
             logger.info(
                 "Applying live/idle settings for session %s (live=%s, idle=%s) on USER_TURN",
-                process.session_id, changes["live"], changes["idle"],
+                agent.session_id, changes["live"], changes["idle"],
             )
-            await process.apply_live_settings(
+            await agent.apply_live_settings(
                 requested["permission_mode"],
                 requested["selected_model"],
                 requested["context_max"],
             )
 
-    async def _on_state_change(self, process: ClaudeProcess) -> None:
-        """Handle process state change by cleaning up dead processes and broadcasting.
 
-        Concurrency model:
-        This callback is invoked in two contexts:
-        1. Synchronously from send_message() when start()/send() fails - the lock is
-           already held by send_message(), so we must not try to acquire it again.
-        2. Asynchronously from the message loop background task when Claude finishes
-           or an error occurs - the lock is NOT held.
+def get_claude_agent_manager() -> ClaudeAgentManager:
+    """Return the Claude Code agent manager singleton from the registry.
 
-        For dead process cleanup, we do NOT acquire the lock because:
-        - In context 1, we'd deadlock (the lock is already held)
-        - In context 2, the cleanup is effectively atomic in asyncio (no await between
-          the check and delete operations, so no preemption)
-        - The identity check (is process) ensures we only delete the exact instance
-
-        Args:
-            process: The process that changed state
-        """
-        # Snapshot the state at entry. This is critical because _apply_pending_settings
-        # may kill() the process (changing process.state to DEAD) while we're handling
-        # a USER_TURN callback. Using the snapshot ensures each callback invocation only
-        # runs the logic for the state it was called with.
-        info = process.get_info()
-        state = info.state
-
-        logger.debug(
-            "State change callback triggered for session %s: state=%s",
-            info.session_id,
-            state.value,
-        )
-
-        # First USER_TURN: purge old ProcessRuns for this session (cascade deletes their crons).
-        # Done BEFORE broadcasting so that _enrich_with_active_crons sees the correct cron count
-        # (without this, crons from the old run + new run would both appear in the broadcast).
-        # Uses _old_runs_purged flag because _first_user_turn_reached is already True at this point
-        # (set in _run_message_loop before _notify_state_change is called).
-        # Systematic for all processes — no-op if no old process runs exist (DELETE affects 0 rows).
-        if (
-            state == ProcessState.USER_TURN
-            and not process._old_runs_purged
-            and process.process_run is not None
-        ):
-            process._old_runs_purged = True
-            current_run_id = process.process_run.pk
-            try:
-                from twicc.core.models import ProcessRun as ProcessRunModel
-                deleted_count, _ = await asyncio.to_thread(
-                    lambda: ProcessRunModel.objects.filter(
-                        session_id=process.session_id
-                    ).exclude(pk=current_run_id).delete()
-                )
-                if deleted_count:
-                    logger.info(
-                        "Purged %d old process run(s) for session %s (current: %s)",
-                        deleted_count, process.session_id, current_run_id,
-                    )
-            except Exception as e:
-                logger.error("Error purging old process runs for session %s: %s", process.session_id, e)
-
-        # Broadcast state change if callback is set
-        if self._broadcast_callback is not None:
-            try:
-                await self._broadcast_callback(info)
-            except Exception as e:
-                logger.error("Error broadcasting state change: %s", e)
-
-        # --- Check for pending settings changes on USER_TURN transition ---
-        # When settings are changed during ASSISTANT_TURN, they are saved to DB
-        # but not applied to the process. On each USER_TURN transition, we compare
-        # DB settings with process settings and apply/restart as needed.
-        if state == ProcessState.USER_TURN:
-            try:
-                await self._apply_pending_settings(process)
-            except Exception as e:
-                logger.error("Error applying pending settings for session %s: %s", process.session_id, e)
-
-        # Flush pending title for draft→real sessions.
-        # On ASSISTANT_TURN, the CLI has created the JSONL file, so we can
-        # now write the title that was stored when the draft was sent.
-        if state == ProcessState.ASSISTANT_TURN:
-            from twicc.providers.claude_code.titles import get_pending_title, pop_pending_title, protect_title, rename_session_in_jsonl
-
-            pending = get_pending_title(process.session_id)
-            if pending:
-                try:
-                    await asyncio.to_thread(rename_session_in_jsonl, process.session_id, pending)
-                    pop_pending_title(process.session_id)
-                    protect_title(process.session_id, pending)
-                except Exception as e:
-                    logger.error("Error flushing pending title for session %s: %s", process.session_id, e)
-
-        # Update last_stopped_at when process dies, and propagate to recent subagents
-        if state == ProcessState.DEAD:
-            from twicc.providers.claude_code.titles import clear_protected_title, get_protected_title, rename_session_in_jsonl
-
-            # Re-write the user-set title at the end of the JSONL so the CLI's
-            # tail-scan finds it on the next resume (survives server restarts).
-            protected = get_protected_title(process.session_id)
-            if protected:
-                try:
-                    await asyncio.to_thread(rename_session_in_jsonl, process.session_id, protected)
-                except Exception as e:
-                    logger.warning("Failed to re-write title on DEAD for session %s: %s", process.session_id, e)
-
-            clear_protected_title(process.session_id)
-
-            try:
-                from django.utils import timezone as dj_timezone
-                from twicc.core.models import Session
-                now = dj_timezone.now()
-
-                # Get the previous cutoff BEFORE updating, to find subagents started in this run
-                session = await asyncio.to_thread(Session.objects.filter(id=process.session_id).first)
-                previous_cutoff = session.cutoff if session else None
-
-                await asyncio.to_thread(
-                    lambda: Session.objects.filter(id=process.session_id).update(
-                        last_stopped_at=now, last_updated_at=now
-                    )
-                )
-                await self._broadcast_session_updated(process.session_id)
-
-                # Propagate last_stopped_at to subagents started after the previous cutoff
-                if session is not None:
-                    subagent_filter = Session.objects.filter(parent_session_id=process.session_id)
-                    if previous_cutoff is not None:
-                        subagent_filter = subagent_filter.filter(last_started_at__gte=previous_cutoff)
-                    subagent_ids = await asyncio.to_thread(
-                        lambda: list(subagent_filter.values_list('id', flat=True))
-                    )
-                    if subagent_ids:
-                        await asyncio.to_thread(
-                            lambda: Session.objects.filter(id__in=subagent_ids).update(
-                                last_stopped_at=now, last_updated_at=now
-                            )
-                        )
-                        for subagent_id in subagent_ids:
-                            await self._broadcast_session_updated(subagent_id)
-
-            except Exception as e:
-                logger.error("Error updating last_stopped_at for session %s: %s", process.session_id, e)
-
-            # ProcessRun lifecycle cleanup on process death
-            if process.process_run is not None:
-                should_delete_run = False
-
-                if process.kill_reason == "manual":
-                    # User explicitly stopped → delete process run (cascade deletes crons)
-                    should_delete_run = True
-                elif not process._first_user_turn_reached:
-                    # Died before first USER_TURN (failed cron restart, early crash, etc.)
-                    # Delete current process run to discard partial crons, keep old runs for retry
-                    should_delete_run = True
-                else:
-                    # Died after USER_TURN (old runs already purged). Keep only if it has crons.
-                    has_crons = await asyncio.to_thread(lambda: process.process_run.crons.exists())
-                    if not has_crons:
-                        should_delete_run = True
-
-                if should_delete_run:
-                    try:
-                        run_pk = process.process_run.pk
-                        await asyncio.to_thread(lambda: process.process_run.delete())
-                        process.process_run = None
-                        logger.info(
-                            "Deleted process run %s for session %s (kill_reason=%s, user_turn_reached=%s)",
-                            run_pk, process.session_id, process.kill_reason, process._first_user_turn_reached,
-                        )
-                    except Exception as e:
-                        logger.error("Error deleting process run for session %s: %s", process.session_id, e)
-
-                # --- Auto-restart crons for non-manual, non-shutdown deaths ---
-                # should_delete_run is False ⟹ process had active crons and died
-                # after USER_TURN. Launch a background restart task.
-                if (
-                    not should_delete_run
-                    and process.kill_reason not in ("manual", "shutdown")
-                    and settings.CRON_AUTO_RESTART
-                    and process.session_id not in self._cron_restart_tasks
-                    and self._stop_event is not None
-                    and not self._stop_event.is_set()
-                ):
-                    task = asyncio.create_task(
-                        self._restart_crons_for_session(process.session_id),
-                        name=f"cron-restart-{process.session_id}",
-                    )
-                    self._cron_restart_tasks[process.session_id] = task
-                    logger.info(
-                        "Launched runtime cron restart task for session %s (kill_reason=%s)",
-                        process.session_id, process.kill_reason,
-                    )
-
-        # Clean up dead processes. No lock needed - see docstring for concurrency model.
-        if state == ProcessState.DEAD:
-            if (
-                process.session_id in self._processes
-                and self._processes[process.session_id] is process
-            ):
-                logger.debug(
-                    "Cleaning up dead process from _processes for session %s",
-                    process.session_id,
-                )
-                del self._processes[process.session_id]
-
-    async def _broadcast_session_updated(self, session_id: str) -> None:
-        """Broadcast a session_updated message via WebSocket after lifecycle timestamp changes."""
-        from channels.layers import get_channel_layer
-        from twicc.core.models import Session
-        from twicc.core.serializers import serialize_session
-
-        try:
-            session = await asyncio.to_thread(Session.objects.get, id=session_id)
-            channel_layer = get_channel_layer()
-            await channel_layer.group_send(
-                "updates",
-                {
-                    "type": "broadcast",
-                    "data": {
-                        "type": "session_updated",
-                        "session": serialize_session(session),
-                    },
-                },
-            )
-        except Exception as e:
-            logger.error("Error broadcasting session_updated for %s: %s", session_id, e)
-
-
-def get_process_manager() -> ProcessManager:
-    """Get the global ProcessManager instance.
-
-    Creates the instance lazily on first access. The same instance is shared
-    across the application (singleton pattern).
-
-    Returns:
-        The global ProcessManager instance
+    Thin convenience wrapper for Claude-specific call sites. The actual
+    instance is owned by the global ``AgentManagerRegistry`` and shared with
+    every provider-agnostic consumer.
     """
-    global _process_manager
-    if _process_manager is None:
-        _process_manager = ProcessManager()
-    return _process_manager
+    # Lazy import to avoid an import cycle: the registry imports this module.
+    from twicc.agent.registry import get_agent_manager_registry
 
-
-async def shutdown_process_manager() -> None:
-    """Shutdown the global ProcessManager if it exists.
-
-    This should be called during server shutdown to gracefully terminate
-    all active Claude processes. Safe to call even if the manager was never
-    initialized.
-    """
-    global _process_manager
-    if _process_manager is not None:
-        await _process_manager.shutdown()
-        _process_manager = None
+    manager = get_agent_manager_registry().get("claude_code")
+    return manager  # type: ignore[return-value]

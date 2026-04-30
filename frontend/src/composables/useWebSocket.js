@@ -793,6 +793,7 @@ export function useWebSocket() {
                 }
                 // Update process state for a session
                 store.setProcessState(msg.session_id, msg.project_id, msg.state, {
+                    provider: msg.provider,
                     started_at: msg.started_at,
                     state_changed_at: msg.state_changed_at,
                     memory: msg.memory,

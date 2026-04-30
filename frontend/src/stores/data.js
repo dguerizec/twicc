@@ -2176,9 +2176,13 @@ export const useDataStore = defineStore('data', {
                 return
             }
             const wasAssistantTurn = this.processStates[agentSessionId]?.state === PROCESS_STATE.ASSISTANT_TURN
+            // Subagent synthetic states are derived from a parent agent that
+            // is itself owned by a provider; for now subagents only exist for
+            // Claude Code, so the parent's provider always applies.
             this.processStates[agentSessionId] = {
                 state: PROCESS_STATE.ASSISTANT_TURN,
                 project_id: projectId,
+                provider: 'claude_code',
                 started_at: startedAtUnix,
                 state_changed_at: startedAtUnix,
                 memory: null,
@@ -2294,7 +2298,7 @@ export const useDataStore = defineStore('data', {
          * @param {string} sessionId
          * @param {string} projectId - The project ID this session belongs to
          * @param {string} state - 'starting' | 'assistant_turn' | 'user_turn' | 'dead'
-         * @param {object} extra - Additional fields: started_at, state_changed_at, memory, error, pending_requests, session_title, project_name
+         * @param {object} extra - Additional fields: provider, started_at, state_changed_at, memory, error, pending_requests, session_title, project_name
          */
         setProcessState(sessionId, projectId, state, extra = {}) {
             const previousState = this.processStates[sessionId]?.state
@@ -2311,6 +2315,7 @@ export const useDataStore = defineStore('data', {
                 this.processStates[sessionId] = {
                     state,
                     project_id: projectId,
+                    provider: extra.provider || null,
                     started_at: extra.started_at || null,
                     state_changed_at: extra.state_changed_at || null,
                     memory: extra.memory || null,
@@ -2356,6 +2361,7 @@ export const useDataStore = defineStore('data', {
                     this.processStates[p.session_id] = {
                         state: p.state,
                         project_id: p.project_id,
+                        provider: p.provider || null,
                         started_at: p.started_at || null,
                         state_changed_at: p.state_changed_at || null,
                         memory: p.memory || null,

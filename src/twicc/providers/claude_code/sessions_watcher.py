@@ -18,7 +18,7 @@ from django.conf import settings
 from watchfiles import Change, awatch
 
 import twicc.search as search
-from twicc.providers.claude_code.agent.manager import get_process_manager
+from twicc.providers.claude_code.agent.manager import get_claude_agent_manager
 from twicc.providers.claude_code.agent.original_file_cache import pop_original_file as _pop_cached_original_file
 from .compute import AgentLinkUpdate, AgentStoppedUpdate, ToolResultUpdate, cache_agent_prompt, \
     check_agent_naturally_stopped, compute_item_cost_and_usage, \
@@ -484,7 +484,7 @@ async def sync_and_broadcast(
                 })
 
             # Broadcast tool result state changes
-            process_manager = get_process_manager()
+            process_manager = get_claude_agent_manager()
             for update in tool_result_updates:
                 await broadcast_message(channel_layer, {
                     "type": "tool_state",
