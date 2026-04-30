@@ -257,7 +257,7 @@ def _sync_session_subagents(
             subagent = Session(
                 id=agent_id,
                 project=project,
-                provider=Provider.CLAUDE_CODE.value,
+                provider=Provider.CLAUDE_CODE,
                 type=SessionType.SUBAGENT,
                 parent_session=session,
                 agent_id=agent_id,
@@ -358,7 +358,7 @@ def sync_project(
             session = Session(
                 id=session_id,
                 project=project,
-                provider=Provider.CLAUDE_CODE.value,
+                provider=Provider.CLAUDE_CODE,
                 type=SessionType.SESSION,
             )
             session.save()

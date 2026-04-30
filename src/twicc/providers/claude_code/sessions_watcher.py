@@ -171,7 +171,7 @@ def create_session(
         return Session.objects.create(
             id=parsed.session_id,
             project=project,
-            provider=Provider.CLAUDE_CODE.value,
+            provider=Provider.CLAUDE_CODE,
             type=SessionType.SUBAGENT,
             parent_session=parent_session,
             agent_id=parsed.session_id,
@@ -181,7 +181,7 @@ def create_session(
         kwargs = dict(
             id=parsed.session_id,
             project=project,
-            provider=Provider.CLAUDE_CODE.value,
+            provider=Provider.CLAUDE_CODE,
             compute_version=settings.CURRENT_COMPUTE_VERSION,
         )
         if permission_mode is not None:

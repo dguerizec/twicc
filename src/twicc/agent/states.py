@@ -13,6 +13,8 @@ from typing import NamedTuple
 
 import psutil
 
+from twicc.core.enums import Provider
+
 
 def format_bytes(size: int) -> str:
     """Format a byte size into a human-readable string (e.g. ``"123.4 MB"``)."""
@@ -75,13 +77,14 @@ class AgentInfo(NamedTuple):
     ``last_started_tool_id``) default to empty for providers that do not
     populate them; the serializer omits empty values.
 
-    ``provider`` carries the provider key (e.g. ``"claude_code"``) so that
-    multi-provider consumers can route or filter without re-querying the DB.
+    ``provider`` carries the provider key (e.g. ``Provider.CLAUDE_CODE``) so
+    that multi-provider consumers can route or filter without re-querying the
+    DB.
     """
 
     session_id: str
     project_id: str
-    provider: str
+    provider: Provider
     state: AgentState
     previous_state: AgentState | None
     started_at: float

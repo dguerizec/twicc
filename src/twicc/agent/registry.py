@@ -18,6 +18,7 @@ from __future__ import annotations
 import logging
 from typing import ClassVar
 
+from twicc.core.enums import Provider
 from twicc.providers.claude_code.agent.manager import ClaudeAgentManager
 
 from .base_manager import BaseAgentManager, BroadcastCallback
@@ -36,12 +37,12 @@ class AgentManagerRegistry:
     use cases.
     """
 
-    PROVIDER_MANAGERS: ClassVar[dict[str, type[BaseAgentManager]]] = {
-        "claude_code": ClaudeAgentManager,
+    PROVIDER_MANAGERS: ClassVar[dict[Provider, type[BaseAgentManager]]] = {
+        Provider.CLAUDE_CODE: ClaudeAgentManager,
     }
 
     def __init__(self) -> None:
-        self._managers: dict[str, BaseAgentManager] = {
+        self._managers: dict[Provider, BaseAgentManager] = {
             key: cls() for key, cls in self.PROVIDER_MANAGERS.items()
         }
 
@@ -49,12 +50,12 @@ class AgentManagerRegistry:
     # Direct provider access
     # ------------------------------------------------------------------
 
-    def get(self, provider: str) -> BaseAgentManager:
+    def get(self, provider: Provider) -> BaseAgentManager:
         """Return the manager for ``provider``. Raises ``KeyError`` if unknown."""
         return self._managers[provider]
 
-    def items(self) -> list[tuple[str, BaseAgentManager]]:
-        """Return ``(provider_key, manager)`` pairs for every registered provider."""
+    def items(self) -> list[tuple[Provider, BaseAgentManager]]:
+        """Return ``(provider, manager)`` pairs for every registered provider."""
         return list(self._managers.items())
 
     # ------------------------------------------------------------------

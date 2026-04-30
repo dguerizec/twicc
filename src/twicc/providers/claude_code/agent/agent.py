@@ -84,7 +84,7 @@ class ClaudeAgent(BaseAgent):
     the SDK never propagate to crash the server.
     """
 
-    provider = Provider.CLAUDE_CODE.value
+    provider = Provider.CLAUDE_CODE
 
     def __init__(
         self,

@@ -16,6 +16,8 @@ import time
 from collections.abc import Callable, Coroutine
 from typing import Any, ClassVar
 
+from twicc.core.enums import Provider
+
 from .states import AgentInfo, AgentState, get_process_memory
 
 logger = logging.getLogger(__name__)
@@ -35,8 +37,8 @@ class BaseAgent:
     provider key registered in ``AgentManagerRegistry.PROVIDER_MANAGERS``.
     """
 
-    # Provider key (e.g. ``"claude_code"``). Subclasses must override.
-    provider: ClassVar[str]
+    # Provider key (e.g. ``Provider.CLAUDE_CODE``). Subclasses must override.
+    provider: ClassVar[Provider]
 
     def __init__(self, session_id: str, project_id: str, cwd: str) -> None:
         # Fail fast if the subclass forgot to set its provider key. Without
@@ -44,8 +46,8 @@ class BaseAgent:
         # the first ``get_info()`` call as an opaque ``AttributeError``.
         if not getattr(type(self), "provider", None):
             raise TypeError(
-                f"{type(self).__name__}.provider must be set to a non-empty "
-                "string class attribute (e.g. 'claude_code')."
+                f"{type(self).__name__}.provider must be set to a "
+                "Provider enum class attribute (e.g. Provider.CLAUDE_CODE)."
             )
 
         self.session_id = session_id

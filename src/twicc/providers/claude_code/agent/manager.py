@@ -13,6 +13,7 @@ from django.conf import settings
 from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
 
 from twicc.agent import AgentInfo, AgentState, BaseAgent, BaseAgentManager
+from twicc.core.enums import Provider
 
 from .agent import ClaudeAgent
 
@@ -1069,5 +1070,5 @@ def get_claude_agent_manager() -> ClaudeAgentManager:
     # Lazy import to avoid an import cycle: the registry imports this module.
     from twicc.agent.registry import get_agent_manager_registry
 
-    manager = get_agent_manager_registry().get("claude_code")
+    manager = get_agent_manager_registry().get(Provider.CLAUDE_CODE)
     return manager  # type: ignore[return-value]

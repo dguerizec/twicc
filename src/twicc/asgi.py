@@ -23,6 +23,7 @@ from django.urls import path
 
 from twicc.agent import AgentInfo, serialize_agent_info
 from twicc.agent.registry import get_agent_manager_registry
+from twicc.core.enums import Provider
 from twicc.providers.claude_code.agent.manager import get_claude_agent_manager
 from twicc.providers.claude_code.ws import ClaudeCodeWSHandler
 from twicc.synced_settings import _settings_lock, prepare_settings_for_client, read_synced_settings, write_synced_settings
@@ -302,13 +303,13 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
     layer, etc.
     """
 
-    PROVIDER_HANDLERS: dict[str, type] = {
-        "claude_code": ClaudeCodeWSHandler,
+    PROVIDER_HANDLERS: dict[Provider, type] = {
+        Provider.CLAUDE_CODE: ClaudeCodeWSHandler,
     }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self._provider_handlers: dict[str, object] = {
+        self._provider_handlers: dict[Provider, object] = {
             key: cls(self) for key, cls in self.PROVIDER_HANDLERS.items()
         }
 
@@ -539,16 +540,22 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
     async def _dispatch_provider_message(self, msg_type: str, content: dict) -> None:
         """Route a prefixed message ``"<provider_key>:<action>"`` to the matching handler."""
         provider_key, _, action = msg_type.partition(":")
-        handler = self._provider_handlers.get(provider_key)
+        try:
+            provider = Provider(provider_key)
+        except ValueError:
+            logger.warning("Unknown provider key %r in message type %r", provider_key, msg_type)
+            return
+
+        handler = self._provider_handlers.get(provider)
         if handler is None:
-            logger.warning("No provider handler registered for prefix %r", provider_key)
+            logger.warning("No provider handler registered for %r", provider)
             return
 
         handled = await handler.dispatch(action, content)
         if not handled:
             logger.warning(
                 "Provider %r did not handle action %r",
-                provider_key, action,
+                provider, action,
             )
 
     async def send_json(self, content, close=False):
