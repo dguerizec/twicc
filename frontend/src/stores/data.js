@@ -1349,17 +1349,41 @@ export const useDataStore = defineStore('data', {
                 this.localState.sessions[sessionId] = {}
             }
 
+            // Coerce a value to an integer string ('' if missing/invalid).
+            const toIntStr = (v) => {
+                if (v == null || v === '') return ''
+                const n = Number(v)
+                return Number.isInteger(n) ? String(n) : null
+            }
+
             // Build query params
             const params = new URLSearchParams()
             for (const range of ranges) {
-                if (typeof range === 'number') {
-                    params.append('range', String(range))
+                if (typeof range === 'number' || typeof range === 'string') {
+                    const s = toIntStr(range)
+                    if (s) {
+                        params.append('range', s)
+                    } else {
+                        console.warn('loadSessionItemsRanges: skipping invalid range', range)
+                    }
                 } else if (Array.isArray(range)) {
                     const [min, max] = range
-                    const minStr = min != null ? String(min) : ''
-                    const maxStr = max != null ? String(max) : ''
+                    const minStr = toIntStr(min)
+                    const maxStr = toIntStr(max)
+                    if (minStr === null || maxStr === null || (minStr === '' && maxStr === '')) {
+                        console.warn('loadSessionItemsRanges: skipping invalid range', range)
+                        continue
+                    }
                     params.append('range', `${minStr}:${maxStr}`)
+                } else {
+                    console.warn('loadSessionItemsRanges: skipping invalid range', range)
                 }
+            }
+
+            // Refuse to call without any range — would fetch the entire session.
+            if ([...params].length === 0) {
+                console.error('loadSessionItemsRanges: no valid range provided, aborting', ranges)
+                return
             }
 
             // Build URL (handle subagent case)

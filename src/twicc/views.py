@@ -1,5 +1,6 @@
 """API views and SPA catch-all for serving the frontend."""
 
+import logging
 import os
 from bisect import bisect_left
 from datetime import datetime, timedelta
@@ -22,6 +23,8 @@ from twicc.core.serializers import (
 )
 from twicc.paths import path_to_project_id
 from twicc.providers.helpers import get_provider_helpers, get_provider_helpers_registry
+
+logger = logging.getLogger(__name__)
 
 # Number of sessions to return per page
 # Set high (1000) to effectively load all sessions at once for most users,
@@ -584,38 +587,50 @@ def session_items(request, project_id, session_id, parent_session_id=None):
         if session.parent_session_id is not None:
             raise Http404("Session not found")
 
-    items = session.items.all()
-
-    # Filter by line_num ranges if provided
+    # Filter by line_num ranges (required — refusing to serve the whole session).
     ranges = request.GET.getlist("range")
-    if ranges:
-        from django.db.models import Q
+    if not ranges:
+        logger.warning(
+            "session_items called without 'range' for session %s (project %s)",
+            session_id,
+            project_id,
+        )
+        return JsonResponse(
+            {"error": "At least one 'range' query parameter is required"},
+            status=400,
+        )
 
-        q_filter = Q()
-        for r in ranges:
-            try:
-                if ":" not in r:
-                    # Single number = exact line
-                    line_val = int(r)
-                    q_filter |= Q(line_num=line_val)
-                else:
-                    min_str, max_str = r.split(":", 1)
-                    min_val = int(min_str) if min_str else None
-                    max_val = int(max_str) if max_str else None
+    from django.db.models import Q
 
-                    if min_val is not None and max_val is not None:
-                        q_filter |= Q(line_num__gte=min_val, line_num__lte=max_val)
-                    elif min_val is not None:
-                        q_filter |= Q(line_num__gte=min_val)
-                    elif max_val is not None:
-                        q_filter |= Q(line_num__lte=max_val)
-                    # Both empty = invalid, skip
-            except ValueError:
-                continue  # Skip invalid ranges
+    q_filter = Q()
+    for r in ranges:
+        try:
+            if ":" not in r:
+                # Single number = exact line
+                line_val = int(r)
+                q_filter |= Q(line_num=line_val)
+            else:
+                min_str, max_str = r.split(":", 1)
+                min_val = int(min_str) if min_str else None
+                max_val = int(max_str) if max_str else None
 
-        if q_filter:
-            items = items.filter(q_filter)
+                if min_val is not None and max_val is not None:
+                    q_filter |= Q(line_num__gte=min_val, line_num__lte=max_val)
+                elif min_val is not None:
+                    q_filter |= Q(line_num__gte=min_val)
+                elif max_val is not None:
+                    q_filter |= Q(line_num__lte=max_val)
+                # Both empty = invalid, skip
+        except ValueError:
+            continue  # Skip invalid ranges
 
+    if not q_filter:
+        return JsonResponse(
+            {"error": "No valid 'range' query parameter could be parsed"},
+            status=400,
+        )
+
+    items = session.items.filter(q_filter)
     data = [serialize_session_item(item) for item in items]
     return JsonResponse(data, safe=False)
 

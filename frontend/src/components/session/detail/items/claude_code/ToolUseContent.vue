@@ -643,7 +643,7 @@ watchEffect(async () => {
     fileChangeBackendPatchLoading.value = true
     try {
         await dataStore.loadSessionItemsRanges(
-            props.projectId, props.sessionId, [`${lineNum}`], props.parentSessionId
+            props.projectId, props.sessionId, [lineNum], props.parentSessionId
         )
         const fetched = dataStore.getSessionItem(props.sessionId, lineNum)
         if (fetched && hasContent(fetched)) {
