@@ -213,14 +213,41 @@ class BaseProviderHelpers:
                     result[category].append(field)
         return result
 
-    def get_user_messages(self, items: Iterable[SessionItem]) -> list[UserMessage]:
+    def get_user_messages(
+        self,
+        items: Iterable[SessionItem],
+        limit: int | None = None,
+    ) -> list[UserMessage]:
         """Extract user messages with text from ``items``.
 
         ``items`` are session items already filtered to user messages and
         ordered by line number; the caller owns that fetch (it's a generic
-        DB lookup), the helper owns the ``content`` parsing.
+        DB lookup), the helper owns the ``content`` parsing. ``limit``
+        caps the number of returned entries when not ``None`` — useful
+        e.g. to fetch only the first user message for title suggestion
+        via ``get_user_messages(items, limit=1)``.
         """
         raise NotImplementedError
+
+    def get_first_user_message(self, session_id: str) -> str | None:
+        """Return the text of the first user message of ``session_id``, or ``None``.
+
+        Combines the generic DB lookup (USER_MESSAGE filter, ordered by
+        ``line_num``) with the provider-specific parsing exposed via
+        :meth:`get_user_messages` (called with ``limit=1`` so we only
+        pay for the first row). Sync method — wrap in
+        :func:`sync_to_async` at the call site if needed.
+        """
+        from twicc.core.enums import ItemKind
+        from twicc.core.models import SessionItem
+
+        items = list(
+            SessionItem.objects
+            .filter(session_id=session_id, kind=ItemKind.USER_MESSAGE)
+            .order_by("line_num")[:1]
+        )
+        messages = self.get_user_messages(items, limit=1)
+        return messages[0].text if messages else None
 
     def get_indexable_messages(self, items: Iterable[SessionItem]) -> list[IndexableMessage]:
         """Extract indexable messages from ``items``.
@@ -249,6 +276,17 @@ class BaseProviderHelpers:
         Returns ``None`` for an empty input.
         """
         raise NotImplementedError
+
+    async def generate_title(self, prompt: str, system_prompt: str) -> str | None:
+        """Generate a session title suggestion from ``prompt`` and ``system_prompt``.
+
+        ``system_prompt`` contains a ``{text}`` placeholder that the
+        implementation replaces with ``prompt``. Default implementation
+        returns ``None`` (provider has no title generation surface);
+        providers override to call their own model — e.g. Claude Code
+        runs a short Haiku query via the SDK.
+        """
+        return None
 
     def validate_title(self, title: str | None) -> TitleValidationResult:
         """Validate and normalize a user-supplied session title.

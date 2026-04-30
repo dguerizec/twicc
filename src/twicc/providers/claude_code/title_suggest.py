@@ -6,12 +6,6 @@ import logging
 
 from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient, ResultMessage
 
-import orjson
-
-from .compute import extract_text_from_content, get_message_content
-from twicc.core.models import SessionItem
-from twicc.core.enums import ItemKind
-
 logger = logging.getLogger(__name__)
 
 SUGGESTION_TIMEOUT_SECONDS = 15
@@ -39,31 +33,6 @@ async def generate_title(user_message: str, system_prompt: str) -> str | None:
     logger.warning("Title suggestion: all %d attempts exhausted", MAX_RETRIES)
     return None
 
-
-
-async def get_first_user_message(session_id: str) -> str | None:
-    """Extract text from the first user message in a session."""
-    from asgiref.sync import sync_to_async
-
-    @sync_to_async
-    def fetch():
-        item = SessionItem.objects.filter(
-            session_id=session_id,
-            kind=ItemKind.USER_MESSAGE
-        ).order_by('line_num').first()
-
-        if not item:
-            return None
-
-        try:
-            parsed = orjson.loads(item.content)
-            content = get_message_content(parsed)
-            return extract_text_from_content(content)
-        except Exception as e:
-            logger.warning("Failed to parse message for session %s: %s", session_id, e)
-            return None
-
-    return await fetch()
 
 
 async def _call_haiku(

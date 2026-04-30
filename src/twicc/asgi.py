@@ -910,7 +910,7 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
         Expected content format:
         {
             "type": "suggest_title",
-            "sessionId": "claude-conv-xxx",
+            "sessionId": "...",
             "systemPrompt": "System prompt with {text} placeholder",
             "prompt": "optional prompt text for draft/new sessions"
         }
@@ -922,34 +922,30 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
         - sessionId only: Fetch first message from DB (existing session)
 
         Always returns the prompt used for generation, so frontend can regenerate.
+        Provider is resolved from the session row; the matching helpers'
+        ``generate_title`` does the actual model call.
         """
-        from twicc.providers.claude_code.title_suggest import (
-            generate_title,
-            get_first_user_message,
-        )
-
         session_id = content.get("sessionId")
         system_prompt = content.get("systemPrompt")
         prompt = content.get("prompt")
 
-        # Require both sessionId and systemPrompt
         if not session_id or not system_prompt:
             return
-
-        # Validate systemPrompt contains {text} placeholder
         if "{text}" not in system_prompt:
             return
 
-        # Get prompt: use provided or fetch from DB
-        if not prompt:
-            prompt = await get_first_user_message(session_id)
+        provider = await get_session_provider(session_id)
+        if provider is None:
+            return
+        helpers = get_provider_helpers(provider)
 
-        # Generate suggestion if we have a prompt
+        if not prompt:
+            prompt = await sync_to_async(helpers.get_first_user_message)(session_id)
+
         suggestion = None
         if prompt:
-            suggestion = await generate_title(prompt, system_prompt)
+            suggestion = await helpers.generate_title(prompt, system_prompt)
 
-        # Send result back to client (always include prompt for regeneration)
         await self.send_json({
             "type": "title_suggested",
             "sessionId": session_id,

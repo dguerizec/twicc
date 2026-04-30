@@ -331,11 +331,17 @@ class ClaudeCodeHelpers(BaseProviderHelpers):
         """Expose Claude Code's :class:`ClaudeCodeModelExtra` flags on the wire."""
         return mv.provider_extra._asdict()
 
-    def get_user_messages(self, items: Iterable[SessionItem]) -> list[UserMessage]:
+    def get_user_messages(
+        self,
+        items: Iterable[SessionItem],
+        limit: int | None = None,
+    ) -> list[UserMessage]:
         from twicc.search import extract_indexable_text
 
         out: list[UserMessage] = []
         for item in items:
+            if limit is not None and len(out) >= limit:
+                break
             try:
                 parsed = orjson.loads(item.content)
             except (orjson.JSONDecodeError, TypeError):
@@ -390,6 +396,12 @@ class ClaudeCodeHelpers(BaseProviderHelpers):
 
     def serialize_model(self, model: str | None) -> dict | None:
         return serialize_model(model)
+
+    async def generate_title(self, prompt: str, system_prompt: str) -> str | None:
+        """Run a short Haiku SDK query to suggest a title for ``prompt``."""
+        from .title_suggest import generate_title as _generate
+
+        return await _generate(prompt, system_prompt)
 
     def validate_title(self, title: str | None) -> TitleValidationResult:
         normalized, error = validate_title(title)
