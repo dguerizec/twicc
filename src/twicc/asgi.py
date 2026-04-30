@@ -25,7 +25,7 @@ from twicc.agent import AgentInfo, serialize_agent_info
 from twicc.agent.registry import get_agent_manager_registry
 from twicc.core.enums import Provider
 from twicc.providers.claude_code.ws import ClaudeCodeWSHandler
-from twicc.providers.helpers import AgentSettings, get_provider_helpers
+from twicc.providers.helpers import AgentSettings, get_provider_helpers, get_provider_helpers_registry
 from twicc.synced_settings import _settings_lock, prepare_settings_for_client, read_synced_settings, write_synced_settings
 from twicc.workspaces import read_workspaces, write_workspaces
 from twicc.message_snippets import read_message_snippets_config, write_message_snippets_config
@@ -970,39 +970,26 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
 
         def _merge_and_write():
             with _settings_lock:
-                existing = read_synced_settings()
-                current_version = existing.get("_version", 0)
+                existing_settings = read_synced_settings()
+                current_version = existing_settings.get("_version", 0)
 
                 # Reject stale writes (accept if baseVersion is None — safety for rolling upgrades)
                 if base_version is not None and base_version < current_version:
-                    clean, ver = prepare_settings_for_client(existing)
+                    clean, ver = prepare_settings_for_client(existing_settings)
                     return None, clean, ver  # rejected
 
                 # Accepted — merge, increment version, write
-                existing.update(synced_settings)
+                existing_settings.update(synced_settings)
 
-                # Enforce provider rules when claudeCodeDefaultModel changes
-                # (auto-upgrade retired model + cap context_max / demote effort)
-                if "claudeCodeDefaultModel" in synced_settings:
-                    from twicc.synced_settings import SYNCED_SETTINGS_DEFAULTS
-                    cc_helpers = get_provider_helpers(Provider.CLAUDE_CODE)
-                    candidate = AgentSettings(
-                        selected_model=existing.get(
-                            "claudeCodeDefaultModel", SYNCED_SETTINGS_DEFAULTS["claudeCodeDefaultModel"],
-                        ),
-                        context_max=existing.get("claudeCodeDefaultContextMax", 200_000),
-                        effort=existing.get("claudeCodeDefaultEffort"),
-                    )
-                    adjusted = cc_helpers.enforce_agent_settings_consistency(candidate)
-                    if adjusted.selected_model != candidate.selected_model:
-                        existing["claudeCodeDefaultModel"] = adjusted.selected_model
-                    if adjusted.context_max != candidate.context_max:
-                        existing["claudeCodeDefaultContextMax"] = adjusted.context_max
-                    if adjusted.effort != candidate.effort:
-                        existing["claudeCodeDefaultEffort"] = adjusted.effort
+                # Let every provider enforce its own rules on the merged dict.
+                # ``synced_settings`` is the subset the client just sent, so
+                # each provider can short-circuit when none of its keys changed.
+                get_provider_helpers_registry().enforce_synced_settings_consistency(
+                    existing_settings, synced_settings,
+                )
 
-                existing["_version"] = current_version + 1
-                write_synced_settings(existing)
+                existing_settings["_version"] = current_version + 1
+                write_synced_settings(existing_settings)
                 return current_version + 1, None, None  # accepted
 
         new_version, reject_settings, reject_version = await sync_to_async(_merge_and_write)()

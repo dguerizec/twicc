@@ -256,6 +256,47 @@ class ClaudeCodeHelpers(BaseProviderHelpers):
             mv = self._resolve_to_default_model_version()
         return bool(mv and mv.provider_extra.supports_effort_max)
 
+    def enforce_synced_settings_consistency(self, synced: dict, changes: dict) -> None:
+        """Normalise ``claudeCodeDefault*`` keys when the default model changed.
+
+        ``claudeCodeDefaultModel`` is the pivot: when the client picks
+        a new default model in the UI, the front sends the related
+        keys (``ContextMax``, ``Effort``) in the same update, so we
+        only need to fire the rule then. Builds a transient
+        :class:`AgentSettings` from the merged ``synced`` dict, runs
+        it through :meth:`enforce_agent_settings_consistency`
+        (auto-upgrade retired model + capability rules), and writes
+        back only fields that were included in ``changes`` — never
+        mutating a key the client didn't ask to touch.
+        """
+        if "claudeCodeDefaultModel" not in changes:
+            return
+        candidate = AgentSettings(
+            selected_model=synced.get(
+                "claudeCodeDefaultModel", self.SYNCED_SETTINGS_DEFAULTS["claudeCodeDefaultModel"],
+            ),
+            context_max=synced.get(
+                "claudeCodeDefaultContextMax", self.SYNCED_SETTINGS_DEFAULTS["claudeCodeDefaultContextMax"],
+            ),
+            effort=synced.get("claudeCodeDefaultEffort"),
+        )
+        adjusted = self.enforce_agent_settings_consistency(candidate)
+        if (
+            "claudeCodeDefaultModel" in changes
+            and adjusted.selected_model != candidate.selected_model
+        ):
+            synced["claudeCodeDefaultModel"] = adjusted.selected_model
+        if (
+            "claudeCodeDefaultContextMax" in changes
+            and adjusted.context_max != candidate.context_max
+        ):
+            synced["claudeCodeDefaultContextMax"] = adjusted.context_max
+        if (
+            "claudeCodeDefaultEffort" in changes
+            and adjusted.effort != candidate.effort
+        ):
+            synced["claudeCodeDefaultEffort"] = adjusted.effort
+
     def enforce_agent_settings_consistency(self, settings: AgentSettings) -> AgentSettings:
         """Auto-upgrade retired model, then normalise capability rules.
 

@@ -326,6 +326,30 @@ class BaseProviderHelpers:
                 return candidate.model if candidate.latest else f"{candidate.model}-{candidate.version}"
         return None
 
+    def enforce_synced_settings_consistency(self, synced: dict, changes: dict) -> None:
+        """Apply this provider's rules to the merged synced settings dict.
+
+        Called once per provider after the WS handler has merged a
+        client update into the synced settings store. ``synced`` is
+        the full merged dict, mutated in place. ``changes`` is the
+        subset of keys the client just sent in this request.
+
+        Implementations must:
+
+        - Use ``changes`` as the trigger to decide whether to fire
+          (typically: only run when the provider's pivotal key — the
+          one that, when changed, can invalidate sibling fields — is
+          in ``changes``).
+        - Only write back keys that are present in ``changes``.
+          Overwriting a key the client did not include in the update
+          would silently mutate state the client didn't ask to touch
+          and is unsafe under optimistic concurrency.
+
+        The base implementation is a no-op; providers that own
+        synced-settings rules override.
+        """
+        return None
+
     def enforce_agent_settings_consistency(self, settings: AgentSettings) -> AgentSettings:
         """Return ``settings`` normalised against this provider's rules.
 
@@ -441,6 +465,17 @@ class ProviderHelpersRegistry:
     def values(self) -> list[BaseProviderHelpers]:
         """Return the helpers instances for every registered provider."""
         return list(self._helpers.values())
+
+    def enforce_synced_settings_consistency(self, synced: dict, changes: dict) -> None:
+        """Run every provider's :meth:`BaseProviderHelpers.enforce_synced_settings_consistency`.
+
+        ``synced`` is the merged synced settings dict (mutated in place by each
+        provider that has rules to apply). ``changes`` is the subset of keys the
+        client sent in this update so each provider can short-circuit when none
+        of its keys changed.
+        """
+        for helpers in self._helpers.values():
+            helpers.enforce_synced_settings_consistency(synced, changes)
 
 
 _registry: ProviderHelpersRegistry | None = None
