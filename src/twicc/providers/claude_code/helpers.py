@@ -9,12 +9,13 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from functools import lru_cache
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 import orjson
 
 from twicc.core.enums import ItemKind
 from twicc.providers.helpers import (
+    AgentSettingCategory,
     BaseProviderHelpers,
     IndexableMessage,
     TitleValidationResult,
@@ -52,6 +53,48 @@ def serialize_model(model: str | None) -> dict | None:
 
 class ClaudeCodeHelpers(BaseProviderHelpers):
     """Helpers for sessions produced by the Claude Code CLI / SDK."""
+
+    SYNCED_SETTINGS_DEFAULTS: ClassVar[dict] = {
+        "claudeCodeDefaultPermissionMode": "default",
+        "claudeCodeDefaultModel": "opus",
+        "claudeCodeDefaultEffort": "medium",
+        "claudeCodeDefaultThinking": True,
+        "claudeCodeDefaultClaudeInChrome": True,
+        "claudeCodeDefaultContextMax": 200_000,
+    }
+
+    RENAMED_SYNCED_SETTINGS_KEYS: ClassVar[dict[str, str]] = {
+        "defaultPermissionMode": "claudeCodeDefaultPermissionMode",
+        "defaultModel": "claudeCodeDefaultModel",
+        "defaultEffort": "claudeCodeDefaultEffort",
+        "defaultThinking": "claudeCodeDefaultThinking",
+        "defaultClaudeInChrome": "claudeCodeDefaultClaudeInChrome",
+        "defaultContextMax": "claudeCodeDefaultContextMax",
+    }
+
+    OBSOLETE_SYNCED_SETTINGS_KEYS: ClassVar[tuple[str, ...]] = (
+        "alwaysApplyDefaultPermissionMode",
+        "alwaysApplyDefaultModel",
+        "alwaysApplyDefaultEffort",
+        "alwaysApplyDefaultThinking",
+        "alwaysApplyDefaultClaudeInChrome",
+        "alwaysApplyDefaultContextMax",
+    )
+
+    AGENT_SETTINGS_CATEGORIES: ClassVar[dict[AgentSettingCategory, list[str]]] = {
+        AgentSettingCategory.LIVE: ["permission_mode"],
+        AgentSettingCategory.IDLE: ["selected_model", "context_max"],
+        AgentSettingCategory.STARTUP: ["effort", "thinking_enabled", "claude_in_chrome"],
+    }
+
+    AGENT_SETTINGS_FIELDS_MAPPING: ClassVar[dict[str, str]] = {
+        "permission_mode": "claudeCodeDefaultPermissionMode",
+        "selected_model": "claudeCodeDefaultModel",
+        "effort": "claudeCodeDefaultEffort",
+        "thinking_enabled": "claudeCodeDefaultThinking",
+        "claude_in_chrome": "claudeCodeDefaultClaudeInChrome",
+        "context_max": "claudeCodeDefaultContextMax",
+    }
 
     def get_user_messages(self, items: Iterable[SessionItem]) -> list[UserMessage]:
         from twicc.search import extract_indexable_text
@@ -121,13 +164,14 @@ class ClaudeCodeHelpers(BaseProviderHelpers):
         rename_session_in_jsonl(session_id, title)
 
     def get_bootstrap_data(self) -> dict:
-        from twicc.synced_settings import CLAUDE_SETTINGS_CATEGORIES
-
         from .claude_settings_presets import read_claude_settings_presets
         from .model_registry import serialize_model_registry
 
         return {
-            "claude_settings_presets": read_claude_settings_presets(),
-            "claude_settings_categories": CLAUDE_SETTINGS_CATEGORIES,
+            "agent_settings_presets": read_claude_settings_presets(),
+            "agent_settings_categories": {
+                category.value: keys
+                for category, keys in self.AGENT_SETTINGS_CATEGORIES.items()
+            },
             "model_registry": serialize_model_registry(),
         }

@@ -2033,7 +2033,7 @@ def bootstrap(request):
 
     clean_settings, version = prepare_settings_for_client(read_synced_settings())
     workspaces_data = read_workspaces()
-    response = {
+    return JsonResponse({
         "settings": clean_settings,
         "settings_version": version,
         "default_settings": SYNCED_SETTINGS_DEFAULTS,
@@ -2043,10 +2043,11 @@ def bootstrap(request):
         "workspaces": workspaces_data.get("workspaces", []),
         "terminal_config": read_terminal_config(),
         "message_snippets": read_message_snippets_config(),
-    }
-    for _, helpers in get_provider_helpers_registry().items():
-        response.update(helpers.get_bootstrap_data())
-    return JsonResponse(response)
+        "providers": {
+            provider.value: helpers.get_bootstrap_data()
+            for provider, helpers in get_provider_helpers_registry().items()
+        },
+    })
 
 
 def changelog(request):

@@ -19,9 +19,25 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from datetime import datetime
-from typing import TYPE_CHECKING, ClassVar, NamedTuple
+from enum import StrEnum
+from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple
 
 from twicc.core.enums import Provider
+
+
+class AgentSettingCategory(StrEnum):
+    """When a per-agent setting can be applied to a running process.
+
+    Each provider classifies its own keys per category in
+    :attr:`BaseProviderHelpers.AGENT_SETTINGS_CATEGORIES`.
+
+    - ``LIVE``: applicable at any time (USER_TURN or ASSISTANT_TURN)
+    - ``IDLE``: applicable only during USER_TURN
+    - ``STARTUP``: applicable only at process creation (requires restart)
+    """
+    LIVE = "live"
+    IDLE = "idle"
+    STARTUP = "startup"
 
 if TYPE_CHECKING:
     from twicc.core.models import SessionItem
@@ -57,6 +73,72 @@ class IndexableMessage(NamedTuple):
 
 class BaseProviderHelpers:
     """Abstract per-provider helpers."""
+
+    # Provider-specific entries to merge into ``SYNCED_SETTINGS_DEFAULTS``.
+    # Keys must be namespaced (e.g. ``claudeCodeDefault*``) to avoid clashes
+    # between providers and with the cross-provider generic defaults.
+    SYNCED_SETTINGS_DEFAULTS: ClassVar[dict] = {}
+
+    # Provider-specific legacy → current key renames applied at read time so
+    # old ``settings.json`` files keep their values across renames.
+    RENAMED_SYNCED_SETTINGS_KEYS: ClassVar[dict[str, str]] = {}
+
+    # Provider-specific legacy keys to drop unconditionally on read (no longer
+    # used). Aggregated with each other provider's contribution and with the
+    # cross-provider generic list during the settings migration.
+    OBSOLETE_SYNCED_SETTINGS_KEYS: ClassVar[tuple[str, ...]] = ()
+
+    # Per-agent settings classified by when they can be applied to a running
+    # process. Each provider defines its own keys per :class:`AgentSettingCategory`.
+    AGENT_SETTINGS_CATEGORIES: ClassVar[dict[AgentSettingCategory, list[str]]] = {}
+
+    # Per-agent setting field name → corresponding key in the synced settings
+    # used as fallback when the session-level value is unset. Drives
+    # :meth:`resolve_agent_settings`. Each provider defines its own mapping.
+    AGENT_SETTINGS_FIELDS_MAPPING: ClassVar[dict[str, str]] = {}
+
+    def resolve_agent_settings(self, source: dict | Any) -> dict:
+        """Return the effective per-agent settings, with synced defaults as fallback.
+
+        ``source`` is either a dict of override values (e.g. fields parsed
+        from a WebSocket message) or any object exposing the per-agent
+        setting field names as attributes (typically a ``Session`` row). For
+        each field listed in :attr:`AGENT_SETTINGS_FIELDS_MAPPING`, the
+        explicit value wins if non-``None``; otherwise the corresponding
+        synced settings default is used, with the helper's own
+        :attr:`SYNCED_SETTINGS_DEFAULTS` as a last-resort fallback.
+        """
+        from twicc.synced_settings import read_synced_settings
+
+        synced = read_synced_settings()
+        is_dict = isinstance(source, dict)
+        result: dict = {}
+        for field, default_key in self.AGENT_SETTINGS_FIELDS_MAPPING.items():
+            value = source.get(field) if is_dict else getattr(source, field, None)
+            if value is None:
+                value = synced.get(default_key, self.SYNCED_SETTINGS_DEFAULTS.get(default_key))
+            result[field] = value
+        return result
+
+    def classify_agent_settings_changes(
+        self,
+        current: dict,
+        requested: dict,
+    ) -> dict[AgentSettingCategory, list[str]]:
+        """Return per-category lists of keys that differ between ``current`` and ``requested``.
+
+        Default implementation derives the per-category diff from
+        :attr:`AGENT_SETTINGS_CATEGORIES`. Categories with no changes return an
+        empty list.
+        """
+        result: dict[AgentSettingCategory, list[str]] = {
+            category: [] for category in self.AGENT_SETTINGS_CATEGORIES
+        }
+        for category, keys in self.AGENT_SETTINGS_CATEGORIES.items():
+            for key in keys:
+                if current.get(key) != requested.get(key):
+                    result[category].append(key)
+        return result
 
     def get_user_messages(self, items: Iterable[SessionItem]) -> list[UserMessage]:
         """Extract user messages with text from ``items``.
@@ -149,6 +231,10 @@ class ProviderHelpersRegistry:
     def items(self) -> list[tuple[Provider, BaseProviderHelpers]]:
         """Return ``(provider, helpers)`` pairs for every registered provider."""
         return list(self._helpers.items())
+
+    def values(self) -> list[BaseProviderHelpers]:
+        """Return the helpers instances for every registered provider."""
+        return list(self._helpers.values())
 
 
 _registry: ProviderHelpersRegistry | None = None

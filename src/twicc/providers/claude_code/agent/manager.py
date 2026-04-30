@@ -127,7 +127,9 @@ class ClaudeAgentManager(BaseAgentManager):
         Raises:
             RuntimeError: If the agent cannot be started or message cannot be sent
         """
-        from twicc.synced_settings import classify_claude_settings_changes
+        from twicc.providers.helpers import AgentSettingCategory, get_provider_helpers
+
+        provider_helpers = get_provider_helpers(Provider.CLAUDE_CODE)
 
         async with self._lock:
             # Cancel any running cron restart task — user is taking over this session.
@@ -156,16 +158,16 @@ class ClaudeAgentManager(BaseAgentManager):
                     del self._agents[session_id]
 
                 elif agent.state == AgentState.USER_TURN:
-                    changes = classify_claude_settings_changes(
+                    changes = provider_helpers.classify_agent_settings_changes(
                         agent.get_claude_settings(), requested_settings,
                     )
-                    has_startup_changes = bool(changes["startup"])
+                    has_startup_changes = bool(changes[AgentSettingCategory.STARTUP])
 
                     if has_startup_changes:
                         # Startup settings changed → must kill and restart
                         logger.info(
                             "Startup settings changed for session %s (%s), killing agent",
-                            session_id, changes["startup"],
+                            session_id, changes[AgentSettingCategory.STARTUP],
                         )
                         has_crons = await self._session_has_crons(agent)
                         will_restart = has_content or has_crons
@@ -998,7 +1000,7 @@ class ClaudeAgentManager(BaseAgentManager):
         - No changes → no-op
         """
         from twicc.core.models import Session
-        from twicc.synced_settings import classify_claude_settings_changes, read_synced_settings
+        from twicc.providers.helpers import AgentSettingCategory, get_provider_helpers
 
         session = await asyncio.to_thread(
             Session.objects.filter(id=agent.session_id).first
@@ -1006,30 +1008,25 @@ class ClaudeAgentManager(BaseAgentManager):
         if session is None:
             return
 
+        provider_helpers = get_provider_helpers(Provider.CLAUDE_CODE)
         # Resolve effective settings (null → global default)
-        defaults = read_synced_settings()
-        requested = {
-            "permission_mode": session.permission_mode if session.permission_mode is not None else defaults.get("claudeCodeDefaultPermissionMode", "default"),
-            "selected_model": session.selected_model if session.selected_model is not None else defaults.get("claudeCodeDefaultModel", "opus"),
-            "effort": session.effort if session.effort is not None else defaults.get("claudeCodeDefaultEffort", "medium"),
-            "thinking_enabled": session.thinking_enabled if session.thinking_enabled is not None else defaults.get("claudeCodeDefaultThinking", True),
-            "claude_in_chrome": session.claude_in_chrome if session.claude_in_chrome is not None else defaults.get("claudeCodeDefaultClaudeInChrome", True),
-            "context_max": session.context_max if session.context_max is not None else defaults.get("claudeCodeDefaultContextMax", 200_000),
-        }
+        requested = provider_helpers.resolve_agent_settings(session)
 
         # Enforce 1M consistency
         from twicc.providers.claude_code.model_registry import enforce_1m_consistency
         requested["context_max"] = enforce_1m_consistency(requested["selected_model"], requested["context_max"])
 
-        changes = classify_claude_settings_changes(agent.get_claude_settings(), requested)
+        changes = provider_helpers.classify_agent_settings_changes(
+            agent.get_claude_settings(), requested,
+        )
         if not any(changes.values()):
             return
 
-        if changes["startup"]:
+        if changes[AgentSettingCategory.STARTUP]:
             # Startup settings changed → kill and let cron restart / pending handle it
             logger.info(
                 "Pending startup settings for session %s (%s), killing agent on USER_TURN",
-                agent.session_id, changes["startup"],
+                agent.session_id, changes[AgentSettingCategory.STARTUP],
             )
             has_crons = await self._session_has_crons(agent)
             has_pending = agent.session_id in self._pending_after_restart
@@ -1051,7 +1048,9 @@ class ClaudeAgentManager(BaseAgentManager):
             # Only live/idle changes → apply via SDK methods
             logger.info(
                 "Applying live/idle settings for session %s (live=%s, idle=%s) on USER_TURN",
-                agent.session_id, changes["live"], changes["idle"],
+                agent.session_id,
+                changes[AgentSettingCategory.LIVE],
+                changes[AgentSettingCategory.IDLE],
             )
             await agent.apply_live_settings(
                 requested["permission_mode"],

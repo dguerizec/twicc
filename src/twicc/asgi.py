@@ -660,19 +660,19 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
         exists = await session_exists(session_id)
 
         manager = get_claude_agent_manager()
+        settings_fields = {
+            "permission_mode": permission_mode,
+            "selected_model": selected_model,
+            "effort": effort,
+            "thinking_enabled": thinking_enabled,
+            "claude_in_chrome": claude_in_chrome,
+            "context_max": context_max,
+        }
         try:
             if exists:
                 # Save all Claude session settings to DB in one query.
                 # Values are null (use global default) or explicit (forced).
                 from twicc.core.models import Session
-                settings_fields = {
-                    "permission_mode": permission_mode,
-                    "selected_model": selected_model,
-                    "effort": effort,
-                    "thinking_enabled": thinking_enabled,
-                    "claude_in_chrome": claude_in_chrome,
-                    "context_max": context_max,
-                }
                 from twicc.core.serializers import serialize_session
                 await sync_to_async(
                     Session.objects.filter(id=session_id).update
@@ -700,16 +700,8 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
 
                 # Resolve effective values for the process manager
                 # (null → global default, so the process gets concrete values)
-                from twicc.synced_settings import read_synced_settings
-                defaults = read_synced_settings()
-                effective = {
-                    "permission_mode": permission_mode if permission_mode is not None else defaults.get("claudeCodeDefaultPermissionMode", "default"),
-                    "selected_model": selected_model if selected_model is not None else defaults.get("claudeCodeDefaultModel", "opus"),
-                    "effort": effort if effort is not None else defaults.get("claudeCodeDefaultEffort", "medium"),
-                    "thinking_enabled": thinking_enabled if thinking_enabled is not None else defaults.get("claudeCodeDefaultThinking", True),
-                    "claude_in_chrome": claude_in_chrome if claude_in_chrome is not None else defaults.get("claudeCodeDefaultClaudeInChrome", True),
-                    "context_max": context_max if context_max is not None else defaults.get("claudeCodeDefaultContextMax", 200_000),
-                }
+                from twicc.providers.helpers import get_provider_helpers as _get_helpers
+                effective = _get_helpers(Provider.CLAUDE_CODE).resolve_agent_settings(settings_fields)
 
                 # Safety net: auto-upgrade retired models (frontend should have corrected, but just in case)
                 from twicc.providers.claude_code.model_registry import enforce_1m_consistency, get_upgrade_target, is_model_retired
@@ -758,16 +750,8 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
                 )
 
                 # Resolve effective values for process creation
-                from twicc.synced_settings import read_synced_settings
-                defaults = read_synced_settings()
-                effective = {
-                    "permission_mode": permission_mode if permission_mode is not None else defaults.get("claudeCodeDefaultPermissionMode", "default"),
-                    "selected_model": selected_model if selected_model is not None else defaults.get("claudeCodeDefaultModel", "opus"),
-                    "effort": effort if effort is not None else defaults.get("claudeCodeDefaultEffort", "medium"),
-                    "thinking_enabled": thinking_enabled if thinking_enabled is not None else defaults.get("claudeCodeDefaultThinking", True),
-                    "claude_in_chrome": claude_in_chrome if claude_in_chrome is not None else defaults.get("claudeCodeDefaultClaudeInChrome", True),
-                    "context_max": context_max if context_max is not None else defaults.get("claudeCodeDefaultContextMax", 200_000),
-                }
+                from twicc.providers.helpers import get_provider_helpers as _get_helpers
+                effective = _get_helpers(Provider.CLAUDE_CODE).resolve_agent_settings(settings_fields)
 
                 # Safety net: auto-upgrade retired models (frontend should have corrected, but just in case)
                 from twicc.providers.claude_code.model_registry import enforce_1m_consistency, get_upgrade_target, is_model_retired

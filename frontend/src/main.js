@@ -114,9 +114,10 @@ if (!authStore.needsLogin) {
         const resp = await fetch('/api/bootstrap/')
         if (resp.ok) {
             bootstrapData = await resp.json()
-            const { settings, settings_version, default_settings, claude_settings_categories, dev_mode, uvx_mode, twicc_launch_prefix } = bootstrapData
-            applyDefaultSettings(default_settings, settings, claude_settings_categories, dev_mode, uvx_mode, twicc_launch_prefix, settings_version)
-            setModelRegistry(bootstrapData.model_registry || [])
+            const { settings, settings_version, default_settings, dev_mode, uvx_mode, twicc_launch_prefix, providers } = bootstrapData
+            const claudeProvider = providers?.claude_code ?? {}
+            applyDefaultSettings(default_settings, settings, claudeProvider.agent_settings_categories, dev_mode, uvx_mode, twicc_launch_prefix, settings_version)
+            setModelRegistry(claudeProvider.model_registry || [])
         } else {
             bootstrapFailed = true
         }
@@ -145,7 +146,7 @@ if (!authStore.needsLogin) {
     useWorkspacesStore().applyWorkspaces(bootstrapData.workspaces)
     useTerminalConfigStore().applyConfig(bootstrapData.terminal_config)
     useMessageSnippetsStore().applyConfig(bootstrapData.message_snippets)
-    useClaudeSettingsPresetsStore().applyConfig(bootstrapData.claude_settings_presets)
+    useClaudeSettingsPresetsStore().applyConfig(bootstrapData.providers?.claude_code?.agent_settings_presets)
 
     // Hydrate drafts from IndexedDB (async, non-blocking)
     // Order matters: sessions first so draft messages have their session available

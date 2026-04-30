@@ -38,10 +38,10 @@ def _collect_restart_data(session_id: str) -> dict | None:
     plus crons_data for message building. Returns None if restart not possible
     (no active crons, session not found, or cwd missing).
     """
+    from twicc.core.enums import Provider
     from twicc.core.models import Session, SessionCron
-    from twicc.synced_settings import read_synced_settings
+    from twicc.providers.helpers import get_provider_helpers
 
-    defaults = read_synced_settings()
     active_crons = list(SessionCron.active_for_session(session_id))
     if not active_crons:
         return None
@@ -65,12 +65,7 @@ def _collect_restart_data(session_id: str) -> dict | None:
             {"cron_expr": c.cron_expr, "recurring": c.recurring, "prompt": c.prompt}
             for c in active_crons
         ],
-        "permission_mode": session.permission_mode if session.permission_mode is not None else defaults.get("claudeCodeDefaultPermissionMode", "default"),
-        "selected_model": session.selected_model if session.selected_model is not None else defaults.get("claudeCodeDefaultModel", "opus"),
-        "effort": session.effort if session.effort is not None else defaults.get("claudeCodeDefaultEffort", "medium"),
-        "thinking_enabled": session.thinking_enabled if session.thinking_enabled is not None else defaults.get("claudeCodeDefaultThinking", True),
-        "claude_in_chrome": session.claude_in_chrome if session.claude_in_chrome is not None else defaults.get("claudeCodeDefaultClaudeInChrome", True),
-        "context_max": session.context_max if session.context_max is not None else defaults.get("claudeCodeDefaultContextMax", 200_000),
+        **get_provider_helpers(Provider.CLAUDE_CODE).resolve_agent_settings(session),
     }
 
     # Enforce model-capability consistency

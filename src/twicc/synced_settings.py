@@ -9,6 +9,10 @@ The backend owns the default values for synced settings. It serves them to the
 frontend (via the ``GET /api/settings/`` endpoint) so the frontend can use them
 for validation without duplicating the definitions.
 
+Provider-specific settings (defaults, legacy renames, per-category lists) are
+contributed by each provider via :class:`BaseProviderHelpers` ClassVars and
+merged here at import time.
+
 A module-level cache (_cache) keeps the latest known state in memory so that
 backend code can access settings without re-reading the file every time.
 """
@@ -21,12 +25,15 @@ import threading
 import orjson
 
 from twicc.paths import get_synced_settings_path
+from twicc.providers.helpers import get_provider_helpers_registry
 
 logger = logging.getLogger(__name__)
 
-# Default values for all synced settings (those changeable via the frontend UI).
-# Backend-only keys (e.g. lastChangelogVersionSeen) are NOT included here.
-SYNCED_SETTINGS_DEFAULTS: dict = {
+# Cross-provider default values for synced settings. Provider-specific
+# defaults (e.g. claudeCode*) are contributed by each provider via
+# ``BaseProviderHelpers.SYNCED_SETTINGS_DEFAULTS`` and merged into
+# :data:`SYNCED_SETTINGS_DEFAULTS` below.
+_GENERIC_SYNCED_SETTINGS_DEFAULTS: dict = {
     "titleGenerationEnabled": True,
     "titleAutoApply": True,
     "titleSystemPrompt": (
@@ -40,12 +47,6 @@ SYNCED_SETTINGS_DEFAULTS: dict = {
         "about code, keep English technical terms as-is).\n\n"
         "User message:\n{text}"
     ),
-    "claudeCodeDefaultPermissionMode": "default",
-    "claudeCodeDefaultModel": "opus",
-    "claudeCodeDefaultEffort": "medium",
-    "claudeCodeDefaultThinking": True,
-    "claudeCodeDefaultClaudeInChrome": True,
-    "claudeCodeDefaultContextMax": 200_000,
     "autoUnpinOnArchive": True,
     "terminalUseTmux": True,
     "terminalTmuxConfigPath": "",
@@ -57,40 +58,28 @@ SYNCED_SETTINGS_DEFAULTS: dict = {
     "usageDumpFilePath": "",
 }
 
-# Claude session settings: classification by when they can be applied to a live process.
-# - "live": can be applied at any time (USER_TURN or ASSISTANT_TURN) via SDK methods
-# - "idle": can only be applied during USER_TURN via SDK methods
-# - "startup": can only be set at process creation (requires process stop to change)
-CLAUDE_SETTINGS_CATEGORIES: dict[str, list[str]] = {
-    "live": ["permission_mode"],
-    "idle": ["selected_model", "context_max"],
-    "startup": ["effort", "thinking_enabled", "claude_in_chrome"],
+
+def _merge_provider_dicts(attr: str) -> dict:
+    """Merge a ``BaseProviderHelpers`` ClassVar dict from every registered provider."""
+    merged: dict = {}
+    for helpers in get_provider_helpers_registry().values():
+        merged.update(getattr(helpers, attr))
+    return merged
+
+
+def _merge_provider_tuples(attr: str) -> tuple[str, ...]:
+    """Concatenate a ``BaseProviderHelpers`` ClassVar tuple from every registered provider."""
+    merged: list[str] = []
+    for helpers in get_provider_helpers_registry().values():
+        merged.extend(getattr(helpers, attr))
+    return tuple(merged)
+
+
+# Final defaults: generic settings + every provider's contribution.
+SYNCED_SETTINGS_DEFAULTS: dict = {
+    **_GENERIC_SYNCED_SETTINGS_DEFAULTS,
+    **_merge_provider_dicts("SYNCED_SETTINGS_DEFAULTS"),
 }
-
-# Reverse lookup: setting name → category
-_SETTING_TO_CATEGORY: dict[str, str] = {
-    setting: category
-    for category, settings in CLAUDE_SETTINGS_CATEGORIES.items()
-    for setting in settings
-}
-
-
-def classify_claude_settings_changes(current: dict, requested: dict) -> dict[str, list[str]]:
-    """Compare current vs requested Claude session settings and return diffs by category.
-
-    Args:
-        current: Current settings on the process (or from DB).
-        requested: Requested settings from the frontend.
-
-    Returns:
-        Dict with keys "live", "idle", "startup", each mapping to a list of
-        setting names that differ. Empty lists for categories with no changes.
-    """
-    result: dict[str, list[str]] = {"live": [], "idle": [], "startup": []}
-    for setting, category in _SETTING_TO_CATEGORY.items():
-        if current.get(setting) != requested.get(setting):
-            result[category].append(setting)
-    return result
 
 
 # In-memory cache of the current synced settings (file content merged with defaults).
@@ -102,27 +91,19 @@ _cache: dict = {}
 _settings_lock = threading.Lock()
 
 
-# Legacy keys to drop unconditionally on read (no longer used).
-_OBSOLETE_SETTINGS_KEYS: tuple[str, ...] = (
-    "alwaysApplyDefaultPermissionMode",
-    "alwaysApplyDefaultModel",
-    "alwaysApplyDefaultEffort",
-    "alwaysApplyDefaultThinking",
-    "alwaysApplyDefaultClaudeInChrome",
-    "alwaysApplyDefaultContextMax",
-)
+# Cross-provider legacy keys to drop unconditionally on read (no longer used).
+# Provider-specific obsolete keys are contributed via
+# ``BaseProviderHelpers.OBSOLETE_SYNCED_SETTINGS_KEYS`` and merged in at
+# migration time. Empty by default — placeholder for future cross-provider
+# drops.
+_GENERIC_OBSOLETE_SYNCED_SETTINGS_KEYS: tuple[str, ...] = ()
 
-# Legacy → current key renames applied on read so old settings.json files keep
-# their values across renames. Inline pattern, mirroring loadSettings() in
-# frontend/src/stores/settings.js — no formal migration system.
-_RENAMED_SETTINGS_KEYS: dict[str, str] = {
-    "defaultPermissionMode": "claudeCodeDefaultPermissionMode",
-    "defaultModel": "claudeCodeDefaultModel",
-    "defaultEffort": "claudeCodeDefaultEffort",
-    "defaultThinking": "claudeCodeDefaultThinking",
-    "defaultClaudeInChrome": "claudeCodeDefaultClaudeInChrome",
-    "defaultContextMax": "claudeCodeDefaultContextMax",
-}
+
+# Cross-provider legacy → current key renames. Provider-specific renames are
+# contributed via ``BaseProviderHelpers.RENAMED_SYNCED_SETTINGS_KEYS`` and
+# merged in at migration time. Empty by default — placeholder for future
+# cross-provider renames.
+_GENERIC_RENAMED_SYNCED_SETTINGS_KEYS: dict[str, str] = {}
 
 
 def _migrate_legacy_settings(file_data: dict) -> bool:
@@ -135,16 +116,29 @@ def _migrate_legacy_settings(file_data: dict) -> bool:
     key value wins — the new key is most likely a default value written by an
     earlier code path before this migration ran, while the old key carries the
     user's actual choice.
+
+    Renames and obsolete keys are aggregated from every registered provider's
+    :attr:`BaseProviderHelpers.RENAMED_SYNCED_SETTINGS_KEYS` and
+    :attr:`BaseProviderHelpers.OBSOLETE_SYNCED_SETTINGS_KEYS` ClassVars, plus
+    the cross-provider generic lists above.
     """
     changed = False
     dropped: list[str] = []
     renamed: list[str] = []
-    for key in _OBSOLETE_SETTINGS_KEYS:
+    obsolete_keys = (
+        *_GENERIC_OBSOLETE_SYNCED_SETTINGS_KEYS,
+        *_merge_provider_tuples("OBSOLETE_SYNCED_SETTINGS_KEYS"),
+    )
+    renames = {
+        **_GENERIC_RENAMED_SYNCED_SETTINGS_KEYS,
+        **_merge_provider_dicts("RENAMED_SYNCED_SETTINGS_KEYS"),
+    }
+    for key in obsolete_keys:
         if key in file_data:
             del file_data[key]
             dropped.append(key)
             changed = True
-    for old_key, new_key in _RENAMED_SETTINGS_KEYS.items():
+    for old_key, new_key in renames.items():
         if old_key in file_data:
             # User's old value wins unconditionally — preserves user choice
             # even if something else already wrote new_key with a default.
