@@ -9,7 +9,7 @@ import { apiFetch } from '../../../../../utils/api'
 import { getLanguageFromPath } from '../../../../../utils/languages'
 import { computeToolSummary } from '../../../../../utils/toolSummary'
 import { AGENT_TOOL_NAMES, PROCESS_STATE, PROCESS_STATE_COLORS } from '../../../../../constants'
-import { stopAgent } from '../../../../../composables/useWebSocket'
+import { stopSubagent } from '../../../../../composables/useWebSocket'
 import { getSessionCutoffMs } from '../../../../../utils/sessions'
 import { getParsedContent, hasContent } from '../../../../../utils/parsedContent'
 import { isValidTodos } from '../../../../../utils/todoList'
@@ -745,7 +745,7 @@ function navigateToSubagent() {
 function handleStopAgent() {
     if (agentId.value && isAgentRunning.value && !stoppingAgent.value) {
         stoppingAgent.value = true
-        stopAgent(props.sessionId, agentId.value)
+        stopSubagent(props.sessionId, agentId.value)
     }
 }
 

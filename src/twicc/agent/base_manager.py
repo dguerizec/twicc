@@ -103,6 +103,18 @@ class BaseAgentManager:
             await agent.interrupt_or_kill(reason=reason)
             return True
 
+    async def stop_subagent(self, session_id: str, subagent_id: str) -> bool:
+        """Stop a running subagent (Task) within ``session_id``.
+
+        Subagents are a provider-specific concept (e.g. Claude Code's
+        Task tool spawns a subagent within a parent session). The base
+        implementation is a no-op returning ``False`` so generic
+        consumers (e.g. the WS handler) can call this without
+        provider-specific dispatch. Providers that support subagents
+        override.
+        """
+        return False
+
     async def shutdown(self, timeout: float = 5.0) -> None:
         """Stop all agents and cancel monitors. Best-effort, time-bounded.
 

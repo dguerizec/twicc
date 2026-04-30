@@ -87,16 +87,16 @@ export function killProcess(sessionId) {
 }
 
 /**
- * Stop a running background agent via the SDK's stop_task.
- * @param {string} sessionId - The parent session ID that spawned the agent
- * @param {string} agentId - The agent ID (from AgentLink)
+ * Stop a running subagent (Task) via the SDK's stop_task.
+ * @param {string} sessionId - The parent session ID that spawned the subagent
+ * @param {string} subagentId - The subagent ID (from AgentLink)
  * @returns {boolean} - True if message was sent, false if not connected
  */
-export function stopAgent(sessionId, agentId) {
+export function stopSubagent(sessionId, subagentId) {
     return sendWsMessage({
-        type: 'stop_agent',
+        type: 'stop_subagent',
         session_id: sessionId,
-        agent_id: agentId
+        subagent_id: subagentId
     })
 }
 

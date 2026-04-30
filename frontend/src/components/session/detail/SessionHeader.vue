@@ -4,7 +4,7 @@ import { useDataStore } from '../../../stores/data'
 import { useSettingsStore } from '../../../stores/settings'
 import { formatDate } from '../../../utils/date'
 import { CONTEXT_MAX_LABELS, PROCESS_STATE, PROCESS_STATE_COLORS, PROCESS_STATE_NAMES } from '../../../constants'
-import { stopAgent } from '../../../composables/useWebSocket'
+import { stopSubagent } from '../../../composables/useWebSocket'
 import { stopSessionProcess } from '../../../composables/useStopSessionProcess'
 import ProjectBadge from '../../project/ProjectBadge.vue'
 import ProcessIndicator from '../../ui/ProcessIndicator.vue'
@@ -231,7 +231,7 @@ function handleStopAgent() {
     const parentId = session.value?.parent_session_id
     if (canStopAgent.value && !stoppingAgent.value && parentId) {
         stoppingAgent.value = true
-        stopAgent(parentId, props.sessionId)
+        stopSubagent(parentId, props.sessionId)
     }
 }
 

@@ -24,7 +24,6 @@ from django.urls import path
 from twicc.agent import AgentInfo, serialize_agent_info
 from twicc.agent.registry import get_agent_manager_registry
 from twicc.core.enums import Provider
-from twicc.providers.claude_code.agent.manager import get_claude_agent_manager
 from twicc.providers.claude_code.ws import ClaudeCodeWSHandler
 from twicc.providers.helpers import AgentSettings, get_provider_helpers
 from twicc.synced_settings import _settings_lock, prepare_settings_for_client, read_synced_settings, write_synced_settings
@@ -460,7 +459,7 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
         - ping: heartbeat, responds with pong
         - send_message: send a message to a Claude session (creates new or resumes existing)
         - kill_process: kill a running Claude process
-        - stop_agent: gracefully stop a running agent/task
+        - stop_subagent: gracefully stop a running subagent (Task)
         - suggest_title: request a title suggestion for a session
         - update_synced_settings: update synced settings and broadcast to all clients
         - session_viewed: mark a session as viewed by the user (updates last_viewed_at)
@@ -483,8 +482,8 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
         elif msg_type == "kill_process":
             await self._handle_kill_process(content)
 
-        elif msg_type == "stop_agent":
-            await self._handle_stop_agent(content)
+        elif msg_type == "stop_subagent":
+            await self._handle_stop_subagent(content)
 
         elif msg_type == "user_draft_updated":
             await self._handle_user_draft_updated(content)
@@ -841,38 +840,46 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
                 session_id,
             )
 
-    async def _handle_stop_agent(self, content: dict) -> None:
-        """Handle stop_agent request from client.
+    async def _handle_stop_subagent(self, content: dict) -> None:
+        """Handle stop_subagent request from client.
 
         Expected content format:
         {
-            "type": "stop_agent",
+            "type": "stop_subagent",
             "session_id": "claude-conv-xxx",
-            "agent_id": "a6c7d21"
+            "subagent_id": "a6c7d21"
         }
 
-        Calls stop_task to gracefully stop a background agent.
+        Routes the request to the manager that owns ``session_id`` (we
+        have a process running, hence we know its provider) and asks
+        it to gracefully stop the subagent.
         """
         session_id = content.get("session_id")
-        agent_id = content.get("agent_id")
+        subagent_id = content.get("subagent_id")
 
-        if not session_id or not agent_id:
-            logger.warning("stop_agent missing session_id or agent_id")
+        if not session_id or not subagent_id:
+            logger.warning("stop_subagent missing session_id or subagent_id")
             await self.send_json(
                 {
                     "type": "error",
-                    "message": "stop_agent requires session_id and agent_id",
+                    "message": "stop_subagent requires session_id and subagent_id",
                 }
             )
             return
 
-        manager = get_claude_agent_manager()
-        stopped = await manager.stop_agent(session_id, agent_id)
+        manager = get_agent_manager_registry().find_manager_for_session(session_id)
+        if manager is None:
+            logger.debug(
+                "stop_subagent: session %s has no active manager (not found or dead)",
+                session_id,
+            )
+            return
 
+        stopped = await manager.stop_subagent(session_id, subagent_id)
         if not stopped:
             logger.error(
-                "stop_agent: agent %s in session %s not stopped (not found or parent process not active)",
-                agent_id,
+                "stop_subagent: subagent %s in session %s not stopped (not found or parent process not active)",
+                subagent_id,
                 session_id,
             )
 

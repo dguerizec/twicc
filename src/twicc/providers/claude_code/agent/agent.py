@@ -925,15 +925,16 @@ class ClaudeAgent(BaseAgent):
         await self._client.set_permission_mode(mode)
         self.agent_settings = self.agent_settings._replace(permission_mode=mode)
 
-    async def stop_agent(self, agent_id: str) -> None:
-        """Stop a running agent/task via the SDK.
+    async def stop_subagent(self, subagent_id: str) -> None:
+        """Stop a running subagent (Task) via the SDK.
 
-        Calls the SDK's stop_task() method to gracefully stop a specific agent
-        running within this process. The CLI will emit a task_notification with
-        status='stopped' in the JSONL stream.
+        Calls the SDK's ``stop_task()`` method to gracefully stop a
+        specific subagent running within this session's process. The
+        CLI will emit a ``task_notification`` with ``status='stopped'``
+        in the JSONL stream.
 
         Args:
-            agent_id: The agent ID (same as task_id for the SDK)
+            subagent_id: The subagent identifier (same as the SDK's task_id)
 
         Raises:
             RuntimeError: If the process is not started
@@ -942,11 +943,11 @@ class ClaudeAgent(BaseAgent):
             raise RuntimeError("Process not started")
 
         logger.info(
-            "Stopping agent %s in session %s",
-            agent_id,
+            "Stopping subagent %s in session %s",
+            subagent_id,
             self.session_id,
         )
-        await self._client.stop_task(agent_id)
+        await self._client.stop_task(subagent_id)
 
     async def interrupt(self) -> None:
         """Send an interrupt signal to the CLI (equivalent to Ctrl+C).

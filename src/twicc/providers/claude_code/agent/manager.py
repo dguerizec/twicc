@@ -272,45 +272,47 @@ class ClaudeAgentManager(BaseAgentManager):
             return False
         return await agent.discard_active_tool(tool_use_id)
 
-    async def stop_agent(self, session_id: str, agent_id: str) -> bool:
-        """Stop a running background agent (subagent task) by its agent ID.
+    async def stop_subagent(self, session_id: str, subagent_id: str) -> bool:
+        """Stop a running subagent (Task) by its subagent ID.
 
-        Verifies that the subagent belongs to the given session, then calls
-        stop_task on the session's main agent.
+        Verifies that the subagent belongs to the given session, then
+        delegates to the running parent agent's ``stop_subagent``.
 
         Args:
             session_id: The parent session that spawned this subagent
-            agent_id: The agent ID (same as task_id for the SDK)
+            subagent_id: The subagent identifier (same as the SDK's task_id;
+                stored on the subagent ``Session`` row's ``agent_id`` column)
 
         Returns:
-            True if stop_task was called, False if not found or not valid
+            True if the SDK stop call was issued, False if the subagent
+            was not found or the parent agent is not active.
         """
         from twicc.core.models import Session
 
         # Verify the subagent exists and belongs to the given session
         exists = await asyncio.to_thread(
             lambda: Session.objects.filter(
-                agent_id=agent_id, parent_session_id=session_id
+                agent_id=subagent_id, parent_session_id=session_id
             ).exists()
         )
         if not exists:
             logger.debug(
-                "stop_agent: no subagent %s found for session %s", agent_id, session_id
+                "stop_subagent: no subagent %s found for session %s", subagent_id, session_id,
             )
             return False
 
         agent = self._agents.get(session_id)
         if not agent or agent.state == AgentState.DEAD:
-            logger.debug("stop_agent: no running agent for session %s", session_id)
+            logger.debug("stop_subagent: no running agent for session %s", session_id)
             return False
 
         try:
-            await agent.stop_agent(agent_id)
+            await agent.stop_subagent(subagent_id)
             return True
         except Exception as e:
             logger.warning(
-                "stop_agent: failed to stop subagent %s in session %s: %s",
-                agent_id, session_id, e,
+                "stop_subagent: failed to stop subagent %s in session %s: %s",
+                subagent_id, session_id, e,
             )
             return False
 
