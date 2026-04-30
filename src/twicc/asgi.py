@@ -767,7 +767,7 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
                 # Session doesn't exist: create new with client-provided ID
                 # Store title as pending if provided (will be written when process is safe)
                 if title:
-                    from twicc.providers.claude_code.titles import set_pending_title
+                    from twicc.pending_titles import set_pending_title
 
                     set_pending_title(session_id, title)
 

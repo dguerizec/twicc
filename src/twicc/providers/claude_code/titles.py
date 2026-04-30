@@ -1,10 +1,11 @@
 """
-Session title management.
+Claude Code title management.
 
-Provides title validation, a pending-title store for draft sessions
-(where the JSONL file doesn't exist yet), and a thin wrapper around
-the Claude Agent SDK's rename_session() for writing custom-title
-entries to JSONL files.
+Provides title validation, a thin wrapper around the Claude Agent
+SDK's ``rename_session()`` for writing custom-title entries to JSONL
+files, and the protected-title machinery that blocks stale CLI
+re-appends after a user rename. The cross-provider pending-title
+buffer lives in :mod:`twicc.pending_titles`.
 """
 
 import logging
@@ -13,9 +14,6 @@ from typing import NamedTuple
 from claude_agent_sdk import rename_session
 
 logger = logging.getLogger(__name__)
-
-# Global dict for pending titles (draft sessions only)
-_pending_titles: dict[str, str] = {}
 
 
 class TitleCheck(NamedTuple):
@@ -70,22 +68,6 @@ def rename_session_in_jsonl(session_id: str, title: str) -> None:
     except Exception as e:
         logger.warning("rename_session failed for %s: %s", session_id, e)
         raise
-
-
-def set_pending_title(session_id: str, title: str) -> None:
-    """Store a title for a draft session (JSONL doesn't exist yet)."""
-    _pending_titles[session_id] = title
-    logger.debug("Set pending title for session %s: %s", session_id, title[:50])
-
-
-def get_pending_title(session_id: str) -> str | None:
-    """Get a pending title for a session without removing it."""
-    return _pending_titles.get(session_id)
-
-
-def pop_pending_title(session_id: str) -> str | None:
-    """Get and remove a pending title for a session."""
-    return _pending_titles.pop(session_id, None)
 
 
 def protect_title(session_id: str, title: str) -> None:

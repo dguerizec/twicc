@@ -570,7 +570,8 @@ class ClaudeAgentManager(BaseAgentManager):
         # On ASSISTANT_TURN, the CLI has created the JSONL file, so we can
         # now write the title that was stored when the draft was sent.
         if state == AgentState.ASSISTANT_TURN:
-            from twicc.providers.claude_code.titles import get_pending_title, pop_pending_title, protect_title, rename_session_in_jsonl
+            from twicc.pending_titles import get_pending_title, pop_pending_title
+            from twicc.providers.claude_code.titles import protect_title, rename_session_in_jsonl
 
             pending = get_pending_title(agent.session_id)
             if pending:

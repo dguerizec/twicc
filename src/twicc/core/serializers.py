@@ -42,7 +42,7 @@ def serialize_session(session):
     This ensures that when a session is created with a custom title, the title
     is immediately visible even before it's written to the JSONL file.
     """
-    from twicc.providers.claude_code.titles import get_pending_title
+    from twicc.pending_titles import get_pending_title
 
     # Use pending title if available, otherwise use the stored title
     title = get_pending_title(session.id) or session.title
