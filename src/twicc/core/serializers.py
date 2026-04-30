@@ -7,11 +7,9 @@ safe to call from async contexts without sync_to_async wrapping, as long as
 the model instance was already fetched from the database.
 """
 
-from functools import lru_cache
-
 from django.conf import settings
 
-from twicc.providers.claude_code.pricing import extract_model_info
+from twicc.providers.helpers import get_provider_helpers
 
 
 def serialize_project(project):
@@ -76,7 +74,7 @@ def serialize_session(session):
         "cwd": session.cwd,  # Current working directory
         "git_branch": session.git_branch or (session.cwd_git_branch if session.git_directory else None),  # Resolved branch, fallback to cwd
         "git_directory": session.git_directory,  # Resolved git root directory
-        "model": _serialize_model(session.model),  # Model info object
+        "model": get_provider_helpers(session.provider).serialize_model(session.model),  # Model info object
         # User-controlled fields
         "archived": session.archived,  # Whether the session is archived
         "pinned": session.pinned,  # Whether the session is pinned
@@ -94,23 +92,6 @@ def serialize_session(session):
         "context_max": session.context_max,
         # Whether the session has been compacted at least once
         "compacted": session.compacted,
-    }
-
-
-@lru_cache(maxsize=32)
-def _serialize_model(model: str | None) -> dict | None:
-    """Serialize model info as structured object with raw, family, version."""
-    if not model:
-        return None
-
-    info = extract_model_info(model)
-    if not info:
-        return {"raw": model, "family": None, "version": None}
-
-    return {
-        "raw": model,
-        "family": info.family,  # e.g., "opus"
-        "version": info.version,  # e.g., "4.5"
     }
 
 

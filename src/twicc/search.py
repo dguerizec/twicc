@@ -284,11 +284,9 @@ def reindex_session(session_id: str) -> None:
 
     Lazy-imports Django models to avoid circular imports at module level.
     """
-    import orjson
-
-    from twicc.providers.claude_code.compute import get_message_content
     from twicc.core.enums import ItemKind
     from twicc.core.models import Session, SessionItem
+    from twicc.providers.helpers import get_provider_helpers
 
     _check_writer()
     _check_index()
@@ -311,27 +309,15 @@ def reindex_session(session_id: str) -> None:
 
     # Index all user/assistant messages
     items = (
-        SessionItem.objects.filter(
-            session_id=session_id,
-            kind__in=[ItemKind.USER_MESSAGE, ItemKind.ASSISTANT_MESSAGE],
-        )
+        SessionItem.objects
+        .filter(session=session, kind__in=[ItemKind.USER_MESSAGE, ItemKind.ASSISTANT_MESSAGE])
         .order_by("line_num")
-        .values_list("content", "kind", "line_num", "timestamp", named=True)
     )
-
-    for item in items:
-        try:
-            parsed = orjson.loads(item.content)
-        except (orjson.JSONDecodeError, TypeError):
-            continue
-        content = get_message_content(parsed)
-        text = extract_indexable_text(content)
-        if text:
-            from_role = "user" if item.kind == ItemKind.USER_MESSAGE else "assistant"
-            index_document(
-                session_id, session.project_id, item.line_num, text,
-                from_role, item.timestamp, session.archived,
-            )
+    for msg in get_provider_helpers(session.provider).get_indexable_messages(items):
+        index_document(
+            session_id, session.project_id, msg.line_num, msg.text,
+            msg.from_role, msg.timestamp, session.archived,
+        )
 
     commit()
     logger.debug("reindex_session: session %s re-indexed", session_id)

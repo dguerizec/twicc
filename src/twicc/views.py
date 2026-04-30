@@ -12,7 +12,6 @@ from django.utils import timezone
 import orjson
 
 from twicc import search
-from twicc.providers.claude_code.compute import get_message_content, get_message_content_list
 from twicc.core.enums import ItemKind
 from twicc.core.models import AgentLink, DailyActivity, PinMode, Project, Session, SessionItem, SessionType, SlashCommand, ToolResultLink, UsageSnapshot, WeeklyActivity
 from twicc.core.serializers import (
@@ -22,6 +21,7 @@ from twicc.core.serializers import (
     serialize_session_item_metadata,
 )
 from twicc.paths import path_to_project_id
+from twicc.providers.helpers import get_provider_helpers, get_provider_helpers_registry
 
 # Number of sessions to return per page
 # Set high (1000) to effectively load all sessions at once for most users,
@@ -386,20 +386,15 @@ def user_messages(request, project_id, session_id):
         SessionItem.objects
         .filter(session=session, kind=ItemKind.USER_MESSAGE)
         .order_by("line_num")
-        .values("line_num", "timestamp", "content")
     )
-
-    messages = []
-    for item in items:
-        parsed = orjson.loads(item["content"])
-        content = get_message_content(parsed)
-        text = search.extract_indexable_text(content)
-        if text:
-            messages.append({
-                "line_num": item["line_num"],
-                "timestamp": item["timestamp"].isoformat() if item["timestamp"] else None,
-                "text": text,
-            })
+    messages = [
+        {
+            "line_num": msg.line_num,
+            "timestamp": msg.timestamp.isoformat() if msg.timestamp else None,
+            "text": msg.text,
+        }
+        for msg in get_provider_helpers(session.provider).get_user_messages(items)
+    ]
 
     return JsonResponse({"messages": messages})
 
@@ -464,11 +459,13 @@ def session_detail(request, project_id, session_id, parent_session_id=None):
 
         # Handle title update
         if "title" in data:
-            from twicc.providers.claude_code.titles import protect_title, rename_session_in_jsonl, validate_title
+            from twicc.providers.claude_code.titles import protect_title
 
-            title, error = validate_title(data["title"])
-            if error:
-                return JsonResponse({"error": error}, status=400)
+            provider_helpers = get_provider_helpers(session.provider)
+            validation = provider_helpers.validate_title(data["title"])
+            if validation.error:
+                return JsonResponse({"error": validation.error}, status=400)
+            title = validation.title
 
             # 1. Update DB immediately
             session.title = title
@@ -481,9 +478,9 @@ def session_detail(request, project_id, session_id, parent_session_id=None):
                 except Exception:
                     pass  # Non-critical: search will catch up on next startup
 
-            # 3. Write to JSONL via SDK (atomic append, safe at any time)
+            # 3. Persist into the provider's session storage
             try:
-                rename_session_in_jsonl(session_id, title)
+                provider_helpers.rename_session(session_id, title)
             except Exception:
                 pass  # Non-critical: DB is already updated, watcher will sync
 
@@ -678,37 +675,21 @@ def tool_results(request, project_id, session_id, line_num, tool_id, parent_sess
         if session.parent_session_id is not None:
             raise Http404("Session not found")
 
-    # Find links for this tool_use
-    links = ToolResultLink.objects.filter(
+    link_lines = ToolResultLink.objects.filter(
         session=session,
         tool_use_line_num=line_num,
         tool_use_id=tool_id,
-    ).values_list('tool_result_line_num', flat=True)
+    ).values_list("tool_result_line_num", flat=True)
 
-    if not links:
+    if not link_lines:
         return JsonResponse({"results": []})
 
-    # Fetch the target items, ordered by line_num (chronological)
     items = SessionItem.objects.filter(
         session=session,
-        line_num__in=links,
-    ).order_by('line_num')
+        line_num__in=link_lines,
+    ).order_by("line_num")
 
-    # Extract tool_result entries from each item's content
-    results = []
-    for item in items:
-        try:
-            parsed = orjson.loads(item.content)
-        except orjson.JSONDecodeError:
-            continue
-
-        content_list = get_message_content_list(parsed, 'user')
-        if not content_list:
-            continue
-        for entry in content_list:
-            if entry.get('type') == 'tool_result' and entry.get('tool_use_id') == tool_id:
-                results.append(entry)
-
+    results = get_provider_helpers(session.provider).get_tool_results(items, tool_id)
     return JsonResponse({"results": results})
 
 
@@ -2045,29 +2026,27 @@ def bootstrap(request):
     terminal config, and message snippets in a single response so the
     frontend doesn't have to wait for the WebSocket connection.
     """
-    from twicc.providers.claude_code.claude_settings_presets import read_claude_settings_presets
     from twicc.message_snippets import read_message_snippets_config
-    from twicc.providers.claude_code.model_registry import serialize_model_registry
-    from twicc.synced_settings import CLAUDE_SETTINGS_CATEGORIES, SYNCED_SETTINGS_DEFAULTS, prepare_settings_for_client, read_synced_settings
+    from twicc.synced_settings import SYNCED_SETTINGS_DEFAULTS, prepare_settings_for_client, read_synced_settings
     from twicc.terminal_config import read_terminal_config
     from twicc.workspaces import read_workspaces
 
     clean_settings, version = prepare_settings_for_client(read_synced_settings())
     workspaces_data = read_workspaces()
-    return JsonResponse({
+    response = {
         "settings": clean_settings,
         "settings_version": version,
         "default_settings": SYNCED_SETTINGS_DEFAULTS,
-        "claude_settings_categories": CLAUDE_SETTINGS_CATEGORIES,
         "dev_mode": settings.DEV_MODE,
         "uvx_mode": settings.UVX_MODE,
         "twicc_launch_prefix": settings.TWICC_LAUNCH_PREFIX,
         "workspaces": workspaces_data.get("workspaces", []),
         "terminal_config": read_terminal_config(),
         "message_snippets": read_message_snippets_config(),
-        "claude_settings_presets": read_claude_settings_presets(),
-        "model_registry": serialize_model_registry(),
-    })
+    }
+    for _, helpers in get_provider_helpers_registry().items():
+        response.update(helpers.get_bootstrap_data())
+    return JsonResponse(response)
 
 
 def changelog(request):
