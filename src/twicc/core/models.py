@@ -325,8 +325,21 @@ class Session(models.Model):
     effort = models.CharField(max_length=10, null=True, default=None)
     # Whether extended thinking is enabled (True=adaptive, False=disabled)
     thinking_enabled = models.BooleanField(null=True, default=None)
-    # Whether the built-in Chrome MCP (Claude in Chrome) is activated for this session
-    # NULL = use global default, explicit value = forced for this session
+    # Whether the built-in Chrome MCP (Claude in Chrome) is activated for this session.
+    # NULL = use global default, explicit value = forced for this session.
+    #
+    # Deliberately Claude Code-specific by name and meaning, but kept on the
+    # generic ``Session`` row alongside the other ``AgentSettings`` fields.
+    # The ``AgentSettings`` NamedTuple is the closed bundle every provider
+    # receives via :meth:`BaseProviderHelpers.resolve_agent_settings`; each
+    # provider ignores the fields it doesn't use. Splitting this column off
+    # into a per-provider side table — or generalising the name —
+    # would ripple through serializers, the WS payload, the synced settings
+    # mapping, and the front store, which is not worth the churn for a
+    # single flag. New provider-specific session-level flags should follow
+    # the same pattern: add a column here, classify it in the owning
+    # provider's ``AGENT_SETTINGS_CATEGORIES`` / ``AGENT_SETTINGS_FIELDS_MAPPING``,
+    # and let the others ignore it.
     claude_in_chrome = models.BooleanField(null=True, default=None)
     # Maximum context window size in tokens (200_000 = default 200K, 1_000_000 = extended 1M)
     # NULL = use global default, explicit value = forced for this session
