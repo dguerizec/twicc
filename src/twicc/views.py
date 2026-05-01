@@ -1633,22 +1633,39 @@ def _format_weekly_activity(rows, current_monday):
 def home_data(request):
     """GET /api/home/ - Home page data: projects with weekly activity.
 
+    Activity is summed across every provider — the home page shows a
+    high-level overview, so per-provider filtering would not be
+    meaningful here. The per-project detail pages use
+    ``/api/daily-activity/`` instead, which exposes a ``provider``
+    query param for that purpose.
+
     Returns:
         {
             "projects": [ { ...project..., "weekly_activity": [...] }, ... ],
             "global_weekly_activity": [ { "date": "...", "user_message_count": N, "session_count": N }, ... ]
         }
     """
+    from django.db.models import Sum
+
     today = timezone.now().date()
     current_monday = today - timedelta(days=today.weekday())
     cutoff = current_monday - timedelta(weeks=_WEEKLY_ACTIVITY_MAX_WEEKS - 1)
 
     projects = Project.objects.all()
 
-    # Load all weekly activities in a single query (within the 52-week window)
-    all_activities = WeeklyActivity.objects.filter(
-        date__gte=cutoff,
-    ).values("project_id", "date", "user_message_count", "session_count", "cost")
+    # Load all weekly activities in a single query (within the 52-week window).
+    # Always aggregate per (project, date) so multi-provider rows collapse
+    # into one entry per project/date.
+    all_activities = (
+        WeeklyActivity.objects
+        .filter(date__gte=cutoff)
+        .values("project_id", "date")
+        .annotate(
+            user_message_count=Sum("user_message_count"),
+            session_count=Sum("session_count"),
+            cost=Sum("cost"),
+        )
+    )
 
     # Group by project_id (None = global)
     from collections import defaultdict
@@ -1691,6 +1708,9 @@ def daily_activity(request, project_id=None):
     Query params (optional, only for /api/daily-activity/):
         project_ids: Comma-separated list of project IDs to filter by (e.g. workspace projects).
                      When provided, aggregates activity across the specified projects.
+        provider: Optional. Backend provider key (e.g. ``claude_code``) to
+                  scope the activity to a single provider. When omitted,
+                  counts and costs are summed across every provider.
 
     Returns:
         {
@@ -1699,6 +1719,15 @@ def daily_activity(request, project_id=None):
         }
     """
     from django.db.models import Sum
+
+    provider_str = request.GET.get("provider")
+    if provider_str:
+        try:
+            provider_filter = {"provider": Provider(provider_str).value}
+        except ValueError:
+            return JsonResponse({"error": f"Unknown provider: {provider_str!r}."}, status=400)
+    else:
+        provider_filter = {}
 
     today = timezone.now().date()
     cutoff = today - timedelta(days=_DAILY_ACTIVITY_MAX_DAYS - 1)
@@ -1712,20 +1741,18 @@ def daily_activity(request, project_id=None):
     else:
         project_filters = {"project__isnull": True}
 
-    qs = DailyActivity.objects.filter(date__gte=cutoff, **project_filters)
-
-    # When filtering by multiple projects, aggregate per date
-    if project_ids_param:
-        rows = qs.values("date").annotate(
-            user_message_count=Sum("user_message_count"),
-            session_count=Sum("session_count"),
-            cost=Sum("cost"),
-        ).order_by("date")
-    else:
-        rows = qs.order_by("date").values("date", "user_message_count", "session_count", "cost")
+    # Always aggregate per date so multi-provider rows collapse into one
+    # entry per day. With ``?provider=`` the sum runs over a single row
+    # (still correct), or a single project's row in the per-project case.
+    qs = DailyActivity.objects.filter(date__gte=cutoff, **project_filters, **provider_filter)
+    rows = qs.values("date").annotate(
+        user_message_count=Sum("user_message_count"),
+        session_count=Sum("session_count"),
+        cost=Sum("cost"),
+    ).order_by("date")
 
     # All-time totals (no date filter)
-    totals = DailyActivity.objects.filter(**project_filters).aggregate(
+    totals = DailyActivity.objects.filter(**project_filters, **provider_filter).aggregate(
         total_user_message_count=Sum("user_message_count"),
         total_session_count=Sum("session_count"),
         total_cost=Sum("cost"),

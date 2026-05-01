@@ -9,7 +9,7 @@ import logging
 
 from django.db.models import Q
 
-from twicc.core.enums import ItemKind
+from twicc.core.enums import ItemKind, Provider
 
 logger = logging.getLogger(__name__)
 
@@ -110,10 +110,12 @@ class Project(models.Model):
 
 
 class PeriodicActivity(models.Model):
-    """Pre-computed periodic activity metrics, per project and global.
+    """Pre-computed periodic activity metrics, per project / provider, and global.
 
-    Each row stores the data for a given date (Monday for week, for example)
-    `project=NULL` means global (all projects combined).
+    Each row stores the data for a given date (Monday for week, for example),
+    scoped to one backend ``provider``. ``project=NULL`` means global (all
+    projects combined). The unique key ``(project, date, provider)`` lets
+    several providers share the same project/date without colliding.
     """
 
     project = models.ForeignKey(
@@ -123,6 +125,7 @@ class PeriodicActivity(models.Model):
         null=True,
         blank=True,  # NULL = global (all projects)
     )
+    provider = models.CharField(max_length=50)  # Backend provider (see Provider enum)
     date = models.DateField()
     user_message_count = models.PositiveIntegerField(default=0)
     session_count = models.PositiveIntegerField(default=0)
@@ -132,8 +135,8 @@ class PeriodicActivity(models.Model):
         abstract = True
         constraints = [
             models.UniqueConstraint(
-                fields=["project", "date"],
-                name="unique_project_%(class)s",
+                fields=["project", "date", "provider"],
+                name="uniq_pdp_%(class)s",
             ),
         ]
 
@@ -146,15 +149,21 @@ class PeriodicActivity(models.Model):
         raise NotImplementedError
 
     @classmethod
-    def recalculate(cls, project_id: str | None, activity_date: DateType) -> None:
-        """Recalculate all activity counters for a project+date from the database.
+    def recalculate(
+        cls, project_id: str | None, activity_date: DateType, provider: Provider,
+    ) -> None:
+        """Recalculate activity counters for ``(project, date, provider)`` from the DB.
 
-        Queries SessionItem and Session to compute accurate values, then
-        sets them via update_or_create (idempotent).
+        Queries SessionItem and Session (filtered by ``provider``) to
+        compute accurate values, then sets them via update_or_create
+        (idempotent).
 
         Args:
             project_id: The project ID, or None for global (all projects).
             activity_date: The date (day for DailyActivity, Monday for WeeklyActivity).
+            provider: Backend provider enum value. Bounds the aggregation
+                to the rows produced by that provider, so each
+                ``(project, date, provider)`` triple lives in its own row.
         """
         from django.db.models import Q, Sum
 
@@ -169,6 +178,7 @@ class PeriodicActivity(models.Model):
         # user_message_count: only from type=SESSION sessions
         user_message_count = SessionItem.objects.filter(
             item_project_filter,
+            session__provider=provider.value,
             kind=ItemKind.USER_MESSAGE,
             timestamp__gte=date_start,
             timestamp__lt=date_end,
@@ -178,6 +188,7 @@ class PeriodicActivity(models.Model):
         # cost: from ALL session types
         cost = SessionItem.objects.filter(
             item_project_filter,
+            session__provider=provider.value,
             cost__isnull=False,
             timestamp__gte=date_start,
             timestamp__lt=date_end,
@@ -186,6 +197,7 @@ class PeriodicActivity(models.Model):
         # session_count: only type=SESSION sessions with at least one user message
         session_count = Session.objects.filter(
             session_project_filter,
+            provider=provider.value,
             type=SessionType.SESSION,
             created_at__gte=date_start,
             created_at__lt=date_end,
@@ -194,12 +206,15 @@ class PeriodicActivity(models.Model):
 
         # If all values are zero, delete the row to keep the table clean
         if user_message_count == 0 and cost == 0 and session_count == 0:
-            cls.objects.filter(project_id=project_id, date=activity_date).delete()
+            cls.objects.filter(
+                project_id=project_id, date=activity_date, provider=provider.value,
+            ).delete()
             return
 
         cls.objects.update_or_create(
             project_id=project_id,
             date=activity_date,
+            provider=provider.value,
             defaults={
                 "user_message_count": user_message_count,
                 "session_count": session_count,
@@ -208,33 +223,36 @@ class PeriodicActivity(models.Model):
         )
 
     @staticmethod
-    def recalculate_for_days(project_id: str, days: set, do_global: bool = True) -> None:
-        """Recalculate daily and weekly activity for the given days.
+    def recalculate_for_days(
+        project_id: str, days: set, provider: Provider, do_global: bool = True,
+    ) -> None:
+        """Recalculate daily and weekly activity for ``provider`` over ``days``.
 
-        Deduces which weeks (Mondays) are affected from the days,
-        then recalculates both project-specific and global rows
-        by querying SessionItem and Session from the database.
+        Deduces which weeks (Mondays) are affected from the days, then
+        recalculates both project-specific and global rows for the given
+        provider by querying SessionItem and Session from the database.
 
         Args:
             project_id: The project ID.
             days: Set of date objects representing affected days.
+            provider: Backend provider enum value.
             do_global: Whether to recalculate global rows.
         """
         if not days:
             return
         mondays = {day - timedelta(days=day.weekday()) for day in days}
         for day in days:
-            DailyActivity.recalculate(project_id, day)
+            DailyActivity.recalculate(project_id, day, provider)
             if do_global:
-                DailyActivity.recalculate(None, day)
+                DailyActivity.recalculate(None, day, provider)
         for monday in mondays:
-            WeeklyActivity.recalculate(project_id, monday)
+            WeeklyActivity.recalculate(project_id, monday, provider)
             if do_global:
-                WeeklyActivity.recalculate(None, monday)
+                WeeklyActivity.recalculate(None, monday, provider)
 
     def __str__(self):
         label = self.project_id or "global"
-        return f"{label} / {self.date} = {self.user_message_count}"
+        return f"{label}[{self.provider}] / {self.date} = {self.user_message_count}"
 
 
 class WeeklyActivity(PeriodicActivity):
@@ -806,6 +824,7 @@ class ProcessRun(models.Model):
     asynchronously by the file watcher when the JSONL file appears.
     """
 
+    provider = models.CharField(max_length=50)  # Backend provider (see Provider enum)
     session_id = models.CharField(max_length=200)
     started_at = models.DateTimeField()
 
@@ -815,14 +834,22 @@ class ProcessRun(models.Model):
         ]
 
     def __str__(self):
-        return f"ProcessRun {self.pk} for session {self.session_id}"
+        return f"ProcessRun[{self.provider}] {self.pk} for session {self.session_id}"
 
 
 class SessionCron(models.Model):
-    """Persisted cron job created by a Claude session.
+    """Persisted cron job created by an agent session via a scheduling tool.
 
-    Saved via PostToolUse hook on CronCreate, deleted on CronDelete.
-    Survives TwiCC restarts to allow automatic rescheduling of cron jobs.
+    Saved via the provider's PostToolUse hook on CronCreate, deleted on
+    CronDelete. Survives TwiCC restarts to allow automatic rescheduling of
+    cron jobs.
+
+    Currently only Claude Code uses this table (the Claude CLI exposes a
+    cron tool); the ``provider`` field tags each row so future providers
+    can either reuse the model or stay isolated. The expiry semantics
+    (``CLAUDE_RECURRING_MAX_AGE``, ``last_fire``, ``expired_at``) are
+    Claude CLI-specific for now — generalising them would require adding
+    a per-provider hook.
 
     Uses a plain CharField for session_id (not a FK) for the same reason as ProcessRun:
     new sessions may not exist in the Session table yet when a cron is created.
@@ -831,6 +858,7 @@ class SessionCron(models.Model):
     CLAUDE_RECURRING_MAX_AGE = timedelta(days=7)
     """Maximum age of a recurring cron before it auto-expires (matches Claude CLI behavior)."""
 
+    provider = models.CharField(max_length=50)  # Backend provider (see Provider enum)
     cron_id = models.CharField(max_length=100, unique=True)
     session_id = models.CharField(max_length=200)
     process_run = models.ForeignKey(ProcessRun, on_delete=models.CASCADE, related_name="crons", null=True, blank=True)
@@ -847,7 +875,7 @@ class SessionCron(models.Model):
 
     def __str__(self):
         kind = "recurring" if self.recurring else "one-shot"
-        return f"Cron {self.cron_id} ({kind}) on session {self.session_id}"
+        return f"Cron[{self.provider}] {self.cron_id} ({kind}) on session {self.session_id}"
 
     def serialize(self) -> dict:
         """Serialize for WebSocket transmission (matches the format expected by the frontend)."""
@@ -909,8 +937,8 @@ class SessionCron(models.Model):
         return self.last_fire + jitter_max + self.JITTER_SAFETY_MARGIN
 
     @classmethod
-    def has_active_for_session(cls, session_id: str) -> bool:
-        """Check if a session has any non-expired cron jobs.
+    def has_active_for_session(cls, session_id: str, provider: Provider) -> bool:
+        """Check if ``session_id`` has any non-expired cron jobs for ``provider``.
 
         Recurring crons expire after CLAUDE_RECURRING_MAX_AGE (7 days, matching CLI behavior).
         One-shot crons expire after their fire time passes.
@@ -918,6 +946,7 @@ class SessionCron(models.Model):
         now = datetime.now(tz=timezone.utc)
         return cls.objects.filter(
             session_id=session_id,
+            provider=provider.value,
         ).filter(
             # Recurring: created less than 7 days ago
             Q(recurring=True, created_at__gt=now - cls.CLAUDE_RECURRING_MAX_AGE)
@@ -926,11 +955,12 @@ class SessionCron(models.Model):
         ).exists()
 
     @classmethod
-    def active_for_session(cls, session_id: str) -> models.QuerySet:
-        """Return the queryset of non-expired crons for a session."""
+    def active_for_session(cls, session_id: str, provider: Provider) -> models.QuerySet:
+        """Return the queryset of non-expired crons for ``(session_id, provider)``."""
         now = datetime.now(tz=timezone.utc)
         return cls.objects.filter(
             session_id=session_id,
+            provider=provider.value,
         ).filter(
             Q(recurring=True, created_at__gt=now - cls.CLAUDE_RECURRING_MAX_AGE)
             | Q(recurring=False, next_fire__gt=now)

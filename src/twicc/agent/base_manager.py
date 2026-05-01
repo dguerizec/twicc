@@ -191,6 +191,7 @@ class BaseAgentManager:
         # when the JSONL file appears).
         process_run = await asyncio.to_thread(
             lambda: ProcessRunModel.objects.create(
+                provider=agent.provider.value,
                 session_id=session_id,
                 started_at=now,
             )

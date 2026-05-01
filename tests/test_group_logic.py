@@ -115,9 +115,12 @@ def apply_compute_results(result_queue) -> None:
             project_id = msg.get('project_id')
             if project_id and affected_days:
                 from datetime import date as date_cls
+                from twicc.core.enums import Provider
                 from twicc.core.models import PeriodicActivity
                 days = {date_cls.fromisoformat(d) for d in affected_days}
-                PeriodicActivity.recalculate_for_days(project_id, days)
+                PeriodicActivity.recalculate_for_days(
+                    project_id, days, provider=Provider.CLAUDE_CODE,
+                )
 
 
 # =============================================================================

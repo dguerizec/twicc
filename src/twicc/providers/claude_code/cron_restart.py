@@ -42,7 +42,7 @@ def _collect_restart_data(session_id: str) -> dict | None:
     from twicc.core.models import Session, SessionCron
     from twicc.providers.helpers import AgentSettings, get_provider_helpers
 
-    active_crons = list(SessionCron.active_for_session(session_id))
+    active_crons = list(SessionCron.active_for_session(session_id, Provider.CLAUDE_CODE))
     if not active_crons:
         return None
 
@@ -120,15 +120,20 @@ async def restart_all_session_crons(stop_event: asyncio.Event) -> None:
 def _prepare_restarts() -> list[str]:
     """Synchronous DB work: cleanup orphan/stale process runs, return session IDs to restart.
 
-    Called in asyncio.to_thread from restart_all_session_crons().
+    Called in asyncio.to_thread from restart_all_session_crons(). Scoped
+    to Claude Code rows only — other providers run their own equivalent.
     """
     from django.db.models import Count
 
+    from twicc.core.enums import Provider
     from twicc.core.models import ProcessRun, Session, SessionCron
+
+    cc_provider = Provider.CLAUDE_CODE.value
 
     # 1. Delete orphan process runs (no crons attached)
     orphan_count, _ = (
         ProcessRun.objects
+        .filter(provider=cc_provider)
         .annotate(cron_count=Count("crons"))
         .filter(cron_count=0)
         .delete()
@@ -138,7 +143,7 @@ def _prepare_restarts() -> list[str]:
 
     # 2. For sessions with multiple process runs, keep only the oldest
     runs_by_session: dict[str, list[ProcessRun]] = defaultdict(list)
-    for process_run in ProcessRun.objects.order_by("started_at"):
+    for process_run in ProcessRun.objects.filter(provider=cc_provider).order_by("started_at"):
         runs_by_session[process_run.session_id].append(process_run)
 
     for session_id, runs in runs_by_session.items():
@@ -157,7 +162,7 @@ def _prepare_restarts() -> list[str]:
     for session_id, runs in runs_by_session.items():
         process_run = runs[0]
 
-        if not SessionCron.active_for_session(session_id).filter(process_run=process_run).exists():
+        if not SessionCron.active_for_session(session_id, Provider.CLAUDE_CODE).filter(process_run=process_run).exists():
             process_run.delete()
             logger.info("Session %s: all crons expired, deleted process run %s", session_id, process_run.pk)
             continue

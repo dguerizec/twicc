@@ -455,7 +455,7 @@ class ClaudeCodeAgentManager(BaseAgentManager):
         try:
             from twicc.core.models import SessionCron
             has_crons = await asyncio.to_thread(
-                lambda sid=agent.session_id: SessionCron.has_active_for_session(sid)
+                lambda sid=agent.session_id: SessionCron.has_active_for_session(sid, Provider.CLAUDE_CODE)
             )
             if has_crons:
                 return None
@@ -863,6 +863,7 @@ class ClaudeCodeAgentManager(BaseAgentManager):
         next_fire: "datetime",
     ) -> None:
         """Persist a newly created cron job to the database and broadcast the update."""
+        from twicc.core.enums import Provider
         from twicc.core.models import SessionCron
 
         # Associate cron with the current process run (if any)
@@ -871,6 +872,7 @@ class ClaudeCodeAgentManager(BaseAgentManager):
 
         await asyncio.to_thread(
             lambda: SessionCron.objects.create(
+                provider=Provider.CLAUDE_CODE.value,
                 cron_id=cron_id,
                 session_id=session_id,
                 process_run=process_run,

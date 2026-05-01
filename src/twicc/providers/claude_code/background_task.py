@@ -286,11 +286,13 @@ async def _broadcast_project_updated(project_id: str) -> None:
 @sync_to_async
 def _flush_pending_activities(pending_activity_days: dict[str, set]) -> None:
     """Flush accumulated activity recalculations for all projects."""
+    from twicc.core.enums import Provider
     from twicc.core.models import PeriodicActivity
+    provider = Provider.CLAUDE_CODE
     for project_id, days in pending_activity_days.items():
-        PeriodicActivity.recalculate_for_days(project_id, days, do_global=False)
+        PeriodicActivity.recalculate_for_days(project_id, days, provider=provider, do_global=False)
     days = set.union(*pending_activity_days.values())
-    PeriodicActivity.recalculate_for_days(None, days, do_global=True)
+    PeriodicActivity.recalculate_for_days(None, days, provider=provider, do_global=True)
 
 
 async def consume_compute_results(

@@ -158,12 +158,14 @@ def get_bulk_session_and_project_display(
     return result
 
 
-async def _enrich_with_active_crons(message: dict, session_id: str) -> None:
+async def _enrich_with_active_crons(
+    message: dict, session_id: str, provider: Provider,
+) -> None:
     """Enrich a serialized process state dict with active crons from the database."""
     from twicc.core.models import SessionCron
 
     crons = await sync_to_async(
-        lambda: [c.serialize() for c in SessionCron.active_for_session(session_id)]
+        lambda: [c.serialize() for c in SessionCron.active_for_session(session_id, provider)]
     )()
     if crons:
         message["active_crons"] = crons
@@ -189,7 +191,7 @@ async def broadcast_process_state(info: AgentInfo) -> None:
     message["type"] = "process_state"
 
     # Enrich with active crons from the database
-    await _enrich_with_active_crons(message, info.session_id)
+    await _enrich_with_active_crons(message, info.session_id, info.provider)
 
     # Enrich with human-readable session title and project name
     # so the frontend can display notifications without needing
@@ -391,7 +393,9 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
                     if project_name is not None:
                         proc["project_name"] = project_name
                     # Enrich with active crons from DB
-                    await _enrich_with_active_crons(proc, proc["session_id"])
+                    await _enrich_with_active_crons(
+                        proc, proc["session_id"], Provider(proc["provider"]),
+                    )
             await self.send_json(
                 {
                     "type": "active_processes",

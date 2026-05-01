@@ -1151,8 +1151,11 @@ def sync_session_items(
     session.save(update_fields=["last_offset", "last_line", "mtime", "user_message_count", "context_usage", "self_cost", "subagents_cost", "total_cost", "cwd", "cwd_git_branch", "git_directory", "git_branch", "model", "slug", "created_at", "last_started_at", "last_updated_at", "last_new_content_at", "compacted"])
 
     # Recalculate activities after session.save (needs created_at in DB for session_count)
+    from twicc.core.enums import Provider
     from twicc.core.models import PeriodicActivity
-    PeriodicActivity.recalculate_for_days(session.project_id, affected_days)
+    PeriodicActivity.recalculate_for_days(
+        session.project_id, affected_days, provider=Provider.CLAUDE_CODE,
+    )
 
     # If this is a subagent, propagate cost to parent session
     if session.type == SessionType.SUBAGENT and session.parent_session_id:
