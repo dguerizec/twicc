@@ -9,7 +9,6 @@ import { useReconciliation } from './useReconciliation'
 import { toast } from './useToast'
 import { computeUsageData } from '../utils/usage'
 import { useSettingsStore } from '../stores/settings'
-import { useClaudeCodeStore } from '../providers/claude_code/store'
 import { getProviderWsHandler } from '../providers'
 import { playNotificationSound, sendBrowserNotification } from '../utils/notificationSounds'
 import { truncateTitle } from '../utils/truncate'
@@ -20,11 +19,6 @@ const WS_CLOSE_AUTH_FAILURE = 4001
 
 // localStorage key for tracking the last version the user was notified about
 const UPDATE_NOTIFIED_VERSION_KEY = 'twicc-update-notified-version'
-const CLAUDE_CODE_ANTHROPIC_STATUS_KEY = 'twicc-claude-code-anthropic-status'
-
-// Clean up the previous storage key (renamed from 'twicc-claude-status' once
-// the value was scoped to a specific provider + service).
-localStorage.removeItem('twicc-claude-status')
 
 // Module-level state, preserved across HMR reloads via import.meta.hot.
 // Without this, Vite HMR resets these variables to their initial values,
@@ -510,72 +504,6 @@ function notifyProcessStateChange(msg, previousState, route) {
 }
 
 /**
- * Status-specific messages for Claude Code outage notifications.
- * Keys are the component status values from the Atlassian Statuspage API.
- */
-const CLAUDE_CODE_ANTHROPIC_STATUS_MESSAGES = {
-    degraded_performance: {
-        type: 'warning',
-        message: 'Claude Code is currently experiencing degraded performance on Anthropic\'s side',
-    },
-    partial_outage: {
-        type: 'warning',
-        message: 'Claude Code is currently experiencing a partial outage on Anthropic\'s side',
-    },
-    major_outage: {
-        type: 'error',
-        message: 'Claude Code is currently experiencing a major outage on Anthropic\'s side',
-    },
-    under_maintenance: {
-        type: 'info',
-        message: 'Claude Code is currently under maintenance on Anthropic\'s side',
-    },
-}
-
-/**
- * Handle claude_code:anthropic_status message from the backend.
- * Shows a persistent toast when Claude Code is not operational,
- * or a resolution toast when it returns to operational.
- * Deduplication is done via localStorage: the toast is only shown if the status
- * has changed since the last time it was displayed, so page refreshes during
- * an ongoing outage don't re-trigger the notification.
- */
-function handleClaudeCodeAnthropicStatus(msg) {
-    const { status } = msg
-    if (!status) return
-
-    // Skip if the status hasn't changed since the last notification
-    const lastStatus = localStorage.getItem(CLAUDE_CODE_ANTHROPIC_STATUS_KEY)
-    if (status === lastStatus) return
-    localStorage.setItem(CLAUDE_CODE_ANTHROPIC_STATUS_KEY, status)
-
-    const statusLink = '<a href="https://status.claude.com/" target="_blank" rel="noopener" style="color: inherit; text-decoration: underline;">status.claude.com</a>'
-
-    if (status === 'operational') {
-        // Only show the "resolved" toast if there was a previous non-operational status.
-        // On first load (no localStorage entry) or if already operational, skip it.
-        if (lastStatus && lastStatus !== 'operational') {
-            toast.custom({
-                type: 'success',
-                title: 'Anthropic status update',
-                html: `Claude Code issues on Anthropic's side are now resolved — ${statusLink}`,
-                duration: Infinity,
-            })
-        }
-    } else {
-        const config = CLAUDE_CODE_ANTHROPIC_STATUS_MESSAGES[status]
-        if (config) {
-            toast.custom({
-                type: config.type,
-                title: 'Anthropic status update',
-                html: `${config.message} — ${statusLink}`,
-                duration: Infinity,
-            })
-        }
-    }
-}
-
-/**
  * Handle update_available message from the backend.
  * Shows a persistent toast if the user hasn't been notified for this version yet.
  * Deduplication is done via localStorage to survive page reloads.
@@ -965,10 +893,6 @@ export function useWebSocket() {
             case 'update_available':
                 store.setLatestVersion(msg.latest_version, msg.release_url)
                 handleUpdateAvailable(msg)
-                break
-            case 'claude_code:anthropic_status':
-                useClaudeCodeStore().setAnthropicStatus(msg.status)
-                handleClaudeCodeAnthropicStatus(msg)
                 break
             case 'model_retirement': {
                 const { retired_models } = msg
