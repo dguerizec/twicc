@@ -982,14 +982,19 @@ class SlashCommandSource(models.TextChoices):
 
 
 class SlashCommand(models.Model):
-    """A slash command available for use in Claude Code sessions.
+    """One slash command discovered for a given backend provider.
 
-    Discovered from the filesystem: user-level commands/skills (~/.claude/),
-    project-level commands/skills (<project>/.claude/), and plugin commands/skills.
+    Each provider runs its own discovery / sync task — typically scanning
+    user-level, project-level, and plugin sources on disk — and writes
+    its findings here. Rows scope to ``provider`` so two providers can
+    expose the same ``name`` (e.g. ``/commit``) without colliding, and so
+    each provider's task only touches its own subset.
 
-    Commands with project=None are global (available for all projects).
+    Commands with ``project=None`` are global (available for all projects
+    of that provider).
     """
 
+    provider = models.CharField(max_length=50)  # Backend provider (see Provider enum)
     project = models.ForeignKey(
         Project,
         on_delete=models.CASCADE,
@@ -1005,9 +1010,11 @@ class SlashCommand(models.Model):
 
     class Meta:
         indexes = [
-            models.Index(fields=["project", "name"], name="idx_slash_command_project_name"),
+            # Leftmost-prefix on ``provider`` so the per-provider sync
+            # task and the per-project lookup both hit the index.
+            models.Index(fields=["provider", "project", "name"], name="idx_slash_prov_proj_name"),
         ]
 
     def __str__(self):
         scope = self.project_id or "global"
-        return f"/{self.name} ({scope})"
+        return f"[{self.provider}] /{self.name} ({scope})"

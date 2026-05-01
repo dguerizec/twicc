@@ -98,7 +98,7 @@ async function fetchCommands() {
     loading.value = true
     error.value = null
     try {
-        const res = await apiFetch(`/api/projects/${props.projectId}/slash-commands/`)
+        const res = await apiFetch(`/api/projects/${props.projectId}/slash-commands/?provider=claude_code`)
         if (!res.ok) {
             const data = await res.json()
             error.value = data.error || `HTTP ${res.status}`

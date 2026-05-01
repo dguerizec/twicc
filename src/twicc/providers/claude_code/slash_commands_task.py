@@ -41,6 +41,7 @@ def _sync_to_database() -> dict[str, int]:
 
     Returns a dict with keys: created, updated, deleted, unchanged.
     """
+    from twicc.core.enums import Provider
     from twicc.core.models import Project, SlashCommand
     from .slash_commands import (
         DiscoveredCommand,
@@ -49,6 +50,8 @@ def _sync_to_database() -> dict[str, int]:
         discover_project_commands,
         read_plugin_entries,
     )
+
+    cc_provider = Provider.CLAUDE_CODE.value
 
     stats = {"created": 0, "updated": 0, "deleted": 0, "unchanged": 0}
 
@@ -112,8 +115,10 @@ def _sync_to_database() -> dict[str, int]:
                 }
 
     # --- 4. Load current state from database ---
+    # Scope strictly to this provider so the diff/delete loop never
+    # touches rows owned by another backend.
     existing: dict[tuple[str | None, str], SlashCommand] = {}
-    for obj in SlashCommand.objects.all():
+    for obj in SlashCommand.objects.filter(provider=cc_provider):
         existing[(obj.project_id, obj.name)] = obj
 
     # --- 5. Diff and apply ---
@@ -140,6 +145,7 @@ def _sync_to_database() -> dict[str, int]:
         if obj is None:
             # New command
             to_create.append(SlashCommand(
+                provider=cc_provider,
                 project_id=project_id,
                 name=name,
                 **fields,

@@ -340,20 +340,32 @@ def project_detail(request, project_id):
 
 
 def slash_commands(request, project_id):
-    """GET /api/projects/<id>/slash-commands/ - Slash commands available for a project.
+    """GET /api/projects/<id>/slash-commands/?provider=<key> — slash commands for a project.
 
-    Returns global commands (project=NULL) and project-specific commands,
-    sorted by name.
+    Returns global commands (``project=NULL``) and project-specific
+    commands, sorted by name. The ``provider`` query parameter is
+    required: slash command sets are not interchangeable across
+    backends (each provider's CLI has its own command vocabulary), so
+    there is no implicit default.
     """
     try:
         Project.objects.get(id=project_id)
     except Project.DoesNotExist:
         raise Http404("Project not found")
 
+    provider_str = request.GET.get("provider")
+    if not provider_str:
+        return JsonResponse({"error": "provider is required."}, status=400)
+    try:
+        provider = Provider(provider_str)
+    except ValueError:
+        return JsonResponse({"error": f"Unknown provider {provider_str!r}."}, status=400)
+
     from django.db.models import Q
 
     commands = (
         SlashCommand.objects
+        .filter(provider=provider.value)
         .filter(Q(project__isnull=True) | Q(project_id=project_id))
         .order_by("name")
         .values("name", "plugin_name", "description", "argument_hint", "source", "project_id")
