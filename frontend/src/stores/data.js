@@ -219,7 +219,6 @@ export const useDataStore = defineStore('data', {
         pendingChangelogVersion: null,  // string, version to show in changelog dialog after app is ready
         previousChangelogVersion: null, // string, previousLastChangelogVersionSeen from backend
         latestVersion: null,            // { version, releaseUrl } or null, from update_available message
-        claudeStatus: 'operational',    // string, from claude_code:anthropic_status message
 
         // Local UI state (separate from server data to avoid being overwritten)
         localState: {
@@ -714,9 +713,6 @@ export const useDataStore = defineStore('data', {
         },
         setLatestVersion(version, releaseUrl) {
             this.latestVersion = { version, releaseUrl }
-        },
-        setClaudeStatus(status) {
-            this.claudeStatus = status
         },
 
         // Startup progress

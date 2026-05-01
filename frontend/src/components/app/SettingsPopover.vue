@@ -5,6 +5,7 @@ import { useRouter } from 'vue-router'
 import { useSettingsStore, SETTINGS_SCHEMA, getModelRegistry, modelSupports1m, modelSupportsEffortXhigh, modelSupportsEffortMax } from '../../stores/settings'
 import { useDataStore } from '../../stores/data'
 import { useAuthStore } from '../../stores/auth'
+import { useClaudeCodeStore } from '../../providers/claude_code/store'
 import { DISPLAY_MODE, COLOR_SCHEME, SESSION_TIME_FORMAT, DEFAULT_MAX_CACHED_SESSIONS, PERMISSION_MODE, PERMISSION_MODE_LABELS, PERMISSION_MODE_DESCRIPTIONS, getModelLabel, EFFORT, EFFORT_LABELS, THINKING, THINKING_LABELS, CLAUDE_IN_CHROME, CLAUDE_IN_CHROME_LABELS, CONTEXT_MAX, CONTEXT_MAX_LABELS, WA_THEME, WA_THEME_LABELS, WA_BRAND, WA_BRAND_LABELS } from '../../constants'
 import NotificationSettings from './NotificationSettings.vue'
 import AppTooltip from '../ui/AppTooltip.vue'
@@ -16,6 +17,7 @@ import { vPopoverFocusFix } from '../../directives/vPopoverFocusFix'
 const router = useRouter()
 const store = useSettingsStore()
 const dataStore = useDataStore()
+const claudeCodeStore = useClaudeCodeStore()
 const authStore = useAuthStore()
 
 // Show logout button only when password-based auth is active
@@ -248,13 +250,13 @@ const isDefaultPrompt = computed(() => titleSystemPrompt.value === SETTINGS_SCHE
 // Server info for footer
 const currentVersion = computed(() => dataStore.currentVersion)
 const latestVersion = computed(() => dataStore.latestVersion)
-const claudeStatus = computed(() => dataStore.claudeStatus)
+const claudeCodeAnthropicStatus = computed(() => claudeCodeStore.anthropicStatus)
 
 /**
  * Status display configuration for Claude Code component statuses.
  * Maps Atlassian Statuspage status values to UI labels and CSS modifier classes.
  */
-const CLAUDE_STATUS_DISPLAY = {
+const CLAUDE_CODE_ANTHROPIC_STATUS_DISPLAY = {
     operational: { label: 'Operational', modifier: 'ok' },
     degraded_performance: { label: 'Degraded', modifier: 'warning' },
     partial_outage: { label: 'Partial outage', modifier: 'warning' },
@@ -262,8 +264,8 @@ const CLAUDE_STATUS_DISPLAY = {
     under_maintenance: { label: 'Maintenance', modifier: 'info' },
 }
 
-const claudeStatusDisplay = computed(() => {
-    return CLAUDE_STATUS_DISPLAY[claudeStatus.value] || { label: claudeStatus.value, modifier: 'ok' }
+const claudeCodeAnthropicStatusDisplay = computed(() => {
+    return CLAUDE_CODE_ANTHROPIC_STATUS_DISPLAY[claudeCodeAnthropicStatus.value] || { label: claudeCodeAnthropicStatus.value, modifier: 'ok' }
 })
 
 // Display mode options for the select
@@ -1203,11 +1205,11 @@ function onChangelogClose() {
                 target="_blank"
                 rel="noopener"
                 class="settings-footer-status"
-                :class="`settings-footer-status--${claudeStatusDisplay.modifier}`"
+                :class="`settings-footer-status--${claudeCodeAnthropicStatusDisplay.modifier}`"
                 id="claude-status"
             >
                 <span class="status-dot"></span>
-                CC: {{ claudeStatusDisplay.label }}
+                CC: {{ claudeCodeAnthropicStatusDisplay.label }}
             </a>
             <AppTooltip for="claude-status">Claude code status on Anthropic's side</AppTooltip>
             <wa-button
