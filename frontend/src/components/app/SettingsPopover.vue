@@ -22,9 +22,6 @@ const authStore = useAuthStore()
 const showLogout = computed(() => authStore.passwordRequired && authStore.authenticated)
 const logoutButtonId = useId()
 
-// Show extra usage setting only when Claude CLI is authenticated (OAuth)
-const showExtraUsageSetting = computed(() => dataStore.claudeAuthenticated === true)
-
 function handleLogout() {
     router.push({ name: 'logout' })
 }
@@ -1061,7 +1058,7 @@ function onChangelogClose() {
                 <!-- Claude quotas/usage Section -->
                 <section v-if="activeSection === 'usage'" class="settings-section">
                     <h3 class="settings-section-title">Claude quotas/usage</h3>
-                    <div class="setting-group" v-if="showExtraUsageSetting">
+                    <div class="setting-group">
                         <label class="setting-group-label">Show extra usage quota</label>
                         <wa-switch
                             :checked="extraUsageOnlyWhenNeeded"

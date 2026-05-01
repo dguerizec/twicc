@@ -24,6 +24,7 @@ import { useClaudeSettingsPresetsStore } from '../../stores/claudeSettingsPreset
 import { formatPresetSummary } from '../../utils/presetFormat'
 import ClaudePresetsDialog from '../app/ClaudePresetsDialog.vue'
 import { getUnavailablePlaceholders, resolveSnippetText } from '../../utils/snippetPlaceholders'
+import { getProviderHelpers } from '../../providers'
 
 const props = defineProps({
     sessionId: {
@@ -301,7 +302,8 @@ const isProcessingFiles = computed(() => store.isProcessingAttachments(props.ses
 // Determine if input/button should be disabled
 const isDisabled = computed(() => {
     if (!store.wsConnected) return true
-    if (store.claudeAuthenticated === false) return true
+    const providerHelpers = getProviderHelpers(session.value?.provider)
+    if (providerHelpers && !providerHelpers.canSendMessage()) return true
     if (store.isInitialSyncInProgress) return true
     if (isProcessingFiles.value) return true
     const state = processState.value?.state

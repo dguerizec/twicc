@@ -9,6 +9,7 @@ import { useCommandRegistry } from '../composables/useCommandRegistry'
 import { useStartupPolling } from '../composables/useStartupPolling'
 import { sendCheckClaudeAuth } from '../composables/useWebSocket'
 import { useTerminalCommandStore } from '../stores/terminalCommand'
+import { useClaudeCodeStore } from '../providers/claude_code/store'
 import { toWorkspaceProjectId } from '../utils/workspaceIds'
 import { splitProjectsByPriority } from '../utils/projectSort'
 import SessionList from '../components/session/list/SessionList.vue'
@@ -30,6 +31,7 @@ import CodeCommentsIndicator from '../components/ui/CodeCommentsIndicator.vue'
 const route = useRoute()
 const router = useRouter()
 const store = useDataStore()
+const claudeCodeStore = useClaudeCodeStore()
 const settingsStore = useSettingsStore()
 const { registerCommands, unregisterCommands } = useCommandRegistry()
 
@@ -1570,7 +1572,7 @@ function updateSidebarClosedClass(closed) {
                     </AppTooltip>
                 </div>
 
-                <template v-if="store.claudeAuthenticated === false">
+                <template v-if="claudeCodeStore.authenticated === false">
                     <wa-divider v-if="quotaHasUsage && quotaComputed"></wa-divider>
                     <div class="sidebar-footer-claude-auth">
                         <wa-callout variant="warning" size="small">

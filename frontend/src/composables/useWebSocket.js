@@ -9,6 +9,7 @@ import { useReconciliation } from './useReconciliation'
 import { toast } from './useToast'
 import { computeUsageData } from '../utils/usage'
 import { useSettingsStore } from '../stores/settings'
+import { useClaudeCodeStore } from '../providers/claude_code/store'
 import { playNotificationSound, sendBrowserNotification } from '../utils/notificationSounds'
 import { truncateTitle } from '../utils/truncate'
 import { getModelLabel } from '../constants'
@@ -506,8 +507,8 @@ function notifyProcessStateChange(msg, previousState, route) {
         }
         // No per-session toast for kill_reason === 'auth_required':
         // the global "Claude CLI not authenticated" toast and the sidebar
-        // callout (driven by claudeAuthenticated) already surface the state,
-        // and the dead session itself shows an inline error.
+        // callout (driven by useClaudeCodeStore().authenticated) already
+        // surface the state, and the dead session itself shows an inline error.
     }
 }
 
@@ -876,7 +877,7 @@ export function useWebSocket() {
             }
             case 'claude_code:auth_updated':
                 // Claude CLI auth state changed (or initial push on WS connect)
-                store.setClaudeAuthenticated(msg.authenticated)
+                useClaudeCodeStore().setAuthenticated(msg.authenticated)
                 break
             case 'claude_code:usage_file_validated':
                 if (_usageFileValidateResolve) {

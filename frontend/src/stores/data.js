@@ -207,11 +207,6 @@ export const useDataStore = defineStore('data', {
         //                 computed: computeUsageData() result } }
         usage: {},
 
-        // Claude CLI authentication state (from claude_code:auth_updated messages)
-        // null = unknown (no message received yet), true/false = known state.
-        // Driven by the backend's auth_task (periodic check) and on-connect push.
-        claudeAuthenticated: null,
-
         // WebSocket connection state (updated by useWebSocket composable)
         wsConnected: false,
 
@@ -702,11 +697,6 @@ export const useDataStore = defineStore('data', {
         // Usage
         setUsage(provider, success, reason, rawData, computedData) {
             this.usage[provider] = { success, reason, raw: rawData, computed: computedData }
-        },
-
-        // Claude CLI authentication state
-        setClaudeAuthenticated(authenticated) {
-            this.claudeAuthenticated = authenticated
         },
 
         // Server info

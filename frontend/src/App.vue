@@ -6,6 +6,7 @@ import { useWebSocket, versionMismatchDetected } from './composables/useWebSocke
 import { useDataStore } from './stores/data'
 import { useSettingsStore } from './stores/settings'
 import { useAuthStore } from './stores/auth'
+import { useClaudeCodeStore } from './providers/claude_code/store'
 import { COLOR_SCHEME, PROCESS_STATE } from './constants'
 import { useFavicon } from './composables/useFavicon'
 import { toast } from './composables/useToast'
@@ -41,6 +42,7 @@ useFavicon()
 
 // Load initial data and connect WebSocket when authenticated
 const dataStore = useDataStore()
+const claudeCodeStore = useClaudeCodeStore()
 
 // React to authentication state changes (initial check + after login)
 watch(isAuthenticated, async (authenticated) => {
@@ -79,7 +81,7 @@ watch(versionMismatchDetected, (mismatch) => {
 // Stays visible until the auth state flips back to true (the watcher dismisses
 // it). Skipped while the state is still null (no backend message received yet).
 let _claudeAuthToastItem = null
-watch(() => dataStore.claudeAuthenticated, (authenticated) => {
+watch(() => claudeCodeStore.authenticated, (authenticated) => {
     if (authenticated === false && !_claudeAuthToastItem) {
         _claudeAuthToastItem = toast.custom(ClaudeAuthToastContent, {
             type: 'warning',
