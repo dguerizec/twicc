@@ -1,8 +1,9 @@
 """
 Synchronization logic for JSONL files from Claude Code projects.
 
-Scans CLAUDE_CODE_PROJECTS_DIR for projects and sessions, synchronizes them
-with the database, and reads new lines from modified JSONL files.
+Scans :attr:`ClaudeCodeHelpers.PROJECTS_DIR` for projects and sessions,
+synchronizes them with the database, and reads new lines from modified
+JSONL files.
 """
 
 from __future__ import annotations
@@ -16,12 +17,11 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from django.conf import settings
-
 from .compute import (
     ensure_project_git_root,
     update_project_total_cost,
 )
+from .helpers import ClaudeCodeHelpers
 from twicc.core.enums import Provider
 from twicc.core.models import Project, Session, SessionItem, SessionType
 
@@ -56,14 +56,9 @@ def is_subagent_file(path: Path) -> bool:
     )
 
 
-def get_projects_dir() -> Path:
-    """Get the Claude Code projects directory from settings."""
-    return Path(settings.CLAUDE_CODE_PROJECTS_DIR)
-
-
 def scan_projects() -> set[str]:
     """Scan the projects directory and return the set of project folder names."""
-    projects_dir = get_projects_dir()
+    projects_dir = ClaudeCodeHelpers.PROJECTS_DIR
     if not projects_dir.exists():
         return set()
     return {d.name for d in projects_dir.iterdir() if d.is_dir()}
@@ -75,7 +70,7 @@ def scan_sessions(project_id: str) -> dict[str, Path]:
 
     Returns a dict mapping session id (filename without extension) to Path.
     """
-    project_dir = get_projects_dir() / project_id
+    project_dir = ClaudeCodeHelpers.PROJECTS_DIR / project_id
     if not project_dir.exists():
         return {}
     return {
@@ -91,7 +86,7 @@ def scan_subagents(project_id: str, session_id: str) -> dict[str, Path]:
 
     Returns a dict mapping agent_id (e.g., "a6c7d21") to Path.
     """
-    subagents_dir = get_projects_dir() / project_id / session_id / "subagents"
+    subagents_dir = ClaudeCodeHelpers.PROJECTS_DIR / project_id / session_id / "subagents"
     if not subagents_dir.exists():
         return {}
     return {
@@ -447,7 +442,7 @@ def sync_all(
     stop_event: threading.Event | None = None,
 ) -> dict[str, int]:
     """
-    Synchronize all projects from CLAUDE_CODE_PROJECTS_DIR.
+    Synchronize all projects from :attr:`ClaudeCodeHelpers.PROJECTS_DIR`.
 
     Args:
         on_project_start: Callback called before syncing a project

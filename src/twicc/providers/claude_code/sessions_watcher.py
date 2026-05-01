@@ -22,6 +22,7 @@ import twicc.search as search
 from twicc.providers.claude_code.agent.manager import get_claude_code_agent_manager
 from twicc.providers.claude_code.agent.original_file_cache import pop_original_file as _pop_cached_original_file
 from twicc.providers.helpers import AgentSettings
+from .helpers import ClaudeCodeHelpers
 from .compute import AgentLinkUpdate, AgentStoppedUpdate, ToolResultUpdate, cache_agent_prompt, \
     check_agent_naturally_stopped, compute_item_cost_and_usage, \
     compute_item_metadata, \
@@ -637,7 +638,7 @@ async def start_watcher() -> None:
     directory.
     """
     channel_layer = get_channel_layer()
-    projects_dir = Path(settings.CLAUDE_CODE_PROJECTS_DIR)
+    projects_dir = ClaudeCodeHelpers.PROJECTS_DIR
     stop_event = get_stop_event()
 
     if not projects_dir.exists():

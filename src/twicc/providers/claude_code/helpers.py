@@ -12,6 +12,7 @@ from collections.abc import Iterable
 from datetime import date
 from decimal import Decimal
 from functools import lru_cache
+from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, NamedTuple
 
 import orjson
@@ -122,6 +123,12 @@ class ClaudeCodeHelpers(BaseProviderHelpers):
     }
 
     USAGE_SYNC_INTERVAL: ClassVar[int | None] = 5 * 60
+
+    # Filesystem source for Claude Code session JSONL files. The CLI
+    # writes one folder per project under here, with one JSONL per
+    # session. Read by the initial sync and the watcher; not exposed
+    # through the registry because it has no cross-provider meaning.
+    PROJECTS_DIR: ClassVar[Path] = Path.home() / ".claude" / "projects"
 
     OPENROUTER_MODEL_PREFIX: ClassVar[str | None] = "anthropic/"
 
