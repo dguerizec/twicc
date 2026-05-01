@@ -7,7 +7,7 @@ import { useWorkspacesStore } from '../stores/workspaces'
 import { COLOR_SCHEME } from '../constants'
 import { useCommandRegistry } from '../composables/useCommandRegistry'
 import { useStartupPolling } from '../composables/useStartupPolling'
-import { sendCheckClaudeAuth } from '../composables/useWebSocket'
+import { sendCheckAuth as sendCheckClaudeCodeAuth } from '../providers/claude_code/ws'
 import { useTerminalCommandStore } from '../stores/terminalCommand'
 import { useClaudeCodeStore } from '../providers/claude_code/store'
 import { toWorkspaceProjectId } from '../utils/workspaceIds'
@@ -61,7 +61,7 @@ const claudeLoginCommand = computed(() => `${settingsStore.twiccLaunchPrefix} cl
 function recheckClaudeAuth() {
     if (claudeAuthChecking.value) return
     claudeAuthChecking.value = true
-    sendCheckClaudeAuth()
+    sendCheckClaudeCodeAuth()
     setTimeout(() => {
         claudeAuthChecking.value = false
     }, 1500)

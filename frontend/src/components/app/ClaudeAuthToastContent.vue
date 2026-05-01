@@ -11,7 +11,7 @@
  */
 import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { sendCheckClaudeAuth } from '../../composables/useWebSocket'
+import { sendCheckAuth as sendCheckClaudeCodeAuth } from '../../providers/claude_code/ws'
 import { useSettingsStore } from '../../stores/settings'
 import { useTerminalCommandStore } from '../../stores/terminalCommand'
 
@@ -36,7 +36,7 @@ const checking = ref(false)
 function checkAgain() {
     if (checking.value) return
     checking.value = true
-    sendCheckClaudeAuth()
+    sendCheckClaudeCodeAuth()
     setTimeout(() => {
         checking.value = false
     }, 1500)

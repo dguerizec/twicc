@@ -10,6 +10,7 @@ import { toast } from './useToast'
 import { computeUsageData } from '../utils/usage'
 import { useSettingsStore } from '../stores/settings'
 import { useClaudeCodeStore } from '../providers/claude_code/store'
+import { getProviderWsHandler } from '../providers'
 import { playNotificationSound, sendBrowserNotification } from '../utils/notificationSounds'
 import { truncateTitle } from '../utils/truncate'
 import { getModelLabel } from '../constants'
@@ -333,14 +334,6 @@ export function sendChangelogSeen(version) {
         type: 'changelog_seen',
         version
     })
-}
-
-/**
- * Force the backend to re-check Claude CLI auth state and broadcast the result.
- * @returns {boolean} - True if message was sent
- */
-export function sendCheckClaudeAuth() {
-    return sendWsMessage({ type: 'claude_code:check_auth' })
 }
 
 // Pending resolve callbacks for usage file validation request-response
@@ -879,10 +872,6 @@ export function useWebSocket() {
                 store.setUsage(provider, msg.success, msg.reason, msg.usage, computed)
                 break
             }
-            case 'claude_code:auth_updated':
-                // Claude CLI auth state changed (or initial push on WS connect)
-                useClaudeCodeStore().setAuthenticated(msg.authenticated)
-                break
             case 'claude_code:usage_file_validated':
                 if (_usageFileValidateResolve) {
                     _usageFileValidateResolve({ valid: msg.valid, message: msg.message })
@@ -993,6 +982,23 @@ export function useWebSocket() {
                     `Model version retired: ${retiredList}. Settings updated automatically.`,
                     { duration: Infinity }
                 )
+                break
+            }
+            default: {
+                // Provider-prefixed message? ``<provider>:<action>`` is delegated
+                // to the provider's WS handler. Generic dispatcher is unaware of
+                // any specific provider key.
+                const colonIdx = msg.type.indexOf(':')
+                if (colonIdx > 0) {
+                    const provider = msg.type.slice(0, colonIdx)
+                    const action = msg.type.slice(colonIdx + 1)
+                    const handler = getProviderWsHandler(provider)
+                    if (handler) {
+                        handler.handle(action, msg)
+                        break
+                    }
+                }
+                console.warn('[ws] Unknown message type:', msg.type)
                 break
             }
         }
