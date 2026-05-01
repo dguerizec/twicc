@@ -459,7 +459,18 @@ class SessionItem(models.Model):
 
 
 class ToolResultLink(models.Model):
-    """Links a tool_use to its tool_result within a session."""
+    """Links one tool_use to one tool_result within a session.
+
+    App-centric and provider-agnostic: every backend that exposes tool
+    calls (Claude Code, future Codex, …) is expected to populate this
+    table from its own JSONL parsing as part of building
+    :class:`SessionItem` rows. The table is not scoped by ``provider``
+    directly — the parent :class:`Session` already carries that scope,
+    and the join enforces it. Concrete ``tool_name`` values (``Bash``,
+    ``Edit``, ``apply_patch``, …) are whatever each provider emits;
+    ``extra`` carries provider-specific structured payloads (e.g. diff
+    stats for Edit-style tools).
+    """
 
     session = models.ForeignKey(
         Session,
@@ -469,9 +480,9 @@ class ToolResultLink(models.Model):
     tool_use_line_num = models.PositiveIntegerField()  # Line containing the tool_use
     tool_result_line_num = models.PositiveIntegerField()  # Line containing the tool_result
     tool_use_id = models.CharField(max_length=255)  # The tool_use ID
-    tool_name = models.CharField(max_length=255, default="")  # The tool name (e.g. "Bash", "Read")
+    tool_name = models.CharField(max_length=255, default="")  # Provider-emitted tool name (free-form)
     tool_result_at = models.DateTimeField(null=True, blank=True)  # Timestamp of the tool_result item
-    extra = models.TextField(null=True, blank=True)  # Optional extra data (e.g. diff stats for Edit tools)
+    extra = models.TextField(null=True, blank=True)  # Optional provider-specific extra data
     error = models.TextField(null=True, blank=True)  # Error message from tool_result (None = no error)
 
     class Meta:
@@ -491,18 +502,29 @@ class ToolResultLink(models.Model):
 
 
 class AgentLink(models.Model):
-    """Links a Task tool_use to its spawned subagent within a session."""
+    """Links a tool_use that spawns a subagent to that subagent's session.
+
+    App-centric and provider-agnostic: any provider whose CLI exposes a
+    "spawn an agent" tool (Claude Code's ``Task``, a hypothetical
+    Codex ``delegate``, …) is expected to populate this table as it
+    parses its JSONL into :class:`SessionItem` rows. The table is not
+    scoped by ``provider`` directly — the parent :class:`Session`
+    already carries that scope, and the join enforces it. The shape
+    fits any spawn-an-agent tool: ``tool_use_id`` identifies the call,
+    ``agent_id`` the spawned session, ``is_background`` whether the
+    parent waits for the child synchronously or not.
+    """
 
     session = models.ForeignKey(
         Session,
         on_delete=models.CASCADE,
         related_name="agent_links",
     )
-    tool_use_line_num = models.PositiveIntegerField()  # Line containing the assistant message with Task tool_use
-    tool_use_id = models.CharField(max_length=255)  # The specific Task tool_use ID
+    tool_use_line_num = models.PositiveIntegerField()  # Line containing the assistant message with the spawning tool_use
+    tool_use_id = models.CharField(max_length=255)  # ID of the spawning tool_use
     agent_id = models.CharField(max_length=255)  # The subagent ID
-    is_background = models.BooleanField(default=False)  # True if run_in_background was set on the Task tool_use
-    started_at = models.DateTimeField(null=True, blank=True)  # Timestamp of the Task tool_use item
+    is_background = models.BooleanField(default=False)  # True when the parent does not wait synchronously
+    started_at = models.DateTimeField(null=True, blank=True)  # Timestamp of the spawning tool_use item
 
     class Meta:
         indexes = [
