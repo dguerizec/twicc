@@ -117,23 +117,6 @@ export function requestTitleSuggestion(sessionId, prompt = null, systemPrompt) {
 }
 
 /**
- * Respond to a pending request on a session's process.
- * Sends a pending_request_response message via WebSocket.
- * @param {string} sessionId - The session ID
- * @param {string} requestId - The pending request ID
- * @param {object} responseData - The response payload (request_type, decision/answers, etc.)
- * @returns {boolean} True if the message was sent
- */
-export function respondToPendingRequest(sessionId, requestId, responseData) {
-    return sendWsMessage({
-        type: 'claude_code:pending_request_response',
-        session_id: sessionId,
-        request_id: requestId,
-        ...responseData,
-    })
-}
-
-/**
  * Notify the server that the user is actively preparing a message.
  * This resets the inactivity timeout for the process.
  * Debounced to 10 seconds per session to avoid spamming.

@@ -29,8 +29,6 @@ import { apiFetch } from '../utils/api'
 import { isWorkspaceProjectId, extractWorkspaceId } from '../utils/workspaceIds'
 import { getParsedContent, setParsedContent, clearParsedContent, hasContent } from '../utils/parsedContent'
 import { initBuffer, feedDelta, flushBuffer, destroySessionBuffers, destroyAllBuffers } from '../utils/streamingBuffer'
-// Note: respondToPendingRequest is imported lazily to avoid circular dependency
-// (data.js ↔ useWebSocket.js)
 
 // Map of debounced save functions per session (to avoid mixing debounces)
 const debouncedSaves = new Map()
@@ -2608,22 +2606,6 @@ export const useDataStore = defineStore('data', {
                 destroySessionBuffers(sessionId)
                 delete this.localState.streamingBlocks[sessionId]
             }
-        },
-
-        /**
-         * Respond to a pending request on a session's process.
-         * Sends the response via WebSocket.
-         * @param {string} sessionId - The session ID
-         * @param {string} requestId - The pending request ID
-         * @param {object} responseData - The response payload:
-         *   For tool approval: { request_type: 'tool_approval', decision: 'allow'|'deny', message?, updated_input? }
-         *   For ask user question: { request_type: 'ask_user_question', answers: { questionText: selectedLabel, ... } }
-         * @returns {boolean} True if the message was sent
-         */
-        async respondToPendingRequest(sessionId, requestId, responseData) {
-            // Lazy import to avoid circular dependency (data.js ↔ useWebSocket.js)
-            const { respondToPendingRequest: sendResponse } = await import('../composables/useWebSocket')
-            return sendResponse(sessionId, requestId, responseData)
         },
 
         // Session rename action

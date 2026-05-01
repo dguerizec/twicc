@@ -6,7 +6,7 @@
 // - ask_user_question: Shows questions with selectable options and an "Other" free-text input
 
 import { ref, computed, reactive, watch, nextTick, useId } from 'vue'
-import { useDataStore } from '../../stores/data'
+import { respondToPendingRequest } from '../../providers/claude_code/ws'
 import JsonHumanView from '../json/JsonHumanView.vue'
 import AppTooltip from '../ui/AppTooltip.vue'
 import { getLanguageFromPath } from '../../utils/languages'
@@ -94,8 +94,6 @@ const props = defineProps({
 
 // Number of additional pending requests waiting behind this one (>= 0).
 const extraPendingCount = computed(() => Math.max(0, props.pendingCount - 1))
-
-const store = useDataStore()
 
 // Whether a response has been sent and we're waiting for the store to clear the pending request
 const isResponding = ref(false)
@@ -347,7 +345,7 @@ function handleApprove() {
     if (isResponding.value) return
     isResponding.value = true
 
-    store.respondToPendingRequest(
+    respondToPendingRequest(
         props.sessionId,
         props.pendingRequest.request_id,
         buildApprovalResponse(toolInput.value),
@@ -373,7 +371,7 @@ function handleDeny() {
     isResponding.value = true
 
     const message = denyReason.value.trim() || 'User denied this action'
-    store.respondToPendingRequest(props.sessionId, props.pendingRequest.request_id, {
+    respondToPendingRequest(props.sessionId, props.pendingRequest.request_id, {
         request_type: 'tool_approval',
         decision: 'deny',
         message,
@@ -432,7 +430,7 @@ function handleApproveWithChanges() {
     if (isResponding.value) return
     isResponding.value = true
 
-    store.respondToPendingRequest(
+    respondToPendingRequest(
         props.sessionId,
         props.pendingRequest.request_id,
         buildApprovalResponse(editedToolInput.value),
@@ -580,7 +578,7 @@ function handleSubmitQuestions() {
         answers[question.question] = getQuestionAnswer(i)
     }
 
-    store.respondToPendingRequest(props.sessionId, props.pendingRequest.request_id, {
+    respondToPendingRequest(props.sessionId, props.pendingRequest.request_id, {
         request_type: 'ask_user_question',
         answers,
     })

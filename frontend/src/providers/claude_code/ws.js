@@ -25,6 +25,21 @@ export function sendCheckAuth() {
 }
 
 /**
+ * Respond to a pending tool-approval / ask-user-question request raised
+ * by the Claude SDK. The shape of ``responseData`` depends on the
+ * ``request_type`` (tool_approval vs ask_user_question).
+ * @returns {boolean} True if the message was sent
+ */
+export function respondToPendingRequest(sessionId, requestId, responseData) {
+    return sendWsMessage({
+        type: 'claude_code:pending_request_response',
+        session_id: sessionId,
+        request_id: requestId,
+        ...responseData,
+    })
+}
+
+/**
  * Push the Claude settings presets config to the backend for persistence.
  * The backend will broadcast the updated config to all connected clients
  * via ``claude_code:settings_presets_updated``.
