@@ -6,7 +6,6 @@ from django.db import migrations, models
 
 def populate_weekly_activity(apps, schema_editor):
     """Populate WeeklyActivity from existing SessionItem data."""
-    from datetime import timedelta
 
     SessionItem = apps.get_model("core", "SessionItem")
     WeeklyActivity = apps.get_model("core", "WeeklyActivity")

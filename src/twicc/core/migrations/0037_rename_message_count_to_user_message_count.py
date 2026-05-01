@@ -2,7 +2,7 @@
 # Old value counted user+assistant messages (user_count*2 or user_count*2-1).
 # New value counts only user messages: ceil(old_value / 2).
 
-from django.db import migrations, models
+from django.db import migrations
 
 
 class Migration(migrations.Migration):

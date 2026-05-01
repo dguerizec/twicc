@@ -9,16 +9,15 @@ and the watcher (single item).
 from __future__ import annotations
 
 import os
-from decimal import Decimal
+import re
 
 import orjson
 import logging
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any, NamedTuple
 
 import xmltodict
-from django.conf import settings
 from django.core.exceptions import MultipleObjectsReturned
 from django.db.models import Q
 
@@ -451,8 +450,6 @@ def resolve_git_for_item(parsed_json: dict, *, use_cache: bool = True) -> tuple[
 # Title Extraction from User Messages
 # =============================================================================
 
-
-import re
 
 # Regex patterns for stripping markdown
 _MARKDOWN_PATTERNS = [
@@ -1618,7 +1615,6 @@ def create_tool_result_link_live(
 
     Returns a ToolResultUpdate if the tool is tracked (Bash/Task/Agent), None otherwise.
     """
-    from twicc.core.models import ToolResultLink
 
     tool_use_id = get_tool_result_id(parsed_json)
     if not tool_use_id:
@@ -1686,7 +1682,7 @@ def check_agent_naturally_stopped(
 
     Returns an AgentStoppedUpdate if the agent stopped, None otherwise.
     """
-    from twicc.core.models import AgentLink, Session
+    from twicc.core.models import Session
 
     # Find the AgentLink for this tool_use_id
     agent_link = AgentLink.objects.filter(
@@ -1728,7 +1724,6 @@ def create_agent_link_from_tool_result(session_id: str, item: SessionItem, parse
 
     Returns an AgentLinkUpdate if a link was created, None otherwise.
     """
-    from twicc.core.models import AgentLink
 
     agent_info = get_tool_result_agent_info(parsed_json)
     if not agent_info:
@@ -1858,7 +1853,6 @@ def create_agent_link_from_subagent(
 
     Returns an AgentLinkUpdate if the link was created, None otherwise.
     """
-    from twicc.core.models import AgentLink
 
     if is_agent_link_done(parent_session_id, agent_id):
         return None
@@ -1932,7 +1926,6 @@ def create_agent_link_from_tool_use(
 
     Returns a list of AgentLinkUpdates for each link created.
     """
-    from twicc.core.models import AgentLink
 
     # Extract assistant message content
     content = get_message_content_list(parsed_json, "assistant")

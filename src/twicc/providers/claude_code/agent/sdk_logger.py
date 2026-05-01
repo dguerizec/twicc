@@ -87,8 +87,6 @@ def patch_client(client: ClaudeSDKClient, session_id: str) -> None:
     # Original: iterates over self._query.receive_messages() and calls parse_message().
     # We intercept the raw dict before parse_message.
 
-    original_receive = client.receive_messages
-
     async def patched_receive_messages() -> AsyncIterator[Message]:
         # Access the internal query stream for raw dicts
         async for data in client._query.receive_messages():
