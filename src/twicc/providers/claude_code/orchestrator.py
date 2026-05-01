@@ -2,14 +2,16 @@
 Claude Code provider orchestrator.
 
 Owns the lifecycle of every async/background task that belongs to the Claude
-Code provider: initial JSONL sync, pricing, sessions watcher, background
-metadata compute, search index, auth/usage/statuspage/slash-commands polling,
-model retirement, cron restart, original file cache cleanup, and the
+Code provider: initial JSONL sync, sessions watcher, background metadata
+compute, search index, auth/usage/statuspage/slash-commands polling, model
+retirement, cron restart, original file cache cleanup, and the
 ClaudeCodeAgentManager that wraps the Claude Agent SDK.
 
 The CLI server entry point (``twicc.cli.run``) instantiates this class and
 delegates start/shutdown of all Claude Code tasks to it. Cross-provider tasks
-(e.g. PyPI version check) stay in the CLI module.
+(PyPI version check, OpenRouter price sync) stay in the CLI module — pricing
+in particular is shared across every provider that has declared an
+``OPENROUTER_MODEL_PREFIX``, with a single fetch per cycle.
 """
 
 from __future__ import annotations
@@ -37,11 +39,6 @@ from twicc.providers.claude_code.initial_sync import scan_projects, scan_session
 from twicc.providers.claude_code.model_retirement_task import (
     start_model_retirement_task,
     stop_model_retirement_task,
-)
-from twicc.providers.claude_code.pricing_task import (
-    run_initial_price_sync,
-    start_price_sync_task,
-    stop_price_sync_task,
 )
 from twicc.providers.claude_code.search_indexing_task import (
     start_search_index_task,
@@ -97,14 +94,18 @@ class ClaudeCodeOrchestrator:
 
     Task dependency graph (started by ``start()``):
 
-    - initial_sync, initial_price_sync, usage_sync, auth_check, statuspage,
-      slash_commands, original_file_cache_cleanup, model_retirement: start
-      immediately.
-    - search index init + watcher + cron_restart: start after initial_sync.
-    - price_sync (periodic) + background_compute: start after both
-      initial_sync AND initial_price_sync complete.
+    - initial_sync, usage_sync, auth_check, statuspage, slash_commands,
+      original_file_cache_cleanup, model_retirement: start immediately.
+    - search index init + watcher + cron_restart + background_compute:
+      start after initial_sync.
     - search_indexing: starts after background_compute finishes (via done
       callback), unless the server is shutting down.
+
+    Pricing is owned by the CLI (cross-provider, single OpenRouter fetch
+    shared by every provider that has an ``OPENROUTER_MODEL_PREFIX``); the
+    initial price sync is awaited by the CLI before instantiating this
+    orchestrator, so prices are guaranteed to be in DB by the time the
+    background compute task starts.
     """
 
     def __init__(self) -> None:
@@ -115,11 +116,9 @@ class ClaudeCodeOrchestrator:
 
         # Internal dependency-signaling events
         self._sync_done = asyncio.Event()
-        self._price_done = asyncio.Event()
 
         # Tasks started immediately
         self._sync_task: asyncio.Task | None = None
-        self._price_init_task: asyncio.Task | None = None
         self._orch_task: asyncio.Task | None = None
         self._usage_sync_task: asyncio.Task | None = None
         self._auth_check_task: asyncio.Task | None = None
@@ -133,7 +132,6 @@ class ClaudeCodeOrchestrator:
         self._watcher_task: asyncio.Task | None = None
         self._compute_task: asyncio.Task | None = None
         self._compute_ctx: ComputeContext | None = None
-        self._price_sync_task: asyncio.Task | None = None
         self._search_indexing_task: asyncio.Task | None = None
         self._cron_restart_task: asyncio.Task | None = None
 
@@ -150,7 +148,6 @@ class ClaudeCodeOrchestrator:
         self._shutdown_event = shutdown_event
 
         self._sync_task = asyncio.create_task(self._initial_sync_task())
-        self._price_init_task = asyncio.create_task(self._initial_price_sync_task())
         self._orch_task = asyncio.create_task(self._dependency_orchestrator())
         self._usage_sync_task = asyncio.create_task(start_usage_sync_task())
         self._auth_check_task = asyncio.create_task(start_auth_task())
@@ -167,8 +164,6 @@ class ClaudeCodeOrchestrator:
         # Cancel startup tasks (may already be done)
         if self._sync_task is not None:
             await _cancel_task(self._sync_task, "Initial sync task")
-        if self._price_init_task is not None:
-            await _cancel_task(self._price_init_task, "Initial price sync task")
         if self._orch_task is not None:
             await _cancel_task(self._orch_task, "Orchestrator task")
 
@@ -187,14 +182,6 @@ class ClaudeCodeOrchestrator:
             await _cancel_task(self._compute_task, "Background compute task")
         else:
             logger.info("Background compute was not started, skipping")
-
-        # Periodic price sync (may not have started yet)
-        if self._price_sync_task is not None:
-            logger.info("Stopping price sync task...")
-            stop_price_sync_task()
-            await _cancel_task(self._price_sync_task, "Price sync task")
-        else:
-            logger.info("Price sync task was not started, skipping")
 
         # Usage sync
         if self._usage_sync_task is not None:
@@ -299,13 +286,13 @@ class ClaudeCodeOrchestrator:
 
         self._sync_done.set()
 
-    async def _initial_price_sync_task(self) -> None:
-        """Run initial price sync then signal completion."""
-        await run_initial_price_sync()
-        self._price_done.set()
-
     async def _dependency_orchestrator(self) -> None:
-        """Wait for dependencies and start watcher + background compute."""
+        """Wait for the initial sync, then start watcher + cron restart + compute.
+
+        The CLI has already run the cross-provider initial price sync
+        before this orchestrator was started, so prices are guaranteed
+        to be in DB by the time background compute kicks in.
+        """
         # Initialize search index before watcher starts, so the watcher can
         # index new items into the search index as they arrive in real time.
         await self._sync_done.wait()
@@ -324,17 +311,11 @@ class ClaudeCodeOrchestrator:
         )
         logger.info("Cron restart task launched")
 
-        # Start background compute and periodic price sync once initial price sync is done.
-        # The periodic price sync task must wait for the initial price sync to avoid
-        # a race condition: both call sync_model_prices() which uses non-atomic
-        # read-then-create, causing UNIQUE constraint violations on concurrent inserts.
-        await self._price_done.wait()
-        self._price_sync_task = asyncio.create_task(start_price_sync_task())
         self._compute_ctx = ComputeContext()
         self._compute_task = asyncio.create_task(
             start_background_compute_task(self._compute_ctx)
         )
-        logger.info("Background compute started (after sync + price sync)")
+        logger.info("Background compute started (after initial sync)")
 
         # Search indexing task starts automatically when background compute finishes
         # (via done callback). Uses shutdown_event to skip if server is stopping.

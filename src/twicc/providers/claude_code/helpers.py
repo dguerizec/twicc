@@ -10,12 +10,14 @@ from __future__ import annotations
 import logging
 from collections.abc import Iterable
 from datetime import date
+from decimal import Decimal
 from functools import lru_cache
 from typing import TYPE_CHECKING, ClassVar, NamedTuple
 
 import orjson
 
 from twicc.core.enums import ItemKind, Provider
+from twicc.pricing import FamilyPrices
 from twicc.providers.helpers import (
     AgentSettingCategory,
     AgentSettings,
@@ -27,7 +29,7 @@ from twicc.providers.helpers import (
 )
 
 from .compute import get_message_content, get_message_content_list
-from .pricing import extract_model_info
+from .pricing import CLAUDE_FAMILIES, extract_model_info
 from .titles import protect_title, rename_session_in_jsonl, validate_title
 
 if TYPE_CHECKING:
@@ -120,6 +122,96 @@ class ClaudeCodeHelpers(BaseProviderHelpers):
     }
 
     USAGE_SYNC_INTERVAL: ClassVar[int | None] = 5 * 60
+
+    OPENROUTER_MODEL_PREFIX: ClassVar[str | None] = "anthropic/"
+
+    # Default per-family prices (USD per million tokens) — fallback when no
+    # ``ModelPrice`` row matches and no other version of the same family is
+    # in the DB. Based on Anthropic's published pricing as of January 2026.
+    DEFAULT_FAMILY_PRICES: ClassVar[dict[str, FamilyPrices]] = {
+        "opus": FamilyPrices(
+            input_price=Decimal("15.00"),
+            output_price=Decimal("75.00"),
+            cache_read_price=Decimal("1.50"),
+            cache_write_5m_price=Decimal("18.75"),
+            cache_write_1h_price=Decimal("30.00"),
+        ),
+        "sonnet": FamilyPrices(
+            input_price=Decimal("3.00"),
+            output_price=Decimal("15.00"),
+            cache_read_price=Decimal("0.30"),
+            cache_write_5m_price=Decimal("3.75"),
+            cache_write_1h_price=Decimal("6.00"),
+        ),
+        "haiku": FamilyPrices(
+            input_price=Decimal("1.00"),
+            output_price=Decimal("5.00"),
+            cache_read_price=Decimal("0.10"),
+            cache_write_5m_price=Decimal("1.25"),
+            cache_write_1h_price=Decimal("2.00"),
+        ),
+    }
+
+    def extract_family_and_version(
+        self, model_id: str,
+    ) -> tuple[str | None, str | None]:
+        """Parse a Claude OpenRouter ``model_id`` into ``(family, version)``.
+
+        Handles every shape we have seen in OpenRouter's response:
+
+        - new layout ``claude-<family>-<version>`` → e.g.
+          ``claude-opus-4.7`` ⇒ ``("opus", "4.7")``;
+        - legacy layout ``claude-<version>-<family>`` → e.g.
+          ``claude-3.5-sonnet`` ⇒ ``("sonnet", "3.5")``;
+        - variant suffix as a dash segment, e.g. ``claude-opus-4.6-fast``
+          ⇒ ``("opus-fast", "4.6")``;
+        - variant suffix after a colon, e.g.
+          ``claude-3.7-sonnet:thinking`` ⇒ ``("sonnet-thinking", "3.7")``.
+
+        Variants are folded into the family because they typically charge
+        different prices (so they need their own pricing-equivalence
+        bucket), while the version is whichever segment is purely numeric
+        (or dotted-numeric). Returns ``(None, None)`` when no known
+        family appears in the id.
+        """
+        prefix = "anthropic/claude-"
+        if not model_id.startswith(prefix):
+            return None, None
+        suffix = model_id.removeprefix(prefix)
+
+        # Optional trailing ``:variant`` (e.g. ``:thinking``)
+        base, _, colon_variant = suffix.partition(":")
+        parts = base.split("-") if base else []
+
+        family: str | None = None
+        version: str | None = None
+        extras: list[str] = []
+        for part in parts:
+            if part in CLAUDE_FAMILIES:
+                family = part
+            elif part and all(ch.isdigit() or ch == "." for ch in part):
+                if version is None:
+                    version = part
+            elif part:
+                extras.append(part)
+
+        if family is None:
+            return None, None
+
+        if colon_variant:
+            extras.append(colon_variant)
+        if extras:
+            family = f"{family}-{'-'.join(extras)}"
+
+        return family, version
+
+    def compute_cache_write_1h_price(
+        self,
+        prompt_price: Decimal,
+        cache_write_5m_price: Decimal,
+    ) -> Decimal:
+        """Anthropic bills the 1-hour cache write at ``prompt_price * 2``."""
+        return prompt_price * 2
 
     # ------------------------------------------------------------------
     # Model registry — supported model versions

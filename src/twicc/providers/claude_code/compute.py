@@ -21,13 +21,10 @@ import xmltodict
 from django.core.exceptions import MultipleObjectsReturned
 from django.db.models import Q
 
-from twicc.core.enums import ItemDisplayLevel, ItemKind
+from twicc.core.enums import ItemDisplayLevel, ItemKind, Provider
 from twicc.core.models import AgentLink, Project, Session, SessionItem, SessionType, ToolResultLink
-from .pricing import (
-    calculate_line_cost,
-    calculate_line_context_usage,
-    extract_model_info,
-)
+from twicc.pricing import calculate_line_context_usage
+from .pricing import extract_model_info, to_token_usage
 
 class AgentLinkUpdate(NamedTuple):
     """Describes a new AgentLink creation to broadcast to the frontend."""
@@ -1551,7 +1548,8 @@ def compute_item_cost_and_usage(
         item.message_id = msg_id
 
     # Context usage: always computed when usage data is present
-    item.context_usage = calculate_line_context_usage(usage)
+    token_usage = to_token_usage(usage)
+    item.context_usage = calculate_line_context_usage(token_usage)
 
     # Cost: only computed if message_id not already seen (deduplication)
     if msg_id and msg_id not in seen_message_ids:
@@ -1562,7 +1560,10 @@ def compute_item_cost_and_usage(
             model_id = f"anthropic/claude-{model_info.family}-{model_info.version}"
             if timestamp_str := parsed_json.get("timestamp"):
                 if dt := parse_timestamp_to_datetime(timestamp_str):
-                    item.cost = calculate_line_cost(usage, model_id, dt.date())
+                    from twicc.providers.helpers import get_provider_helpers
+                    item.cost = get_provider_helpers(Provider.CLAUDE_CODE).calculate_line_cost(
+                        token_usage, model_id, dt.date(),
+                    )
 
 
 # =============================================================================

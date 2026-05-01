@@ -19,10 +19,12 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from datetime import date, datetime
+from decimal import Decimal
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple
 
 from twicc.core.enums import Provider
+from twicc.pricing import FamilyPrices, TokenUsage
 
 
 class AgentSettingCategory(StrEnum):
@@ -175,6 +177,74 @@ class BaseProviderHelpers:
     # the declarative source of truth read by the loop and by tools that
     # iterate the registry (e.g. the ``twicc usage`` CLI).
     USAGE_SYNC_INTERVAL: ClassVar[int | None] = None
+
+    # OpenRouter ``model_id`` prefix used both to filter the pricing API
+    # response and to recognise rows that belong to this provider. E.g.
+    # ``"anthropic/"`` for Claude Code, ``"openai/"`` for OpenAI. When
+    # ``None``, the provider is excluded from the cross-provider
+    # OpenRouter price sync (see :mod:`twicc.pricing_task`).
+    OPENROUTER_MODEL_PREFIX: ClassVar[str | None] = None
+
+    # Per-family default prices (USD per million tokens) — fallback when
+    # no :class:`ModelPrice` row matches and no other version of the
+    # same family is in the DB. Keys must match what
+    # :meth:`extract_family_and_version` produces for this provider.
+    DEFAULT_FAMILY_PRICES: ClassVar[dict[str, FamilyPrices]] = {}
+
+    # ------------------------------------------------------------------
+    # Pricing
+    # ------------------------------------------------------------------
+
+    def extract_family_and_version(
+        self, model_id: str,
+    ) -> tuple[str | None, str | None]:
+        """Split a ``model_id`` into ``(family, version)``.
+
+        ``family`` is the *pricing-equivalence* key — the identifier used
+        to find fallback prices among siblings (e.g. for Claude Code:
+        ``"opus"`` / ``"sonnet"`` / ``"haiku"``; for OpenAI: ``"gpt"``,
+        ``"gpt-mini"``, ``"gpt-codex"``, …). Two ``model_id`` values
+        sharing the same ``family`` must charge similar prices, so the
+        cross-provider fallback logic can substitute one for the other.
+
+        ``version`` is the numeric portion (e.g. ``"4.7"``, ``"5.4"``).
+        It must be parsable as a dotted tuple of ints by the generic
+        fallback ordering. Both values are ``None`` when the format is
+        not recognised.
+
+        Each provider implements this against its own naming convention.
+        """
+        return None, None
+
+    def compute_cache_write_1h_price(
+        self,
+        prompt_price: Decimal,
+        cache_write_5m_price: Decimal,
+    ) -> Decimal:
+        """Return the per-million 1-hour cache-write price.
+
+        Default: identical to the 5-minute cache-write price (most
+        providers don't differentiate). Claude overrides to
+        ``prompt_price * 2`` per Anthropic's published billing rule.
+        """
+        return cache_write_5m_price
+
+    def calculate_line_cost(
+        self,
+        usage: TokenUsage,
+        model_id: str,
+        line_date: date,
+    ) -> Decimal | None:
+        """Compute the per-line cost for this provider.
+
+        Thin wrapper that injects ``self.provider`` and delegates to
+        :func:`twicc.pricing.calculate_line_cost` so call sites in
+        provider-specific code don't have to thread the enum value
+        themselves.
+        """
+        from twicc.pricing import calculate_line_cost
+
+        return calculate_line_cost(self.provider, usage, model_id, line_date)
 
     def resolve_agent_settings(self, source: AgentSettings) -> AgentSettings:
         """Return the effective per-agent settings, with synced defaults as fallback.

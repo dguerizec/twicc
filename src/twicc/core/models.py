@@ -50,33 +50,6 @@ class PinMode(models.TextChoices):
     ALL = "all", "All projects"
 
 
-# Default prices per family (USD per million tokens) - fallback when no DB price exists
-# Based on Anthropic's published pricing as of January 2026
-DEFAULT_FAMILY_PRICES = {
-    "opus": {
-        "input_price": Decimal("15.00"),
-        "output_price": Decimal("75.00"),
-        "cache_read_price": Decimal("1.50"),
-        "cache_write_5m_price": Decimal("18.75"),
-        "cache_write_1h_price": Decimal("30.00"),
-    },
-    "sonnet": {
-        "input_price": Decimal("3.00"),
-        "output_price": Decimal("15.00"),
-        "cache_read_price": Decimal("0.30"),
-        "cache_write_5m_price": Decimal("3.75"),
-        "cache_write_1h_price": Decimal("6.00"),
-    },
-    "haiku": {
-        "input_price": Decimal("1.00"),
-        "output_price": Decimal("5.00"),
-        "cache_read_price": Decimal("0.10"),
-        "cache_write_5m_price": Decimal("1.25"),
-        "cache_write_1h_price": Decimal("2.00"),
-    },
-}
-
-
 class Project(models.Model):
     """A project corresponds to a subfolder of ~/.claude/projects/"""
 
@@ -544,15 +517,20 @@ class AgentLink(models.Model):
 
 
 class ModelPrice(models.Model):
-    """
-    Stores pricing information for AI models, with support for historical prices.
+    """Historical pricing for AI models, scoped per backend ``provider``.
 
-    Prices are stored per model_id (OpenRouter format, e.g. "anthropic/claude-opus-4.5")
-    with an effective_date to support historical price lookups. A new entry is only
-    created when prices change, not daily.
+    Each row is a snapshot of a single model's prices for a given
+    ``effective_date`` — a new row is only inserted when the prices
+    change, so historical lookups can find the right rate for an old
+    message. The ``provider`` field bounds the namespace for ``model_id``
+    so that two providers with overlapping naming (unlikely for
+    OpenRouter today, but possible) do not collide.
     """
 
-    # OpenRouter model ID (e.g. "anthropic/claude-opus-4.5")
+    # Backend provider that produced this price row (see Provider enum)
+    provider = models.CharField(max_length=50)
+
+    # OpenRouter model ID (e.g. "anthropic/claude-opus-4.5", "openai/gpt-5.4-mini")
     model_id = models.CharField(max_length=100)
 
     # Date from which this price is effective
@@ -569,68 +547,70 @@ class ModelPrice(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        unique_together = [["model_id", "effective_date"]]
-        indexes = [
-            models.Index(fields=["model_id", "-effective_date"]),
+        constraints = [
+            # The UniqueConstraint's implicit B-tree index on
+            # ``(provider, model_id, effective_date ASC)`` is enough to
+            # serve every read pattern we have here: SQLite reverse-scans
+            # it for ``ORDER BY -effective_date LIMIT 1`` and range-scans
+            # it for ``effective_date <= target_date`` lookups, and the
+            # table is small (one row per price change). No separate
+            # ``-effective_date`` index needed.
+            models.UniqueConstraint(
+                fields=["provider", "model_id", "effective_date"],
+                name="uniq_mp_prov_mid_date",
+            ),
         ]
 
     def __str__(self):
-        return f"{self.model_id} ({self.effective_date})"
-
-    @classmethod
-    def _extract_family_and_version(cls, model_id: str) -> tuple[str | None, str | None]:
-        """
-        Extract family and version from model_id.
-
-        Example: "anthropic/claude-opus-4.5" -> ("opus", "4.5")
-        """
-        if not model_id.startswith("anthropic/claude-"):
-            return None, None
-
-        # Remove prefix: "anthropic/claude-opus-4.5" -> "opus-4.5"
-        suffix = model_id.removeprefix("anthropic/claude-")
-        parts = suffix.split("-")
-
-        if not parts:
-            return None, None
-
-        family = parts[0]  # "opus", "sonnet", "haiku"
-        version = parts[1] if len(parts) > 1 else None
-
-        return family, version
+        return f"[{self.provider}] {self.model_id} ({self.effective_date})"
 
     # ── In-memory price cache ──────────────────────────────────────────
+    # Lazily populated on first access, invalidated by invalidate_price_cache().
+    # Nested by provider so each provider's family fallback stays scoped to its
+    # own model_ids (no cross-provider bleed in the same-family search).
 
-    # Cache structure: populated lazily on first access, invalidated by invalidate_price_cache()
-    _prices_by_model: ClassVar[dict[str, list["ModelPrice"]] | None] = None
-    _models_by_family: ClassVar[dict[str, list[str]] | None] = None
+    _prices_by_model: ClassVar[dict[str, dict[str, list["ModelPrice"]]] | None] = None
+    _models_by_family: ClassVar[dict[str, dict[str, list[str]]] | None] = None
 
     @classmethod
     def _ensure_price_cache(cls) -> None:
-        """Load all ModelPrice rows into memory if cache is not populated."""
+        """Load every :class:`ModelPrice` row into memory, indexed per provider."""
         if cls._prices_by_model is not None:
             return
 
         from collections import defaultdict
 
-        prices_by_model: dict[str, list[ModelPrice]] = defaultdict(list)
-        models_by_family: dict[str, list[str]] = defaultdict(list)
+        from twicc.providers.helpers import get_provider_helpers_registry
 
-        for price in cls.objects.all().order_by("model_id", "-effective_date"):
-            prices_by_model[price.model_id].append(price)
+        prices_by_model: dict[str, dict[str, list[ModelPrice]]] = defaultdict(
+            lambda: defaultdict(list),
+        )
+        models_by_family: dict[str, dict[str, list[str]]] = defaultdict(
+            lambda: defaultdict(list),
+        )
 
-        # Build family index from distinct model_ids
-        seen_model_ids: set[str] = set()
-        for model_id in prices_by_model:
-            if model_id in seen_model_ids:
+        for price in cls.objects.all().order_by("provider", "model_id", "-effective_date"):
+            prices_by_model[price.provider][price.model_id].append(price)
+
+        registry = get_provider_helpers_registry()
+        for provider_value, model_map in prices_by_model.items():
+            try:
+                helpers = registry.get(Provider(provider_value))
+            except (KeyError, ValueError):
                 continue
-            seen_model_ids.add(model_id)
-            family, _ = cls._extract_family_and_version(model_id)
-            if family:
-                models_by_family[family].append(model_id)
+            for model_id in model_map:
+                family, _ = helpers.extract_family_and_version(model_id)
+                if family:
+                    models_by_family[provider_value][family].append(model_id)
 
-        cls._prices_by_model = dict(prices_by_model)
-        cls._models_by_family = dict(models_by_family)
+        cls._prices_by_model = {
+            provider_value: dict(model_map)
+            for provider_value, model_map in prices_by_model.items()
+        }
+        cls._models_by_family = {
+            provider_value: dict(family_map)
+            for provider_value, family_map in models_by_family.items()
+        }
 
     @classmethod
     def invalidate_price_cache(cls) -> None:
@@ -639,52 +619,59 @@ class ModelPrice(models.Model):
         cls._models_by_family = None
 
     @classmethod
-    def get_price_for_date(cls, model_id: str, target_date: date) -> "ModelPrice | None":
-        """
-        Retrieve the applicable price for a model at a given date.
+    def get_price_for_date(
+        cls, provider: Provider, model_id: str, target_date: date,
+    ) -> "ModelPrice | None":
+        """Resolve the applicable price for ``(provider, model_id)`` at ``target_date``.
 
         Uses an in-memory cache (loaded lazily on first call) to avoid
-        SQL queries on every invocation. The cache is invalidated by
-        calling invalidate_price_cache() when price data is updated.
+        an SQL query on every invocation. The cache is invalidated via
+        :meth:`invalidate_price_cache` when price data is updated.
 
-        Fallback chain:
-        1. Exact model_id with effective_date <= target_date
-        2. Exact model_id with oldest known price (for old messages)
-        3. Same family, lower version (e.g., opus-4.5 if opus-4.7 not found)
-        4. Same family, higher version (e.g., opus-5.0 if no lower version)
-        5. None (caller should use DEFAULT_FAMILY_PRICES)
+        Fallback chain (each step scoped to the same ``provider``):
+
+        1. exact ``model_id`` row with ``effective_date <= target_date``;
+        2. exact ``model_id`` oldest known row (for messages older than
+           any tracked price);
+        3. same family, lower version (closest first);
+        4. same family, higher version (closest first);
+        5. ``None`` — caller should fall back to the helper's
+           :attr:`DEFAULT_FAMILY_PRICES`.
         """
         cls._ensure_price_cache()
         assert cls._prices_by_model is not None
         assert cls._models_by_family is not None
 
+        provider_value = provider.value
+        prices_by_model = cls._prices_by_model.get(provider_value, {})
+
         # 1. Try to find price valid at target_date for exact model
-        model_prices = cls._prices_by_model.get(model_id)
+        model_prices = prices_by_model.get(model_id)
         if model_prices:
             # List is sorted by effective_date descending
             for price in model_prices:
                 if price.effective_date <= target_date:
                     return price
-
             # 2. Fallback: oldest known price for exact model (last in descending list)
             return model_prices[-1]
 
         # 3 & 4. Try other versions of the same family
-        family, version = cls._extract_family_and_version(model_id)
+        from twicc.providers.helpers import get_provider_helpers
+
+        helpers = get_provider_helpers(provider)
+        family, version = helpers.extract_family_and_version(model_id)
         if not family:
             return None
 
-        family_model_ids = cls._models_by_family.get(family)
+        family_model_ids = cls._models_by_family.get(provider_value, {}).get(family)
         if not family_model_ids:
             return None
 
-        # Sort by version to find lower/higher versions
-        family_prefix = f"anthropic/claude-{family}-"
-
-        def extract_version(mid: str) -> tuple[int, ...]:
-            """Extract version tuple for sorting: '4.5' -> (4, 5)"""
-            v = mid.removeprefix(family_prefix)
-            v = v.split(":")[0]
+        def extract_version_tuple(mid: str) -> tuple[int, ...]:
+            """Extract a sortable version tuple from a sibling ``model_id``."""
+            _, v = helpers.extract_family_and_version(mid)
+            if not v:
+                return (0,)
             try:
                 return tuple(int(x) for x in v.split("."))
             except ValueError:
@@ -696,14 +683,18 @@ class ModelPrice(models.Model):
             except ValueError:
                 target_version = (0,)
 
-            lower_versions = [m for m in family_model_ids if extract_version(m) < target_version]
-            higher_versions = [m for m in family_model_ids if extract_version(m) > target_version]
+            lower_versions = [
+                m for m in family_model_ids if extract_version_tuple(m) < target_version
+            ]
+            higher_versions = [
+                m for m in family_model_ids if extract_version_tuple(m) > target_version
+            ]
 
-            lower_versions.sort(key=extract_version, reverse=True)
-            higher_versions.sort(key=extract_version)
+            lower_versions.sort(key=extract_version_tuple, reverse=True)
+            higher_versions.sort(key=extract_version_tuple)
 
             for fallback_model_id in lower_versions + higher_versions:
-                fallback_prices = cls._prices_by_model.get(fallback_model_id)
+                fallback_prices = prices_by_model.get(fallback_model_id)
                 if fallback_prices:
                     # Return most recent price for the fallback model
                     return fallback_prices[0]

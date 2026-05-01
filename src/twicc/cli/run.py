@@ -2,10 +2,12 @@
 CLI entry point for the TWICC application.
 
 Handles Django setup, migrations, and starts the server. All Claude Code
-provider tasks (sync, watcher, compute, pricing, auth, usage, statuspage,
-slash commands, search index, model retirement, cron restart, process
-manager) are owned by ``ClaudeCodeOrchestrator``. The CLI only manages the
-HTTP server lifecycle and cross-provider tasks (e.g. PyPI version check).
+provider tasks (sync, watcher, compute, auth, usage, statuspage, slash
+commands, search index, model retirement, cron restart, process manager)
+are owned by ``ClaudeCodeOrchestrator``. The CLI manages the HTTP server
+lifecycle and the cross-provider tasks: PyPI version check and the
+OpenRouter price sync (one fetch shared across every provider that has
+declared an ``OPENROUTER_MODEL_PREFIX``).
 
 Used by:
 - ``uvx twicc`` / ``pip install twicc && twicc``  (via project.scripts)
@@ -51,6 +53,7 @@ logging.getLogger("twicc").addHandler(_startup_console)
 # Now we can import Django-dependent modules
 from django.core.management import call_command  # noqa: E402
 
+from twicc.pricing_task import start_price_sync_task, sync_all_providers  # noqa: E402
 from twicc.providers.claude_code.orchestrator import ClaudeCodeOrchestrator  # noqa: E402
 from twicc.version_check_task import start_version_check_task, stop_version_check_task  # noqa: E402
 
@@ -76,11 +79,18 @@ async def run_server(port: int):
     # Set up signal handlers to ensure clean shutdown
     shutdown_event = asyncio.Event()
 
+    # Cross-provider initial price sync runs *before* per-provider orchestrators
+    # so they can rely on prices being in DB by the time their compute paths run.
+    # A single OpenRouter fetch covers every provider that has declared an
+    # ``OPENROUTER_MODEL_PREFIX``; failure here is logged and non-fatal.
+    await sync_all_providers()
+
     # Claude Code provider owns its own tasks
     claude_code = ClaudeCodeOrchestrator()
     await claude_code.start(shutdown_event)
 
-    # Cross-provider tasks
+    # Cross-provider periodic tasks
+    price_sync_task = asyncio.create_task(start_price_sync_task(shutdown_event))
     version_check_task = asyncio.create_task(start_version_check_task())
 
     # Configure uvicorn
@@ -109,7 +119,12 @@ async def run_server(port: int):
     finally:
         logger.info("Server shutdown initiated...")
 
-        # Stop cross-provider tasks first
+        # Stop cross-provider tasks first. The price sync loop watches
+        # ``shutdown_event`` directly (set above by the signal handler),
+        # so we just wait for it to finish.
+        logger.info("Stopping price sync task...")
+        await _cancel_task(price_sync_task, "Price sync task")
+
         logger.info("Stopping version check task...")
         stop_version_check_task()
         await _cancel_task(version_check_task, "Version check task")
