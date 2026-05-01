@@ -151,6 +151,21 @@ if (!authStore.needsLogin) {
     // Hydrate drafts from IndexedDB (async, non-blocking)
     // Order matters: sessions first so draft messages have their session available
     const dataStore = useDataStore()
+
+    // Seed per-provider usage from the bootstrap so the UI can render immediately
+    // without waiting for the WS connect-time ``usage_updated`` push. The WS will
+    // still send fresh data on (re)connect and at every periodic sync — those
+    // updates flow through the same setUsage path.
+    {
+        const { computeUsageData } = await import('./utils/usage')
+        for (const [provider, providerData] of Object.entries(bootstrapData.providers ?? {})) {
+            if (providerData?.tracks_usage && providerData.usage) {
+                const computed = computeUsageData(providerData.usage)
+                dataStore.setUsage(provider, true, 'bootstrap', providerData.usage, computed)
+            }
+        }
+    }
+
     dataStore.hydrateDraftSessions().then(() => {
         dataStore.hydrateDraftMessages()
         dataStore.hydrateAttachments()

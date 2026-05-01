@@ -423,7 +423,7 @@ class ClaudeCodeHelpers(BaseProviderHelpers):
     def get_bootstrap_data(self) -> dict:
         from .agent_settings_presets import read_agent_settings_presets
 
-        return {
+        return super().get_bootstrap_data() | {
             "agent_settings_presets": read_agent_settings_presets(),
             "agent_settings_categories": {
                 category.value: keys

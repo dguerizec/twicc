@@ -314,9 +314,41 @@ class BaseProviderHelpers:
     def get_bootstrap_data(self) -> dict:
         """Return provider-specific keys merged into the ``/api/bootstrap/`` payload.
 
-        Default implementation contributes nothing.
+        Default implementation contributes the cross-provider usage block
+        when this provider tracks usage (``USAGE_SYNC_INTERVAL`` is set):
+
+        - ``tracks_usage``: ``True`` when the provider has a usage sync
+          loop, so the front knows to allocate a slot for it even before
+          a snapshot exists (auth not configured yet, first fetch still
+          pending, etc.).
+        - ``usage``: the latest serialised ``UsageSnapshot`` for this
+          provider, or ``None`` when none exists yet. Mirrors the inner
+          shape of the ``usage_updated`` WS payload.
+
+        Subclasses with extra keys override and merge:
+        ``super().get_bootstrap_data() | {"my_key": ...}``.
         """
-        return {}
+        if self.USAGE_SYNC_INTERVAL is None:
+            return {}
+
+        from twicc.core.models import UsageSnapshot
+        from twicc.core.serializers import serialize_usage_snapshot
+        from twicc.usage import compute_period_costs
+        from twicc.usage_task import _build_reference_snapshots
+
+        snapshot = (
+            UsageSnapshot.objects
+            .filter(provider=self.provider.value)
+            .first()  # ordered by -fetched_at
+        )
+        return {
+            "tracks_usage": True,
+            "usage": serialize_usage_snapshot(
+                snapshot,
+                period_costs=compute_period_costs(snapshot),
+                references=_build_reference_snapshots(snapshot),
+            ) if snapshot else None,
+        }
 
     # ------------------------------------------------------------------
     # Model registry
