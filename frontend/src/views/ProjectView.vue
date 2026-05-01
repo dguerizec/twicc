@@ -74,7 +74,9 @@ function launchClaudeAuthInTerminal() {
 // Usage quotas
 // ═══════════════════════════════════════════════════════════════════════════
 
-const quotaData = computed(() => store.usage)
+// Sidebar shows Claude Code usage only for now; the multi-provider switcher
+// will land in a follow-up step.
+const quotaData = computed(() => store.usage['claude_code'] ?? null)
 const quotaComputed = computed(() => quotaData.value?.computed ?? null)
 // Show the usage block whenever usage data is available — the source can be
 // OAuth credentials or a local JSON file; either way the backend signals

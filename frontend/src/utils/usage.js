@@ -351,58 +351,6 @@ export function computeUsageData(raw) {
             _sdCross(refs.cross_sd_short, 'seven_day_utilization'),
         ),
 
-        sevenDayOpus: computeQuota(
-            raw.seven_day_opus_utilization,
-            raw.seven_day_opus_resets_at,
-            fetchedAt,
-            SEVEN_DAYS_MS,
-            _sdRef(refs.one_day, 'seven_day_opus_utilization'),
-            _sdRef(refs.twelve_hour, 'seven_day_opus_utilization'),
-            ONE_DAY_MS,
-            TWELVE_HOURS_MS,
-            _sdCross(refs.cross_sd_long, 'seven_day_opus_utilization'),
-            _sdCross(refs.cross_sd_short, 'seven_day_opus_utilization'),
-        ),
-
-        sevenDaySonnet: computeQuota(
-            raw.seven_day_sonnet_utilization,
-            raw.seven_day_sonnet_resets_at,
-            fetchedAt,
-            SEVEN_DAYS_MS,
-            _sdRef(refs.one_day, 'seven_day_sonnet_utilization'),
-            _sdRef(refs.twelve_hour, 'seven_day_sonnet_utilization'),
-            ONE_DAY_MS,
-            TWELVE_HOURS_MS,
-            _sdCross(refs.cross_sd_long, 'seven_day_sonnet_utilization'),
-            _sdCross(refs.cross_sd_short, 'seven_day_sonnet_utilization'),
-        ),
-
-        sevenDayOauthApps: computeQuota(
-            raw.seven_day_oauth_apps_utilization,
-            raw.seven_day_oauth_apps_resets_at,
-            fetchedAt,
-            SEVEN_DAYS_MS,
-            _sdRef(refs.one_day, 'seven_day_oauth_apps_utilization'),
-            _sdRef(refs.twelve_hour, 'seven_day_oauth_apps_utilization'),
-            ONE_DAY_MS,
-            TWELVE_HOURS_MS,
-            _sdCross(refs.cross_sd_long, 'seven_day_oauth_apps_utilization'),
-            _sdCross(refs.cross_sd_short, 'seven_day_oauth_apps_utilization'),
-        ),
-
-        sevenDayCowork: computeQuota(
-            raw.seven_day_cowork_utilization,
-            raw.seven_day_cowork_resets_at,
-            fetchedAt,
-            SEVEN_DAYS_MS,
-            _sdRef(refs.one_day, 'seven_day_cowork_utilization'),
-            _sdRef(refs.twelve_hour, 'seven_day_cowork_utilization'),
-            ONE_DAY_MS,
-            TWELVE_HOURS_MS,
-            _sdCross(refs.cross_sd_long, 'seven_day_cowork_utilization'),
-            _sdCross(refs.cross_sd_short, 'seven_day_cowork_utilization'),
-        ),
-
         extraUsage: {
             isEnabled: raw.extra_usage_is_enabled ?? false,
             monthlyLimit: raw.extra_usage_monthly_limit,

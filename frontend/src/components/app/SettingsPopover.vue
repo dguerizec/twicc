@@ -61,7 +61,7 @@ function selectSection(id) {
         nextTick(() => notificationSettingsRef.value?.sync())
     }
     if (id === 'usage') {
-        usageFilePathInput.value = usageJsonFilePath.value || ''
+        usageFilePathInput.value = usageReadFilePath.value || ''
         usageFileValidation.value = null
         usageDumpPathInput.value = usageDumpFilePath.value || ''
         usageDumpValidation.value = null
@@ -208,16 +208,16 @@ const toolDiffWordWrap = computed(() => store.isToolDiffWordWrap)
 const toolDiffSideBySide = computed(() => store.isToolDiffSideBySide)
 const diffSideBySide = computed(() => store.isDiffSideBySide)
 const editorWordWrap = computed(() => store.isEditorWordWrap)
-const usageJsonFileEnabled = computed(() => store.isUsageJsonFileEnabled)
-const usageJsonFilePath = computed(() => store.getUsageJsonFilePath)
-const usageDumpFileEnabled = computed(() => store.isUsageDumpFileEnabled)
-const usageDumpFilePath = computed(() => store.getUsageDumpFilePath)
+const usageReadFileEnabled = computed(() => store.isClaudeCodeUsageReadFileEnabled)
+const usageReadFilePath = computed(() => store.getClaudeCodeUsageReadFilePath)
+const usageDumpFileEnabled = computed(() => store.isClaudeCodeUsageDumpFileEnabled)
+const usageDumpFilePath = computed(() => store.getClaudeCodeUsageDumpFilePath)
 
 // Usage file — local input + validation state
 const usageFilePathInput = ref('')
 const usageFileValidating = ref(false)
 const usageFileValidation = ref(null) // { valid: boolean, message: string } | null
-const usageFilePathModified = computed(() => usageFilePathInput.value.trim() !== (usageJsonFilePath.value || ''))
+const usageFilePathModified = computed(() => usageFilePathInput.value.trim() !== (usageReadFilePath.value || ''))
 const usageFileApplyIcon = computed(() => {
     if (usageFileValidation.value?.valid === false) return 'x-circle'
     if (usageFilePathModified.value) return 'triangle-exclamation'
@@ -375,7 +375,7 @@ function onExtraUsageOnlyWhenNeededChange(event) {
 }
 
 function onUsageFileEnabledChange(event) {
-    store.setUsageJsonFileEnabled(event.target.checked)
+    store.setClaudeCodeUsageReadFileEnabled(event.target.checked)
 }
 
 function onUsageFilePathInputChange(event) {
@@ -388,7 +388,7 @@ async function onUsageFilePathApply() {
     const path = usageFilePathInput.value.trim()
     if (!path) {
         usageFileValidation.value = null
-        store.setUsageJsonFilePath('')
+        store.setClaudeCodeUsageReadFilePath('')
         return
     }
     usageFileValidating.value = true
@@ -396,7 +396,7 @@ async function onUsageFilePathApply() {
     try {
         const result = await sendValidateUsageFile(path)
         if (result.valid) {
-            store.setUsageJsonFilePath(path)
+            store.setClaudeCodeUsageReadFilePath(path)
         } else {
             usageFileValidation.value = result
         }
@@ -406,7 +406,7 @@ async function onUsageFilePathApply() {
 }
 
 function onUsageDumpEnabledChange(event) {
-    store.setUsageDumpFileEnabled(event.target.checked)
+    store.setClaudeCodeUsageDumpFileEnabled(event.target.checked)
 }
 
 function onUsageDumpPathInputChange(event) {
@@ -418,7 +418,7 @@ async function onUsageDumpPathApply() {
     const path = usageDumpPathInput.value.trim()
     if (!path) {
         usageDumpValidation.value = null
-        store.setUsageDumpFilePath('')
+        store.setClaudeCodeUsageDumpFilePath('')
         return
     }
     usageDumpValidating.value = true
@@ -426,7 +426,7 @@ async function onUsageDumpPathApply() {
     try {
         const result = await sendValidateUsageDumpPath(path)
         if (result.valid) {
-            store.setUsageDumpFilePath(path)
+            store.setClaudeCodeUsageDumpFilePath(path)
         } else {
             usageDumpValidation.value = result
         }
@@ -1072,7 +1072,7 @@ function onChangelogClose() {
                     <div class="setting-group">
                         <label class="setting-group-label">Read usage from file <wa-icon name="cloud" class="synced-icon"></wa-icon></label>
                         <wa-switch
-                            :checked="usageJsonFileEnabled"
+                            :checked="usageReadFileEnabled"
                             @change="onUsageFileEnabledChange"
                             size="small"
                             :disabled="usageDumpFileEnabled"
@@ -1082,7 +1082,7 @@ function onChangelogClose() {
                             from your own script and save the raw API response to a JSON file, you can provide
                             its path here. TwiCC will read from this file instead of calling the API directly.
                         </span>
-                        <template v-if="usageJsonFileEnabled">
+                        <template v-if="usageReadFileEnabled">
                             <div class="usage-file-input-row">
                                 <wa-input
                                     :value="usageFilePathInput"
@@ -1118,7 +1118,7 @@ function onChangelogClose() {
                             :checked="usageDumpFileEnabled"
                             @change="onUsageDumpEnabledChange"
                             size="small"
-                            :disabled="usageJsonFileEnabled"
+                            :disabled="usageReadFileEnabled"
                         >Enabled</wa-switch>
                         <span class="setting-group-hint">
                             Save the raw API response to a JSON file each time TwiCC fetches usage data.

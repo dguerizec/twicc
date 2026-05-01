@@ -169,6 +169,13 @@ class BaseProviderHelpers:
     # :class:`ProviderHelpersRegistry`.
     MODEL_VERSIONS: ClassVar[list[ModelVersion]] = []
 
+    # Polling interval (seconds) for this provider's usage sync task, or
+    # ``None`` when the provider has no usage tracking. The actual loop
+    # lives in each provider's own orchestrator module; this ClassVar is
+    # the declarative source of truth read by the loop and by tools that
+    # iterate the registry (e.g. the ``twicc usage`` CLI).
+    USAGE_SYNC_INTERVAL: ClassVar[int | None] = None
+
     def resolve_agent_settings(self, source: AgentSettings) -> AgentSettings:
         """Return the effective per-agent settings, with synced defaults as fallback.
 

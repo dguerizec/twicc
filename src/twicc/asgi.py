@@ -30,7 +30,6 @@ from twicc.synced_settings import _settings_lock, prepare_settings_for_client, r
 from twicc.workspaces import read_workspaces, write_workspaces
 from twicc.message_snippets import read_message_snippets_config, write_message_snippets_config
 from twicc.terminal_config import read_terminal_config, write_terminal_config
-from twicc.providers.claude_code.usage_task import get_usage_message_for_connection
 from twicc.terminal import terminal_application
 
 logger = logging.getLogger(__name__)
@@ -400,11 +399,6 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
                 }
             )
 
-        # Send latest usage snapshot to the connecting client
-        if self._should_send("usage_updated"):
-            usage_message = await get_usage_message_for_connection()
-            await self.send_json(usage_message)
-
         # Send synced settings to the connecting client
         if self._should_send("synced_settings_updated"):
             raw_settings = await sync_to_async(read_synced_settings)()
@@ -466,7 +460,6 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
         - mark_session_read_state: explicitly mark a session as read or unread
         - list_terminals: list active tmux terminal indices for a terminal context
         - kill_terminal: kill a secondary terminal's tmux session and broadcast
-        - validate_usage_file: validate a usage JSON file path (read mode) and return result
         - validate_usage_dump_path: validate a usage dump file path (write mode) and return result
         - validate_tmux_config_path: validate a tmux config file path and return result
         - changelog_seen: acknowledge that the user has seen the changelog for a version
@@ -521,9 +514,6 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
 
         elif msg_type == "rename_terminal":
             await self._handle_rename_terminal(content)
-
-        elif msg_type == "validate_usage_file":
-            await self._handle_validate_usage_file(content)
 
         elif msg_type == "validate_usage_dump_path":
             await self._handle_validate_usage_dump_path(content)
@@ -1011,26 +1001,17 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
                 "version": reject_version,
             })
 
-    async def _handle_validate_usage_file(self, content: dict) -> None:
-        """Validate a usage JSON file path and return the result to the client."""
-        file_path = content.get("file_path", "")
-        if not isinstance(file_path, str) or not file_path.strip():
-            await self.send_json({"type": "usage_file_validated", "valid": False, "message": "No file path provided"})
-            return
-
-        from twicc.providers.claude_code.usage import validate_usage_file
-
-        valid, message = await sync_to_async(validate_usage_file)(file_path.strip())
-        await self.send_json({"type": "usage_file_validated", "valid": valid, "message": message})
-
     async def _handle_validate_usage_dump_path(self, content: dict) -> None:
-        """Validate a usage dump file path and return the result to the client."""
+        """Validate a usage dump file path and return the result to the client.
+
+        Provider-agnostic: the check is a pure filesystem validation.
+        """
         file_path = content.get("file_path", "")
         if not isinstance(file_path, str) or not file_path.strip():
             await self.send_json({"type": "usage_dump_path_validated", "valid": False, "message": "No file path provided"})
             return
 
-        from twicc.providers.claude_code.usage import validate_usage_dump_path
+        from twicc.usage import validate_usage_dump_path
 
         valid, message = await sync_to_async(validate_usage_dump_path)(file_path.strip())
         await self.send_json({"type": "usage_dump_path_validated", "valid": valid, "message": message})

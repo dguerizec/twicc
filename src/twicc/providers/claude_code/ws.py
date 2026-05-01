@@ -24,6 +24,7 @@ from claude_agent_sdk.types import (
     PermissionUpdate,
 )
 
+from twicc.core.enums import Provider
 from twicc.providers.claude_code.agent.manager import get_claude_agent_manager
 from twicc.providers.claude_code.auth import (
     check_and_broadcast as check_auth_and_broadcast,
@@ -34,6 +35,7 @@ from twicc.providers.claude_code.claude_settings_presets import (
     write_claude_settings_presets,
 )
 from twicc.providers.claude_code.statuspage_task import get_statuspage_message_for_connection
+from twicc.usage_task import get_usage_message_for_connection
 
 logger = logging.getLogger(__name__)
 
@@ -118,9 +120,11 @@ class ClaudeCodeWSHandler:
     async def get_connect_messages(self) -> AsyncIterator[dict]:
         """Yield messages to send to a newly connected client.
 
-        Each yielded dict is a fully-formed message with its ``type`` already
-        set to ``"claude_code:<action>"``. The consumer applies the client's
-        ``subscribe`` filter before sending.
+        Each yielded dict is a fully-formed message ready to be sent. CC-only
+        messages have their ``type`` already set to ``"claude_code:<action>"``;
+        cross-provider messages (e.g. ``usage_updated``) keep the generic
+        type and carry the provider info inside their payload. The consumer
+        applies the client's ``subscribe`` filter before sending.
         """
         # Claude CLI authentication state
         yield await get_auth_message_for_connection()
@@ -133,6 +137,9 @@ class ClaudeCodeWSHandler:
         status_msg = get_statuspage_message_for_connection()
         if status_msg is not None:
             yield status_msg
+
+        # Latest Claude Code usage snapshot (wire type: ``usage_updated``)
+        yield await get_usage_message_for_connection(Provider.CLAUDE_CODE)
 
     async def dispatch(self, action: str, content: dict) -> bool:
         """Dispatch a Claude Code-prefixed message.
@@ -158,6 +165,10 @@ class ClaudeCodeWSHandler:
             await self._handle_update_settings_presets(content)
             return True
 
+        if action == "validate_usage_file":
+            await self._handle_validate_usage_file(content)
+            return True
+
         return False
 
     async def _handle_update_settings_presets(self, content: dict) -> None:
@@ -168,6 +179,32 @@ class ClaudeCodeWSHandler:
         await self.consumer.channel_layer.group_send("updates", {
             "type": "broadcast",
             "data": {"type": "claude_code:settings_presets_updated", "config": config},
+        })
+
+    async def _handle_validate_usage_file(self, content: dict) -> None:
+        """Validate a Claude Code usage JSON file path and reply to the client.
+
+        The check is Claude Code-specific: the file must contain the
+        Anthropic OAuth usage API response shape (``five_hour`` /
+        ``seven_day`` blocks). The response goes back as
+        ``claude_code:usage_file_validated``.
+        """
+        from twicc.providers.claude_code.usage import validate_usage_file
+
+        file_path = content.get("file_path", "")
+        if not isinstance(file_path, str) or not file_path.strip():
+            await self.consumer.send_json({
+                "type": "claude_code:usage_file_validated",
+                "valid": False,
+                "message": "No file path provided",
+            })
+            return
+
+        valid, message = await sync_to_async(validate_usage_file)(file_path.strip())
+        await self.consumer.send_json({
+            "type": "claude_code:usage_file_validated",
+            "valid": valid,
+            "message": message,
         })
 
     async def _handle_pending_request_response(self, content: dict) -> None:

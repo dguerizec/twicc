@@ -202,9 +202,10 @@ export const useDataStore = defineStore('data', {
         // { _global: [...], projectId: [...] } — each value is Array of { date, user_message_count }
         weeklyActivity: {},
 
-        // Usage quota data (from periodic usage sync)
-        // { success: bool, raw: serialized snapshot, computed: computeUsageData() result }
-        usage: null,
+        // Usage quota data, keyed by provider (from periodic usage sync).
+        // { [provider]: { success: bool, reason: string, raw: serialized snapshot,
+        //                 computed: computeUsageData() result } }
+        usage: {},
 
         // Claude CLI authentication state (from claude_code:auth_updated messages)
         // null = unknown (no message received yet), true/false = known state.
@@ -340,6 +341,12 @@ export const useDataStore = defineStore('data', {
     }),
 
     getters: {
+        // Providers that have at least one usage snapshot in the store.
+        // Source of truth for the sidebar's provider switcher and the graph dialog's
+        // provider selector. A provider only appears once its first ``usage_updated``
+        // message has arrived.
+        availableUsageProviders: (state) => Object.keys(state.usage).filter(p => state.usage[p]?.raw),
+
         // Data getters (sorted by mtime descending - most recent first)
         getProjects: (state) => Object.values(state.projects).sort((a, b) => b.mtime - a.mtime),
         getProject: (state) => (id) => state.projects[id],
@@ -693,8 +700,8 @@ export const useDataStore = defineStore('data', {
 
     actions: {
         // Usage
-        setUsage(success, reason, rawData, computedData) {
-            this.usage = { success, reason, raw: rawData, computed: computedData }
+        setUsage(provider, success, reason, rawData, computedData) {
+            this.usage[provider] = { success, reason, raw: rawData, computed: computedData }
         },
 
         // Claude CLI authentication state

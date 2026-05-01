@@ -137,7 +137,8 @@ async function fetchData({ isInitial = false, before = null, rangeDays = null, s
         const { days, bucket } = currentRange.value
         // Initial fetch: 3× the display period for panning buffer (2 extra periods to the left)
         const fetchDays = rangeDays ?? (isInitial ? Math.min(1825, days * 3) : days)
-        let url = `/api/usage-history/?range_days=${fetchDays}&bucket_minutes=${bucket}`
+        // Provider is hardcoded for now; a UI selector will land with multi-provider support.
+        let url = `/api/usage-history/?provider=claude_code&range_days=${fetchDays}&bucket_minutes=${bucket}`
         if (before) url += `&before=${encodeURIComponent(before)}`
         const res = await fetch(url)
         if (!res.ok) {

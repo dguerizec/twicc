@@ -76,6 +76,10 @@ class ClaudeCodeHelpers(BaseProviderHelpers):
         "claudeCodeDefaultThinking": True,
         "claudeCodeDefaultClaudeInChrome": True,
         "claudeCodeDefaultContextMax": 200_000,
+        "claudeCodeUsageReadFileEnabled": False,
+        "claudeCodeUsageReadFilePath": "",
+        "claudeCodeUsageDumpFileEnabled": False,
+        "claudeCodeUsageDumpFilePath": "",
     }
 
     RENAMED_SYNCED_SETTINGS_KEYS: ClassVar[dict[str, str]] = {
@@ -85,6 +89,10 @@ class ClaudeCodeHelpers(BaseProviderHelpers):
         "defaultThinking": "claudeCodeDefaultThinking",
         "defaultClaudeInChrome": "claudeCodeDefaultClaudeInChrome",
         "defaultContextMax": "claudeCodeDefaultContextMax",
+        "usageJsonFileEnabled": "claudeCodeUsageReadFileEnabled",
+        "usageJsonFilePath": "claudeCodeUsageReadFilePath",
+        "usageDumpFileEnabled": "claudeCodeUsageDumpFileEnabled",
+        "usageDumpFilePath": "claudeCodeUsageDumpFilePath",
     }
 
     OBSOLETE_SYNCED_SETTINGS_KEYS: ClassVar[tuple[str, ...]] = (
@@ -110,6 +118,8 @@ class ClaudeCodeHelpers(BaseProviderHelpers):
         "claude_in_chrome": "claudeCodeDefaultClaudeInChrome",
         "context_max": "claudeCodeDefaultContextMax",
     }
+
+    USAGE_SYNC_INTERVAL: ClassVar[int | None] = 5 * 60
 
     # ------------------------------------------------------------------
     # Model registry — supported model versions

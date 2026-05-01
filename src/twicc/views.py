@@ -13,7 +13,7 @@ from django.utils import timezone
 import orjson
 
 from twicc import search
-from twicc.core.enums import ItemKind
+from twicc.core.enums import ItemKind, Provider
 from twicc.core.models import AgentLink, DailyActivity, PinMode, Project, Session, SessionItem, SessionType, SlashCommand, ToolResultLink, UsageSnapshot, WeeklyActivity
 from twicc.core.serializers import (
     serialize_project,
@@ -1846,12 +1846,15 @@ def search_sessions(request):
 
 
 def usage_history(request):
-    """GET /api/usage-history/?range_days=30&bucket_minutes=60&before=...
+    """GET /api/usage-history/?provider=<key>&range_days=30&bucket_minutes=60&before=...
 
     Returns historical usage snapshots for charting utilization and burn rate over time.
     Both five_hour and seven_day data are returned in a single response.
 
     Parameters:
+        provider: Required. Backend provider key (e.g. ``claude_code``). 400 when
+            missing or unknown — there is no implicit default since multiple
+            providers can track usage independently.
         range_days: Number of days to look back (default 30, 0.25–1825).
         bucket_minutes: Aggregation bucket size in minutes (default 0 = raw data).
             Allowed: 0, 30, 60, 300, 720, 1440.
@@ -1861,6 +1864,14 @@ def usage_history(request):
             instead of now. Used for panning the usage history chart into the past.
     """
     ALLOWED_BUCKETS = {0, 30, 60, 300, 720, 1440}
+
+    provider_str = request.GET.get("provider")
+    if not provider_str:
+        return JsonResponse({"error": "provider is required."}, status=400)
+    try:
+        provider = Provider(provider_str)
+    except ValueError:
+        return JsonResponse({"error": f"Unknown provider: {provider_str!r}."}, status=400)
 
     try:
         range_days = float(request.GET.get("range_days", "30"))
@@ -1889,7 +1900,12 @@ def usage_history(request):
 
     cutoff = end - timedelta(days=range_days)
 
-    snapshots = list(UsageSnapshot.objects.filter(fetched_at__gte=cutoff, fetched_at__lte=end).order_by("fetched_at"))
+    snapshots = list(
+        UsageSnapshot.objects
+        .filter(provider=provider.value)
+        .filter(fetched_at__gte=cutoff, fetched_at__lte=end)
+        .order_by("fetched_at")
+    )
 
     FIVE_HOURS_S = 5 * 3600
     ONE_HOUR_S = 3600

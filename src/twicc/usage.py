@@ -1,0 +1,178 @@
+"""Cross-provider usage helpers.
+
+Generic computations on :class:`UsageSnapshot` rows that don't depend on
+how the snapshot was produced — only on the shared shape (``five_hour_*``
+/ ``seven_day_*`` quotas + ``provider`` field). Provider-specific
+fetching/parsing lives in each provider's module.
+"""
+
+from __future__ import annotations
+
+import os
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal
+from pathlib import Path
+
+from twicc.core.enums import Provider
+from twicc.core.models import SessionItem, UsageSnapshot
+
+
+# Duration of 30 days in seconds, for monthly cost projection.
+THIRTY_DAYS_SECONDS = 30 * 24 * 60 * 60
+
+
+def _sum_costs_since(provider: Provider, start: datetime) -> Decimal:
+    """Sum SessionItem costs for ``provider`` with timestamp >= ``start``.
+
+    Returns ``Decimal(0)`` when no items match.
+    """
+    from django.db.models import Sum
+
+    result = (
+        SessionItem.objects.filter(
+            session__provider=provider.value,
+            timestamp__gte=start,
+            cost__isnull=False,
+        )
+        .aggregate(total=Sum("cost"))
+    )
+    return result["total"] or Decimal(0)
+
+
+def compute_period_costs(snapshot: UsageSnapshot) -> dict:
+    """Compute cost data for the 5-hour and 7-day quota periods.
+
+    For each period, calculates:
+    - spent: actual sum of SessionItem costs since period start (USD)
+    - estimated_period: projected cost for the full period, capped at quota cutoff
+    - estimated_monthly: projected cost over 30 days, derived from capped period cost
+    - capped: whether the period estimate was capped due to burn rate > 1
+    - cutoff_at: ISO datetime when quota will be exhausted (null if burn rate <= 1)
+
+    When burn rate > 1.0, usage will hit 100% before the period ends.
+    The cost at cutoff is: spent * (100 / utilization).
+    After cutoff, no more usage is possible, so cost plateaus.
+
+    The 30-day estimate is derived from the (potentially capped) period cost:
+    estimated_monthly = (estimated_period / window_seconds) * 30_days_seconds.
+    This correctly models the repeating pattern: if you burn through quota in
+    half the window every cycle, you spend the capped amount per window, repeated
+    across all windows in 30 days.
+
+    Costs are scoped to ``snapshot.provider`` so multi-provider deployments
+    don't mix sessions across providers.
+
+    Args:
+        snapshot: The usage snapshot containing resets_at times and utilization.
+
+    Returns:
+        Dict with keys "five_hour" and "seven_day", each containing:
+        - spent (float): actual cost in USD
+        - estimated_period (float|None): projected period cost (capped if burn rate > 1)
+        - estimated_monthly (float|None): projected 30-day cost
+        - capped (bool): True if estimated_period was capped due to quota exhaustion
+        - cutoff_at (str|None): ISO datetime when quota will be exhausted, or None
+    """
+    now = datetime.now(timezone.utc)
+    result: dict = {}
+
+    periods = [
+        ("five_hour", snapshot.five_hour_resets_at, timedelta(hours=5), snapshot.five_hour_utilization),
+        ("seven_day", snapshot.seven_day_resets_at, timedelta(days=7), snapshot.seven_day_utilization),
+    ]
+
+    for key, resets_at, window, utilization in periods:
+        if resets_at is None:
+            result[key] = {
+                "spent": 0.0,
+                "estimated_period": None,
+                "estimated_monthly": None,
+                "capped": False,
+                "cutoff_at": None,
+            }
+            continue
+
+        period_start = resets_at - window
+        spent = _sum_costs_since(Provider(snapshot.provider), period_start)
+        spent_float = float(spent)
+
+        # Time elapsed since period start
+        elapsed_seconds = (now - period_start).total_seconds()
+        window_seconds = window.total_seconds()
+
+        if elapsed_seconds <= 0 or window_seconds <= 0:
+            result[key] = {
+                "spent": round(spent_float, 4),
+                "estimated_period": None,
+                "estimated_monthly": None,
+                "capped": False,
+                "cutoff_at": None,
+            }
+            continue
+
+        # Linear projection: cost for the full window at current pace
+        rate_per_second = spent_float / elapsed_seconds
+        estimated_period_linear = rate_per_second * window_seconds
+
+        # Check if burn rate > 1 (will hit quota before period ends)
+        capped = False
+        cutoff_at = None  # ISO datetime when quota will be exhausted
+
+        if utilization is not None and utilization > 0:
+            # Burn rate = utilization / time_pct
+            time_pct = elapsed_seconds / window_seconds
+            burn_rate = (utilization / 100.0) / time_pct if time_pct > 0 else 0
+
+            if utilization >= 100:
+                # Already exhausted — cost won't grow further
+                capped = True
+                cutoff_at = now  # already hit
+                estimated_period = spent_float
+            elif burn_rate > 1.0:
+                # Will exhaust before period ends
+                # Cost at cutoff = spent * (100 / utilization)
+                capped = True
+                estimated_period = spent_float * (100.0 / utilization)
+
+                # Time until cutoff: utilization reaches 100% at this pace
+                # cutoff_time_pct = 1.0 / burn_rate (fraction of window)
+                cutoff_seconds = window_seconds / burn_rate
+                remaining_to_cutoff = max(0.0, cutoff_seconds - elapsed_seconds)
+                cutoff_at = now + timedelta(seconds=remaining_to_cutoff)
+            else:
+                estimated_period = estimated_period_linear
+        else:
+            estimated_period = estimated_period_linear
+
+        # Monthly estimate derived from (capped) period cost
+        # This models the repeating cycle: each window costs estimated_period
+        estimated_monthly = (estimated_period / window_seconds) * THIRTY_DAYS_SECONDS
+
+        result[key] = {
+            "spent": round(spent_float, 4),
+            "estimated_period": round(estimated_period, 4),
+            "estimated_monthly": round(estimated_monthly, 2),
+            "capped": capped,
+            "cutoff_at": cutoff_at.isoformat() if cutoff_at else None,
+        }
+
+    return result
+
+
+def validate_usage_dump_path(file_path: str) -> tuple[bool, str]:
+    """Validate that a dump file path is usable (parent directory exists and is writable).
+
+    Pure filesystem check — provider-agnostic.
+
+    Returns:
+        A ``(valid, message)`` tuple.
+    """
+    path = Path(file_path)
+
+    if not path.parent.is_dir():
+        return False, f"Directory does not exist: {path.parent}"
+
+    if not os.access(path.parent, os.W_OK):
+        return False, f"Directory is not writable: {path.parent}"
+
+    return True, "Valid dump path"

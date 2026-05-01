@@ -52,10 +52,6 @@ _GENERIC_SYNCED_SETTINGS_DEFAULTS: dict = {
     "terminalTmuxConfigPath": "",
     "waTheme": "default",
     "waBrand": "cyan",
-    "usageJsonFileEnabled": False,
-    "usageJsonFilePath": "",
-    "usageDumpFileEnabled": False,
-    "usageDumpFilePath": "",
 }
 
 

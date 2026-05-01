@@ -59,10 +59,10 @@ export const SETTINGS_SCHEMA = {
     claudeCodeDefaultContextMax: null,
     waTheme: null,
     waBrand: null,
-    usageJsonFileEnabled: null,
-    usageJsonFilePath: null,
-    usageDumpFileEnabled: null,
-    usageDumpFilePath: null,
+    claudeCodeUsageReadFileEnabled: null,
+    claudeCodeUsageReadFilePath: null,
+    claudeCodeUsageDumpFileEnabled: null,
+    claudeCodeUsageDumpFilePath: null,
     // --- Not persisted - runtime state ---
     _devMode: false,
     _uvxMode: false,
@@ -116,10 +116,10 @@ const SETTINGS_VALIDATORS = {
     notifPendingRequestBrowser: (v) => typeof v === 'boolean',
     waTheme: (v) => Object.values(WA_THEME).includes(v),
     waBrand: (v) => Object.values(WA_BRAND).includes(v),
-    usageJsonFileEnabled: (v) => typeof v === 'boolean',
-    usageJsonFilePath: (v) => typeof v === 'string',
-    usageDumpFileEnabled: (v) => typeof v === 'boolean',
-    usageDumpFilePath: (v) => typeof v === 'string',
+    claudeCodeUsageReadFileEnabled: (v) => typeof v === 'boolean',
+    claudeCodeUsageReadFilePath: (v) => typeof v === 'string',
+    claudeCodeUsageDumpFileEnabled: (v) => typeof v === 'boolean',
+    claudeCodeUsageDumpFilePath: (v) => typeof v === 'string',
 }
 
 /**
@@ -330,10 +330,10 @@ export const useSettingsStore = defineStore('settings', {
         isNotifPendingRequestBrowser: (state) => state.notifPendingRequestBrowser,
         getWaTheme: (state) => state.waTheme,
         getWaBrand: (state) => state.waBrand,
-        isUsageJsonFileEnabled: (state) => state.usageJsonFileEnabled,
-        getUsageJsonFilePath: (state) => state.usageJsonFilePath,
-        isUsageDumpFileEnabled: (state) => state.usageDumpFileEnabled,
-        getUsageDumpFilePath: (state) => state.usageDumpFilePath,
+        isClaudeCodeUsageReadFileEnabled: (state) => state.claudeCodeUsageReadFileEnabled,
+        getClaudeCodeUsageReadFilePath: (state) => state.claudeCodeUsageReadFilePath,
+        isClaudeCodeUsageDumpFileEnabled: (state) => state.claudeCodeUsageDumpFileEnabled,
+        getClaudeCodeUsageDumpFilePath: (state) => state.claudeCodeUsageDumpFilePath,
         /**
          * Whether the backend is running in dev mode (source layout) vs installed package.
          */
@@ -717,31 +717,31 @@ export const useSettingsStore = defineStore('settings', {
             }
         },
 
-        setUsageJsonFileEnabled(enabled) {
-            if (SETTINGS_VALIDATORS.usageJsonFileEnabled(enabled)) {
-                this.usageJsonFileEnabled = enabled
+        setClaudeCodeUsageReadFileEnabled(enabled) {
+            if (SETTINGS_VALIDATORS.claudeCodeUsageReadFileEnabled(enabled)) {
+                this.claudeCodeUsageReadFileEnabled = enabled
                 // Mutually exclusive: disable dump mode
-                if (enabled) this.usageDumpFileEnabled = false
+                if (enabled) this.claudeCodeUsageDumpFileEnabled = false
             }
         },
 
-        setUsageJsonFilePath(path) {
-            if (SETTINGS_VALIDATORS.usageJsonFilePath(path)) {
-                this.usageJsonFilePath = path
+        setClaudeCodeUsageReadFilePath(path) {
+            if (SETTINGS_VALIDATORS.claudeCodeUsageReadFilePath(path)) {
+                this.claudeCodeUsageReadFilePath = path
             }
         },
 
-        setUsageDumpFileEnabled(enabled) {
-            if (SETTINGS_VALIDATORS.usageDumpFileEnabled(enabled)) {
-                this.usageDumpFileEnabled = enabled
+        setClaudeCodeUsageDumpFileEnabled(enabled) {
+            if (SETTINGS_VALIDATORS.claudeCodeUsageDumpFileEnabled(enabled)) {
+                this.claudeCodeUsageDumpFileEnabled = enabled
                 // Mutually exclusive: disable read mode
-                if (enabled) this.usageJsonFileEnabled = false
+                if (enabled) this.claudeCodeUsageReadFileEnabled = false
             }
         },
 
-        setUsageDumpFilePath(path) {
-            if (SETTINGS_VALIDATORS.usageDumpFilePath(path)) {
-                this.usageDumpFilePath = path
+        setClaudeCodeUsageDumpFilePath(path) {
+            if (SETTINGS_VALIDATORS.claudeCodeUsageDumpFilePath(path)) {
+                this.claudeCodeUsageDumpFilePath = path
             }
         },
 

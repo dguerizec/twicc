@@ -696,12 +696,15 @@ class ModelPrice(models.Model):
 
 class UsageSnapshot(models.Model):
     """
-    A point-in-time snapshot of Claude Code usage quotas.
+    A point-in-time snapshot of a provider's usage quotas.
 
-    Fetched from the Anthropic OAuth usage API endpoint.
-    Each row represents one API call, storing both parsed fields
-    and the raw JSON response for investigation purposes.
+    Each row represents one fetch from the provider's usage source
+    (e.g. the Anthropic OAuth usage API for Claude Code), storing both
+    parsed fields and the raw response for investigation purposes.
     """
+
+    # Backend provider that produced this snapshot (see Provider enum)
+    provider = models.CharField(max_length=50)
 
     # When the API was called
     fetched_at = models.DateTimeField()
@@ -717,18 +720,6 @@ class UsageSnapshot(models.Model):
     seven_day_utilization = models.FloatField(null=True, blank=True)
     seven_day_resets_at = models.DateTimeField(null=True, blank=True)
 
-    # Seven-day per-model quotas (null means no specific limit for that model)
-    seven_day_opus_utilization = models.FloatField(null=True, blank=True)
-    seven_day_opus_resets_at = models.DateTimeField(null=True, blank=True)
-    seven_day_sonnet_utilization = models.FloatField(null=True, blank=True)
-    seven_day_sonnet_resets_at = models.DateTimeField(null=True, blank=True)
-
-    # Seven-day other quotas (null if not applicable)
-    seven_day_oauth_apps_utilization = models.FloatField(null=True, blank=True)
-    seven_day_oauth_apps_resets_at = models.DateTimeField(null=True, blank=True)
-    seven_day_cowork_utilization = models.FloatField(null=True, blank=True)
-    seven_day_cowork_resets_at = models.DateTimeField(null=True, blank=True)
-
     # Extra usage (default False if the block is absent)
     extra_usage_is_enabled = models.BooleanField(default=False)
     extra_usage_monthly_limit = models.IntegerField(null=True, blank=True)
@@ -738,11 +729,14 @@ class UsageSnapshot(models.Model):
     class Meta:
         ordering = ["-fetched_at"]
         indexes = [
-            models.Index(fields=["-fetched_at"], name="idx_usage_snapshot_fetched"),
+            models.Index(
+                fields=["provider", "-fetched_at"],
+                name="idx_usage_snap_prov_fetch",
+            ),
         ]
 
     def __str__(self):
-        return f"UsageSnapshot {self.fetched_at.isoformat()}"
+        return f"UsageSnapshot[{self.provider}] {self.fetched_at.isoformat()}"
 
     # --- Computed properties ---
 
@@ -767,18 +761,6 @@ class UsageSnapshot(models.Model):
         if self.seven_day_resets_at is None:
             return None
         return self._temporal_pct(self.fetched_at, self.seven_day_resets_at, timedelta(days=7))
-
-    @property
-    def seven_day_opus_temporal_pct(self) -> float | None:
-        if self.seven_day_opus_resets_at is None:
-            return None
-        return self._temporal_pct(self.fetched_at, self.seven_day_opus_resets_at, timedelta(days=7))
-
-    @property
-    def seven_day_sonnet_temporal_pct(self) -> float | None:
-        if self.seven_day_sonnet_resets_at is None:
-            return None
-        return self._temporal_pct(self.fetched_at, self.seven_day_sonnet_resets_at, timedelta(days=7))
 
     @staticmethod
     def _burn_rate(utilization: float | None, temporal_pct: float | None) -> float | None:

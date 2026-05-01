@@ -351,7 +351,7 @@ let _tmuxConfigPathValidateResolve = null
 export function sendValidateUsageFile(filePath) {
     return new Promise((resolve) => {
         _usageFileValidateResolve = resolve
-        const sent = sendWsMessage({ type: 'validate_usage_file', file_path: filePath })
+        const sent = sendWsMessage({ type: 'claude_code:validate_usage_file', file_path: filePath })
         if (!sent) {
             _usageFileValidateResolve = null
             resolve({ valid: false, message: 'Not connected' })
@@ -867,16 +867,18 @@ export function useWebSocket() {
                 store.handleTitleSuggested(msg)
                 break
             case 'usage_updated': {
-                // Handle usage quota update
+                // Handle usage quota update — provider routes the message to its slot.
+                const provider = msg.provider ?? msg.usage?.provider
+                if (!provider) break
                 const computed = msg.usage ? computeUsageData(msg.usage) : null
-                store.setUsage(msg.success, msg.reason, msg.usage, computed)
+                store.setUsage(provider, msg.success, msg.reason, msg.usage, computed)
                 break
             }
             case 'claude_code:auth_updated':
                 // Claude CLI auth state changed (or initial push on WS connect)
                 store.setClaudeAuthenticated(msg.authenticated)
                 break
-            case 'usage_file_validated':
+            case 'claude_code:usage_file_validated':
                 if (_usageFileValidateResolve) {
                     _usageFileValidateResolve({ valid: msg.valid, message: msg.message })
                     _usageFileValidateResolve = null
