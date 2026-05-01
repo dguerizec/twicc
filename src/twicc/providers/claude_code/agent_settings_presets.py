@@ -1,6 +1,6 @@
-"""Read/write Claude config presets.
+"""Read/write Claude Code agent settings presets.
 
-File: <data_dir>/claude-settings-presets.json
+File: <data_dir>/claude_code-settings-presets.json
 """
 
 import os
@@ -8,24 +8,24 @@ import tempfile
 
 import orjson
 
-from twicc.paths import get_claude_settings_presets_path
+from twicc.paths import get_agent_settings_presets_path
 
 
-def read_claude_settings_presets() -> dict:
-    """Read claude-settings-presets.json. Returns empty config if missing or invalid."""
-    path = get_claude_settings_presets_path()
+def read_agent_settings_presets() -> dict:
+    """Read claude_code-settings-presets.json. Returns empty config if missing or invalid."""
+    path = get_agent_settings_presets_path()
     try:
         return orjson.loads(path.read_bytes())
     except (FileNotFoundError, orjson.JSONDecodeError):
         return {"presets": []}
 
 
-def write_claude_settings_presets(config: dict) -> None:
-    """Write claude-settings-presets.json atomically.
+def write_agent_settings_presets(config: dict) -> None:
+    """Write claude_code-settings-presets.json atomically.
 
     Uses write-to-temp-then-rename to avoid partial writes.
     """
-    path = get_claude_settings_presets_path()
+    path = get_agent_settings_presets_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     content = orjson.dumps(config, option=orjson.OPT_INDENT_2)
 

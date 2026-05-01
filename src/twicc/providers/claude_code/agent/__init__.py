@@ -5,11 +5,11 @@ Provides the infrastructure for running Claude Code SDK agents that enable
 bidirectional communication with Claude Code from TwiCC.
 """
 
-from .agent import ClaudeAgent
-from .manager import ClaudeAgentManager, get_claude_agent_manager
+from .agent import ClaudeCodeAgent
+from .manager import ClaudeCodeAgentManager, get_claude_code_agent_manager
 
 __all__ = [
-    "ClaudeAgent",
-    "ClaudeAgentManager",
-    "get_claude_agent_manager",
+    "ClaudeCodeAgent",
+    "ClaudeCodeAgentManager",
+    "get_claude_code_agent_manager",
 ]

@@ -1,5 +1,5 @@
 """
-Claude CLI authentication state and credentials access.
+Claude Code CLI authentication state and credentials access.
 
 Reads OAuth credentials from the system Keychain (macOS) or
 ~/.claude/.credentials.json (Linux), exposes the auth state, and
@@ -245,7 +245,7 @@ def get_auth_wake_event() -> asyncio.Event:
 
 async def check_auth_status() -> bool:
     """
-    Run ``claude auth status --json`` and return ``loggedIn``.
+    Run ``claude auth status --json`` (Claude Code CLI command) and return ``loggedIn``.
 
     Calls the bundled CLI binary directly (the same one the SDK uses). This
     avoids depending on how TwiCC itself was installed (uvx, pip, etc.).
@@ -262,7 +262,7 @@ async def check_auth_status() -> bool:
     except SystemExit:
         # get_claude_binary() prints to stderr and raises SystemExit when
         # the bundled binary is missing — turn that into a False result here.
-        logger.warning("Cannot check Claude auth status: bundled CLI not found")
+        logger.warning("Cannot check Claude Code auth status: bundled CLI not found")
         return False
 
     try:
@@ -272,13 +272,13 @@ async def check_auth_status() -> bool:
             stderr=asyncio.subprocess.PIPE,
         )
     except Exception as e:
-        logger.warning("Cannot launch Claude auth status check: %s", e)
+        logger.warning("Cannot launch Claude Code auth status check: %s", e)
         return False
 
     try:
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=_AUTH_STATUS_TIMEOUT)
     except asyncio.TimeoutError:
-        logger.warning("Claude auth status check timed out after %ds", _AUTH_STATUS_TIMEOUT)
+        logger.warning("Claude Code auth status check timed out after %ds", _AUTH_STATUS_TIMEOUT)
         proc.kill()
         try:
             await proc.wait()
@@ -288,7 +288,7 @@ async def check_auth_status() -> bool:
 
     if proc.returncode != 0:
         logger.warning(
-            "Claude auth status check failed (exit %d): %s",
+            "Claude Code auth status check failed (exit %d): %s",
             proc.returncode,
             stderr.decode(errors="replace").strip(),
         )
@@ -297,7 +297,7 @@ async def check_auth_status() -> bool:
     try:
         data = orjson.loads(stdout)
     except orjson.JSONDecodeError as e:
-        logger.warning("Claude auth status returned invalid JSON: %s", e)
+        logger.warning("Claude Code auth status returned invalid JSON: %s", e)
         return False
 
     return bool(data.get("loggedIn"))
@@ -321,7 +321,7 @@ async def get_auth_message_for_connection() -> dict:
 
 async def check_and_broadcast(*, force: bool = False) -> bool:
     """
-    Run a Claude auth status check and broadcast claude_code:auth_updated on change.
+    Run a Claude Code auth status check and broadcast claude_code:auth_updated on change.
 
     When ``force`` is True, the message is always broadcast (used to answer
     a manual "Check again" request from the client, where echoing the

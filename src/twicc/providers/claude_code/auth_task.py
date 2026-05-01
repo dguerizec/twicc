@@ -1,5 +1,5 @@
 """
-Background task for monitoring Claude CLI authentication state.
+Background task for monitoring Claude Code CLI authentication state.
 
 Runs ``claude auth status --json`` on startup, then keeps polling every
 30 seconds **only while the state is False**. Once the state flips to
@@ -62,7 +62,7 @@ async def _wait_either(events: list[asyncio.Event], *, timeout: float | None) ->
 
 async def start_auth_task() -> None:
     """
-    Background task that monitors Claude CLI authentication state.
+    Background task that monitors Claude Code CLI authentication state.
 
     Behavior:
     - Runs a check on startup.
@@ -87,7 +87,7 @@ async def start_auth_task() -> None:
             authenticated = False
 
         if authenticated != previous:
-            logger.info("Claude CLI authenticated: %s", authenticated)
+            logger.info("Claude Code CLI authenticated: %s", authenticated)
             previous = authenticated
 
         if stop_event.is_set():

@@ -159,7 +159,7 @@ def usage() -> None:
     context_settings={"allow_extra_args": True, "allow_interspersed_args": False, "ignore_unknown_options": True, "help_option_names": []},
 )
 def claude(ctx: typer.Context) -> None:
-    """Run the Claude CLI bundled with claude-agent-sdk."""
+    """Run the Claude Code CLI bundled with claude-agent-sdk."""
     from twicc.cli.claude import main as claude_main
 
     claude_main(ctx.args)

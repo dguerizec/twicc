@@ -1,9 +1,9 @@
 """
-Cron restart: re-launch Claude sessions that had active cron jobs.
+Cron restart: re-launch Claude Code sessions that had active cron jobs.
 
 Called at TwiCC startup (restart_all_session_crons) and at runtime when a
 process with active crons dies from a non-manual cause (_restart_crons_for_session
-in ClaudeAgentManager). Both paths use the same restart_session_crons() function.
+in ClaudeCodeAgentManager). Both paths use the same restart_session_crons() function.
 """
 
 import asyncio
@@ -187,12 +187,12 @@ async def restart_session_crons(
     crons have expired (nothing left to restart).
 
     Used identically by startup (restart_all_session_crons) and runtime
-    (_restart_crons_for_session in ClaudeAgentManager).
+    (_restart_crons_for_session in ClaudeCodeAgentManager).
     """
     from twicc.agent import AgentState
-    from twicc.providers.claude_code.agent.manager import get_claude_agent_manager
+    from twicc.providers.claude_code.agent.manager import get_claude_code_agent_manager
 
-    manager = get_claude_agent_manager()
+    manager = get_claude_code_agent_manager()
     delays = _retry_delays(initial_delay)
     attempt = 0
 

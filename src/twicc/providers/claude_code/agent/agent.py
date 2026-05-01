@@ -77,10 +77,10 @@ CronDeletedCallback = Callable[
 ]
 
 
-class ClaudeAgent(BaseAgent):
+class ClaudeCodeAgent(BaseAgent):
     """Claude Code SDK agent for a single TwiCC session.
 
-    Manages the lifecycle of a Claude SDK client (connection, message sending,
+    Manages the lifecycle of a Claude Code SDK client (connection, message sending,
     state tracking). Designed to be completely isolated so that any errors in
     the SDK never propagate to crash the server.
     """
@@ -97,7 +97,7 @@ class ClaudeAgent(BaseAgent):
         on_cron_created: CronCreatedCallback,
         on_cron_deleted: CronDeletedCallback,
     ) -> None:
-        """Initialize a Claude agent wrapper.
+        """Initialize a Claude Code agent wrapper.
 
         Args:
             session_id: The session to resume
@@ -137,7 +137,7 @@ class ClaudeAgent(BaseAgent):
         self._old_runs_purged = False                   # True after old ProcessRuns are purged at first USER_TURN
 
         logger.debug(
-            "ClaudeAgent created for session %s, project %s, cwd=%s, settings=%s",
+            "ClaudeCodeAgent created for session %s, project %s, cwd=%s, settings=%s",
             session_id,
             project_id,
             cwd,
@@ -145,24 +145,24 @@ class ClaudeAgent(BaseAgent):
         )
 
     def _log_stderr(self, line: str) -> None:
-        """Log stderr output from the Claude CLI subprocess.
+        """Log stderr output from the Claude Code CLI subprocess.
 
         This callback is passed to the SDK to capture stderr lines.
         """
         logger.warning(
-            "Claude stderr for session %s: %s",
+            "Claude Code stderr for session %s: %s",
             self.session_id,
             line.rstrip(),
         )
 
     def get_pid(self) -> int | None:
-        """Get the PID of the underlying Claude CLI subprocess.
+        """Get the PID of the underlying Claude Code CLI subprocess.
 
         This accesses internal SDK attributes to extract the subprocess PID.
         May return None if the process is not started or has terminated.
 
         Returns:
-            Process ID of the Claude CLI subprocess, or None if unavailable
+            Process ID of the Claude Code CLI subprocess, or None if unavailable
         """
         try:
             if self._client is None:
@@ -641,7 +641,7 @@ class ClaudeAgent(BaseAgent):
     ) -> bool:
         """Resolve a specific pending request with the user's response.
 
-        Called by ClaudeAgentManager when a WebSocket response arrives from the frontend.
+        Called by ClaudeCodeAgentManager when a WebSocket response arrives from the frontend.
         The request_id identifies which pending request the response is for, so that
         concurrent permission asks (e.g., parallel Read + Glob) are routed correctly.
 
@@ -887,7 +887,7 @@ class ClaudeAgent(BaseAgent):
             # Start background message loop
             self._message_loop_task = asyncio.create_task(
                 self._run_message_loop(),
-                name=f"claude-process-{self.session_id}",
+                name=f"claude_code-process-{self.session_id}",
             )
 
             logger.debug(
@@ -1070,7 +1070,7 @@ class ClaudeAgent(BaseAgent):
     @staticmethod
     def _is_settings_change_ack(msg: object) -> bool:
         """Check if a message is an ack from a settings control request (not real assistant activity)."""
-        return ClaudeAgent._is_permission_mode_change_ack(msg) or ClaudeAgent._is_model_change_ack(msg)
+        return ClaudeCodeAgent._is_permission_mode_change_ack(msg) or ClaudeCodeAgent._is_model_change_ack(msg)
 
     async def apply_live_settings(self, settings: AgentSettings) -> None:
         """Apply live and idle setting changes to the live SDK client.
@@ -1378,7 +1378,7 @@ class ClaudeAgent(BaseAgent):
 
                 elif isinstance(msg, AssistantMessage) and msg.error == "authentication_failed":
                     logger.error(
-                        "Authentication failed for session %s — Claude CLI is not logged in",
+                        "Authentication failed for session %s — Claude Code CLI is not logged in",
                         self.session_id,
                     )
                     self._cancel_pending_request_future()
@@ -1420,7 +1420,7 @@ class ClaudeAgent(BaseAgent):
 
                         # Log full ResultMessage details for debugging
                         logger.error(
-                            "Claude error for session %s: result=%r, subtype=%s, "
+                            "Claude Code error for session %s: result=%r, subtype=%s, "
                             "num_turns=%s, duration_ms=%s",
                             self.session_id,
                             msg.result,

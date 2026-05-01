@@ -1,5 +1,5 @@
 """
-File watcher for JSONL files in Claude projects directory.
+File watcher for JSONL files in Claude Code projects directory.
 
 Uses watchfiles to monitor changes and broadcasts updates via WebSocket.
 """
@@ -19,7 +19,7 @@ from django.conf import settings
 from watchfiles import Change, awatch
 
 import twicc.search as search
-from twicc.providers.claude_code.agent.manager import get_claude_agent_manager
+from twicc.providers.claude_code.agent.manager import get_claude_code_agent_manager
 from twicc.providers.claude_code.agent.original_file_cache import pop_original_file as _pop_cached_original_file
 from twicc.providers.helpers import AgentSettings
 from .compute import AgentLinkUpdate, AgentStoppedUpdate, ToolResultUpdate, cache_agent_prompt, \
@@ -466,7 +466,7 @@ async def sync_and_broadcast(
                 })
 
             # Broadcast tool result state changes
-            process_manager = get_claude_agent_manager()
+            process_manager = get_claude_code_agent_manager()
             for update in tool_result_updates:
                 await broadcast_message(channel_layer, {
                     "type": "tool_state",
@@ -565,7 +565,7 @@ def request_fast_poll(duration: float = FAST_POLL_DURATION) -> None:
     Shorten the projects-dir poll interval for ``duration`` seconds.
 
     Called when something likely to create ``~/.claude/projects/`` is about
-    to happen (e.g. starting a Claude SDK session). Cheap no-op when the
+    to happen (e.g. starting a Claude Code SDK session). Cheap no-op when the
     watcher is already past the polling phase — the boost event is consumed
     only by that phase's wait loop.
     """
@@ -593,7 +593,7 @@ async def _wait_for_projects_dir(projects_dir: Path, stop_event: asyncio.Event) 
 
     The interval is normally PROJECTS_DIR_POLL_INTERVAL seconds, but drops
     to PROJECTS_DIR_POLL_INTERVAL_FAST while a fast-poll request is active
-    (typically right after a Claude session start signal).
+    (typically right after a Claude Code session start signal).
 
     Returns True if the directory appeared, False if shutdown was signaled.
     """
@@ -627,17 +627,17 @@ async def _wait_for_projects_dir(projects_dir: Path, stop_event: asyncio.Event) 
 
 async def start_watcher() -> None:
     """
-    Start the file watcher for Claude projects directory.
+    Start the file watcher for Claude Code projects directory.
 
     Monitors all changes recursively and dispatches to appropriate handlers.
     If the projects directory doesn't exist yet, polls until it appears
     (e.g. user hasn't used Claude Code yet). The poll interval drops from
     30s to 5s after :func:`request_fast_poll` is called — typically right
-    before a Claude SDK session start, since that's about to create the
+    before a Claude Code SDK session start, since that's about to create the
     directory.
     """
     channel_layer = get_channel_layer()
-    projects_dir = Path(settings.CLAUDE_PROJECTS_DIR)
+    projects_dir = Path(settings.CLAUDE_CODE_PROJECTS_DIR)
     stop_event = get_stop_event()
 
     if not projects_dir.exists():

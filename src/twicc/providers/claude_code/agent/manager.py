@@ -15,7 +15,7 @@ from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
 from twicc.agent import AgentInfo, AgentState, BaseAgent, BaseAgentManager
 from twicc.core.enums import Provider
 
-from .agent import ClaudeAgent
+from .agent import ClaudeCodeAgent
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -50,16 +50,16 @@ async def get_session_slug(session_id: str) -> str | None:
     return await asyncio.to_thread(_get_session_slug_sync, session_id)
 
 
-class ClaudeAgentManager(BaseAgentManager):
+class ClaudeCodeAgentManager(BaseAgentManager):
     """Manages all active Claude Code agents.
 
     Inherits the registry, lifecycle and timeout monitor from BaseAgentManager
-    and adds Claude-specific behavior: settings hot-reload, cron lifecycle,
+    and adds Claude Code–specific behavior: settings hot-reload, cron lifecycle,
     title flushing, subagent propagation, and a separate cron-expiry monitor
     that runs alongside the timeout monitor.
 
     Typical usage:
-        manager = ClaudeAgentManager()
+        manager = ClaudeCodeAgentManager()
 
         # Send a message to an existing session
         await manager.send_to_session(session_id, project_id, cwd, "Hello")
@@ -89,7 +89,7 @@ class ClaudeAgentManager(BaseAgentManager):
         self._pending_after_restart: dict[str, dict] = {}  # session_id -> {text, images, documents}
 
     # ------------------------------------------------------------------
-    # Public API (Claude-specific signatures)
+    # Public API (Claude Code–specific signatures)
     # ------------------------------------------------------------------
 
     async def send_to_session(
@@ -110,7 +110,7 @@ class ClaudeAgentManager(BaseAgentManager):
         the resume option to continue the existing conversation.
 
         Messages can be sent during USER_TURN (normal) or ASSISTANT_TURN
-        (Claude reads them inline during work).
+        (Claude Code reads them inline during work).
 
         Settings are classified into categories:
         - live (permission_mode): applied immediately in any state
@@ -343,7 +343,7 @@ class ClaudeAgentManager(BaseAgentManager):
         return agent.resolve_pending_request(request_id, response)
 
     # ------------------------------------------------------------------
-    # Factory + lifecycle helper (Claude-specific kwargs)
+    # Factory + lifecycle helper (Claude Code–specific kwargs)
     # ------------------------------------------------------------------
 
     async def _create_agent(
@@ -353,9 +353,9 @@ class ClaudeAgentManager(BaseAgentManager):
         cwd: str,
         *,
         settings: AgentSettings,
-    ) -> ClaudeAgent:
-        """Build a ClaudeAgent wired to this manager's cron callbacks."""
-        return ClaudeAgent(
+    ) -> ClaudeCodeAgent:
+        """Build a ClaudeCodeAgent wired to this manager's cron callbacks."""
+        return ClaudeCodeAgent(
             session_id=session_id,
             project_id=project_id,
             cwd=cwd,
@@ -377,7 +377,7 @@ class ClaudeAgentManager(BaseAgentManager):
         images: list[dict] | None = None,
         documents: list[dict] | None = None,
     ) -> None:
-        """Create and start a new Claude agent.
+        """Create and start a new Claude Code agent.
 
         Common implementation for both send_to_session (resume=True) and
         create_session (resume=False). Must be called while holding self._lock.
@@ -506,7 +506,7 @@ class ClaudeAgentManager(BaseAgentManager):
         This callback is invoked in two contexts:
         1. Synchronously from send_message() when start()/send() fails - the lock is
            already held by send_message(), so we must not try to acquire it again.
-        2. Asynchronously from the message loop background task when Claude finishes
+        2. Asynchronously from the message loop background task when Claude Code finishes
            or an error occurs - the lock is NOT held.
 
         For dead agent cleanup, we do NOT acquire the lock because:
@@ -723,7 +723,7 @@ class ClaudeAgentManager(BaseAgentManager):
         has completed (Claude is no longer working on the cron's prompt).
 
         When expired crons are found, they are deleted from the DB and a message is
-        sent to Claude asking it to recreate them via CronCreate. The new crons will
+        sent to Claude Code asking it to recreate them via CronCreate. The new crons will
         be persisted by the existing PostToolUse hooks.
         """
         from twicc.core.models import SessionCron
@@ -770,7 +770,7 @@ class ClaudeAgentManager(BaseAgentManager):
                     len(expired_ids), agent.session_id,
                 )
 
-                # Send message to Claude asking to recreate the crons
+                # Send message to Claude Code asking to recreate the crons
                 try:
                     await agent.send(message)
                     logger.info(
@@ -849,7 +849,7 @@ class ClaudeAgentManager(BaseAgentManager):
             self._pending_after_restart.pop(session_id, None)
 
     # ------------------------------------------------------------------
-    # Cron persistence callbacks (passed to ClaudeAgent)
+    # Cron persistence callbacks (passed to ClaudeCodeAgent)
     # ------------------------------------------------------------------
 
     async def _on_cron_created(
@@ -901,7 +901,7 @@ class ClaudeAgentManager(BaseAgentManager):
         await self._broadcast_agent_state(session_id)
 
     @staticmethod
-    async def _session_has_crons(agent: ClaudeAgent) -> bool:
+    async def _session_has_crons(agent: ClaudeCodeAgent) -> bool:
         """Check if an agent has active crons (via its ProcessRun)."""
         if agent.process_run is None:
             return False
@@ -931,7 +931,7 @@ class ClaudeAgentManager(BaseAgentManager):
                 info = AgentInfo(
                     session_id=session_id,
                     project_id=project_id,
-                    provider=ClaudeAgent.provider,
+                    provider=ClaudeCodeAgent.provider,
                     state=override_state,
                     previous_state=None,
                     started_at=now,
@@ -950,7 +950,7 @@ class ClaudeAgentManager(BaseAgentManager):
     # Settings hot-reload
     # ------------------------------------------------------------------
 
-    async def _apply_pending_settings(self, agent: ClaudeAgent) -> None:
+    async def _apply_pending_settings(self, agent: ClaudeCodeAgent) -> None:
         """Check DB settings vs agent settings and apply/restart on USER_TURN.
 
         Called from _on_state_change when an agent transitions to USER_TURN.
@@ -1016,10 +1016,10 @@ class ClaudeAgentManager(BaseAgentManager):
             await agent.apply_live_settings(requested_settings)
 
 
-def get_claude_agent_manager() -> ClaudeAgentManager:
+def get_claude_code_agent_manager() -> ClaudeCodeAgentManager:
     """Return the Claude Code agent manager singleton from the registry.
 
-    Thin convenience wrapper for Claude-specific call sites. The actual
+    Thin convenience wrapper for Claude Code–specific call sites. The actual
     instance is owned by the global ``AgentManagerRegistry`` and shared with
     every provider-agnostic consumer.
     """

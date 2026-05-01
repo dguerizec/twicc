@@ -25,14 +25,14 @@ from claude_agent_sdk.types import (
 )
 
 from twicc.core.enums import Provider
-from twicc.providers.claude_code.agent.manager import get_claude_agent_manager
+from twicc.providers.claude_code.agent.manager import get_claude_code_agent_manager
 from twicc.providers.claude_code.auth import (
     check_and_broadcast as check_auth_and_broadcast,
     get_auth_message_for_connection,
 )
-from twicc.providers.claude_code.claude_settings_presets import (
-    read_claude_settings_presets,
-    write_claude_settings_presets,
+from twicc.providers.claude_code.agent_settings_presets import (
+    read_agent_settings_presets,
+    write_agent_settings_presets,
 )
 from twicc.providers.claude_code.statuspage_task import get_statuspage_message_for_connection
 from twicc.usage_task import get_usage_message_for_connection
@@ -126,11 +126,11 @@ class ClaudeCodeWSHandler:
         type and carry the provider info inside their payload. The consumer
         applies the client's ``subscribe`` filter before sending.
         """
-        # Claude CLI authentication state
+        # Claude Code CLI authentication state
         yield await get_auth_message_for_connection()
 
-        # Claude settings presets
-        presets = await sync_to_async(read_claude_settings_presets)()
+        # Claude Code agent settings presets
+        presets = await sync_to_async(read_agent_settings_presets)()
         yield {"type": "claude_code:settings_presets_updated", "config": presets}
 
         # Anthropic statuspage status (only when not operational)
@@ -156,7 +156,7 @@ class ClaudeCodeWSHandler:
             return True
 
         if action == "check_auth":
-            # Forced re-check of Claude CLI auth state. The result is broadcast
+            # Forced re-check of Claude Code CLI auth state. The result is broadcast
             # to the entire "updates" group so every connected client refreshes.
             await check_auth_and_broadcast(force=True)
             return True
@@ -175,7 +175,7 @@ class ClaudeCodeWSHandler:
         config = content.get("config")
         if not isinstance(config, dict):
             return
-        await sync_to_async(write_claude_settings_presets)(config)
+        await sync_to_async(write_agent_settings_presets)(config)
         await self.consumer.channel_layer.group_send("updates", {
             "type": "broadcast",
             "data": {"type": "claude_code:settings_presets_updated", "config": config},
@@ -211,7 +211,7 @@ class ClaudeCodeWSHandler:
         """Handle a pending request response from the user.
 
         Routes the user's decision (tool approval or clarifying question answer)
-        to the correct agent via the ClaudeAgentManager.
+        to the correct agent via the ClaudeCodeAgentManager.
 
         Expected content for tool approval:
         {
@@ -249,7 +249,7 @@ class ClaudeCodeWSHandler:
             )
             return
 
-        manager = get_claude_agent_manager()
+        manager = get_claude_code_agent_manager()
 
         if request_type == "tool_approval":
             decision = content.get("decision")

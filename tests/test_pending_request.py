@@ -1,6 +1,6 @@
 """
 Tests for PendingRequest dataclass, AgentInfo serialization,
-and ClaudeAgent / ClaudeAgentManager pending request mechanism.
+and ClaudeCodeAgent / ClaudeCodeAgentManager pending request mechanism.
 """
 
 import asyncio
@@ -17,8 +17,8 @@ from twicc.agent import (
     serialize_agent_info,
 )
 from twicc.core.enums import Provider
-from twicc.providers.claude_code.agent.agent import ClaudeAgent
-from twicc.providers.claude_code.agent.manager import ClaudeAgentManager
+from twicc.providers.claude_code.agent.agent import ClaudeCodeAgent
+from twicc.providers.claude_code.agent.manager import ClaudeCodeAgentManager
 from twicc.providers.helpers import AgentSettings
 
 # Mock context object with a suggestions attribute (mimics ToolPermissionContext)
@@ -67,9 +67,9 @@ async def _dummy_on_cron_deleted(session_id, cron_id):
     """No-op cron deleted callback for testing."""
 
 
-def _make_claude_agent(session_id: str = "test-session-1") -> ClaudeAgent:
-    """Create a ClaudeAgent for testing, without starting it."""
-    return ClaudeAgent(
+def _make_claude_agent(session_id: str = "test-session-1") -> ClaudeCodeAgent:
+    """Create a ClaudeCodeAgent for testing, without starting it."""
+    return ClaudeCodeAgent(
         session_id=session_id,
         project_id="test-project-1",
         cwd="/tmp/test",
@@ -80,7 +80,7 @@ def _make_claude_agent(session_id: str = "test-session-1") -> ClaudeAgent:
     )
 
 
-def _inject_pending(agent: ClaudeAgent, request: PendingRequest, future: asyncio.Future | None = None) -> asyncio.Future:
+def _inject_pending(agent: ClaudeCodeAgent, request: PendingRequest, future: asyncio.Future | None = None) -> asyncio.Future:
     """Directly inject a pending request + Future on an agent (test helper)."""
     if future is None:
         future = asyncio.get_event_loop().create_future()
@@ -96,13 +96,13 @@ def _make_manager_with_agent(
     last_activity: float | None = None,
     state_changed_at: float | None = None,
     inject_future: bool = False,
-) -> tuple[ClaudeAgentManager, ClaudeAgent, asyncio.Future | None]:
-    """Create a ClaudeAgentManager with a single mock agent injected directly.
+) -> tuple[ClaudeCodeAgentManager, ClaudeCodeAgent, asyncio.Future | None]:
+    """Create a ClaudeCodeAgentManager with a single mock agent injected directly.
 
     Returns (manager, agent, future). The future is non-None when a pending
     request was injected.
     """
-    manager = ClaudeAgentManager()
+    manager = ClaudeCodeAgentManager()
     agent = _make_claude_agent(session_id=session_id)
     agent.state = state
     agent._state_change_callback = AsyncMock()
@@ -309,12 +309,12 @@ class TestSerializeAgentInfoPendingRequests:
 
 
 # =============================================================================
-# ClaudeAgent._handle_pending_request()
+# ClaudeCodeAgent._handle_pending_request()
 # =============================================================================
 
 
 class TestHandlePendingRequest:
-    """Tests for ClaudeAgent._handle_pending_request()."""
+    """Tests for ClaudeCodeAgent._handle_pending_request()."""
 
     def test_creates_pending_request_and_blocks_on_future(self):
         """_handle_pending_request() registers a request, notifies state change,
@@ -425,12 +425,12 @@ class TestHandlePendingRequest:
 
 
 # =============================================================================
-# ClaudeAgent.resolve_pending_request()
+# ClaudeCodeAgent.resolve_pending_request()
 # =============================================================================
 
 
 class TestResolvePendingRequest:
-    """Tests for ClaudeAgent.resolve_pending_request(request_id, response)."""
+    """Tests for ClaudeCodeAgent.resolve_pending_request(request_id, response)."""
 
     def test_returns_true_and_resolves_active_future(self):
         """resolve_pending_request() returns True and sets the Future result for
@@ -511,12 +511,12 @@ class TestResolvePendingRequest:
 
 
 # =============================================================================
-# ClaudeAgent._cancel_pending_request_future()
+# ClaudeCodeAgent._cancel_pending_request_future()
 # =============================================================================
 
 
 class TestCancelPendingRequestFuture:
-    """Tests for ClaudeAgent._cancel_pending_request_future() (cancel-all)."""
+    """Tests for ClaudeCodeAgent._cancel_pending_request_future() (cancel-all)."""
 
     def test_cancels_active_future_and_clears_state(self):
         """_cancel_pending_request_future() cancels the Future and clears both dicts."""
@@ -664,7 +664,7 @@ class TestHandleErrorCancelsPendingRequest:
 
 
 # =============================================================================
-# ClaudeAgent.get_info() and pending_requests property
+# ClaudeCodeAgent.get_info() and pending_requests property
 # =============================================================================
 
 
@@ -695,7 +695,7 @@ class TestGetInfoIncludesPendingRequests:
 
 
 class TestPendingRequestsProperty:
-    """Tests for the ClaudeAgent.pending_requests property."""
+    """Tests for the ClaudeCodeAgent.pending_requests property."""
 
     def test_returns_empty_when_no_requests(self):
         """The pending_requests property returns an empty tuple by default."""
@@ -718,12 +718,12 @@ class TestPendingRequestsProperty:
 
 
 # =============================================================================
-# ClaudeAgent._build_query_prompt (always async generator)
+# ClaudeCodeAgent._build_query_prompt (always async generator)
 # =============================================================================
 
 
 class TestBuildQueryPrompt:
-    """Tests for ClaudeAgent._build_query_prompt() always returning an async generator."""
+    """Tests for ClaudeCodeAgent._build_query_prompt() always returning an async generator."""
 
     def test_text_only_returns_async_generator(self):
         """_build_query_prompt() returns an async generator even for text-only messages."""
@@ -809,12 +809,12 @@ class TestBuildQueryPrompt:
 
 
 # =============================================================================
-# ClaudeAgentManager.resolve_pending_request(session_id, request_id, response)
+# ClaudeCodeAgentManager.resolve_pending_request(session_id, request_id, response)
 # =============================================================================
 
 
 class TestManagerResolvePendingRequest:
-    """Tests for ClaudeAgentManager.resolve_pending_request()."""
+    """Tests for ClaudeCodeAgentManager.resolve_pending_request()."""
 
     def test_routes_to_correct_agent(self):
         """resolve_pending_request() finds the agent and resolves the matching request."""
@@ -857,7 +857,7 @@ class TestManagerResolvePendingRequest:
         """resolve_pending_request() returns False for a session_id not in _agents."""
 
         async def run():
-            manager = ClaudeAgentManager()
+            manager = ClaudeCodeAgentManager()
             response = PermissionResultAllow(updated_input={})
             result = await manager.resolve_pending_request("nonexistent", "req-X", response)
 
@@ -899,7 +899,7 @@ class TestManagerResolvePendingRequest:
         """resolve_pending_request() routes to the correct agent when multiple exist."""
 
         async def run():
-            manager = ClaudeAgentManager()
+            manager = ClaudeCodeAgentManager()
 
             agent1 = _make_claude_agent(session_id="session-1")
             agent1.state = AgentState.ASSISTANT_TURN
@@ -926,7 +926,7 @@ class TestManagerResolvePendingRequest:
 
 
 # =============================================================================
-# ClaudeAgentManager.check_and_stop_timed_out_agents() with pending requests
+# ClaudeCodeAgentManager.check_and_stop_timed_out_agents() with pending requests
 # =============================================================================
 
 
@@ -1001,7 +1001,7 @@ class TestTimeoutExemptionForPendingRequest:
 
         async def run():
             far_past = 1000.0
-            manager = ClaudeAgentManager()
+            manager = ClaudeCodeAgentManager()
 
             agent1 = _make_claude_agent(session_id="session-1")
             agent1.state = AgentState.ASSISTANT_TURN
@@ -1090,7 +1090,7 @@ class TestHandlePendingRequestResponseToolApproval:
 
             consumer = _FakeConsumer()
 
-            with patch("twicc.providers.claude_code.ws.get_claude_agent_manager", return_value=manager):
+            with patch("twicc.providers.claude_code.ws.get_claude_code_agent_manager", return_value=manager):
                 await consumer._handle_pending_request_response({
                     "type": "pending_request_response",
                     "session_id": "session-A",
@@ -1121,7 +1121,7 @@ class TestHandlePendingRequestResponseToolApproval:
 
             consumer = _FakeConsumer()
 
-            with patch("twicc.providers.claude_code.ws.get_claude_agent_manager", return_value=manager):
+            with patch("twicc.providers.claude_code.ws.get_claude_code_agent_manager", return_value=manager):
                 await consumer._handle_pending_request_response({
                     "type": "pending_request_response",
                     "session_id": "session-A",
@@ -1150,7 +1150,7 @@ class TestHandlePendingRequestResponseToolApproval:
 
             consumer = _FakeConsumer()
 
-            with patch("twicc.providers.claude_code.ws.get_claude_agent_manager", return_value=manager):
+            with patch("twicc.providers.claude_code.ws.get_claude_code_agent_manager", return_value=manager):
                 await consumer._handle_pending_request_response({
                     "type": "pending_request_response",
                     "session_id": "session-B",
@@ -1180,7 +1180,7 @@ class TestHandlePendingRequestResponseToolApproval:
 
             consumer = _FakeConsumer()
 
-            with patch("twicc.providers.claude_code.ws.get_claude_agent_manager", return_value=manager):
+            with patch("twicc.providers.claude_code.ws.get_claude_code_agent_manager", return_value=manager):
                 await consumer._handle_pending_request_response({
                     "type": "pending_request_response",
                     "session_id": "session-B",
@@ -1226,7 +1226,7 @@ class TestHandlePendingRequestResponseAskUserQuestion:
 
             consumer = _FakeConsumer()
 
-            with patch("twicc.providers.claude_code.ws.get_claude_agent_manager", return_value=manager):
+            with patch("twicc.providers.claude_code.ws.get_claude_code_agent_manager", return_value=manager):
                 await consumer._handle_pending_request_response({
                     "type": "pending_request_response",
                     "session_id": "session-C",
@@ -1275,7 +1275,7 @@ class TestHandlePendingRequestResponseAskUserQuestion:
 
             consumer = _FakeConsumer()
 
-            with patch("twicc.providers.claude_code.ws.get_claude_agent_manager", return_value=manager):
+            with patch("twicc.providers.claude_code.ws.get_claude_code_agent_manager", return_value=manager):
                 await consumer._handle_pending_request_response({
                     "type": "pending_request_response",
                     "session_id": "session-D",
@@ -1304,7 +1304,7 @@ class TestHandlePendingRequestResponseAskUserQuestion:
 
             consumer = _FakeConsumer()
 
-            with patch("twicc.providers.claude_code.ws.get_claude_agent_manager", return_value=manager):
+            with patch("twicc.providers.claude_code.ws.get_claude_code_agent_manager", return_value=manager):
                 await consumer._handle_pending_request_response({
                     "type": "pending_request_response",
                     "session_id": "session-E",
@@ -1328,7 +1328,7 @@ class TestHandlePendingRequestResponseEdgeCases:
         async def run():
             consumer = _FakeConsumer()
 
-            with patch("twicc.providers.claude_code.ws.get_claude_agent_manager") as mock_manager:
+            with patch("twicc.providers.claude_code.ws.get_claude_code_agent_manager") as mock_manager:
                 await consumer._handle_pending_request_response({
                     "type": "pending_request_response",
                     "request_id": "req-X",
@@ -1345,7 +1345,7 @@ class TestHandlePendingRequestResponseEdgeCases:
         async def run():
             consumer = _FakeConsumer()
 
-            with patch("twicc.providers.claude_code.ws.get_claude_agent_manager") as mock_manager:
+            with patch("twicc.providers.claude_code.ws.get_claude_code_agent_manager") as mock_manager:
                 await consumer._handle_pending_request_response({
                     "type": "pending_request_response",
                     "session_id": "session-X",
@@ -1366,7 +1366,7 @@ class TestHandlePendingRequestResponseEdgeCases:
         async def run():
             consumer = _FakeConsumer()
 
-            with patch("twicc.providers.claude_code.ws.get_claude_agent_manager") as mock_manager:
+            with patch("twicc.providers.claude_code.ws.get_claude_code_agent_manager") as mock_manager:
                 await consumer._handle_pending_request_response({
                     "type": "pending_request_response",
                     "session_id": "session-X",
@@ -1381,10 +1381,10 @@ class TestHandlePendingRequestResponseEdgeCases:
         """Unknown request_type causes the handler to return early."""
 
         async def run():
-            manager = ClaudeAgentManager()
+            manager = ClaudeCodeAgentManager()
             consumer = _FakeConsumer()
 
-            with patch("twicc.providers.claude_code.ws.get_claude_agent_manager", return_value=manager):
+            with patch("twicc.providers.claude_code.ws.get_claude_code_agent_manager", return_value=manager):
                 await consumer._handle_pending_request_response({
                     "type": "pending_request_response",
                     "session_id": "session-X",
@@ -1398,10 +1398,10 @@ class TestHandlePendingRequestResponseEdgeCases:
         """Resolving for a non-existent session does not raise."""
 
         async def run():
-            manager = ClaudeAgentManager()
+            manager = ClaudeCodeAgentManager()
             consumer = _FakeConsumer()
 
-            with patch("twicc.providers.claude_code.ws.get_claude_agent_manager", return_value=manager):
+            with patch("twicc.providers.claude_code.ws.get_claude_code_agent_manager", return_value=manager):
                 await consumer._handle_pending_request_response({
                     "type": "pending_request_response",
                     "session_id": "nonexistent-session",
@@ -1427,7 +1427,7 @@ class TestHandlePendingRequestResponseEdgeCases:
 
             consumer = _FakeConsumer()
 
-            with patch("twicc.providers.claude_code.ws.get_claude_agent_manager", return_value=manager):
+            with patch("twicc.providers.claude_code.ws.get_claude_code_agent_manager", return_value=manager):
                 await consumer._handle_pending_request_response({
                     "type": "pending_request_response",
                     "session_id": "session-F",

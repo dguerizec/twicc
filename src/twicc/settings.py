@@ -147,8 +147,8 @@ DATABASES = {
 # Static file serving is handled by BlackNoise at the ASGI level (see asgi.py).
 FRONTEND_DIST_DIR = PACKAGE_DIR / "static" / "frontend"
 
-# Source des donnees Claude
-CLAUDE_PROJECTS_DIR = Path.home() / ".claude" / "projects"
+# Source des donnees Claude Code
+CLAUDE_CODE_PROJECTS_DIR = Path.home() / ".claude" / "projects"
 
 # Logging configuration
 # All logs go to file (<data_dir>/logs/backend.log)

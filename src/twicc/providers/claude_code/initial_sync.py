@@ -1,7 +1,7 @@
 """
-Synchronization logic for JSONL files from Claude projects.
+Synchronization logic for JSONL files from Claude Code projects.
 
-Scans CLAUDE_PROJECTS_DIR for projects and sessions, synchronizes them
+Scans CLAUDE_CODE_PROJECTS_DIR for projects and sessions, synchronizes them
 with the database, and reads new lines from modified JSONL files.
 """
 
@@ -57,8 +57,8 @@ def is_subagent_file(path: Path) -> bool:
 
 
 def get_projects_dir() -> Path:
-    """Get the Claude projects directory from settings."""
-    return Path(settings.CLAUDE_PROJECTS_DIR)
+    """Get the Claude Code projects directory from settings."""
+    return Path(settings.CLAUDE_CODE_PROJECTS_DIR)
 
 
 def scan_projects() -> set[str]:
@@ -447,7 +447,7 @@ def sync_all(
     stop_event: threading.Event | None = None,
 ) -> dict[str, int]:
     """
-    Synchronize all projects from CLAUDE_PROJECTS_DIR.
+    Synchronize all projects from CLAUDE_CODE_PROJECTS_DIR.
 
     Args:
         on_project_start: Callback called before syncing a project

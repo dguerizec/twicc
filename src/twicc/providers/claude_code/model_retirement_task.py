@@ -126,11 +126,11 @@ async def _check_and_retire() -> None:
     # - ASSISTANT_TURN: apply_live_settings skips idle changes, so we also
     #   update the session DB row; _apply_pending_settings will pick it up
     #   at the next USER_TURN transition.
-    from twicc.providers.claude_code.agent.manager import get_claude_agent_manager
+    from twicc.providers.claude_code.agent.manager import get_claude_code_agent_manager
 
-    manager = get_claude_agent_manager()
-    # NOTE: ClaudeAgentManager doesn't expose a public get_all_agents() method.
-    # We need to iterate over manager._agents.values() which gives ClaudeAgent instances.
+    manager = get_claude_code_agent_manager()
+    # NOTE: ClaudeCodeAgentManager doesn't expose a public get_all_agents() method.
+    # We need to iterate over manager._agents.values() which gives ClaudeCodeAgent instances.
     for process in list(manager._agents.values()):
         process_settings = process.agent_settings
         if process_settings.selected_model not in retired_models:

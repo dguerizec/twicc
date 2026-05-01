@@ -421,10 +421,10 @@ class ClaudeCodeHelpers(BaseProviderHelpers):
         rename_session_in_jsonl(session_id, title)
 
     def get_bootstrap_data(self) -> dict:
-        from .claude_settings_presets import read_claude_settings_presets
+        from .agent_settings_presets import read_agent_settings_presets
 
         return {
-            "agent_settings_presets": read_claude_settings_presets(),
+            "agent_settings_presets": read_agent_settings_presets(),
             "agent_settings_categories": {
                 category.value: keys
                 for category, keys in self.AGENT_SETTINGS_CATEGORIES.items()
