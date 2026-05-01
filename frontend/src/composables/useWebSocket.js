@@ -715,7 +715,7 @@ export function useWebSocket() {
                 }
                 // Agent just linked → create synthetic process state
                 const startedAtUnix = msg.started_at ? new Date(msg.started_at).getTime() / 1000 : null
-                store.setSyntheticProcessState(agentSessionId, msg.project_id, startedAtUnix)
+                store.setSyntheticProcessState(agentSessionId, msg.parent_session_id, msg.project_id, startedAtUnix)
                 break
             }
             case 'tool_state': {

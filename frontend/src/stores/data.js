@@ -397,6 +397,7 @@ export const useDataStore = defineStore('data', {
                 .sort(sessionSortComparator(pStates))
         },
         getSession: (state) => (id) => state.sessions[id],
+        getSessionProvider: (state) => (sessionId) => state.sessions[sessionId]?.provider ?? null,
         getSessionItems: (state) => (sessionId) => state.sessionItems[sessionId] || [],
 
         // Process state getter - returns { state, error?, pending_requests? } or null if no active process
@@ -2182,22 +2183,26 @@ export const useDataStore = defineStore('data', {
          * and the assistant_turn status actually changed.
          *
          * @param {string} agentSessionId - The subagent session ID
+         * @param {string} parentSessionId - The parent session that spawned the subagent
+         *   (its ``provider`` is inherited by the synthetic state).
          * @param {string} projectId - The project ID
          * @param {number|null} startedAtUnix - Unix timestamp (seconds) of when the agent started
          */
-        setSyntheticProcessState(agentSessionId, projectId, startedAtUnix) {
+        setSyntheticProcessState(agentSessionId, parentSessionId, projectId, startedAtUnix) {
             // Don't overwrite real process states (from ProcessManager)
             if (this.processStates[agentSessionId] && !this.processStates[agentSessionId].synthetic) {
                 return
             }
+            const provider = this.getSessionProvider(parentSessionId)
+            if (!provider) {
+                console.warn('[setSyntheticProcessState] no provider for parent session', parentSessionId)
+                return
+            }
             const wasAssistantTurn = this.processStates[agentSessionId]?.state === PROCESS_STATE.ASSISTANT_TURN
-            // Subagent synthetic states are derived from a parent agent that
-            // is itself owned by a provider; for now subagents only exist for
-            // Claude Code, so the parent's provider always applies.
             this.processStates[agentSessionId] = {
                 state: PROCESS_STATE.ASSISTANT_TURN,
                 project_id: projectId,
-                provider: 'claude_code',
+                provider,
                 started_at: startedAtUnix,
                 state_changed_at: startedAtUnix,
                 memory: null,
@@ -2284,7 +2289,7 @@ export const useDataStore = defineStore('data', {
                     const requiredCount = agent.is_background ? 2 : 1
                     if (resultCount < requiredCount) {
                         const startedAtUnix = agent.started_at ? new Date(agent.started_at).getTime() / 1000 : null
-                        this.setSyntheticProcessState(agent.agent_id, projectId, startedAtUnix)
+                        this.setSyntheticProcessState(agent.agent_id, sessionId, projectId, startedAtUnix)
                     }
                 }
             } catch (error) {
