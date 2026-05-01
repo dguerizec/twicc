@@ -21,9 +21,14 @@
 
 import { ref, computed, watch, nextTick, onBeforeUnmount } from 'vue'
 import { apiFetch } from '../../utils/api'
+import { getProviderHelpers } from '../../providers'
 
 const props = defineProps({
     projectId: {
+        type: String,
+        required: true,
+    },
+    provider: {
         type: String,
         required: true,
     },
@@ -52,16 +57,6 @@ const activeIndex = ref(0)
 
 // Number of items to jump with PageUp/PageDown
 const PAGE_SIZE = 10
-
-// ─── Built-in commands (hardcoded Claude Code CLI commands) ───────────────
-
-const BUILTIN_COMMANDS = [
-    { name: 'compact', plugin_name: null, source: 'builtin', is_global: true, description: 'Clear conversation history but keep a summary in context', argument_hint: '[instructions for summarization]' },
-    { name: 'cost', plugin_name: null, source: 'builtin', is_global: true, description: 'Show the cost of the current session', argument_hint: null },
-    { name: 'context', plugin_name: null, source: 'builtin', is_global: true, description: 'Show the current context window usage', argument_hint: null },
-    { name: 'init', plugin_name: null, source: 'builtin', is_global: true, description: 'Initialize a new CLAUDE.md file with codebase documentation', argument_hint: null },
-    { name: 'loop', plugin_name: null, source: 'builtin', is_global: true, description: "Run a prompt or slash command on a recurring interval until the session ends (e.g. /loop 5m /foo, defaults to 10m)", argument_hint: '[interval] [command or prompt]' },
-]
 
 // ─── Display tag ──────────────────────────────────────────────────────────
 // Builds the parenthesized tag shown next to the command name.
@@ -98,7 +93,7 @@ async function fetchCommands() {
     loading.value = true
     error.value = null
     try {
-        const res = await apiFetch(`/api/projects/${props.projectId}/slash-commands/?provider=claude_code`)
+        const res = await apiFetch(`/api/projects/${props.projectId}/slash-commands/?provider=${encodeURIComponent(props.provider)}`)
         if (!res.ok) {
             const data = await res.json()
             error.value = data.error || `HTTP ${res.status}`
@@ -106,7 +101,9 @@ async function fetchCommands() {
             return
         }
         const data = await res.json()
-        const all = [...BUILTIN_COMMANDS, ...(data.commands || [])]
+        const helpers = getProviderHelpers(props.provider)
+        const builtins = helpers ? helpers.getBuiltInSlashCommands() : []
+        const all = [...builtins, ...(data.commands || [])]
         all.sort((a, b) => a.name.localeCompare(b.name))
         allCommands.value = all
     } catch (err) {

@@ -18,4 +18,13 @@ export class BaseProviderHelpers {
     canSendMessage() {
         return true
     }
+
+    /**
+     * Built-in slash commands provided by the provider's runtime/CLI.
+     * Returned items are merged with the user-defined commands fetched
+     * from the backend by the slash command picker. Default: no built-ins.
+     */
+    getBuiltInSlashCommands() {
+        return []
+    }
 }

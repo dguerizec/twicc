@@ -1587,6 +1587,7 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
             <SlashCommandPickerPopup
                 ref="slashPickerRef"
                 :project-id="projectId"
+                :provider="session?.provider"
                 :anchor-id="textareaAnchorId"
                 @select="onSlashCommandSelect"
                 @close="onSlashCommandPickerClose"
