@@ -382,6 +382,20 @@ class BaseProviderHelpers:
         """
         raise NotImplementedError
 
+    def purge_env_vars(self, env: dict) -> None:
+        """Strip provider-specific env vars from ``env`` in place.
+
+        Called when TwiCC is about to spawn a subprocess (login shell,
+        tmux server, the CLI itself) that should not inherit a parent
+        process's provider-specific environment — e.g. Claude Code's
+        ``CLAUDE_CODE_*`` markers, which would make a freshly-launched
+        instance think it's already inside an SDK session.
+
+        The default is a no-op so a provider only pays for the keys it
+        actually contributes; subclasses override.
+        """
+        return None
+
     async def enrich_agent_state(self, message: dict, session_id: str) -> None:
         """Augment a serialised ``process_state`` / ``active_processes`` entry.
 
@@ -640,6 +654,18 @@ class ProviderHelpersRegistry:
         """
         for helpers in self._helpers.values():
             helpers.enforce_synced_settings_consistency(synced, changes)
+
+    def purge_env_vars(self, env: dict) -> None:
+        """Strip every provider's provider-specific env vars from ``env`` in place.
+
+        Called by the CLI before its own ``django.setup()`` and by the
+        terminal spawner before exec-ing a shell or tmux: the goal is
+        that no subprocess inherits provider markers from the parent
+        TwiCC process, so a newly launched provider CLI starts clean.
+        Each provider's helper decides what its markers are.
+        """
+        for helpers in self._helpers.values():
+            helpers.purge_env_vars(env)
 
 
 _registry: ProviderHelpersRegistry | None = None

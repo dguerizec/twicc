@@ -22,14 +22,7 @@ import sys
 
 from dotenv import load_dotenv
 
-from twicc.providers.claude_code.env import purge_claude_code_vars
 from twicc.paths import get_env_path
-
-# Clean up Claude Code environment variables that may have been inherited from a
-# parent process (e.g., when devctl or TwiCC is launched from within Claude Code).
-# These variables cause Claude Code to think it's already running inside an SDK
-# session, preventing interactive use from TwiCC's terminal.
-purge_claude_code_vars(os.environ)
 
 # Load .env from the data directory (~/.twicc/.env or $TWICC_DATA_DIR/.env)
 load_dotenv(get_env_path())
@@ -40,6 +33,19 @@ os.environ.setdefault("DJANGO_SETTINGS_MODULE", "twicc.settings")
 import django  # noqa: E402
 
 django.setup()
+
+# Clean up provider-specific environment variables that may have been
+# inherited from a parent process (e.g. ``CLAUDE_CODE_*`` when TwiCC is
+# launched from within Claude Code). These would make subprocesses we
+# spawn (login shell, tmux, the provider CLI itself) think they are
+# already inside an SDK session. Each provider's helper purges its own
+# markers; ordering after ``django.setup()`` is required because the
+# helpers registry instantiates provider helpers that touch Django
+# models on import. None of the variables we strip influence anything
+# Django reads at startup, so the move is benign.
+from twicc.providers.helpers import get_provider_helpers_registry  # noqa: E402
+
+get_provider_helpers_registry().purge_env_vars(os.environ)
 
 # Logger must be created AFTER django.setup() so LOGGING config is applied
 logger = logging.getLogger("twicc.run")

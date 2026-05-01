@@ -42,7 +42,7 @@ from urllib.parse import parse_qs
 from asgiref.sync import sync_to_async
 from django.conf import settings
 
-from twicc.providers.claude_code.env import purge_claude_code_vars
+from twicc.providers.helpers import get_provider_helpers_registry
 
 logger = logging.getLogger(__name__)
 
@@ -239,10 +239,11 @@ def spawn_pty(cwd: str) -> tuple[int, int]:
         # Set TERM for proper terminal emulation
         os.environ["TERM"] = "xterm-256color"
 
-        # Remove Claude Code env vars that may have been set by the SDK in the
-        # backend process. Without this, Claude Code launched from this terminal
-        # would think it's already inside an SDK session.
-        purge_claude_code_vars(os.environ)
+        # Strip provider-specific env vars that may have been set by an
+        # SDK in the backend process — without this, the same provider
+        # CLI launched from this terminal would think it's already
+        # inside an SDK session.
+        get_provider_helpers_registry().purge_env_vars(os.environ)
 
         # Exec the shell as a login shell (prefix argv[0] with -)
         os.execvp(shell, [f"-{os.path.basename(shell)}"])
@@ -299,8 +300,8 @@ def spawn_tmux_pty(
         os.environ["TERM"] = "xterm-256color"
         # Unset TMUX to avoid nesting issues if the server itself runs in tmux
         os.environ.pop("TMUX", None)
-        # Remove Claude Code env vars (same reason as in spawn_pty)
-        purge_claude_code_vars(os.environ)
+        # Strip provider-specific env vars (same reason as in spawn_pty)
+        get_provider_helpers_registry().purge_env_vars(os.environ)
 
         os.execvp(tmux_path, [
             "tmux",

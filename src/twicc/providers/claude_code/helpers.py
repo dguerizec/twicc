@@ -529,6 +529,25 @@ class ClaudeCodeHelpers(BaseProviderHelpers):
         finally:
             protect_title(session_id, title)
 
+    # Env vars set by Claude Code (CLI / SDK) that, when inherited by
+    # a subprocess, make a fresh ``claude`` invocation think it's
+    # already inside an SDK session. Each var name *starts with* one
+    # of these prefixes (e.g. ``CLAUDE_CODE_ENTRYPOINT``,
+    # ``CLAUDECODE_DEBUG``).
+    _ENV_VAR_PREFIXES: ClassVar[tuple[str, ...]] = ("CLAUDE_CODE", "CLAUDECODE")
+
+    def purge_env_vars(self, env: dict) -> None:
+        """Strip Claude Code env vars from ``env`` in place.
+
+        See :attr:`_ENV_VAR_PREFIXES` for the affected names. Called
+        before TwiCC spawns any subprocess (login shell, tmux server,
+        the CLI itself) that must start with a clean Claude
+        environment.
+        """
+        for key in list(env):
+            if key.startswith(self._ENV_VAR_PREFIXES):
+                del env[key]
+
     async def enrich_agent_state(self, message: dict, session_id: str) -> None:
         """Attach ``active_crons`` for ``session_id`` to ``message``.
 
