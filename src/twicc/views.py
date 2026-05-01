@@ -462,8 +462,6 @@ def session_detail(request, project_id, session_id, parent_session_id=None):
 
         # Handle title update
         if "title" in data:
-            from twicc.providers.claude_code.titles import protect_title
-
             provider_helpers = get_provider_helpers(session.provider)
             validation = provider_helpers.validate_title(data["title"])
             if validation.error:
@@ -481,14 +479,12 @@ def session_detail(request, project_id, session_id, parent_session_id=None):
                 except Exception:
                     pass  # Non-critical: search will catch up on next startup
 
-            # 3. Persist into the provider's session storage
+            # 3. Persist into the provider's session storage (also wires
+            #    up any provider-specific anti-stale-write protection).
             try:
                 provider_helpers.rename_session(session_id, title)
             except Exception:
                 pass  # Non-critical: DB is already updated, watcher will sync
-
-            # 4. Protect from CLI stale re-append
-            protect_title(session_id, title)
 
         # Handle archived update
         needs_broadcast = False

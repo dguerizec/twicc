@@ -305,9 +305,10 @@ class BaseProviderHelpers:
     def rename_session(self, session_id: str, title: str) -> None:
         """Persist a new title in the provider's session storage.
 
-        Only writes to the provider-specific backing store (e.g. JSONL for
-        Claude Code). The DB row and the cross-provider title-protection
-        machinery are handled by the caller.
+        Writes to the provider-specific backing store (e.g. JSONL for
+        Claude Code) and applies any provider-specific anti-stale-write
+        protection so a CLI reappend cannot overwrite the user's choice.
+        The DB row is handled by the caller.
         """
         raise NotImplementedError
 

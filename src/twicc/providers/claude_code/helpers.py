@@ -28,7 +28,7 @@ from twicc.providers.helpers import (
 
 from .compute import get_message_content, get_message_content_list
 from .pricing import extract_model_info
-from .titles import rename_session_in_jsonl, validate_title
+from .titles import protect_title, rename_session_in_jsonl, validate_title
 
 if TYPE_CHECKING:
     from twicc.core.models import SessionItem
@@ -418,7 +418,17 @@ class ClaudeCodeHelpers(BaseProviderHelpers):
         return TitleValidationResult(title=normalized, error=error)
 
     def rename_session(self, session_id: str, title: str) -> None:
-        rename_session_in_jsonl(session_id, title)
+        """Append the title to the JSONL and mark it protected against CLI stale re-appends.
+
+        ``protect_title`` runs in a ``finally`` so the protection is
+        registered even when the JSONL write fails — the DB row already
+        holds the new title and we still want to block any out-of-date
+        title the CLI might re-append.
+        """
+        try:
+            rename_session_in_jsonl(session_id, title)
+        finally:
+            protect_title(session_id, title)
 
     def get_bootstrap_data(self) -> dict:
         from .agent_settings_presets import read_agent_settings_presets
