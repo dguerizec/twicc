@@ -20,7 +20,7 @@ import MessageSnippetsBar from './MessageSnippetsBar.vue'
 import MessageSnippetsDialog from './MessageSnippetsDialog.vue'
 import { useMessageSnippetsStore } from '../../stores/messageSnippets'
 import { useWorkspacesStore } from '../../stores/workspaces'
-import { useClaudeSettingsPresetsStore } from '../../stores/claudeSettingsPresets'
+import { useClaudeCodeStore } from '../../providers/claude_code/store'
 import { formatPresetSummary } from '../../utils/presetFormat'
 import ClaudePresetsDialog from '../app/ClaudePresetsDialog.vue'
 import { getUnavailablePlaceholders, resolveSnippetText } from '../../utils/snippetPlaceholders'
@@ -42,7 +42,7 @@ const route = useRoute()
 const store = useDataStore()
 const settingsStore = useSettingsStore()
 const codeCommentsStore = useCodeCommentsStore()
-const presetsStore = useClaudeSettingsPresetsStore()
+const claudeCodeStore = useClaudeCodeStore()
 
 // Detect "All Projects" mode from route name
 const isAllProjectsMode = computed(() => route.name?.startsWith('projects-'))
@@ -265,7 +265,7 @@ const selectedClaudeInChrome = ref(null)
 const selectedContextMax = ref(null)
 
 // Claude config presets (apply to the six selects above).
-const presets = computed(() => presetsStore.presets)
+const presets = computed(() => claudeCodeStore.settingsPresets)
 const hasPresets = computed(() => presets.value.length > 0)
 const claudePresetsDialogOpen = ref(false)
 

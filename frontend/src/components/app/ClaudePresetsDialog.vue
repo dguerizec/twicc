@@ -1,6 +1,6 @@
 <script setup>
 import { computed, nextTick, ref, watch } from 'vue'
-import { useClaudeSettingsPresetsStore } from '../../stores/claudeSettingsPresets'
+import { useClaudeCodeStore } from '../../providers/claude_code/store'
 import {
     PERMISSION_MODE,
     PERMISSION_MODE_LABELS,
@@ -22,7 +22,7 @@ const props = defineProps({
 })
 const emit = defineEmits(['update:open'])
 
-const store = useClaudeSettingsPresetsStore()
+const claudeCodeStore = useClaudeCodeStore()
 
 const view = ref('list')
 const editIndex = ref(null)
@@ -33,7 +33,7 @@ const dialogRef = ref(null)
 const nameInputRef = ref(null)
 const submitButtonRef = ref(null)
 
-const presets = computed(() => store.presets)
+const presets = computed(() => claudeCodeStore.settingsPresets)
 
 const dialogLabel = computed(() => {
     if (view.value === 'list') return 'Claude config presets'
@@ -106,15 +106,15 @@ function emptyFormData() {
 }
 
 function handleDelete(index) {
-    store.deletePreset(index)
+    claudeCodeStore.deleteSettingsPreset(index)
 }
 
 function handleDuplicate(index) {
-    store.duplicatePreset(index)
+    claudeCodeStore.duplicateSettingsPreset(index)
 }
 
 function handleReorder(index, direction) {
-    store.reorderPreset(index, direction)
+    claudeCodeStore.reorderSettingsPreset(index, direction)
 }
 
 function closeDialog() {
@@ -170,15 +170,15 @@ function handleSave() {
         errorMessage.value = 'Name is required'
         return
     }
-    if (store.findPresetIndexByName(trimmedName, editIndex.value) !== -1) {
+    if (claudeCodeStore.findSettingsPresetIndexByName(trimmedName, editIndex.value) !== -1) {
         errorMessage.value = 'A preset with this name already exists'
         return
     }
     const payload = { ...formData.value, name: trimmedName }
     if (editIndex.value === null) {
-        store.addPreset(payload)
+        claudeCodeStore.addSettingsPreset(payload)
     } else {
-        store.updatePreset(editIndex.value, payload)
+        claudeCodeStore.updateSettingsPreset(editIndex.value, payload)
     }
     view.value = 'list'
 }

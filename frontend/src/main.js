@@ -53,7 +53,7 @@ import { useCodeCommentsStore } from './stores/codeComments'
 import { useWorkspacesStore } from './stores/workspaces'
 import { useTerminalConfigStore } from './stores/terminalConfig'
 import { useMessageSnippetsStore } from './stores/messageSnippets'
-import { useClaudeSettingsPresetsStore } from './stores/claudeSettingsPresets'
+import { useClaudeCodeStore } from './providers/claude_code/store'
 
 // Notivue CSS
 import 'notivue/notification.css'
@@ -146,7 +146,7 @@ if (!authStore.needsLogin) {
     useWorkspacesStore().applyWorkspaces(bootstrapData.workspaces)
     useTerminalConfigStore().applyConfig(bootstrapData.terminal_config)
     useMessageSnippetsStore().applyConfig(bootstrapData.message_snippets)
-    useClaudeSettingsPresetsStore().applyConfig(bootstrapData.providers?.claude_code?.agent_settings_presets)
+    useClaudeCodeStore().applySettingsPresetsConfig(bootstrapData.providers?.claude_code?.agent_settings_presets)
 
     // Hydrate drafts from IndexedDB (async, non-blocking)
     // Order matters: sessions first so draft messages have their session available

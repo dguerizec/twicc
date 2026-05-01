@@ -149,11 +149,7 @@ export const claudeCodeWsHandler = {
                 }
                 break
             case 'settings_presets_updated':
-                // Lazy import avoids the circular dep
-                // (ws.js → claudeSettingsPresets store → ws.js sender).
-                import('../../stores/claudeSettingsPresets').then(({ useClaudeSettingsPresetsStore }) => {
-                    useClaudeSettingsPresetsStore().applyConfig(msg.config)
-                })
+                useClaudeCodeStore().applySettingsPresetsConfig(msg.config)
                 break
             default:
                 console.warn(`[claude_code:ws] no handler for action "${action}"`, msg)
