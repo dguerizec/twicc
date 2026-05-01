@@ -330,26 +330,9 @@ export function sendChangelogSeen(version) {
     })
 }
 
-// Pending resolve callbacks for usage file validation request-response
-let _usageFileValidateResolve = null
+// Pending resolve callbacks for path validation request-response round-trips
 let _usageDumpPathValidateResolve = null
 let _tmuxConfigPathValidateResolve = null
-
-/**
- * Validate a usage JSON file path (read mode) on the backend.
- * @param {string} filePath - The file path to validate
- * @returns {Promise<{valid: boolean, message: string}>}
- */
-export function sendValidateUsageFile(filePath) {
-    return new Promise((resolve) => {
-        _usageFileValidateResolve = resolve
-        const sent = sendWsMessage({ type: 'claude_code:validate_usage_file', file_path: filePath })
-        if (!sent) {
-            _usageFileValidateResolve = null
-            resolve({ valid: false, message: 'Not connected' })
-        }
-    })
-}
 
 /**
  * Validate a usage dump file path (write mode) on the backend.
@@ -800,12 +783,6 @@ export function useWebSocket() {
                 store.setUsage(provider, msg.success, msg.reason, msg.usage, computed)
                 break
             }
-            case 'claude_code:usage_file_validated':
-                if (_usageFileValidateResolve) {
-                    _usageFileValidateResolve({ valid: msg.valid, message: msg.message })
-                    _usageFileValidateResolve = null
-                }
-                break
             case 'usage_dump_path_validated':
                 if (_usageDumpPathValidateResolve) {
                     _usageDumpPathValidateResolve({ valid: msg.valid, message: msg.message })

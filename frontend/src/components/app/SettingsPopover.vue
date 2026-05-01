@@ -11,7 +11,8 @@ import NotificationSettings from './NotificationSettings.vue'
 import AppTooltip from '../ui/AppTooltip.vue'
 import ChangelogDialog from './ChangelogDialog.vue'
 import ClaudePresetsDialog from './ClaudePresetsDialog.vue'
-import { sendChangelogSeen, sendValidateUsageFile, sendValidateUsageDumpPath, sendValidateTmuxConfigPath } from '../../composables/useWebSocket'
+import { sendChangelogSeen, sendValidateUsageDumpPath, sendValidateTmuxConfigPath } from '../../composables/useWebSocket'
+import { sendValidateUsageFile as sendValidateClaudeCodeUsageFile } from '../../providers/claude_code/ws'
 import { vPopoverFocusFix } from '../../directives/vPopoverFocusFix'
 
 const router = useRouter()
@@ -393,7 +394,7 @@ async function onUsageFilePathApply() {
     usageFileValidating.value = true
     usageFileValidation.value = null
     try {
-        const result = await sendValidateUsageFile(path)
+        const result = await sendValidateClaudeCodeUsageFile(path)
         if (result.valid) {
             store.setClaudeCodeUsageReadFilePath(path)
         } else {
