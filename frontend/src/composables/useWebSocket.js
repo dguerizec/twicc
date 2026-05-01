@@ -9,7 +9,7 @@ import { useReconciliation } from './useReconciliation'
 import { toast } from './useToast'
 import { computeUsageData } from '../utils/usage'
 import { useSettingsStore } from '../stores/settings'
-import { getProviderWsHandler } from '../providers'
+import { getProviderWsHandler, getProviderStore } from '../providers'
 import { playNotificationSound, sendBrowserNotification } from '../utils/notificationSounds'
 import { truncateTitle } from '../utils/truncate'
 import { getModelLabel } from '../constants'
@@ -749,11 +749,12 @@ export function useWebSocket() {
                 store.handleTitleSuggested(msg)
                 break
             case 'usage_updated': {
-                // Handle usage quota update — provider routes the message to its slot.
+                // Handle usage quota update — dispatched to the matching provider's
+                // store so the data lives next to the rest of that provider's state.
                 const provider = msg.provider ?? msg.usage?.provider
                 if (!provider) break
                 const computed = msg.usage ? computeUsageData(msg.usage) : null
-                store.setUsage(provider, msg.success, msg.reason, msg.usage, computed)
+                getProviderStore(provider)?.setUsage(msg.success, msg.reason, msg.usage, computed)
                 break
             }
             case 'usage_dump_path_validated':

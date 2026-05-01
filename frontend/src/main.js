@@ -158,10 +158,11 @@ if (!authStore.needsLogin) {
     // updates flow through the same setUsage path.
     {
         const { computeUsageData } = await import('./utils/usage')
+        const { getProviderStore } = await import('./providers')
         for (const [provider, providerData] of Object.entries(bootstrapData.providers ?? {})) {
             if (providerData?.tracks_usage && providerData.usage) {
                 const computed = computeUsageData(providerData.usage)
-                dataStore.setUsage(provider, true, 'bootstrap', providerData.usage, computed)
+                getProviderStore(provider)?.setUsage(true, 'bootstrap', providerData.usage, computed)
             }
         }
     }

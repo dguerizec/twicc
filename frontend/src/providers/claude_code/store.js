@@ -43,6 +43,17 @@ export const useClaudeCodeStore = defineStore('claudeCode', () => {
         anthropicStatus.value = value
     }
 
+    // ─── Usage quota ─────────────────────────────────────────────────────
+
+    // Per-provider usage data. ``null`` until the bootstrap seed or the
+    // first ``usage_updated`` push arrives, then ``{ success, reason, raw,
+    // computed }``. Consumers should treat ``null`` as "not yet loaded".
+    const usage = ref(null)
+
+    function setUsage(success, reason, raw, computed) {
+        usage.value = { success, reason, raw, computed }
+    }
+
     // ─── Settings presets ────────────────────────────────────────────────
 
     const settingsPresets = ref([])
@@ -117,6 +128,8 @@ export const useClaudeCodeStore = defineStore('claudeCode', () => {
         setAuthenticated,
         anthropicStatus,
         setAnthropicStatus,
+        usage,
+        setUsage,
         settingsPresets,
         settingsPresetsInitialized,
         applySettingsPresetsConfig,

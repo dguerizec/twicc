@@ -4,7 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useDataStore, ALL_PROJECTS_ID } from '../stores/data'
 import { useSettingsStore } from '../stores/settings'
 import { useWorkspacesStore } from '../stores/workspaces'
-import { COLOR_SCHEME } from '../constants'
+import { COLOR_SCHEME, PROVIDER } from '../constants'
 import { useCommandRegistry } from '../composables/useCommandRegistry'
 import { useStartupPolling } from '../composables/useStartupPolling'
 import { sendCheckAuth as sendCheckClaudeCodeAuth } from '../providers/claude_code/ws'
@@ -78,7 +78,7 @@ function launchClaudeAuthInTerminal() {
 
 // Sidebar shows Claude Code usage only for now; the multi-provider switcher
 // will land in a follow-up step.
-const quotaData = computed(() => store.usage['claude_code'] ?? null)
+const quotaData = computed(() => claudeCodeStore.usage)
 const quotaComputed = computed(() => quotaData.value?.computed ?? null)
 // Show the usage block whenever usage data is available — the source can be
 // OAuth credentials or a local JSON file; either way the backend signals
@@ -1650,7 +1650,7 @@ function updateSidebarClosedClass(closed) {
     <ProjectEditDialog ref="createProjectDialogRef" @saved="handleProjectCreated" />
 
     <!-- Usage graph dialog -->
-    <UsageGraphDialog ref="usageGraphDialogRef" />
+    <UsageGraphDialog ref="usageGraphDialogRef" :provider="PROVIDER.CLAUDE_CODE" />
 
     <!-- Workspace management dialog -->
     <WorkspaceManageDialog ref="manageWorkspacesDialogRef" />
