@@ -829,25 +829,34 @@ class ProcessRun(models.Model):
 
 
 class SessionCron(models.Model):
-    """Persisted cron job created by an agent session via a scheduling tool.
+    """Persisted cron job created by a Claude Code session via the CLI's cron tool.
 
-    Saved via the provider's PostToolUse hook on CronCreate, deleted on
-    CronDelete. Survives TwiCC restarts to allow automatic rescheduling of
-    cron jobs.
+    Today this table is **Claude Code-specific**: every callsite outside
+    of :mod:`twicc.asgi` lives in :mod:`twicc.providers.claude_code`,
+    and every field on the row encodes a Claude CLI behaviour:
 
-    Currently only Claude Code uses this table (the Claude CLI exposes a
-    cron tool); the ``provider`` field tags each row so future providers
-    can either reuse the model or stay isolated. The expiry semantics
-    (``CLAUDE_RECURRING_MAX_AGE``, ``last_fire``, ``expired_at``) are
-    Claude CLI-specific for now — generalising them would require adding
-    a per-provider hook.
+    - ``CronCreate`` / ``CronDelete`` are the Claude SDK PostToolUse
+      hooks that drive insert/delete (see
+      ``providers/claude_code/agent/manager.py``).
+    - The auto-expiry rule, the jitter model, and the
+      :attr:`CLAUDE_RECURRING_MAX_AGE` ceiling all match the Claude CLI
+      semantics — they are *not* generic cron semantics.
+    - The ``last_fire`` / ``expired_at`` cached properties exist to
+      mirror the CLI's own auto-deletion timer.
 
-    Uses a plain CharField for session_id (not a FK) for the same reason as ProcessRun:
-    new sessions may not exist in the Session table yet when a cron is created.
+    The :attr:`provider` column is kept (defaulting to
+    :attr:`Provider.CLAUDE_CODE`) so that a future provider exposing an
+    equivalent surface can reuse the table — but it would need to share
+    the same expiry semantics or replace them via a per-provider hook.
+    Until that happens, treat any addition here as Claude Code-only.
+
+    Uses a plain CharField for ``session_id`` (not a FK) for the same
+    reason as :class:`ProcessRun`: new sessions may not exist in the
+    :class:`Session` table yet when a cron row is created.
     """
 
     CLAUDE_RECURRING_MAX_AGE = timedelta(days=7)
-    """Maximum age of a recurring cron before it auto-expires (matches Claude CLI behavior)."""
+    """Recurring crons auto-delete after this delay — matches the Claude CLI's own auto-delete window."""
 
     provider = models.CharField(max_length=50)  # Backend provider (see Provider enum)
     cron_id = models.CharField(max_length=100, unique=True)
@@ -880,17 +889,21 @@ class SessionCron(models.Model):
         }
 
     JITTER_SAFETY_MARGIN = timedelta(minutes=1)
-    """Extra margin added after jitter to ensure the last fire has completed."""
+    """Margin added after the CLI's jitter to ensure the last fire has completed (Claude CLI-specific)."""
 
     @cached_property
     def last_fire(self) -> datetime | None:
-        """The timestamp when the CLI will fire this cron for the last time before auto-deleting it.
+        """Timestamp at which the Claude CLI will fire this cron for the last time before auto-deleting it.
 
-        Only meaningful for recurring crons. Returns the first cron occurrence that falls
-        at or after created_at + 7 days (CLAUDE_RECURRING_MAX_AGE). This is the fire that
-        triggers the CLI's age check and causes deletion.
+        Only meaningful for recurring crons. Returns the first cron
+        occurrence that falls at or after
+        ``created_at + CLAUDE_RECURRING_MAX_AGE`` (7 days). This is the
+        fire that triggers the CLI's age check and causes deletion.
+        Tied to Claude CLI behaviour — another provider would need its
+        own equivalent.
 
-        Returns None for non-recurring crons or if the cron expression is unparseable.
+        Returns ``None`` for non-recurring crons or if the cron
+        expression is unparseable.
         """
         if not self.recurring:
             return None
@@ -907,11 +920,14 @@ class SessionCron(models.Model):
     def expired_at(self) -> datetime | None:
         """Timestamp after which this recurring cron has certainly finished its last fire.
 
-        Computed as: last_fire + jitter_max + safety_margin.
-        The CLI adds a random jitter of 10% of the cron period (capped at 15 minutes)
-        to each fire. We add a safety margin on top.
+        Computed as: ``last_fire + jitter_max + safety_margin``. The
+        Claude CLI adds a random jitter of 10% of the cron period
+        (capped at 15 minutes) to each fire; we add
+        :attr:`JITTER_SAFETY_MARGIN` on top. Tied to Claude CLI
+        behaviour.
 
-        Returns None for non-recurring crons or if last_fire cannot be computed.
+        Returns ``None`` for non-recurring crons or if
+        :attr:`last_fire` cannot be computed.
         """
         if self.last_fire is None:
             return None

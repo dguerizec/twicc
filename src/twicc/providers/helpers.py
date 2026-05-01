@@ -382,6 +382,22 @@ class BaseProviderHelpers:
         """
         raise NotImplementedError
 
+    async def enrich_agent_state(self, message: dict, session_id: str) -> None:
+        """Augment a serialised ``process_state`` / ``active_processes`` entry.
+
+        Called by :mod:`twicc.asgi` for each agent record being broadcast,
+        scoped to the provider that owns ``session_id`` (the dispatcher
+        looks up the right helper from
+        :class:`ProviderHelpersRegistry`). The default is a no-op so a
+        provider only pays for the keys it actually contributes.
+
+        Claude Code overrides this to attach ``active_crons`` from
+        :class:`SessionCron`; other providers can hook their own
+        provider-specific decoration here as the multi-provider surface
+        grows.
+        """
+        return None
+
     def get_bootstrap_data(self) -> dict:
         """Return provider-specific keys merged into the ``/api/bootstrap/`` payload.
 

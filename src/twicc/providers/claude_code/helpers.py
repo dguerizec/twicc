@@ -522,6 +522,25 @@ class ClaudeCodeHelpers(BaseProviderHelpers):
         finally:
             protect_title(session_id, title)
 
+    async def enrich_agent_state(self, message: dict, session_id: str) -> None:
+        """Attach ``active_crons`` for ``session_id`` to ``message``.
+
+        Claude Code crons live in :class:`SessionCron` and are queried
+        by ``(session_id, provider)``. We can scope the query with our
+        own :attr:`provider` ClassVar — the dispatcher in
+        :mod:`twicc.asgi` already routed us here based on the session's
+        provider, so there is nothing else to read from ``message``.
+        """
+        from asgiref.sync import sync_to_async
+
+        from twicc.core.models import SessionCron
+
+        crons = await sync_to_async(
+            lambda: [c.serialize() for c in SessionCron.active_for_session(session_id, self.provider)]
+        )()
+        if crons:
+            message["active_crons"] = crons
+
     def get_bootstrap_data(self) -> dict:
         from .agent_settings_presets import read_agent_settings_presets
 

@@ -158,19 +158,6 @@ def get_bulk_session_and_project_display(
     return result
 
 
-async def _enrich_with_active_crons(
-    message: dict, session_id: str, provider: Provider,
-) -> None:
-    """Enrich a serialized process state dict with active crons from the database."""
-    from twicc.core.models import SessionCron
-
-    crons = await sync_to_async(
-        lambda: [c.serialize() for c in SessionCron.active_for_session(session_id, provider)]
-    )()
-    if crons:
-        message["active_crons"] = crons
-
-
 async def broadcast_process_state(info: AgentInfo) -> None:
     """Broadcast a process state change to all connected clients.
 
@@ -190,8 +177,9 @@ async def broadcast_process_state(info: AgentInfo) -> None:
     message = serialize_agent_info(info)
     message["type"] = "process_state"
 
-    # Enrich with active crons from the database
-    await _enrich_with_active_crons(message, info.session_id, info.provider)
+    # Let the provider attach any state it owns (e.g. Claude Code's
+    # ``active_crons``). Each provider routes its own keys via its helper.
+    await get_provider_helpers(info.provider).enrich_agent_state(message, info.session_id)
 
     # Enrich with human-readable session title and project name
     # so the frontend can display notifications without needing
@@ -392,10 +380,10 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
                         proc["session_title"] = session_title
                     if project_name is not None:
                         proc["project_name"] = project_name
-                    # Enrich with active crons from DB
-                    await _enrich_with_active_crons(
-                        proc, proc["session_id"], Provider(proc["provider"]),
-                    )
+                    # Let the provider attach any state it owns
+                    await get_provider_helpers(
+                        Provider(proc["provider"])
+                    ).enrich_agent_state(proc, proc["session_id"])
             await self.send_json(
                 {
                     "type": "active_processes",
