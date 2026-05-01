@@ -29,8 +29,8 @@ export const useClaudeSettingsPresetsStore = defineStore('claudeSettingsPresets'
     }
 
     async function _sendConfig() {
-        const { sendClaudeSettingsPresets } = await import('../composables/useWebSocket')
-        sendClaudeSettingsPresets({ presets: presets.value })
+        const { sendUpdateSettingsPresets } = await import('../providers/claude_code/ws')
+        sendUpdateSettingsPresets({ presets: presets.value })
     }
 
     function findPresetIndexByName(name, excludeIndex = null) {
