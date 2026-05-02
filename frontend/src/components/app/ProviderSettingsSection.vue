@@ -141,6 +141,7 @@ function openPresetsDialog() {
                     v-for="option in helpers.getFieldChoices(field)"
                     :key="String(option.value)"
                     :value="String(option.value)"
+                    :label="option.label"
                     :disabled="isChoiceDisabledFor(field, option.value)"
                 >
                     <span>{{ option.label }}{{ isChoiceDisabledFor(field, option.value) ? ' (not available)' : '' }}</span>
@@ -166,3 +167,15 @@ function openPresetsDialog() {
         />
     </section>
 </template>
+
+<style scoped>
+.option-description {
+    display: block;
+    font-size: var(--wa-font-size-s);
+    color: var(--wa-color-text-quiet);
+}
+
+.synced-icon {
+    color: var(--wa-color-brand);
+}
+</style>
