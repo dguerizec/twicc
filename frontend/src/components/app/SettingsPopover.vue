@@ -5,19 +5,13 @@ import { useRouter } from 'vue-router'
 import { useSettingsStore, SETTINGS_SCHEMA } from '../../stores/settings'
 import { useDataStore } from '../../stores/data'
 import { useAuthStore } from '../../stores/auth'
-import { getProviderOptions } from '../../providers'
+import { getProviderHelpers, getProviderOptions, getRegisteredProviders } from '../../providers'
 import { useClaudeCodeStore } from '../../providers/claude_code/store'
-import { claudeCodeHelpers } from '../../providers/claude_code/helpers'
 import { DISPLAY_MODE, COLOR_SCHEME, SESSION_TIME_FORMAT, DEFAULT_MAX_CACHED_SESSIONS, WA_THEME, WA_THEME_LABELS, WA_BRAND, WA_BRAND_LABELS } from '../../constants'
-import {
-    CONTEXT_MAX as CLAUDE_CODE_CONTEXT_MAX,
-    EFFORT as CLAUDE_CODE_EFFORT,
-} from '../../providers/claude_code/constants'
 import NotificationSettings from './NotificationSettings.vue'
 import AppTooltip from '../ui/AppTooltip.vue'
 import ChangelogDialog from './ChangelogDialog.vue'
-import AgentSettingsPresetsDialog from './AgentSettingsPresetsDialog.vue'
-import { PROVIDER } from '../../constants'
+import ProviderSettingsSection from './ProviderSettingsSection.vue'
 import { sendChangelogSeen, sendValidateUsageDumpPath, sendValidateTmuxConfigPath } from '../../composables/useWebSocket'
 import { sendValidateUsageFile as sendValidateClaudeCodeUsageFile } from '../../providers/claude_code/ws'
 import { vPopoverFocusFix } from '../../directives/vPopoverFocusFix'
@@ -38,23 +32,39 @@ function handleLogout() {
 
 // -- Section navigation --
 
-const sections = [
+// Per-provider sections — one entry per registered provider, identified
+// by ``provider_<key>`` so the activeSection check disambiguates them.
+const providerSections = computed(() =>
+    getRegisteredProviders().map(provider => {
+        const helpers = getProviderHelpers(provider)
+        const label = helpers.constructor.label ?? provider
+        return {
+            id: `provider_${provider}`,
+            provider,
+            label: `${label} settings`,
+            navLabel: label,
+            synced: true,
+        }
+    })
+)
+
+const sections = computed(() => [
     { id: 'global',                    label: 'Global' },
     { id: 'providers',                 label: 'Providers', synced: true },
-    { id: 'provider_claude_code',      label: 'Claude settings', navLabel: 'Claude', synced: true },
+    ...providerSections.value,
     { id: 'notifications',             label: 'Notifications' },
     { id: 'sessions',      label: 'Sessions' },
     { id: 'title',         label: 'Title suggestion', navLabel: 'Titles', synced: true },
     { id: 'editor',        label: 'Editor' },
     { id: 'terminal',      label: 'Terminal' },
     { id: 'usage',         label: 'Providers quotas/usage', navLabel: 'Usage' },
-]
+])
 
 const activeSection = ref('global')
 const mobileShowContent = ref(false)
 
 const activeSectionObj = computed(() =>
-    sections.find(s => s.id === activeSection.value)
+    sections.value.find(s => s.id === activeSection.value)
 )
 
 const activeSectionLabel = computed(() => {
@@ -183,10 +193,6 @@ const sessionTimeFormatOptions = [
 const notificationSettingsRef = ref(null)
 const changelogDialogRef = ref(null)
 const forcedChangelogOpen = ref(false)
-const claudeCodePresetsDialogOpen = ref(false)
-function openClaudeCodePresetsDialog() {
-    claudeCodePresetsDialogOpen.value = true
-}
 
 // Settings from store
 const defaultProvider = computed(() => store.getDefaultProvider)
@@ -205,12 +211,6 @@ const titleSystemPrompt = computed(() => store.getTitleSystemPrompt)
 const terminalUseTmux = computed(() => store.isTerminalUseTmux)
 const terminalTmuxConfigPath = computed(() => store.getTerminalTmuxConfigPath)
 const compactSessionList = computed(() => store.isCompactSessionList)
-const claudeCodeDefaultPermissionMode = computed(() => claudeCodeStore.defaultPermissionMode)
-const claudeCodeDefaultModel = computed(() => claudeCodeStore.defaultModel)
-const claudeCodeDefaultEffort = computed(() => claudeCodeStore.defaultEffort)
-const claudeCodeDefaultThinking = computed(() => claudeCodeStore.defaultThinking)
-const claudeCodeDefaultClaudeInChrome = computed(() => claudeCodeStore.defaultClaudeInChrome)
-const claudeCodeDefaultContextMax = computed(() => claudeCodeStore.defaultContextMax)
 const waTheme = computed(() => store.getWaTheme)
 const waBrand = computed(() => store.getWaBrand)
 const showDiffs = computed(() => store.isShowDiffs)
@@ -287,35 +287,6 @@ const displayModeOptions = [
     { value: DISPLAY_MODE.DEBUG, label: 'Debug' },
 ]
 
-// Per-field choice catalogues come from the Claude Code provider helpers.
-// Booleans are stringified at the template boundary because wa-select binds
-// string values; the @change handlers re-parse before writing back to the
-// store. Names are prefixed so a future Codex section can declare its own
-// equivalents in the same component without colliding.
-const claudeCodePermissionModeOptions = computed(() => claudeCodeHelpers.getFieldChoices('permission_mode'))
-const claudeCodeEffortOptions = computed(() => claudeCodeHelpers.getFieldChoices('effort'))
-const claudeCodeThinkingOptions = computed(() => claudeCodeHelpers.getFieldChoices('thinking_enabled'))
-const claudeCodeClaudeInChromeOptions = computed(() => claudeCodeHelpers.getFieldChoices('claude_in_chrome'))
-const claudeCodeContextMaxOptions = computed(() => claudeCodeHelpers.getFieldChoices('context_max'))
-
-// Model options for the select — built from the Claude Code registry.
-const claudeCodeModelRegistryOptions = computed(() => {
-    const registry = claudeCodeHelpers.getModelRegistry()
-    return {
-        latest: registry.filter(e => e.latest),
-        older: registry.filter(e => !e.latest),
-    }
-})
-
-function claudeCodeFormatRetirementDate(isoDate) {
-    return new Date(isoDate + 'T00:00:00').toLocaleDateString(undefined, {
-        month: 'short', day: 'numeric', year: 'numeric',
-    })
-}
-
-const claudeCodeDefaultModelSupports1m = computed(() => claudeCodeHelpers.modelSupports1m(claudeCodeDefaultModel.value))
-const claudeCodeDefaultModelSupportsEffortXhigh = computed(() => claudeCodeHelpers.modelSupportsEffortXhigh(claudeCodeDefaultModel.value))
-const claudeCodeDefaultModelSupportsEffortMax = computed(() => claudeCodeHelpers.modelSupportsEffortMax(claudeCodeDefaultModel.value))
 
 /**
  * Handle default-provider change.
@@ -498,44 +469,6 @@ async function onTmuxConfigPathApply() {
     } finally {
         tmuxConfigValidating.value = false
     }
-}
-
-/**
- * Handle Claude Code default permission mode change.
- */
-function onClaudeCodeDefaultPermissionModeChange(event) {
-    claudeCodeStore.setDefaultPermissionMode(event.target.value)
-}
-
-function onClaudeCodeDefaultModelChange(event) {
-    const adjusted = claudeCodeHelpers.enforceAgentSettingsConsistency({
-        selectedModel: event.target.value,
-        contextMax: claudeCodeStore.defaultContextMax,
-        effort: claudeCodeStore.defaultEffort,
-    })
-    claudeCodeStore.setDefaultModel(adjusted.selectedModel)
-    if (adjusted.contextMax !== claudeCodeStore.defaultContextMax) {
-        claudeCodeStore.setDefaultContextMax(adjusted.contextMax)
-    }
-    if (adjusted.effort !== claudeCodeStore.defaultEffort) {
-        claudeCodeStore.setDefaultEffort(adjusted.effort)
-    }
-}
-
-function onClaudeCodeDefaultEffortChange(event) {
-    claudeCodeStore.setDefaultEffort(event.target.value)
-}
-
-function onClaudeCodeDefaultThinkingChange(event) {
-    claudeCodeStore.setDefaultThinking(event.target.value === 'true')
-}
-
-function onClaudeCodeDefaultClaudeInChromeChange(event) {
-    claudeCodeStore.setDefaultClaudeInChrome(event.target.value === 'true')
-}
-
-function onClaudeCodeDefaultContextMaxChange(event) {
-    claudeCodeStore.setDefaultContextMax(Number(event.target.value))
 }
 
 /**
@@ -761,128 +694,13 @@ function onChangelogClose() {
                     </div>
                 </section>
 
-                <!-- Claude Code provider section -->
-                <section v-if="activeSection === 'provider_claude_code'" class="settings-section">
-                    <h3 class="settings-section-title">Claude settings <wa-icon name="cloud" class="synced-icon"></wa-icon></h3>
-                    <div v-if="claudeCodeHelpers.supportsAgentSetting('permission_mode')" class="setting-group">
-                        <label class="setting-group-label">Default permission mode</label>
-                        <wa-select
-                            :value.prop="claudeCodeDefaultPermissionMode"
-                            @change="onClaudeCodeDefaultPermissionModeChange"
-                            size="small"
-                        >
-                            <wa-option
-                                v-for="option in claudeCodePermissionModeOptions"
-                                :key="option.value"
-                                :value="option.value"
-                                :label="option.label"
-                            >
-                                <span>{{ option.label }}</span>
-                                <span class="option-description">{{ option.description }}</span>
-                            </wa-option>
-                        </wa-select>
-                    </div>
-                    <div v-if="claudeCodeHelpers.supportsAgentSetting('selected_model')" class="setting-group">
-                        <label class="setting-group-label">Default model</label>
-                        <wa-select
-                            :value.prop="claudeCodeDefaultModel"
-                            @change="onClaudeCodeDefaultModelChange"
-                            size="small"
-                        >
-                            <wa-option
-                                v-for="entry in claudeCodeModelRegistryOptions.latest"
-                                :key="entry.selected_model"
-                                :value="entry.selected_model"
-                            >
-                                {{ claudeCodeHelpers.getModelLabel(entry.selected_model) }} (latest: {{ entry.version }})
-                            </wa-option>
-                            <wa-divider v-if="claudeCodeModelRegistryOptions.older.length"></wa-divider>
-                            <wa-option
-                                v-for="entry in claudeCodeModelRegistryOptions.older"
-                                :key="entry.selected_model"
-                                :value="entry.selected_model"
-                            >
-                                {{ claudeCodeHelpers.getModelLabel(entry.selected_model) }} (until {{ claudeCodeFormatRetirementDate(entry.retirement_date) }})
-                            </wa-option>
-                        </wa-select>
-                    </div>
-                    <div v-if="claudeCodeHelpers.supportsAgentSetting('context_max')" class="setting-group">
-                        <label class="setting-group-label">Default context size</label>
-                        <wa-select
-                            :value.prop="String(claudeCodeDefaultContextMax)"
-                            @change="onClaudeCodeDefaultContextMaxChange"
-                            size="small"
-                        >
-                            <wa-option
-                                v-for="option in claudeCodeContextMaxOptions"
-                                :key="option.value"
-                                :value="String(option.value)"
-                                :disabled="option.value === CLAUDE_CODE_CONTEXT_MAX.EXTENDED && !claudeCodeDefaultModelSupports1m"
-                            >
-                                {{ option.label }}{{ option.value === CLAUDE_CODE_CONTEXT_MAX.EXTENDED && !claudeCodeDefaultModelSupports1m ? ' (not available)' : '' }}
-                            </wa-option>
-                        </wa-select>
-                    </div>
-                    <div v-if="claudeCodeHelpers.supportsAgentSetting('effort')" class="setting-group">
-                        <label class="setting-group-label">Default effort</label>
-                        <wa-select
-                            :value.prop="claudeCodeDefaultEffort"
-                            @change="onClaudeCodeDefaultEffortChange"
-                            size="small"
-                        >
-                            <wa-option
-                                v-for="option in claudeCodeEffortOptions"
-                                :key="option.value"
-                                :value="option.value"
-                                :disabled="(option.value === CLAUDE_CODE_EFFORT.X_HIGH && !claudeCodeDefaultModelSupportsEffortXhigh) || (option.value === CLAUDE_CODE_EFFORT.MAX && !claudeCodeDefaultModelSupportsEffortMax)"
-                            >
-                                {{ option.label }}{{ ((option.value === CLAUDE_CODE_EFFORT.X_HIGH && !claudeCodeDefaultModelSupportsEffortXhigh) || (option.value === CLAUDE_CODE_EFFORT.MAX && !claudeCodeDefaultModelSupportsEffortMax)) ? ' (not available)' : '' }}
-                            </wa-option>
-                        </wa-select>
-                    </div>
-                    <div v-if="claudeCodeHelpers.supportsAgentSetting('thinking_enabled')" class="setting-group">
-                        <label class="setting-group-label">Default thinking</label>
-                        <wa-select
-                            :value.prop="String(claudeCodeDefaultThinking)"
-                            @change="onClaudeCodeDefaultThinkingChange"
-                            size="small"
-                        >
-                            <wa-option
-                                v-for="option in claudeCodeThinkingOptions"
-                                :key="String(option.value)"
-                                :value="String(option.value)"
-                            >
-                                {{ option.label }}
-                            </wa-option>
-                        </wa-select>
-                    </div>
-                    <div v-if="claudeCodeHelpers.supportsAgentSetting('claude_in_chrome')" class="setting-group">
-                        <label class="setting-group-label">Default Chrome MCP</label>
-                        <wa-select
-                            :value.prop="String(claudeCodeDefaultClaudeInChrome)"
-                            @change="onClaudeCodeDefaultClaudeInChromeChange"
-                            size="small"
-                        >
-                            <wa-option
-                                v-for="option in claudeCodeClaudeInChromeOptions"
-                                :key="String(option.value)"
-                                :value="String(option.value)"
-                            >
-                                {{ option.label }}
-                            </wa-option>
-                        </wa-select>
-                    </div>
-                    <div class="setting-group">
-                        <label class="setting-group-label">Presets</label>
-                        <span class="setting-group-hint">
-                            Define bundles of Claude settings to quickly apply to a session
-                        </span>
-                        <wa-button size="small" @click="openClaudeCodePresetsDialog">
-                            <wa-icon slot="start" name="sliders"></wa-icon>
-                            Manage presets…
-                        </wa-button>
-                    </div>
-                </section>
+                <!-- Per-provider sections — one block per registered provider, identified by its wire key. -->
+                <template v-for="section in providerSections" :key="section.id">
+                    <ProviderSettingsSection
+                        v-if="activeSection === section.id"
+                        :provider="section.provider"
+                    />
+                </template>
 
                 <!-- Notifications Section -->
                 <NotificationSettings v-if="activeSection === 'notifications'" ref="notificationSettingsRef" />
@@ -1245,7 +1063,6 @@ function onChangelogClose() {
         </footer>
     </wa-popover>
     <ChangelogDialog ref="changelogDialogRef" @close="onChangelogClose" />
-    <AgentSettingsPresetsDialog v-model:open="claudeCodePresetsDialogOpen" :provider="PROVIDER.CLAUDE_CODE" />
 </template>
 
 <style scoped>

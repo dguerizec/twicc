@@ -3,7 +3,7 @@ import { computed, watch, ref, readonly, provide, inject, onActivated, onDeactiv
 import { useRoute, useRouter } from 'vue-router'
 import { useDataStore } from '../stores/data'
 import { useSettingsStore } from '../stores/settings'
-import { getProviderStore, getProviderHelpers } from '../providers'
+import { getProviderHelpers } from '../providers'
 import { useCommandRegistry } from '../composables/useCommandRegistry'
 import { requestTitleSuggestion, notifySessionViewed, forceNotifySessionViewed } from '../composables/useWebSocket'
 import { stopSessionProcess } from '../composables/useStopSessionProcess'
@@ -933,34 +933,18 @@ function setSessionSettingValue(key, value) {
     sessionItemsListRef.value?.setSessionSetting(key, value)
 }
 
-// Wire-name → store property (the per-provider stores follow the same
-// camelCase convention for default values).
-const FIELD_TO_DEFAULT_STORE_PROP = {
-    selected_model:    'defaultModel',
-    effort:            'defaultEffort',
-    thinking_enabled:  'defaultThinking',
-    permission_mode:   'defaultPermissionMode',
-    context_max:       'defaultContextMax',
-    claude_in_chrome:  'defaultClaudeInChrome',
-}
-
 function buildSessionSettingsCommands() {
     const provider = session.value?.provider
     const helpers = getProviderHelpers(provider)
-    const providerStore = getProviderStore(provider)
-    if (!helpers || !providerStore) return []
+    if (!helpers) return []
 
     const isAvailable = () => !!sessionSettingsGate()
-
-    function defaultValueFor(field) {
-        return providerStore[FIELD_TO_DEFAULT_STORE_PROP[field]]
-    }
 
     function buildDefaultItem(field, current) {
         return {
             id: '__default__',
             group: 'default',
-            label: `Default: ${helpers.getDefaultValueLabel(field, defaultValueFor(field))}`,
+            label: `Default: ${helpers.getDefaultValueLabel(field, helpers.getDefaultValue(field))}`,
             action: () => setSessionSettingValue(field, null),
             active: current === null,
         }

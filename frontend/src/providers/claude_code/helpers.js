@@ -21,6 +21,19 @@ const BUILTIN_SLASH_COMMANDS = [
     { name: 'loop', plugin_name: null, source: 'builtin', is_global: true, description: "Run a prompt or slash command on a recurring interval until the session ends (e.g. /loop 5m /foo, defaults to 10m)", argument_hint: '[interval] [command or prompt]' },
 ]
 
+// Map of agent-setting wire names → store getter/setter for the persisted
+// default. Used by ``getDefaultValue`` / ``setDefaultValue`` so generic
+// surfaces (palette, settings popover) can read/write defaults without
+// knowing the field-specific store property names.
+const FIELD_TO_DEFAULT_STORE_BINDING = {
+    selected_model:   { getter: 'defaultModel',           setter: 'setDefaultModel' },
+    effort:           { getter: 'defaultEffort',          setter: 'setDefaultEffort' },
+    thinking_enabled: { getter: 'defaultThinking',        setter: 'setDefaultThinking' },
+    permission_mode:  { getter: 'defaultPermissionMode',  setter: 'setDefaultPermissionMode' },
+    context_max:      { getter: 'defaultContextMax',      setter: 'setDefaultContextMax' },
+    claude_in_chrome: { getter: 'defaultClaudeInChrome',  setter: 'setDefaultClaudeInChrome' },
+}
+
 // Map of synced setting keys (the wire/storage names) → store action that
 // applies the value. Used by both ``applySyncedSettings`` (input) and
 // ``getSyncedSettings`` (output) so the two sides can never drift apart.
@@ -124,6 +137,31 @@ export class ClaudeCodeHelpers extends BaseProviderHelpers {
         // the cycle so HMR can keep doing hot updates.
         const { sendCheckAuth } = await import('./ws')
         sendCheckAuth()
+    }
+
+    getDefaultValue(field) {
+        const binding = FIELD_TO_DEFAULT_STORE_BINDING[field]
+        if (!binding) return null
+        return useClaudeCodeStore()[binding.getter]
+    }
+
+    setDefaultValue(field, value) {
+        const binding = FIELD_TO_DEFAULT_STORE_BINDING[field]
+        if (!binding) return
+        const store = useClaudeCodeStore()
+        store[binding.setter](value)
+        // Re-enforce cross-field consistency when the default model changes:
+        // the new model may not support the persisted context_max / effort,
+        // so they get rolled back to a value the model accepts.
+        if (field === 'selected_model') {
+            const adjusted = this.enforceAgentSettingsConsistency({
+                selectedModel: store.defaultModel,
+                contextMax: store.defaultContextMax,
+                effort: store.defaultEffort,
+            })
+            if (adjusted.contextMax !== store.defaultContextMax) store.setDefaultContextMax(adjusted.contextMax)
+            if (adjusted.effort !== store.defaultEffort) store.setDefaultEffort(adjusted.effort)
+        }
     }
 
     getSyncedSettingsKeys() {

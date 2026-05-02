@@ -67,6 +67,30 @@ export class BaseProviderHelpers {
      */
     requestAuthRecheck() {}
 
+    // ─── Per-provider default values for agent settings ──────────────────
+    //
+    // Generic surfaces that need to read or write the provider-scoped
+    // default for a given agent setting field (the Settings popover's
+    // provider section, the static palette commands, …) go through these
+    // hooks instead of poking the provider store directly. Each provider
+    // overrides them with its own field → store-binding mapping.
+
+    /**
+     * Read this provider's persisted default for ``field`` (the wire-name,
+     * e.g. ``selected_model``). Returns ``null`` when the provider doesn't
+     * own the field. Default: no defaults exposed.
+     */
+    getDefaultValue(/* field */) {
+        return null
+    }
+
+    /**
+     * Write this provider's persisted default for ``field``. Validation
+     * (type, enum membership) is the store's responsibility — invalid
+     * values are silently ignored. Default: no-op.
+     */
+    setDefaultValue(/* field, value */) {}
+
     // ─── Synced settings ownership ───────────────────────────────────────
     //
     // The settings store hosts a single localStorage blob and a single
