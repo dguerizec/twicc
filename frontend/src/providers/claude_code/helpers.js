@@ -2,6 +2,7 @@ import { BaseProviderHelpers } from '../baseHelpers'
 import { PROVIDER } from '../../constants'
 import { CONTEXT_MAX, EFFORT, PERMISSION_MODE } from './constants'
 import { useClaudeCodeStore } from './store'
+import { useSettingsStore } from '../../stores/settings'
 
 function formatRetirementDate(isoDate) {
     return new Date(isoDate + 'T00:00:00').toLocaleDateString(undefined, {
@@ -103,6 +104,22 @@ export class ClaudeCodeHelpers extends BaseProviderHelpers {
 
     getBuiltInSlashCommands() {
         return BUILTIN_SLASH_COMMANDS
+    }
+
+    getAuthState() {
+        return () => useClaudeCodeStore().authenticated
+    }
+
+    getAuthLoginCommand() {
+        return `${useSettingsStore().twiccLaunchPrefix} claude auth login`
+    }
+
+    async requestAuthRecheck() {
+        // Lazy import: ``./ws`` pulls ``useWebSocket``, which imports back into
+        // ``providers/index`` (which imports this module). The lazy form breaks
+        // the cycle so HMR can keep doing hot updates.
+        const { sendCheckAuth } = await import('./ws')
+        sendCheckAuth()
     }
 
     getSyncedSettingsKeys() {

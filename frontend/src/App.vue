@@ -6,11 +6,11 @@ import { useWebSocket, versionMismatchDetected } from './composables/useWebSocke
 import { useDataStore } from './stores/data'
 import { useSettingsStore } from './stores/settings'
 import { useAuthStore } from './stores/auth'
-import { useClaudeCodeStore } from './providers/claude_code/store'
 import { COLOR_SCHEME, PROCESS_STATE } from './constants'
 import { useFavicon } from './composables/useFavicon'
 import { toast } from './composables/useToast'
-import ClaudeAuthToastContent from './components/app/ClaudeAuthToastContent.vue'
+import ProviderAuthToastContent from './components/app/ProviderAuthToastContent.vue'
+import { getRegisteredProviders, getProviderHelpers } from './providers'
 import ConnectionIndicator from './components/app/ConnectionIndicator.vue'
 import CustomNotification from './components/app/CustomNotification.vue'
 import CommandPalette from './components/app/CommandPalette.vue'
@@ -42,7 +42,6 @@ useFavicon()
 
 // Load initial data and connect WebSocket when authenticated
 const dataStore = useDataStore()
-const claudeCodeStore = useClaudeCodeStore()
 
 // React to authentication state changes (initial check + after login)
 watch(isAuthenticated, async (authenticated) => {
@@ -77,22 +76,35 @@ watch(versionMismatchDetected, (mismatch) => {
     }
 })
 
-// Persistent toast when Claude CLI is not authenticated.
-// Stays visible until the auth state flips back to true (the watcher dismisses
-// it). Skipped while the state is still null (no backend message received yet).
-let _claudeAuthToastItem = null
-watch(() => claudeCodeStore.authenticated, (authenticated) => {
-    if (authenticated === false && !_claudeAuthToastItem) {
-        _claudeAuthToastItem = toast.custom(ClaudeAuthToastContent, {
-            type: 'warning',
-            title: 'Claude CLI not authenticated',
-            duration: Infinity,
-        })
-    } else if (authenticated === true && _claudeAuthToastItem) {
-        _claudeAuthToastItem.clear?.()
-        _claudeAuthToastItem = null
-    }
-})
+// Persistent toast(s) when a provider's CLI is not authenticated.
+// One toast per registered provider whose helpers expose ``getAuthState``;
+// providers without an auth gate (default base implementation) are skipped
+// entirely. Each toast stays visible until the matching auth state flips
+// back to ``true``.
+const _providerAuthToastItems = new Map()
+for (const provider of getRegisteredProviders()) {
+    const helpers = getProviderHelpers(provider)
+    const authStateGetter = helpers.getAuthState()
+    if (!authStateGetter) continue
+    watch(authStateGetter, (authenticated) => {
+        const existing = _providerAuthToastItems.get(provider)
+        if (authenticated === false && !existing) {
+            const item = toast.custom(ProviderAuthToastContent, {
+                type: 'warning',
+                title: `${helpers.constructor.label} CLI not authenticated`,
+                duration: Infinity,
+                props: {
+                    provider,
+                    loginCommand: helpers.getAuthLoginCommand(),
+                },
+            })
+            _providerAuthToastItems.set(provider, item)
+        } else if (authenticated === true && existing) {
+            existing.clear?.()
+            _providerAuthToastItems.delete(provider)
+        }
+    })
+}
 
 // ─── Command Palette (Ctrl+K / Cmd+K) & Search (Ctrl+Shift+F / Ctrl+F) ──
 const commandPaletteRef = ref(null)

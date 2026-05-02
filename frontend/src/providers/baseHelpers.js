@@ -29,6 +29,44 @@ export class BaseProviderHelpers {
         return []
     }
 
+    // ─── Authentication ──────────────────────────────────────────────────
+    //
+    // Some providers gate sending on an external authentication step (e.g.
+    // a CLI login). The frontend surfaces that state via a persistent toast
+    // and the sidebar callout; both consume the hooks below. A provider
+    // that doesn't authenticate returns ``null`` from ``getAuthState`` and
+    // the surface skips it entirely.
+
+    /**
+     * Getter function that returns the current auth state for this provider:
+     * ``true`` (authenticated), ``false`` (not authenticated) or ``null``
+     * (still unknown — no backend push received yet). Returned as a getter
+     * (not a ``ref``) so callers can hand it straight to ``watch``; Pinia
+     * unwraps refs read through the store, so the getter form is the only
+     * way to keep reactivity across the helpers boundary.
+     * Default: ``null`` (provider doesn't gate on auth — return ``null`` for
+     * the helper itself, not a getter).
+     */
+    getAuthState() {
+        return null
+    }
+
+    /**
+     * Shell command the user must run to authenticate with this provider,
+     * already prefixed by the configured TwiCC launch prefix. Used by the
+     * persistent auth toast and the sidebar callout. Default: ``null``.
+     */
+    getAuthLoginCommand() {
+        return null
+    }
+
+    /**
+     * Ask the backend to re-check this provider's auth state right now,
+     * bypassing the periodic poll. Bound to the toast / sidebar "Check
+     * again" buttons. Default: no-op.
+     */
+    requestAuthRecheck() {}
+
     // ─── Synced settings ownership ───────────────────────────────────────
     //
     // The settings store hosts a single localStorage blob and a single
