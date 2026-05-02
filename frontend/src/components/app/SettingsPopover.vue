@@ -8,7 +8,11 @@ import { useAuthStore } from '../../stores/auth'
 import { useClaudeCodeStore } from '../../providers/claude_code/store'
 import { claudeCodeHelpers } from '../../providers/claude_code/helpers'
 import { DISPLAY_MODE, COLOR_SCHEME, SESSION_TIME_FORMAT, DEFAULT_MAX_CACHED_SESSIONS, WA_THEME, WA_THEME_LABELS, WA_BRAND, WA_BRAND_LABELS } from '../../constants'
-import { CONTEXT_MAX, EFFORT, getModelLabel } from '../../providers/claude_code/constants'
+import {
+    CONTEXT_MAX as CLAUDE_CODE_CONTEXT_MAX,
+    EFFORT as CLAUDE_CODE_EFFORT,
+    getModelLabel as getClaudeCodeModelLabel,
+} from '../../providers/claude_code/constants'
 import NotificationSettings from './NotificationSettings.vue'
 import AppTooltip from '../ui/AppTooltip.vue'
 import ChangelogDialog from './ChangelogDialog.vue'
@@ -34,9 +38,9 @@ function handleLogout() {
 // -- Section navigation --
 
 const sections = [
-    { id: 'global',        label: 'Global' },
-    { id: 'claude',        label: 'Claude settings', navLabel: 'Claude', synced: true },
-    { id: 'notifications', label: 'Notifications' },
+    { id: 'global',                    label: 'Global' },
+    { id: 'provider_claude_code',      label: 'Claude settings', navLabel: 'Claude', synced: true },
+    { id: 'notifications',             label: 'Notifications' },
     { id: 'sessions',      label: 'Sessions' },
     { id: 'title',         label: 'Title suggestion', navLabel: 'Titles', synced: true },
     { id: 'editor',        label: 'Editor' },
@@ -177,9 +181,9 @@ const sessionTimeFormatOptions = [
 const notificationSettingsRef = ref(null)
 const changelogDialogRef = ref(null)
 const forcedChangelogOpen = ref(false)
-const claudePresetsDialogOpen = ref(false)
-function openClaudePresetsDialog() {
-    claudePresetsDialogOpen.value = true
+const claudeCodePresetsDialogOpen = ref(false)
+function openClaudeCodePresetsDialog() {
+    claudeCodePresetsDialogOpen.value = true
 }
 
 // Settings from store
@@ -279,17 +283,19 @@ const displayModeOptions = [
     { value: DISPLAY_MODE.DEBUG, label: 'Debug' },
 ]
 
-// Per-field choice catalogues come from the provider helpers. Booleans are
-// stringified at the template boundary because wa-select binds string values;
-// the @change handlers re-parse before writing back to the store.
-const permissionModeOptions = computed(() => claudeCodeHelpers.getFieldChoices('permission_mode'))
-const effortOptions = computed(() => claudeCodeHelpers.getFieldChoices('effort'))
-const thinkingOptions = computed(() => claudeCodeHelpers.getFieldChoices('thinking_enabled'))
-const claudeInChromeOptions = computed(() => claudeCodeHelpers.getFieldChoices('claude_in_chrome'))
-const contextMaxOptions = computed(() => claudeCodeHelpers.getFieldChoices('context_max'))
+// Per-field choice catalogues come from the Claude Code provider helpers.
+// Booleans are stringified at the template boundary because wa-select binds
+// string values; the @change handlers re-parse before writing back to the
+// store. Names are prefixed so a future Codex section can declare its own
+// equivalents in the same component without colliding.
+const claudeCodePermissionModeOptions = computed(() => claudeCodeHelpers.getFieldChoices('permission_mode'))
+const claudeCodeEffortOptions = computed(() => claudeCodeHelpers.getFieldChoices('effort'))
+const claudeCodeThinkingOptions = computed(() => claudeCodeHelpers.getFieldChoices('thinking_enabled'))
+const claudeCodeClaudeInChromeOptions = computed(() => claudeCodeHelpers.getFieldChoices('claude_in_chrome'))
+const claudeCodeContextMaxOptions = computed(() => claudeCodeHelpers.getFieldChoices('context_max'))
 
-// Model options for the select — built from the registry
-const modelRegistryOptions = computed(() => {
+// Model options for the select — built from the Claude Code registry.
+const claudeCodeModelRegistryOptions = computed(() => {
     const registry = claudeCodeHelpers.getModelRegistry()
     return {
         latest: registry.filter(e => e.latest),
@@ -297,7 +303,7 @@ const modelRegistryOptions = computed(() => {
     }
 })
 
-function formatRetirementDate(isoDate) {
+function claudeCodeFormatRetirementDate(isoDate) {
     return new Date(isoDate + 'T00:00:00').toLocaleDateString(undefined, {
         month: 'short', day: 'numeric', year: 'numeric',
     })
@@ -725,8 +731,8 @@ function onChangelogClose() {
                     </div>
                 </section>
 
-                <!-- Claude Settings Section -->
-                <section v-if="activeSection === 'claude'" class="settings-section">
+                <!-- Claude Code provider section -->
+                <section v-if="activeSection === 'provider_claude_code'" class="settings-section">
                     <h3 class="settings-section-title">Claude settings <wa-icon name="cloud" class="synced-icon"></wa-icon></h3>
                     <div v-if="claudeCodeHelpers.supportsAgentSetting('permission_mode')" class="setting-group">
                         <label class="setting-group-label">Default permission mode</label>
@@ -736,7 +742,7 @@ function onChangelogClose() {
                             size="small"
                         >
                             <wa-option
-                                v-for="option in permissionModeOptions"
+                                v-for="option in claudeCodePermissionModeOptions"
                                 :key="option.value"
                                 :value="option.value"
                                 :label="option.label"
@@ -754,19 +760,19 @@ function onChangelogClose() {
                             size="small"
                         >
                             <wa-option
-                                v-for="entry in modelRegistryOptions.latest"
+                                v-for="entry in claudeCodeModelRegistryOptions.latest"
                                 :key="entry.selected_model"
                                 :value="entry.selected_model"
                             >
-                                {{ getModelLabel(entry.selected_model) }} (latest: {{ entry.version }})
+                                {{ getClaudeCodeModelLabel(entry.selected_model) }} (latest: {{ entry.version }})
                             </wa-option>
-                            <wa-divider v-if="modelRegistryOptions.older.length"></wa-divider>
+                            <wa-divider v-if="claudeCodeModelRegistryOptions.older.length"></wa-divider>
                             <wa-option
-                                v-for="entry in modelRegistryOptions.older"
+                                v-for="entry in claudeCodeModelRegistryOptions.older"
                                 :key="entry.selected_model"
                                 :value="entry.selected_model"
                             >
-                                {{ getModelLabel(entry.selected_model) }} (until {{ formatRetirementDate(entry.retirement_date) }})
+                                {{ getClaudeCodeModelLabel(entry.selected_model) }} (until {{ claudeCodeFormatRetirementDate(entry.retirement_date) }})
                             </wa-option>
                         </wa-select>
                     </div>
@@ -778,12 +784,12 @@ function onChangelogClose() {
                             size="small"
                         >
                             <wa-option
-                                v-for="option in contextMaxOptions"
+                                v-for="option in claudeCodeContextMaxOptions"
                                 :key="option.value"
                                 :value="String(option.value)"
-                                :disabled="option.value === CONTEXT_MAX.EXTENDED && !claudeCodeDefaultModelSupports1m"
+                                :disabled="option.value === CLAUDE_CODE_CONTEXT_MAX.EXTENDED && !claudeCodeDefaultModelSupports1m"
                             >
-                                {{ option.label }}{{ option.value === CONTEXT_MAX.EXTENDED && !claudeCodeDefaultModelSupports1m ? ' (not available)' : '' }}
+                                {{ option.label }}{{ option.value === CLAUDE_CODE_CONTEXT_MAX.EXTENDED && !claudeCodeDefaultModelSupports1m ? ' (not available)' : '' }}
                             </wa-option>
                         </wa-select>
                     </div>
@@ -795,12 +801,12 @@ function onChangelogClose() {
                             size="small"
                         >
                             <wa-option
-                                v-for="option in effortOptions"
+                                v-for="option in claudeCodeEffortOptions"
                                 :key="option.value"
                                 :value="option.value"
-                                :disabled="(option.value === EFFORT.X_HIGH && !claudeCodeDefaultModelSupportsEffortXhigh) || (option.value === EFFORT.MAX && !claudeCodeDefaultModelSupportsEffortMax)"
+                                :disabled="(option.value === CLAUDE_CODE_EFFORT.X_HIGH && !claudeCodeDefaultModelSupportsEffortXhigh) || (option.value === CLAUDE_CODE_EFFORT.MAX && !claudeCodeDefaultModelSupportsEffortMax)"
                             >
-                                {{ option.label }}{{ ((option.value === EFFORT.X_HIGH && !claudeCodeDefaultModelSupportsEffortXhigh) || (option.value === EFFORT.MAX && !claudeCodeDefaultModelSupportsEffortMax)) ? ' (not available)' : '' }}
+                                {{ option.label }}{{ ((option.value === CLAUDE_CODE_EFFORT.X_HIGH && !claudeCodeDefaultModelSupportsEffortXhigh) || (option.value === CLAUDE_CODE_EFFORT.MAX && !claudeCodeDefaultModelSupportsEffortMax)) ? ' (not available)' : '' }}
                             </wa-option>
                         </wa-select>
                     </div>
@@ -812,7 +818,7 @@ function onChangelogClose() {
                             size="small"
                         >
                             <wa-option
-                                v-for="option in thinkingOptions"
+                                v-for="option in claudeCodeThinkingOptions"
                                 :key="String(option.value)"
                                 :value="String(option.value)"
                             >
@@ -828,7 +834,7 @@ function onChangelogClose() {
                             size="small"
                         >
                             <wa-option
-                                v-for="option in claudeInChromeOptions"
+                                v-for="option in claudeCodeClaudeInChromeOptions"
                                 :key="String(option.value)"
                                 :value="String(option.value)"
                             >
@@ -841,7 +847,7 @@ function onChangelogClose() {
                         <span class="setting-group-hint">
                             Define bundles of Claude settings to quickly apply to a session
                         </span>
-                        <wa-button size="small" @click="openClaudePresetsDialog">
+                        <wa-button size="small" @click="openClaudeCodePresetsDialog">
                             <wa-icon slot="start" name="sliders"></wa-icon>
                             Manage presets…
                         </wa-button>
@@ -1209,7 +1215,7 @@ function onChangelogClose() {
         </footer>
     </wa-popover>
     <ChangelogDialog ref="changelogDialogRef" @close="onChangelogClose" />
-    <ClaudePresetsDialog v-model:open="claudePresetsDialogOpen" />
+    <ClaudePresetsDialog v-model:open="claudeCodePresetsDialogOpen" />
 </template>
 
 <style scoped>
