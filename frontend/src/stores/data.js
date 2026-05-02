@@ -4,7 +4,7 @@ import { defineStore, acceptHMRUpdate } from 'pinia'
 import { toRaw } from 'vue'
 import { getPrefixSuffixBoundaries } from '../utils/contentVisibility'
 import { computeVisualItems, visualItemEqual } from '../utils/visualItems'
-import { DISPLAY_LEVEL, DISPLAY_MODE, PROCESS_STATE, PROVIDER, SYNTHETIC_ITEM } from '../constants'
+import { DISPLAY_LEVEL, DISPLAY_MODE, PROCESS_STATE, SYNTHETIC_ITEM } from '../constants'
 import { getProviderHelpers } from '../providers'
 import { getSessionCutoffMs } from '../utils/sessions'
 import { useSettingsStore } from './settings'
@@ -789,7 +789,7 @@ export const useDataStore = defineStore('data', {
             this.sessions[id] = {
                 id,
                 project_id: projectId,
-                provider: PROVIDER.CLAUDE_CODE,
+                provider: useSettingsStore().defaultProvider,
                 title: null,  // null = user hasn't set a title yet, UI will display "New session"
                 mtime: now,
                 last_line: 0,
@@ -2914,10 +2914,12 @@ export const useDataStore = defineStore('data', {
             try {
                 const draftSessions = await getAllDraftSessions()
                 const now = Date.now() / 1000
+                const defaultProvider = useSettingsStore().defaultProvider
                 for (const [sessionId, { projectId, title }] of Object.entries(draftSessions)) {
                     this.sessions[sessionId] = {
                         id: sessionId,
                         project_id: projectId,
+                        provider: defaultProvider,
                         title: title || null,  // null = user hasn't set a title yet
                         mtime: now,
                         last_line: 0,
