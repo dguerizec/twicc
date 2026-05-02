@@ -3,6 +3,7 @@ import { ref, watch, computed } from 'vue'
 import { useDataStore } from '../../../stores/data'
 import { useSettingsStore } from '../../../stores/settings'
 import { requestTitleSuggestion } from '../../../composables/useWebSocket'
+import { getProviderLabel } from '../../../providers'
 
 const props = defineProps({
     session: {
@@ -35,6 +36,8 @@ const suggestion = computed(() => {
     if (!props.session) return null
     return store.getTitleSuggestion(props.session.id)
 })
+
+const providerLabel = computed(() => getProviderLabel(props.session?.provider))
 
 // Sync form values when session changes
 watch(
@@ -230,7 +233,7 @@ defineExpose({
         <form v-if="session" :id="formId" class="dialog-content" @submit.prevent="handleSave">
             <!-- Contextual hint when opened during message send -->
             <p v-if="showContextHint" class="context-hint">
-                While Claude is working, you may want to give this session a more descriptive name.
+                While {{ providerLabel }} is working, you may want to give this session a more descriptive name.
             </p>
 
             <!-- Title suggestion (only if enabled in settings) -->

@@ -7,6 +7,8 @@
 
 import { ref, computed, reactive, watch, nextTick, useId } from 'vue'
 import { respondToPendingRequest as respondToClaudeCodePendingRequest } from '../../providers/claude_code/ws'
+import { useDataStore } from '../../stores/data'
+import { getProviderLabel } from '../../providers'
 import JsonHumanView from '../json/JsonHumanView.vue'
 import AppTooltip from '../ui/AppTooltip.vue'
 import { getLanguageFromPath } from '../../utils/languages'
@@ -94,6 +96,10 @@ const props = defineProps({
 
 // Number of additional pending requests waiting behind this one (>= 0).
 const extraPendingCount = computed(() => Math.max(0, props.pendingCount - 1))
+
+// Human-readable provider label for the current session, used in the form header.
+const dataStore = useDataStore()
+const providerLabel = computed(() => getProviderLabel(dataStore.getSession(props.sessionId)?.provider))
 
 // Whether a response has been sent and we're waiting for the store to clear the pending request
 const isResponding = ref(false)
@@ -769,7 +775,7 @@ function handleSubmitQuestions() {
             <!-- Header -->
             <div class="pending-request-header">
                 <wa-icon name="circle-question" class="pending-request-icon question-icon"></wa-icon>
-                <span class="pending-request-title">Claude needs your input</span>
+                <span class="pending-request-title">{{ providerLabel }} needs your input</span>
                 <span
                     v-if="extraPendingCount > 0"
                     class="pending-count-badge"

@@ -51,8 +51,8 @@ const effectiveCount = computed(() => {
 const tooltipText = computed(() => {
     const n = effectiveCount.value
     return n === 1
-        ? '1 code comment not yet sent to Claude'
-        : `${n} code comments not yet sent to Claude`
+        ? '1 code comment not yet sent'
+        : `${n} code comments not yet sent`
 })
 
 const indicatorId = useId()

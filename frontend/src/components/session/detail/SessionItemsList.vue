@@ -19,6 +19,7 @@ import MessageInput from '../../message/MessageInput.vue'
 import PendingRequestForm from '../../message/PendingRequestForm.vue'
 import ProcessIndicator from '../../ui/ProcessIndicator.vue'
 import TextSelectionComment from './TextSelectionComment.vue'
+import { getProviderLabel } from '../../../providers'
 
 // All states should animate for the bottom process indicator
 const BOTTOM_INDICATOR_ANIMATE_STATES = ['assistant_turn', 'user_turn', 'dead']
@@ -118,6 +119,7 @@ const messageInputRef = ref(null)
 
 // Session data
 const session = computed(() => store.getSession(props.sessionId))
+const providerLabel = computed(() => getProviderLabel(session.value?.provider))
 
 // Whether the session is stale (JSONL files deleted, history preserved as read-only)
 const isStale = computed(() => session.value?.stale === true)
@@ -1571,7 +1573,7 @@ defineExpose({
                     <wa-icon slot="icon" name="clock-rotate-left"></wa-icon>
                     <div class="stale-banner-content">
                         <strong>Read-only session</strong>
-                        <span>The session files were cleaned up by Claude Code. The conversation history has been preserved for reference.</span>
+                        <span>The session files were cleaned up by {{ providerLabel }}. The conversation history has been preserved for reference.</span>
                     </div>
                 </wa-callout>
             </div>

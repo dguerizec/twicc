@@ -9,7 +9,7 @@ import { ref, computed, watch, nextTick, useId, toRef } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useDataStore } from '../../stores/data'
 import { useSettingsStore } from '../../stores/settings'
-import { getProviderHelpers } from '../../providers'
+import { getProviderHelpers, getProviderLabel } from '../../providers'
 import { sendWsMessage, notifyUserDraftUpdated } from '../../composables/useWebSocket'
 import { useSessionAgentSettings } from '../../composables/useSessionAgentSettings'
 import { vPopoverFocusFix } from '../../directives/vPopoverFocusFix'
@@ -76,6 +76,7 @@ const emit = defineEmits(['needs-title'])
 // Get session data to check if it's a draft
 const session = computed(() => store.getSession(props.sessionId))
 const isDraft = computed(() => session.value?.draft === true)
+const providerLabel = computed(() => getProviderLabel(session.value?.provider))
 
 // Local state for the textarea
 const messageText = ref('')
@@ -183,10 +184,10 @@ const buttonIcon = computed(() => {
 const placeholderText = computed(() => {
     const state = processState.value?.state
     if (state === 'starting') {
-        return 'Starting Claude process...'
+        return `Starting ${providerLabel.value} process...`
     }
     if (state === 'assistant_turn') {
-        return 'You can send a message now. Claude will receive it as soon as possible (while working or after). Note: it will not appear in the conversation history.'
+        return `You can send a message now. ${providerLabel.value} will receive it as soon as possible (while working or after). Note: it will not appear in the conversation history.`
     }
     const historyHint = isDraft.value
         ? ''

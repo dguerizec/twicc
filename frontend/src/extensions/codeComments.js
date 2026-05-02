@@ -152,7 +152,7 @@ class CodeCommentWidget extends WidgetType {
             helpWrap.className = 'cm-code-comment-help'
 
             const helpSpan = document.createElement('span')
-            helpSpan.textContent = 'Annotate code lines for your next message to Claude. '
+            helpSpan.textContent = 'Annotate code lines for your next message. '
                 + 'Use "Add to message" to insert the formatted comment into the message input. '
                 + 'You can annotate multiple lines across files and send them all at once.'
 

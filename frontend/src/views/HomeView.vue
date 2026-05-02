@@ -103,7 +103,7 @@ onBeforeUnmount(() => {
 <template>
     <div class="home-view">
         <header class="home-header">
-            <h1>Claude Code Projects</h1>
+            <h1>Welcome to TwiCC</h1>
             <span id="home-global-sparkline" class="global-sparkline">
                 <ActivitySparkline :data="globalWeeklyActivity" />
             </span>

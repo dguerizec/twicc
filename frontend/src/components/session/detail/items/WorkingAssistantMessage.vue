@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import { useDataStore } from '../../../../stores/data'
 import { computeToolSummary, getVerb } from '../../../../utils/toolSummary'
+import { getProviderLabel } from '../../../../providers'
 import ProcessIndicator from '../../../ui/ProcessIndicator.vue'
 
 const props = defineProps({
@@ -19,6 +20,12 @@ const sessionBaseDir = computed(() => {
     if (!props.sessionId) return null
     const session = dataStore.getSession(props.sessionId)
     return session?.git_directory || session?.cwd || null
+})
+
+const providerLabel = computed(() => {
+    if (!props.sessionId) return getProviderLabel(null)
+    const session = dataStore.getSession(props.sessionId)
+    return getProviderLabel(session?.provider)
 })
 
 const plainPhrase = computed(() => {
@@ -69,8 +76,8 @@ function buildPhraseGroups(tools, baseDir, lastStartedToolId, lastToolVisible) {
 <template>
     <div class="working-assistant-message text-content">
         <ProcessIndicator :state="processState" size="small" :animate-states="['starting', 'assistant_turn']" />
-        <span v-if="plainPhrase !== null">Claude is {{ plainPhrase }}...</span>
-        <span v-else>Claude is <template v-for="(group, gi) in phraseGroups" :key="gi"><template v-if="gi > 0 && gi === phraseGroups.length - 1"> and </template><template v-else-if="gi > 0">, </template><template v-if="phraseGroups.length > 1"><strong>{{ group.verb }}</strong></template><template v-else>{{ group.verb }}</template><template v-if="group.targets"> (<template v-for="(t, ti) in group.targets" :key="`${gi}-${ti}`"><template v-if="ti > 0">, </template><code>{{ t }}</code></template>)</template></template>...</span>
+        <span v-if="plainPhrase !== null">{{ providerLabel }} is {{ plainPhrase }}...</span>
+        <span v-else>{{ providerLabel }} is <template v-for="(group, gi) in phraseGroups" :key="gi"><template v-if="gi > 0 && gi === phraseGroups.length - 1"> and </template><template v-else-if="gi > 0">, </template><template v-if="phraseGroups.length > 1"><strong>{{ group.verb }}</strong></template><template v-else>{{ group.verb }}</template><template v-if="group.targets"> (<template v-for="(t, ti) in group.targets" :key="`${gi}-${ti}`"><template v-if="ti > 0">, </template><code>{{ t }}</code></template>)</template></template>...</span>
     </div>
 </template>
 

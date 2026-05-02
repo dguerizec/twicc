@@ -9,7 +9,7 @@ import { useReconciliation } from './useReconciliation'
 import { toast } from './useToast'
 import { computeUsageData } from '../utils/usage'
 import { useSettingsStore } from '../stores/settings'
-import { getProviderHelpers, getProviderWsHandler, getProviderStore } from '../providers'
+import { getProviderHelpers, getProviderLabel, getProviderWsHandler, getProviderStore } from '../providers'
 import { playNotificationSound, sendBrowserNotification } from '../utils/notificationSounds'
 import { truncateTitle } from '../utils/truncate'
 
@@ -365,8 +365,9 @@ function buildNotificationBody(msg) {
 function notifyProcessStateChange(msg, previousState, route) {
     const sessionId = msg.session_id
     const settings = useSettingsStore()
+    const providerLabel = getProviderLabel(msg.provider)
 
-    // --- Transition to user_turn: "Claude finished working" ---
+    // --- Transition to user_turn: "<Provider> finished working" ---
     if (msg.state === 'user_turn' && previousState?.state !== 'user_turn') {
         const isViewingSession = route?.params?.sessionId === sessionId
         // If viewing the session, force-update last_viewed_at immediately.
@@ -380,7 +381,7 @@ function notifyProcessStateChange(msg, previousState, route) {
             __hmrState.activeUserTurnToasts.add(sessionId)
             toast.session(sessionId, {
                 type: 'info',
-                title: 'Claude finished working',
+                title: `${providerLabel} finished working`,
                 duration: 15000,
                 autoDismiss: true,
                 showActions: true,
@@ -391,13 +392,13 @@ function notifyProcessStateChange(msg, previousState, route) {
         // Browser notification
         if (settings.notifUserTurnBrowser) {
             sendBrowserNotification(
-                'Claude finished working',
+                `${providerLabel} finished working`,
                 buildNotificationBody(msg),
             )
         }
     }
 
-    // --- Pending request: "Claude needs your attention" ---
+    // --- Pending request: "<Provider> needs your attention" ---
     // Notify when at least one new pending request appeared (transition from
     // 0 → ≥1, or any growth in count for parallel concurrency-safe tools).
     const newPendingCount = msg.pending_requests?.length || 0
@@ -410,8 +411,8 @@ function notifyProcessStateChange(msg, previousState, route) {
             // Use the freshest (last-arrived) request to title the toast.
             const latest = msg.pending_requests[newPendingCount - 1]
             const pendingTitle = latest?.request_type === 'ask_user_question'
-                ? '🖐️ Claude has a question for you'
-                : '🖐️ Claude needs your approval'
+                ? `🖐️ ${providerLabel} has a question for you`
+                : `🖐️ ${providerLabel} needs your approval`
             toast.session(sessionId, { type: 'warning', title: pendingTitle })
         }
 
@@ -420,7 +421,7 @@ function notifyProcessStateChange(msg, previousState, route) {
         // Browser notification
         if (settings.notifPendingRequestBrowser) {
             sendBrowserNotification(
-                'Claude needs your attention',
+                `${providerLabel} needs your attention`,
                 buildNotificationBody(msg),
             )
         }
@@ -432,23 +433,23 @@ function notifyProcessStateChange(msg, previousState, route) {
         if (msg.kill_reason === 'error') {
             toast.session(sessionId, {
                 type: 'error',
-                title: 'Claude Code terminated due to error',
+                title: `${providerLabel} terminated due to error`,
                 errorMessage: msg.error || 'Unknown error',
             })
         } else if (msg.kill_reason === 'timeout_starting') {
             toast.session(sessionId, {
                 type: 'error',
-                title: 'Claude Code stopped: failed to start within 1 minute',
+                title: `${providerLabel} stopped: failed to start within 1 minute`,
             })
         } else if (msg.kill_reason === 'timeout_assistant_turn') {
             toast.session(sessionId, {
                 type: 'warning',
-                title: 'Claude Code stopped: no activity for 2 hours',
+                title: `${providerLabel} stopped: no activity for 2 hours`,
             })
         } else if (msg.kill_reason === 'timeout_assistant_turn_absolute') {
             toast.session(sessionId, {
                 type: 'warning',
-                title: 'Claude Code stopped: running for over 6 hours',
+                title: `${providerLabel} stopped: running for over 6 hours`,
             })
         }
         // No per-session toast for kill_reason === 'auth_required':

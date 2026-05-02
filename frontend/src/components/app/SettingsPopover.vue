@@ -41,13 +41,13 @@ function handleLogout() {
 const sections = [
     { id: 'global',                    label: 'Global' },
     { id: 'providers',                 label: 'Providers', synced: true },
-    { id: 'provider_claude_code',      label: 'Claude Code settings', navLabel: 'Claude Code', synced: true },
+    { id: 'provider_claude_code',      label: 'Claude settings', navLabel: 'Claude', synced: true },
     { id: 'notifications',             label: 'Notifications' },
     { id: 'sessions',      label: 'Sessions' },
     { id: 'title',         label: 'Title suggestion', navLabel: 'Titles', synced: true },
     { id: 'editor',        label: 'Editor' },
     { id: 'terminal',      label: 'Terminal' },
-    { id: 'usage',         label: 'Claude quotas/usage', navLabel: 'Usage' },
+    { id: 'usage',         label: 'Providers quotas/usage', navLabel: 'Usage' },
 ]
 
 const activeSection = ref('global')
@@ -107,7 +107,7 @@ const shortcutGroups = computed(() => {
         {
             label: 'Session chat',
             shortcuts: [
-                { keys: ['Quick triple Esc'], description: 'Emergency stop of the running Claude Code process' },
+                { keys: ['Quick triple Esc'], description: 'Emergency stop of the running process' },
             ]
         },
         {
@@ -1076,9 +1076,9 @@ function onChangelogClose() {
                     </div>
                 </section>
 
-                <!-- Claude quotas/usage Section -->
+                <!-- Providers quotas/usage Section -->
                 <section v-if="activeSection === 'usage'" class="settings-section">
-                    <h3 class="settings-section-title">Claude quotas/usage</h3>
+                    <h3 class="settings-section-title">Providers quotas/usage</h3>
                     <div class="setting-group">
                         <label class="setting-group-label">Show extra usage quota</label>
                         <wa-switch

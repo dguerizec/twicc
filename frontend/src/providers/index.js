@@ -35,6 +35,15 @@ export function getRegisteredProviders() {
 }
 
 /**
+ * Human-readable label for the given provider, suitable for inlining in
+ * user-facing strings (toasts, tooltips, placeholders). Falls back to
+ * ``'Agent'`` when the provider is unknown so callers don't have to guard.
+ */
+export function getProviderLabel(provider) {
+    return PROVIDER_HELPERS[provider]?.constructor.label ?? 'Agent'
+}
+
+/**
  * ``[{ value, label }]`` pairs for every registered provider, intended to feed
  * a ``<wa-select>`` (e.g. the global default-provider setting). The label
  * comes from the helpers' static ``label`` field, falling back to the wire

@@ -22,6 +22,7 @@ import ProcessIndicator from '../../ui/ProcessIndicator.vue'
 import ProcessDuration from '../../ui/ProcessDuration.vue'
 import CostDisplay from '../../ui/CostDisplay.vue'
 import AppTooltip from '../../ui/AppTooltip.vue'
+import { getProviderLabel } from '../../../providers'
 
 const props = defineProps({
     session: {
@@ -92,6 +93,9 @@ const hasCodeComments = computed(() =>
 
 /** Process state for this session — single lookup, used everywhere in template. */
 const processState = computed(() => store.getProcessState(props.session.id))
+
+/** Human-readable provider label, used in tooltips/dropdown labels. */
+const providerLabel = computed(() => getProviderLabel(props.session.provider))
 
 /** Whether this session has any pending request waiting for user response. */
 const pendingRequest = computed(() => store.getPendingRequests(props.session.id).length > 0)
@@ -374,7 +378,7 @@ function handleMenuSelect(event) {
                     name="eye"
                     class="compact-unread-indicator"
                 ></wa-icon>
-                <AppTooltip v-if="compactView && hasUnread" :for="`compact-unread-${session.id}`">New content to read<template v-if="processState"> · Claude Code state: {{ PROCESS_STATE_NAMES[processState.state] }}<template v-if="activeCronCount"> ({{ activeCronCount }} active cron{{ activeCronCount > 1 ? 's' : '' }})</template></template></AppTooltip>
+                <AppTooltip v-if="compactView && hasUnread" :for="`compact-unread-${session.id}`">New content to read<template v-if="processState"> · {{ providerLabel }} state: {{ PROCESS_STATE_NAMES[processState.state] }}<template v-if="activeCronCount"> ({{ activeCronCount }} active cron{{ activeCronCount > 1 ? 's' : '' }})</template></template></AppTooltip>
                 <!-- Compact mode: pending request indicator (takes priority over process indicator) -->
                 <wa-icon
                     v-if="compactView && !hasUnread && pendingRequest"
@@ -393,7 +397,7 @@ function handleMenuSelect(event) {
                     :animate-states="animateStates"
                     class="compact-process-indicator"
                 />
-                <AppTooltip v-if="compactView && processState && !hasUnread && !pendingRequest" :for="`compact-process-indicator-${session.id}`">Claude Code state: {{ PROCESS_STATE_NAMES[processState.state] }}<template v-if="activeCronCount"> ({{ activeCronCount }} active cron{{ activeCronCount > 1 ? 's' : '' }})</template></AppTooltip>
+                <AppTooltip v-if="compactView && processState && !hasUnread && !pendingRequest" :for="`compact-process-indicator-${session.id}`">{{ providerLabel }} state: {{ PROCESS_STATE_NAMES[processState.state] }}<template v-if="activeCronCount"> ({{ activeCronCount }} active cron{{ activeCronCount > 1 ? 's' : '' }})</template></AppTooltip>
             </div>
             <!-- Project badge line (hidden in compact mode, dot is shown inline instead) -->
             <!-- When unread + no process: show unread indicator on the project line (right-aligned) -->
@@ -424,7 +428,7 @@ function handleMenuSelect(event) {
                         {{ formatMemory(processState.memory) }}
                     </template>
                 </span>
-                <AppTooltip :for="`process-memory-${session.id}`">Claude Code memory usage</AppTooltip>
+                <AppTooltip :for="`process-memory-${session.id}`">{{ providerLabel }} memory usage</AppTooltip>
 
                 <span :id="`process-duration-${session.id}`" class="process-duration">
                     <ProcessDuration
@@ -449,7 +453,7 @@ function handleMenuSelect(event) {
                         name="eye"
                         class="unread-indicator"
                     ></wa-icon>
-                    <AppTooltip v-if="hasUnread" :for="`process-unread-${session.id}`">New content to read · Claude Code state: {{ PROCESS_STATE_NAMES[processState.state] }}<template v-if="activeCronCount"> ({{ activeCronCount }} active cron{{ activeCronCount > 1 ? 's' : '' }})</template></AppTooltip>
+                    <AppTooltip v-if="hasUnread" :for="`process-unread-${session.id}`">New content to read · {{ providerLabel }} state: {{ PROCESS_STATE_NAMES[processState.state] }}<template v-if="activeCronCount"> ({{ activeCronCount }} active cron{{ activeCronCount > 1 ? 's' : '' }})</template></AppTooltip>
                     <ProcessIndicator
                         v-else
                         :id="`process-indicator-${session.id}`"
@@ -458,7 +462,7 @@ function handleMenuSelect(event) {
                         size="small"
                         :animate-states="animateStates"
                     />
-                    <AppTooltip v-if="!hasUnread" :for="`process-indicator-${session.id}`">Claude Code state: {{ PROCESS_STATE_NAMES[processState.state] }}<template v-if="activeCronCount"> ({{ activeCronCount }} active cron{{ activeCronCount > 1 ? 's' : '' }})</template></AppTooltip>
+                    <AppTooltip v-if="!hasUnread" :for="`process-indicator-${session.id}`">{{ providerLabel }} state: {{ PROCESS_STATE_NAMES[processState.state] }}<template v-if="activeCronCount"> ({{ activeCronCount }} active cron{{ activeCronCount > 1 ? 's' : '' }})</template></AppTooltip>
                 </span>
             </div>
             <!-- Meta row (not shown for draft sessions, hidden in compact mode) -->
@@ -527,7 +531,7 @@ function handleMenuSelect(event) {
             </wa-dropdown-item>
             <wa-dropdown-item v-if="!session.draft && !session.archived" value="archive">
                 <wa-icon slot="icon" name="box-archive"></wa-icon>
-                {{ canStop ? 'Archive (it will stop the Claude Code process)' : 'Archive' }}
+                {{ canStop ? `Archive (it will stop the ${providerLabel} process)` : 'Archive' }}
             </wa-dropdown-item>
             <wa-dropdown-item v-if="session.archived" value="unarchive">
                 <wa-icon slot="icon" name="box-open"></wa-icon>
@@ -538,7 +542,7 @@ function handleMenuSelect(event) {
                 <wa-divider></wa-divider>
                 <wa-dropdown-item v-if="canStop" value="stop" :disabled="stoppingProcess">
                     <wa-icon slot="icon" name="ban"></wa-icon>
-                    {{ stoppingProcess ? 'Stopping…' : 'Stop the Claude Code process' }}
+                    {{ stoppingProcess ? 'Stopping…' : `Stop the ${providerLabel} process` }}
                 </wa-dropdown-item>
                 <wa-dropdown-item v-if="session.draft" value="delete-draft" variant="danger">
                     <wa-icon slot="icon" name="trash"></wa-icon>

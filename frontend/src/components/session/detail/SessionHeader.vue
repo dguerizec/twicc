@@ -5,6 +5,7 @@ import { useSettingsStore } from '../../../stores/settings'
 import { formatDate } from '../../../utils/date'
 import { PROCESS_STATE, PROCESS_STATE_COLORS, PROCESS_STATE_NAMES } from '../../../constants'
 import { claudeCodeHelpers } from '../../../providers/claude_code/helpers'
+import { getProviderLabel } from '../../../providers'
 import { stopSubagent } from '../../../composables/useWebSocket'
 import { stopSessionProcess } from '../../../composables/useStopSessionProcess'
 import ProjectBadge from '../../project/ProjectBadge.vue'
@@ -51,6 +52,7 @@ const showCosts = computed(() => settingsStore.areCostsShown)
 
 // Session data from store
 const session = computed(() => store.getSession(props.sessionId))
+const providerLabel = computed(() => getProviderLabel(session.value?.provider))
 
 // Get display name for header
 // - Session mode: title if available, "New session" for drafts without title, otherwise session ID
@@ -377,7 +379,7 @@ defineExpose({
                 >
                     <wa-icon name="box-archive" label="Archive"></wa-icon>
                 </wa-button>
-                <AppTooltip v-if="!session.archived && !session.draft" :for="`session-header-${sessionId}-archive-button`">{{ canStopProcess ? 'Archive session (it will stop the Claude Code process)' : 'Archive session' }}</AppTooltip>
+                <AppTooltip v-if="!session.archived && !session.draft" :for="`session-header-${sessionId}-archive-button`">{{ canStopProcess ? `Archive session (it will stop the ${providerLabel} process)` : 'Archive session' }}</AppTooltip>
 
                 <!-- Rename button (only for main session) -->
                 <wa-button
@@ -571,7 +573,7 @@ defineExpose({
                     >
                         {{ formatMemory(processState.memory) }}
                     </span>
-                    <AppTooltip v-if="processState.memory" :for="`session-header-${sessionId}-process-memory`">Claude Code memory usage</AppTooltip>
+                    <AppTooltip v-if="processState.memory" :for="`session-header-${sessionId}-process-memory`">{{ providerLabel }} memory usage</AppTooltip>
 
                     <ProcessIndicator
                         :id="`session-header-${sessionId}-process-indicator`"
@@ -580,7 +582,7 @@ defineExpose({
                         size="small"
                         :animate-states="animateStates"
                     />
-                    <AppTooltip :for="`session-header-${sessionId}-process-indicator`">Claude Code state: {{ PROCESS_STATE_NAMES[processState.state] }}<template v-if="activeCronCount"> ({{ activeCronCount }} active cron{{ activeCronCount > 1 ? 's' : '' }})</template></AppTooltip>
+                    <AppTooltip :for="`session-header-${sessionId}-process-indicator`">{{ providerLabel }} state: {{ PROCESS_STATE_NAMES[processState.state] }}<template v-if="activeCronCount"> ({{ activeCronCount }} active cron{{ activeCronCount > 1 ? 's' : '' }})</template></AppTooltip>
 
                     <wa-button
                         v-if="canStopProcess"
@@ -595,7 +597,7 @@ defineExpose({
                     >
                         <wa-icon name="ban" label="Stop"></wa-icon>
                     </wa-button>
-                    <AppTooltip :for="`session-header-${sessionId}-stop-button`">Stop the Claude Code process</AppTooltip>
+                    <AppTooltip :for="`session-header-${sessionId}-stop-button`">Stop the {{ providerLabel }} process</AppTooltip>
 
                     <wa-button
                         v-if="canStopAgent"

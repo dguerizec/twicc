@@ -95,9 +95,9 @@ defineExpose({ sync })
             >Enable browser notifications</wa-button>
         </div>
 
-        <!-- Claude finished working -->
+        <!-- Agent finished working -->
         <div class="setting-group">
-            <label class="setting-group-label">Claude finished working</label>
+            <label class="setting-group-label">Agent finished working</label>
             <wa-select
                 :value.prop="userTurnSound"
                 @change="onUserTurnSoundChange"
@@ -121,9 +121,9 @@ defineExpose({ sync })
             </div>
         </div>
 
-        <!-- Claude needs your attention -->
+        <!-- Agent needs your attention -->
         <div class="setting-group">
-            <label class="setting-group-label">Claude needs your attention</label>
+            <label class="setting-group-label">Agent needs your attention</label>
             <wa-select
                 :value.prop="pendingRequestSound"
                 @change="onPendingRequestSoundChange"
