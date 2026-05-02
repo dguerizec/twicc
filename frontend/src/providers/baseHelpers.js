@@ -174,4 +174,18 @@ export class BaseProviderHelpers {
         }
         return false
     }
+
+    // ─── Runtime context-max resolution ──────────────────────────────────
+    //
+    // Unlike ``enforceAgentSettingsConsistency`` (which is rules-only over a
+    // settings dict), this hook can read live session state — typically
+    // ``context_usage`` — so a provider can promote the effective window
+    // when the persisted value would be too small. ``overrideModel`` lets
+    // callers preview the value for a model that hasn't been saved yet.
+    //
+    // Default: return the session's persisted ``context_max`` as-is.
+
+    getEffectiveContextMax(session, /* overrideModel */ _overrideModel) {
+        return session?.context_max ?? null
+    }
 }

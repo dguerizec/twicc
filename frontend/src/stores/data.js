@@ -5,11 +5,9 @@ import { toRaw } from 'vue'
 import { getPrefixSuffixBoundaries } from '../utils/contentVisibility'
 import { computeVisualItems, visualItemEqual } from '../utils/visualItems'
 import { DISPLAY_LEVEL, DISPLAY_MODE, PROCESS_STATE, PROVIDER, SYNTHETIC_ITEM } from '../constants'
-import { CONTEXT_MAX as CLAUDE_CODE_CONTEXT_MAX } from '../providers/claude_code/constants'
+import { getProviderHelpers } from '../providers'
 import { getSessionCutoffMs } from '../utils/sessions'
 import { useSettingsStore } from './settings'
-import { useClaudeCodeStore } from '../providers/claude_code/store'
-import { claudeCodeHelpers } from '../providers/claude_code/helpers'
 import {
     saveDraftMessage,
     getDraftMessage,
@@ -395,22 +393,17 @@ export const useDataStore = defineStore('data', {
         // Process state getter - returns { state, error?, pending_requests? } or null if no active process
         getProcessState: (state) => (sessionId) => state.processStates[sessionId] || null,
 
-        // Effective context max for a session, accounting for the auto-force-to-1M
-        // rule that kicks in when usage exceeds 85% of the 200K window. Single
-        // source of truth: used by the settings selector, the header progress
-        // ring, and when sending the value to the backend so they stay in sync.
-        // `overrideModel` lets callers pass the model currently selected in the
-        // UI (which may differ from the persisted one) so the rule respects the
-        // model's 1M capability.
+        // Effective context max for a session — provider-specific rules (such
+        // as Claude Code's auto-promote-to-1M when usage > 85% of the 200K
+        // window) live in the provider helpers. Single source of truth used by
+        // the settings selector, the header progress ring, and the value sent
+        // to the backend so they stay in sync. ``overrideModel`` lets callers
+        // preview the value for a model not yet persisted on the session.
         getEffectiveContextMax: (state) => (sessionId, overrideModel = undefined) => {
             const session = state.sessions[sessionId]
-            const claudeCodeStore = useClaudeCodeStore()
-            const baseValue = session?.context_max ?? claudeCodeStore.defaultContextMax
-            if (baseValue !== CLAUDE_CODE_CONTEXT_MAX.DEFAULT) return baseValue
-            const model = overrideModel !== undefined ? overrideModel : (session?.selected_model ?? claudeCodeStore.defaultModel)
-            if (!claudeCodeHelpers.modelSupports1m(model)) return baseValue
-            if ((session?.context_usage ?? 0) > CLAUDE_CODE_CONTEXT_MAX.DEFAULT * 0.85) return CLAUDE_CODE_CONTEXT_MAX.EXTENDED
-            return baseValue
+            if (!session) return null
+            const helpers = getProviderHelpers(session.provider)
+            return helpers ? helpers.getEffectiveContextMax(session, overrideModel) : (session.context_max ?? null)
         },
 
         /**

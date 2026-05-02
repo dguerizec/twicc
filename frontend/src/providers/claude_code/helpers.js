@@ -202,6 +202,22 @@ export class ClaudeCodeHelpers extends BaseProviderHelpers {
     }
 
     /**
+     * Promote the effective window from DEFAULT to EXTENDED when the session
+     * has burned past 85% of the 200K window AND the (possibly overridden)
+     * model supports 1M. Single source of truth for the settings selector,
+     * the header progress ring, and the value sent to the backend.
+     */
+    getEffectiveContextMax(session, overrideModel = undefined) {
+        const store = useClaudeCodeStore()
+        const baseValue = session?.context_max ?? store.defaultContextMax
+        if (baseValue !== CONTEXT_MAX.DEFAULT) return baseValue
+        const model = overrideModel !== undefined ? overrideModel : (session?.selected_model ?? store.defaultModel)
+        if (!this.modelSupports1m(model)) return baseValue
+        if ((session?.context_usage ?? 0) > CONTEXT_MAX.DEFAULT * 0.85) return CONTEXT_MAX.EXTENDED
+        return baseValue
+    }
+
+    /**
      * If ``selectedModel`` is retired (past retirement date and not the
      * latest), return the next-higher version in the same family. Otherwise
      * ``null``. Used at render/send time to correct stale session settings.
