@@ -4,15 +4,14 @@
  * These commands don't depend on component lifecycle; they rely only on
  * store state, route state, and the router instance.
  *
- * Categories covered: navigation, creation, display, claude, ui.
+ * Categories covered: navigation, creation, display, provider:<key>, ui.
  */
 
 import { useCommandRegistry } from '../composables/useCommandRegistry'
 import { useSettingsStore } from '../stores/settings'
 import { useDataStore, ALL_PROJECTS_ID } from '../stores/data'
 import { useWorkspacesStore } from '../stores/workspaces'
-import { useClaudeCodeStore } from '../providers/claude_code/store'
-import { claudeCodeHelpers } from '../providers/claude_code/helpers'
+import { getRegisteredProviders, getProviderHelpers } from '../providers'
 import { useRoute } from 'vue-router'
 import { clearTabRouteParams } from '../utils/granularRoutes'
 import { computeSidebarSessionBlocks } from '../utils/sidebarSessions'
@@ -25,7 +24,87 @@ import {
     WA_BRAND,
     WA_BRAND_LABELS,
 } from '../constants'
-import { EFFORT as CLAUDE_CODE_EFFORT } from '../providers/claude_code/constants'
+
+// Per-provider "Change Default …" palette command descriptors. Each entry
+// targets one agent-setting wire-name; ``selected_model`` is handled out
+// of band because it consumes the model registry's groupings.
+const PROVIDER_DEFAULTS_SIMPLE_FIELDS = [
+    { field: 'effort',           idSuffix: 'effort',     label: 'Change Default Effort…',                  icon: 'gauge' },
+    { field: 'permission_mode',  idSuffix: 'permission', label: 'Change Default Permission Mode…',         icon: 'shield-halved' },
+    { field: 'thinking_enabled', idSuffix: 'thinking',   label: 'Change Default Thinking…',                icon: 'brain' },
+    { field: 'context_max',      idSuffix: 'context',    label: 'Change Default Context Size…',            icon: 'window-maximize' },
+    { field: 'claude_in_chrome', idSuffix: 'chrome',     label: 'Change Default Claude in Chrome MCP…',    icon: 'globe' },
+]
+
+/**
+ * Build the "Change Default …" palette commands for every registered
+ * provider. Each provider that supports an agent setting field
+ * contributes one command; commands land in the per-provider category
+ * (``provider:<key>``) so the palette renders one section per provider.
+ *
+ * Reads/writes go through ``helpers.getDefaultValue`` /
+ * ``helpers.setDefaultValue`` so a model change re-applies
+ * ``enforceAgentSettingsConsistency`` automatically (rolls back
+ * context_max / effort when the new model doesn't support them).
+ */
+function buildProviderDefaultsCommands() {
+    const commands = []
+    for (const provider of getRegisteredProviders()) {
+        const helpers = getProviderHelpers(provider)
+        if (!helpers) continue
+        const category = `provider:${provider}`
+
+        if (helpers.supportsAgentSetting('selected_model')) {
+            commands.push({
+                id: `${category}.model`,
+                label: 'Change Default Model…',
+                icon: 'robot',
+                category,
+                items: () => {
+                    const current = helpers.getDefaultValue('selected_model')
+                    const groups = helpers.getModelSelectGroups(helpers.getModelRegistry?.() ?? [])
+                    const items = []
+                    groups.forEach((group, idx) => {
+                        const groupKey = `model_group_${idx}`
+                        for (const entry of group.entries ?? []) {
+                            items.push({
+                                id: entry.value,
+                                group: groupKey,
+                                label: entry.label,
+                                action: () => helpers.setDefaultValue('selected_model', entry.value),
+                                active: current === entry.value,
+                            })
+                        }
+                    })
+                    return items
+                },
+            })
+        }
+
+        for (const { field, idSuffix, label, icon } of PROVIDER_DEFAULTS_SIMPLE_FIELDS) {
+            if (!helpers.supportsAgentSetting(field)) continue
+            commands.push({
+                id: `${category}.${idSuffix}`,
+                label,
+                icon,
+                category,
+                items: () => {
+                    const current = helpers.getDefaultValue(field)
+                    const ctx = { effectiveModel: helpers.getDefaultValue('selected_model') }
+                    return helpers.getFieldChoices(field)
+                        .filter(choice => !helpers.isChoiceDisabled(field, choice.value, ctx))
+                        .map(choice => ({
+                            id: String(choice.value),
+                            label: choice.label,
+                            action: () => helpers.setDefaultValue(field, choice.value),
+                            active: current === choice.value,
+                        }))
+                },
+            })
+        }
+    }
+    return commands
+}
 
 // Cap on how many sessions "Go to Session…" exposes. The list is already
 // prioritized (extra → cross-filter pinned → cross-filter active → natural),
@@ -184,7 +263,6 @@ function buildSessionNavItems({
 export function initStaticCommands(router) {
     const { registerCommands } = useCommandRegistry()
     const settings = useSettingsStore()
-    const claudeCodeStore = useClaudeCodeStore()
     const data = useDataStore()
     const workspaces = useWorkspacesStore()
     const route = useRoute()
@@ -672,88 +750,9 @@ export function initStaticCommands(router) {
             action: () => settings.setToolDiffSideBySide(!settings.toolDiffSideBySide),
         },
 
-        // ── Claude Defaults ───────────────────────────────────────────
+        // ── Provider defaults (one section per registered provider) ───
 
-        ...(claudeCodeHelpers.supportsAgentSetting('selected_model') ? [{
-            id: 'claude.model',
-            label: 'Change Default Model\u2026',
-            icon: 'robot',
-            category: 'claude',
-            items: () => claudeCodeHelpers.getModelRegistry().map(entry => ({
-                id: entry.selected_model,
-                label: entry.latest
-                    ? `${claudeCodeHelpers.getModelLabel(entry.selected_model)} (latest: ${entry.version})`
-                    : `${claudeCodeHelpers.getModelLabel(entry.selected_model)} (until ${entry.retirement_date})`,
-                action: () => claudeCodeStore.setDefaultModel(entry.selected_model),
-                active: claudeCodeStore.defaultModel === entry.selected_model,
-            })),
-        }] : []),
-        ...(claudeCodeHelpers.supportsAgentSetting('effort') ? [{
-            id: 'claude.effort',
-            label: 'Change Default Effort\u2026',
-            icon: 'gauge',
-            category: 'claude',
-            items: () => claudeCodeHelpers.getFieldChoices('effort')
-                .filter(choice => {
-                    if (choice.value === CLAUDE_CODE_EFFORT.X_HIGH) return claudeCodeHelpers.modelSupportsEffortXhigh(claudeCodeStore.defaultModel)
-                    if (choice.value === CLAUDE_CODE_EFFORT.MAX) return claudeCodeHelpers.modelSupportsEffortMax(claudeCodeStore.defaultModel)
-                    return true
-                })
-                .map(choice => ({
-                    id: choice.value,
-                    label: choice.label,
-                    action: () => claudeCodeStore.setDefaultEffort(choice.value),
-                    active: claudeCodeStore.defaultEffort === choice.value,
-                })),
-        }] : []),
-        ...(claudeCodeHelpers.supportsAgentSetting('permission_mode') ? [{
-            id: 'claude.permission',
-            label: 'Change Default Permission Mode\u2026',
-            icon: 'shield-halved',
-            category: 'claude',
-            items: () => claudeCodeHelpers.getFieldChoices('permission_mode').map(choice => ({
-                id: choice.value,
-                label: choice.label,
-                action: () => claudeCodeStore.setDefaultPermissionMode(choice.value),
-                active: claudeCodeStore.defaultPermissionMode === choice.value,
-            })),
-        }] : []),
-        ...(claudeCodeHelpers.supportsAgentSetting('thinking_enabled') ? [{
-            id: 'claude.thinking',
-            label: 'Change Default Thinking\u2026',
-            icon: 'brain',
-            category: 'claude',
-            items: () => claudeCodeHelpers.getFieldChoices('thinking_enabled').map(choice => ({
-                id: String(choice.value),
-                label: choice.label,
-                action: () => claudeCodeStore.setDefaultThinking(choice.value),
-                active: claudeCodeStore.defaultThinking === choice.value,
-            })),
-        }] : []),
-        ...(claudeCodeHelpers.supportsAgentSetting('context_max') ? [{
-            id: 'claude.context',
-            label: 'Change Default Context Size\u2026',
-            icon: 'window-maximize',
-            category: 'claude',
-            items: () => claudeCodeHelpers.getFieldChoices('context_max').map(choice => ({
-                id: String(choice.value),
-                label: choice.label,
-                action: () => claudeCodeStore.setDefaultContextMax(choice.value),
-                active: claudeCodeStore.defaultContextMax === choice.value,
-            })),
-        }] : []),
-        ...(claudeCodeHelpers.supportsAgentSetting('claude_in_chrome') ? [{
-            id: 'claude.chrome',
-            label: 'Change Default Claude in Chrome MCP\u2026',
-            icon: 'globe',
-            category: 'claude',
-            items: () => claudeCodeHelpers.getFieldChoices('claude_in_chrome').map(choice => ({
-                id: String(choice.value),
-                label: choice.label,
-                action: () => claudeCodeStore.setDefaultClaudeInChrome(choice.value),
-                active: claudeCodeStore.defaultClaudeInChrome === choice.value,
-            })),
-        }] : []),
+        ...buildProviderDefaultsCommands(),
 
         // ── UI ────────────────────────────────────────────────────────
 

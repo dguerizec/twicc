@@ -35,21 +35,32 @@
  */
 
 import { ref, shallowRef, computed } from 'vue'
+import { getRegisteredProviders, getProviderHelpers } from '../providers'
 
 /**
  * Category definitions in display order.
- * Used to group and sort commands in the palette UI.
+ *
+ * Provider categories (``provider:<key>``) are inserted dynamically — one
+ * per registered provider — so adding a new provider doesn't require
+ * editing this list. The position between ``display`` and ``ui`` matches
+ * the original "Claude Defaults" slot.
  */
-export const CATEGORIES = [
-    { key: 'navigation', label: 'Navigation' },
-    { key: 'session', label: 'Session' },
-    { key: 'creation', label: 'Creation' },
-    { key: 'display', label: 'Display' },
-    { key: 'claude', label: 'Claude Defaults' },
-    { key: 'ui', label: 'UI' },
-]
+export const CATEGORIES = computed(() => {
+    const providerCategories = getRegisteredProviders().map(provider => {
+        const label = getProviderHelpers(provider).constructor.label ?? provider
+        return { key: `provider:${provider}`, label: `${label} Defaults` }
+    })
+    return [
+        { key: 'navigation', label: 'Navigation' },
+        { key: 'session',    label: 'Session' },
+        { key: 'creation',   label: 'Creation' },
+        { key: 'display',    label: 'Display' },
+        ...providerCategories,
+        { key: 'ui',         label: 'UI' },
+    ]
+})
 
-const VALID_CATEGORY_KEYS = new Set(CATEGORIES.map((c) => c.key))
+const VALID_CATEGORY_KEYS = computed(() => new Set(CATEGORIES.value.map(c => c.key)))
 
 // ---------------------------------------------------------------------------
 // Module-level singleton state
@@ -109,7 +120,7 @@ const commandsByCategory = computed(() => {
         list.push(command)
     }
     // Iterate in CATEGORIES order, skip empty
-    for (const category of CATEGORIES) {
+    for (const category of CATEGORIES.value) {
         const commands = byCategoryKey.get(category.key)
         if (commands && commands.length > 0) {
             groups.push({ ...category, commands })
@@ -130,7 +141,7 @@ export function useCommandRegistry() {
      * @param {object} command
      */
     function registerCommand(command) {
-        if (!VALID_CATEGORY_KEYS.has(command.category)) {
+        if (!VALID_CATEGORY_KEYS.value.has(command.category)) {
             console.warn(`[CommandRegistry] Unknown category "${command.category}" for command "${command.id}"`)
         }
         const next = new Map(commandMap.value)
@@ -144,8 +155,9 @@ export function useCommandRegistry() {
      */
     function registerCommands(commands) {
         const next = new Map(commandMap.value)
+        const validKeys = VALID_CATEGORY_KEYS.value
         for (const command of commands) {
-            if (!VALID_CATEGORY_KEYS.has(command.category)) {
+            if (!validKeys.has(command.category)) {
                 console.warn(`[CommandRegistry] Unknown category "${command.category}" for command "${command.id}"`)
             }
             next.set(command.id, command)
