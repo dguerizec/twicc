@@ -53,7 +53,6 @@ import { useCodeCommentsStore } from './stores/codeComments'
 import { useWorkspacesStore } from './stores/workspaces'
 import { useTerminalConfigStore } from './stores/terminalConfig'
 import { useMessageSnippetsStore } from './stores/messageSnippets'
-import { useClaudeCodeStore } from './providers/claude_code/store'
 
 // Notivue CSS
 import 'notivue/notification.css'
@@ -118,8 +117,9 @@ if (!authStore.needsLogin) {
             applyDefaultSettings(default_settings, settings, dev_mode, uvx_mode, twicc_launch_prefix, settings_version)
             // Seed each provider's bootstrap-driven state (agent-setting categories
             // for ``classifyAgentSettingsChanges``, model registry for capability
-            // and retired-model lookups). Optional chaining: providers without one
-            // of those concerns simply won't expose the corresponding setter.
+            // and retired-model lookups, agent-setting presets). Optional chaining:
+            // providers without one of those concerns simply won't expose the
+            // corresponding setter.
             const { getProviderStore } = await import('./providers')
             for (const [provider, providerData] of Object.entries(providers ?? {})) {
                 const providerStore = getProviderStore(provider)
@@ -130,6 +130,7 @@ if (!authStore.needsLogin) {
                 if (providerData?.model_registry) {
                     providerStore.setModelRegistry?.(providerData.model_registry)
                 }
+                providerStore.applySettingsPresetsConfig?.(providerData?.agent_settings_presets)
             }
         } else {
             bootstrapFailed = true
@@ -159,7 +160,6 @@ if (!authStore.needsLogin) {
     useWorkspacesStore().applyWorkspaces(bootstrapData.workspaces)
     useTerminalConfigStore().applyConfig(bootstrapData.terminal_config)
     useMessageSnippetsStore().applyConfig(bootstrapData.message_snippets)
-    useClaudeCodeStore().applySettingsPresetsConfig(bootstrapData.providers?.claude_code?.agent_settings_presets)
 
     // Hydrate drafts from IndexedDB (async, non-blocking)
     // Order matters: sessions first so draft messages have their session available
