@@ -1,19 +1,20 @@
 <script setup>
-// MessageInput.vue - Text input for sending messages to Claude
-import { ref, computed, watch, nextTick, useId } from 'vue'
+// MessageInput.vue - Text input + send/apply controls for a session.
+// Per-session agent settings (model, effort, …) live in the
+// ``useSessionAgentSettings`` composable; the trigger summary and the
+// popover that exposes them are rendered by AgentSettingsSummary /
+// AgentSettingsPopover. This component owns the textarea, attachments,
+// pickers, and the send pipeline.
+import { ref, computed, watch, nextTick, useId, toRef } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useDataStore } from '../../stores/data'
 import { useSettingsStore } from '../../stores/settings'
 import { getProviderHelpers } from '../../providers'
-import { claudeCodeHelpers } from '../../providers/claude_code/helpers'
 import { sendWsMessage, notifyUserDraftUpdated } from '../../composables/useWebSocket'
+import { useSessionAgentSettings } from '../../composables/useSessionAgentSettings'
+import { vPopoverFocusFix } from '../../directives/vPopoverFocusFix'
 import { isSupportedMimeType, MAX_FILE_SIZE, SUPPORTED_IMAGE_TYPES, draftMediaToMediaItem } from '../../utils/fileUtils'
 import { toast } from '../../composables/useToast'
-import { vPopoverFocusFix } from '../../directives/vPopoverFocusFix'
-import {
-    CONTEXT_MAX as CLAUDE_CODE_CONTEXT_MAX,
-    EFFORT as CLAUDE_CODE_EFFORT,
-} from '../../providers/claude_code/constants'
 import { useCodeCommentsStore, formatAllComments } from '../../stores/codeComments'
 import { getParsedContent } from '../../utils/parsedContent'
 import MediaThumbnailGroup from '../media/MediaThumbnailGroup.vue'
@@ -23,11 +24,10 @@ import SlashCommandPickerPopup from './SlashCommandPickerPopup.vue'
 import MessageHistoryPickerPopup from './MessageHistoryPickerPopup.vue'
 import MessageSnippetsBar from './MessageSnippetsBar.vue'
 import MessageSnippetsDialog from './MessageSnippetsDialog.vue'
+import AgentSettingsSummary from './AgentSettingsSummary.vue'
+import AgentSettingsPopover from './AgentSettingsPopover.vue'
 import { useMessageSnippetsStore } from '../../stores/messageSnippets'
 import { useWorkspacesStore } from '../../stores/workspaces'
-import { useClaudeCodeStore } from '../../providers/claude_code/store'
-import { formatPresetSummary } from '../../utils/presetFormat'
-import ClaudePresetsDialog from '../app/ClaudePresetsDialog.vue'
 import { getUnavailablePlaceholders, resolveSnippetText } from '../../utils/snippetPlaceholders'
 
 const props = defineProps({
@@ -46,7 +46,27 @@ const route = useRoute()
 const store = useDataStore()
 const settingsStore = useSettingsStore()
 const codeCommentsStore = useCodeCommentsStore()
-const claudeCodeStore = useClaudeCodeStore()
+
+const settings = useSessionAgentSettings(toRef(props, 'sessionId'))
+const {
+    selectedModel,
+    selectedPermissionMode,
+    selectedEffort,
+    selectedThinking,
+    selectedClaudeInChrome,
+    selectedContextMax,
+    activeModel,
+    activePermissionMode,
+    activeEffort,
+    activeThinking,
+    activeClaudeInChrome,
+    activeContextMax,
+    isStarting,
+    processState,
+    isContextMaxForced,
+    hasDropdownsChanged,
+    hasSettingsChanged,
+} = settings
 
 // Detect "All Projects" mode from route name
 const isAllProjectsMode = computed(() => route.name?.startsWith('projects-'))
@@ -131,152 +151,6 @@ watch(attachmentCount, (newCount, oldCount) => {
 // Convert DraftMedia objects to normalized MediaItem format for the thumbnail group
 const mediaItems = computed(() => attachments.value.map(a => draftMediaToMediaItem(a)))
 
-// Sentinel value for the "use default" option in wa-select dropdowns.
-// When selected, the corresponding ref is set to null (= follow global default).
-const DEFAULT_SENTINEL = '__default__'
-
-// Per-field choice catalogues come from the provider helpers. Booleans are
-// stringified at the template boundary for wa-select compatibility.
-const permissionModeOptions = computed(() => claudeCodeHelpers.getFieldChoices('permission_mode'))
-const effortOptions = computed(() => claudeCodeHelpers.getFieldChoices('effort'))
-const thinkingOptions = computed(() => claudeCodeHelpers.getFieldChoices('thinking_enabled'))
-const claudeInChromeOptions = computed(() => claudeCodeHelpers.getFieldChoices('claude_in_chrome'))
-const contextMaxOptions = computed(() => claudeCodeHelpers.getFieldChoices('context_max'))
-
-// Model options for the dropdown
-const modelRegistryOptions = computed(() => {
-    const registry = claudeCodeHelpers.getModelRegistry()
-    return {
-        latest: registry.filter(e => e.latest),
-        older: registry.filter(e => !e.latest),
-    }
-})
-
-function formatRetirementDate(isoDate) {
-    return new Date(isoDate + 'T00:00:00').toLocaleDateString(undefined, {
-        month: 'short', day: 'numeric', year: 'numeric',
-    })
-}
-
-// Default labels for the "Default: xxx" option in each dropdown
-const claudeCodeDefaultModelLabel = computed(() => {
-    const model = claudeCodeStore.defaultModel
-    const registry = claudeCodeHelpers.getModelRegistry()
-    const entry = registry.find(e => e.selected_model === model)
-    if (entry) {
-        return entry.latest
-            ? `${claudeCodeHelpers.getModelLabel(model)} (latest: ${entry.version})`
-            : `${claudeCodeHelpers.getModelLabel(model)}`
-    }
-    return claudeCodeHelpers.getModelLabel(model)
-})
-const claudeCodeDefaultContextMaxLabel = computed(() => claudeCodeHelpers.getChoiceLabel('context_max', claudeCodeStore.defaultContextMax))
-const claudeCodeDefaultEffortLabel = computed(() => claudeCodeHelpers.getChoiceLabel('effort', claudeCodeStore.defaultEffort))
-const claudeCodeDefaultThinkingLabel = computed(() => claudeCodeHelpers.getChoiceLabel('thinking_enabled', claudeCodeStore.defaultThinking))
-const claudeCodeDefaultChromeLabel = computed(() => claudeCodeHelpers.getChoiceLabel('claude_in_chrome', claudeCodeStore.defaultClaudeInChrome))
-const claudeCodeDefaultPermissionLabel = computed(() => claudeCodeHelpers.getChoiceLabel('permission_mode', claudeCodeStore.defaultPermissionMode))
-
-// Whether any session setting is explicitly forced (non-null)
-const anySettingForced = computed(() =>
-    selectedPermissionMode.value !== null ||
-    selectedModel.value !== null ||
-    selectedEffort.value !== null ||
-    selectedThinking.value !== null ||
-    selectedClaudeInChrome.value !== null ||
-    selectedContextMax.value !== null
-)
-
-// Reset all settings to defaults (null = follow global default)
-function resetAllToDefaults() {
-    selectedPermissionMode.value = null
-    selectedModel.value = null
-    selectedEffort.value = null
-    selectedThinking.value = null
-    selectedClaudeInChrome.value = null
-    selectedContextMax.value = null
-}
-
-// Restore dropdowns to their active (saved) values, discarding unsaved changes
-
-function restoreSettings() {
-    selectedModel.value = activeModel.value
-    selectedPermissionMode.value = activePermissionMode.value
-    selectedEffort.value = activeEffort.value
-    selectedThinking.value = activeThinking.value
-    selectedClaudeInChrome.value = activeClaudeInChrome.value
-    selectedContextMax.value = activeContextMax.value
-}
-
-// Summary parts for the settings button.
-// Each entry is { text, forced } where forced=true means the effective value
-// differs from the global default (and the setting is explicitly set, not null).
-// Model is also marked forced when context_max is explicitly forced to a non-default value.
-const settingsSummaryParts = computed(() => {
-    const effectiveModel = selectedModel.value ?? claudeCodeStore.defaultModel
-    const effectiveContextMax = selectedContextMax.value ?? claudeCodeStore.defaultContextMax
-    const effectiveEffort = selectedEffort.value ?? claudeCodeStore.defaultEffort
-    const effectiveThinking = selectedThinking.value ?? claudeCodeStore.defaultThinking
-    const effectiveChrome = selectedClaudeInChrome.value ?? claudeCodeStore.defaultClaudeInChrome
-    const effectivePermission = selectedPermissionMode.value ?? claudeCodeStore.defaultPermissionMode
-
-    const modelLabel = claudeCodeHelpers.getModelLabel(effectiveModel)
-    const modelDisplay = effectiveContextMax === CLAUDE_CODE_CONTEXT_MAX.EXTENDED
-        ? `${modelLabel}[1m]`
-        : modelLabel
-    // Model part is forced if model or context_max is explicitly set to a non-default value
-    const modelForced = (selectedModel.value !== null && selectedModel.value !== claudeCodeStore.defaultModel)
-        || (selectedContextMax.value !== null && selectedContextMax.value !== claudeCodeStore.defaultContextMax)
-
-    return [
-        { text: modelDisplay, forced: modelForced },
-        { text: claudeCodeHelpers.getChoiceDisplayLabel('effort', effectiveEffort), forced: selectedEffort.value !== null && selectedEffort.value !== claudeCodeStore.defaultEffort },
-        { text: claudeCodeHelpers.getChoiceDisplayLabel('thinking_enabled', effectiveThinking), forced: selectedThinking.value !== null && selectedThinking.value !== claudeCodeStore.defaultThinking },
-        { text: claudeCodeHelpers.getChoiceLabel('permission_mode', effectivePermission), forced: selectedPermissionMode.value !== null && selectedPermissionMode.value !== claudeCodeStore.defaultPermissionMode },
-        { text: claudeCodeHelpers.getChoiceDisplayLabel('claude_in_chrome', effectiveChrome), forced: selectedClaudeInChrome.value !== null && selectedClaudeInChrome.value !== claudeCodeStore.defaultClaudeInChrome },
-    ]
-})
-
-// Selected settings for the current session.
-// null = "use default" (follow global default), explicit value = "forced" for this session.
-const selectedPermissionMode = ref(null)
-const selectedModel = ref(null)
-const selectedEffort = ref(null)
-const selectedThinking = ref(null)
-const selectedClaudeInChrome = ref(null)
-const selectedContextMax = ref(null)
-
-// Claude config presets (apply to the six selects above).
-const presets = computed(() => claudeCodeStore.settingsPresets)
-const hasPresets = computed(() => presets.value.length > 0)
-const claudePresetsDialogOpen = ref(false)
-
-function handlePresetSelect(event) {
-    const item = event.detail?.item
-    const value = item?.value
-    if (value === undefined || value === null || value === '') return
-    if (value === '__reset__') {
-        resetAllToDefaults()
-        return
-    }
-    if (value === '__manage__') {
-        claudePresetsDialogOpen.value = true
-        return
-    }
-    const index = Number(value)
-    if (!Number.isInteger(index)) return
-    const preset = presets.value[index]
-    if (!preset) return
-    selectedModel.value = preset.model
-    selectedContextMax.value = preset.context_max
-    selectedEffort.value = preset.effort
-    selectedThinking.value = preset.thinking
-    selectedPermissionMode.value = preset.permission_mode
-    selectedClaudeInChrome.value = preset.claude_in_chrome
-}
-
-// Get process state for this session
-const processState = computed(() => store.getProcessState(props.sessionId))
-
 // Whether files are currently being processed (encoded/resized) for this session
 const isProcessingFiles = computed(() => store.isProcessingAttachments(props.sessionId))
 
@@ -287,76 +161,8 @@ const isDisabled = computed(() => {
     if (providerHelpers && !providerHelpers.canSendMessage()) return true
     if (store.isInitialSyncInProgress) return true
     if (isProcessingFiles.value) return true
-    const state = processState.value?.state
-    return state === 'starting'
+    return isStarting.value
 })
-
-// All dropdowns disabled only during starting
-const isStarting = computed(() => processState.value?.state === 'starting')
-
-// Whether the auto-force-to-1M rule is currently active for this session.
-// The rule itself lives in the data store getter `getEffectiveContextMax` —
-// here we just detect that the effective value diverges from what the user
-// actually picked (or defaulted to). We feed the currently-selected model
-// to the getter so the rule respects the live UI choice, not just the DB.
-const isContextMaxForced = computed(() => {
-    const baseValue = selectedContextMax.value ?? claudeCodeStore.defaultContextMax
-    const effectiveModel = selectedModel.value ?? claudeCodeStore.defaultModel
-    return store.getEffectiveContextMax(props.sessionId, effectiveModel) !== baseValue
-})
-
-const isContextMaxForcedByModel = computed(() => {
-    const effectiveModel = selectedModel.value ?? claudeCodeStore.defaultModel
-    return !claudeCodeHelpers.modelSupports1m(effectiveModel)
-})
-
-// Value to display in the context select. When forced (by usage) we surface
-// 1M even though `selectedContextMax` may still be null/200K — the actual
-// stored value is preserved so we don't pollute the user's saved setting.
-const contextMaxSelectValue = computed(() => {
-    if (isContextMaxForced.value) return String(CLAUDE_CODE_CONTEXT_MAX.EXTENDED)
-    return selectedContextMax.value === null ? DEFAULT_SENTINEL : String(selectedContextMax.value)
-})
-
-const isEffortXhighAvailable = computed(() => {
-    const effectiveModel = selectedModel.value ?? claudeCodeStore.defaultModel
-    return claudeCodeHelpers.modelSupportsEffortXhigh(effectiveModel)
-})
-
-const isEffortMaxAvailable = computed(() => {
-    const effectiveModel = selectedModel.value ?? claudeCodeStore.defaultModel
-    return claudeCodeHelpers.modelSupportsEffortMax(effectiveModel)
-})
-
-// Watch: keep the active model / context_max / effort triple consistent
-// against the provider's rules. Single dispatch via the helpers' enforce
-// pipeline (retired model → upgrade, then context_max / effort demotion
-// against the model's capabilities). Fires immediately so a session
-// loading with stale settings gets corrected on mount.
-watch(
-    () => ({
-        selectedModel: selectedModel.value ?? claudeCodeStore.defaultModel,
-        contextMax: selectedContextMax.value ?? claudeCodeStore.defaultContextMax,
-        effort: selectedEffort.value ?? claudeCodeStore.defaultEffort,
-    }),
-    (current) => {
-        const helpers = getProviderHelpers(session.value?.provider) ?? claudeCodeHelpers
-        const adjusted = helpers.enforceAgentSettingsConsistency(current)
-        if (adjusted.selectedModel !== current.selectedModel) {
-            selectedModel.value = adjusted.selectedModel
-            activeModel.value = adjusted.selectedModel
-        }
-        if (adjusted.contextMax !== current.contextMax) {
-            selectedContextMax.value = adjusted.contextMax
-            activeContextMax.value = adjusted.contextMax
-        }
-        if (adjusted.effort !== current.effort) {
-            selectedEffort.value = adjusted.effort
-            activeEffort.value = adjusted.effort
-        }
-    },
-    { immediate: true }
-)
 
 // Button label based on process state and settings changes
 // On drafts, the button is always "Send" since there's no process to apply settings to.
@@ -394,137 +200,6 @@ const placeholderText = computed(() => {
     }
     return text
 })
-
-// Whether a process is actively running (not starting, not dead)
-const processIsActive = computed(() => {
-    const state = processState.value?.state
-    return state === 'assistant_turn' || state === 'user_turn'
-})
-
-// Track the "active" values currently applied on the live SDK process (or from DB when no process).
-// null means the setting uses the global default.
-const activeModel = ref(null)
-const activePermissionMode = ref(null)
-const activeEffort = ref(null)
-const activeThinking = ref(null)
-const activeClaudeInChrome = ref(null)
-const activeContextMax = ref(null)
-
-// Detect whether the user has changed any dropdown from its reference value
-const hasDropdownsChanged = computed(() =>
-    selectedModel.value !== activeModel.value ||
-    selectedPermissionMode.value !== activePermissionMode.value ||
-    selectedEffort.value !== activeEffort.value ||
-    selectedThinking.value !== activeThinking.value ||
-    selectedClaudeInChrome.value !== activeClaudeInChrome.value ||
-    selectedContextMax.value !== activeContextMax.value
-)
-
-// Whether any setting has changed from the active/DB value (used for button label)
-const hasSettingsChanged = computed(() => hasDropdownsChanged.value)
-
-// Resolve null → global default for a settings dict (so classify compares concrete values).
-function resolveSettingsDefaults(settings) {
-    return {
-        permission_mode: settings.permission_mode ?? claudeCodeStore.defaultPermissionMode,
-        selected_model: settings.selected_model ?? claudeCodeStore.defaultModel,
-        effort: settings.effort ?? claudeCodeStore.defaultEffort,
-        thinking_enabled: settings.thinking_enabled ?? claudeCodeStore.defaultThinking,
-        claude_in_chrome: settings.claude_in_chrome ?? claudeCodeStore.defaultClaudeInChrome,
-        context_max: settings.context_max ?? claudeCodeStore.defaultContextMax,
-    }
-}
-
-// Warning message when startup settings changed on an active process (will cause stop/restart).
-// Returns null if no warning needed. Compares concrete (resolved) values, not raw null vs explicit.
-const startupSettingsWarning = computed(() => {
-    const _processActive = processIsActive.value
-    const _dropdownsChanged = hasDropdownsChanged.value
-    if (!_processActive || !_dropdownsChanged) {
-        // console.debug('[startupWarning] early exit:', { processIsActive: _processActive, hasDropdownsChanged: _dropdownsChanged, processState: processState.value?.state, sessionId: props.sessionId })
-        return null
-    }
-
-    const current = resolveSettingsDefaults({
-        permission_mode: activePermissionMode.value,
-        selected_model: activeModel.value,
-        effort: activeEffort.value,
-        thinking_enabled: activeThinking.value,
-        claude_in_chrome: activeClaudeInChrome.value,
-        context_max: activeContextMax.value,
-    })
-    const requested = resolveSettingsDefaults({
-        permission_mode: selectedPermissionMode.value,
-        selected_model: selectedModel.value,
-        effort: selectedEffort.value,
-        thinking_enabled: selectedThinking.value,
-        claude_in_chrome: selectedClaudeInChrome.value,
-        context_max: selectedContextMax.value,
-    })
-    const helpers = getProviderHelpers(session.value?.provider)
-    const changes = helpers ? helpers.classifyAgentSettingsChanges(current, requested) : { live: [], idle: [], startup: [] }
-    if (!changes.startup.length) return null
-
-    const state = processState.value?.state
-    const hasCrons = processState.value?.active_crons?.length > 0
-    const prefix = state === 'assistant_turn'
-        ? 'Once Claude finishes its current work, the'
-        : 'The'
-
-    const hasText = messageText.value.trim()
-    if (hasCrons) {
-        const suffix = hasText
-            ? ', after which your message will be sent.'
-            : '.'
-        return `${prefix} Claude Code process will be stopped to apply these settings, then resumed to restart the current cron jobs${suffix}`
-    }
-    const suffix = hasText
-        ? 'Your message will be sent after the process restarts.'
-        : 'Your next message will resume the session.'
-    return `${prefix} Claude Code process will be stopped to apply these settings. ${suffix}`
-})
-
-// Sync all settings when session changes
-watch(() => props.sessionId, (newId) => {
-    const sess = store.getSession(newId)
-    // Session DB values (null = default, explicit = forced)
-    selectedPermissionMode.value = sess?.permission_mode ?? null
-    selectedModel.value = sess?.selected_model ?? null
-    selectedEffort.value = sess?.effort ?? null
-    selectedThinking.value = sess?.thinking_enabled ?? null
-    selectedClaudeInChrome.value = sess?.claude_in_chrome ?? null
-    selectedContextMax.value = sess?.context_max ?? null
-    // Initialize active values to match
-    activePermissionMode.value = selectedPermissionMode.value
-    activeModel.value = selectedModel.value
-    activeEffort.value = selectedEffort.value
-    activeThinking.value = selectedThinking.value
-    activeClaudeInChrome.value = selectedClaudeInChrome.value
-    activeContextMax.value = selectedContextMax.value
-}, { immediate: true })
-
-// When global defaults change and this session uses them (null setting),
-// the display updates automatically via the default label computeds.
-// No watcher needed — the computed that reads the default getter re-evaluates.
-
-// React when session data arrives from backend (e.g., after save or watcher creates the row).
-// Update active values to track what's in DB. Don't overwrite user's selection when process is active.
-const SESSION_SETTING_FIELDS = ['permission_mode', 'selected_model', 'effort', 'thinking_enabled', 'claude_in_chrome', 'context_max']
-const SELECTED_REFS = { permission_mode: selectedPermissionMode, selected_model: selectedModel, effort: selectedEffort, thinking_enabled: selectedThinking, claude_in_chrome: selectedClaudeInChrome, context_max: selectedContextMax }
-const ACTIVE_REFS = { permission_mode: activePermissionMode, selected_model: activeModel, effort: activeEffort, thinking_enabled: activeThinking, claude_in_chrome: activeClaudeInChrome, context_max: activeContextMax }
-
-for (const field of SESSION_SETTING_FIELDS) {
-    watch(
-        () => store.getSession(props.sessionId)?.[field],
-        (newValue) => {
-            if (newValue === undefined) return
-            ACTIVE_REFS[field].value = newValue
-            if (!processIsActive.value) {
-                SELECTED_REFS[field].value = newValue
-            }
-        }
-    )
-}
 
 // Restore draft message when session changes
 watch(() => props.sessionId, async (newId) => {
@@ -1247,7 +922,9 @@ async function handleSend() {
         effort: selectedEffort.value,
         thinking_enabled: selectedThinking.value,
         claude_in_chrome: selectedClaudeInChrome.value,
-        context_max: isContextMaxForced.value ? CLAUDE_CODE_CONTEXT_MAX.EXTENDED : selectedContextMax.value,
+        context_max: isContextMaxForced.value
+            ? store.getEffectiveContextMax(props.sessionId, selectedModel.value ?? settings.providerStore.value?.defaultModel)
+            : selectedContextMax.value,
     }
 
     // For draft sessions with a title, include it
@@ -1377,7 +1054,7 @@ async function handleReset() {
     }
     // Reset dropdowns to their reference values (active process or DB, including null)
     if (hasDropdownsChanged.value) {
-        restoreSettings()
+        settings.restoreSettings()
     }
 }
 
@@ -1482,23 +1159,23 @@ function openMessageSnippetsDialog() {
 }
 
 function getSessionSetting(key) {
-    const ref_ = SELECTED_REFS[key]
+    const ref_ = settings.SELECTED_REFS[key]
     return ref_ ? ref_.value : null
 }
 
 function setSessionSetting(key, value) {
-    const ref_ = SELECTED_REFS[key]
+    const ref_ = settings.SELECTED_REFS[key]
     if (ref_) ref_.value = value
 }
 
 function getSessionGateState() {
     return {
-        isStarting: isStarting.value,
-        isContextMaxForced: isContextMaxForced.value,
-        isContextMaxForcedByModel: isContextMaxForcedByModel.value,
-        isEffortXhighAvailable: isEffortXhighAvailable.value,
-        isEffortMaxAvailable: isEffortMaxAvailable.value,
-        effectiveModel: selectedModel.value ?? claudeCodeStore.defaultModel,
+        isStarting: settings.isStarting.value,
+        isContextMaxForced: settings.isContextMaxForced.value,
+        isContextMaxForcedByModel: settings.isContextMaxForcedByModel.value,
+        isEffortXhighAvailable: settings.isEffortXhighAvailable.value,
+        isEffortMaxAvailable: settings.isEffortMaxAvailable.value,
+        effectiveModel: settings.selectedModel.value ?? settings.providerStore.value?.defaultModel,
     }
 }
 
@@ -1667,7 +1344,7 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
             </div>
 
             <div class="message-input-actions">
-                <!-- Settings summary button + popover -->
+                <!-- Settings trigger: button (with summary) + popover -->
                 <wa-button
                     :id="settingsButtonId"
                     appearance="plain"
@@ -1675,194 +1352,17 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
                     size="small"
                     class="settings-button"
                 >
-                    <wa-icon name="gear"></wa-icon><span class="settings-summary"><template v-for="(part, i) in settingsSummaryParts" :key="i"><span v-if="i"> · </span><span v-if="part.forced" class="setting-forced">{{ part.text }}</span><template v-else>{{ part.text }}</template></template></span>
+                    <wa-icon name="gear"></wa-icon>
+                    <AgentSettingsSummary :session="session" :settings="settings" />
                 </wa-button>
-                <wa-popover
-                    v-popover-focus-fix
+                <AgentSettingsPopover
                     :for="settingsButtonId"
-                    placement="top"
-                    class="settings-popover"
-                >
-                    <!-- Apply preset / Reset / Manage (non-scrollable) -->
-                    <div class="settings-panel-presets">
-                        <wa-dropdown @wa-select="handlePresetSelect">
-                            <wa-button slot="trigger" size="small" appearance="outlined" :disabled="isStarting">
-                                <wa-icon slot="start" name="sliders"></wa-icon>
-                                Reset / Presets
-                                <wa-icon slot="end" name="caret-down"></wa-icon>
-                            </wa-button>
-                            <wa-dropdown-item value="__reset__" :disabled="!anySettingForced">
-                                <wa-icon slot="icon" name="arrow-rotate-left"></wa-icon>
-                                Reset to defaults
-                            </wa-dropdown-item>
-                            <wa-divider></wa-divider>
-                            <wa-dropdown-item v-if="hasPresets" disabled>Presets</wa-dropdown-item>
-                            <wa-dropdown-item
-                                v-for="(preset, i) in presets"
-                                :key="i"
-                                :value="String(i)"
-                                class="preset-item"
-                            >
-                                <span>{{ preset.name }}</span>
-                                <span class="option-description">{{ formatPresetSummary(preset, claudeCodeHelpers) }}</span>
-                            </wa-dropdown-item>
-                            <wa-divider v-if="hasPresets"></wa-divider>
-                            <wa-dropdown-item value="__manage__">
-                                <wa-icon slot="icon" name="pen-to-square"></wa-icon>
-                                Manage presets
-                            </wa-dropdown-item>
-                        </wa-dropdown>
-                    </div>
-
-                    <!-- Actions & callouts (non-scrollable) — hidden on drafts since there's no process to apply to -->
-                    <div v-if="(!isDraft && hasDropdownsChanged) || startupSettingsWarning" class="settings-panel-actions">
-                        <div v-if="!isDraft && hasDropdownsChanged" class="settings-panel-links">
-                            <a v-if="!isDraft && hasDropdownsChanged" class="settings-action-link" @click.prevent="restoreSettings">
-                                <wa-icon name="xmark"></wa-icon>
-                                Discard unsaved changes
-                            </a>
-                        </div>
-                        <wa-callout v-if="!isDraft && hasDropdownsChanged" variant="brand" class="settings-info-callout">
-                            <wa-icon name="circle-info" slot="icon"></wa-icon>
-                            Click "{{ buttonLabel }}" to apply your changes.
-                        </wa-callout>
-                        <wa-callout v-if="startupSettingsWarning" variant="warning" class="startup-warning-callout">
-                            <wa-icon name="triangle-exclamation" slot="icon"></wa-icon>
-                            {{ startupSettingsWarning }}
-                        </wa-callout>
-                    </div>
-
-                    <!-- Settings dropdowns (scrollable) -->
-                    <div class="settings-panel">
-                        <!-- Model -->
-                        <div v-if="claudeCodeHelpers.supportsAgentSetting('selected_model')" class="setting-row">
-                            <label class="setting-label">Model</label>
-                            <wa-select
-                                :value.prop="selectedModel === null ? DEFAULT_SENTINEL : selectedModel"
-                                @change="selectedModel = $event.target.value === DEFAULT_SENTINEL ? null : $event.target.value"
-                                size="small"
-                                :disabled="isStarting"
-                            >
-                                <wa-option :value="DEFAULT_SENTINEL">Default: {{ claudeCodeDefaultModelLabel }}</wa-option>
-                                <small class="select-group-label">Force to:</small>
-                                <wa-option
-                                    v-for="entry in modelRegistryOptions.latest"
-                                    :key="entry.selected_model"
-                                    :value="entry.selected_model"
-                                >
-                                    {{ claudeCodeHelpers.getModelLabel(entry.selected_model) }} (latest: {{ entry.version }})
-                                </wa-option>
-                                <wa-divider v-if="modelRegistryOptions.older.length"></wa-divider>
-                                <wa-option
-                                    v-for="entry in modelRegistryOptions.older"
-                                    :key="entry.selected_model"
-                                    :value="entry.selected_model"
-                                >
-                                    {{ claudeCodeHelpers.getModelLabel(entry.selected_model) }} (until {{ formatRetirementDate(entry.retirement_date) }})
-                                </wa-option>
-                            </wa-select>
-                            <a v-if="selectedModel !== null" class="reset-setting-link" @click.prevent="selectedModel = null">Reset to default: {{ claudeCodeDefaultModelLabel }}</a>
-                        </div>
-
-                        <!-- Context -->
-                        <div v-if="claudeCodeHelpers.supportsAgentSetting('context_max')" class="setting-row">
-                            <label class="setting-label">Context</label>
-                            <wa-select
-                                :value.prop="contextMaxSelectValue"
-                                @change="selectedContextMax = $event.target.value === DEFAULT_SENTINEL ? null : Number($event.target.value)"
-                                size="small"
-                                :disabled="isStarting || isContextMaxForced || isContextMaxForcedByModel"
-                            >
-                                <wa-option :value="DEFAULT_SENTINEL">Default: {{ claudeCodeDefaultContextMaxLabel }}</wa-option>
-                                <small class="select-group-label">Force to:</small>
-                                <wa-option v-for="option in contextMaxOptions" :key="option.value" :value="String(option.value)">
-                                    {{ option.label }}
-                                </wa-option>
-                            </wa-select>
-                            <span v-if="isContextMaxForced" class="setting-help">Forced to 1M: context usage exceeds 85% of 200K.</span>
-                            <span v-else-if="isContextMaxForcedByModel" class="setting-help">1M not available for this model version.</span>
-                            <a v-else-if="selectedContextMax !== null" class="reset-setting-link" @click.prevent="selectedContextMax = null">Reset to default: {{ claudeCodeDefaultContextMaxLabel }}</a>
-                        </div>
-
-                        <!-- Effort -->
-                        <div v-if="claudeCodeHelpers.supportsAgentSetting('effort')" class="setting-row">
-                            <label class="setting-label">Effort</label>
-                            <wa-select
-                                :value.prop="selectedEffort === null ? DEFAULT_SENTINEL : selectedEffort"
-                                @change="selectedEffort = $event.target.value === DEFAULT_SENTINEL ? null : $event.target.value"
-                                size="small"
-                                :disabled="isStarting"
-                            >
-                                <wa-option :value="DEFAULT_SENTINEL">Default: {{ claudeCodeDefaultEffortLabel }}</wa-option>
-                                <small class="select-group-label">Force to:</small>
-                                <wa-option
-                                    v-for="option in effortOptions"
-                                    :key="option.value"
-                                    :value="option.value"
-                                    :disabled="(option.value === CLAUDE_CODE_EFFORT.X_HIGH && !isEffortXhighAvailable) || (option.value === CLAUDE_CODE_EFFORT.MAX && !isEffortMaxAvailable)"
-                                >
-                                    {{ option.label }}{{ ((option.value === CLAUDE_CODE_EFFORT.X_HIGH && !isEffortXhighAvailable) || (option.value === CLAUDE_CODE_EFFORT.MAX && !isEffortMaxAvailable)) ? ' (not available)' : '' }}
-                                </wa-option>
-                            </wa-select>
-                            <a v-if="selectedEffort !== null" class="reset-setting-link" @click.prevent="selectedEffort = null">Reset to default: {{ claudeCodeDefaultEffortLabel }}</a>
-                        </div>
-
-                        <!-- Thinking -->
-                        <div v-if="claudeCodeHelpers.supportsAgentSetting('thinking_enabled')" class="setting-row">
-                            <label class="setting-label">Thinking</label>
-                            <wa-select
-                                :value.prop="selectedThinking === null ? DEFAULT_SENTINEL : String(selectedThinking)"
-                                @change="selectedThinking = $event.target.value === DEFAULT_SENTINEL ? null : $event.target.value === 'true'"
-                                size="small"
-                                :disabled="isStarting"
-                            >
-                                <wa-option :value="DEFAULT_SENTINEL">Default: {{ claudeCodeDefaultThinkingLabel }}</wa-option>
-                                <small class="select-group-label">Force to:</small>
-                                <wa-option v-for="option in thinkingOptions" :key="String(option.value)" :value="String(option.value)">
-                                    {{ option.label }}
-                                </wa-option>
-                            </wa-select>
-                            <a v-if="selectedThinking !== null" class="reset-setting-link" @click.prevent="selectedThinking = null">Reset to default: {{ claudeCodeDefaultThinkingLabel }}</a>
-                        </div>
-
-                        <!-- Permission -->
-                        <div v-if="claudeCodeHelpers.supportsAgentSetting('permission_mode')" class="setting-row">
-                            <label class="setting-label">Permission</label>
-                            <wa-select
-                                :value.prop="selectedPermissionMode === null ? DEFAULT_SENTINEL : selectedPermissionMode"
-                                @change="selectedPermissionMode = $event.target.value === DEFAULT_SENTINEL ? null : $event.target.value"
-                                size="small"
-                                :disabled="isStarting"
-                            >
-                                <wa-option :value="DEFAULT_SENTINEL">Default: {{ claudeCodeDefaultPermissionLabel }}</wa-option>
-                                <small class="select-group-label">Force to:</small>
-                                <wa-option v-for="option in permissionModeOptions" :key="option.value" :value="option.value" :label="option.label">
-                                    <span>{{ option.label }}</span>
-                                    <span class="option-description">{{ option.description }}</span>
-                                </wa-option>
-                            </wa-select>
-                            <a v-if="selectedPermissionMode !== null" class="reset-setting-link" @click.prevent="selectedPermissionMode = null">Reset to default: {{ claudeCodeDefaultPermissionLabel }}</a>
-                        </div>
-
-                        <!-- Claude in Chrome -->
-                        <div v-if="claudeCodeHelpers.supportsAgentSetting('claude_in_chrome')" class="setting-row">
-                            <label class="setting-label">Claude built-in Chrome MCP</label>
-                            <wa-select
-                                :value.prop="selectedClaudeInChrome === null ? DEFAULT_SENTINEL : String(selectedClaudeInChrome)"
-                                @change="selectedClaudeInChrome = $event.target.value === DEFAULT_SENTINEL ? null : $event.target.value === 'true'"
-                                size="small"
-                                :disabled="isStarting"
-                            >
-                                <wa-option :value="DEFAULT_SENTINEL">Default: {{ claudeCodeDefaultChromeLabel }}</wa-option>
-                                <small class="select-group-label">Force to:</small>
-                                <wa-option v-for="option in claudeInChromeOptions" :key="String(option.value)" :value="String(option.value)">
-                                    {{ option.label }}
-                                </wa-option>
-                            </wa-select>
-                            <a v-if="selectedClaudeInChrome !== null" class="reset-setting-link" @click.prevent="selectedClaudeInChrome = null">Reset to default: {{ claudeCodeDefaultChromeLabel }}</a>
-                        </div>
-                    </div>
-                </wa-popover>
+                    :session="session"
+                    :settings="settings"
+                    :is-draft="isDraft"
+                    :message-text="messageText"
+                    :button-label="buttonLabel"
+                />
 
                 <!-- Cancel button for draft sessions -->
                 <wa-button
@@ -1901,8 +1401,6 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
                 </wa-button>
             </div>
         </div>
-
-        <ClaudePresetsDialog v-model:open="claudePresetsDialogOpen" />
     </div>
 </template>
 
@@ -1970,124 +1468,6 @@ body.sidebar-closed .message-input-toolbar {
         font-weight: normal;
         font-size: var(--wa-font-size-s);
     }
-}
-
-.settings-popover {
-    --max-width: min(30rem, 100vw);
-    --arrow-size: 12px;
-    &::part(body) {
-        max-height: calc(100vh - 8rem);
-        display: flex;
-        flex-direction: column;
-    }
-}
-
-.settings-panel {
-    display: flex;
-    flex-direction: column;
-    gap: var(--wa-space-m);
-    overflow-y: auto;
-    flex: 1;
-    min-height: 0;
-}
-
-.settings-info-callout,
-.startup-warning-callout {
-    font-size: var(--wa-font-size-xs);
-    width: 100%;
-}
-
-.settings-panel-presets {
-    display: flex;
-    justify-content: center;
-    flex-shrink: 0;
-    padding-bottom: var(--wa-space-s);
-    wa-dropdown::part(menu) {
-        max-width: 90vw !important;
-        width: auto;
-    }
-}
-
-.settings-panel-actions {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: var(--wa-space-xs);
-    flex-shrink: 0;
-    padding-bottom: var(--wa-space-s);
-    border-bottom: 1px solid var(--wa-color-border);
-}
-
-.settings-panel-links {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--wa-space-2xs) var(--wa-space-s);
-    justify-content: center;
-}
-
-.settings-action-link {
-    font-size: var(--wa-font-size-xs);
-    color: var(--wa-color-brand-60);
-    cursor: pointer;
-    text-decoration: none;
-    display: flex;
-    align-items: center;
-    gap: var(--wa-space-3xs);
-    &:hover {
-        text-decoration: underline;
-    }
-}
-
-.setting-row {
-    display: flex;
-    flex-direction: column;
-    gap: var(--wa-space-2xs);
-}
-
-.setting-label {
-    font-size: var(--wa-font-size-s);
-    font-weight: var(--wa-font-weight-semibold);
-}
-
-.setting-help {
-    font-size: var(--wa-font-size-xs);
-    color: var(--wa-color-text-quiet);
-}
-
-.select-group-label {
-    display: block;
-    padding: var(--wa-space-3xs) var(--wa-space-l);
-    font-size: var(--wa-font-size-xs);
-    color: var(--wa-color-text-quiet);
-    font-weight: var(--wa-font-weight-semibold);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-}
-
-.reset-setting-link {
-    font-size: var(--wa-font-size-xs);
-    color: var(--wa-color-brand-60);
-    cursor: pointer;
-    text-decoration: none;
-    &:hover {
-        text-decoration: underline;
-    }
-}
-
-.setting-forced {
-    text-decoration: underline dashed;
-    text-underline-offset: 3px;
-}
-
-.option-description {
-    display: block;
-    font-size: var(--wa-font-size-s);
-    color: var(--wa-color-text-quiet);
-}
-
-.preset-item::part(label) {
-    white-space: normal;
-    max-width: 25rem;
 }
 
 .message-input-actions {
