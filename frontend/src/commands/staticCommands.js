@@ -25,7 +25,10 @@ import {
     WA_BRAND,
     WA_BRAND_LABELS,
 } from '../constants'
-import { EFFORT, getModelLabel } from '../providers/claude_code/constants'
+import {
+    EFFORT as CLAUDE_CODE_EFFORT,
+    getModelLabel as getClaudeCodeModelLabel,
+} from '../providers/claude_code/constants'
 
 // Cap on how many sessions "Go to Session…" exposes. The list is already
 // prioritized (extra → cross-filter pinned → cross-filter active → natural),
@@ -682,8 +685,8 @@ export function initStaticCommands(router) {
             items: () => claudeCodeHelpers.getModelRegistry().map(entry => ({
                 id: entry.selected_model,
                 label: entry.latest
-                    ? `${getModelLabel(entry.selected_model)} (latest: ${entry.version})`
-                    : `${getModelLabel(entry.selected_model)} (until ${entry.retirement_date})`,
+                    ? `${getClaudeCodeModelLabel(entry.selected_model)} (latest: ${entry.version})`
+                    : `${getClaudeCodeModelLabel(entry.selected_model)} (until ${entry.retirement_date})`,
                 action: () => claudeCodeStore.setDefaultModel(entry.selected_model),
                 active: claudeCodeStore.defaultModel === entry.selected_model,
             })),
@@ -695,8 +698,8 @@ export function initStaticCommands(router) {
             category: 'claude',
             items: () => claudeCodeHelpers.getFieldChoices('effort')
                 .filter(choice => {
-                    if (choice.value === EFFORT.X_HIGH) return claudeCodeHelpers.modelSupportsEffortXhigh(claudeCodeStore.defaultModel)
-                    if (choice.value === EFFORT.MAX) return claudeCodeHelpers.modelSupportsEffortMax(claudeCodeStore.defaultModel)
+                    if (choice.value === CLAUDE_CODE_EFFORT.X_HIGH) return claudeCodeHelpers.modelSupportsEffortXhigh(claudeCodeStore.defaultModel)
+                    if (choice.value === CLAUDE_CODE_EFFORT.MAX) return claudeCodeHelpers.modelSupportsEffortMax(claudeCodeStore.defaultModel)
                     return true
                 })
                 .map(choice => ({

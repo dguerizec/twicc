@@ -6,7 +6,7 @@
 // - ask_user_question: Shows questions with selectable options and an "Other" free-text input
 
 import { ref, computed, reactive, watch, nextTick, useId } from 'vue'
-import { respondToPendingRequest } from '../../providers/claude_code/ws'
+import { respondToPendingRequest as respondToClaudeCodePendingRequest } from '../../providers/claude_code/ws'
 import JsonHumanView from '../json/JsonHumanView.vue'
 import AppTooltip from '../ui/AppTooltip.vue'
 import { getLanguageFromPath } from '../../utils/languages'
@@ -322,7 +322,7 @@ const canSubmitQuestions = computed(() => {
 /**
  * Build the base approval response payload, including checked permission suggestions.
  * @param {Object} toolInputValue - The tool input to include (original or edited)
- * @returns {Object} The response payload for respondToPendingRequest
+ * @returns {Object} The response payload for respondToClaudeCodePendingRequest
  */
 function buildApprovalResponse(toolInputValue) {
     const response = {
@@ -345,7 +345,7 @@ function handleApprove() {
     if (isResponding.value) return
     isResponding.value = true
 
-    respondToPendingRequest(
+    respondToClaudeCodePendingRequest(
         props.sessionId,
         props.pendingRequest.request_id,
         buildApprovalResponse(toolInput.value),
@@ -371,7 +371,7 @@ function handleDeny() {
     isResponding.value = true
 
     const message = denyReason.value.trim() || 'User denied this action'
-    respondToPendingRequest(props.sessionId, props.pendingRequest.request_id, {
+    respondToClaudeCodePendingRequest(props.sessionId, props.pendingRequest.request_id, {
         request_type: 'tool_approval',
         decision: 'deny',
         message,
@@ -430,7 +430,7 @@ function handleApproveWithChanges() {
     if (isResponding.value) return
     isResponding.value = true
 
-    respondToPendingRequest(
+    respondToClaudeCodePendingRequest(
         props.sessionId,
         props.pendingRequest.request_id,
         buildApprovalResponse(editedToolInput.value),
@@ -578,7 +578,7 @@ function handleSubmitQuestions() {
         answers[question.question] = getQuestionAnswer(i)
     }
 
-    respondToPendingRequest(props.sessionId, props.pendingRequest.request_id, {
+    respondToClaudeCodePendingRequest(props.sessionId, props.pendingRequest.request_id, {
         request_type: 'ask_user_question',
         answers,
     })

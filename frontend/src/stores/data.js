@@ -5,7 +5,7 @@ import { toRaw } from 'vue'
 import { getPrefixSuffixBoundaries } from '../utils/contentVisibility'
 import { computeVisualItems, visualItemEqual } from '../utils/visualItems'
 import { DISPLAY_LEVEL, DISPLAY_MODE, PROCESS_STATE, PROVIDER, SYNTHETIC_ITEM } from '../constants'
-import { CONTEXT_MAX } from '../providers/claude_code/constants'
+import { CONTEXT_MAX as CLAUDE_CODE_CONTEXT_MAX } from '../providers/claude_code/constants'
 import { getSessionCutoffMs } from '../utils/sessions'
 import { useSettingsStore } from './settings'
 import { useClaudeCodeStore } from '../providers/claude_code/store'
@@ -406,10 +406,10 @@ export const useDataStore = defineStore('data', {
             const session = state.sessions[sessionId]
             const claudeCodeStore = useClaudeCodeStore()
             const baseValue = session?.context_max ?? claudeCodeStore.defaultContextMax
-            if (baseValue !== CONTEXT_MAX.DEFAULT) return baseValue
+            if (baseValue !== CLAUDE_CODE_CONTEXT_MAX.DEFAULT) return baseValue
             const model = overrideModel !== undefined ? overrideModel : (session?.selected_model ?? claudeCodeStore.defaultModel)
             if (!claudeCodeHelpers.modelSupports1m(model)) return baseValue
-            if ((session?.context_usage ?? 0) > CONTEXT_MAX.DEFAULT * 0.85) return CONTEXT_MAX.EXTENDED
+            if ((session?.context_usage ?? 0) > CLAUDE_CODE_CONTEXT_MAX.DEFAULT * 0.85) return CLAUDE_CODE_CONTEXT_MAX.EXTENDED
             return baseValue
         },
 

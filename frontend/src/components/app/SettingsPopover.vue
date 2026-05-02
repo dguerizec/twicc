@@ -39,7 +39,7 @@ function handleLogout() {
 
 const sections = [
     { id: 'global',                    label: 'Global' },
-    { id: 'provider_claude_code',      label: 'Claude settings', navLabel: 'Claude', synced: true },
+    { id: 'provider_claude_code',      label: 'Claude Code settings', navLabel: 'Claude Code', synced: true },
     { id: 'notifications',             label: 'Notifications' },
     { id: 'sessions',      label: 'Sessions' },
     { id: 'title',         label: 'Title suggestion', navLabel: 'Titles', synced: true },

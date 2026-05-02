@@ -10,7 +10,11 @@ import { sendWsMessage, notifyUserDraftUpdated } from '../../composables/useWebS
 import { isSupportedMimeType, MAX_FILE_SIZE, SUPPORTED_IMAGE_TYPES, draftMediaToMediaItem } from '../../utils/fileUtils'
 import { toast } from '../../composables/useToast'
 import { vPopoverFocusFix } from '../../directives/vPopoverFocusFix'
-import { CONTEXT_MAX, EFFORT, getModelLabel } from '../../providers/claude_code/constants'
+import {
+    CONTEXT_MAX as CLAUDE_CODE_CONTEXT_MAX,
+    EFFORT as CLAUDE_CODE_EFFORT,
+    getModelLabel as getClaudeCodeModelLabel,
+} from '../../providers/claude_code/constants'
 import { useCodeCommentsStore, formatAllComments } from '../../stores/codeComments'
 import { getParsedContent } from '../../utils/parsedContent'
 import MediaThumbnailGroup from '../media/MediaThumbnailGroup.vue'
@@ -162,10 +166,10 @@ const claudeCodeDefaultModelLabel = computed(() => {
     const entry = registry.find(e => e.selected_model === model)
     if (entry) {
         return entry.latest
-            ? `${getModelLabel(model)} (latest: ${entry.version})`
-            : `${getModelLabel(model)}`
+            ? `${getClaudeCodeModelLabel(model)} (latest: ${entry.version})`
+            : `${getClaudeCodeModelLabel(model)}`
     }
-    return getModelLabel(model)
+    return getClaudeCodeModelLabel(model)
 })
 const claudeCodeDefaultContextMaxLabel = computed(() => claudeCodeHelpers.getChoiceLabel('context_max', claudeCodeStore.defaultContextMax))
 const claudeCodeDefaultEffortLabel = computed(() => claudeCodeHelpers.getChoiceLabel('effort', claudeCodeStore.defaultEffort))
@@ -216,8 +220,8 @@ const settingsSummaryParts = computed(() => {
     const effectiveChrome = selectedClaudeInChrome.value ?? claudeCodeStore.defaultClaudeInChrome
     const effectivePermission = selectedPermissionMode.value ?? claudeCodeStore.defaultPermissionMode
 
-    const modelLabel = getModelLabel(effectiveModel)
-    const modelDisplay = effectiveContextMax === CONTEXT_MAX.EXTENDED
+    const modelLabel = getClaudeCodeModelLabel(effectiveModel)
+    const modelDisplay = effectiveContextMax === CLAUDE_CODE_CONTEXT_MAX.EXTENDED
         ? `${modelLabel}[1m]`
         : modelLabel
     // Model part is forced if model or context_max is explicitly set to a non-default value
@@ -311,7 +315,7 @@ const isContextMaxForcedByModel = computed(() => {
 // 1M even though `selectedContextMax` may still be null/200K — the actual
 // stored value is preserved so we don't pollute the user's saved setting.
 const contextMaxSelectValue = computed(() => {
-    if (isContextMaxForced.value) return String(CONTEXT_MAX.EXTENDED)
+    if (isContextMaxForced.value) return String(CLAUDE_CODE_CONTEXT_MAX.EXTENDED)
     return selectedContextMax.value === null ? DEFAULT_SENTINEL : String(selectedContextMax.value)
 })
 
@@ -1244,7 +1248,7 @@ async function handleSend() {
         effort: selectedEffort.value,
         thinking_enabled: selectedThinking.value,
         claude_in_chrome: selectedClaudeInChrome.value,
-        context_max: isContextMaxForced.value ? CONTEXT_MAX.EXTENDED : selectedContextMax.value,
+        context_max: isContextMaxForced.value ? CLAUDE_CODE_CONTEXT_MAX.EXTENDED : selectedContextMax.value,
     }
 
     // For draft sessions with a title, include it
@@ -1747,7 +1751,7 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
                                     :key="entry.selected_model"
                                     :value="entry.selected_model"
                                 >
-                                    {{ getModelLabel(entry.selected_model) }} (latest: {{ entry.version }})
+                                    {{ getClaudeCodeModelLabel(entry.selected_model) }} (latest: {{ entry.version }})
                                 </wa-option>
                                 <wa-divider v-if="modelRegistryOptions.older.length"></wa-divider>
                                 <wa-option
@@ -1755,7 +1759,7 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
                                     :key="entry.selected_model"
                                     :value="entry.selected_model"
                                 >
-                                    {{ getModelLabel(entry.selected_model) }} (until {{ formatRetirementDate(entry.retirement_date) }})
+                                    {{ getClaudeCodeModelLabel(entry.selected_model) }} (until {{ formatRetirementDate(entry.retirement_date) }})
                                 </wa-option>
                             </wa-select>
                             <a v-if="selectedModel !== null" class="reset-setting-link" @click.prevent="selectedModel = null">Reset to default: {{ claudeCodeDefaultModelLabel }}</a>
@@ -1796,9 +1800,9 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
                                     v-for="option in effortOptions"
                                     :key="option.value"
                                     :value="option.value"
-                                    :disabled="(option.value === EFFORT.X_HIGH && !isEffortXhighAvailable) || (option.value === EFFORT.MAX && !isEffortMaxAvailable)"
+                                    :disabled="(option.value === CLAUDE_CODE_EFFORT.X_HIGH && !isEffortXhighAvailable) || (option.value === CLAUDE_CODE_EFFORT.MAX && !isEffortMaxAvailable)"
                                 >
-                                    {{ option.label }}{{ ((option.value === EFFORT.X_HIGH && !isEffortXhighAvailable) || (option.value === EFFORT.MAX && !isEffortMaxAvailable)) ? ' (not available)' : '' }}
+                                    {{ option.label }}{{ ((option.value === CLAUDE_CODE_EFFORT.X_HIGH && !isEffortXhighAvailable) || (option.value === CLAUDE_CODE_EFFORT.MAX && !isEffortMaxAvailable)) ? ' (not available)' : '' }}
                                 </wa-option>
                             </wa-select>
                             <a v-if="selectedEffort !== null" class="reset-setting-link" @click.prevent="selectedEffort = null">Reset to default: {{ claudeCodeDefaultEffortLabel }}</a>

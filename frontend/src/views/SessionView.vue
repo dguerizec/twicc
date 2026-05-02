@@ -10,7 +10,10 @@ import { requestTitleSuggestion, notifySessionViewed, forceNotifySessionViewed }
 import { stopSessionProcess } from '../composables/useStopSessionProcess'
 import { useDragHover } from '../composables/useDragHover'
 import { PROCESS_STATE } from '../constants'
-import { EFFORT, getModelLabel } from '../providers/claude_code/constants'
+import {
+    EFFORT as CLAUDE_CODE_EFFORT,
+    getModelLabel as getClaudeCodeModelLabel,
+} from '../providers/claude_code/constants'
 import SessionHeader from '../components/session/detail/SessionHeader.vue'
 import SessionItemsList from '../components/session/detail/SessionItemsList.vue'
 import SessionContent from '../components/session/detail/SessionContent.vue'
@@ -958,7 +961,7 @@ function buildSessionSettingsCommands() {
                 const registry = claudeCodeHelpers.getModelRegistry()
                 const defaultEntry = registry.find(e => e.selected_model === claudeCodeDefaultModel)
                 const defaultSuffix = defaultEntry?.latest ? ` (latest: ${defaultEntry.version})` : ''
-                const defaultLabel = `${getModelLabel(claudeCodeDefaultModel)}${defaultSuffix}`
+                const defaultLabel = `${getClaudeCodeModelLabel(claudeCodeDefaultModel)}${defaultSuffix}`
 
                 const items = [
                     {
@@ -973,7 +976,7 @@ function buildSessionSettingsCommands() {
                     items.push({
                         id: entry.selected_model,
                         group: 'latest',
-                        label: `${getModelLabel(entry.selected_model)} (latest: ${entry.version})`,
+                        label: `${getClaudeCodeModelLabel(entry.selected_model)} (latest: ${entry.version})`,
                         action: () => setSessionSettingValue('selected_model', entry.selected_model),
                         active: current === entry.selected_model,
                     })
@@ -982,7 +985,7 @@ function buildSessionSettingsCommands() {
                     items.push({
                         id: entry.selected_model,
                         group: 'older',
-                        label: `${getModelLabel(entry.selected_model)} (until ${formatRetirementDate(entry.retirement_date)})`,
+                        label: `${getClaudeCodeModelLabel(entry.selected_model)} (until ${formatRetirementDate(entry.retirement_date)})`,
                         action: () => setSessionSettingValue('selected_model', entry.selected_model),
                         active: current === entry.selected_model,
                     })
@@ -1010,8 +1013,8 @@ function buildSessionSettingsCommands() {
                     },
                 ]
                 for (const choice of claudeCodeHelpers.getFieldChoices('effort')) {
-                    if (choice.value === EFFORT.X_HIGH && !gate.isEffortXhighAvailable) continue
-                    if (choice.value === EFFORT.MAX && !gate.isEffortMaxAvailable) continue
+                    if (choice.value === CLAUDE_CODE_EFFORT.X_HIGH && !gate.isEffortXhighAvailable) continue
+                    if (choice.value === CLAUDE_CODE_EFFORT.MAX && !gate.isEffortMaxAvailable) continue
                     items.push({
                         id: choice.value,
                         group: 'force',
