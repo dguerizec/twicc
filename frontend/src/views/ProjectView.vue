@@ -7,9 +7,9 @@ import { useWorkspacesStore } from '../stores/workspaces'
 import { COLOR_SCHEME, PROVIDER } from '../constants'
 import { useCommandRegistry } from '../composables/useCommandRegistry'
 import { useStartupPolling } from '../composables/useStartupPolling'
-import { sendCheckAuth as sendCheckClaudeCodeAuth } from '../providers/claude_code/ws'
 import { useTerminalCommandStore } from '../stores/terminalCommand'
 import { useClaudeCodeStore } from '../providers/claude_code/store'
+import { getRegisteredProviders, getProviderHelpers } from '../providers'
 import { toWorkspaceProjectId } from '../utils/workspaceIds'
 import { splitProjectsByPriority } from '../utils/projectSort'
 import SessionList from '../components/session/list/SessionList.vue'
@@ -50,25 +50,50 @@ const quotaButtonAppearance = computed(() =>
 )
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Claude CLI authentication
+// Provider authentication callouts
 // ═══════════════════════════════════════════════════════════════════════════
 
-const claudeAuthChecking = ref(false)
 const terminalCommandStore = useTerminalCommandStore()
 
-const claudeLoginCommand = computed(() => `${settingsStore.twiccLaunchPrefix} claude auth login`)
+// Reactive set of providers currently waiting for an auth recheck round-trip
+// (so each "Check again" button can disable independently).
+const authChecking = ref(new Set())
 
-function recheckClaudeAuth() {
-    if (claudeAuthChecking.value) return
-    claudeAuthChecking.value = true
-    sendCheckClaudeCodeAuth()
+// Providers that the registry knows about and that gate sending on auth.
+// Registry membership is fixed at app boot, so this is a plain array.
+const _authAwareProviders = getRegisteredProviders()
+    .map(provider => ({ provider, helpers: getProviderHelpers(provider) }))
+    .filter(({ helpers }) => helpers.getAuthState() !== null)
+
+const unauthenticatedProviders = computed(() => {
+    const result = []
+    for (const { provider, helpers } of _authAwareProviders) {
+        const authStateGetter = helpers.getAuthState()
+        if (authStateGetter() !== false) continue
+        result.push({
+            provider,
+            label: helpers.constructor.label,
+            loginCommand: helpers.getAuthLoginCommand(),
+        })
+    }
+    return result
+})
+
+function recheckProviderAuth(provider) {
+    if (authChecking.value.has(provider)) return
+    const helpers = getProviderHelpers(provider)
+    if (!helpers) return
+    authChecking.value.add(provider)
+    helpers.requestAuthRecheck()
     setTimeout(() => {
-        claudeAuthChecking.value = false
+        authChecking.value.delete(provider)
+        // Force reactivity: ``Set`` mutation alone doesn't trigger watchers.
+        authChecking.value = new Set(authChecking.value)
     }, 1500)
 }
 
-function launchClaudeAuthInTerminal() {
-    terminalCommandStore.request('global', claudeLoginCommand.value)
+function launchProviderAuthInTerminal(loginCommand) {
+    terminalCommandStore.request('global', loginCommand)
     router.push({ name: 'projects-terminal' })
 }
 
@@ -1572,19 +1597,20 @@ function updateSidebarClosedClass(closed) {
                     </AppTooltip>
                 </div>
 
-                <template v-if="claudeCodeStore.authenticated === false">
-                    <wa-divider v-if="quotaHasUsage && quotaComputed"></wa-divider>
-                    <div class="sidebar-footer-claude-auth">
+                <template v-for="(entry, index) in unauthenticatedProviders" :key="entry.provider">
+                    <wa-divider v-if="index === 0 && quotaHasUsage && quotaComputed"></wa-divider>
+                    <wa-divider v-else-if="index > 0"></wa-divider>
+                    <div class="sidebar-footer-provider-auth">
                         <wa-callout variant="warning" size="small">
                             <wa-icon slot="icon" name="triangle-exclamation"></wa-icon>
-                            <div class="sidebar-footer-claude-auth-row">
-                                <span class="sidebar-footer-claude-auth-text">Claude CLI not authenticated. Run <code>{{ claudeLoginCommand }}</code>.</span>
-                                <div class="sidebar-footer-claude-auth-buttons">
+                            <div class="sidebar-footer-provider-auth-row">
+                                <span class="sidebar-footer-provider-auth-text">{{ entry.label }} CLI not authenticated. Run <code>{{ entry.loginCommand }}</code>.</span>
+                                <div class="sidebar-footer-provider-auth-buttons">
                                     <wa-button
                                         size="small"
                                         variant="warning"
                                         appearance="outlined"
-                                        @click="launchClaudeAuthInTerminal"
+                                        @click="launchProviderAuthInTerminal(entry.loginCommand)"
                                     >
                                         <wa-icon slot="start" name="terminal"></wa-icon>Launch in terminal
                                     </wa-button>
@@ -1592,8 +1618,8 @@ function updateSidebarClosedClass(closed) {
                                         size="small"
                                         variant="warning"
                                         appearance="outlined"
-                                        :disabled="claudeAuthChecking"
-                                        @click="recheckClaudeAuth"
+                                        :disabled="authChecking.has(entry.provider)"
+                                        @click="recheckProviderAuth(entry.provider)"
                                     >Check again</wa-button>
                                 </div>
                             </div>
@@ -2007,23 +2033,23 @@ wa-split-panel::part(divider) {
     padding: var(--wa-space-xs) var(--wa-space-s);
 }
 
-.sidebar-footer-claude-auth {
+.sidebar-footer-provider-auth {
     padding: var(--wa-space-xs) var(--wa-space-s);
 }
 
-.sidebar-footer-claude-auth-row {
+.sidebar-footer-provider-auth-row {
     display: flex;
     align-items: center;
     gap: var(--wa-space-s);
     flex-wrap: wrap;
 }
 
-.sidebar-footer-claude-auth-text {
+.sidebar-footer-provider-auth-text {
     flex: 1 1 auto;
     min-width: 0;
 }
 
-.sidebar-footer-claude-auth-text code {
+.sidebar-footer-provider-auth-text code {
     font-family: var(--wa-font-family-code);
     font-size: 0.95em;
     padding: 0 var(--wa-space-3xs);
@@ -2031,7 +2057,7 @@ wa-split-panel::part(divider) {
     border-radius: var(--wa-border-radius-s);
 }
 
-.sidebar-footer-claude-auth-buttons {
+.sidebar-footer-provider-auth-buttons {
     display: flex;
     flex-wrap: wrap;
     gap: var(--wa-space-xs);
