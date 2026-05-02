@@ -3,8 +3,9 @@
 
 import { defineStore, acceptHMRUpdate } from 'pinia'
 import { watch, nextTick } from 'vue'
-import { DEFAULT_DISPLAY_MODE, DEFAULT_COLOR_SCHEME, DEFAULT_SESSION_TIME_FORMAT, DEFAULT_MAX_CACHED_SESSIONS, DISPLAY_MODE, COLOR_SCHEME, SESSION_TIME_FORMAT, PERMISSION_MODE, EFFORT, CONTEXT_MAX, SYNCED_SETTINGS_KEYS, WA_THEME, WA_BRAND, WA_THEME_DEFAULT_PALETTE } from '../constants'
+import { DEFAULT_DISPLAY_MODE, DEFAULT_COLOR_SCHEME, DEFAULT_SESSION_TIME_FORMAT, DEFAULT_MAX_CACHED_SESSIONS, DISPLAY_MODE, COLOR_SCHEME, SESSION_TIME_FORMAT, SYNCED_SETTINGS_KEYS, WA_THEME, WA_BRAND, WA_THEME_DEFAULT_PALETTE } from '../constants'
 import { NOTIFICATION_SOUNDS } from '../utils/notificationSounds'
+import { getProviderHelpers, getRegisteredProviders } from '../providers'
 // Note: useDataStore is imported lazily to avoid circular dependency (settings.js ↔ data.js)
 import { setColorScheme as setColorSchemeOnDom, setWaTheme, setWaBrand } from '../utils/theme'
 
@@ -51,12 +52,6 @@ export const SETTINGS_SCHEMA = {
     autoUnpinOnArchive: null,
     terminalUseTmux: null,
     terminalTmuxConfigPath: null,
-    claudeCodeDefaultPermissionMode: null,
-    claudeCodeDefaultModel: null,
-    claudeCodeDefaultEffort: null,
-    claudeCodeDefaultThinking: null,
-    claudeCodeDefaultClaudeInChrome: null,
-    claudeCodeDefaultContextMax: null,
     waTheme: null,
     waBrand: null,
     claudeCodeUsageReadFileEnabled: null,
@@ -104,12 +99,6 @@ const SETTINGS_VALIDATORS = {
     showActiveAcrossFilters: (v) => typeof v === 'boolean',
     showHiddenFiles: (v) => typeof v === 'boolean',
     showGitIgnoredFiles: (v) => typeof v === 'boolean',
-    claudeCodeDefaultPermissionMode: (v) => Object.values(PERMISSION_MODE).includes(v),
-    claudeCodeDefaultModel: (v) => typeof v === 'string' && v.length > 0,
-    claudeCodeDefaultEffort: (v) => Object.values(EFFORT).includes(v),
-    claudeCodeDefaultThinking: (v) => typeof v === 'boolean',
-    claudeCodeDefaultClaudeInChrome: (v) => typeof v === 'boolean',
-    claudeCodeDefaultContextMax: (v) => Object.values(CONTEXT_MAX).includes(v),
     notifUserTurnSound: (v) => Object.values(NOTIFICATION_SOUNDS).includes(v),
     notifUserTurnBrowser: (v) => typeof v === 'boolean',
     notifPendingRequestSound: (v) => Object.values(NOTIFICATION_SOUNDS).includes(v),
@@ -175,6 +164,11 @@ function loadSettings() {
                 console.info('[settings] migrated localStorage keys:', renamed.join(', '))
             }
 
+            // Stash the parsed dict (full) so initSettings() can dispatch
+            // provider-owned synced keys to their respective stores. Generic
+            // keys are filtered into ``settings`` below for the store factory.
+            _pendingLocalStorageSettings = parsed
+
             // Only keep keys that exist in schema and have valid values
             // Skip _-prefixed keys (runtime state, not persisted)
             for (const key of Object.keys(SETTINGS_SCHEMA)) {
@@ -191,9 +185,6 @@ function loadSettings() {
     } catch (e) {
         console.warn('Failed to load settings from localStorage:', e)
     }
-
-    // Save cleaned settings back to localStorage
-    saveSettings(settings)
 
     return settings
 }
@@ -213,77 +204,6 @@ function saveSettings(settings) {
     } catch (e) {
         console.warn('Failed to save settings to localStorage:', e)
     }
-}
-
-let _modelRegistry = []
-
-export function setModelRegistry(registry) {
-    _modelRegistry = registry
-}
-
-export function getModelRegistry() {
-    return _modelRegistry
-}
-
-/**
- * Look up a registry entry for a given selected model, falling back to the
- * current default model from the settings store when the argument is
- * null/undefined or absent from the registry.
- *
- * Returns the registry entry, or undefined when even the default is unknown
- * (e.g. during boot before the registry has been populated).
- */
-function resolveRegistryEntry(selectedModel) {
-    let entry = selectedModel ? _modelRegistry.find(e => e.selected_model === selectedModel) : undefined
-    if (!entry) {
-        const claudeCodeDefaultModel = useSettingsStore().claudeCodeDefaultModel
-        if (claudeCodeDefaultModel) {
-            entry = _modelRegistry.find(e => e.selected_model === claudeCodeDefaultModel)
-        }
-    }
-    return entry
-}
-
-export function modelSupports1m(selectedModel) {
-    const entry = resolveRegistryEntry(selectedModel)
-    return entry ? entry.provider_extra.supports_1m : false  // last-resort default: conservative
-}
-
-export function modelSupportsEffortXhigh(selectedModel) {
-    const entry = resolveRegistryEntry(selectedModel)
-    return entry ? entry.provider_extra.supports_effort_xhigh : false  // last-resort default: conservative
-}
-
-export function modelSupportsEffortMax(selectedModel) {
-    const entry = resolveRegistryEntry(selectedModel)
-    return entry ? entry.provider_extra.supports_effort_max : false  // last-resort default: conservative
-}
-
-/**
- * If selectedModel is retired, return the upgrade target. Otherwise null.
- * Used by frontend to correct stale session settings at render/send time.
- */
-export function getRetiredModelUpgrade(selectedModel) {
-    if (!selectedModel) return null
-    const entry = _modelRegistry.find(e => e.selected_model === selectedModel)
-    if (!entry || entry.latest || !entry.retirement_date) return null
-    if (new Date(entry.retirement_date + 'T00:00:00') >= new Date()) return null
-    // Find next higher version in same family
-    const family = _modelRegistry
-        .filter(e => e.model === entry.model)
-        .sort((a, b) => {
-            const av = a.version.split('.').map(Number)
-            const bv = b.version.split('.').map(Number)
-            return av[0] - bv[0] || (av[1] ?? 0) - (bv[1] ?? 0)
-        })
-    const currentParts = entry.version.split('.').map(Number)
-    for (const candidate of family) {
-        const cp = candidate.version.split('.').map(Number)
-        if (cp[0] > currentParts[0] || (cp[0] === currentParts[0] && (cp[1] ?? 0) > (currentParts[1] ?? 0))) {
-            return candidate.selected_model
-        }
-    }
-    return null
 }
 
 export const useSettingsStore = defineStore('settings', {
@@ -318,12 +238,6 @@ export const useSettingsStore = defineStore('settings', {
         isShowActiveAcrossFilters: (state) => state.showActiveAcrossFilters,
         isShowHiddenFiles: (state) => state.showHiddenFiles,
         isShowGitIgnoredFiles: (state) => state.showGitIgnoredFiles,
-        getClaudeCodeDefaultPermissionMode: (state) => state.claudeCodeDefaultPermissionMode,
-        getClaudeCodeDefaultModel: (state) => state.claudeCodeDefaultModel,
-        getClaudeCodeDefaultEffort: (state) => state.claudeCodeDefaultEffort,
-        getClaudeCodeDefaultThinking: (state) => state.claudeCodeDefaultThinking,
-        getClaudeCodeDefaultClaudeInChrome: (state) => state.claudeCodeDefaultClaudeInChrome,
-        getClaudeCodeDefaultContextMax: (state) => state.claudeCodeDefaultContextMax,
         getNotifUserTurnSound: (state) => state.notifUserTurnSound,
         isNotifUserTurnBrowser: (state) => state.notifUserTurnBrowser,
         getNotifPendingRequestSound: (state) => state.notifPendingRequestSound,
@@ -626,46 +540,6 @@ export const useSettingsStore = defineStore('settings', {
         },
 
         /**
-         * Set the default permission mode for new Claude Code sessions.
-         * @param {string} mode - One of PERMISSION_MODE values
-         */
-        setClaudeCodeDefaultPermissionMode(mode) {
-            if (SETTINGS_VALIDATORS.claudeCodeDefaultPermissionMode(mode)) {
-                this.claudeCodeDefaultPermissionMode = mode
-            }
-        },
-
-        setClaudeCodeDefaultModel(model) {
-            if (SETTINGS_VALIDATORS.claudeCodeDefaultModel(model)) {
-                this.claudeCodeDefaultModel = model
-            }
-        },
-
-        setClaudeCodeDefaultEffort(effort) {
-            if (SETTINGS_VALIDATORS.claudeCodeDefaultEffort(effort)) {
-                this.claudeCodeDefaultEffort = effort
-            }
-        },
-
-        setClaudeCodeDefaultThinking(thinking) {
-            if (SETTINGS_VALIDATORS.claudeCodeDefaultThinking(thinking)) {
-                this.claudeCodeDefaultThinking = thinking
-            }
-        },
-
-        setClaudeCodeDefaultClaudeInChrome(enabled) {
-            if (SETTINGS_VALIDATORS.claudeCodeDefaultClaudeInChrome(enabled)) {
-                this.claudeCodeDefaultClaudeInChrome = enabled
-            }
-        },
-
-        setClaudeCodeDefaultContextMax(contextMax) {
-            if (SETTINGS_VALIDATORS.claudeCodeDefaultContextMax(contextMax)) {
-                this.claudeCodeDefaultContextMax = contextMax
-            }
-        },
-
-        /**
          * Set notification sound for user turn events.
          * @param {string} sound - One of NOTIFICATION_SOUNDS values
          */
@@ -761,6 +635,7 @@ export const useSettingsStore = defineStore('settings', {
             // HTTP data is silently dropped.
             if (version !== undefined && version < _settingsVersion) return
             this._isApplyingRemoteSettings = true
+            // Generic synced keys live on this store.
             for (const key of SYNCED_SETTINGS_KEYS) {
                 if (key in remoteSettings) {
                     const validator = SETTINGS_VALIDATORS[key]
@@ -768,6 +643,10 @@ export const useSettingsStore = defineStore('settings', {
                         this[key] = remoteSettings[key]
                     }
                 }
+            }
+            // Provider-owned synced keys are dispatched through each helper.
+            for (const provider of getRegisteredProviders()) {
+                getProviderHelpers(provider).applySyncedSettings(remoteSettings)
             }
             if (version !== undefined) {
                 _settingsVersion = version
@@ -792,57 +671,29 @@ export const useSettingsStore = defineStore('settings', {
 })
 
 /**
- * Claude session settings categories (live/idle/startup), loaded from backend.
- * Maps category name → array of setting field names.
- * Used to determine which settings can be applied live vs require process restart.
- */
-let _claudeSettingsCategories = { live: [], idle: [], startup: [] }
-
-/**
- * Get the Claude settings categories loaded from the backend.
- * @returns {{ live: string[], idle: string[], startup: string[] }}
- */
-export function getClaudeSettingsCategories() {
-    return _claudeSettingsCategories
-}
-
-/**
- * Classify changes between current and requested Claude session settings.
- * Returns which settings differ, grouped by category.
- * @param {Object} current - Current settings (from process or DB)
- * @param {Object} requested - Requested settings (from dropdowns)
- * @returns {{ live: string[], idle: string[], startup: string[] }}
- */
-export function classifyClaudeSettingsChanges(current, requested) {
-    const result = { live: [], idle: [], startup: [] }
-    for (const [category, settings] of Object.entries(_claudeSettingsCategories)) {
-        for (const setting of settings) {
-            if (current[setting] !== requested[setting]) {
-                result[category].push(setting)
-            }
-        }
-    }
-    return result
-}
-
-/**
  * Apply backend-provided default values for synced settings into SETTINGS_SCHEMA.
  * Must be called BEFORE initSettings() / useSettingsStore() so that loadSettings()
  * picks up the correct defaults when it runs for the first time.
- * Also applies the current synced settings values to the store.
+ * Also stashes the current synced settings values for later application.
+ *
+ * Per-provider settings (those declared by ``BaseProviderHelpers.getSyncedSettingsKeys``)
+ * are dispatched at ``initSettings()`` time via each provider's helper —
+ * they do not need to live on this store's schema.
+ *
  * @param {Object} defaultSettings - Default values from the backend
  * @param {Object} currentSettings - Current synced settings from the backend
- * @param {Object} claudeSettingsCategories - Claude settings categories from the backend
  * @param {boolean} devMode - Whether the backend is running in dev mode
  * @param {boolean} uvxMode - Whether the app was launched via uvx
  * @param {string} twiccLaunchPrefix - Shell prefix that re-invokes this TwiCC distribution
  */
-export function applyDefaultSettings(defaultSettings, currentSettings, claudeSettingsCategories, devMode, uvxMode, twiccLaunchPrefix, version) {
+export function applyDefaultSettings(defaultSettings, currentSettings, devMode, uvxMode, twiccLaunchPrefix, version) {
     if (defaultSettings && typeof defaultSettings === 'object') {
-        Object.assign(SETTINGS_SCHEMA, defaultSettings)
-    }
-    if (claudeSettingsCategories && typeof claudeSettingsCategories === 'object') {
-        _claudeSettingsCategories = claudeSettingsCategories
+        // Only merge defaults for keys declared in the generic schema; provider-owned
+        // keys are silently ignored here (their bootstrap-current values flow through
+        // applySyncedSettings → provider helper instead).
+        for (const key of Object.keys(SETTINGS_SCHEMA)) {
+            if (key in defaultSettings) SETTINGS_SCHEMA[key] = defaultSettings[key]
+        }
     }
     SETTINGS_SCHEMA._devMode = !!devMode
     SETTINGS_SCHEMA._uvxMode = !!uvxMode
@@ -854,6 +705,8 @@ export function applyDefaultSettings(defaultSettings, currentSettings, claudeSet
 
 // Pending synced settings to apply once the store is initialized
 let _pendingSyncedSettings = null
+// Pending localStorage parsed dict — dispatched to provider helpers at init
+let _pendingLocalStorageSettings = null
 
 // Current settings version from backend (for optimistic concurrency).
 // Module-level (not in store state) to avoid unnecessary reactivity.
@@ -875,7 +728,17 @@ let _pendingSettingsVersion = undefined
 export function initSettings() {
     const store = useSettingsStore()
 
-    // Apply synced settings fetched from the API before mount
+    // Dispatch the parsed localStorage values that are owned by providers
+    // (the generic ones were already applied via the store's state factory).
+    if (_pendingLocalStorageSettings) {
+        for (const provider of getRegisteredProviders()) {
+            getProviderHelpers(provider).applySyncedSettings(_pendingLocalStorageSettings)
+        }
+        _pendingLocalStorageSettings = null
+    }
+
+    // Apply synced settings fetched from the API before mount. This OVERRIDES
+    // the localStorage values applied above (backend is the source of truth).
     if (_pendingSyncedSettings) {
         store.applySyncedSettings(_pendingSyncedSettings, _pendingSettingsVersion)
         _pendingSyncedSettings = null
@@ -885,10 +748,11 @@ export function initSettings() {
     // Apply initial font size (theme is already applied in main.js)
     document.documentElement.style.fontSize = `${store.fontSize}px`
 
-    // Watch all state changes and save to localStorage
-    // Note: _effectiveColorScheme is excluded as it's computed at runtime
-    watch(
-        () => ({
+    // Build the union of settings (generic + each provider's synced subset)
+    // for the localStorage and outgoing-sync watchers. The function is invoked
+    // by Vue inside watchers, so reactive reads track every dependency.
+    const collectAllSyncedSettings = () => {
+        const dict = {
             displayMode: store.displayMode,
             fontSize: store.fontSize,
             colorScheme: store.colorScheme,
@@ -914,24 +778,24 @@ export function initSettings() {
             showActiveAcrossFilters: store.showActiveAcrossFilters,
             showHiddenFiles: store.showHiddenFiles,
             showGitIgnoredFiles: store.showGitIgnoredFiles,
-            claudeCodeDefaultPermissionMode: store.claudeCodeDefaultPermissionMode,
-            claudeCodeDefaultModel: store.claudeCodeDefaultModel,
-            claudeCodeDefaultEffort: store.claudeCodeDefaultEffort,
-            claudeCodeDefaultThinking: store.claudeCodeDefaultThinking,
-            claudeCodeDefaultClaudeInChrome: store.claudeCodeDefaultClaudeInChrome,
-            claudeCodeDefaultContextMax: store.claudeCodeDefaultContextMax,
             notifUserTurnSound: store.notifUserTurnSound,
             notifUserTurnBrowser: store.notifUserTurnBrowser,
             notifPendingRequestSound: store.notifPendingRequestSound,
             notifPendingRequestBrowser: store.notifPendingRequestBrowser,
             waTheme: store.waTheme,
             waBrand: store.waBrand,
-        }),
-        (newSettings) => {
-            saveSettings(newSettings)
-        },
-        { deep: true }
-    )
+        }
+        for (const provider of getRegisteredProviders()) {
+            Object.assign(dict, getProviderHelpers(provider).getSyncedSettings())
+        }
+        return dict
+    }
+
+    // Watch the union and persist to localStorage on every change.
+    // Note: _effectiveColorScheme is excluded as it's computed at runtime
+    watch(collectAllSyncedSettings, (newSettings) => {
+        saveSettings(newSettings)
+    }, { deep: true })
 
     // Watch for color scheme changes
     watch(() => store.colorScheme, (mode) => {
@@ -968,6 +832,9 @@ export function initSettings() {
             const synced = {}
             for (const key of SYNCED_SETTINGS_KEYS) {
                 synced[key] = store[key]
+            }
+            for (const provider of getRegisteredProviders()) {
+                Object.assign(synced, getProviderHelpers(provider).getSyncedSettings())
             }
             return synced
         },

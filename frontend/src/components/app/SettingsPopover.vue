@@ -2,10 +2,11 @@
 // SettingsPopover.vue - Settings button with popover panel
 import { computed, nextTick, onBeforeUnmount, ref, useId, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { useSettingsStore, SETTINGS_SCHEMA, getModelRegistry, modelSupports1m, modelSupportsEffortXhigh, modelSupportsEffortMax } from '../../stores/settings'
+import { useSettingsStore, SETTINGS_SCHEMA } from '../../stores/settings'
 import { useDataStore } from '../../stores/data'
 import { useAuthStore } from '../../stores/auth'
 import { useClaudeCodeStore } from '../../providers/claude_code/store'
+import { claudeCodeHelpers } from '../../providers/claude_code/helpers'
 import { DISPLAY_MODE, COLOR_SCHEME, SESSION_TIME_FORMAT, DEFAULT_MAX_CACHED_SESSIONS, PERMISSION_MODE, PERMISSION_MODE_LABELS, PERMISSION_MODE_DESCRIPTIONS, getModelLabel, EFFORT, EFFORT_LABELS, THINKING, THINKING_LABELS, CLAUDE_IN_CHROME, CLAUDE_IN_CHROME_LABELS, CONTEXT_MAX, CONTEXT_MAX_LABELS, WA_THEME, WA_THEME_LABELS, WA_BRAND, WA_BRAND_LABELS } from '../../constants'
 import NotificationSettings from './NotificationSettings.vue'
 import AppTooltip from '../ui/AppTooltip.vue'
@@ -195,12 +196,12 @@ const titleSystemPrompt = computed(() => store.getTitleSystemPrompt)
 const terminalUseTmux = computed(() => store.isTerminalUseTmux)
 const terminalTmuxConfigPath = computed(() => store.getTerminalTmuxConfigPath)
 const compactSessionList = computed(() => store.isCompactSessionList)
-const claudeCodeDefaultPermissionMode = computed(() => store.getClaudeCodeDefaultPermissionMode)
-const claudeCodeDefaultModel = computed(() => store.getClaudeCodeDefaultModel)
-const claudeCodeDefaultEffort = computed(() => store.getClaudeCodeDefaultEffort)
-const claudeCodeDefaultThinking = computed(() => store.getClaudeCodeDefaultThinking)
-const claudeCodeDefaultClaudeInChrome = computed(() => store.getClaudeCodeDefaultClaudeInChrome)
-const claudeCodeDefaultContextMax = computed(() => store.getClaudeCodeDefaultContextMax)
+const claudeCodeDefaultPermissionMode = computed(() => claudeCodeStore.defaultPermissionMode)
+const claudeCodeDefaultModel = computed(() => claudeCodeStore.defaultModel)
+const claudeCodeDefaultEffort = computed(() => claudeCodeStore.defaultEffort)
+const claudeCodeDefaultThinking = computed(() => claudeCodeStore.defaultThinking)
+const claudeCodeDefaultClaudeInChrome = computed(() => claudeCodeStore.defaultClaudeInChrome)
+const claudeCodeDefaultContextMax = computed(() => claudeCodeStore.defaultContextMax)
 const waTheme = computed(() => store.getWaTheme)
 const waBrand = computed(() => store.getWaBrand)
 const showDiffs = computed(() => store.isShowDiffs)
@@ -286,7 +287,7 @@ const permissionModeOptions = Object.values(PERMISSION_MODE).map(value => ({
 
 // Model options for the select — built from the registry
 const modelRegistryOptions = computed(() => {
-    const registry = getModelRegistry()
+    const registry = claudeCodeHelpers.getModelRegistry()
     return {
         latest: registry.filter(e => e.latest),
         older: registry.filter(e => !e.latest),
@@ -323,9 +324,9 @@ function formatRetirementDate(isoDate) {
     })
 }
 
-const claudeCodeDefaultModelSupports1m = computed(() => modelSupports1m(claudeCodeDefaultModel.value))
-const claudeCodeDefaultModelSupportsEffortXhigh = computed(() => modelSupportsEffortXhigh(claudeCodeDefaultModel.value))
-const claudeCodeDefaultModelSupportsEffortMax = computed(() => modelSupportsEffortMax(claudeCodeDefaultModel.value))
+const claudeCodeDefaultModelSupports1m = computed(() => claudeCodeHelpers.modelSupports1m(claudeCodeDefaultModel.value))
+const claudeCodeDefaultModelSupportsEffortXhigh = computed(() => claudeCodeHelpers.modelSupportsEffortXhigh(claudeCodeDefaultModel.value))
+const claudeCodeDefaultModelSupportsEffortMax = computed(() => claudeCodeHelpers.modelSupportsEffortMax(claudeCodeDefaultModel.value))
 
 /**
  * Handle display mode change.
@@ -507,36 +508,38 @@ async function onTmuxConfigPathApply() {
  * Handle Claude Code default permission mode change.
  */
 function onClaudeCodeDefaultPermissionModeChange(event) {
-    store.setClaudeCodeDefaultPermissionMode(event.target.value)
+    claudeCodeStore.setDefaultPermissionMode(event.target.value)
 }
 
 function onClaudeCodeDefaultModelChange(event) {
-    const newModel = event.target.value
-    store.setClaudeCodeDefaultModel(newModel)
-    if (!modelSupports1m(newModel) && store.getClaudeCodeDefaultContextMax === CONTEXT_MAX.EXTENDED) {
-        store.setClaudeCodeDefaultContextMax(CONTEXT_MAX.DEFAULT)
+    const adjusted = claudeCodeHelpers.enforceAgentSettingsConsistency({
+        selectedModel: event.target.value,
+        contextMax: claudeCodeStore.defaultContextMax,
+        effort: claudeCodeStore.defaultEffort,
+    })
+    claudeCodeStore.setDefaultModel(adjusted.selectedModel)
+    if (adjusted.contextMax !== claudeCodeStore.defaultContextMax) {
+        claudeCodeStore.setDefaultContextMax(adjusted.contextMax)
     }
-    if (store.claudeCodeDefaultEffort === EFFORT.MAX && !modelSupportsEffortMax(newModel)) {
-        store.setClaudeCodeDefaultEffort(modelSupportsEffortXhigh(newModel) ? EFFORT.X_HIGH : EFFORT.HIGH)
-    } else if (store.claudeCodeDefaultEffort === EFFORT.X_HIGH && !modelSupportsEffortXhigh(newModel)) {
-        store.setClaudeCodeDefaultEffort(EFFORT.HIGH)
+    if (adjusted.effort !== claudeCodeStore.defaultEffort) {
+        claudeCodeStore.setDefaultEffort(adjusted.effort)
     }
 }
 
 function onClaudeCodeDefaultEffortChange(event) {
-    store.setClaudeCodeDefaultEffort(event.target.value)
+    claudeCodeStore.setDefaultEffort(event.target.value)
 }
 
 function onClaudeCodeDefaultThinkingChange(event) {
-    store.setClaudeCodeDefaultThinking(event.target.value === 'true')
+    claudeCodeStore.setDefaultThinking(event.target.value === 'true')
 }
 
 function onClaudeCodeDefaultClaudeInChromeChange(event) {
-    store.setClaudeCodeDefaultClaudeInChrome(event.target.value === 'true')
+    claudeCodeStore.setDefaultClaudeInChrome(event.target.value === 'true')
 }
 
 function onClaudeCodeDefaultContextMaxChange(event) {
-    store.setClaudeCodeDefaultContextMax(Number(event.target.value))
+    claudeCodeStore.setDefaultContextMax(Number(event.target.value))
 }
 
 /**

@@ -46,7 +46,7 @@ import { createPinia } from 'pinia'
 import { createNotivue } from 'notivue'
 import { router } from './router'
 import App from './App.vue'
-import { applyDefaultSettings, initSettings, setModelRegistry } from './stores/settings'
+import { applyDefaultSettings, initSettings } from './stores/settings'
 import { useAuthStore } from './stores/auth'
 import { useDataStore } from './stores/data'
 import { useCodeCommentsStore } from './stores/codeComments'
@@ -115,9 +115,22 @@ if (!authStore.needsLogin) {
         if (resp.ok) {
             bootstrapData = await resp.json()
             const { settings, settings_version, default_settings, dev_mode, uvx_mode, twicc_launch_prefix, providers } = bootstrapData
-            const claudeProvider = providers?.claude_code ?? {}
-            applyDefaultSettings(default_settings, settings, claudeProvider.agent_settings_categories, dev_mode, uvx_mode, twicc_launch_prefix, settings_version)
-            setModelRegistry(claudeProvider.model_registry || [])
+            applyDefaultSettings(default_settings, settings, dev_mode, uvx_mode, twicc_launch_prefix, settings_version)
+            // Seed each provider's bootstrap-driven state (agent-setting categories
+            // for ``classifyAgentSettingsChanges``, model registry for capability
+            // and retired-model lookups). Optional chaining: providers without one
+            // of those concerns simply won't expose the corresponding setter.
+            const { getProviderStore } = await import('./providers')
+            for (const [provider, providerData] of Object.entries(providers ?? {})) {
+                const providerStore = getProviderStore(provider)
+                if (!providerStore) continue
+                if (providerData?.agent_settings_categories) {
+                    providerStore.setAgentSettingsCategories?.(providerData.agent_settings_categories)
+                }
+                if (providerData?.model_registry) {
+                    providerStore.setModelRegistry?.(providerData.model_registry)
+                }
+            }
         } else {
             bootstrapFailed = true
         }

@@ -6,7 +6,9 @@ import { getPrefixSuffixBoundaries } from '../utils/contentVisibility'
 import { computeVisualItems, visualItemEqual } from '../utils/visualItems'
 import { CONTEXT_MAX, DISPLAY_LEVEL, DISPLAY_MODE, PROCESS_STATE, PROVIDER, SYNTHETIC_ITEM } from '../constants'
 import { getSessionCutoffMs } from '../utils/sessions'
-import { useSettingsStore, modelSupports1m } from './settings'
+import { useSettingsStore } from './settings'
+import { useClaudeCodeStore } from '../providers/claude_code/store'
+import { claudeCodeHelpers } from '../providers/claude_code/helpers'
 import {
     saveDraftMessage,
     getDraftMessage,
@@ -401,11 +403,11 @@ export const useDataStore = defineStore('data', {
         // model's 1M capability.
         getEffectiveContextMax: (state) => (sessionId, overrideModel = undefined) => {
             const session = state.sessions[sessionId]
-            const settingsStore = useSettingsStore()
-            const baseValue = session?.context_max ?? settingsStore.getClaudeCodeDefaultContextMax
+            const claudeCodeStore = useClaudeCodeStore()
+            const baseValue = session?.context_max ?? claudeCodeStore.defaultContextMax
             if (baseValue !== CONTEXT_MAX.DEFAULT) return baseValue
-            const model = overrideModel !== undefined ? overrideModel : (session?.selected_model ?? settingsStore.getClaudeCodeDefaultModel)
-            if (!modelSupports1m(model)) return baseValue
+            const model = overrideModel !== undefined ? overrideModel : (session?.selected_model ?? claudeCodeStore.defaultModel)
+            if (!claudeCodeHelpers.modelSupports1m(model)) return baseValue
             if ((session?.context_usage ?? 0) > CONTEXT_MAX.DEFAULT * 0.85) return CONTEXT_MAX.EXTENDED
             return baseValue
         },

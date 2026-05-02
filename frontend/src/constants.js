@@ -339,19 +339,16 @@ export const WA_BRAND_LABELS = {
 }
 
 /**
- * Settings keys that are synced across devices via backend settings.json.
+ * Generic settings keys synced across devices via backend settings.json.
+ * Provider-owned synced keys are declared by each provider's helper
+ * (``BaseProviderHelpers.getSyncedSettingsKeys``) — they are dispatched to
+ * provider stores by the settings orchestrator and must not be listed here.
  * All other settings remain local to the browser (localStorage only).
  */
 export const SYNCED_SETTINGS_KEYS = new Set([
     'titleGenerationEnabled',
     'titleAutoApply',
     'titleSystemPrompt',
-    'claudeCodeDefaultPermissionMode',
-    'claudeCodeDefaultModel',
-    'claudeCodeDefaultEffort',
-    'claudeCodeDefaultThinking',
-    'claudeCodeDefaultClaudeInChrome',
-    'claudeCodeDefaultContextMax',
     'autoUnpinOnArchive',
     'terminalUseTmux',
     'terminalTmuxConfigPath',

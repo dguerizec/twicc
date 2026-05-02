@@ -8,9 +8,11 @@
  */
 
 import { useCommandRegistry } from '../composables/useCommandRegistry'
-import { useSettingsStore, getModelRegistry, modelSupportsEffortXhigh, modelSupportsEffortMax } from '../stores/settings'
+import { useSettingsStore } from '../stores/settings'
 import { useDataStore, ALL_PROJECTS_ID } from '../stores/data'
 import { useWorkspacesStore } from '../stores/workspaces'
+import { useClaudeCodeStore } from '../providers/claude_code/store'
+import { claudeCodeHelpers } from '../providers/claude_code/helpers'
 import { useRoute } from 'vue-router'
 import { clearTabRouteParams } from '../utils/granularRoutes'
 import { computeSidebarSessionBlocks } from '../utils/sidebarSessions'
@@ -192,6 +194,7 @@ function buildSessionNavItems({
 export function initStaticCommands(router) {
     const { registerCommands } = useCommandRegistry()
     const settings = useSettingsStore()
+    const claudeCodeStore = useClaudeCodeStore()
     const data = useDataStore()
     const workspaces = useWorkspacesStore()
     const route = useRoute()
@@ -686,13 +689,13 @@ export function initStaticCommands(router) {
             label: 'Change Default Model\u2026',
             icon: 'robot',
             category: 'claude',
-            items: () => getModelRegistry().map(entry => ({
+            items: () => claudeCodeHelpers.getModelRegistry().map(entry => ({
                 id: entry.selected_model,
                 label: entry.latest
                     ? `${getModelLabel(entry.selected_model)} (latest: ${entry.version})`
                     : `${getModelLabel(entry.selected_model)} (until ${entry.retirement_date})`,
-                action: () => settings.setClaudeCodeDefaultModel(entry.selected_model),
-                active: settings.claudeCodeDefaultModel === entry.selected_model,
+                action: () => claudeCodeStore.setDefaultModel(entry.selected_model),
+                active: claudeCodeStore.defaultModel === entry.selected_model,
             })),
         },
         {
@@ -702,15 +705,15 @@ export function initStaticCommands(router) {
             category: 'claude',
             items: () => Object.values(EFFORT)
                 .filter(value => {
-                    if (value === EFFORT.X_HIGH) return modelSupportsEffortXhigh(settings.claudeCodeDefaultModel)
-                    if (value === EFFORT.MAX) return modelSupportsEffortMax(settings.claudeCodeDefaultModel)
+                    if (value === EFFORT.X_HIGH) return claudeCodeHelpers.modelSupportsEffortXhigh(claudeCodeStore.defaultModel)
+                    if (value === EFFORT.MAX) return claudeCodeHelpers.modelSupportsEffortMax(claudeCodeStore.defaultModel)
                     return true
                 })
                 .map(value => ({
                     id: value,
                     label: EFFORT_LABELS[value],
-                    action: () => settings.setClaudeCodeDefaultEffort(value),
-                    active: settings.claudeCodeDefaultEffort === value,
+                    action: () => claudeCodeStore.setDefaultEffort(value),
+                    active: claudeCodeStore.defaultEffort === value,
                 })),
         },
         {
@@ -721,8 +724,8 @@ export function initStaticCommands(router) {
             items: () => Object.values(PERMISSION_MODE).map(value => ({
                 id: value,
                 label: PERMISSION_MODE_LABELS[value],
-                action: () => settings.setClaudeCodeDefaultPermissionMode(value),
-                active: settings.claudeCodeDefaultPermissionMode === value,
+                action: () => claudeCodeStore.setDefaultPermissionMode(value),
+                active: claudeCodeStore.defaultPermissionMode === value,
             })),
         },
         {
@@ -731,8 +734,8 @@ export function initStaticCommands(router) {
             icon: 'brain',
             category: 'claude',
             items: () => [
-                { id: 'enabled', label: THINKING_LABELS[THINKING.ENABLED], action: () => settings.setClaudeCodeDefaultThinking(THINKING.ENABLED), active: settings.claudeCodeDefaultThinking === THINKING.ENABLED },
-                { id: 'disabled', label: THINKING_LABELS[THINKING.DISABLED], action: () => settings.setClaudeCodeDefaultThinking(THINKING.DISABLED), active: settings.claudeCodeDefaultThinking === THINKING.DISABLED },
+                { id: 'enabled', label: THINKING_LABELS[THINKING.ENABLED], action: () => claudeCodeStore.setDefaultThinking(THINKING.ENABLED), active: claudeCodeStore.defaultThinking === THINKING.ENABLED },
+                { id: 'disabled', label: THINKING_LABELS[THINKING.DISABLED], action: () => claudeCodeStore.setDefaultThinking(THINKING.DISABLED), active: claudeCodeStore.defaultThinking === THINKING.DISABLED },
             ],
         },
         {
@@ -743,8 +746,8 @@ export function initStaticCommands(router) {
             items: () => Object.values(CONTEXT_MAX).map(value => ({
                 id: String(value),
                 label: CONTEXT_MAX_LABELS[value],
-                action: () => settings.setClaudeCodeDefaultContextMax(value),
-                active: settings.claudeCodeDefaultContextMax === value,
+                action: () => claudeCodeStore.setDefaultContextMax(value),
+                active: claudeCodeStore.defaultContextMax === value,
             })),
         },
         {
@@ -755,8 +758,8 @@ export function initStaticCommands(router) {
             items: () => Object.values(CLAUDE_IN_CHROME).map(value => ({
                 id: String(value),
                 label: CLAUDE_IN_CHROME_LABELS[value],
-                action: () => settings.setClaudeCodeDefaultClaudeInChrome(value),
-                active: settings.claudeCodeDefaultClaudeInChrome === value,
+                action: () => claudeCodeStore.setDefaultClaudeInChrome(value),
+                active: claudeCodeStore.defaultClaudeInChrome === value,
             })),
         },
 

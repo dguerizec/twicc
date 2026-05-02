@@ -12,7 +12,7 @@ import {
     CONTEXT_MAX_LABELS,
     getModelLabel,
 } from '../../constants'
-import { getModelRegistry } from '../../stores/settings'
+import { claudeCodeHelpers } from '../../providers/claude_code/helpers'
 import { formatPresetSummary } from '../../utils/presetFormat'
 
 const DEFAULT_SENTINEL = '__default__'
@@ -41,7 +41,7 @@ const dialogLabel = computed(() => {
 })
 
 const modelOptions = computed(() => {
-    const registry = getModelRegistry() || []
+    const registry = claudeCodeHelpers.getModelRegistry() || []
     return registry.map((entry) => {
         const baseLabel = getModelLabel(entry.selected_model)
         return {

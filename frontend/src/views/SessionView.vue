@@ -2,7 +2,9 @@
 import { computed, watch, ref, readonly, provide, inject, onActivated, onDeactivated, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useDataStore } from '../stores/data'
-import { useSettingsStore, getModelRegistry } from '../stores/settings'
+import { useSettingsStore } from '../stores/settings'
+import { useClaudeCodeStore } from '../providers/claude_code/store'
+import { claudeCodeHelpers } from '../providers/claude_code/helpers'
 import { useCommandRegistry } from '../composables/useCommandRegistry'
 import { requestTitleSuggestion, notifySessionViewed, forceNotifySessionViewed } from '../composables/useWebSocket'
 import { stopSessionProcess } from '../composables/useStopSessionProcess'
@@ -48,6 +50,7 @@ const route = useRoute()
 const router = useRouter()
 const store = useDataStore()
 const settingsStore = useSettingsStore()
+const claudeCodeStore = useClaudeCodeStore()
 const codeCommentsStore = useCodeCommentsStore()
 const { registerCommands, unregisterCommands } = useCommandRegistry()
 
@@ -963,8 +966,8 @@ function buildSessionSettingsCommands() {
             when: isAvailable,
             items: () => {
                 const current = getSessionSettingValue('selected_model')
-                const claudeCodeDefaultModel = settingsStore.getClaudeCodeDefaultModel
-                const registry = getModelRegistry()
+                const claudeCodeDefaultModel = claudeCodeStore.defaultModel
+                const registry = claudeCodeHelpers.getModelRegistry()
                 const defaultEntry = registry.find(e => e.selected_model === claudeCodeDefaultModel)
                 const defaultSuffix = defaultEntry?.latest ? ` (latest: ${defaultEntry.version})` : ''
                 const defaultLabel = `${getModelLabel(claudeCodeDefaultModel)}${defaultSuffix}`
@@ -1009,7 +1012,7 @@ function buildSessionSettingsCommands() {
                 const gate = sessionSettingsGate()
                 if (!gate) return []
                 const current = getSessionSettingValue('effort')
-                const claudeCodeDefaultEffort = settingsStore.getClaudeCodeDefaultEffort
+                const claudeCodeDefaultEffort = claudeCodeStore.defaultEffort
 
                 const items = [
                     {
@@ -1042,7 +1045,7 @@ function buildSessionSettingsCommands() {
             when: isAvailable,
             items: () => {
                 const current = getSessionSettingValue('thinking_enabled')
-                const claudeCodeDefaultThinking = settingsStore.getClaudeCodeDefaultThinking
+                const claudeCodeDefaultThinking = claudeCodeStore.defaultThinking
                 return [
                     {
                         id: '__default__',
@@ -1076,7 +1079,7 @@ function buildSessionSettingsCommands() {
             when: isAvailable,
             items: () => {
                 const current = getSessionSettingValue('permission_mode')
-                const claudeCodeDefaultPermission = settingsStore.getClaudeCodeDefaultPermissionMode
+                const claudeCodeDefaultPermission = claudeCodeStore.defaultPermissionMode
 
                 const items = [
                     {
@@ -1111,7 +1114,7 @@ function buildSessionSettingsCommands() {
             },
             items: () => {
                 const current = getSessionSettingValue('context_max')
-                const claudeCodeDefaultContext = settingsStore.getClaudeCodeDefaultContextMax
+                const claudeCodeDefaultContext = claudeCodeStore.defaultContextMax
 
                 const items = [
                     {
@@ -1142,7 +1145,7 @@ function buildSessionSettingsCommands() {
             when: isAvailable,
             items: () => {
                 const current = getSessionSettingValue('claude_in_chrome')
-                const claudeCodeDefaultChrome = settingsStore.getClaudeCodeDefaultClaudeInChrome
+                const claudeCodeDefaultChrome = claudeCodeStore.defaultClaudeInChrome
 
                 const items = [
                     {

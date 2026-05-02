@@ -3,7 +3,9 @@
 import { ref, computed, watch, nextTick, useId } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useDataStore } from '../../stores/data'
-import { useSettingsStore, classifyClaudeSettingsChanges, getModelRegistry, modelSupports1m, modelSupportsEffortXhigh, modelSupportsEffortMax, getRetiredModelUpgrade } from '../../stores/settings'
+import { useSettingsStore } from '../../stores/settings'
+import { getProviderHelpers } from '../../providers'
+import { claudeCodeHelpers } from '../../providers/claude_code/helpers'
 import { sendWsMessage, notifyUserDraftUpdated } from '../../composables/useWebSocket'
 import { isSupportedMimeType, MAX_FILE_SIZE, SUPPORTED_IMAGE_TYPES, draftMediaToMediaItem } from '../../utils/fileUtils'
 import { toast } from '../../composables/useToast'
@@ -24,7 +26,6 @@ import { useClaudeCodeStore } from '../../providers/claude_code/store'
 import { formatPresetSummary } from '../../utils/presetFormat'
 import ClaudePresetsDialog from '../app/ClaudePresetsDialog.vue'
 import { getUnavailablePlaceholders, resolveSnippetText } from '../../utils/snippetPlaceholders'
-import { getProviderHelpers } from '../../providers'
 
 const props = defineProps({
     sessionId: {
@@ -140,7 +141,7 @@ const permissionModeOptions = Object.values(PERMISSION_MODE).map(value => ({
 
 // Model options for the dropdown
 const modelRegistryOptions = computed(() => {
-    const registry = getModelRegistry()
+    const registry = claudeCodeHelpers.getModelRegistry()
     return {
         latest: registry.filter(e => e.latest),
         older: registry.filter(e => !e.latest),
@@ -179,8 +180,8 @@ const contextMaxOptions = Object.values(CONTEXT_MAX).map(value => ({
 
 // Default labels for the "Default: xxx" option in each dropdown
 const claudeCodeDefaultModelLabel = computed(() => {
-    const model = settingsStore.getClaudeCodeDefaultModel
-    const registry = getModelRegistry()
+    const model = claudeCodeStore.defaultModel
+    const registry = claudeCodeHelpers.getModelRegistry()
     const entry = registry.find(e => e.selected_model === model)
     if (entry) {
         return entry.latest
@@ -189,11 +190,11 @@ const claudeCodeDefaultModelLabel = computed(() => {
     }
     return getModelLabel(model)
 })
-const claudeCodeDefaultContextMaxLabel = computed(() => CONTEXT_MAX_LABELS[settingsStore.getClaudeCodeDefaultContextMax])
-const claudeCodeDefaultEffortLabel = computed(() => EFFORT_LABELS[settingsStore.getClaudeCodeDefaultEffort])
-const claudeCodeDefaultThinkingLabel = computed(() => THINKING_LABELS[settingsStore.getClaudeCodeDefaultThinking])
-const claudeCodeDefaultChromeLabel = computed(() => CLAUDE_IN_CHROME_LABELS[settingsStore.getClaudeCodeDefaultClaudeInChrome])
-const claudeCodeDefaultPermissionLabel = computed(() => PERMISSION_MODE_LABELS[settingsStore.getClaudeCodeDefaultPermissionMode])
+const claudeCodeDefaultContextMaxLabel = computed(() => CONTEXT_MAX_LABELS[claudeCodeStore.defaultContextMax])
+const claudeCodeDefaultEffortLabel = computed(() => EFFORT_LABELS[claudeCodeStore.defaultEffort])
+const claudeCodeDefaultThinkingLabel = computed(() => THINKING_LABELS[claudeCodeStore.defaultThinking])
+const claudeCodeDefaultChromeLabel = computed(() => CLAUDE_IN_CHROME_LABELS[claudeCodeStore.defaultClaudeInChrome])
+const claudeCodeDefaultPermissionLabel = computed(() => PERMISSION_MODE_LABELS[claudeCodeStore.defaultPermissionMode])
 
 // Whether any session setting is explicitly forced (non-null)
 const anySettingForced = computed(() =>
@@ -231,27 +232,27 @@ function restoreSettings() {
 // differs from the global default (and the setting is explicitly set, not null).
 // Model is also marked forced when context_max is explicitly forced to a non-default value.
 const settingsSummaryParts = computed(() => {
-    const effectiveModel = selectedModel.value ?? settingsStore.getClaudeCodeDefaultModel
-    const effectiveContextMax = selectedContextMax.value ?? settingsStore.getClaudeCodeDefaultContextMax
-    const effectiveEffort = selectedEffort.value ?? settingsStore.getClaudeCodeDefaultEffort
-    const effectiveThinking = selectedThinking.value ?? settingsStore.getClaudeCodeDefaultThinking
-    const effectiveChrome = selectedClaudeInChrome.value ?? settingsStore.getClaudeCodeDefaultClaudeInChrome
-    const effectivePermission = selectedPermissionMode.value ?? settingsStore.getClaudeCodeDefaultPermissionMode
+    const effectiveModel = selectedModel.value ?? claudeCodeStore.defaultModel
+    const effectiveContextMax = selectedContextMax.value ?? claudeCodeStore.defaultContextMax
+    const effectiveEffort = selectedEffort.value ?? claudeCodeStore.defaultEffort
+    const effectiveThinking = selectedThinking.value ?? claudeCodeStore.defaultThinking
+    const effectiveChrome = selectedClaudeInChrome.value ?? claudeCodeStore.defaultClaudeInChrome
+    const effectivePermission = selectedPermissionMode.value ?? claudeCodeStore.defaultPermissionMode
 
     const modelLabel = getModelLabel(effectiveModel)
     const modelDisplay = effectiveContextMax === CONTEXT_MAX.EXTENDED
         ? `${modelLabel}[1m]`
         : modelLabel
     // Model part is forced if model or context_max is explicitly set to a non-default value
-    const modelForced = (selectedModel.value !== null && selectedModel.value !== settingsStore.getClaudeCodeDefaultModel)
-        || (selectedContextMax.value !== null && selectedContextMax.value !== settingsStore.getClaudeCodeDefaultContextMax)
+    const modelForced = (selectedModel.value !== null && selectedModel.value !== claudeCodeStore.defaultModel)
+        || (selectedContextMax.value !== null && selectedContextMax.value !== claudeCodeStore.defaultContextMax)
 
     return [
         { text: modelDisplay, forced: modelForced },
-        { text: EFFORT_DISPLAY_LABELS[effectiveEffort], forced: selectedEffort.value !== null && selectedEffort.value !== settingsStore.getClaudeCodeDefaultEffort },
-        { text: THINKING_DISPLAY_LABELS[effectiveThinking], forced: selectedThinking.value !== null && selectedThinking.value !== settingsStore.getClaudeCodeDefaultThinking },
-        { text: PERMISSION_MODE_LABELS[effectivePermission], forced: selectedPermissionMode.value !== null && selectedPermissionMode.value !== settingsStore.getClaudeCodeDefaultPermissionMode },
-        { text: CLAUDE_IN_CHROME_DISPLAY_LABELS[effectiveChrome], forced: selectedClaudeInChrome.value !== null && selectedClaudeInChrome.value !== settingsStore.getClaudeCodeDefaultClaudeInChrome },
+        { text: EFFORT_DISPLAY_LABELS[effectiveEffort], forced: selectedEffort.value !== null && selectedEffort.value !== claudeCodeStore.defaultEffort },
+        { text: THINKING_DISPLAY_LABELS[effectiveThinking], forced: selectedThinking.value !== null && selectedThinking.value !== claudeCodeStore.defaultThinking },
+        { text: PERMISSION_MODE_LABELS[effectivePermission], forced: selectedPermissionMode.value !== null && selectedPermissionMode.value !== claudeCodeStore.defaultPermissionMode },
+        { text: CLAUDE_IN_CHROME_DISPLAY_LABELS[effectiveChrome], forced: selectedClaudeInChrome.value !== null && selectedClaudeInChrome.value !== claudeCodeStore.defaultClaudeInChrome },
     ]
 })
 
@@ -319,14 +320,14 @@ const isStarting = computed(() => processState.value?.state === 'starting')
 // actually picked (or defaulted to). We feed the currently-selected model
 // to the getter so the rule respects the live UI choice, not just the DB.
 const isContextMaxForced = computed(() => {
-    const baseValue = selectedContextMax.value ?? settingsStore.getClaudeCodeDefaultContextMax
-    const effectiveModel = selectedModel.value ?? settingsStore.getClaudeCodeDefaultModel
+    const baseValue = selectedContextMax.value ?? claudeCodeStore.defaultContextMax
+    const effectiveModel = selectedModel.value ?? claudeCodeStore.defaultModel
     return store.getEffectiveContextMax(props.sessionId, effectiveModel) !== baseValue
 })
 
 const isContextMaxForcedByModel = computed(() => {
-    const effectiveModel = selectedModel.value ?? settingsStore.getClaudeCodeDefaultModel
-    return !modelSupports1m(effectiveModel)
+    const effectiveModel = selectedModel.value ?? claudeCodeStore.defaultModel
+    return !claudeCodeHelpers.modelSupports1m(effectiveModel)
 })
 
 // Value to display in the context select. When forced (by usage) we surface
@@ -338,51 +339,40 @@ const contextMaxSelectValue = computed(() => {
 })
 
 const isEffortXhighAvailable = computed(() => {
-    const effectiveModel = selectedModel.value ?? settingsStore.getClaudeCodeDefaultModel
-    return modelSupportsEffortXhigh(effectiveModel)
+    const effectiveModel = selectedModel.value ?? claudeCodeStore.defaultModel
+    return claudeCodeHelpers.modelSupportsEffortXhigh(effectiveModel)
 })
 
 const isEffortMaxAvailable = computed(() => {
-    const effectiveModel = selectedModel.value ?? settingsStore.getClaudeCodeDefaultModel
-    return modelSupportsEffortMax(effectiveModel)
+    const effectiveModel = selectedModel.value ?? claudeCodeStore.defaultModel
+    return claudeCodeHelpers.modelSupportsEffortMax(effectiveModel)
 })
 
-// Watch: auto-reset to 200K when model doesn't support 1M
-watch(isContextMaxForcedByModel, (forced) => {
-    if (forced) {
-        const effectiveCtx = selectedContextMax.value ?? settingsStore.getClaudeCodeDefaultContextMax
-        if (effectiveCtx === CONTEXT_MAX.EXTENDED) {
-            selectedContextMax.value = CONTEXT_MAX.DEFAULT
-            activeContextMax.value = CONTEXT_MAX.DEFAULT
-        }
-    }
-})
-
-// Watch: cascade-demote Max/xHigh efforts when the new model drops support.
-// Max → xHigh if supported, else High. xHigh → High.
-watch([isEffortMaxAvailable, isEffortXhighAvailable], ([maxOk, xhighOk]) => {
-    const effectiveEffort = selectedEffort.value ?? settingsStore.getClaudeCodeDefaultEffort
-    let target = null
-    if (effectiveEffort === EFFORT.MAX && !maxOk) {
-        target = xhighOk ? EFFORT.X_HIGH : EFFORT.HIGH
-    } else if (effectiveEffort === EFFORT.X_HIGH && !xhighOk) {
-        target = EFFORT.HIGH
-    }
-    if (target !== null) {
-        selectedEffort.value = target
-        activeEffort.value = target
-    }
-})
-
-// Auto-correct retired model when session loads
+// Watch: keep the active model / context_max / effort triple consistent
+// against the provider's rules. Single dispatch via the helpers' enforce
+// pipeline (retired model → upgrade, then context_max / effort demotion
+// against the model's capabilities). Fires immediately so a session
+// loading with stale settings gets corrected on mount.
 watch(
-    () => selectedModel.value,
-    (model) => {
-        if (!model) return
-        const upgrade = getRetiredModelUpgrade(model)
-        if (upgrade) {
-            selectedModel.value = upgrade
-            activeModel.value = upgrade
+    () => ({
+        selectedModel: selectedModel.value ?? claudeCodeStore.defaultModel,
+        contextMax: selectedContextMax.value ?? claudeCodeStore.defaultContextMax,
+        effort: selectedEffort.value ?? claudeCodeStore.defaultEffort,
+    }),
+    (current) => {
+        const helpers = getProviderHelpers(session.value?.provider) ?? claudeCodeHelpers
+        const adjusted = helpers.enforceAgentSettingsConsistency(current)
+        if (adjusted.selectedModel !== current.selectedModel) {
+            selectedModel.value = adjusted.selectedModel
+            activeModel.value = adjusted.selectedModel
+        }
+        if (adjusted.contextMax !== current.contextMax) {
+            selectedContextMax.value = adjusted.contextMax
+            activeContextMax.value = adjusted.contextMax
+        }
+        if (adjusted.effort !== current.effort) {
+            selectedEffort.value = adjusted.effort
+            activeEffort.value = adjusted.effort
         }
     },
     { immediate: true }
@@ -456,12 +446,12 @@ const hasSettingsChanged = computed(() => hasDropdownsChanged.value)
 // Resolve null → global default for a settings dict (so classify compares concrete values).
 function resolveSettingsDefaults(settings) {
     return {
-        permission_mode: settings.permission_mode ?? settingsStore.getClaudeCodeDefaultPermissionMode,
-        selected_model: settings.selected_model ?? settingsStore.getClaudeCodeDefaultModel,
-        effort: settings.effort ?? settingsStore.getClaudeCodeDefaultEffort,
-        thinking_enabled: settings.thinking_enabled ?? settingsStore.getClaudeCodeDefaultThinking,
-        claude_in_chrome: settings.claude_in_chrome ?? settingsStore.getClaudeCodeDefaultClaudeInChrome,
-        context_max: settings.context_max ?? settingsStore.getClaudeCodeDefaultContextMax,
+        permission_mode: settings.permission_mode ?? claudeCodeStore.defaultPermissionMode,
+        selected_model: settings.selected_model ?? claudeCodeStore.defaultModel,
+        effort: settings.effort ?? claudeCodeStore.defaultEffort,
+        thinking_enabled: settings.thinking_enabled ?? claudeCodeStore.defaultThinking,
+        claude_in_chrome: settings.claude_in_chrome ?? claudeCodeStore.defaultClaudeInChrome,
+        context_max: settings.context_max ?? claudeCodeStore.defaultContextMax,
     }
 }
 
@@ -491,7 +481,8 @@ const startupSettingsWarning = computed(() => {
         claude_in_chrome: selectedClaudeInChrome.value,
         context_max: selectedContextMax.value,
     })
-    const changes = classifyClaudeSettingsChanges(current, requested)
+    const helpers = getProviderHelpers(session.value?.provider)
+    const changes = helpers ? helpers.classifyAgentSettingsChanges(current, requested) : { live: [], idle: [], startup: [] }
     if (!changes.startup.length) return null
 
     const state = processState.value?.state
@@ -1527,7 +1518,7 @@ function getSessionGateState() {
         isContextMaxForcedByModel: isContextMaxForcedByModel.value,
         isEffortXhighAvailable: isEffortXhighAvailable.value,
         isEffortMaxAvailable: isEffortMaxAvailable.value,
-        effectiveModel: selectedModel.value ?? settingsStore.getClaudeCodeDefaultModel,
+        effectiveModel: selectedModel.value ?? claudeCodeStore.defaultModel,
     }
 }
 

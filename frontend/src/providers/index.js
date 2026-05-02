@@ -29,3 +29,7 @@ export function getProviderStore(provider) {
     const factory = PROVIDER_STORE_FACTORIES[provider]
     return factory ? factory() : null
 }
+
+export function getRegisteredProviders() {
+    return Object.keys(PROVIDER_HELPERS)
+}
