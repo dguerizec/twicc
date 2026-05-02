@@ -189,7 +189,7 @@ function handleSave() {
                     </div>
                     <div class="preset-display">
                         <span class="preset-name">{{ preset.name }}</span>
-                        <span class="preset-summary">{{ formatPresetSummary(preset) }}</span>
+                        <span class="preset-summary">{{ formatPresetSummary(preset, claudeCodeHelpers) }}</span>
                     </div>
                     <div class="preset-actions">
                         <button class="action-btn" title="Edit" @click="openEditForm(index)">

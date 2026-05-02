@@ -1704,7 +1704,7 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
                                 class="preset-item"
                             >
                                 <span>{{ preset.name }}</span>
-                                <span class="option-description">{{ formatPresetSummary(preset) }}</span>
+                                <span class="option-description">{{ formatPresetSummary(preset, claudeCodeHelpers) }}</span>
                             </wa-dropdown-item>
                             <wa-divider v-if="hasPresets"></wa-divider>
                             <wa-dropdown-item value="__manage__">
