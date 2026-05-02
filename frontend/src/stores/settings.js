@@ -55,10 +55,6 @@ export const SETTINGS_SCHEMA = {
     terminalTmuxConfigPath: null,
     waTheme: null,
     waBrand: null,
-    claudeCodeUsageReadFileEnabled: null,
-    claudeCodeUsageReadFilePath: null,
-    claudeCodeUsageDumpFileEnabled: null,
-    claudeCodeUsageDumpFilePath: null,
     // --- Not persisted - runtime state ---
     _devMode: false,
     _uvxMode: false,
@@ -107,10 +103,6 @@ const SETTINGS_VALIDATORS = {
     notifPendingRequestBrowser: (v) => typeof v === 'boolean',
     waTheme: (v) => Object.values(WA_THEME).includes(v),
     waBrand: (v) => Object.values(WA_BRAND).includes(v),
-    claudeCodeUsageReadFileEnabled: (v) => typeof v === 'boolean',
-    claudeCodeUsageReadFilePath: (v) => typeof v === 'string',
-    claudeCodeUsageDumpFileEnabled: (v) => typeof v === 'boolean',
-    claudeCodeUsageDumpFilePath: (v) => typeof v === 'string',
 }
 
 /**
@@ -265,10 +257,6 @@ export const useSettingsStore = defineStore('settings', {
         isNotifPendingRequestBrowser: (state) => state.notifPendingRequestBrowser,
         getWaTheme: (state) => state.waTheme,
         getWaBrand: (state) => state.waBrand,
-        isClaudeCodeUsageReadFileEnabled: (state) => state.claudeCodeUsageReadFileEnabled,
-        getClaudeCodeUsageReadFilePath: (state) => state.claudeCodeUsageReadFilePath,
-        isClaudeCodeUsageDumpFileEnabled: (state) => state.claudeCodeUsageDumpFileEnabled,
-        getClaudeCodeUsageDumpFilePath: (state) => state.claudeCodeUsageDumpFilePath,
         /**
          * Whether the backend is running in dev mode (source layout) vs installed package.
          */
@@ -619,34 +607,6 @@ export const useSettingsStore = defineStore('settings', {
         setWaBrand(brand) {
             if (SETTINGS_VALIDATORS.waBrand(brand)) {
                 this.waBrand = brand
-            }
-        },
-
-        setClaudeCodeUsageReadFileEnabled(enabled) {
-            if (SETTINGS_VALIDATORS.claudeCodeUsageReadFileEnabled(enabled)) {
-                this.claudeCodeUsageReadFileEnabled = enabled
-                // Mutually exclusive: disable dump mode
-                if (enabled) this.claudeCodeUsageDumpFileEnabled = false
-            }
-        },
-
-        setClaudeCodeUsageReadFilePath(path) {
-            if (SETTINGS_VALIDATORS.claudeCodeUsageReadFilePath(path)) {
-                this.claudeCodeUsageReadFilePath = path
-            }
-        },
-
-        setClaudeCodeUsageDumpFileEnabled(enabled) {
-            if (SETTINGS_VALIDATORS.claudeCodeUsageDumpFileEnabled(enabled)) {
-                this.claudeCodeUsageDumpFileEnabled = enabled
-                // Mutually exclusive: disable read mode
-                if (enabled) this.claudeCodeUsageReadFileEnabled = false
-            }
-        },
-
-        setClaudeCodeUsageDumpFilePath(path) {
-            if (SETTINGS_VALIDATORS.claudeCodeUsageDumpFilePath(path)) {
-                this.claudeCodeUsageDumpFilePath = path
             }
         },
 

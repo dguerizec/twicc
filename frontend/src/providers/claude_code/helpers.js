@@ -31,6 +31,10 @@ const SYNCED_SETTING_KEYS_TO_STORE = {
     claudeCodeDefaultEffort:         { setter: 'setDefaultEffort',         getter: 'defaultEffort' },
     claudeCodeDefaultThinking:       { setter: 'setDefaultThinking',       getter: 'defaultThinking' },
     claudeCodeDefaultClaudeInChrome: { setter: 'setDefaultClaudeInChrome', getter: 'defaultClaudeInChrome' },
+    claudeCodeUsageReadFileEnabled:  { setter: 'setUsageReadFileEnabled',  getter: 'usageReadFileEnabled' },
+    claudeCodeUsageReadFilePath:     { setter: 'setUsageReadFilePath',     getter: 'usageReadFilePath' },
+    claudeCodeUsageDumpFileEnabled:  { setter: 'setUsageDumpFileEnabled',  getter: 'usageDumpFileEnabled' },
+    claudeCodeUsageDumpFilePath:     { setter: 'setUsageDumpFilePath',     getter: 'usageDumpFilePath' },
 }
 
 // Per-field choice catalogue for the Claude Code provider.

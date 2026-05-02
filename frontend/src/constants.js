@@ -202,8 +202,4 @@ export const SYNCED_SETTINGS_KEYS = new Set([
     'terminalTmuxConfigPath',
     'waTheme',
     'waBrand',
-    'claudeCodeUsageReadFileEnabled',
-    'claudeCodeUsageReadFilePath',
-    'claudeCodeUsageDumpFileEnabled',
-    'claudeCodeUsageDumpFilePath',
 ])

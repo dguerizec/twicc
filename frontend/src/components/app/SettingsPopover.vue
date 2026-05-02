@@ -218,10 +218,10 @@ const toolDiffWordWrap = computed(() => store.isToolDiffWordWrap)
 const toolDiffSideBySide = computed(() => store.isToolDiffSideBySide)
 const diffSideBySide = computed(() => store.isDiffSideBySide)
 const editorWordWrap = computed(() => store.isEditorWordWrap)
-const usageReadFileEnabled = computed(() => store.isClaudeCodeUsageReadFileEnabled)
-const usageReadFilePath = computed(() => store.getClaudeCodeUsageReadFilePath)
-const usageDumpFileEnabled = computed(() => store.isClaudeCodeUsageDumpFileEnabled)
-const usageDumpFilePath = computed(() => store.getClaudeCodeUsageDumpFilePath)
+const usageReadFileEnabled = computed(() => claudeCodeStore.usageReadFileEnabled)
+const usageReadFilePath = computed(() => claudeCodeStore.usageReadFilePath)
+const usageDumpFileEnabled = computed(() => claudeCodeStore.usageDumpFileEnabled)
+const usageDumpFilePath = computed(() => claudeCodeStore.usageDumpFilePath)
 
 // Usage file — local input + validation state
 const usageFilePathInput = ref('')
@@ -372,7 +372,7 @@ function onExtraUsageOnlyWhenNeededChange(event) {
 }
 
 function onUsageFileEnabledChange(event) {
-    store.setClaudeCodeUsageReadFileEnabled(event.target.checked)
+    claudeCodeStore.setUsageReadFileEnabled(event.target.checked)
 }
 
 function onUsageFilePathInputChange(event) {
@@ -385,7 +385,7 @@ async function onUsageFilePathApply() {
     const path = usageFilePathInput.value.trim()
     if (!path) {
         usageFileValidation.value = null
-        store.setClaudeCodeUsageReadFilePath('')
+        claudeCodeStore.setUsageReadFilePath('')
         return
     }
     usageFileValidating.value = true
@@ -393,7 +393,7 @@ async function onUsageFilePathApply() {
     try {
         const result = await sendValidateClaudeCodeUsageFile(path)
         if (result.valid) {
-            store.setClaudeCodeUsageReadFilePath(path)
+            claudeCodeStore.setUsageReadFilePath(path)
         } else {
             usageFileValidation.value = result
         }
@@ -403,7 +403,7 @@ async function onUsageFilePathApply() {
 }
 
 function onUsageDumpEnabledChange(event) {
-    store.setClaudeCodeUsageDumpFileEnabled(event.target.checked)
+    claudeCodeStore.setUsageDumpFileEnabled(event.target.checked)
 }
 
 function onUsageDumpPathInputChange(event) {
@@ -415,7 +415,7 @@ async function onUsageDumpPathApply() {
     const path = usageDumpPathInput.value.trim()
     if (!path) {
         usageDumpValidation.value = null
-        store.setClaudeCodeUsageDumpFilePath('')
+        claudeCodeStore.setUsageDumpFilePath('')
         return
     }
     usageDumpValidating.value = true
@@ -423,7 +423,7 @@ async function onUsageDumpPathApply() {
     try {
         const result = await sendValidateUsageDumpPath(path)
         if (result.valid) {
-            store.setClaudeCodeUsageDumpFilePath(path)
+            claudeCodeStore.setUsageDumpFilePath(path)
         } else {
             usageDumpValidation.value = result
         }

@@ -158,6 +158,39 @@ export const useClaudeCodeStore = defineStore('claudeCode', () => {
         if (typeof value === 'boolean') defaultClaudeInChrome.value = value
     }
 
+    // ─── Usage file source (read / dump) ────────────────────────────────
+    //
+    // Two mutually-exclusive modes for sourcing the Anthropic OAuth quota
+    // data: ``read`` consumes a JSON file the user maintains externally
+    // (validated by ``providers/claude_code/ws.js#sendValidateUsageFile``),
+    // ``dump`` writes the live-fetched quota to the configured path. The
+    // backend reconciles the active mode and either reads or writes; the
+    // synced settings keep the UI in sync across clients via the helpers.
+
+    const usageReadFileEnabled = ref(null)
+    const usageReadFilePath = ref(null)
+    const usageDumpFileEnabled = ref(null)
+    const usageDumpFilePath = ref(null)
+
+    function setUsageReadFileEnabled(value) {
+        if (typeof value !== 'boolean') return
+        usageReadFileEnabled.value = value
+        // Mutually exclusive with dump mode.
+        if (value) usageDumpFileEnabled.value = false
+    }
+    function setUsageReadFilePath(value) {
+        if (typeof value === 'string') usageReadFilePath.value = value
+    }
+    function setUsageDumpFileEnabled(value) {
+        if (typeof value !== 'boolean') return
+        usageDumpFileEnabled.value = value
+        // Mutually exclusive with read mode.
+        if (value) usageReadFileEnabled.value = false
+    }
+    function setUsageDumpFilePath(value) {
+        if (typeof value === 'string') usageDumpFilePath.value = value
+    }
+
     // ─── Agent settings categories (live/idle/startup) ───────────────────
     //
     // Classification of the per-session agent setting fields by lifecycle
@@ -221,6 +254,14 @@ export const useClaudeCodeStore = defineStore('claudeCode', () => {
         setDefaultEffort,
         setDefaultThinking,
         setDefaultClaudeInChrome,
+        usageReadFileEnabled,
+        usageReadFilePath,
+        usageDumpFileEnabled,
+        usageDumpFilePath,
+        setUsageReadFileEnabled,
+        setUsageReadFilePath,
+        setUsageDumpFileEnabled,
+        setUsageDumpFilePath,
         agentSettingsCategories,
         setAgentSettingsCategories,
         modelRegistry,
