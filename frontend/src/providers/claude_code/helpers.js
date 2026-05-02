@@ -127,6 +127,19 @@ export class ClaudeCodeHelpers extends BaseProviderHelpers {
         return AGENT_SETTINGS_CHOICES
     }
 
+    /**
+     * Build a human-friendly label for a Claude Code ``selected_model`` value.
+     * "opus" → "Opus", "opus-4.5" → "Opus 4.5", "sonnet" → "Sonnet"
+     */
+    getModelLabel(selectedModel) {
+        if (!selectedModel) return ''
+        if (selectedModel.includes('-')) {
+            const [model, version] = selectedModel.split('-', 2)
+            return `${model.charAt(0).toUpperCase() + model.slice(1)} ${version}`
+        }
+        return selectedModel.charAt(0).toUpperCase() + selectedModel.slice(1)
+    }
+
     // ─── Model registry & capability flags ───────────────────────────────
     //
     // Wrap reads against the per-provider model registry held by the store.

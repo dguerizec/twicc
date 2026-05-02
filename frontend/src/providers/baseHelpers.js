@@ -175,6 +175,18 @@ export class BaseProviderHelpers {
         return false
     }
 
+    // ─── Model label formatter ───────────────────────────────────────────
+    //
+    // Generic call sites (toasts, preset summaries, command palette) need a
+    // human-readable label for a ``selected_model`` value. Each provider
+    // overrides with its own formatting; the neutral default returns the raw
+    // value (or ``''`` when unset) so a missing override still renders
+    // something readable.
+
+    getModelLabel(selectedModel) {
+        return selectedModel ?? ''
+    }
+
     // ─── Runtime context-max resolution ──────────────────────────────────
     //
     // Unlike ``enforceAgentSettingsConsistency`` (which is rules-only over a

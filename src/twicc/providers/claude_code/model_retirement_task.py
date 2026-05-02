@@ -160,7 +160,9 @@ async def _check_and_retire() -> None:
 
     # 3. Broadcast model_retirement to frontends
     # Frontends use this to correct display/settings of non-running sessions
-    # at render time (no DB update needed for those)
+    # at render time (no DB update needed for those). The ``provider`` field
+    # tells the generic dispatcher which model registry / label formatter to
+    # consult — model retirement is a concept all providers can opt into.
     channel_layer = get_channel_layer()
     await channel_layer.group_send(
         "updates",
@@ -168,6 +170,7 @@ async def _check_and_retire() -> None:
             "type": "broadcast",
             "data": {
                 "type": "model_retirement",
+                "provider": Provider.CLAUDE_CODE.value,
                 "retired_models": retired_models,
                 "default_changed": settings_changed,
             },

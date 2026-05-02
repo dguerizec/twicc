@@ -1,7 +1,6 @@
 <script setup>
 import { computed, nextTick, ref, watch } from 'vue'
 import { useClaudeCodeStore } from '../../providers/claude_code/store'
-import { getModelLabel } from '../../providers/claude_code/constants'
 import { claudeCodeHelpers } from '../../providers/claude_code/helpers'
 import { formatPresetSummary } from '../../utils/presetFormat'
 
@@ -33,7 +32,7 @@ const dialogLabel = computed(() => {
 const modelOptions = computed(() => {
     const registry = claudeCodeHelpers.getModelRegistry() || []
     return registry.map((entry) => {
-        const baseLabel = getModelLabel(entry.selected_model)
+        const baseLabel = claudeCodeHelpers.getModelLabel(entry.selected_model)
         return {
             value: entry.selected_model,
             label: entry.latest ? `${baseLabel} (latest)` : baseLabel,

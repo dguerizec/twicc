@@ -1,4 +1,3 @@
-import { getModelLabel as getClaudeCodeModelLabel } from '../providers/claude_code/constants'
 import { claudeCodeHelpers } from '../providers/claude_code/helpers'
 
 /**
@@ -11,7 +10,7 @@ import { claudeCodeHelpers } from '../providers/claude_code/helpers'
 export function formatPresetSummary(preset) {
     const parts = []
     if (preset.model !== null && preset.model !== undefined) {
-        parts.push(`model: ${getClaudeCodeModelLabel(preset.model)}`)
+        parts.push(`model: ${claudeCodeHelpers.getModelLabel(preset.model)}`)
     }
     if (preset.context_max !== null && preset.context_max !== undefined) {
         parts.push(`context: ${claudeCodeHelpers.getChoiceLabel('context_max', preset.context_max) ?? preset.context_max}`)

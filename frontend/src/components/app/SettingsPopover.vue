@@ -11,7 +11,6 @@ import { DISPLAY_MODE, COLOR_SCHEME, SESSION_TIME_FORMAT, DEFAULT_MAX_CACHED_SES
 import {
     CONTEXT_MAX as CLAUDE_CODE_CONTEXT_MAX,
     EFFORT as CLAUDE_CODE_EFFORT,
-    getModelLabel as getClaudeCodeModelLabel,
 } from '../../providers/claude_code/constants'
 import NotificationSettings from './NotificationSettings.vue'
 import AppTooltip from '../ui/AppTooltip.vue'
@@ -764,7 +763,7 @@ function onChangelogClose() {
                                 :key="entry.selected_model"
                                 :value="entry.selected_model"
                             >
-                                {{ getClaudeCodeModelLabel(entry.selected_model) }} (latest: {{ entry.version }})
+                                {{ claudeCodeHelpers.getModelLabel(entry.selected_model) }} (latest: {{ entry.version }})
                             </wa-option>
                             <wa-divider v-if="claudeCodeModelRegistryOptions.older.length"></wa-divider>
                             <wa-option
@@ -772,7 +771,7 @@ function onChangelogClose() {
                                 :key="entry.selected_model"
                                 :value="entry.selected_model"
                             >
-                                {{ getClaudeCodeModelLabel(entry.selected_model) }} (until {{ claudeCodeFormatRetirementDate(entry.retirement_date) }})
+                                {{ claudeCodeHelpers.getModelLabel(entry.selected_model) }} (until {{ claudeCodeFormatRetirementDate(entry.retirement_date) }})
                             </wa-option>
                         </wa-select>
                     </div>

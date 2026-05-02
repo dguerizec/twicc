@@ -25,10 +25,7 @@ import {
     WA_BRAND,
     WA_BRAND_LABELS,
 } from '../constants'
-import {
-    EFFORT as CLAUDE_CODE_EFFORT,
-    getModelLabel as getClaudeCodeModelLabel,
-} from '../providers/claude_code/constants'
+import { EFFORT as CLAUDE_CODE_EFFORT } from '../providers/claude_code/constants'
 
 // Cap on how many sessions "Go to Session…" exposes. The list is already
 // prioritized (extra → cross-filter pinned → cross-filter active → natural),
@@ -685,8 +682,8 @@ export function initStaticCommands(router) {
             items: () => claudeCodeHelpers.getModelRegistry().map(entry => ({
                 id: entry.selected_model,
                 label: entry.latest
-                    ? `${getClaudeCodeModelLabel(entry.selected_model)} (latest: ${entry.version})`
-                    : `${getClaudeCodeModelLabel(entry.selected_model)} (until ${entry.retirement_date})`,
+                    ? `${claudeCodeHelpers.getModelLabel(entry.selected_model)} (latest: ${entry.version})`
+                    : `${claudeCodeHelpers.getModelLabel(entry.selected_model)} (until ${entry.retirement_date})`,
                 action: () => claudeCodeStore.setDefaultModel(entry.selected_model),
                 active: claudeCodeStore.defaultModel === entry.selected_model,
             })),

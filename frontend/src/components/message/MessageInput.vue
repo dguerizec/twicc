@@ -13,7 +13,6 @@ import { vPopoverFocusFix } from '../../directives/vPopoverFocusFix'
 import {
     CONTEXT_MAX as CLAUDE_CODE_CONTEXT_MAX,
     EFFORT as CLAUDE_CODE_EFFORT,
-    getModelLabel as getClaudeCodeModelLabel,
 } from '../../providers/claude_code/constants'
 import { useCodeCommentsStore, formatAllComments } from '../../stores/codeComments'
 import { getParsedContent } from '../../utils/parsedContent'
@@ -166,10 +165,10 @@ const claudeCodeDefaultModelLabel = computed(() => {
     const entry = registry.find(e => e.selected_model === model)
     if (entry) {
         return entry.latest
-            ? `${getClaudeCodeModelLabel(model)} (latest: ${entry.version})`
-            : `${getClaudeCodeModelLabel(model)}`
+            ? `${claudeCodeHelpers.getModelLabel(model)} (latest: ${entry.version})`
+            : `${claudeCodeHelpers.getModelLabel(model)}`
     }
-    return getClaudeCodeModelLabel(model)
+    return claudeCodeHelpers.getModelLabel(model)
 })
 const claudeCodeDefaultContextMaxLabel = computed(() => claudeCodeHelpers.getChoiceLabel('context_max', claudeCodeStore.defaultContextMax))
 const claudeCodeDefaultEffortLabel = computed(() => claudeCodeHelpers.getChoiceLabel('effort', claudeCodeStore.defaultEffort))
@@ -220,7 +219,7 @@ const settingsSummaryParts = computed(() => {
     const effectiveChrome = selectedClaudeInChrome.value ?? claudeCodeStore.defaultClaudeInChrome
     const effectivePermission = selectedPermissionMode.value ?? claudeCodeStore.defaultPermissionMode
 
-    const modelLabel = getClaudeCodeModelLabel(effectiveModel)
+    const modelLabel = claudeCodeHelpers.getModelLabel(effectiveModel)
     const modelDisplay = effectiveContextMax === CLAUDE_CODE_CONTEXT_MAX.EXTENDED
         ? `${modelLabel}[1m]`
         : modelLabel
@@ -1751,7 +1750,7 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
                                     :key="entry.selected_model"
                                     :value="entry.selected_model"
                                 >
-                                    {{ getClaudeCodeModelLabel(entry.selected_model) }} (latest: {{ entry.version }})
+                                    {{ claudeCodeHelpers.getModelLabel(entry.selected_model) }} (latest: {{ entry.version }})
                                 </wa-option>
                                 <wa-divider v-if="modelRegistryOptions.older.length"></wa-divider>
                                 <wa-option
@@ -1759,7 +1758,7 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
                                     :key="entry.selected_model"
                                     :value="entry.selected_model"
                                 >
-                                    {{ getClaudeCodeModelLabel(entry.selected_model) }} (until {{ formatRetirementDate(entry.retirement_date) }})
+                                    {{ claudeCodeHelpers.getModelLabel(entry.selected_model) }} (until {{ formatRetirementDate(entry.retirement_date) }})
                                 </wa-option>
                             </wa-select>
                             <a v-if="selectedModel !== null" class="reset-setting-link" @click.prevent="selectedModel = null">Reset to default: {{ claudeCodeDefaultModelLabel }}</a>
