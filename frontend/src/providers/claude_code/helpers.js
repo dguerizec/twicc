@@ -1,10 +1,7 @@
-import { defineAsyncComponent } from 'vue'
 import { BaseProviderHelpers } from '../baseHelpers'
 import { PROVIDER } from '../../constants'
 import { CONTEXT_MAX, EFFORT, PERMISSION_MODE } from './constants'
 import { useClaudeCodeStore } from './store'
-
-const ManagePresetsComponent = defineAsyncComponent(() => import('../../components/app/ClaudePresetsDialog.vue'))
 
 function formatRetirementDate(isoDate) {
     return new Date(isoDate + 'T00:00:00').toLocaleDateString(undefined, {
@@ -332,10 +329,6 @@ export class ClaudeCodeHelpers extends BaseProviderHelpers {
                 })),
             },
         ]
-    }
-
-    getManagePresetsComponent() {
-        return ManagePresetsComponent
     }
 
     getRetiredModelUpgrade(selectedModel) {

@@ -16,7 +16,8 @@ import {
 import NotificationSettings from './NotificationSettings.vue'
 import AppTooltip from '../ui/AppTooltip.vue'
 import ChangelogDialog from './ChangelogDialog.vue'
-import ClaudePresetsDialog from './ClaudePresetsDialog.vue'
+import AgentSettingsPresetsDialog from './AgentSettingsPresetsDialog.vue'
+import { PROVIDER } from '../../constants'
 import { sendChangelogSeen, sendValidateUsageDumpPath, sendValidateTmuxConfigPath } from '../../composables/useWebSocket'
 import { sendValidateUsageFile as sendValidateClaudeCodeUsageFile } from '../../providers/claude_code/ws'
 import { vPopoverFocusFix } from '../../directives/vPopoverFocusFix'
@@ -1244,7 +1245,7 @@ function onChangelogClose() {
         </footer>
     </wa-popover>
     <ChangelogDialog ref="changelogDialogRef" @close="onChangelogClose" />
-    <ClaudePresetsDialog v-model:open="claudeCodePresetsDialogOpen" />
+    <AgentSettingsPresetsDialog v-model:open="claudeCodePresetsDialogOpen" :provider="PROVIDER.CLAUDE_CODE" />
 </template>
 
 <style scoped>

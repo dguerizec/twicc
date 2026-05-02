@@ -10,6 +10,7 @@ import { computed } from 'vue'
 import { vPopoverFocusFix } from '../../directives/vPopoverFocusFix'
 import { formatPresetSummary } from '../../utils/presetFormat'
 import { DEFAULT_SENTINEL } from '../../composables/useSessionAgentSettings'
+import AgentSettingsPresetsDialog from '../app/AgentSettingsPresetsDialog.vue'
 
 const props = defineProps({
     for: { type: String, required: true },
@@ -48,8 +49,6 @@ const {
 // Order of the rows below the model row. ``supportsAgentSetting`` filters
 // each entry per-provider so a field nobody declares is silently skipped.
 const SIMPLE_FIELDS = ['context_max', 'effort', 'thinking_enabled', 'permission_mode', 'claude_in_chrome']
-
-const managePresetsComponent = computed(() => providerHelpers.value?.getManagePresetsComponent() ?? null)
 
 const defaults = computed(() => summaryState.value.defaults)
 
@@ -187,8 +186,8 @@ function resetField(field) {
                     <span>{{ preset.name }}</span>
                     <span class="option-description">{{ formatPresetSummary(preset, providerHelpers) }}</span>
                 </wa-dropdown-item>
-                <wa-divider v-if="hasPresets && managePresetsComponent"></wa-divider>
-                <wa-dropdown-item v-if="managePresetsComponent" value="__manage__">
+                <wa-divider v-if="hasPresets"></wa-divider>
+                <wa-dropdown-item value="__manage__">
                     <wa-icon slot="icon" name="pen-to-square"></wa-icon>
                     Manage presets
                 </wa-dropdown-item>
@@ -272,10 +271,10 @@ function resetField(field) {
             </div>
         </div>
 
-        <component
-            :is="managePresetsComponent"
-            v-if="managePresetsComponent"
+        <AgentSettingsPresetsDialog
+            v-if="session?.provider"
             v-model:open="presetsDialogOpen"
+            :provider="session.provider"
         />
     </wa-popover>
 </template>

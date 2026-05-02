@@ -1,17 +1,47 @@
 <script setup>
-import { computed, nextTick, ref, watch } from 'vue'
-import { useClaudeCodeStore } from '../../providers/claude_code/store'
-import { claudeCodeHelpers } from '../../providers/claude_code/helpers'
-import { formatPresetSummary } from '../../utils/presetFormat'
+// Provider-agnostic dialog to manage the agent settings presets of a given
+// provider. Opens the list view by default; "Add" / "Edit" switch to a
+// form that renders one row per agent setting field the provider supports.
+//
+// Each row uses the same rendering hooks as ``AgentSettingsPopover``
+// (``getFieldLabel``, ``getFieldChoices``, ``getModelSelectGroups``) so a
+// new provider that ships its own catalog needs zero template changes here.
+//
+// Preset persistence and CRUD live on each provider's store —
+// ``settingsPresets`` / ``addSettingsPreset`` / ``updateSettingsPreset`` /
+// ``deleteSettingsPreset`` / ``duplicateSettingsPreset`` /
+// ``reorderSettingsPreset`` / ``findSettingsPresetIndexByName``. The dialog
+// expects this contract; a provider that doesn't expose it must not surface
+// the "Manage presets" entry that opens this dialog.
 
-const DEFAULT_SENTINEL = '__default__'
+import { computed, nextTick, ref, watch } from 'vue'
+import { getProviderHelpers, getProviderStore } from '../../providers'
+import { formatPresetSummary } from '../../utils/presetFormat'
+import { DEFAULT_SENTINEL } from '../../composables/useSessionAgentSettings'
 
 const props = defineProps({
     open: { type: Boolean, default: false },
+    provider: { type: String, required: true },
 })
 const emit = defineEmits(['update:open'])
 
-const claudeCodeStore = useClaudeCodeStore()
+const providerHelpers = computed(() => getProviderHelpers(props.provider))
+const providerStore = computed(() => getProviderStore(props.provider))
+const providerLabel = computed(() => providerHelpers.value?.constructor?.label ?? 'Agent')
+
+// Preset records use historical key names (``model``, ``thinking``) while
+// the helpers' rendering hooks are keyed on wire names
+// (``selected_model``, ``thinking_enabled``). The form keeps wire names
+// internally and we translate at the persistence boundary.
+const WIRE_TO_PRESET_KEY = {
+    selected_model: 'model',
+    context_max: 'context_max',
+    effort: 'effort',
+    thinking_enabled: 'thinking',
+    permission_mode: 'permission_mode',
+    claude_in_chrome: 'claude_in_chrome',
+}
+const FIELD_ORDER = ['selected_model', 'context_max', 'effort', 'thinking_enabled', 'permission_mode', 'claude_in_chrome']
 
 const view = ref('list')
 const editIndex = ref(null)
@@ -22,37 +52,72 @@ const dialogRef = ref(null)
 const nameInputRef = ref(null)
 const submitButtonRef = ref(null)
 
-const presets = computed(() => claudeCodeStore.settingsPresets)
+const presets = computed(() => providerStore.value?.settingsPresets ?? [])
 
 const dialogLabel = computed(() => {
-    if (view.value === 'list') return 'Claude config presets'
+    if (view.value === 'list') return `${providerLabel.value} settings presets`
     return editIndex.value === null ? 'Add preset' : 'Edit preset'
 })
 
-const modelOptions = computed(() => {
-    const registry = claudeCodeHelpers.getModelRegistry() || []
-    return registry.map((entry) => {
-        const baseLabel = claudeCodeHelpers.getModelLabel(entry.selected_model)
-        return {
-            value: entry.selected_model,
-            label: entry.latest ? `${baseLabel} (latest)` : baseLabel,
-        }
-    })
+// Fields the provider declares — drives the rows of the edit form. The
+// model row uses ``getModelSelectGroups``; the rest use a flat
+// ``getFieldChoices`` list.
+const supportedFields = computed(() => {
+    const helpers = providerHelpers.value
+    if (!helpers) return []
+    return FIELD_ORDER.filter(f => helpers.supportsAgentSetting(f))
 })
 
-const contextOptions = computed(() => claudeCodeHelpers.getFieldChoices('context_max'))
-const effortOptions = computed(() => claudeCodeHelpers.getFieldChoices('effort'))
-const permissionOptions = computed(() => claudeCodeHelpers.getFieldChoices('permission_mode'))
-const thinkingOptions = computed(() => claudeCodeHelpers.getFieldChoices('thinking_enabled'))
-const chromeOptions = computed(() => claudeCodeHelpers.getFieldChoices('claude_in_chrome'))
+const modelGroups = computed(() => {
+    const helpers = providerHelpers.value
+    if (!helpers) return []
+    return helpers.getModelSelectGroups(helpers.getModelRegistry())
+})
+
+function emptyFormData() {
+    return {
+        name: '',
+        selected_model: null,
+        context_max: null,
+        effort: null,
+        thinking_enabled: null,
+        permission_mode: null,
+        claude_in_chrome: null,
+    }
+}
+
+function presetToFormData(preset) {
+    const data = emptyFormData()
+    data.name = preset.name ?? ''
+    for (const wire of FIELD_ORDER) {
+        const presetKey = WIRE_TO_PRESET_KEY[wire]
+        data[wire] = preset[presetKey] ?? null
+    }
+    return data
+}
+
+function formDataToPreset(data) {
+    const preset = { name: data.name }
+    for (const wire of FIELD_ORDER) {
+        const presetKey = WIRE_TO_PRESET_KEY[wire]
+        preset[presetKey] = data[wire]
+    }
+    return preset
+}
 
 function toSentinel(value) {
     return value === null || value === undefined ? DEFAULT_SENTINEL : String(value)
 }
 
-function fromSentinel(stringValue, parser = (v) => v) {
-    if (stringValue === DEFAULT_SENTINEL) return null
-    return parser(stringValue)
+// Reads the wa-select's current string back into the typed value used by
+// the form. Falls back to the raw string if no choice matches (defensive —
+// shouldn't happen with the static catalogues we ship today).
+function fromSentinel(field, raw) {
+    if (raw === DEFAULT_SENTINEL) return null
+    if (field === 'selected_model') return raw
+    const choices = providerHelpers.value?.getFieldChoices(field) ?? []
+    const match = choices.find(opt => String(opt.value) === raw)
+    return match ? match.value : raw
 }
 
 watch(
@@ -65,28 +130,16 @@ watch(
     },
 )
 
-function emptyFormData() {
-    return {
-        name: '',
-        model: null,
-        context_max: null,
-        effort: null,
-        thinking: null,
-        permission_mode: null,
-        claude_in_chrome: null,
-    }
-}
-
 function handleDelete(index) {
-    claudeCodeStore.deleteSettingsPreset(index)
+    providerStore.value?.deleteSettingsPreset(index)
 }
 
 function handleDuplicate(index) {
-    claudeCodeStore.duplicateSettingsPreset(index)
+    providerStore.value?.duplicateSettingsPreset(index)
 }
 
 function handleReorder(index, direction) {
-    claudeCodeStore.reorderSettingsPreset(index, direction)
+    providerStore.value?.reorderSettingsPreset(index, direction)
 }
 
 function closeDialog() {
@@ -100,7 +153,6 @@ function onAfterShow() {
     errorMessage.value = ''
 }
 
-// List → Form transitions (filled in Task 8/9)
 function openAddForm() {
     formData.value = emptyFormData()
     editIndex.value = null
@@ -112,7 +164,7 @@ function openAddForm() {
 function openEditForm(index) {
     const source = presets.value[index]
     if (!source) return
-    formData.value = { ...source }
+    formData.value = presetToFormData(source)
     editIndex.value = index
     errorMessage.value = ''
     view.value = 'form'
@@ -137,20 +189,25 @@ async function focusNameInput() {
 
 function handleSave() {
     errorMessage.value = ''
+    const store = providerStore.value
+    if (!store) {
+        errorMessage.value = 'Provider unavailable'
+        return
+    }
     const trimmedName = formData.value.name.trim()
     if (!trimmedName) {
         errorMessage.value = 'Name is required'
         return
     }
-    if (claudeCodeStore.findSettingsPresetIndexByName(trimmedName, editIndex.value) !== -1) {
+    if (store.findSettingsPresetIndexByName(trimmedName, editIndex.value) !== -1) {
         errorMessage.value = 'A preset with this name already exists'
         return
     }
-    const payload = { ...formData.value, name: trimmedName }
+    const payload = formDataToPreset({ ...formData.value, name: trimmedName })
     if (editIndex.value === null) {
-        claudeCodeStore.addSettingsPreset(payload)
+        store.addSettingsPreset(payload)
     } else {
-        claudeCodeStore.updateSettingsPreset(editIndex.value, payload)
+        store.updateSettingsPreset(editIndex.value, payload)
     }
     view.value = 'list'
 }
@@ -189,7 +246,7 @@ function handleSave() {
                     </div>
                     <div class="preset-display">
                         <span class="preset-name">{{ preset.name }}</span>
-                        <span class="preset-summary">{{ formatPresetSummary(preset, claudeCodeHelpers) }}</span>
+                        <span class="preset-summary">{{ formatPresetSummary(preset, providerHelpers) }}</span>
                     </div>
                     <div class="preset-actions">
                         <button class="action-btn" title="Edit" @click="openEditForm(index)">
@@ -206,111 +263,67 @@ function handleSave() {
             </div>
         </div>
         <form v-else id="preset-form" class="dialog-content" @submit.prevent="handleSave">
-                <div class="form-group">
-                    <label class="form-label" for="preset-name-input">
-                        Name <span class="form-label-quiet">(mandatory)</span>
-                    </label>
-                    <wa-input
-                        id="preset-name-input"
-                        ref="nameInputRef"
-                        :value="formData.name"
-                        size="small"
-                        @input="formData.name = $event.target.value"
-                    ></wa-input>
-                </div>
+            <div class="form-group">
+                <label class="form-label" for="preset-name-input">
+                    Name <span class="form-label-quiet">(mandatory)</span>
+                </label>
+                <wa-input
+                    id="preset-name-input"
+                    ref="nameInputRef"
+                    :value="formData.name"
+                    size="small"
+                    @input="formData.name = $event.target.value"
+                ></wa-input>
+            </div>
 
-                <div v-if="claudeCodeHelpers.supportsAgentSetting('selected_model')" class="form-group">
-                    <label class="form-label">Model</label>
+            <template v-for="field in supportedFields" :key="field">
+                <!-- Model row uses registry-driven groups instead of a flat choices list -->
+                <div v-if="field === 'selected_model'" class="form-group">
+                    <label class="form-label">{{ providerHelpers.getFieldLabel('selected_model') }}</label>
                     <wa-select
                         size="small"
-                        :value.prop="toSentinel(formData.model)"
-                        @change="formData.model = fromSentinel($event.target.value)"
+                        :value.prop="toSentinel(formData.selected_model)"
+                        @change="formData.selected_model = fromSentinel('selected_model', $event.target.value)"
                     >
                         <wa-option :value="DEFAULT_SENTINEL">Default</wa-option>
                         <small class="select-group-label">Force to:</small>
-                        <wa-option v-for="opt in modelOptions" :key="opt.value" :value="opt.value">
-                            {{ opt.label }}
-                        </wa-option>
+                        <template v-for="(group, gi) in modelGroups" :key="gi">
+                            <wa-divider v-if="gi > 0 && group.entries.length"></wa-divider>
+                            <wa-option
+                                v-for="entry in group.entries"
+                                :key="entry.value"
+                                :value="entry.value"
+                            >
+                                {{ entry.label }}
+                            </wa-option>
+                        </template>
                     </wa-select>
                 </div>
-
-                <div v-if="claudeCodeHelpers.supportsAgentSetting('context_max')" class="form-group">
-                    <label class="form-label">Context size</label>
+                <!-- Generic row: flat list of choices from the provider -->
+                <div v-else class="form-group">
+                    <label class="form-label">{{ providerHelpers.getFieldLabel(field) }}</label>
                     <wa-select
                         size="small"
-                        :value.prop="toSentinel(formData.context_max)"
-                        @change="formData.context_max = fromSentinel($event.target.value, (v) => Number(v))"
+                        :value.prop="toSentinel(formData[field])"
+                        @change="formData[field] = fromSentinel(field, $event.target.value)"
                     >
                         <wa-option :value="DEFAULT_SENTINEL">Default</wa-option>
                         <small class="select-group-label">Force to:</small>
-                        <wa-option v-for="opt in contextOptions" :key="opt.value" :value="String(opt.value)">
-                            {{ opt.label }}
+                        <wa-option
+                            v-for="opt in providerHelpers.getFieldChoices(field)"
+                            :key="String(opt.value)"
+                            :value="String(opt.value)"
+                            :label="opt.label"
+                        >
+                            <span>{{ opt.label }}</span>
+                            <span v-if="opt.description" class="option-description">{{ opt.description }}</span>
                         </wa-option>
                     </wa-select>
                 </div>
+            </template>
 
-                <div v-if="claudeCodeHelpers.supportsAgentSetting('effort')" class="form-group">
-                    <label class="form-label">Effort</label>
-                    <wa-select
-                        size="small"
-                        :value.prop="toSentinel(formData.effort)"
-                        @change="formData.effort = fromSentinel($event.target.value)"
-                    >
-                        <wa-option :value="DEFAULT_SENTINEL">Default</wa-option>
-                        <small class="select-group-label">Force to:</small>
-                        <wa-option v-for="opt in effortOptions" :key="opt.value" :value="opt.value">
-                            {{ opt.label }}
-                        </wa-option>
-                    </wa-select>
-                </div>
-
-                <div v-if="claudeCodeHelpers.supportsAgentSetting('thinking_enabled')" class="form-group">
-                    <label class="form-label">Thinking</label>
-                    <wa-select
-                        size="small"
-                        :value.prop="toSentinel(formData.thinking)"
-                        @change="formData.thinking = fromSentinel($event.target.value, (v) => v === 'true')"
-                    >
-                        <wa-option :value="DEFAULT_SENTINEL">Default</wa-option>
-                        <small class="select-group-label">Force to:</small>
-                        <wa-option v-for="opt in thinkingOptions" :key="String(opt.value)" :value="String(opt.value)">
-                            {{ opt.label }}
-                        </wa-option>
-                    </wa-select>
-                </div>
-
-                <div v-if="claudeCodeHelpers.supportsAgentSetting('permission_mode')" class="form-group">
-                    <label class="form-label">Permission mode</label>
-                    <wa-select
-                        size="small"
-                        :value.prop="toSentinel(formData.permission_mode)"
-                        @change="formData.permission_mode = fromSentinel($event.target.value)"
-                    >
-                        <wa-option :value="DEFAULT_SENTINEL">Default</wa-option>
-                        <small class="select-group-label">Force to:</small>
-                        <wa-option v-for="opt in permissionOptions" :key="opt.value" :value="opt.value">
-                            {{ opt.label }}
-                        </wa-option>
-                    </wa-select>
-                </div>
-
-                <div v-if="claudeCodeHelpers.supportsAgentSetting('claude_in_chrome')" class="form-group">
-                    <label class="form-label">Chrome MCP</label>
-                    <wa-select
-                        size="small"
-                        :value.prop="toSentinel(formData.claude_in_chrome)"
-                        @change="formData.claude_in_chrome = fromSentinel($event.target.value, (v) => v === 'true')"
-                    >
-                        <wa-option :value="DEFAULT_SENTINEL">Default</wa-option>
-                        <small class="select-group-label">Force to:</small>
-                        <wa-option v-for="opt in chromeOptions" :key="String(opt.value)" :value="String(opt.value)">
-                            {{ opt.label }}
-                        </wa-option>
-                    </wa-select>
-                </div>
-
-                <wa-callout v-if="errorMessage" variant="danger">{{ errorMessage }}</wa-callout>
-            </form>
+            <wa-callout v-if="errorMessage" variant="danger">{{ errorMessage }}</wa-callout>
+        </form>
 
         <div slot="footer" class="dialog-footer">
             <template v-if="view === 'list'">
@@ -467,5 +480,11 @@ function handleSave() {
     color: var(--wa-color-text-quiet);
     font-size: var(--wa-font-size-xs);
     font-style: italic;
+}
+
+.option-description {
+    display: block;
+    font-size: var(--wa-font-size-s);
+    color: var(--wa-color-text-quiet);
 }
 </style>

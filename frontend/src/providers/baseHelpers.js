@@ -362,15 +362,4 @@ export class BaseProviderHelpers {
         }]
     }
 
-    // ─── Provider-owned UI components ────────────────────────────────────
-
-    /**
-     * Vue component (or async wrapper) shown when the user clicks "Manage
-     * presets" in the popover. The host component renders it bound to
-     * ``v-model:open="presetsDialogOpen"`` so each provider's dialog
-     * controls its own UX. Default: null (= no manage button rendered).
-     */
-    getManagePresetsComponent() {
-        return null
-    }
 }
