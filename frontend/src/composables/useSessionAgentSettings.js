@@ -1,7 +1,6 @@
 import { ref, computed, watch, toValue } from 'vue'
 import { useDataStore } from '../stores/data'
 import { getProviderHelpers, getProviderStore } from '../providers'
-import { CONTEXT_MAX as CLAUDE_CODE_CONTEXT_MAX } from '../providers/claude_code/constants'
 
 // Sentinel value used by the popover selects to encode the "follow global
 // default" choice. When set, the corresponding selected ref is null.
@@ -10,19 +9,19 @@ export const DEFAULT_SENTINEL = '__default__'
 const SESSION_SETTING_FIELDS = ['permission_mode', 'selected_model', 'effort', 'thinking_enabled', 'claude_in_chrome', 'context_max']
 
 /**
- * Per-session agent settings state, helpers, and watchers — extracted from
- * MessageInput so the agent settings summary and popover can render
- * independently while sharing the same source of truth.
+ * Per-session agent settings state — provider-agnostic.
  *
- * The composable resolves provider helpers/store from ``session.provider``
- * so each session works with its own provider's catalog (choices, defaults,
- * label formatter, capability gates). For agent-setting fields a provider
- * doesn't expose, the corresponding select/option is silently dropped by
- * the consuming component via ``providerHelpers.value.supportsAgentSetting``.
+ * Hosts the per-session refs (``selected*`` / ``active*``), the watchers
+ * that keep them in sync with the DB and the provider's consistency rules,
+ * and the aggregate flags consumers need (``hasDropdownsChanged``,
+ * ``startupChanges``, ``isContextMaxForced``…). Provider-specific behaviour
+ * is intentionally NOT part of this composable: rendering hooks live on
+ * ``BaseProviderHelpers`` (``getDefaultValueLabel``, ``isFieldDisabled``,
+ * ``getSummaryParts``, …) and are called by the consuming components with a
+ * ``context`` assembled from this composable's exposed state.
  *
- * @param {() => string | string} sessionIdSource - The current session id (ref, getter, or static).
- * @returns Reactive bag of refs/computeds/handlers consumed by
- *   ``AgentSettingsSummary``, ``AgentSettingsPopover`` and ``MessageInput``.
+ * @param {() => string | string} sessionIdSource - The current session id
+ *   (ref, getter, or static value).
  */
 export function useSessionAgentSettings(sessionIdSource) {
     const store = useDataStore()
@@ -72,74 +71,21 @@ export function useSessionAgentSettings(sessionIdSource) {
         context_max: activeContextMax,
     }
 
-    // ─── Provider-driven catalogs ────────────────────────────────────────────
-    const permissionModeOptions = computed(() => providerHelpers.value?.getFieldChoices('permission_mode') ?? [])
-    const effortOptions = computed(() => providerHelpers.value?.getFieldChoices('effort') ?? [])
-    const thinkingOptions = computed(() => providerHelpers.value?.getFieldChoices('thinking_enabled') ?? [])
-    const claudeInChromeOptions = computed(() => providerHelpers.value?.getFieldChoices('claude_in_chrome') ?? [])
-    const contextMaxOptions = computed(() => providerHelpers.value?.getFieldChoices('context_max') ?? [])
+    // The model that's effectively in use right now: the user's selection if
+    // any, otherwise the provider's global default. Used to feed
+    // ``context.effectiveModel`` into rendering hooks (capability gates,
+    // help text, etc.).
+    const effectiveModel = computed(() => selectedModel.value ?? providerStore.value?.defaultModel)
 
-    const modelRegistryOptions = computed(() => {
-        const registry = providerHelpers.value?.getModelRegistry() ?? []
-        return {
-            latest: registry.filter(e => e.latest),
-            older: registry.filter(e => !e.latest),
-        }
-    })
-
-    // ─── Default-value labels (rendered as "Default: …" rows) ────────────────
-    const defaultModelLabel = computed(() => {
-        const helpers = providerHelpers.value
-        if (!helpers) return ''
-        const model = providerStore.value?.defaultModel
-        const registry = helpers.getModelRegistry?.() ?? []
-        const entry = registry.find(e => e.selected_model === model)
-        if (entry) {
-            return entry.latest
-                ? `${helpers.getModelLabel(model)} (latest: ${entry.version})`
-                : `${helpers.getModelLabel(model)}`
-        }
-        return helpers.getModelLabel(model)
-    })
-    const defaultContextMaxLabel = computed(() => providerHelpers.value?.getChoiceLabel('context_max', providerStore.value?.defaultContextMax) ?? '')
-    const defaultEffortLabel = computed(() => providerHelpers.value?.getChoiceLabel('effort', providerStore.value?.defaultEffort) ?? '')
-    const defaultThinkingLabel = computed(() => providerHelpers.value?.getChoiceLabel('thinking_enabled', providerStore.value?.defaultThinking) ?? '')
-    const defaultClaudeInChromeLabel = computed(() => providerHelpers.value?.getChoiceLabel('claude_in_chrome', providerStore.value?.defaultClaudeInChrome) ?? '')
-    const defaultPermissionModeLabel = computed(() => providerHelpers.value?.getChoiceLabel('permission_mode', providerStore.value?.defaultPermissionMode) ?? '')
-
-    // ─── Capability/state derivations on top of selections ───────────────────
-    // Whether the auto-promote-to-1M rule is active for this session. The rule
-    // itself lives on the provider's helpers via ``getEffectiveContextMax``;
-    // we just detect that the effective value diverges from what the user
-    // actually picked (or defaulted to). The current selection feeds the
-    // helper so it respects the live UI choice, not just the persisted one.
+    // Whether the auto-promote rule on this session is currently active —
+    // i.e. the persisted/selected ``context_max`` differs from the one the
+    // provider's ``getEffectiveContextMax`` resolves to. The rule itself is
+    // provider-specific; this flag stays generic by simply observing the
+    // divergence.
     const isContextMaxForced = computed(() => {
         const baseValue = selectedContextMax.value ?? providerStore.value?.defaultContextMax
-        const effectiveModel = selectedModel.value ?? providerStore.value?.defaultModel
-        return store.getEffectiveContextMax(sessionId.value, effectiveModel) !== baseValue
-    })
-
-    // The next three flags are Claude-only capability gates. We invoke them
-    // through ``providerHelpers`` (optional chaining on the method) so a
-    // provider that doesn't ship the method simply yields falsy — equivalent
-    // to "this concept doesn't apply", which is what the disabled-option
-    // checks expect.
-    const isContextMaxForcedByModel = computed(() => {
-        const effectiveModel = selectedModel.value ?? providerStore.value?.defaultModel
-        return !providerHelpers.value?.modelSupports1m?.(effectiveModel)
-    })
-    const isEffortXhighAvailable = computed(() => {
-        const effectiveModel = selectedModel.value ?? providerStore.value?.defaultModel
-        return providerHelpers.value?.modelSupportsEffortXhigh?.(effectiveModel) ?? false
-    })
-    const isEffortMaxAvailable = computed(() => {
-        const effectiveModel = selectedModel.value ?? providerStore.value?.defaultModel
-        return providerHelpers.value?.modelSupportsEffortMax?.(effectiveModel) ?? false
-    })
-
-    const contextMaxSelectValue = computed(() => {
-        if (isContextMaxForced.value) return String(CLAUDE_CODE_CONTEXT_MAX.EXTENDED)
-        return selectedContextMax.value === null ? DEFAULT_SENTINEL : String(selectedContextMax.value)
+        const effective = store.getEffectiveContextMax(sessionId.value, effectiveModel.value)
+        return effective !== baseValue
     })
 
     // ─── Aggregate state ─────────────────────────────────────────────────────
@@ -163,42 +109,40 @@ export function useSessionAgentSettings(sessionIdSource) {
 
     const hasSettingsChanged = computed(() => hasDropdownsChanged.value)
 
-    // ─── Settings summary parts (rendered by AgentSettingsSummary) ───────────
-    const settingsSummaryParts = computed(() => {
-        const helpers = providerHelpers.value
+    // The shape consumed by ``providerHelpers.getSummaryParts``. Held here
+    // (not on the helpers) because it depends on this session's selections —
+    // helpers operate over the rendered values, not the live refs.
+    const summaryState = computed(() => {
         const pStore = providerStore.value
-        if (!helpers || !pStore) return []
-
-        const effectiveModel = selectedModel.value ?? pStore.defaultModel
-        const effectiveContextMax = selectedContextMax.value ?? pStore.defaultContextMax
-        const effectiveEffort = selectedEffort.value ?? pStore.defaultEffort
-        const effectiveThinking = selectedThinking.value ?? pStore.defaultThinking
-        const effectiveChrome = selectedClaudeInChrome.value ?? pStore.defaultClaudeInChrome
-        const effectivePermission = selectedPermissionMode.value ?? pStore.defaultPermissionMode
-
-        const modelLabel = helpers.getModelLabel(effectiveModel)
-        const modelDisplay = effectiveContextMax === CLAUDE_CODE_CONTEXT_MAX.EXTENDED
-            ? `${modelLabel}[1m]`
-            : modelLabel
-        const modelForced = (selectedModel.value !== null && selectedModel.value !== pStore.defaultModel)
-            || (selectedContextMax.value !== null && selectedContextMax.value !== pStore.defaultContextMax)
-
-        return [
-            { text: modelDisplay, forced: modelForced },
-            { text: helpers.getChoiceDisplayLabel('effort', effectiveEffort), forced: selectedEffort.value !== null && selectedEffort.value !== pStore.defaultEffort },
-            { text: helpers.getChoiceDisplayLabel('thinking_enabled', effectiveThinking), forced: selectedThinking.value !== null && selectedThinking.value !== pStore.defaultThinking },
-            { text: helpers.getChoiceLabel('permission_mode', effectivePermission), forced: selectedPermissionMode.value !== null && selectedPermissionMode.value !== pStore.defaultPermissionMode },
-            { text: helpers.getChoiceDisplayLabel('claude_in_chrome', effectiveChrome), forced: selectedClaudeInChrome.value !== null && selectedClaudeInChrome.value !== pStore.defaultClaudeInChrome },
-        ]
+        return {
+            selected: {
+                selected_model: selectedModel.value,
+                permission_mode: selectedPermissionMode.value,
+                effort: selectedEffort.value,
+                thinking_enabled: selectedThinking.value,
+                claude_in_chrome: selectedClaudeInChrome.value,
+                context_max: selectedContextMax.value,
+            },
+            defaults: {
+                selected_model: pStore?.defaultModel,
+                permission_mode: pStore?.defaultPermissionMode,
+                effort: pStore?.defaultEffort,
+                thinking_enabled: pStore?.defaultThinking,
+                claude_in_chrome: pStore?.defaultClaudeInChrome,
+                context_max: pStore?.defaultContextMax,
+            },
+        }
     })
 
     // ─── Presets ─────────────────────────────────────────────────────────────
     // Sourced from the session's provider — each provider that supports
     // presets exposes ``settingsPresets`` on its store; others get an empty
-    // array and the dropdown's "Presets" group renders nothing.
+    // array and the dropdown's "Presets" group renders nothing. The
+    // "Manage…" button toggles ``presetsDialogOpen``; the actual dialog
+    // component is exposed by ``providerHelpers.getManagePresetsComponent``.
     const presets = computed(() => providerStore.value?.settingsPresets ?? [])
     const hasPresets = computed(() => presets.value.length > 0)
-    const claudePresetsDialogOpen = ref(false)
+    const presetsDialogOpen = ref(false)
 
     function handlePresetSelect(event) {
         const item = event.detail?.item
@@ -209,7 +153,7 @@ export function useSessionAgentSettings(sessionIdSource) {
             return
         }
         if (value === '__manage__') {
-            claudePresetsDialogOpen.value = true
+            presetsDialogOpen.value = true
             return
         }
         const index = Number(value)
@@ -242,8 +186,8 @@ export function useSessionAgentSettings(sessionIdSource) {
         selectedContextMax.value = activeContextMax.value
     }
 
-    // Resolve null → global default for a settings dict (so classify compares
-    // concrete values instead of "raw null vs explicit").
+    // Resolve null → global default for a settings dict (so ``classify``
+    // compares concrete values instead of "raw null vs explicit").
     function resolveSettingsDefaults(settings) {
         const pStore = providerStore.value
         return {
@@ -259,8 +203,8 @@ export function useSessionAgentSettings(sessionIdSource) {
     // ─── Startup-category change detection ───────────────────────────────────
     // Returns ``{ live, idle, startup }`` arrays of changed fields when a
     // process is active and the user has pending changes, else ``null``.
-    // Consumers pair this with the provider's "process display name" to
-    // build a human warning string.
+    // The popover pairs this with ``providerHelpers.getStartupWarningText``
+    // to format the human warning.
     const startupChanges = computed(() => {
         if (!processIsActive.value || !hasDropdownsChanged.value) return null
 
@@ -374,36 +318,19 @@ export function useSessionAgentSettings(sessionIdSource) {
         activeContextMax,
         SELECTED_REFS,
         ACTIVE_REFS,
-        // catalogs
-        permissionModeOptions,
-        effortOptions,
-        thinkingOptions,
-        claudeInChromeOptions,
-        contextMaxOptions,
-        modelRegistryOptions,
-        // default labels
-        defaultModelLabel,
-        defaultContextMaxLabel,
-        defaultEffortLabel,
-        defaultThinkingLabel,
-        defaultClaudeInChromeLabel,
-        defaultPermissionModeLabel,
-        // capability/state
+        // derived
+        effectiveModel,
         isContextMaxForced,
-        isContextMaxForcedByModel,
-        isEffortXhighAvailable,
-        isEffortMaxAvailable,
-        contextMaxSelectValue,
         // aggregates
         anySettingForced,
         hasDropdownsChanged,
         hasSettingsChanged,
-        settingsSummaryParts,
+        summaryState,
         startupChanges,
         // presets
         presets,
         hasPresets,
-        claudePresetsDialogOpen,
+        presetsDialogOpen,
         handlePresetSelect,
         // handlers
         resetAllToDefaults,

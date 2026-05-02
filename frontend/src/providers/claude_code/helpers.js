@@ -1,7 +1,16 @@
+import { defineAsyncComponent } from 'vue'
 import { BaseProviderHelpers } from '../baseHelpers'
 import { PROVIDER } from '../../constants'
 import { CONTEXT_MAX, EFFORT, PERMISSION_MODE } from './constants'
 import { useClaudeCodeStore } from './store'
+
+const ManagePresetsComponent = defineAsyncComponent(() => import('../../components/app/ClaudePresetsDialog.vue'))
+
+function formatRetirementDate(isoDate) {
+    return new Date(isoDate + 'T00:00:00').toLocaleDateString(undefined, {
+        month: 'short', day: 'numeric', year: 'numeric',
+    })
+}
 
 // Claude CLI's built-in slash commands. Hardcoded here because the CLI
 // never exposes the list programmatically; entries are sourced from the
@@ -236,6 +245,99 @@ export class ClaudeCodeHelpers extends BaseProviderHelpers {
      * latest), return the next-higher version in the same family. Otherwise
      * ``null``. Used at render/send time to correct stale session settings.
      */
+    // ─── Popover/summary rendering hooks ────────────────────────────────
+
+    getDefaultValueLabel(field, value) {
+        if (field === 'selected_model') {
+            const entry = this.getModelRegistry().find(e => e.selected_model === value)
+            if (entry?.latest) return `${this.getModelLabel(value)} (latest: ${entry.version})`
+            return this.getModelLabel(value)
+        }
+        return super.getDefaultValueLabel(field, value)
+    }
+
+    isChoiceDisabled(field, choiceValue, context) {
+        if (field === 'effort') {
+            if (choiceValue === EFFORT.X_HIGH) return !this.modelSupportsEffortXhigh(context?.effectiveModel)
+            if (choiceValue === EFFORT.MAX) return !this.modelSupportsEffortMax(context?.effectiveModel)
+        }
+        return false
+    }
+
+    isFieldDisabled(field, context) {
+        if (field === 'context_max') {
+            if (context?.isStarting) return true
+            if (context?.isContextMaxForced) return true
+            if (!this.modelSupports1m(context?.effectiveModel)) return true
+            return false
+        }
+        return super.isFieldDisabled(field, context)
+    }
+
+    getFieldHelpText(field, context) {
+        if (field === 'context_max') {
+            if (context?.isContextMaxForced) return 'Forced to 1M: context usage exceeds 85% of 200K.'
+            if (!this.modelSupports1m(context?.effectiveModel)) return '1M not available for this model version.'
+            return null
+        }
+        return null
+    }
+
+    getDisplayedSelectValue(field, selectedValue, context) {
+        if (field === 'context_max' && context?.isContextMaxForced) {
+            return String(CONTEXT_MAX.EXTENDED)
+        }
+        return super.getDisplayedSelectValue(field, selectedValue, context)
+    }
+
+    getSummaryParts(state) {
+        const sel = state?.selected ?? {}
+        const def = state?.defaults ?? {}
+        const effectiveModel = sel.selected_model ?? def.selected_model
+        const effectiveContextMax = sel.context_max ?? def.context_max
+        const effectiveEffort = sel.effort ?? def.effort
+        const effectiveThinking = sel.thinking_enabled ?? def.thinking_enabled
+        const effectiveChrome = sel.claude_in_chrome ?? def.claude_in_chrome
+        const effectivePermission = sel.permission_mode ?? def.permission_mode
+
+        const modelLabel = this.getModelLabel(effectiveModel)
+        const modelDisplay = effectiveContextMax === CONTEXT_MAX.EXTENDED
+            ? `${modelLabel}[1m]`
+            : modelLabel
+        const modelForced = (sel.selected_model !== null && sel.selected_model !== undefined && sel.selected_model !== def.selected_model)
+            || (sel.context_max !== null && sel.context_max !== undefined && sel.context_max !== def.context_max)
+
+        return [
+            { text: modelDisplay, forced: modelForced },
+            { text: this.getChoiceDisplayLabel('effort', effectiveEffort) ?? this.getChoiceLabel('effort', effectiveEffort) ?? '', forced: sel.effort !== null && sel.effort !== undefined && sel.effort !== def.effort },
+            { text: this.getChoiceDisplayLabel('thinking_enabled', effectiveThinking) ?? this.getChoiceLabel('thinking_enabled', effectiveThinking) ?? '', forced: sel.thinking_enabled !== null && sel.thinking_enabled !== undefined && sel.thinking_enabled !== def.thinking_enabled },
+            { text: this.getChoiceLabel('permission_mode', effectivePermission) ?? '', forced: sel.permission_mode !== null && sel.permission_mode !== undefined && sel.permission_mode !== def.permission_mode },
+            { text: this.getChoiceDisplayLabel('claude_in_chrome', effectiveChrome) ?? this.getChoiceLabel('claude_in_chrome', effectiveChrome) ?? '', forced: sel.claude_in_chrome !== null && sel.claude_in_chrome !== undefined && sel.claude_in_chrome !== def.claude_in_chrome },
+        ]
+    }
+
+    getModelSelectGroups(registry) {
+        const list = registry ?? []
+        return [
+            {
+                entries: list.filter(e => e.latest).map(e => ({
+                    value: e.selected_model,
+                    label: `${this.getModelLabel(e.selected_model)} (latest: ${e.version})`,
+                })),
+            },
+            {
+                entries: list.filter(e => !e.latest).map(e => ({
+                    value: e.selected_model,
+                    label: `${this.getModelLabel(e.selected_model)} (until ${formatRetirementDate(e.retirement_date)})`,
+                })),
+            },
+        ]
+    }
+
+    getManagePresetsComponent() {
+        return ManagePresetsComponent
+    }
+
     getRetiredModelUpgrade(selectedModel) {
         if (!selectedModel) return null
         const registry = useClaudeCodeStore().modelRegistry

@@ -1169,13 +1169,15 @@ function setSessionSetting(key, value) {
 }
 
 function getSessionGateState() {
+    const helpers = settings.providerHelpers.value
+    const model = settings.effectiveModel.value
     return {
         isStarting: settings.isStarting.value,
         isContextMaxForced: settings.isContextMaxForced.value,
-        isContextMaxForcedByModel: settings.isContextMaxForcedByModel.value,
-        isEffortXhighAvailable: settings.isEffortXhighAvailable.value,
-        isEffortMaxAvailable: settings.isEffortMaxAvailable.value,
-        effectiveModel: settings.selectedModel.value ?? settings.providerStore.value?.defaultModel,
+        isContextMaxForcedByModel: !helpers?.modelSupports1m?.(model),
+        isEffortXhighAvailable: helpers?.modelSupportsEffortXhigh?.(model) ?? false,
+        isEffortMaxAvailable: helpers?.modelSupportsEffortMax?.(model) ?? false,
+        effectiveModel: model,
     }
 }
 

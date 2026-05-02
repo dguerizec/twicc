@@ -1,16 +1,15 @@
 <script setup>
-// Per-session agent settings popover anchored on the trigger button rendered
-// by MessageInput. State, watchers and provider dispatch live in the
-// ``useSessionAgentSettings`` composable; this component is the rendering
-// surface — both the catalogue (which selects appear, what each contains)
-// and the warning copy ("Claude Code process will be stopped…") are driven
-// by the session's provider via ``settings.providerHelpers``.
+// Provider-agnostic agent-settings popover anchored on the trigger button
+// rendered by MessageInput. Every render decision (which fields appear,
+// which options are disabled, what the help text says, what the startup
+// warning reads, which dialog the "Manage presets" button opens) is
+// resolved through hooks on the session's provider helpers — see the
+// "Agent settings popover/summary rendering hooks" section in
+// ``BaseProviderHelpers``.
 import { computed } from 'vue'
 import { vPopoverFocusFix } from '../../directives/vPopoverFocusFix'
 import { formatPresetSummary } from '../../utils/presetFormat'
 import { DEFAULT_SENTINEL } from '../../composables/useSessionAgentSettings'
-import { CONTEXT_MAX as CLAUDE_CODE_CONTEXT_MAX, EFFORT as CLAUDE_CODE_EFFORT } from '../../providers/claude_code/constants'
-import ClaudePresetsDialog from '../app/ClaudePresetsDialog.vue'
 
 const props = defineProps({
     for: { type: String, required: true },
@@ -24,68 +23,137 @@ const props = defineProps({
 const {
     isStarting,
     processState,
-    selectedPermissionMode,
     selectedModel,
+    selectedPermissionMode,
     selectedEffort,
     selectedThinking,
     selectedClaudeInChrome,
     selectedContextMax,
-    permissionModeOptions,
-    effortOptions,
-    thinkingOptions,
-    claudeInChromeOptions,
-    contextMaxOptions,
-    modelRegistryOptions,
-    defaultModelLabel,
-    defaultContextMaxLabel,
-    defaultEffortLabel,
-    defaultThinkingLabel,
-    defaultClaudeInChromeLabel,
-    defaultPermissionModeLabel,
+    SELECTED_REFS,
+    summaryState,
+    effectiveModel,
     isContextMaxForced,
-    isContextMaxForcedByModel,
-    isEffortXhighAvailable,
-    isEffortMaxAvailable,
-    contextMaxSelectValue,
     anySettingForced,
     hasDropdownsChanged,
     presets,
     hasPresets,
-    claudePresetsDialogOpen,
+    presetsDialogOpen,
     handlePresetSelect,
     restoreSettings,
     startupChanges,
     providerHelpers,
+    providerStore,
 } = props.settings
 
-const providerLabel = computed(() => providerHelpers.value?.constructor?.label ?? 'Agent')
+// Order of the rows below the model row. ``supportsAgentSetting`` filters
+// each entry per-provider so a field nobody declares is silently skipped.
+const SIMPLE_FIELDS = ['context_max', 'effort', 'thinking_enabled', 'permission_mode', 'claude_in_chrome']
 
-// Warning shown when applying the pending changes will require a process
-// stop/restart (i.e. at least one ``startup``-category setting differs from
-// what's currently active). Returns null when no warning is needed.
+const managePresetsComponent = computed(() => providerHelpers.value?.getManagePresetsComponent() ?? null)
+
+const defaults = computed(() => summaryState.value.defaults)
+
+// Render-time context fed to the rendering hooks. Hooks ignore keys they
+// don't need; this lets us assemble it once per render and pass it through.
+const baseContext = computed(() => ({
+    sessionId: props.settings.sessionId.value,
+    isStarting: isStarting.value,
+    isContextMaxForced: isContextMaxForced.value,
+    effectiveModel: effectiveModel.value,
+}))
+
+function fieldContext(field) {
+    return {
+        ...baseContext.value,
+        field,
+        selectedValue: SELECTED_REFS[field]?.value ?? null,
+        defaultValue: defaults.value[field],
+    }
+}
+
 const startupSettingsWarning = computed(() => {
     if (!startupChanges.value?.startup.length) return null
-
-    const state = processState.value?.state
-    const hasCrons = processState.value?.active_crons?.length > 0
-    const prefix = state === 'assistant_turn'
-        ? `Once ${providerLabel.value} finishes its current work, the`
-        : 'The'
-    const hasText = props.messageText.trim()
-    if (hasCrons) {
-        const suffix = hasText ? ', after which your message will be sent.' : '.'
-        return `${prefix} ${providerLabel.value} process will be stopped to apply these settings, then resumed to restart the current cron jobs${suffix}`
-    }
-    const suffix = hasText
-        ? 'Your message will be sent after the process restarts.'
-        : 'Your next message will resume the session.'
-    return `${prefix} ${providerLabel.value} process will be stopped to apply these settings. ${suffix}`
+    const helpers = providerHelpers.value
+    if (!helpers) return null
+    return helpers.getStartupWarningText({
+        processStateName: processState.value?.state ?? null,
+        hasMessageText: Boolean(props.messageText.trim()),
+        hasCrons: (processState.value?.active_crons?.length ?? 0) > 0,
+    })
 })
 
-function formatRetirementDate(isoDate) {
-    return new Date(isoDate + 'T00:00:00').toLocaleDateString(undefined, {
-        month: 'short', day: 'numeric', year: 'numeric',
-    })
+// Setting rows below the model row — one v-for over all simple fields the
+// provider declares. The model row is rendered separately because it
+// consumes ``getModelSelectGroups`` instead of a flat choices list.
+const simpleFieldRows = computed(() => {
+    const helpers = providerHelpers.value
+    if (!helpers) return []
+    return SIMPLE_FIELDS
+        .filter(field => helpers.supportsAgentSetting(field))
+        .map(field => {
+            const ctx = fieldContext(field)
+            const selectedValue = SELECTED_REFS[field]?.value ?? null
+            const defaultValue = defaults.value[field]
+            return {
+                field,
+                label: helpers.getFieldLabel(field),
+                value: helpers.getDisplayedSelectValue(field, selectedValue, ctx),
+                defaultLabel: helpers.getDefaultValueLabel(field, defaultValue),
+                fieldDisabled: helpers.isFieldDisabled(field, ctx),
+                helpText: helpers.getFieldHelpText(field, ctx),
+                selectedValue,
+                choices: helpers.getFieldChoices(field).map(opt => {
+                    const disabled = helpers.isChoiceDisabled(field, opt.value, ctx)
+                    return {
+                        value: String(opt.value),
+                        rawValue: opt.value,
+                        label: opt.label,
+                        description: opt.description ?? null,
+                        labelWithSuffix: disabled ? `${opt.label} (not available)` : opt.label,
+                        disabled,
+                    }
+                }),
+            }
+        })
+})
+
+const modelRow = computed(() => {
+    const helpers = providerHelpers.value
+    if (!helpers || !helpers.supportsAgentSetting('selected_model')) return null
+    const ctx = fieldContext('selected_model')
+    return {
+        label: helpers.getFieldLabel('selected_model'),
+        value: helpers.getDisplayedSelectValue('selected_model', selectedModel.value, ctx),
+        defaultLabel: helpers.getDefaultValueLabel('selected_model', defaults.value.selected_model),
+        fieldDisabled: helpers.isFieldDisabled('selected_model', ctx),
+        helpText: helpers.getFieldHelpText('selected_model', ctx),
+        groups: helpers.getModelSelectGroups(helpers.getModelRegistry()),
+    }
+})
+
+function onSelectChange(field, event) {
+    const ref_ = SELECTED_REFS[field]
+    if (!ref_) return
+    const raw = event.target.value
+    if (raw === DEFAULT_SENTINEL) {
+        ref_.value = null
+        return
+    }
+    // Look the option up by stringified value so the typed (boolean / number /
+    // string) original is restored from the wa-select's string binding.
+    const choices = providerHelpers.value?.getFieldChoices(field) ?? []
+    const match = choices.find(opt => String(opt.value) === raw)
+    ref_.value = match ? match.value : raw
+}
+
+function onModelChange(event) {
+    const raw = event.target.value
+    selectedModel.value = raw === DEFAULT_SENTINEL ? null : raw
+}
+
+function resetField(field) {
+    const ref_ = SELECTED_REFS[field]
+    if (ref_) ref_.value = null
 }
 </script>
 
@@ -119,8 +187,8 @@ function formatRetirementDate(isoDate) {
                     <span>{{ preset.name }}</span>
                     <span class="option-description">{{ formatPresetSummary(preset, providerHelpers) }}</span>
                 </wa-dropdown-item>
-                <wa-divider v-if="hasPresets"></wa-divider>
-                <wa-dropdown-item value="__manage__">
+                <wa-divider v-if="hasPresets && managePresetsComponent"></wa-divider>
+                <wa-dropdown-item v-if="managePresetsComponent" value="__manage__">
                     <wa-icon slot="icon" name="pen-to-square"></wa-icon>
                     Manage presets
                 </wa-dropdown-item>
@@ -147,136 +215,68 @@ function formatRetirementDate(isoDate) {
 
         <!-- Settings dropdowns (scrollable) -->
         <div class="settings-panel">
-            <!-- Model -->
-            <div v-if="providerHelpers?.supportsAgentSetting('selected_model')" class="setting-row">
-                <label class="setting-label">Model</label>
+            <!-- Model row (special: registry-driven groups instead of a flat choices list) -->
+            <div v-if="modelRow" class="setting-row">
+                <label class="setting-label">{{ modelRow.label }}</label>
                 <wa-select
-                    :value.prop="selectedModel === null ? DEFAULT_SENTINEL : selectedModel"
-                    @change="selectedModel = $event.target.value === DEFAULT_SENTINEL ? null : $event.target.value"
+                    :value.prop="modelRow.value"
+                    @change="onModelChange"
                     size="small"
-                    :disabled="isStarting"
+                    :disabled="modelRow.fieldDisabled"
                 >
-                    <wa-option :value="DEFAULT_SENTINEL">Default: {{ defaultModelLabel }}</wa-option>
+                    <wa-option :value="DEFAULT_SENTINEL">Default: {{ modelRow.defaultLabel }}</wa-option>
+                    <small class="select-group-label">Force to:</small>
+                    <template v-for="(group, gi) in modelRow.groups" :key="gi">
+                        <wa-divider v-if="gi > 0 && group.entries.length"></wa-divider>
+                        <wa-option
+                            v-for="entry in group.entries"
+                            :key="entry.value"
+                            :value="entry.value"
+                        >
+                            {{ entry.label }}
+                        </wa-option>
+                    </template>
+                </wa-select>
+                <span v-if="modelRow.helpText" class="setting-help">{{ modelRow.helpText }}</span>
+                <a v-else-if="selectedModel !== null" class="reset-setting-link" @click.prevent="selectedModel = null">Reset to default: {{ modelRow.defaultLabel }}</a>
+            </div>
+
+            <!-- Other rows -->
+            <div
+                v-for="row in simpleFieldRows"
+                :key="row.field"
+                class="setting-row"
+            >
+                <label class="setting-label">{{ row.label }}</label>
+                <wa-select
+                    :value.prop="row.value"
+                    @change="onSelectChange(row.field, $event)"
+                    size="small"
+                    :disabled="row.fieldDisabled"
+                >
+                    <wa-option :value="DEFAULT_SENTINEL">Default: {{ row.defaultLabel }}</wa-option>
                     <small class="select-group-label">Force to:</small>
                     <wa-option
-                        v-for="entry in modelRegistryOptions.latest"
-                        :key="entry.selected_model"
-                        :value="entry.selected_model"
+                        v-for="opt in row.choices"
+                        :key="opt.value"
+                        :value="opt.value"
+                        :label="opt.labelWithSuffix"
+                        :disabled="opt.disabled"
                     >
-                        {{ providerHelpers.getModelLabel(entry.selected_model) }} (latest: {{ entry.version }})
-                    </wa-option>
-                    <wa-divider v-if="modelRegistryOptions.older.length"></wa-divider>
-                    <wa-option
-                        v-for="entry in modelRegistryOptions.older"
-                        :key="entry.selected_model"
-                        :value="entry.selected_model"
-                    >
-                        {{ providerHelpers.getModelLabel(entry.selected_model) }} (until {{ formatRetirementDate(entry.retirement_date) }})
+                        <span>{{ opt.labelWithSuffix }}</span>
+                        <span v-if="opt.description" class="option-description">{{ opt.description }}</span>
                     </wa-option>
                 </wa-select>
-                <a v-if="selectedModel !== null" class="reset-setting-link" @click.prevent="selectedModel = null">Reset to default: {{ defaultModelLabel }}</a>
-            </div>
-
-            <!-- Context -->
-            <div v-if="providerHelpers?.supportsAgentSetting('context_max')" class="setting-row">
-                <label class="setting-label">Context</label>
-                <wa-select
-                    :value.prop="contextMaxSelectValue"
-                    @change="selectedContextMax = $event.target.value === DEFAULT_SENTINEL ? null : Number($event.target.value)"
-                    size="small"
-                    :disabled="isStarting || isContextMaxForced || isContextMaxForcedByModel"
-                >
-                    <wa-option :value="DEFAULT_SENTINEL">Default: {{ defaultContextMaxLabel }}</wa-option>
-                    <small class="select-group-label">Force to:</small>
-                    <wa-option v-for="option in contextMaxOptions" :key="option.value" :value="String(option.value)">
-                        {{ option.label }}
-                    </wa-option>
-                </wa-select>
-                <span v-if="isContextMaxForced" class="setting-help">Forced to 1M: context usage exceeds 85% of 200K.</span>
-                <span v-else-if="isContextMaxForcedByModel" class="setting-help">1M not available for this model version.</span>
-                <a v-else-if="selectedContextMax !== null" class="reset-setting-link" @click.prevent="selectedContextMax = null">Reset to default: {{ defaultContextMaxLabel }}</a>
-            </div>
-
-            <!-- Effort -->
-            <div v-if="providerHelpers?.supportsAgentSetting('effort')" class="setting-row">
-                <label class="setting-label">Effort</label>
-                <wa-select
-                    :value.prop="selectedEffort === null ? DEFAULT_SENTINEL : selectedEffort"
-                    @change="selectedEffort = $event.target.value === DEFAULT_SENTINEL ? null : $event.target.value"
-                    size="small"
-                    :disabled="isStarting"
-                >
-                    <wa-option :value="DEFAULT_SENTINEL">Default: {{ defaultEffortLabel }}</wa-option>
-                    <small class="select-group-label">Force to:</small>
-                    <wa-option
-                        v-for="option in effortOptions"
-                        :key="option.value"
-                        :value="option.value"
-                        :disabled="(option.value === CLAUDE_CODE_EFFORT.X_HIGH && !isEffortXhighAvailable) || (option.value === CLAUDE_CODE_EFFORT.MAX && !isEffortMaxAvailable)"
-                    >
-                        {{ option.label }}{{ ((option.value === CLAUDE_CODE_EFFORT.X_HIGH && !isEffortXhighAvailable) || (option.value === CLAUDE_CODE_EFFORT.MAX && !isEffortMaxAvailable)) ? ' (not available)' : '' }}
-                    </wa-option>
-                </wa-select>
-                <a v-if="selectedEffort !== null" class="reset-setting-link" @click.prevent="selectedEffort = null">Reset to default: {{ defaultEffortLabel }}</a>
-            </div>
-
-            <!-- Thinking -->
-            <div v-if="providerHelpers?.supportsAgentSetting('thinking_enabled')" class="setting-row">
-                <label class="setting-label">Thinking</label>
-                <wa-select
-                    :value.prop="selectedThinking === null ? DEFAULT_SENTINEL : String(selectedThinking)"
-                    @change="selectedThinking = $event.target.value === DEFAULT_SENTINEL ? null : $event.target.value === 'true'"
-                    size="small"
-                    :disabled="isStarting"
-                >
-                    <wa-option :value="DEFAULT_SENTINEL">Default: {{ defaultThinkingLabel }}</wa-option>
-                    <small class="select-group-label">Force to:</small>
-                    <wa-option v-for="option in thinkingOptions" :key="String(option.value)" :value="String(option.value)">
-                        {{ option.label }}
-                    </wa-option>
-                </wa-select>
-                <a v-if="selectedThinking !== null" class="reset-setting-link" @click.prevent="selectedThinking = null">Reset to default: {{ defaultThinkingLabel }}</a>
-            </div>
-
-            <!-- Permission -->
-            <div v-if="providerHelpers?.supportsAgentSetting('permission_mode')" class="setting-row">
-                <label class="setting-label">Permission</label>
-                <wa-select
-                    :value.prop="selectedPermissionMode === null ? DEFAULT_SENTINEL : selectedPermissionMode"
-                    @change="selectedPermissionMode = $event.target.value === DEFAULT_SENTINEL ? null : $event.target.value"
-                    size="small"
-                    :disabled="isStarting"
-                >
-                    <wa-option :value="DEFAULT_SENTINEL">Default: {{ defaultPermissionModeLabel }}</wa-option>
-                    <small class="select-group-label">Force to:</small>
-                    <wa-option v-for="option in permissionModeOptions" :key="option.value" :value="option.value" :label="option.label">
-                        <span>{{ option.label }}</span>
-                        <span class="option-description">{{ option.description }}</span>
-                    </wa-option>
-                </wa-select>
-                <a v-if="selectedPermissionMode !== null" class="reset-setting-link" @click.prevent="selectedPermissionMode = null">Reset to default: {{ defaultPermissionModeLabel }}</a>
-            </div>
-
-            <!-- Claude in Chrome -->
-            <div v-if="providerHelpers?.supportsAgentSetting('claude_in_chrome')" class="setting-row">
-                <label class="setting-label">Claude built-in Chrome MCP</label>
-                <wa-select
-                    :value.prop="selectedClaudeInChrome === null ? DEFAULT_SENTINEL : String(selectedClaudeInChrome)"
-                    @change="selectedClaudeInChrome = $event.target.value === DEFAULT_SENTINEL ? null : $event.target.value === 'true'"
-                    size="small"
-                    :disabled="isStarting"
-                >
-                    <wa-option :value="DEFAULT_SENTINEL">Default: {{ defaultClaudeInChromeLabel }}</wa-option>
-                    <small class="select-group-label">Force to:</small>
-                    <wa-option v-for="option in claudeInChromeOptions" :key="String(option.value)" :value="String(option.value)">
-                        {{ option.label }}
-                    </wa-option>
-                </wa-select>
-                <a v-if="selectedClaudeInChrome !== null" class="reset-setting-link" @click.prevent="selectedClaudeInChrome = null">Reset to default: {{ defaultClaudeInChromeLabel }}</a>
+                <span v-if="row.helpText" class="setting-help">{{ row.helpText }}</span>
+                <a v-else-if="row.selectedValue !== null" class="reset-setting-link" @click.prevent="resetField(row.field)">Reset to default: {{ row.defaultLabel }}</a>
             </div>
         </div>
 
-        <ClaudePresetsDialog v-model:open="claudePresetsDialogOpen" />
+        <component
+            :is="managePresetsComponent"
+            v-if="managePresetsComponent"
+            v-model:open="presetsDialogOpen"
+        />
     </wa-popover>
 </template>
 

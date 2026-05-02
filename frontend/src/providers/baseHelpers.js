@@ -201,4 +201,176 @@ export class BaseProviderHelpers {
     getEffectiveContextMax(session, /* overrideModel */ _overrideModel) {
         return session?.context_max ?? null
     }
+
+    // ─── Agent settings popover/summary rendering hooks ──────────────────
+    //
+    // The popover (per-session selects) and the summary strip share a single
+    // generic Vue template. Whenever a provider needs to inject behaviour
+    // that doesn't fit the catalogue (auto-promote, capability-based
+    // disabling, "(latest: vX)" suffixes, etc.) it overrides one of the
+    // hooks below — each one has a sensible default so providers only
+    // implement what's specific.
+    //
+    // ``context`` is a plain object the popover assembles per render. Common
+    // fields callers may set: ``effectiveModel``, ``isStarting``,
+    // ``isContextMaxForced``, ``selectedValue``, ``defaultValue``,
+    // ``processStateName``, ``hasMessageText``, ``hasCrons``. Hooks should
+    // ignore keys they don't need.
+
+    /**
+     * Human label for a setting field — used as the row's ``<label>`` in the
+     * popover. Default carries sensible English names for the fields the
+     * Claude provider uses; providers override individual entries when their
+     * terminology differs.
+     */
+    getFieldLabel(field) {
+        const defaults = {
+            selected_model: 'Model',
+            permission_mode: 'Permission',
+            effort: 'Effort',
+            thinking_enabled: 'Thinking',
+            claude_in_chrome: 'Claude built-in Chrome MCP',
+            context_max: 'Context',
+        }
+        return defaults[field] ?? field
+    }
+
+    /**
+     * Label of the "Default: …" pseudo-option of a setting's wa-select.
+     * Default: model fields use ``getModelLabel``, everything else uses
+     * ``getChoiceLabel``. Providers override to e.g. append a "(latest: vX)"
+     * suffix on the model.
+     */
+    getDefaultValueLabel(field, value) {
+        if (field === 'selected_model') return this.getModelLabel(value)
+        return this.getChoiceLabel(field, value) ?? String(value ?? '')
+    }
+
+    /**
+     * Whether a single choice option of a select should be disabled. The
+     * popover surfaces a "(not available)" suffix on disabled options so
+     * the user understands why. Default: never disabled.
+     */
+    isChoiceDisabled(/* field, choiceValue, context */) {
+        return false
+    }
+
+    /**
+     * Whether the entire wa-select for ``field`` should be disabled.
+     * Default: disabled while the process is starting. Providers override
+     * to also disable when a runtime override is in effect (e.g. Claude's
+     * auto-promote-to-1M rule grays the context_max select out).
+     */
+    isFieldDisabled(field, context) {
+        return !!context?.isStarting
+    }
+
+    /**
+     * Help text rendered under a wa-select (between select and reset link).
+     * Returns a string or null. Default: null. Providers override to surface
+     * runtime-driven explanations like "1M not available for this model
+     * version".
+     */
+    getFieldHelpText(/* field, context */) {
+        return null
+    }
+
+    /**
+     * Value the wa-select should display, given the user's persisted
+     * selection. Most fields surface the selection as-is; some providers
+     * override to show a runtime override instead (e.g. Claude shows
+     * ``EXTENDED`` in the context_max select while the auto-promote rule is
+     * active, even if the user's persisted value is null/200K).
+     *
+     * Returns the same string the matching ``<wa-option :value>`` exposes —
+     * the popover uses it directly via ``:value.prop``. The sentinel for
+     * "follow default" is the literal string ``'__default__'``.
+     */
+    getDisplayedSelectValue(_field, selectedValue /* , context */) {
+        return selectedValue === null ? '__default__' : String(selectedValue)
+    }
+
+    /**
+     * Build the parts list rendered by the inline summary in the popover
+     * trigger button. Each entry is ``{ text, forced }`` — ``forced=true``
+     * adds a dashed underline so the user notices a non-default choice.
+     *
+     * ``state`` shape:
+     * ```
+     * { selected: { selected_model, effort, …}, defaults: {…} }
+     * ```
+     *
+     * Default: one part per supported field, in registration order.
+     * Providers override to merge or reorder fields (e.g. Claude appends
+     * "[1m]" to the model when context_max is forced to EXTENDED, and
+     * collapses model+context into a single part).
+     */
+    getSummaryParts(state) {
+        const parts = []
+        const sel = state?.selected ?? {}
+        const def = state?.defaults ?? {}
+        const fieldOrder = ['selected_model', 'effort', 'thinking_enabled', 'permission_mode', 'claude_in_chrome', 'context_max']
+        for (const field of fieldOrder) {
+            if (!this.supportsAgentSetting(field)) continue
+            const selected = sel[field] ?? null
+            const defaultValue = def[field]
+            const effective = selected ?? defaultValue
+            const text = field === 'selected_model'
+                ? this.getModelLabel(effective)
+                : (this.getChoiceDisplayLabel(field, effective) ?? this.getChoiceLabel(field, effective) ?? String(effective ?? ''))
+            const forced = selected !== null && selected !== undefined && selected !== defaultValue
+            parts.push({ text, forced })
+        }
+        return parts
+    }
+
+    /**
+     * Copy of the warning shown in the popover when applying the pending
+     * changes will require a process stop/restart. ``context`` carries
+     * ``processStateName`` ('assistant_turn' / 'user_turn' / etc.),
+     * ``hasMessageText`` (boolean) and ``hasCrons`` (boolean). Default uses
+     * the provider's ``label`` for the agent's display name.
+     */
+    getStartupWarningText(context) {
+        const label = this.constructor.label ?? 'Agent'
+        const prefix = context?.processStateName === 'assistant_turn'
+            ? `Once ${label} finishes its current work, the`
+            : 'The'
+        if (context?.hasCrons) {
+            const suffix = context.hasMessageText ? ', after which your message will be sent.' : '.'
+            return `${prefix} ${label} process will be stopped to apply these settings, then resumed to restart the current cron jobs${suffix}`
+        }
+        const suffix = context?.hasMessageText
+            ? 'Your message will be sent after the process restarts.'
+            : 'Your next message will resume the session.'
+        return `${prefix} ${label} process will be stopped to apply these settings. ${suffix}`
+    }
+
+    /**
+     * Resolve the model registry into the option groups rendered by the
+     * model wa-select. Each group is ``{ entries: [{ value, label }] }`` —
+     * adjacent groups are separated by a wa-divider. Default: a single
+     * group flattening the registry. Claude overrides to split latest vs
+     * older with a divider in between.
+     */
+    getModelSelectGroups(registry) {
+        return [{
+            entries: (registry ?? []).map(e => ({
+                value: e.selected_model,
+                label: this.getModelLabel(e.selected_model),
+            })),
+        }]
+    }
+
+    // ─── Provider-owned UI components ────────────────────────────────────
+
+    /**
+     * Vue component (or async wrapper) shown when the user clicks "Manage
+     * presets" in the popover. The host component renders it bound to
+     * ``v-model:open="presetsDialogOpen"`` so each provider's dialog
+     * controls its own UX. Default: null (= no manage button rendered).
+     */
+    getManagePresetsComponent() {
+        return null
+    }
 }
