@@ -28,9 +28,13 @@ const props = defineProps({
         type: String,
         required: true,
     },
+    // Provider key of the session the popup is opened for. May be ``null``
+    // briefly while the session hasn't loaded yet — the popup is mounted
+    // eagerly via Teleport but ``open()`` is gated by the consumer, which
+    // only triggers it once a provider is known.
     provider: {
         type: String,
-        required: true,
+        default: null,
     },
     anchorId: {
         type: String,
@@ -90,6 +94,10 @@ const filteredCommands = computed(() => {
 // ─── API fetch ────────────────────────────────────────────────────────────
 
 async function fetchCommands() {
+    if (!props.provider) {
+        allCommands.value = []
+        return
+    }
     loading.value = true
     error.value = null
     try {
