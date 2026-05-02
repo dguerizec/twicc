@@ -33,3 +33,16 @@ export function getProviderStore(provider) {
 export function getRegisteredProviders() {
     return Object.keys(PROVIDER_HELPERS)
 }
+
+/**
+ * ``[{ value, label }]`` pairs for every registered provider, intended to feed
+ * a ``<wa-select>`` (e.g. the global default-provider setting). The label
+ * comes from the helpers' static ``label`` field, falling back to the wire
+ * key when a provider hasn't declared one.
+ */
+export function getProviderOptions() {
+    return Object.entries(PROVIDER_HELPERS).map(([value, helpers]) => ({
+        value,
+        label: helpers.constructor.label ?? value,
+    }))
+}

@@ -46,6 +46,7 @@ export const SETTINGS_SCHEMA = {
     notifPendingRequestSound: NOTIFICATION_SOUNDS.NONE,
     notifPendingRequestBrowser: false,
     // --- Synced settings (defaults from backend, null as placeholder) ---
+    defaultProvider: null,
     titleGenerationEnabled: null,
     titleAutoApply: null,
     titleSystemPrompt: null,
@@ -74,6 +75,7 @@ export const SETTINGS_SCHEMA = {
  * Invalid values will be replaced with defaults.
  */
 const SETTINGS_VALIDATORS = {
+    defaultProvider: (v) => typeof v === 'string' && getRegisteredProviders().includes(v),
     displayMode: (v) => [DISPLAY_MODE.CONVERSATION, DISPLAY_MODE.SIMPLIFIED, DISPLAY_MODE.NORMAL, DISPLAY_MODE.DEBUG].includes(v),
     fontSize: (v) => typeof v === 'number' && v >= 12 && v <= 32,
     colorScheme: (v) => [COLOR_SCHEME.SYSTEM, COLOR_SCHEME.LIGHT, COLOR_SCHEME.DARK].includes(v),
@@ -109,6 +111,17 @@ const SETTINGS_VALIDATORS = {
     claudeCodeUsageReadFilePath: (v) => typeof v === 'string',
     claudeCodeUsageDumpFileEnabled: (v) => typeof v === 'boolean',
     claudeCodeUsageDumpFilePath: (v) => typeof v === 'string',
+}
+
+/**
+ * Resolve a ``defaultProvider`` value: pass through when it points to a
+ * currently registered provider, otherwise substitute the first registered
+ * provider — used to coerce empty/null/unknown backend values to a working
+ * choice without ever propagating that substitution back to the backend.
+ */
+function resolveDefaultProvider(value) {
+    const registered = getRegisteredProviders()
+    return registered.includes(value) ? value : registered[0]
 }
 
 /**
@@ -186,6 +199,13 @@ function loadSettings() {
         console.warn('Failed to load settings from localStorage:', e)
     }
 
+    // Coerce ``defaultProvider`` to a registered provider before any
+    // consumer sees the state, so the rest of the app always works with a
+    // valid value. The substitution stays in memory only — it is never
+    // propagated back to the backend (the corresponding watcher only
+    // triggers on subsequent mutations, not on the initial state).
+    settings.defaultProvider = resolveDefaultProvider(settings.defaultProvider)
+
     return settings
 }
 
@@ -213,6 +233,7 @@ export const useSettingsStore = defineStore('settings', {
         /**
          * Current display mode: 'simplified', 'normal', or 'debug'.
          */
+        getDefaultProvider: (state) => state.defaultProvider,
         getDisplayMode: (state) => state.displayMode,
         getFontSize: (state) => state.fontSize,
         getColorScheme: (state) => state.colorScheme,
@@ -279,6 +300,16 @@ export const useSettingsStore = defineStore('settings', {
     },
 
     actions: {
+        /**
+         * Set the default provider used when starting a fresh session.
+         * @param {string} provider - One of the registered provider keys.
+         */
+        setDefaultProvider(provider) {
+            if (SETTINGS_VALIDATORS.defaultProvider(provider)) {
+                this.defaultProvider = provider
+            }
+        },
+
         /**
          * Set display mode.
          * @param {string} mode - 'simplified' | 'normal' | 'debug'
@@ -644,6 +675,12 @@ export const useSettingsStore = defineStore('settings', {
                     }
                 }
             }
+            // Coerce ``defaultProvider`` if the backend payload left it
+            // empty or pointing at an unknown provider. Done here rather
+            // than via a watcher so the value the rest of the app reads
+            // is already valid; the mutation does not propagate back to
+            // the backend because ``_isApplyingRemoteSettings`` is set.
+            this.defaultProvider = resolveDefaultProvider(this.defaultProvider)
             // Provider-owned synced keys are dispatched through each helper.
             for (const provider of getRegisteredProviders()) {
                 getProviderHelpers(provider).applySyncedSettings(remoteSettings)
@@ -753,6 +790,7 @@ export function initSettings() {
     // by Vue inside watchers, so reactive reads track every dependency.
     const collectAllSyncedSettings = () => {
         const dict = {
+            defaultProvider: store.defaultProvider,
             displayMode: store.displayMode,
             fontSize: store.fontSize,
             colorScheme: store.colorScheme,

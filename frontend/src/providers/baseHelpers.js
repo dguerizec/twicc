@@ -9,6 +9,7 @@
  */
 export class BaseProviderHelpers {
     static provider = null
+    static label = null
 
     /**
      * Whether the current frontend state allows sending a message to a

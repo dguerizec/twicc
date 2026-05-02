@@ -24,6 +24,7 @@ import threading
 
 import orjson
 
+from twicc.core.enums import Provider
 from twicc.paths import get_synced_settings_path
 from twicc.providers.helpers import get_provider_helpers_registry
 
@@ -34,6 +35,7 @@ logger = logging.getLogger(__name__)
 # ``BaseProviderHelpers.SYNCED_SETTINGS_DEFAULTS`` and merged into
 # :data:`SYNCED_SETTINGS_DEFAULTS` below.
 _GENERIC_SYNCED_SETTINGS_DEFAULTS: dict = {
+    "defaultProvider": Provider.CLAUDE_CODE.value,
     "titleGenerationEnabled": True,
     "titleAutoApply": True,
     "titleSystemPrompt": (

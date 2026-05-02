@@ -5,6 +5,7 @@ import { useRouter } from 'vue-router'
 import { useSettingsStore, SETTINGS_SCHEMA } from '../../stores/settings'
 import { useDataStore } from '../../stores/data'
 import { useAuthStore } from '../../stores/auth'
+import { getProviderOptions } from '../../providers'
 import { useClaudeCodeStore } from '../../providers/claude_code/store'
 import { claudeCodeHelpers } from '../../providers/claude_code/helpers'
 import { DISPLAY_MODE, COLOR_SCHEME, SESSION_TIME_FORMAT, DEFAULT_MAX_CACHED_SESSIONS, WA_THEME, WA_THEME_LABELS, WA_BRAND, WA_BRAND_LABELS } from '../../constants'
@@ -38,6 +39,7 @@ function handleLogout() {
 
 const sections = [
     { id: 'global',                    label: 'Global' },
+    { id: 'providers',                 label: 'Providers', synced: true },
     { id: 'provider_claude_code',      label: 'Claude Code settings', navLabel: 'Claude Code', synced: true },
     { id: 'notifications',             label: 'Notifications' },
     { id: 'sessions',      label: 'Sessions' },
@@ -186,6 +188,8 @@ function openClaudeCodePresetsDialog() {
 }
 
 // Settings from store
+const defaultProvider = computed(() => store.getDefaultProvider)
+const providerOptions = getProviderOptions()
 const displayMode = computed(() => store.getDisplayMode)
 const fontSize = computed(() => store.getFontSize)
 const colorScheme = computed(() => store.getColorScheme)
@@ -311,6 +315,13 @@ function claudeCodeFormatRetirementDate(isoDate) {
 const claudeCodeDefaultModelSupports1m = computed(() => claudeCodeHelpers.modelSupports1m(claudeCodeDefaultModel.value))
 const claudeCodeDefaultModelSupportsEffortXhigh = computed(() => claudeCodeHelpers.modelSupportsEffortXhigh(claudeCodeDefaultModel.value))
 const claudeCodeDefaultModelSupportsEffortMax = computed(() => claudeCodeHelpers.modelSupportsEffortMax(claudeCodeDefaultModel.value))
+
+/**
+ * Handle default-provider change.
+ */
+function onDefaultProviderChange(event) {
+    store.setDefaultProvider(event.target.value)
+}
 
 /**
  * Handle display mode change.
@@ -727,6 +738,25 @@ function onChangelogClose() {
                             @change="onShowCostsChange"
                             size="small"
                         >Enabled</wa-switch>
+                    </div>
+                </section>
+
+                <!-- Providers section -->
+                <section v-if="activeSection === 'providers'" class="settings-section">
+                    <h3 class="settings-section-title">Providers <wa-icon name="cloud" class="synced-icon"></wa-icon></h3>
+                    <div class="setting-group">
+                        <label class="setting-group-label">Default provider for new sessions</label>
+                        <wa-select
+                            :value.prop="defaultProvider"
+                            @change="onDefaultProviderChange"
+                            size="small"
+                        >
+                            <wa-option
+                                v-for="option in providerOptions"
+                                :key="option.value"
+                                :value="option.value"
+                            >{{ option.label }}</wa-option>
+                        </wa-select>
                     </div>
                 </section>
 
