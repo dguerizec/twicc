@@ -9,20 +9,8 @@ import { useCommandRegistry } from '../composables/useCommandRegistry'
 import { requestTitleSuggestion, notifySessionViewed, forceNotifySessionViewed } from '../composables/useWebSocket'
 import { stopSessionProcess } from '../composables/useStopSessionProcess'
 import { useDragHover } from '../composables/useDragHover'
-import {
-    PROCESS_STATE,
-    PERMISSION_MODE,
-    PERMISSION_MODE_LABELS,
-    EFFORT,
-    EFFORT_LABELS,
-    THINKING,
-    THINKING_LABELS,
-    CLAUDE_IN_CHROME,
-    CLAUDE_IN_CHROME_LABELS,
-    CONTEXT_MAX,
-    CONTEXT_MAX_LABELS,
-    getModelLabel,
-} from '../constants'
+import { PROCESS_STATE } from '../constants'
+import { EFFORT, getModelLabel } from '../providers/claude_code/constants'
 import SessionHeader from '../components/session/detail/SessionHeader.vue'
 import SessionItemsList from '../components/session/detail/SessionItemsList.vue'
 import SessionContent from '../components/session/detail/SessionContent.vue'
@@ -958,7 +946,7 @@ function buildSessionSettingsCommands() {
     const isAvailable = () => !!sessionSettingsGate()
 
     return [
-        {
+        ...(claudeCodeHelpers.supportsAgentSetting('selected_model') ? [{
             id: 'session.model',
             label: 'Change Session Model…',
             icon: 'robot',
@@ -1001,8 +989,8 @@ function buildSessionSettingsCommands() {
                 }
                 return items
             },
-        },
-        {
+        }] : []),
+        ...(claudeCodeHelpers.supportsAgentSetting('effort') ? [{
             id: 'session.effort',
             label: 'Change Session Effort…',
             icon: 'gauge',
@@ -1012,32 +1000,30 @@ function buildSessionSettingsCommands() {
                 const gate = sessionSettingsGate()
                 if (!gate) return []
                 const current = getSessionSettingValue('effort')
-                const claudeCodeDefaultEffort = claudeCodeStore.defaultEffort
-
                 const items = [
                     {
                         id: '__default__',
                         group: 'default',
-                        label: `Default: ${EFFORT_LABELS[claudeCodeDefaultEffort]}`,
+                        label: `Default: ${claudeCodeHelpers.getChoiceLabel('effort', claudeCodeStore.defaultEffort)}`,
                         action: () => setSessionSettingValue('effort', null),
                         active: current === null,
                     },
                 ]
-                for (const value of Object.values(EFFORT)) {
-                    if (value === EFFORT.X_HIGH && !gate.isEffortXhighAvailable) continue
-                    if (value === EFFORT.MAX && !gate.isEffortMaxAvailable) continue
+                for (const choice of claudeCodeHelpers.getFieldChoices('effort')) {
+                    if (choice.value === EFFORT.X_HIGH && !gate.isEffortXhighAvailable) continue
+                    if (choice.value === EFFORT.MAX && !gate.isEffortMaxAvailable) continue
                     items.push({
-                        id: value,
+                        id: choice.value,
                         group: 'force',
-                        label: EFFORT_LABELS[value],
-                        action: () => setSessionSettingValue('effort', value),
-                        active: current === value,
+                        label: choice.label,
+                        action: () => setSessionSettingValue('effort', choice.value),
+                        active: current === choice.value,
                     })
                 }
                 return items
             },
-        },
-        {
+        }] : []),
+        ...(claudeCodeHelpers.supportsAgentSetting('thinking_enabled') ? [{
             id: 'session.thinking',
             label: 'Change Session Thinking…',
             icon: 'brain',
@@ -1045,33 +1031,28 @@ function buildSessionSettingsCommands() {
             when: isAvailable,
             items: () => {
                 const current = getSessionSettingValue('thinking_enabled')
-                const claudeCodeDefaultThinking = claudeCodeStore.defaultThinking
-                return [
+                const items = [
                     {
                         id: '__default__',
                         group: 'default',
-                        label: `Default: ${THINKING_LABELS[claudeCodeDefaultThinking]}`,
+                        label: `Default: ${claudeCodeHelpers.getChoiceLabel('thinking_enabled', claudeCodeStore.defaultThinking)}`,
                         action: () => setSessionSettingValue('thinking_enabled', null),
                         active: current === null,
                     },
-                    {
-                        id: 'enabled',
-                        group: 'force',
-                        label: THINKING_LABELS[THINKING.ENABLED],
-                        action: () => setSessionSettingValue('thinking_enabled', THINKING.ENABLED),
-                        active: current === THINKING.ENABLED,
-                    },
-                    {
-                        id: 'disabled',
-                        group: 'force',
-                        label: THINKING_LABELS[THINKING.DISABLED],
-                        action: () => setSessionSettingValue('thinking_enabled', THINKING.DISABLED),
-                        active: current === THINKING.DISABLED,
-                    },
                 ]
+                for (const choice of claudeCodeHelpers.getFieldChoices('thinking_enabled')) {
+                    items.push({
+                        id: String(choice.value),
+                        group: 'force',
+                        label: choice.label,
+                        action: () => setSessionSettingValue('thinking_enabled', choice.value),
+                        active: current === choice.value,
+                    })
+                }
+                return items
             },
-        },
-        {
+        }] : []),
+        ...(claudeCodeHelpers.supportsAgentSetting('permission_mode') ? [{
             id: 'session.permission',
             label: 'Change Session Permission Mode…',
             icon: 'shield-halved',
@@ -1079,30 +1060,28 @@ function buildSessionSettingsCommands() {
             when: isAvailable,
             items: () => {
                 const current = getSessionSettingValue('permission_mode')
-                const claudeCodeDefaultPermission = claudeCodeStore.defaultPermissionMode
-
                 const items = [
                     {
                         id: '__default__',
                         group: 'default',
-                        label: `Default: ${PERMISSION_MODE_LABELS[claudeCodeDefaultPermission]}`,
+                        label: `Default: ${claudeCodeHelpers.getChoiceLabel('permission_mode', claudeCodeStore.defaultPermissionMode)}`,
                         action: () => setSessionSettingValue('permission_mode', null),
                         active: current === null,
                     },
                 ]
-                for (const value of Object.values(PERMISSION_MODE)) {
+                for (const choice of claudeCodeHelpers.getFieldChoices('permission_mode')) {
                     items.push({
-                        id: value,
+                        id: choice.value,
                         group: 'force',
-                        label: PERMISSION_MODE_LABELS[value],
-                        action: () => setSessionSettingValue('permission_mode', value),
-                        active: current === value,
+                        label: choice.label,
+                        action: () => setSessionSettingValue('permission_mode', choice.value),
+                        active: current === choice.value,
                     })
                 }
                 return items
             },
-        },
-        {
+        }] : []),
+        ...(claudeCodeHelpers.supportsAgentSetting('context_max') ? [{
             id: 'session.context',
             label: 'Change Session Context Size…',
             icon: 'window-maximize',
@@ -1114,30 +1093,28 @@ function buildSessionSettingsCommands() {
             },
             items: () => {
                 const current = getSessionSettingValue('context_max')
-                const claudeCodeDefaultContext = claudeCodeStore.defaultContextMax
-
                 const items = [
                     {
                         id: '__default__',
                         group: 'default',
-                        label: `Default: ${CONTEXT_MAX_LABELS[claudeCodeDefaultContext]}`,
+                        label: `Default: ${claudeCodeHelpers.getChoiceLabel('context_max', claudeCodeStore.defaultContextMax)}`,
                         action: () => setSessionSettingValue('context_max', null),
                         active: current === null,
                     },
                 ]
-                for (const value of Object.values(CONTEXT_MAX)) {
+                for (const choice of claudeCodeHelpers.getFieldChoices('context_max')) {
                     items.push({
-                        id: String(value),
+                        id: String(choice.value),
                         group: 'force',
-                        label: CONTEXT_MAX_LABELS[value],
-                        action: () => setSessionSettingValue('context_max', value),
-                        active: current === value,
+                        label: choice.label,
+                        action: () => setSessionSettingValue('context_max', choice.value),
+                        active: current === choice.value,
                     })
                 }
                 return items
             },
-        },
-        {
+        }] : []),
+        ...(claudeCodeHelpers.supportsAgentSetting('claude_in_chrome') ? [{
             id: 'session.chrome',
             label: 'Change Session Claude in Chrome MCP…',
             icon: 'globe',
@@ -1145,29 +1122,27 @@ function buildSessionSettingsCommands() {
             when: isAvailable,
             items: () => {
                 const current = getSessionSettingValue('claude_in_chrome')
-                const claudeCodeDefaultChrome = claudeCodeStore.defaultClaudeInChrome
-
                 const items = [
                     {
                         id: '__default__',
                         group: 'default',
-                        label: `Default: ${CLAUDE_IN_CHROME_LABELS[claudeCodeDefaultChrome]}`,
+                        label: `Default: ${claudeCodeHelpers.getChoiceLabel('claude_in_chrome', claudeCodeStore.defaultClaudeInChrome)}`,
                         action: () => setSessionSettingValue('claude_in_chrome', null),
                         active: current === null,
                     },
                 ]
-                for (const value of Object.values(CLAUDE_IN_CHROME)) {
+                for (const choice of claudeCodeHelpers.getFieldChoices('claude_in_chrome')) {
                     items.push({
-                        id: String(value),
+                        id: String(choice.value),
                         group: 'force',
-                        label: CLAUDE_IN_CHROME_LABELS[value],
-                        action: () => setSessionSettingValue('claude_in_chrome', value),
-                        active: current === value,
+                        label: choice.label,
+                        action: () => setSessionSettingValue('claude_in_chrome', choice.value),
+                        active: current === choice.value,
                     })
                 }
                 return items
             },
-        },
+        }] : []),
     ]
 }
 

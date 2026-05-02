@@ -10,7 +10,7 @@ import { sendWsMessage, notifyUserDraftUpdated } from '../../composables/useWebS
 import { isSupportedMimeType, MAX_FILE_SIZE, SUPPORTED_IMAGE_TYPES, draftMediaToMediaItem } from '../../utils/fileUtils'
 import { toast } from '../../composables/useToast'
 import { vPopoverFocusFix } from '../../directives/vPopoverFocusFix'
-import { PERMISSION_MODE, PERMISSION_MODE_LABELS, PERMISSION_MODE_DESCRIPTIONS, getModelLabel, EFFORT, EFFORT_LABELS, EFFORT_DISPLAY_LABELS, THINKING_LABELS, THINKING_DISPLAY_LABELS, CLAUDE_IN_CHROME_LABELS, CLAUDE_IN_CHROME_DISPLAY_LABELS, CONTEXT_MAX, CONTEXT_MAX_LABELS } from '../../constants'
+import { CONTEXT_MAX, EFFORT, getModelLabel } from '../../providers/claude_code/constants'
 import { useCodeCommentsStore, formatAllComments } from '../../stores/codeComments'
 import { getParsedContent } from '../../utils/parsedContent'
 import MediaThumbnailGroup from '../media/MediaThumbnailGroup.vue'
@@ -132,12 +132,13 @@ const mediaItems = computed(() => attachments.value.map(a => draftMediaToMediaIt
 // When selected, the corresponding ref is set to null (= follow global default).
 const DEFAULT_SENTINEL = '__default__'
 
-// Permission mode options for the dropdown
-const permissionModeOptions = Object.values(PERMISSION_MODE).map(value => ({
-    value,
-    label: PERMISSION_MODE_LABELS[value],
-    description: PERMISSION_MODE_DESCRIPTIONS[value],
-}))
+// Per-field choice catalogues come from the provider helpers. Booleans are
+// stringified at the template boundary for wa-select compatibility.
+const permissionModeOptions = computed(() => claudeCodeHelpers.getFieldChoices('permission_mode'))
+const effortOptions = computed(() => claudeCodeHelpers.getFieldChoices('effort'))
+const thinkingOptions = computed(() => claudeCodeHelpers.getFieldChoices('thinking_enabled'))
+const claudeInChromeOptions = computed(() => claudeCodeHelpers.getFieldChoices('claude_in_chrome'))
+const contextMaxOptions = computed(() => claudeCodeHelpers.getFieldChoices('context_max'))
 
 // Model options for the dropdown
 const modelRegistryOptions = computed(() => {
@@ -154,30 +155,6 @@ function formatRetirementDate(isoDate) {
     })
 }
 
-// Effort options for the dropdown
-const effortOptions = Object.values(EFFORT).map(value => ({
-    value,
-    label: EFFORT_LABELS[value],
-}))
-
-// Thinking options for the dropdown (use string values for wa-select compatibility)
-const thinkingOptions = [
-    { value: 'true', label: THINKING_LABELS[true] },
-    { value: 'false', label: THINKING_LABELS[false] },
-]
-
-// Claude in Chrome options for the dropdown (use string values for wa-select compatibility)
-const claudeInChromeOptions = [
-    { value: 'true', label: CLAUDE_IN_CHROME_LABELS[true] },
-    { value: 'false', label: CLAUDE_IN_CHROME_LABELS[false] },
-]
-
-// Context max options for the dropdown (use string values for wa-select compatibility)
-const contextMaxOptions = Object.values(CONTEXT_MAX).map(value => ({
-    value: String(value),
-    label: CONTEXT_MAX_LABELS[value],
-}))
-
 // Default labels for the "Default: xxx" option in each dropdown
 const claudeCodeDefaultModelLabel = computed(() => {
     const model = claudeCodeStore.defaultModel
@@ -190,11 +167,11 @@ const claudeCodeDefaultModelLabel = computed(() => {
     }
     return getModelLabel(model)
 })
-const claudeCodeDefaultContextMaxLabel = computed(() => CONTEXT_MAX_LABELS[claudeCodeStore.defaultContextMax])
-const claudeCodeDefaultEffortLabel = computed(() => EFFORT_LABELS[claudeCodeStore.defaultEffort])
-const claudeCodeDefaultThinkingLabel = computed(() => THINKING_LABELS[claudeCodeStore.defaultThinking])
-const claudeCodeDefaultChromeLabel = computed(() => CLAUDE_IN_CHROME_LABELS[claudeCodeStore.defaultClaudeInChrome])
-const claudeCodeDefaultPermissionLabel = computed(() => PERMISSION_MODE_LABELS[claudeCodeStore.defaultPermissionMode])
+const claudeCodeDefaultContextMaxLabel = computed(() => claudeCodeHelpers.getChoiceLabel('context_max', claudeCodeStore.defaultContextMax))
+const claudeCodeDefaultEffortLabel = computed(() => claudeCodeHelpers.getChoiceLabel('effort', claudeCodeStore.defaultEffort))
+const claudeCodeDefaultThinkingLabel = computed(() => claudeCodeHelpers.getChoiceLabel('thinking_enabled', claudeCodeStore.defaultThinking))
+const claudeCodeDefaultChromeLabel = computed(() => claudeCodeHelpers.getChoiceLabel('claude_in_chrome', claudeCodeStore.defaultClaudeInChrome))
+const claudeCodeDefaultPermissionLabel = computed(() => claudeCodeHelpers.getChoiceLabel('permission_mode', claudeCodeStore.defaultPermissionMode))
 
 // Whether any session setting is explicitly forced (non-null)
 const anySettingForced = computed(() =>
@@ -249,10 +226,10 @@ const settingsSummaryParts = computed(() => {
 
     return [
         { text: modelDisplay, forced: modelForced },
-        { text: EFFORT_DISPLAY_LABELS[effectiveEffort], forced: selectedEffort.value !== null && selectedEffort.value !== claudeCodeStore.defaultEffort },
-        { text: THINKING_DISPLAY_LABELS[effectiveThinking], forced: selectedThinking.value !== null && selectedThinking.value !== claudeCodeStore.defaultThinking },
-        { text: PERMISSION_MODE_LABELS[effectivePermission], forced: selectedPermissionMode.value !== null && selectedPermissionMode.value !== claudeCodeStore.defaultPermissionMode },
-        { text: CLAUDE_IN_CHROME_DISPLAY_LABELS[effectiveChrome], forced: selectedClaudeInChrome.value !== null && selectedClaudeInChrome.value !== claudeCodeStore.defaultClaudeInChrome },
+        { text: claudeCodeHelpers.getChoiceDisplayLabel('effort', effectiveEffort), forced: selectedEffort.value !== null && selectedEffort.value !== claudeCodeStore.defaultEffort },
+        { text: claudeCodeHelpers.getChoiceDisplayLabel('thinking_enabled', effectiveThinking), forced: selectedThinking.value !== null && selectedThinking.value !== claudeCodeStore.defaultThinking },
+        { text: claudeCodeHelpers.getChoiceLabel('permission_mode', effectivePermission), forced: selectedPermissionMode.value !== null && selectedPermissionMode.value !== claudeCodeStore.defaultPermissionMode },
+        { text: claudeCodeHelpers.getChoiceDisplayLabel('claude_in_chrome', effectiveChrome), forced: selectedClaudeInChrome.value !== null && selectedClaudeInChrome.value !== claudeCodeStore.defaultClaudeInChrome },
     ]
 })
 
@@ -1755,7 +1732,7 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
                     <!-- Settings dropdowns (scrollable) -->
                     <div class="settings-panel">
                         <!-- Model -->
-                        <div class="setting-row">
+                        <div v-if="claudeCodeHelpers.supportsAgentSetting('selected_model')" class="setting-row">
                             <label class="setting-label">Model</label>
                             <wa-select
                                 :value.prop="selectedModel === null ? DEFAULT_SENTINEL : selectedModel"
@@ -1785,7 +1762,7 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
                         </div>
 
                         <!-- Context -->
-                        <div class="setting-row">
+                        <div v-if="claudeCodeHelpers.supportsAgentSetting('context_max')" class="setting-row">
                             <label class="setting-label">Context</label>
                             <wa-select
                                 :value.prop="contextMaxSelectValue"
@@ -1795,7 +1772,7 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
                             >
                                 <wa-option :value="DEFAULT_SENTINEL">Default: {{ claudeCodeDefaultContextMaxLabel }}</wa-option>
                                 <small class="select-group-label">Force to:</small>
-                                <wa-option v-for="option in contextMaxOptions" :key="option.value" :value="option.value">
+                                <wa-option v-for="option in contextMaxOptions" :key="option.value" :value="String(option.value)">
                                     {{ option.label }}
                                 </wa-option>
                             </wa-select>
@@ -1805,7 +1782,7 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
                         </div>
 
                         <!-- Effort -->
-                        <div class="setting-row">
+                        <div v-if="claudeCodeHelpers.supportsAgentSetting('effort')" class="setting-row">
                             <label class="setting-label">Effort</label>
                             <wa-select
                                 :value.prop="selectedEffort === null ? DEFAULT_SENTINEL : selectedEffort"
@@ -1828,7 +1805,7 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
                         </div>
 
                         <!-- Thinking -->
-                        <div class="setting-row">
+                        <div v-if="claudeCodeHelpers.supportsAgentSetting('thinking_enabled')" class="setting-row">
                             <label class="setting-label">Thinking</label>
                             <wa-select
                                 :value.prop="selectedThinking === null ? DEFAULT_SENTINEL : String(selectedThinking)"
@@ -1838,7 +1815,7 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
                             >
                                 <wa-option :value="DEFAULT_SENTINEL">Default: {{ claudeCodeDefaultThinkingLabel }}</wa-option>
                                 <small class="select-group-label">Force to:</small>
-                                <wa-option v-for="option in thinkingOptions" :key="option.value" :value="option.value">
+                                <wa-option v-for="option in thinkingOptions" :key="String(option.value)" :value="String(option.value)">
                                     {{ option.label }}
                                 </wa-option>
                             </wa-select>
@@ -1846,7 +1823,7 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
                         </div>
 
                         <!-- Permission -->
-                        <div class="setting-row">
+                        <div v-if="claudeCodeHelpers.supportsAgentSetting('permission_mode')" class="setting-row">
                             <label class="setting-label">Permission</label>
                             <wa-select
                                 :value.prop="selectedPermissionMode === null ? DEFAULT_SENTINEL : selectedPermissionMode"
@@ -1865,7 +1842,7 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
                         </div>
 
                         <!-- Claude in Chrome -->
-                        <div class="setting-row">
+                        <div v-if="claudeCodeHelpers.supportsAgentSetting('claude_in_chrome')" class="setting-row">
                             <label class="setting-label">Claude built-in Chrome MCP</label>
                             <wa-select
                                 :value.prop="selectedClaudeInChrome === null ? DEFAULT_SENTINEL : String(selectedClaudeInChrome)"
@@ -1875,7 +1852,7 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
                             >
                                 <wa-option :value="DEFAULT_SENTINEL">Default: {{ claudeCodeDefaultChromeLabel }}</wa-option>
                                 <small class="select-group-label">Force to:</small>
-                                <wa-option v-for="option in claudeInChromeOptions" :key="option.value" :value="option.value">
+                                <wa-option v-for="option in claudeInChromeOptions" :key="String(option.value)" :value="String(option.value)">
                                     {{ option.label }}
                                 </wa-option>
                             </wa-select>

@@ -7,7 +7,8 @@ import { useDataStore } from '../../stores/data'
 import { useAuthStore } from '../../stores/auth'
 import { useClaudeCodeStore } from '../../providers/claude_code/store'
 import { claudeCodeHelpers } from '../../providers/claude_code/helpers'
-import { DISPLAY_MODE, COLOR_SCHEME, SESSION_TIME_FORMAT, DEFAULT_MAX_CACHED_SESSIONS, PERMISSION_MODE, PERMISSION_MODE_LABELS, PERMISSION_MODE_DESCRIPTIONS, getModelLabel, EFFORT, EFFORT_LABELS, THINKING, THINKING_LABELS, CLAUDE_IN_CHROME, CLAUDE_IN_CHROME_LABELS, CONTEXT_MAX, CONTEXT_MAX_LABELS, WA_THEME, WA_THEME_LABELS, WA_BRAND, WA_BRAND_LABELS } from '../../constants'
+import { DISPLAY_MODE, COLOR_SCHEME, SESSION_TIME_FORMAT, DEFAULT_MAX_CACHED_SESSIONS, WA_THEME, WA_THEME_LABELS, WA_BRAND, WA_BRAND_LABELS } from '../../constants'
+import { CONTEXT_MAX, EFFORT, getModelLabel } from '../../providers/claude_code/constants'
 import NotificationSettings from './NotificationSettings.vue'
 import AppTooltip from '../ui/AppTooltip.vue'
 import ChangelogDialog from './ChangelogDialog.vue'
@@ -278,12 +279,14 @@ const displayModeOptions = [
     { value: DISPLAY_MODE.DEBUG, label: 'Debug' },
 ]
 
-// Permission mode options for the select
-const permissionModeOptions = Object.values(PERMISSION_MODE).map(value => ({
-    value,
-    label: PERMISSION_MODE_LABELS[value],
-    description: PERMISSION_MODE_DESCRIPTIONS[value],
-}))
+// Per-field choice catalogues come from the provider helpers. Booleans are
+// stringified at the template boundary because wa-select binds string values;
+// the @change handlers re-parse before writing back to the store.
+const permissionModeOptions = computed(() => claudeCodeHelpers.getFieldChoices('permission_mode'))
+const effortOptions = computed(() => claudeCodeHelpers.getFieldChoices('effort'))
+const thinkingOptions = computed(() => claudeCodeHelpers.getFieldChoices('thinking_enabled'))
+const claudeInChromeOptions = computed(() => claudeCodeHelpers.getFieldChoices('claude_in_chrome'))
+const contextMaxOptions = computed(() => claudeCodeHelpers.getFieldChoices('context_max'))
 
 // Model options for the select — built from the registry
 const modelRegistryOptions = computed(() => {
@@ -293,30 +296,6 @@ const modelRegistryOptions = computed(() => {
         older: registry.filter(e => !e.latest),
     }
 })
-
-// Effort options for the select
-const effortOptions = Object.values(EFFORT).map(value => ({
-    value,
-    label: EFFORT_LABELS[value],
-}))
-
-// Thinking options for the select (use string values for wa-select compatibility)
-const thinkingOptions = [
-    { value: 'true', label: THINKING_LABELS[true] },
-    { value: 'false', label: THINKING_LABELS[false] },
-]
-
-// Claude in Chrome options for the select (use string values for wa-select compatibility)
-const claudeInChromeOptions = [
-    { value: 'true', label: CLAUDE_IN_CHROME_LABELS[true] },
-    { value: 'false', label: CLAUDE_IN_CHROME_LABELS[false] },
-]
-
-// Context max options for the select (use string values for wa-select compatibility)
-const contextMaxOptions = Object.values(CONTEXT_MAX).map(value => ({
-    value: String(value),
-    label: CONTEXT_MAX_LABELS[value],
-}))
 
 function formatRetirementDate(isoDate) {
     return new Date(isoDate + 'T00:00:00').toLocaleDateString(undefined, {
@@ -749,7 +728,7 @@ function onChangelogClose() {
                 <!-- Claude Settings Section -->
                 <section v-if="activeSection === 'claude'" class="settings-section">
                     <h3 class="settings-section-title">Claude settings <wa-icon name="cloud" class="synced-icon"></wa-icon></h3>
-                    <div class="setting-group">
+                    <div v-if="claudeCodeHelpers.supportsAgentSetting('permission_mode')" class="setting-group">
                         <label class="setting-group-label">Default permission mode</label>
                         <wa-select
                             :value.prop="claudeCodeDefaultPermissionMode"
@@ -767,7 +746,7 @@ function onChangelogClose() {
                             </wa-option>
                         </wa-select>
                     </div>
-                    <div class="setting-group">
+                    <div v-if="claudeCodeHelpers.supportsAgentSetting('selected_model')" class="setting-group">
                         <label class="setting-group-label">Default model</label>
                         <wa-select
                             :value.prop="claudeCodeDefaultModel"
@@ -791,7 +770,7 @@ function onChangelogClose() {
                             </wa-option>
                         </wa-select>
                     </div>
-                    <div class="setting-group">
+                    <div v-if="claudeCodeHelpers.supportsAgentSetting('context_max')" class="setting-group">
                         <label class="setting-group-label">Default context size</label>
                         <wa-select
                             :value.prop="String(claudeCodeDefaultContextMax)"
@@ -801,14 +780,14 @@ function onChangelogClose() {
                             <wa-option
                                 v-for="option in contextMaxOptions"
                                 :key="option.value"
-                                :value="option.value"
-                                :disabled="option.value === String(CONTEXT_MAX.EXTENDED) && !claudeCodeDefaultModelSupports1m"
+                                :value="String(option.value)"
+                                :disabled="option.value === CONTEXT_MAX.EXTENDED && !claudeCodeDefaultModelSupports1m"
                             >
-                                {{ option.label }}{{ option.value === String(CONTEXT_MAX.EXTENDED) && !claudeCodeDefaultModelSupports1m ? ' (not available)' : '' }}
+                                {{ option.label }}{{ option.value === CONTEXT_MAX.EXTENDED && !claudeCodeDefaultModelSupports1m ? ' (not available)' : '' }}
                             </wa-option>
                         </wa-select>
                     </div>
-                    <div class="setting-group">
+                    <div v-if="claudeCodeHelpers.supportsAgentSetting('effort')" class="setting-group">
                         <label class="setting-group-label">Default effort</label>
                         <wa-select
                             :value.prop="claudeCodeDefaultEffort"
@@ -825,7 +804,7 @@ function onChangelogClose() {
                             </wa-option>
                         </wa-select>
                     </div>
-                    <div class="setting-group">
+                    <div v-if="claudeCodeHelpers.supportsAgentSetting('thinking_enabled')" class="setting-group">
                         <label class="setting-group-label">Default thinking</label>
                         <wa-select
                             :value.prop="String(claudeCodeDefaultThinking)"
@@ -834,14 +813,14 @@ function onChangelogClose() {
                         >
                             <wa-option
                                 v-for="option in thinkingOptions"
-                                :key="option.value"
-                                :value="option.value"
+                                :key="String(option.value)"
+                                :value="String(option.value)"
                             >
                                 {{ option.label }}
                             </wa-option>
                         </wa-select>
                     </div>
-                    <div class="setting-group">
+                    <div v-if="claudeCodeHelpers.supportsAgentSetting('claude_in_chrome')" class="setting-group">
                         <label class="setting-group-label">Default Chrome MCP</label>
                         <wa-select
                             :value.prop="String(claudeCodeDefaultClaudeInChrome)"
@@ -850,8 +829,8 @@ function onChangelogClose() {
                         >
                             <wa-option
                                 v-for="option in claudeInChromeOptions"
-                                :key="option.value"
-                                :value="option.value"
+                                :key="String(option.value)"
+                                :value="String(option.value)"
                             >
                                 {{ option.label }}
                             </wa-option>

@@ -20,22 +20,12 @@ import { toWorkspaceProjectId } from '../utils/workspaceIds'
 import {
     DISPLAY_MODE,
     COLOR_SCHEME,
-    PERMISSION_MODE,
-    PERMISSION_MODE_LABELS,
-    EFFORT,
-    EFFORT_LABELS,
-    THINKING,
-    THINKING_LABELS,
-    CLAUDE_IN_CHROME,
-    CLAUDE_IN_CHROME_LABELS,
-    CONTEXT_MAX,
-    CONTEXT_MAX_LABELS,
     WA_THEME,
     WA_THEME_LABELS,
     WA_BRAND,
     WA_BRAND_LABELS,
-    getModelLabel,
 } from '../constants'
+import { EFFORT, getModelLabel } from '../providers/claude_code/constants'
 
 // Cap on how many sessions "Go to Session…" exposes. The list is already
 // prioritized (extra → cross-filter pinned → cross-filter active → natural),
@@ -684,7 +674,7 @@ export function initStaticCommands(router) {
 
         // ── Claude Defaults ───────────────────────────────────────────
 
-        {
+        ...(claudeCodeHelpers.supportsAgentSetting('selected_model') ? [{
             id: 'claude.model',
             label: 'Change Default Model\u2026',
             icon: 'robot',
@@ -697,71 +687,73 @@ export function initStaticCommands(router) {
                 action: () => claudeCodeStore.setDefaultModel(entry.selected_model),
                 active: claudeCodeStore.defaultModel === entry.selected_model,
             })),
-        },
-        {
+        }] : []),
+        ...(claudeCodeHelpers.supportsAgentSetting('effort') ? [{
             id: 'claude.effort',
             label: 'Change Default Effort\u2026',
             icon: 'gauge',
             category: 'claude',
-            items: () => Object.values(EFFORT)
-                .filter(value => {
-                    if (value === EFFORT.X_HIGH) return claudeCodeHelpers.modelSupportsEffortXhigh(claudeCodeStore.defaultModel)
-                    if (value === EFFORT.MAX) return claudeCodeHelpers.modelSupportsEffortMax(claudeCodeStore.defaultModel)
+            items: () => claudeCodeHelpers.getFieldChoices('effort')
+                .filter(choice => {
+                    if (choice.value === EFFORT.X_HIGH) return claudeCodeHelpers.modelSupportsEffortXhigh(claudeCodeStore.defaultModel)
+                    if (choice.value === EFFORT.MAX) return claudeCodeHelpers.modelSupportsEffortMax(claudeCodeStore.defaultModel)
                     return true
                 })
-                .map(value => ({
-                    id: value,
-                    label: EFFORT_LABELS[value],
-                    action: () => claudeCodeStore.setDefaultEffort(value),
-                    active: claudeCodeStore.defaultEffort === value,
+                .map(choice => ({
+                    id: choice.value,
+                    label: choice.label,
+                    action: () => claudeCodeStore.setDefaultEffort(choice.value),
+                    active: claudeCodeStore.defaultEffort === choice.value,
                 })),
-        },
-        {
+        }] : []),
+        ...(claudeCodeHelpers.supportsAgentSetting('permission_mode') ? [{
             id: 'claude.permission',
             label: 'Change Default Permission Mode\u2026',
             icon: 'shield-halved',
             category: 'claude',
-            items: () => Object.values(PERMISSION_MODE).map(value => ({
-                id: value,
-                label: PERMISSION_MODE_LABELS[value],
-                action: () => claudeCodeStore.setDefaultPermissionMode(value),
-                active: claudeCodeStore.defaultPermissionMode === value,
+            items: () => claudeCodeHelpers.getFieldChoices('permission_mode').map(choice => ({
+                id: choice.value,
+                label: choice.label,
+                action: () => claudeCodeStore.setDefaultPermissionMode(choice.value),
+                active: claudeCodeStore.defaultPermissionMode === choice.value,
             })),
-        },
-        {
+        }] : []),
+        ...(claudeCodeHelpers.supportsAgentSetting('thinking_enabled') ? [{
             id: 'claude.thinking',
             label: 'Change Default Thinking\u2026',
             icon: 'brain',
             category: 'claude',
-            items: () => [
-                { id: 'enabled', label: THINKING_LABELS[THINKING.ENABLED], action: () => claudeCodeStore.setDefaultThinking(THINKING.ENABLED), active: claudeCodeStore.defaultThinking === THINKING.ENABLED },
-                { id: 'disabled', label: THINKING_LABELS[THINKING.DISABLED], action: () => claudeCodeStore.setDefaultThinking(THINKING.DISABLED), active: claudeCodeStore.defaultThinking === THINKING.DISABLED },
-            ],
-        },
-        {
+            items: () => claudeCodeHelpers.getFieldChoices('thinking_enabled').map(choice => ({
+                id: String(choice.value),
+                label: choice.label,
+                action: () => claudeCodeStore.setDefaultThinking(choice.value),
+                active: claudeCodeStore.defaultThinking === choice.value,
+            })),
+        }] : []),
+        ...(claudeCodeHelpers.supportsAgentSetting('context_max') ? [{
             id: 'claude.context',
             label: 'Change Default Context Size\u2026',
             icon: 'window-maximize',
             category: 'claude',
-            items: () => Object.values(CONTEXT_MAX).map(value => ({
-                id: String(value),
-                label: CONTEXT_MAX_LABELS[value],
-                action: () => claudeCodeStore.setDefaultContextMax(value),
-                active: claudeCodeStore.defaultContextMax === value,
+            items: () => claudeCodeHelpers.getFieldChoices('context_max').map(choice => ({
+                id: String(choice.value),
+                label: choice.label,
+                action: () => claudeCodeStore.setDefaultContextMax(choice.value),
+                active: claudeCodeStore.defaultContextMax === choice.value,
             })),
-        },
-        {
+        }] : []),
+        ...(claudeCodeHelpers.supportsAgentSetting('claude_in_chrome') ? [{
             id: 'claude.chrome',
             label: 'Change Default Claude in Chrome MCP\u2026',
             icon: 'globe',
             category: 'claude',
-            items: () => Object.values(CLAUDE_IN_CHROME).map(value => ({
-                id: String(value),
-                label: CLAUDE_IN_CHROME_LABELS[value],
-                action: () => claudeCodeStore.setDefaultClaudeInChrome(value),
-                active: claudeCodeStore.defaultClaudeInChrome === value,
+            items: () => claudeCodeHelpers.getFieldChoices('claude_in_chrome').map(choice => ({
+                id: String(choice.value),
+                label: choice.label,
+                action: () => claudeCodeStore.setDefaultClaudeInChrome(choice.value),
+                active: claudeCodeStore.defaultClaudeInChrome === choice.value,
             })),
-        },
+        }] : []),
 
         // ── UI ────────────────────────────────────────────────────────
 

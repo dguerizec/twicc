@@ -114,4 +114,64 @@ export class BaseProviderHelpers {
     enforceAgentSettingsConsistency(settings) {
         return settings
     }
+
+    // ─── Per-field choice catalogue ──────────────────────────────────────
+    //
+    // Each provider declares the valid values + human labels for the agent
+    // setting fields it owns (everything except ``selected_model``, which is
+    // served separately via the model registry). Choice entries follow the
+    // shape ``{ value, label, display_label?, description? }``. Generic call
+    // sites pull lists from ``getFieldChoices(field)`` and lookups from
+    // ``getChoiceLabel`` / ``getChoiceDisplayLabel``.
+
+    /**
+     * Map from agent setting field name (snake_case wire name) to its list
+     * of choice entries. Default: empty (provider declares no choices).
+     */
+    getAgentSettingsChoices() {
+        return {}
+    }
+
+    /**
+     * Return the list of choice entries for ``field``, or ``[]`` when the
+     * provider doesn't declare any. Order is preserved (used to drive the
+     * select option order).
+     */
+    getFieldChoices(field) {
+        return this.getAgentSettingsChoices()[field] ?? []
+    }
+
+    /**
+     * Return the ``label`` of the choice for ``field`` whose ``value``
+     * matches ``value`` strictly (``===``). Returns ``null`` when nothing
+     * matches — call sites can fall back to a stringified value if they
+     * want to surface the raw value.
+     */
+    getChoiceLabel(field, value) {
+        const choice = this.getFieldChoices(field).find(c => c.value === value)
+        return choice?.label ?? null
+    }
+
+    /**
+     * Like ``getChoiceLabel`` but prefers ``display_label`` when present —
+     * used by compact summary strips where ``label`` would be too long.
+     */
+    getChoiceDisplayLabel(field, value) {
+        const choice = this.getFieldChoices(field).find(c => c.value === value)
+        return choice?.display_label ?? choice?.label ?? null
+    }
+
+    /**
+     * Whether this provider supports the agent setting ``field``. Derived
+     * from ``getAgentSettingsCategories``: a field listed in any category
+     * (live/idle/startup) is supported. UI components branch on this to
+     * hide selects/commands the provider doesn't own.
+     */
+    supportsAgentSetting(field) {
+        const categories = this.getAgentSettingsCategories()
+        for (const fields of Object.values(categories)) {
+            if (fields.includes(field)) return true
+        }
+        return false
+    }
 }

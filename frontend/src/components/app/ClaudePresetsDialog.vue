@@ -1,17 +1,7 @@
 <script setup>
 import { computed, nextTick, ref, watch } from 'vue'
 import { useClaudeCodeStore } from '../../providers/claude_code/store'
-import {
-    PERMISSION_MODE,
-    PERMISSION_MODE_LABELS,
-    EFFORT,
-    EFFORT_LABELS,
-    THINKING_LABELS,
-    CLAUDE_IN_CHROME_LABELS,
-    CONTEXT_MAX,
-    CONTEXT_MAX_LABELS,
-    getModelLabel,
-} from '../../constants'
+import { getModelLabel } from '../../providers/claude_code/constants'
 import { claudeCodeHelpers } from '../../providers/claude_code/helpers'
 import { formatPresetSummary } from '../../utils/presetFormat'
 
@@ -51,28 +41,11 @@ const modelOptions = computed(() => {
     })
 })
 
-const contextOptions = Object.values(CONTEXT_MAX).map((value) => ({
-    value: String(value),
-    raw: value,
-    label: CONTEXT_MAX_LABELS[value],
-}))
-
-const effortOptions = Object.values(EFFORT).map((value) => ({ value, label: EFFORT_LABELS[value] }))
-
-const permissionOptions = Object.values(PERMISSION_MODE).map((value) => ({
-    value,
-    label: PERMISSION_MODE_LABELS[value],
-}))
-
-const thinkingOptions = [
-    { value: 'true', raw: true, label: THINKING_LABELS[true] },
-    { value: 'false', raw: false, label: THINKING_LABELS[false] },
-]
-
-const chromeOptions = [
-    { value: 'true', raw: true, label: CLAUDE_IN_CHROME_LABELS[true] },
-    { value: 'false', raw: false, label: CLAUDE_IN_CHROME_LABELS[false] },
-]
+const contextOptions = computed(() => claudeCodeHelpers.getFieldChoices('context_max'))
+const effortOptions = computed(() => claudeCodeHelpers.getFieldChoices('effort'))
+const permissionOptions = computed(() => claudeCodeHelpers.getFieldChoices('permission_mode'))
+const thinkingOptions = computed(() => claudeCodeHelpers.getFieldChoices('thinking_enabled'))
+const chromeOptions = computed(() => claudeCodeHelpers.getFieldChoices('claude_in_chrome'))
 
 function toSentinel(value) {
     return value === null || value === undefined ? DEFAULT_SENTINEL : String(value)
@@ -247,7 +220,7 @@ function handleSave() {
                     ></wa-input>
                 </div>
 
-                <div class="form-group">
+                <div v-if="claudeCodeHelpers.supportsAgentSetting('selected_model')" class="form-group">
                     <label class="form-label">Model</label>
                     <wa-select
                         size="small"
@@ -262,7 +235,7 @@ function handleSave() {
                     </wa-select>
                 </div>
 
-                <div class="form-group">
+                <div v-if="claudeCodeHelpers.supportsAgentSetting('context_max')" class="form-group">
                     <label class="form-label">Context size</label>
                     <wa-select
                         size="small"
@@ -271,13 +244,13 @@ function handleSave() {
                     >
                         <wa-option :value="DEFAULT_SENTINEL">Default</wa-option>
                         <small class="select-group-label">Force to:</small>
-                        <wa-option v-for="opt in contextOptions" :key="opt.value" :value="opt.value">
+                        <wa-option v-for="opt in contextOptions" :key="opt.value" :value="String(opt.value)">
                             {{ opt.label }}
                         </wa-option>
                     </wa-select>
                 </div>
 
-                <div class="form-group">
+                <div v-if="claudeCodeHelpers.supportsAgentSetting('effort')" class="form-group">
                     <label class="form-label">Effort</label>
                     <wa-select
                         size="small"
@@ -292,7 +265,7 @@ function handleSave() {
                     </wa-select>
                 </div>
 
-                <div class="form-group">
+                <div v-if="claudeCodeHelpers.supportsAgentSetting('thinking_enabled')" class="form-group">
                     <label class="form-label">Thinking</label>
                     <wa-select
                         size="small"
@@ -301,13 +274,13 @@ function handleSave() {
                     >
                         <wa-option :value="DEFAULT_SENTINEL">Default</wa-option>
                         <small class="select-group-label">Force to:</small>
-                        <wa-option v-for="opt in thinkingOptions" :key="opt.value" :value="opt.value">
+                        <wa-option v-for="opt in thinkingOptions" :key="String(opt.value)" :value="String(opt.value)">
                             {{ opt.label }}
                         </wa-option>
                     </wa-select>
                 </div>
 
-                <div class="form-group">
+                <div v-if="claudeCodeHelpers.supportsAgentSetting('permission_mode')" class="form-group">
                     <label class="form-label">Permission mode</label>
                     <wa-select
                         size="small"
@@ -322,7 +295,7 @@ function handleSave() {
                     </wa-select>
                 </div>
 
-                <div class="form-group">
+                <div v-if="claudeCodeHelpers.supportsAgentSetting('claude_in_chrome')" class="form-group">
                     <label class="form-label">Chrome MCP</label>
                     <wa-select
                         size="small"
@@ -331,7 +304,7 @@ function handleSave() {
                     >
                         <wa-option :value="DEFAULT_SENTINEL">Default</wa-option>
                         <small class="select-group-label">Force to:</small>
-                        <wa-option v-for="opt in chromeOptions" :key="opt.value" :value="opt.value">
+                        <wa-option v-for="opt in chromeOptions" :key="String(opt.value)" :value="String(opt.value)">
                             {{ opt.label }}
                         </wa-option>
                     </wa-select>

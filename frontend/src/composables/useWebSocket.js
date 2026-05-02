@@ -12,7 +12,7 @@ import { useSettingsStore } from '../stores/settings'
 import { getProviderWsHandler, getProviderStore } from '../providers'
 import { playNotificationSound, sendBrowserNotification } from '../utils/notificationSounds'
 import { truncateTitle } from '../utils/truncate'
-import { getModelLabel } from '../constants'
+import { getModelLabel } from '../providers/claude_code/constants'
 
 // WebSocket close code sent by backend when authentication fails
 const WS_CLOSE_AUTH_FAILURE = 4001

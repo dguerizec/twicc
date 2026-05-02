@@ -2,7 +2,7 @@
 
 import { defineStore, acceptHMRUpdate } from 'pinia'
 import { ref } from 'vue'
-import { CONTEXT_MAX, EFFORT, PERMISSION_MODE } from '../../constants'
+import { CONTEXT_MAX, EFFORT, PERMISSION_MODE } from './constants'
 
 const SETTINGS_PRESET_FIELDS = [
     'model',

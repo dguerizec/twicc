@@ -1,5 +1,6 @@
 import { BaseProviderHelpers } from '../baseHelpers'
-import { CONTEXT_MAX, EFFORT, PROVIDER } from '../../constants'
+import { PROVIDER } from '../../constants'
+import { CONTEXT_MAX, EFFORT, PERMISSION_MODE } from './constants'
 import { useClaudeCodeStore } from './store'
 
 // Claude CLI's built-in slash commands. Hardcoded here because the CLI
@@ -23,6 +24,67 @@ const SYNCED_SETTING_KEYS_TO_STORE = {
     claudeCodeDefaultEffort:         { setter: 'setDefaultEffort',         getter: 'defaultEffort' },
     claudeCodeDefaultThinking:       { setter: 'setDefaultThinking',       getter: 'defaultThinking' },
     claudeCodeDefaultClaudeInChrome: { setter: 'setDefaultClaudeInChrome', getter: 'defaultClaudeInChrome' },
+}
+
+// Per-field choice catalogue for the Claude Code provider.
+// Field names match the snake_case wire names (``thinking_enabled``, not
+// ``thinking``); the preset shape uses ``thinking`` and is translated at
+// the lookup boundary by callers.
+//
+// Values are stored in their natural type (string for permission/effort,
+// boolean for thinking/chrome, integer for context_max). UI components
+// stringify when binding to ``<wa-select>`` and re-parse on change.
+//
+// ``selected_model`` is intentionally absent: the model list is served via
+// the model registry (see ``getModelRegistry``) which carries additional
+// metadata (latest, retirement_date, capability flags).
+const AGENT_SETTINGS_CHOICES = {
+    permission_mode: [
+        {
+            value: PERMISSION_MODE.DEFAULT,
+            label: 'Default',
+            description: 'Prompts for permission on first use of each tool',
+        },
+        {
+            value: PERMISSION_MODE.ACCEPT_EDITS,
+            label: 'Accept Edits',
+            description: 'Auto-accepts file edit permissions',
+        },
+        {
+            value: PERMISSION_MODE.PLAN,
+            label: 'Plan',
+            description: 'Read-only: Claude can analyze but not modify files',
+        },
+        {
+            value: PERMISSION_MODE.DONT_ASK,
+            label: "Don't Ask",
+            description: 'Auto-denies tools unless pre-approved via permission rules',
+        },
+        {
+            value: PERMISSION_MODE.BYPASS,
+            label: 'Bypass permissions',
+            description: 'Skips all permission prompts',
+        },
+    ],
+    effort: [
+        { value: EFFORT.LOW,    label: 'Low',    display_label: 'Low effort' },
+        { value: EFFORT.MEDIUM, label: 'Medium', display_label: 'Medium effort' },
+        { value: EFFORT.HIGH,   label: 'High',   display_label: 'High effort' },
+        { value: EFFORT.X_HIGH, label: 'xHigh',  display_label: 'xHigh effort' },
+        { value: EFFORT.MAX,    label: 'Max',    display_label: 'Max effort' },
+    ],
+    thinking_enabled: [
+        { value: true,  label: 'Adaptive', display_label: 'Thinking' },
+        { value: false, label: 'Disabled', display_label: 'No thinking' },
+    ],
+    claude_in_chrome: [
+        { value: true,  label: 'Enabled',  display_label: 'Chrome MCP' },
+        { value: false, label: 'Disabled', display_label: 'No Chrome MCP' },
+    ],
+    context_max: [
+        { value: CONTEXT_MAX.DEFAULT,  label: '200K' },
+        { value: CONTEXT_MAX.EXTENDED, label: '1M' },
+    ],
 }
 
 export class ClaudeCodeHelpers extends BaseProviderHelpers {
@@ -59,6 +121,10 @@ export class ClaudeCodeHelpers extends BaseProviderHelpers {
 
     getAgentSettingsCategories() {
         return useClaudeCodeStore().agentSettingsCategories
+    }
+
+    getAgentSettingsChoices() {
+        return AGENT_SETTINGS_CHOICES
     }
 
     // ─── Model registry & capability flags ───────────────────────────────

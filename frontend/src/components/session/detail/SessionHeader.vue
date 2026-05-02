@@ -3,7 +3,8 @@ import { ref, computed, watch, inject } from 'vue'
 import { useDataStore } from '../../../stores/data'
 import { useSettingsStore } from '../../../stores/settings'
 import { formatDate } from '../../../utils/date'
-import { CONTEXT_MAX_LABELS, PROCESS_STATE, PROCESS_STATE_COLORS, PROCESS_STATE_NAMES } from '../../../constants'
+import { PROCESS_STATE, PROCESS_STATE_COLORS, PROCESS_STATE_NAMES } from '../../../constants'
+import { claudeCodeHelpers } from '../../../providers/claude_code/helpers'
 import { stopSubagent } from '../../../composables/useWebSocket'
 import { stopSessionProcess } from '../../../composables/useStopSessionProcess'
 import ProjectBadge from '../../project/ProjectBadge.vue'
@@ -99,7 +100,7 @@ const contextUsagePercentage = computed(() => {
 
 // Tooltip text for context usage ring
 const contextUsageTooltip = computed(() => {
-    const label = CONTEXT_MAX_LABELS[contextMax.value] || `${Math.round(contextMax.value / 1000)}K`
+    const label = claudeCodeHelpers.getChoiceLabel('context_max', contextMax.value) || `${Math.round(contextMax.value / 1000)}K`
     return `Context window usage (${label} max)`
 })
 
