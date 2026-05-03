@@ -1,13 +1,14 @@
 """
 CLI entry point for the TWICC application.
 
-Handles Django setup, migrations, and starts the server. All Claude Code
-provider tasks (sync, watcher, compute, auth, usage, statuspage, slash
-commands, search index, model retirement, cron restart, process manager)
-are owned by ``ClaudeCodeOrchestrator``. The CLI manages the HTTP server
-lifecycle and the cross-provider tasks: PyPI version check and the
-OpenRouter price sync (one fetch shared across every provider that has
-declared an ``OPENROUTER_MODEL_PREFIX``).
+Handles Django setup, migrations, and starts the server. Each provider's
+own background tasks (sync, watcher, compute, auth, usage, ...) are
+owned by its :class:`BaseOrchestrator` subclass; the CLI just iterates
+the :class:`OrchestratorRegistry` to start, signal, and shut them down.
+
+The CLI itself owns the cross-provider tasks: the PyPI version check
+and the OpenRouter price sync (one fetch shared across every provider
+that has declared an ``OPENROUTER_MODEL_PREFIX``).
 
 Used by:
 - ``uvx twicc`` / ``pip install twicc && twicc``  (via project.scripts)
@@ -59,8 +60,8 @@ logging.getLogger("twicc").addHandler(_startup_console)
 # Now we can import Django-dependent modules
 from django.core.management import call_command  # noqa: E402
 
+from twicc.orchestrator import get_orchestrator_registry  # noqa: E402
 from twicc.pricing_task import start_price_sync_task, sync_all_providers  # noqa: E402
-from twicc.providers.claude_code.orchestrator import ClaudeCodeOrchestrator  # noqa: E402
 from twicc.version_check_task import start_version_check_task, stop_version_check_task  # noqa: E402
 
 
@@ -91,9 +92,10 @@ async def run_server(port: int):
     # ``OPENROUTER_MODEL_PREFIX``; failure here is logged and non-fatal.
     await sync_all_providers()
 
-    # Claude Code provider owns its own tasks
-    claude_code = ClaudeCodeOrchestrator()
-    await claude_code.start(shutdown_event)
+    # Per-provider orchestrators (started in parallel; each one is
+    # responsible for its own task graph and dependency ordering).
+    orchestrators = get_orchestrator_registry()
+    await orchestrators.start_all(shutdown_event)
 
     # Cross-provider periodic tasks
     price_sync_task = asyncio.create_task(start_price_sync_task(shutdown_event))
@@ -113,7 +115,9 @@ async def run_server(port: int):
 
     def handle_signal(signum, frame):
         logger.info("Received signal %s, initiating shutdown...", signum)
-        claude_code.request_stop()
+        # Cooperative stop for any provider's blocking sync threads
+        # (async tasks listen for ``shutdown_event`` directly).
+        orchestrators.request_thread_stop_all()
         shutdown_event.set()
         server.should_exit = True
 
@@ -135,8 +139,8 @@ async def run_server(port: int):
         stop_version_check_task()
         await _cancel_task(version_check_task, "Version check task")
 
-        # Then let the Claude Code provider tear down its own tasks
-        await claude_code.shutdown()
+        # Then let every provider tear down its own tasks (in parallel).
+        await orchestrators.shutdown_all()
 
         logger.info("Server shutdown complete")
 

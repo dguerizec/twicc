@@ -22,6 +22,8 @@ import threading
 
 from asgiref.sync import sync_to_async
 
+from twicc.core.enums import Provider
+from twicc.orchestrator import BaseOrchestrator
 from twicc.providers.claude_code.agent import get_claude_code_agent_manager
 from twicc.providers.claude_code.agent.original_file_cache import (
     start_cleanup_task as start_original_file_cache_cleanup,
@@ -89,7 +91,7 @@ def _on_watcher_done(task: asyncio.Task) -> None:
         )
 
 
-class ClaudeCodeOrchestrator:
+class ClaudeCodeOrchestrator(BaseOrchestrator):
     """Lifecycle manager for Claude Code provider tasks.
 
     Task dependency graph (started by ``start()``):
@@ -108,7 +110,10 @@ class ClaudeCodeOrchestrator:
     background compute task starts.
     """
 
+    provider = Provider.CLAUDE_CODE
+
     def __init__(self) -> None:
+        super().__init__()
         # Cooperative stop event for the initial sync thread
         self._sync_stop_event = threading.Event()
         # Set by the host (CLI) when the server begins shutting down
@@ -135,11 +140,13 @@ class ClaudeCodeOrchestrator:
         self._search_indexing_task: asyncio.Task | None = None
         self._cron_restart_task: asyncio.Task | None = None
 
-    def request_stop(self) -> None:
+    def request_thread_stop(self) -> None:
         """Signal the cooperative stop event for the initial sync thread.
 
         Called from the CLI signal handler so that ``sync_all`` can return
-        promptly even mid-iteration.
+        promptly even mid-iteration. Async tasks listen for the shared
+        ``shutdown_event`` passed to :meth:`start`; this hook is for the
+        blocking thread only.
         """
         self._sync_stop_event.set()
 
