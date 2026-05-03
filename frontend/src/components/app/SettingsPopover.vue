@@ -888,7 +888,7 @@ function onChangelogClose() {
                             @change="onTmuxChange"
                             size="small"
                         >Enabled</wa-switch>
-                        <span class="setting-group-hint">Tmux sessions are destroyed when Claude sessions are archived.</span>
+                        <span class="setting-group-hint">Tmux sessions are destroyed when their agent session is archived.</span>
                     </div>
                     <div class="setting-group" v-if="terminalUseTmux">
                         <label class="setting-group-label">Tmux config file <wa-icon name="cloud" class="synced-icon"></wa-icon></label>

@@ -1577,9 +1577,9 @@ defineExpose({
                     </div>
                 </wa-callout>
             </div>
-            <!-- Pending request form (replaces MessageInput when Claude requests approval or asks a question).
-                 When multiple parallel requests are pending, the oldest is shown and a counter
-                 is displayed for the others. -->
+            <!-- Pending request form (replaces MessageInput when the agent requests approval
+                 or asks a question). When multiple parallel requests are pending, the oldest
+                 is shown and a counter is displayed for the others. -->
             <PendingRequestForm
                 v-else-if="hasPendingRequest"
                 :session-id="sessionId"
