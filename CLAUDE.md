@@ -198,6 +198,10 @@ Visual items are stabilized across recomputes: when `recomputeVisualItems` runs,
 
 Direct `JSON.parse(item.content)` is forbidden — it bypasses the cache and wastes CPU on repeated parsing. Direct access to the internal `_parsedContent` field is also forbidden — always use the functions above.
 
+### Agent Settings — Closed Bundle
+
+The six per-session agent setting fields (`selected_model`, `effort`, `thinking_enabled`, `permission_mode`, `context_max`, `claude_in_chrome`) are a **closed bundle** shared across every provider. The bundle, the `Session` row, the WS payload, and the localStorage synced settings all carry the same shape regardless of which provider owns the session. Each provider declares which fields it actually uses via `getAgentSettingsCategories()` in `frontend/src/providers/baseHelpers.js` (and its overrides); fields not listed are silently ignored by that provider. New provider-specific session-level flags follow the same pattern: add the column to `Session`, classify it in the owning provider's categories — never split off into a per-provider side table. See the matching comment on `Session.claude_in_chrome` in `src/twicc/core/models.py` for the backend rationale.
+
 ## Web Awesome Components
 
 **Version:** Web Awesome 3.1. Since version 3, **native** browser events are no longer prefixed with `wa-` (e.g., `@click`, `@focus`, `@input`). However, **custom** Web Awesome events still use the `wa-` prefix (e.g., `@wa-show`, `@wa-hide`, `@wa-after-show`).

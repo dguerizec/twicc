@@ -152,6 +152,20 @@ export class BaseProviderHelpers {
 
     // ─── Per-session agent settings classification ───────────────────────
     //
+    // The agent settings bundle is a CLOSED set of fields shared by every
+    // provider: ``selected_model``, ``effort``, ``thinking_enabled``,
+    // ``permission_mode``, ``context_max``, ``claude_in_chrome``. The
+    // bundle — and the matching ``Session`` row, the WS payload, and the
+    // localStorage synced settings — has the same shape regardless of
+    // which provider owns the running session. Each provider declares
+    // which fields it actually uses by listing them in
+    // ``getAgentSettingsCategories``; every other field is silently
+    // ignored by that provider. New provider-specific session-level flags
+    // follow the same pattern: add the column to ``Session`` and classify
+    // it in the owning provider's categories — never split off into a
+    // per-provider side table. See the matching backend comment on
+    // ``Session.claude_in_chrome`` in ``src/twicc/core/models.py``.
+    //
     // Each provider classifies its per-session agent settings (model,
     // effort, etc.) into ``live`` / ``idle`` / ``startup`` buckets so the
     // agent manager knows when a change can be applied to a running
