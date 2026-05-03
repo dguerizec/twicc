@@ -9,7 +9,6 @@ import { COLOR_SCHEME } from '../constants'
 import { useCommandRegistry } from '../composables/useCommandRegistry'
 import { useStartupPolling } from '../composables/useStartupPolling'
 import { useTerminalCommandStore } from '../stores/terminalCommand'
-import { useClaudeCodeStore } from '../providers/claude_code/store'
 import { getRegisteredProviders, getProviderHelpers, getProviderStore } from '../providers'
 import { toWorkspaceProjectId } from '../utils/workspaceIds'
 import { splitProjectsByPriority } from '../utils/projectSort'
@@ -32,7 +31,6 @@ import CodeCommentsIndicator from '../components/ui/CodeCommentsIndicator.vue'
 const route = useRoute()
 const router = useRouter()
 const store = useDataStore()
-const claudeCodeStore = useClaudeCodeStore()
 const settingsStore = useSettingsStore()
 const { registerCommands, unregisterCommands } = useCommandRegistry()
 

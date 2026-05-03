@@ -568,10 +568,9 @@ class ClaudeCodeHelpers(BaseProviderHelpers):
             message["active_crons"] = crons
 
     def get_bootstrap_data(self) -> dict:
-        from .agent_settings_presets import read_agent_settings_presets
-
+        # ``agent_settings_presets`` is contributed by the base class for
+        # every provider — only Claude Code-specific extras are added here.
         return super().get_bootstrap_data() | {
-            "agent_settings_presets": read_agent_settings_presets(),
             "agent_settings_categories": {
                 category.value: keys
                 for category, keys in self.AGENT_SETTINGS_CATEGORIES.items()

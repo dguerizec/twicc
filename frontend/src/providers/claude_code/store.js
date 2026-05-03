@@ -4,23 +4,6 @@ import { defineStore, acceptHMRUpdate } from 'pinia'
 import { ref } from 'vue'
 import { CONTEXT_MAX, EFFORT, PERMISSION_MODE } from './constants'
 
-const SETTINGS_PRESET_FIELDS = [
-    'model',
-    'context_max',
-    'effort',
-    'thinking',
-    'permission_mode',
-    'claude_in_chrome',
-]
-
-function normalizeSettingsPreset(raw) {
-    const preset = { name: typeof raw?.name === 'string' ? raw.name : '' }
-    for (const field of SETTINGS_PRESET_FIELDS) {
-        preset[field] = raw && field in raw ? raw[field] : null
-    }
-    return preset
-}
-
 export const useClaudeCodeStore = defineStore('claudeCode', () => {
     // ─── Auth ────────────────────────────────────────────────────────────
 
@@ -53,75 +36,6 @@ export const useClaudeCodeStore = defineStore('claudeCode', () => {
 
     function setUsage(success, reason, raw, computed) {
         usage.value = { success, reason, raw, computed }
-    }
-
-    // ─── Settings presets ────────────────────────────────────────────────
-
-    const settingsPresets = ref([])
-    const settingsPresetsInitialized = ref(false)
-
-    function applySettingsPresetsConfig(config) {
-        const list = Array.isArray(config?.presets) ? config.presets : []
-        settingsPresets.value = list.map(normalizeSettingsPreset)
-        settingsPresetsInitialized.value = true
-    }
-
-    async function _sendSettingsPresetsConfig() {
-        // Lazy import to avoid the circular dep with the sibling ws.js module
-        // (ws.js eagerly imports this store; if we eagerly imported ws.js the
-        // module evaluation order would deadlock).
-        const { sendUpdateSettingsPresets } = await import('./ws')
-        sendUpdateSettingsPresets({ presets: settingsPresets.value })
-    }
-
-    function findSettingsPresetIndexByName(name, excludeIndex = null) {
-        const target = name.trim().toLowerCase()
-        return settingsPresets.value.findIndex((p, i) => i !== excludeIndex && p.name.trim().toLowerCase() === target)
-    }
-
-    function findSettingsPresetByName(name, excludeIndex = null) {
-        const idx = findSettingsPresetIndexByName(name, excludeIndex)
-        return idx === -1 ? null : settingsPresets.value[idx]
-    }
-
-    function addSettingsPreset(preset) {
-        settingsPresets.value.push(normalizeSettingsPreset(preset))
-        _sendSettingsPresetsConfig()
-    }
-
-    function updateSettingsPreset(index, preset) {
-        if (index < 0 || index >= settingsPresets.value.length) return
-        settingsPresets.value.splice(index, 1, normalizeSettingsPreset(preset))
-        _sendSettingsPresetsConfig()
-    }
-
-    function deleteSettingsPreset(index) {
-        if (index < 0 || index >= settingsPresets.value.length) return
-        settingsPresets.value.splice(index, 1)
-        _sendSettingsPresetsConfig()
-    }
-
-    function duplicateSettingsPreset(index) {
-        if (index < 0 || index >= settingsPresets.value.length) return
-        const source = settingsPresets.value[index]
-        const baseName = `${source.name} (copy)`
-        let candidate = baseName
-        let n = 2
-        while (findSettingsPresetIndexByName(candidate) !== -1) {
-            candidate = `${baseName} ${n}`
-            n += 1
-        }
-        const copy = normalizeSettingsPreset({ ...source, name: candidate })
-        settingsPresets.value.splice(index + 1, 0, copy)
-        _sendSettingsPresetsConfig()
-    }
-
-    function reorderSettingsPreset(index, direction) {
-        const target = index + direction
-        if (target < 0 || target >= settingsPresets.value.length) return
-        const [moved] = settingsPresets.value.splice(index, 1)
-        settingsPresets.value.splice(target, 0, moved)
-        _sendSettingsPresetsConfig()
     }
 
     // ─── Per-session agent settings defaults ─────────────────────────────
@@ -232,16 +146,6 @@ export const useClaudeCodeStore = defineStore('claudeCode', () => {
         setAnthropicStatus,
         usage,
         setUsage,
-        settingsPresets,
-        settingsPresetsInitialized,
-        applySettingsPresetsConfig,
-        findSettingsPresetByName,
-        findSettingsPresetIndexByName,
-        addSettingsPreset,
-        updateSettingsPreset,
-        deleteSettingsPreset,
-        duplicateSettingsPreset,
-        reorderSettingsPreset,
         defaultPermissionMode,
         defaultModel,
         defaultContextMax,

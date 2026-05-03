@@ -1,5 +1,6 @@
 import { ref, computed, watch, toValue } from 'vue'
 import { useDataStore } from '../stores/data'
+import { useAgentSettingsPresetsStore } from '../stores/agentSettingsPresets'
 import { getProviderHelpers, getProviderStore } from '../providers'
 
 // Sentinel value used by the popover selects to encode the "follow global
@@ -135,12 +136,12 @@ export function useSessionAgentSettings(sessionIdSource) {
     })
 
     // ─── Presets ─────────────────────────────────────────────────────────────
-    // Sourced from the session's provider — each provider that supports
-    // presets exposes ``settingsPresets`` on its store; others get an empty
-    // array and the dropdown's "Presets" group renders nothing. The
-    // "Manage…" button toggles ``presetsDialogOpen``; the actual dialog
-    // component is exposed by ``providerHelpers.getManagePresetsComponent``.
-    const presets = computed(() => providerStore.value?.settingsPresets ?? [])
+    // Sourced from the cross-provider presets store, keyed by the session's
+    // provider. The on-disk format is shared, only the file path varies.
+    // The "Manage…" button toggles ``presetsDialogOpen`` to open the
+    // ``AgentSettingsPresetsDialog`` for the current provider.
+    const presetsStore = useAgentSettingsPresetsStore()
+    const presets = computed(() => presetsStore.getPresets(session.value?.provider))
     const hasPresets = computed(() => presets.value.length > 0)
     const presetsDialogOpen = ref(false)
 

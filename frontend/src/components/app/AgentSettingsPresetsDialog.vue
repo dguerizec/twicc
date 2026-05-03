@@ -7,15 +7,14 @@
 // (``getFieldLabel``, ``getFieldChoices``, ``getModelSelectGroups``) so a
 // new provider that ships its own catalog needs zero template changes here.
 //
-// Preset persistence and CRUD live on each provider's store —
-// ``settingsPresets`` / ``addSettingsPreset`` / ``updateSettingsPreset`` /
-// ``deleteSettingsPreset`` / ``duplicateSettingsPreset`` /
-// ``reorderSettingsPreset`` / ``findSettingsPresetIndexByName``. The dialog
-// expects this contract; a provider that doesn't expose it must not surface
-// the "Manage presets" entry that opens this dialog.
+// Preset persistence is cross-provider: the dialog reads/writes through the
+// shared ``useAgentSettingsPresetsStore`` (one keyed bucket per provider),
+// not through each provider's own store. The on-disk format is the same
+// for every provider — only the file path varies.
 
 import { computed, nextTick, ref, watch } from 'vue'
-import { getProviderHelpers, getProviderStore } from '../../providers'
+import { getProviderHelpers } from '../../providers'
+import { useAgentSettingsPresetsStore } from '../../stores/agentSettingsPresets'
 import { formatPresetSummary } from '../../utils/presetFormat'
 import { DEFAULT_SENTINEL } from '../../composables/useSessionAgentSettings'
 
@@ -26,7 +25,7 @@ const props = defineProps({
 const emit = defineEmits(['update:open'])
 
 const providerHelpers = computed(() => getProviderHelpers(props.provider))
-const providerStore = computed(() => getProviderStore(props.provider))
+const presetsStore = useAgentSettingsPresetsStore()
 const providerLabel = computed(() => providerHelpers.value?.constructor?.label ?? 'Agent')
 
 // Preset records use historical key names (``model``, ``thinking``) while
@@ -52,7 +51,7 @@ const dialogRef = ref(null)
 const nameInputRef = ref(null)
 const submitButtonRef = ref(null)
 
-const presets = computed(() => providerStore.value?.settingsPresets ?? [])
+const presets = computed(() => presetsStore.getPresets(props.provider))
 
 const dialogLabel = computed(() => {
     if (view.value === 'list') return `${providerLabel.value} settings presets`
@@ -131,15 +130,15 @@ watch(
 )
 
 function handleDelete(index) {
-    providerStore.value?.deleteSettingsPreset(index)
+    presetsStore.remove(props.provider, index)
 }
 
 function handleDuplicate(index) {
-    providerStore.value?.duplicateSettingsPreset(index)
+    presetsStore.duplicate(props.provider, index)
 }
 
 function handleReorder(index, direction) {
-    providerStore.value?.reorderSettingsPreset(index, direction)
+    presetsStore.reorder(props.provider, index, direction)
 }
 
 function closeDialog() {
@@ -189,25 +188,20 @@ async function focusNameInput() {
 
 function handleSave() {
     errorMessage.value = ''
-    const store = providerStore.value
-    if (!store) {
-        errorMessage.value = 'Provider unavailable'
-        return
-    }
     const trimmedName = formData.value.name.trim()
     if (!trimmedName) {
         errorMessage.value = 'Name is required'
         return
     }
-    if (store.findSettingsPresetIndexByName(trimmedName, editIndex.value) !== -1) {
+    if (presetsStore.findIndexByName(props.provider, trimmedName, editIndex.value) !== -1) {
         errorMessage.value = 'A preset with this name already exists'
         return
     }
     const payload = formDataToPreset({ ...formData.value, name: trimmedName })
     if (editIndex.value === null) {
-        store.addSettingsPreset(payload)
+        presetsStore.add(props.provider, payload)
     } else {
-        store.updateSettingsPreset(editIndex.value, payload)
+        presetsStore.update(props.provider, editIndex.value, payload)
     }
     view.value = 'list'
 }

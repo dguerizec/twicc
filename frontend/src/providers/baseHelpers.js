@@ -93,6 +93,45 @@ export class BaseProviderHelpers {
         return null
     }
 
+    // ─── Service status surface (Statuspage / health) ───────────────────
+    //
+    // Providers whose backend service publishes a public status (e.g.
+    // Anthropic's statuspage for Claude Code) opt in by returning a
+    // reactive getter from ``getServiceStatus`` and a display descriptor
+    // from ``getServiceStatusDisplay``. The Settings popover footer
+    // rotates across providers that expose one (same pattern as the
+    // sidebar usage quota rotation).
+
+    /**
+     * Getter function returning the current service status string for
+     * this provider, or ``null`` (still unknown). Returned as a getter
+     * (not a ``ref``) so callers can hand it straight to ``watch`` /
+     * ``computed`` while keeping reactivity across the helpers boundary.
+     * Default: ``null`` — provider has no service status surface.
+     */
+    getServiceStatus() {
+        return null
+    }
+
+    /**
+     * Render-side descriptor for a status value. Returns
+     * ``{ label, modifier, url, tooltip, shortLabel }`` or ``null`` when
+     * the provider doesn't expose a status surface or doesn't recognise
+     * the value.
+     *
+     * - ``label``: human-readable status name (e.g. "Operational")
+     * - ``modifier``: one of ``ok`` / ``warning`` / ``error`` / ``info``,
+     *   used by the footer to colour the dot
+     * - ``url``: external link to the public status page
+     * - ``tooltip``: hover text (e.g. "Claude code status on Anthropic's side")
+     * - ``shortLabel``: 2–4 char compact label used in the footer ("CC", "CX")
+     *
+     * Default: ``null``.
+     */
+    getServiceStatusDisplay(/* status */) {
+        return null
+    }
+
     // ─── Per-provider default values for agent settings ──────────────────
     //
     // Generic surfaces that need to read or write the provider-scoped

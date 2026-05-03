@@ -192,6 +192,22 @@ class BaseProviderHelpers:
     DEFAULT_FAMILY_PRICES: ClassVar[dict[str, FamilyPrices]] = {}
 
     # ------------------------------------------------------------------
+    # Per-provider data files
+    # ------------------------------------------------------------------
+
+    def get_settings_presets_path(self):
+        """Return the per-provider agent settings presets file path.
+
+        File layout: ``<data_dir>/<provider>-settings-presets.json``. The
+        path is fully derived from the provider key — every provider gets
+        its own file with no override needed. Used by the agent settings
+        presets read/write functions of each provider.
+        """
+        from twicc.paths import get_data_dir
+
+        return get_data_dir() / f"{self.provider.value}-settings-presets.json"
+
+    # ------------------------------------------------------------------
     # Pricing
     # ------------------------------------------------------------------
 
@@ -415,22 +431,36 @@ class BaseProviderHelpers:
     def get_bootstrap_data(self) -> dict:
         """Return provider-specific keys merged into the ``/api/bootstrap/`` payload.
 
-        Default implementation contributes the cross-provider usage block
-        when this provider tracks usage (``USAGE_SYNC_INTERVAL`` is set):
+        Default implementation contributes:
 
-        - ``tracks_usage``: ``True`` when the provider has a usage sync
-          loop, so the front knows to allocate a slot for it even before
-          a snapshot exists (auth not configured yet, first fetch still
-          pending, etc.).
-        - ``usage``: the latest serialised ``UsageSnapshot`` for this
-          provider, or ``None`` when none exists yet. Mirrors the inner
-          shape of the ``usage_updated`` WS payload.
+        - ``agent_settings_presets`` (cross-provider): the persisted
+          presets file for this provider, read via
+          :func:`twicc.agent_settings_presets.read_agent_settings_presets`.
+          Always present — every provider has its own file (even if
+          empty), so the front can render the presets dialog without
+          guarding on the field's existence.
+        - The usage block (``tracks_usage`` / ``usage``) when this
+          provider declares a ``USAGE_SYNC_INTERVAL``:
+
+          - ``tracks_usage``: ``True`` when the provider has a usage sync
+            loop, so the front knows to allocate a slot for it even before
+            a snapshot exists (auth not configured yet, first fetch still
+            pending, etc.).
+          - ``usage``: the latest serialised ``UsageSnapshot`` for this
+            provider, or ``None`` when none exists yet. Mirrors the inner
+            shape of the ``usage_updated`` WS payload.
 
         Subclasses with extra keys override and merge:
         ``super().get_bootstrap_data() | {"my_key": ...}``.
         """
+        from twicc.agent_settings_presets import read_agent_settings_presets
+
+        data: dict = {
+            "agent_settings_presets": read_agent_settings_presets(self.provider),
+        }
+
         if self.USAGE_SYNC_INTERVAL is None:
-            return {}
+            return data
 
         from twicc.core.models import UsageSnapshot
         from twicc.core.serializers import serialize_usage_snapshot
@@ -442,7 +472,7 @@ class BaseProviderHelpers:
             .filter(provider=self.provider.value)
             .first()  # ordered by -fetched_at
         )
-        return {
+        return data | {
             "tracks_usage": True,
             "usage": serialize_usage_snapshot(
                 snapshot,

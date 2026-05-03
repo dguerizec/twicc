@@ -291,6 +291,20 @@ export function sendMessageSnippetsConfig(config) {
 }
 
 /**
+ * Push a provider's agent settings presets config to the backend for
+ * persistence. The backend writes it to the per-provider presets file
+ * (resolved via ``BaseProviderHelpers.get_settings_presets_path``) and
+ * broadcasts ``agent_settings_presets_updated`` to every connected
+ * client.
+ * @param {string} provider - Provider wire key (e.g. ``"claude_code"``)
+ * @param {Object} config - ``{ presets: [...] }``
+ * @returns {boolean} True if message was sent, false if not connected.
+ */
+export function sendUpdateAgentSettingsPresets(provider, config) {
+    return sendWsMessage({ type: 'update_agent_settings_presets', provider, config })
+}
+
+/**
  * Acknowledge that the user has seen the forced changelog for a version.
  * @param {string} version - The version that was displayed
  * @returns {boolean} - True if message was sent
@@ -758,6 +772,12 @@ export function useWebSocket() {
                 break
             }
             case 'usage_dump_path_validated':
+                // Intentionally provider-agnostic: this is a write-target validation
+                // (directory exists/writable). Unlike a read file (which has a
+                // provider-specific format and lives in ``claude_code:`` handlers),
+                // a dump just writes the raw payload back, so the check has no
+                // provider-specific content to verify. Do not move under a provider
+                // handler.
                 if (_usageDumpPathValidateResolve) {
                     _usageDumpPathValidateResolve({ valid: msg.valid, message: msg.message })
                     _usageDumpPathValidateResolve = null
@@ -796,6 +816,16 @@ export function useWebSocket() {
                 import('../stores/messageSnippets').then(({ useMessageSnippetsStore }) => {
                     useMessageSnippetsStore().applyConfig(msg.config)
                 })
+                break
+            case 'agent_settings_presets_updated':
+                // Cross-provider preset update — the on-disk format is identical
+                // for every provider, the ``provider`` field selects the bucket
+                // in the per-provider keyed store. Mirrors ``usage_updated``.
+                if (msg.provider) {
+                    import('../stores/agentSettingsPresets').then(({ useAgentSettingsPresetsStore }) => {
+                        useAgentSettingsPresetsStore().applyConfig(msg.provider, msg.config)
+                    })
+                }
                 break
             case 'terminal_list':
                 import('../stores/terminalTabs').then(({ useTerminalTabsStore }) => {

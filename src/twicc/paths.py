@@ -105,26 +105,35 @@ def get_workspaces_path() -> Path:
     return get_data_dir() / "workspaces.json"
 
 
-def get_agent_settings_presets_path() -> Path:
-    return get_data_dir() / "claude_code-settings-presets.json"
-
-
 def path_to_project_id(path: str) -> str:
-    """Convert a filesystem path to a Claude Code project ID.
+    """Convert a filesystem path to a TwiCC project ID.
 
-    Pure function: replaces each non-alphanumeric character with a dash,
-    matching Claude Code's convention for naming subfolders of
-    ~/.claude/projects/. The caller is responsible for resolving and
-    normalizing the path beforehand (e.g. via os.path.realpath) if a
+    A project in TwiCC is a working directory; its ID is derived from the
+    directory path by replacing every non-alphanumeric character with a
+    dash. The convention is inherited from Claude Code (which names its
+    own subfolders of ``~/.claude/projects/`` the same way), but TwiCC
+    reuses it as the cross-provider project key — multiple providers can
+    run inside the same project, sharing the same ID.
+
+    Pure function: the caller is responsible for resolving and
+    normalizing the path beforehand (e.g. via ``os.path.realpath``) if a
     canonical ID is required.
     """
     return re.sub(r'[^a-zA-Z0-9]', '-', path)
 
 
 def _migrate_legacy_data_files() -> None:
-    """Rename legacy data files left over from older TwiCC versions."""
+    """Rename legacy data files left over from older TwiCC versions.
+
+    The agent settings presets file used to live at
+    ``<data_dir>/claude-settings-presets.json`` (no provider prefix). The
+    cross-provider naming scheme is now ``<data_dir>/<provider>-settings-presets.json``,
+    owned by ``BaseProviderHelpers.get_settings_presets_path``. This
+    migration is Claude Code-specific by design: it predates the
+    multi-provider split and only ever targeted the Claude Code file.
+    """
     legacy_presets = get_data_dir() / "claude-settings-presets.json"
-    new_presets = get_agent_settings_presets_path()
+    new_presets = get_data_dir() / "claude_code-settings-presets.json"
     if legacy_presets.exists() and not new_presets.exists():
         legacy_presets.rename(new_presets)
 

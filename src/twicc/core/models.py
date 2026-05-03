@@ -51,7 +51,13 @@ class PinMode(models.TextChoices):
 
 
 class Project(models.Model):
-    """A project corresponds to a subfolder of ~/.claude/projects/"""
+    """A project corresponds to a working directory.
+
+    The ``id`` is derived from the directory path via
+    :func:`twicc.paths.path_to_project_id` — a convention inherited from
+    Claude Code but reused as the cross-provider TwiCC project key.
+    Multiple providers can run inside the same project, sharing this ID.
+    """
 
     id = models.CharField(max_length=255, primary_key=True)
     directory = models.CharField(max_length=500, null=True, blank=True)  # Actual filesystem path (from session cwd)
@@ -292,7 +298,7 @@ class Session(models.Model):
     # Runtime environment fields (last known values from JSONL)
     cwd = models.CharField(max_length=500, null=True, blank=True)  # Current working directory
     cwd_git_branch = models.CharField(max_length=255, null=True, blank=True)  # Git branch from cwd (unreliable for worktrees)
-    model = models.CharField(max_length=100, null=True, blank=True)  # Model name (e.g., "claude-opus-4-5-20251101")
+    model = models.CharField(max_length=100, null=True, blank=True)  # Last model identifier seen on the session (provider-specific format, e.g. "claude-opus-4-5-20251101" for Claude Code)
     slug = models.CharField(max_length=255, null=True, blank=True)  # Last session slug (e.g., "gleaming-marinating-twilight")
 
     # Session creation timestamp (from first JSONL item with a timestamp)
@@ -317,9 +323,11 @@ class Session(models.Model):
     # Any truthy value means the session is pinned; mode controls cross-filter visibility.
     pinned = models.CharField(max_length=16, choices=PinMode.choices, null=True, blank=True, default=None)
 
-    # Permission mode for the Claude SDK (e.g., "default", "acceptEdits", "plan", "bypassPermissions")
+    # Per-session permission mode. Values are provider-specific (e.g. "default",
+    # "acceptEdits", "plan", "bypassPermissions" for Claude Code). NULL = use global default.
     permission_mode = models.CharField(max_length=30, null=True, default=None)
-    # User-selected model for the Claude SDK (e.g., "opus", "sonnet", "haiku")
+    # Per-session selected model identifier. Values are provider-specific
+    # (e.g. "opus" / "sonnet" / "haiku" for Claude Code). NULL = use global default.
     selected_model = models.CharField(max_length=30, null=True, default=None)
     # Effort level for thinking depth (e.g., "low", "medium", "high", "max")
     effort = models.CharField(max_length=10, null=True, default=None)

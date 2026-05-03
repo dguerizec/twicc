@@ -50,6 +50,16 @@ const SYNCED_SETTING_KEYS_TO_STORE = {
     claudeCodeUsageDumpFilePath:     { setter: 'setUsageDumpFilePath',     getter: 'usageDumpFilePath' },
 }
 
+// Statuspage display map: Atlassian status values → footer rendering.
+// Matches the status strings broadcast by the backend statuspage task.
+const ANTHROPIC_STATUS_DISPLAY = {
+    operational:          { label: 'Operational',      modifier: 'ok' },
+    degraded_performance: { label: 'Degraded',         modifier: 'warning' },
+    partial_outage:       { label: 'Partial outage',   modifier: 'warning' },
+    major_outage:         { label: 'Major outage',     modifier: 'error' },
+    under_maintenance:    { label: 'Maintenance',      modifier: 'info' },
+}
+
 // Per-field choice catalogue for the Claude Code provider.
 // Field names match the snake_case wire names (``thinking_enabled``, not
 // ``thinking``); the preset shape uses ``thinking`` and is translated at
@@ -145,6 +155,20 @@ export class ClaudeCodeHelpers extends BaseProviderHelpers {
 
     getUsageExternalLink() {
         return { url: 'https://claude.ai/settings/usage', label: 'View usage on claude.ai' }
+    }
+
+    getServiceStatus() {
+        return () => useClaudeCodeStore().anthropicStatus
+    }
+
+    getServiceStatusDisplay(status) {
+        const entry = ANTHROPIC_STATUS_DISPLAY[status] ?? { label: status, modifier: 'ok' }
+        return {
+            ...entry,
+            url: 'https://status.claude.com/',
+            tooltip: "Claude code status on Anthropic's side",
+            shortLabel: 'CC',
+        }
     }
 
     getDefaultValue(field) {

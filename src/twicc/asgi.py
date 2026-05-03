@@ -23,6 +23,7 @@ from django.urls import path
 
 from twicc.agent import AgentInfo, serialize_agent_info
 from twicc.agent.registry import get_agent_manager_registry
+from twicc.agent_settings_presets import read_agent_settings_presets, write_agent_settings_presets
 from twicc.core.enums import Provider
 from twicc.providers.claude_code.ws import ClaudeCodeWSHandler
 from twicc.providers.helpers import AgentSettings, get_provider_helpers, get_provider_helpers_registry
@@ -397,6 +398,20 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
             clean_settings, version = prepare_settings_for_client(raw_settings)
             await self.send_json({"type": "synced_settings_updated", "settings": clean_settings, "version": version})
 
+        # Send agent settings presets for every registered provider (cross-provider:
+        # the on-disk format is identical, only the file path differs per provider).
+        # Necessary on every WS connect — including reconnects after the initial
+        # /api/bootstrap/ — so the client store stays in sync without re-fetching
+        # the bootstrap payload.
+        if self._should_send("agent_settings_presets_updated"):
+            for provider, _ in get_provider_helpers_registry().items():
+                presets = await sync_to_async(read_agent_settings_presets)(provider)
+                await self.send_json({
+                    "type": "agent_settings_presets_updated",
+                    "provider": provider.value,
+                    "config": presets,
+                })
+
         if self._should_send("terminal_config_updated"):
             terminal_config = await sync_to_async(read_terminal_config)()
             await self.send_json({"type": "terminal_config_updated", "config": terminal_config})
@@ -491,6 +506,9 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
 
         elif msg_type == "update_message_snippets":
             await self._handle_update_message_snippets(content)
+
+        elif msg_type == "update_agent_settings_presets":
+            await self._handle_update_agent_settings_presets(content)
 
         elif msg_type == "session_viewed":
             await self._handle_session_viewed(content)
@@ -996,7 +1014,13 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
     async def _handle_validate_usage_dump_path(self, content: dict) -> None:
         """Validate a usage dump file path and return the result to the client.
 
-        Provider-agnostic: the check is a pure filesystem validation.
+        Intentionally provider-agnostic: this validates a *write* target (the
+        directory exists and is writable). Unlike a *read* file — whose content
+        must match a provider-specific shape (e.g. the Anthropic OAuth usage
+        JSON for Claude Code, hence ``claude_code:validate_usage_file`` in the
+        provider handler) — a dump only writes the raw payload back, so the
+        check has no provider-specific content to verify. Do not move this
+        into a provider handler.
         """
         file_path = content.get("file_path", "")
         if not isinstance(file_path, str) or not file_path.strip():
@@ -1076,6 +1100,41 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
                 "type": "broadcast",
                 "data": {
                     "type": "message_snippets_updated",
+                    "config": config,
+                },
+            },
+        )
+
+    async def _handle_update_agent_settings_presets(self, content: dict) -> None:
+        """Persist a provider's agent settings presets and broadcast the change.
+
+        Expected payload:
+        ``{"type": "update_agent_settings_presets", "provider": "<key>", "config": {"presets": [...]}}``
+
+        Cross-provider: the on-disk format is identical for every provider —
+        the ``provider`` field selects the file. Mirrors the way
+        ``usage_updated`` carries its provider in the payload.
+        """
+        provider_value = content.get("provider")
+        config = content.get("config")
+        if not provider_value or not isinstance(config, dict):
+            logger.warning("Invalid update_agent_settings_presets: provider=%r, config=%r", provider_value, config)
+            return
+        try:
+            provider = Provider(provider_value)
+        except ValueError:
+            logger.warning("update_agent_settings_presets: unknown provider %r", provider_value)
+            return
+
+        await sync_to_async(write_agent_settings_presets)(provider, config)
+
+        await self.channel_layer.group_send(
+            "updates",
+            {
+                "type": "broadcast",
+                "data": {
+                    "type": "agent_settings_presets_updated",
+                    "provider": provider.value,
                     "config": config,
                 },
             },

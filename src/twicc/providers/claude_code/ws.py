@@ -30,10 +30,6 @@ from twicc.providers.claude_code.auth import (
     check_and_broadcast as check_auth_and_broadcast,
     get_auth_message_for_connection,
 )
-from twicc.providers.claude_code.agent_settings_presets import (
-    read_agent_settings_presets,
-    write_agent_settings_presets,
-)
 from twicc.providers.claude_code.statuspage_task import get_statuspage_message_for_connection
 from twicc.usage_task import get_usage_message_for_connection
 
@@ -129,10 +125,6 @@ class ClaudeCodeWSHandler:
         # Claude Code CLI authentication state
         yield await get_auth_message_for_connection()
 
-        # Claude Code agent settings presets
-        presets = await sync_to_async(read_agent_settings_presets)()
-        yield {"type": "claude_code:settings_presets_updated", "config": presets}
-
         # Anthropic statuspage status (only when not operational)
         status_msg = get_statuspage_message_for_connection()
         if status_msg is not None:
@@ -161,25 +153,11 @@ class ClaudeCodeWSHandler:
             await check_auth_and_broadcast(force=True)
             return True
 
-        if action == "update_settings_presets":
-            await self._handle_update_settings_presets(content)
-            return True
-
         if action == "validate_usage_file":
             await self._handle_validate_usage_file(content)
             return True
 
         return False
-
-    async def _handle_update_settings_presets(self, content: dict) -> None:
-        config = content.get("config")
-        if not isinstance(config, dict):
-            return
-        await sync_to_async(write_agent_settings_presets)(config)
-        await self.consumer.channel_layer.group_send("updates", {
-            "type": "broadcast",
-            "data": {"type": "claude_code:settings_presets_updated", "config": config},
-        })
 
     async def _handle_validate_usage_file(self, content: dict) -> None:
         """Validate a Claude Code usage JSON file path and reply to the client.

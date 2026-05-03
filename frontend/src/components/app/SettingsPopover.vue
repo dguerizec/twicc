@@ -261,23 +261,57 @@ const isDefaultPrompt = computed(() => titleSystemPrompt.value === SETTINGS_SCHE
 // Server info for footer
 const currentVersion = computed(() => dataStore.currentVersion)
 const latestVersion = computed(() => dataStore.latestVersion)
-const claudeCodeAnthropicStatus = computed(() => claudeCodeStore.anthropicStatus)
 
-/**
- * Status display configuration for Claude Code component statuses.
- * Maps Atlassian Statuspage status values to UI labels and CSS modifier classes.
- */
-const CLAUDE_CODE_ANTHROPIC_STATUS_DISPLAY = {
-    operational: { label: 'Operational', modifier: 'ok' },
-    degraded_performance: { label: 'Degraded', modifier: 'warning' },
-    partial_outage: { label: 'Partial outage', modifier: 'warning' },
-    major_outage: { label: 'Major outage', modifier: 'error' },
-    under_maintenance: { label: 'Maintenance', modifier: 'info' },
-}
+// ─── Service status footer rotation ──────────────────────────────────
+//
+// Providers that publish a public service status (e.g. Anthropic's
+// statuspage for Claude Code) opt in via ``helpers.getServiceStatus()``
+// and ``helpers.getServiceStatusDisplay()``. The footer rotates among
+// them every ``STATUS_ROTATION_INTERVAL_MS`` to keep the chrome compact;
+// hover pauses the rotation (mirrors the sidebar usage rotation).
 
-const claudeCodeAnthropicStatusDisplay = computed(() => {
-    return CLAUDE_CODE_ANTHROPIC_STATUS_DISPLAY[claudeCodeAnthropicStatus.value] || { label: claudeCodeAnthropicStatus.value, modifier: 'ok' }
+const STATUS_ROTATION_INTERVAL_MS = 15000
+
+const _statusAwareProviders = getRegisteredProviders()
+    .map(provider => ({ provider, helpers: getProviderHelpers(provider), getter: getProviderHelpers(provider).getServiceStatus() }))
+    .filter(({ getter }) => getter !== null)
+
+const currentStatusProviderIndex = ref(0)
+
+const currentStatusProvider = computed(() => {
+    if (_statusAwareProviders.length === 0) return null
+    return _statusAwareProviders[currentStatusProviderIndex.value % _statusAwareProviders.length]
 })
+
+const currentStatusDisplay = computed(() => {
+    const entry = currentStatusProvider.value
+    if (!entry) return null
+    const status = entry.getter()
+    if (!status) return null
+    return entry.helpers.getServiceStatusDisplay(status)
+})
+
+const statusFooterId = useId()
+const statusFooterRef = ref(null)
+
+let _statusRotationTimer = null
+function _startStatusRotation() {
+    if (_statusRotationTimer) return
+    if (_statusAwareProviders.length <= 1) return
+    _statusRotationTimer = setInterval(() => {
+        if (statusFooterRef.value && statusFooterRef.value.matches(':hover')) return
+        currentStatusProviderIndex.value =
+            (currentStatusProviderIndex.value + 1) % _statusAwareProviders.length
+    }, STATUS_ROTATION_INTERVAL_MS)
+}
+function _stopStatusRotation() {
+    if (_statusRotationTimer) {
+        clearInterval(_statusRotationTimer)
+        _statusRotationTimer = null
+    }
+}
+_startStatusRotation()
+onBeforeUnmount(_stopStatusRotation)
 
 // Display mode options for the select
 const displayModeOptions = [
@@ -1038,17 +1072,19 @@ function onChangelogClose() {
             </a>
             ·
             <a
-                href="https://status.claude.com/"
+                v-if="currentStatusDisplay"
+                ref="statusFooterRef"
+                :href="currentStatusDisplay.url"
                 target="_blank"
                 rel="noopener"
                 class="settings-footer-status"
-                :class="`settings-footer-status--${claudeCodeAnthropicStatusDisplay.modifier}`"
-                id="claude-status"
+                :class="`settings-footer-status--${currentStatusDisplay.modifier}`"
+                :id="statusFooterId"
             >
                 <span class="status-dot"></span>
-                CC: {{ claudeCodeAnthropicStatusDisplay.label }}
+                {{ currentStatusDisplay.shortLabel }}: {{ currentStatusDisplay.label }}
             </a>
-            <AppTooltip for="claude-status">Claude code status on Anthropic's side</AppTooltip>
+            <AppTooltip v-if="currentStatusDisplay" :for="statusFooterId">{{ currentStatusDisplay.tooltip }}</AppTooltip>
             <wa-button
                 v-if="showLogout"
                 :id="logoutButtonId"

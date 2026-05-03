@@ -121,7 +121,14 @@ if (!authStore.needsLogin) {
             // providers without one of those concerns simply won't expose the
             // corresponding setter.
             const { getProviderStore } = await import('./providers')
+            const { useAgentSettingsPresetsStore } = await import('./stores/agentSettingsPresets')
+            const presetsStore = useAgentSettingsPresetsStore()
             for (const [provider, providerData] of Object.entries(providers ?? {})) {
+                // Cross-provider: presets land in the shared keyed store, not on
+                // each provider's own store (the on-disk format is identical).
+                if (providerData?.agent_settings_presets !== undefined) {
+                    presetsStore.applyConfig(provider, providerData.agent_settings_presets)
+                }
                 const providerStore = getProviderStore(provider)
                 if (!providerStore) continue
                 if (providerData?.agent_settings_categories) {
@@ -130,7 +137,6 @@ if (!authStore.needsLogin) {
                 if (providerData?.model_registry) {
                     providerStore.setModelRegistry?.(providerData.model_registry)
                 }
-                providerStore.applySettingsPresetsConfig?.(providerData?.agent_settings_presets)
             }
         } else {
             bootstrapFailed = true

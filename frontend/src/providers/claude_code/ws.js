@@ -39,17 +39,6 @@ export function respondToPendingRequest(sessionId, requestId, responseData) {
     })
 }
 
-/**
- * Push the Claude settings presets config to the backend for persistence.
- * The backend will broadcast the updated config to all connected clients
- * via ``claude_code:settings_presets_updated``.
- * @param {Object} config - The Claude settings presets config
- * @returns {boolean} - True if message was sent, false if not connected
- */
-export function sendUpdateSettingsPresets(config) {
-    return sendWsMessage({ type: 'claude_code:update_settings_presets', config })
-}
-
 // Pending resolve callback for the usage file validation request/response
 // round-trip (claude_code:validate_usage_file → claude_code:usage_file_validated).
 let _usageFileValidateResolve = null
@@ -162,9 +151,6 @@ export const claudeCodeWsHandler = {
                     _usageFileValidateResolve({ valid: msg.valid, message: msg.message })
                     _usageFileValidateResolve = null
                 }
-                break
-            case 'settings_presets_updated':
-                useClaudeCodeStore().applySettingsPresetsConfig(msg.config)
                 break
             default:
                 console.warn(`[claude_code:ws] no handler for action "${action}"`, msg)
