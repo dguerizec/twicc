@@ -319,6 +319,9 @@ export function sendChangelogSeen(version) {
 // Pending resolve callbacks for path validation request-response round-trips
 let _usageDumpPathValidateResolve = null
 let _tmuxConfigPathValidateResolve = null
+// Usage *file* (read mode) validation can run concurrently for several
+// providers, so the resolver is keyed by provider rather than singular.
+const _usageFileValidateResolvers = new Map()
 
 /**
  * Validate a usage dump file path (write mode) on the backend.
@@ -331,6 +334,25 @@ export function sendValidateUsageDumpPath(filePath) {
         const sent = sendWsMessage({ type: 'validate_usage_dump_path', file_path: filePath })
         if (!sent) {
             _usageDumpPathValidateResolve = null
+            resolve({ valid: false, message: 'Not connected' })
+        }
+    })
+}
+
+/**
+ * Validate a usage *read* file path for a given provider on the backend.
+ * The reply is dispatched back via ``usage_file_validated`` and routed
+ * to this provider's pending resolver.
+ * @param {string} provider - Provider wire key (e.g. ``"claude_code"``)
+ * @param {string} filePath - The file path to validate
+ * @returns {Promise<{valid: boolean, message: string}>}
+ */
+export function sendValidateUsageFile(provider, filePath) {
+    return new Promise((resolve) => {
+        _usageFileValidateResolvers.set(provider, resolve)
+        const sent = sendWsMessage({ type: 'validate_usage_file', provider, file_path: filePath })
+        if (!sent) {
+            _usageFileValidateResolvers.delete(provider)
             resolve({ valid: false, message: 'Not connected' })
         }
     })
@@ -774,7 +796,7 @@ export function useWebSocket() {
             case 'usage_dump_path_validated':
                 // Intentionally provider-agnostic: this is a write-target validation
                 // (directory exists/writable). Unlike a read file (which has a
-                // provider-specific format and lives in ``claude_code:`` handlers),
+                // provider-specific format and goes through ``usage_file_validated``),
                 // a dump just writes the raw payload back, so the check has no
                 // provider-specific content to verify. Do not move under a provider
                 // handler.
@@ -783,6 +805,20 @@ export function useWebSocket() {
                     _usageDumpPathValidateResolve = null
                 }
                 break
+            case 'usage_file_validated': {
+                // Cross-provider read-mode validation reply. The backend
+                // delegates the format check to the provider's helper but
+                // the wire envelope is generic — keyed resolvers let
+                // simultaneous validations for different providers coexist.
+                const provider = msg.provider
+                if (!provider) break
+                const resolver = _usageFileValidateResolvers.get(provider)
+                if (resolver) {
+                    _usageFileValidateResolvers.delete(provider)
+                    resolver({ valid: msg.valid, message: msg.message })
+                }
+                break
+            }
             case 'tmux_config_path_validated':
                 if (_tmuxConfigPathValidateResolve) {
                     _tmuxConfigPathValidateResolve({ valid: msg.valid, message: msg.message })

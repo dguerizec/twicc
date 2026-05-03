@@ -176,3 +176,38 @@ def validate_usage_dump_path(file_path: str) -> tuple[bool, str]:
         return False, f"Directory is not writable: {path.parent}"
 
     return True, "Valid dump path"
+
+
+def validate_usage_file(provider: Provider, file_path: str) -> tuple[bool, str]:
+    """Validate that ``file_path`` holds a usage payload readable for ``provider``.
+
+    Cross-provider envelope: checks that the file exists, is valid JSON,
+    and parses to a top-level object. The provider-specific format check
+    (e.g. ``five_hour`` / ``seven_day`` for Claude Code) is delegated to
+    :meth:`BaseProviderHelpers.validate_usage_file_payload` so each
+    provider only owns the schema bits that vary.
+
+    Returns ``(valid, message)``.
+    """
+    import orjson
+    from twicc.providers.helpers import get_provider_helpers
+
+    path = Path(file_path)
+
+    if not path.is_file():
+        return False, "File not found"
+
+    try:
+        content = path.read_bytes()
+    except OSError as e:
+        return False, f"Cannot read file: {e}"
+
+    try:
+        data = orjson.loads(content)
+    except orjson.JSONDecodeError as e:
+        return False, f"Invalid JSON: {e}"
+
+    if not isinstance(data, dict):
+        return False, "JSON root must be an object"
+
+    return get_provider_helpers(provider).validate_usage_file_payload(data)

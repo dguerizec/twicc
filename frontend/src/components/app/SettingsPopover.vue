@@ -5,15 +5,14 @@ import { useRouter } from 'vue-router'
 import { useSettingsStore, SETTINGS_SCHEMA } from '../../stores/settings'
 import { useDataStore } from '../../stores/data'
 import { useAuthStore } from '../../stores/auth'
-import { getProviderHelpers, getProviderOptions, getRegisteredProviders } from '../../providers'
+import { getProviderHelpers, getProviderLabel, getProviderOptions, getRegisteredProviders } from '../../providers'
 import { useClaudeCodeStore } from '../../providers/claude_code/store'
 import { DISPLAY_MODE, COLOR_SCHEME, SESSION_TIME_FORMAT, DEFAULT_MAX_CACHED_SESSIONS, WA_THEME, WA_THEME_LABELS, WA_BRAND, WA_BRAND_LABELS } from '../../constants'
 import NotificationSettings from './NotificationSettings.vue'
 import AppTooltip from '../ui/AppTooltip.vue'
 import ChangelogDialog from './ChangelogDialog.vue'
 import ProviderSettingsSection from './ProviderSettingsSection.vue'
-import { sendChangelogSeen, sendValidateUsageDumpPath, sendValidateTmuxConfigPath } from '../../composables/useWebSocket'
-import { sendValidateUsageFile as sendValidateClaudeCodeUsageFile } from '../../providers/claude_code/ws'
+import { sendChangelogSeen, sendValidateUsageDumpPath, sendValidateUsageFile, sendValidateTmuxConfigPath } from '../../composables/useWebSocket'
 import { vPopoverFocusFix } from '../../directives/vPopoverFocusFix'
 
 const router = useRouter()
@@ -79,10 +78,22 @@ function selectSection(id) {
         nextTick(() => notificationSettingsRef.value?.sync())
     }
     if (id === 'usage') {
-        usageFilePathInput.value = usageReadFilePath.value || ''
-        usageFileValidation.value = null
-        usageDumpPathInput.value = usageDumpFilePath.value || ''
-        usageDumpValidation.value = null
+        // Seed local input/validation state from persisted values, one
+        // entry per provider that tracksUsage.
+        const fileInputs = {}
+        const fileValidations = {}
+        const dumpInputs = {}
+        const dumpValidations = {}
+        for (const provider of usageProviders.value) {
+            fileInputs[provider] = getReadPath(provider)
+            fileValidations[provider] = null
+            dumpInputs[provider] = getDumpPath(provider)
+            dumpValidations[provider] = null
+        }
+        usageFilePathInput.value = fileInputs
+        usageFileValidation.value = fileValidations
+        usageDumpPathInput.value = dumpInputs
+        usageDumpValidation.value = dumpValidations
     }
     if (id === 'terminal') {
         tmuxConfigPathInput.value = terminalTmuxConfigPath.value || ''
@@ -218,31 +229,57 @@ const toolDiffWordWrap = computed(() => store.isToolDiffWordWrap)
 const toolDiffSideBySide = computed(() => store.isToolDiffSideBySide)
 const diffSideBySide = computed(() => store.isDiffSideBySide)
 const editorWordWrap = computed(() => store.isEditorWordWrap)
-const usageReadFileEnabled = computed(() => claudeCodeStore.usageReadFileEnabled)
-const usageReadFilePath = computed(() => claudeCodeStore.usageReadFilePath)
-const usageDumpFileEnabled = computed(() => claudeCodeStore.usageDumpFileEnabled)
-const usageDumpFilePath = computed(() => claudeCodeStore.usageDumpFilePath)
+// ─── Usage section: per-provider state (cross-provider) ─────────────
+//
+// Every registered provider that ``tracksUsage()`` may surface read +
+// dump file settings. The Settings popover renders one block per
+// provider, so all of read/dump local state (input value, in-flight
+// validating flag, last validation result) is keyed by provider here.
+// Persisted values live on each provider's own store, accessed via
+// ``getProviderHelpers(provider).getUsageFileSetting(field)``.
 
-// Usage file — local input + validation state
-const usageFilePathInput = ref('')
-const usageFileValidating = ref(false)
-const usageFileValidation = ref(null) // { valid: boolean, message: string } | null
-const usageFilePathModified = computed(() => usageFilePathInput.value.trim() !== (usageReadFilePath.value || ''))
-const usageFileApplyIcon = computed(() => {
-    if (usageFileValidation.value?.valid === false) return 'x-circle'
-    if (usageFilePathModified.value) return 'triangle-exclamation'
-    return 'check'
-})
+const usageProviders = computed(() =>
+    getRegisteredProviders().filter(p => getProviderHelpers(p)?.tracksUsage())
+)
 
-const usageDumpPathInput = ref('')
-const usageDumpValidating = ref(false)
-const usageDumpValidation = ref(null) // { valid: boolean, message: string } | null
-const usageDumpPathModified = computed(() => usageDumpPathInput.value.trim() !== (usageDumpFilePath.value || ''))
-const usageDumpApplyIcon = computed(() => {
-    if (usageDumpValidation.value?.valid === false) return 'x-circle'
-    if (usageDumpPathModified.value) return 'triangle-exclamation'
+// Reactive maps keyed by provider wire key.
+const usageFilePathInput = ref({})         // { [provider]: string }
+const usageFileValidating = ref({})        // { [provider]: boolean }
+const usageFileValidation = ref({})        // { [provider]: {valid,message} | null }
+
+const usageDumpPathInput = ref({})
+const usageDumpValidating = ref({})
+const usageDumpValidation = ref({})
+
+function getReadEnabled(provider) {
+    return !!getProviderHelpers(provider)?.getUsageFileSetting('read_enabled')
+}
+function getReadPath(provider) {
+    return getProviderHelpers(provider)?.getUsageFileSetting('read_path') || ''
+}
+function getDumpEnabled(provider) {
+    return !!getProviderHelpers(provider)?.getUsageFileSetting('dump_enabled')
+}
+function getDumpPath(provider) {
+    return getProviderHelpers(provider)?.getUsageFileSetting('dump_path') || ''
+}
+
+function isReadPathModified(provider) {
+    return (usageFilePathInput.value[provider] ?? '').trim() !== getReadPath(provider)
+}
+function readApplyIcon(provider) {
+    if (usageFileValidation.value[provider]?.valid === false) return 'x-circle'
+    if (isReadPathModified(provider)) return 'triangle-exclamation'
     return 'check'
-})
+}
+function isDumpPathModified(provider) {
+    return (usageDumpPathInput.value[provider] ?? '').trim() !== getDumpPath(provider)
+}
+function dumpApplyIcon(provider) {
+    if (usageDumpValidation.value[provider]?.valid === false) return 'x-circle'
+    if (isDumpPathModified(provider)) return 'triangle-exclamation'
+    return 'check'
+}
 
 // Tmux config path — local input + validation state
 const tmuxConfigPathInput = ref('')
@@ -376,64 +413,72 @@ function onExtraUsageOnlyWhenNeededChange(event) {
     store.setExtraUsageOnlyWhenNeeded(event.target.checked)
 }
 
-function onUsageFileEnabledChange(event) {
-    claudeCodeStore.setUsageReadFileEnabled(event.target.checked)
+function onUsageFileEnabledChange(provider, event) {
+    getProviderHelpers(provider)?.setUsageFileSetting('read_enabled', event.target.checked)
 }
 
-function onUsageFilePathInputChange(event) {
-    usageFilePathInput.value = event.target.value
+function onUsageFilePathInputChange(provider, event) {
+    usageFilePathInput.value = { ...usageFilePathInput.value, [provider]: event.target.value }
     // Clear previous validation error when user edits
-    if (usageFileValidation.value) usageFileValidation.value = null
+    if (usageFileValidation.value[provider]) {
+        usageFileValidation.value = { ...usageFileValidation.value, [provider]: null }
+    }
 }
 
-async function onUsageFilePathApply() {
-    const path = usageFilePathInput.value.trim()
+async function onUsageFilePathApply(provider) {
+    const helpers = getProviderHelpers(provider)
+    if (!helpers) return
+    const path = (usageFilePathInput.value[provider] ?? '').trim()
     if (!path) {
-        usageFileValidation.value = null
-        claudeCodeStore.setUsageReadFilePath('')
+        usageFileValidation.value = { ...usageFileValidation.value, [provider]: null }
+        helpers.setUsageFileSetting('read_path', '')
         return
     }
-    usageFileValidating.value = true
-    usageFileValidation.value = null
+    usageFileValidating.value = { ...usageFileValidating.value, [provider]: true }
+    usageFileValidation.value = { ...usageFileValidation.value, [provider]: null }
     try {
-        const result = await sendValidateClaudeCodeUsageFile(path)
+        const result = await sendValidateUsageFile(provider, path)
         if (result.valid) {
-            claudeCodeStore.setUsageReadFilePath(path)
+            helpers.setUsageFileSetting('read_path', path)
         } else {
-            usageFileValidation.value = result
+            usageFileValidation.value = { ...usageFileValidation.value, [provider]: result }
         }
     } finally {
-        usageFileValidating.value = false
+        usageFileValidating.value = { ...usageFileValidating.value, [provider]: false }
     }
 }
 
-function onUsageDumpEnabledChange(event) {
-    claudeCodeStore.setUsageDumpFileEnabled(event.target.checked)
+function onUsageDumpEnabledChange(provider, event) {
+    getProviderHelpers(provider)?.setUsageFileSetting('dump_enabled', event.target.checked)
 }
 
-function onUsageDumpPathInputChange(event) {
-    usageDumpPathInput.value = event.target.value
-    if (usageDumpValidation.value) usageDumpValidation.value = null
+function onUsageDumpPathInputChange(provider, event) {
+    usageDumpPathInput.value = { ...usageDumpPathInput.value, [provider]: event.target.value }
+    if (usageDumpValidation.value[provider]) {
+        usageDumpValidation.value = { ...usageDumpValidation.value, [provider]: null }
+    }
 }
 
-async function onUsageDumpPathApply() {
-    const path = usageDumpPathInput.value.trim()
+async function onUsageDumpPathApply(provider) {
+    const helpers = getProviderHelpers(provider)
+    if (!helpers) return
+    const path = (usageDumpPathInput.value[provider] ?? '').trim()
     if (!path) {
-        usageDumpValidation.value = null
-        claudeCodeStore.setUsageDumpFilePath('')
+        usageDumpValidation.value = { ...usageDumpValidation.value, [provider]: null }
+        helpers.setUsageFileSetting('dump_path', '')
         return
     }
-    usageDumpValidating.value = true
-    usageDumpValidation.value = null
+    usageDumpValidating.value = { ...usageDumpValidating.value, [provider]: true }
+    usageDumpValidation.value = { ...usageDumpValidation.value, [provider]: null }
     try {
         const result = await sendValidateUsageDumpPath(path)
         if (result.valid) {
-            claudeCodeStore.setUsageDumpFilePath(path)
+            helpers.setUsageFileSetting('dump_path', path)
         } else {
-            usageDumpValidation.value = result
+            usageDumpValidation.value = { ...usageDumpValidation.value, [provider]: result }
         }
     } finally {
-        usageDumpValidating.value = false
+        usageDumpValidating.value = { ...usageDumpValidating.value, [provider]: false }
     }
 }
 
@@ -939,90 +984,102 @@ function onChangelogClose() {
                             size="small"
                         >Only when needed</wa-switch>
                     </div>
-                    <div class="setting-group">
-                        <label class="setting-group-label">Read usage from file <wa-icon name="cloud" class="synced-icon"></wa-icon></label>
-                        <wa-switch
-                            :checked="usageReadFileEnabled"
-                            @change="onUsageFileEnabledChange"
-                            size="small"
-                            :disabled="usageDumpFileEnabled"
-                        >Enabled</wa-switch>
-                        <span class="setting-group-hint">
-                            The Anthropic usage API is heavily rate-limited. If you already fetch usage data
-                            from your own script and save the raw API response to a JSON file, you can provide
-                            its path here. TwiCC will read from this file instead of calling the API directly.
-                        </span>
-                        <template v-if="usageReadFileEnabled">
-                            <div class="usage-file-input-row">
-                                <wa-input
-                                    :value="usageFilePathInput"
-                                    @input="onUsageFilePathInputChange"
-                                    @keydown.enter="onUsageFilePathApply"
-                                    placeholder="/path/to/usage.json"
-                                    size="small"
-                                    :disabled="usageFileValidating"
-                                ></wa-input>
-                                <wa-button
-                                    size="small"
-                                    variant="neutral"
-                                    @click="onUsageFilePathApply"
-                                    :disabled="usageFileValidating"
-                                >
-                                    <wa-spinner v-if="usageFileValidating" slot="start"></wa-spinner>
-                                    <wa-icon v-else :name="usageFileApplyIcon" slot="start"></wa-icon>
-                                    Apply
-                                </wa-button>
-                            </div>
-                            <span class="setting-group-hint">Press Apply or Enter to validate and save the path.</span>
-                            <wa-callout
-                                v-if="usageFileValidation && !usageFileValidation.valid"
-                                variant="danger"
+                    <div v-for="provider in usageProviders" :key="provider" class="provider-usage-block">
+                        <h4 class="provider-usage-title">{{ getProviderLabel(provider) }}</h4>
+                        <div class="setting-group">
+                            <wa-switch
+                                :checked="getReadEnabled(provider)"
+                                @change="onUsageFileEnabledChange(provider, $event)"
                                 size="small"
-                                class="usage-file-validation"
-                            >{{ usageFileValidation.message }}</wa-callout>
-                        </template>
+                                :disabled="getDumpEnabled(provider)"
+                            >Read usage from file* <wa-icon name="cloud" class="synced-icon"></wa-icon></wa-switch>
+                            <template v-if="getReadEnabled(provider)">
+                                <div class="usage-file-input-row">
+                                    <wa-input
+                                        :value="usageFilePathInput[provider] ?? ''"
+                                        @input="onUsageFilePathInputChange(provider, $event)"
+                                        @keydown.enter="onUsageFilePathApply(provider)"
+                                        placeholder="/path/to/usage.json"
+                                        size="small"
+                                        :disabled="!!usageFileValidating[provider]"
+                                    ></wa-input>
+                                    <wa-button
+                                        size="small"
+                                        variant="neutral"
+                                        @click="onUsageFilePathApply(provider)"
+                                        :disabled="!!usageFileValidating[provider]"
+                                    >
+                                        <wa-spinner v-if="usageFileValidating[provider]" slot="start"></wa-spinner>
+                                        <wa-icon v-else :name="readApplyIcon(provider)" slot="start"></wa-icon>
+                                        Apply
+                                    </wa-button>
+                                </div>
+                                <span class="setting-group-hint">Press Apply or Enter to validate and save the path.</span>
+                                <wa-callout
+                                    v-if="usageFileValidation[provider] && !usageFileValidation[provider].valid"
+                                    variant="danger"
+                                    size="small"
+                                    class="usage-file-validation"
+                                >{{ usageFileValidation[provider].message }}</wa-callout>
+                            </template>
+                        </div>
+                        <div class="setting-group">
+                            <wa-switch
+                                :checked="getDumpEnabled(provider)"
+                                @change="onUsageDumpEnabledChange(provider, $event)"
+                                size="small"
+                                :disabled="getReadEnabled(provider)"
+                            >Dump usage to file** <wa-icon name="cloud" class="synced-icon"></wa-icon></wa-switch>
+                            <template v-if="getDumpEnabled(provider)">
+                                <div class="usage-file-input-row">
+                                    <wa-input
+                                        :value="usageDumpPathInput[provider] ?? ''"
+                                        @input="onUsageDumpPathInputChange(provider, $event)"
+                                        @keydown.enter="onUsageDumpPathApply(provider)"
+                                        placeholder="/path/to/usage-dump.json"
+                                        size="small"
+                                        :disabled="!!usageDumpValidating[provider]"
+                                    ></wa-input>
+                                    <wa-button
+                                        size="small"
+                                        variant="neutral"
+                                        @click="onUsageDumpPathApply(provider)"
+                                        :disabled="!!usageDumpValidating[provider]"
+                                    >
+                                        <wa-spinner v-if="usageDumpValidating[provider]" slot="start"></wa-spinner>
+                                        <wa-icon v-else :name="dumpApplyIcon(provider)" slot="start"></wa-icon>
+                                        Apply
+                                    </wa-button>
+                                </div>
+                                <span class="setting-group-hint">Press Apply or Enter to validate and save the path.</span>
+                                <wa-callout
+                                    v-if="usageDumpValidation[provider] && !usageDumpValidation[provider].valid"
+                                    variant="danger"
+                                    size="small"
+                                    class="usage-file-validation"
+                                >{{ usageDumpValidation[provider].message }}</wa-callout>
+                            </template>
+                        </div>
                     </div>
-                    <div class="setting-group">
-                        <label class="setting-group-label">Dump usage to file <wa-icon name="cloud" class="synced-icon"></wa-icon></label>
-                        <wa-switch
-                            :checked="usageDumpFileEnabled"
-                            @change="onUsageDumpEnabledChange"
-                            size="small"
-                            :disabled="usageReadFileEnabled"
-                        >Enabled</wa-switch>
+                    <!-- Cross-provider explanations rendered once at the bottom, so each
+                         provider block above stays compact (just toggles + path inputs).
+                         The synced-icon lives next to each provider's read/dump
+                         switches above, where the actual settings are stored. -->
+                    <wa-divider></wa-divider>
+                    <div class="setting-group usage-mode-explanation">
+                        <label class="setting-group-label">* About read mode</label>
+                        <span class="setting-group-hint">
+                            If you already maintain a JSON file with usage data outside TwiCC (typically
+                            because the provider's API is rate-limited), point to it here and TwiCC will
+                            read from this file instead of calling the API directly.
+                        </span>
+                    </div>
+                    <div class="setting-group usage-mode-explanation">
+                        <label class="setting-group-label">** About dump mode</label>
                         <span class="setting-group-hint">
                             Save the raw API response to a JSON file each time TwiCC fetches usage data.
                             Useful if you want to share the data with other tools without extra API calls.
                         </span>
-                        <template v-if="usageDumpFileEnabled">
-                            <div class="usage-file-input-row">
-                                <wa-input
-                                    :value="usageDumpPathInput"
-                                    @input="onUsageDumpPathInputChange"
-                                    @keydown.enter="onUsageDumpPathApply"
-                                    placeholder="/path/to/usage-dump.json"
-                                    size="small"
-                                    :disabled="usageDumpValidating"
-                                ></wa-input>
-                                <wa-button
-                                    size="small"
-                                    variant="neutral"
-                                    @click="onUsageDumpPathApply"
-                                    :disabled="usageDumpValidating"
-                                >
-                                    <wa-spinner v-if="usageDumpValidating" slot="start"></wa-spinner>
-                                    <wa-icon v-else :name="usageDumpApplyIcon" slot="start"></wa-icon>
-                                    Apply
-                                </wa-button>
-                            </div>
-                            <span class="setting-group-hint">Press Apply or Enter to validate and save the path.</span>
-                            <wa-callout
-                                v-if="usageDumpValidation && !usageDumpValidation.valid"
-                                variant="danger"
-                                size="small"
-                                class="usage-file-validation"
-                            >{{ usageDumpValidation.message }}</wa-callout>
-                        </template>
                     </div>
                 </section>
 
@@ -1601,6 +1658,31 @@ wa-popover > wa-divider {
 
 .usage-file-validation {
     margin-top: var(--wa-space-2xs);
+}
+
+.usage-mode-explanation .setting-group-hint {
+    /* Mode-explanation paragraphs are read once at the top of the section
+       — keep the spacing tight so they read as a header block, not as a
+       collection of independent settings. */
+    margin-top: 0;
+}
+
+.provider-usage-block {
+    display: flex;
+    flex-direction: column;
+    gap: var(--wa-space-m);
+}
+
+.provider-usage-block + .provider-usage-block {
+    margin-top: var(--wa-space-m);
+    padding-top: var(--wa-space-m);
+    border-top: 1px solid var(--wa-color-surface-border);
+}
+
+.provider-usage-title {
+    margin: 0;
+    font-size: var(--wa-font-size-m);
+    color: var(--wa-color-text-normal);
 }
 
 @media (width < 640px) {

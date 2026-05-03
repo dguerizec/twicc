@@ -528,6 +528,9 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
         elif msg_type == "validate_usage_dump_path":
             await self._handle_validate_usage_dump_path(content)
 
+        elif msg_type == "validate_usage_file":
+            await self._handle_validate_usage_file(content)
+
         elif msg_type == "validate_tmux_config_path":
             await self._handle_validate_tmux_config_path(content)
 
@@ -1016,11 +1019,10 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
 
         Intentionally provider-agnostic: this validates a *write* target (the
         directory exists and is writable). Unlike a *read* file — whose content
-        must match a provider-specific shape (e.g. the Anthropic OAuth usage
-        JSON for Claude Code, hence ``claude_code:validate_usage_file`` in the
-        provider handler) — a dump only writes the raw payload back, so the
-        check has no provider-specific content to verify. Do not move this
-        into a provider handler.
+        must match a provider-specific shape and goes through
+        :meth:`_handle_validate_usage_file` — a dump only writes the raw
+        payload back, so the check has no provider-specific content to
+        verify. Do not move this into a provider handler.
         """
         file_path = content.get("file_path", "")
         if not isinstance(file_path, str) or not file_path.strip():
@@ -1031,6 +1033,55 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
 
         valid, message = await sync_to_async(validate_usage_dump_path)(file_path.strip())
         await self.send_json({"type": "usage_dump_path_validated", "valid": valid, "message": message})
+
+    async def _handle_validate_usage_file(self, content: dict) -> None:
+        """Validate a usage *read* file path for a given provider and reply.
+
+        Cross-provider envelope: file existence + JSON parsing happens
+        in :func:`twicc.usage.validate_usage_file`, then format checking
+        is delegated to the provider's
+        :meth:`BaseProviderHelpers.validate_usage_file_payload`.
+        """
+        provider_value = content.get("provider")
+        file_path = content.get("file_path", "")
+
+        if not provider_value:
+            await self.send_json({
+                "type": "usage_file_validated",
+                "provider": None,
+                "valid": False,
+                "message": "Missing provider",
+            })
+            return
+        try:
+            provider = Provider(provider_value)
+        except ValueError:
+            await self.send_json({
+                "type": "usage_file_validated",
+                "provider": provider_value,
+                "valid": False,
+                "message": f"Unknown provider: {provider_value!r}",
+            })
+            return
+
+        if not isinstance(file_path, str) or not file_path.strip():
+            await self.send_json({
+                "type": "usage_file_validated",
+                "provider": provider.value,
+                "valid": False,
+                "message": "No file path provided",
+            })
+            return
+
+        from twicc.usage import validate_usage_file
+
+        valid, message = await sync_to_async(validate_usage_file)(provider, file_path.strip())
+        await self.send_json({
+            "type": "usage_file_validated",
+            "provider": provider.value,
+            "valid": valid,
+            "message": message,
+        })
 
     async def _handle_validate_tmux_config_path(self, content: dict) -> None:
         """Validate a tmux config file path and return the result to the client."""

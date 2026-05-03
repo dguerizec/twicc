@@ -21,6 +21,19 @@ const BUILTIN_SLASH_COMMANDS = [
     { name: 'loop', plugin_name: null, source: 'builtin', is_global: true, description: "Run a prompt or slash command on a recurring interval until the session ends (e.g. /loop 5m /foo, defaults to 10m)", argument_hint: '[interval] [command or prompt]' },
 ]
 
+// Map of usage-file field names (cross-provider) → Claude Code store
+// getter/setter. Mirrors ``FIELD_TO_DEFAULT_STORE_BINDING``: lets the
+// generic ``getUsageFileSetting`` / ``setUsageFileSetting`` hooks proxy
+// to this provider's own ``useClaudeCodeStore`` refs, so the on-disk
+// shape and synced settings stay Claude Code-specific while the UI
+// stays provider-agnostic.
+const USAGE_FILE_FIELD_TO_STORE_BINDING = {
+    read_enabled: { getter: 'usageReadFileEnabled', setter: 'setUsageReadFileEnabled' },
+    read_path:    { getter: 'usageReadFilePath',    setter: 'setUsageReadFilePath' },
+    dump_enabled: { getter: 'usageDumpFileEnabled', setter: 'setUsageDumpFileEnabled' },
+    dump_path:    { getter: 'usageDumpFilePath',    setter: 'setUsageDumpFilePath' },
+}
+
 // Map of agent-setting wire names → store getter/setter for the persisted
 // default. Used by ``getDefaultValue`` / ``setDefaultValue`` so generic
 // surfaces (palette, settings popover) can read/write defaults without
@@ -155,6 +168,18 @@ export class ClaudeCodeHelpers extends BaseProviderHelpers {
 
     getUsageExternalLink() {
         return { url: 'https://claude.ai/settings/usage', label: 'View usage on claude.ai' }
+    }
+
+    getUsageFileSetting(field) {
+        const binding = USAGE_FILE_FIELD_TO_STORE_BINDING[field]
+        if (!binding) return null
+        return useClaudeCodeStore()[binding.getter]
+    }
+
+    setUsageFileSetting(field, value) {
+        const binding = USAGE_FILE_FIELD_TO_STORE_BINDING[field]
+        if (!binding) return
+        useClaudeCodeStore()[binding.setter](value)
     }
 
     getServiceStatus() {

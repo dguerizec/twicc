@@ -178,38 +178,9 @@ def read_usage_from_file(file_path: str) -> dict | None:
 USAGE_REQUIRED_KEYS = {"five_hour", "seven_day"}
 
 
-def validate_usage_file(file_path: str) -> tuple[bool, str]:
-    """
-    Validate that a file exists, is readable, and contains the expected keys.
-
-    Checks: file exists, valid JSON object, has "five_hour" and "seven_day" keys.
-
-    Returns:
-        A (valid, message) tuple. If valid is False, message explains the problem.
-    """
-    path = Path(file_path)
-
-    if not path.is_file():
-        return False, "File not found"
-
-    try:
-        content = path.read_bytes()
-    except OSError as e:
-        return False, f"Cannot read file: {e}"
-
-    try:
-        data = orjson.loads(content)
-    except orjson.JSONDecodeError as e:
-        return False, f"Invalid JSON: {e}"
-
-    if not isinstance(data, dict):
-        return False, "JSON root must be an object"
-
-    missing = USAGE_REQUIRED_KEYS - data.keys()
-    if missing:
-        return False, f"Missing required keys: {', '.join(sorted(missing))}"
-
-    return True, "Valid usage file"
+# File-level validation is owned by ``twicc.usage.validate_usage_file`` (cross-provider envelope);
+# the format check (presence of ``USAGE_REQUIRED_KEYS``) is performed by
+# ``ClaudeCodeHelpers.validate_usage_file_payload``, which imports the constant above.
 
 
 def dump_usage_to_file(raw: dict, file_path: str) -> None:

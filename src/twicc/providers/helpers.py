@@ -262,6 +262,26 @@ class BaseProviderHelpers:
 
         return calculate_line_cost(self.provider, usage, model_id, line_date)
 
+    # ------------------------------------------------------------------
+    # Usage file (read mode) format validation
+    # ------------------------------------------------------------------
+
+    def validate_usage_file_payload(self, payload: dict) -> tuple[bool, str]:
+        """Validate the format of a usage file payload for this provider.
+
+        Called by the cross-provider read-mode flow after the file has
+        been opened, parsed as JSON, and asserted to be a top-level
+        object. The helper is responsible only for checking that the
+        payload matches the shape this provider expects from its
+        own usage source (e.g. for Claude Code, the Anthropic OAuth
+        usage API response with ``five_hour`` / ``seven_day`` blocks).
+
+        Returns ``(valid, message)``. The default refuses any payload
+        with a generic message — providers that support the read mode
+        must override.
+        """
+        return False, "This provider does not support reading usage from a file"
+
     def resolve_agent_settings(self, source: AgentSettings) -> AgentSettings:
         """Return the effective per-agent settings, with synced defaults as fallback.
 

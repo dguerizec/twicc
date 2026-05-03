@@ -39,27 +39,6 @@ export function respondToPendingRequest(sessionId, requestId, responseData) {
     })
 }
 
-// Pending resolve callback for the usage file validation request/response
-// round-trip (claude_code:validate_usage_file → claude_code:usage_file_validated).
-let _usageFileValidateResolve = null
-
-/**
- * Validate a usage JSON file path (read mode) on the backend. Resolves
- * once the matching ``claude_code:usage_file_validated`` reply arrives.
- * @param {string} filePath - The file path to validate
- * @returns {Promise<{valid: boolean, message: string}>}
- */
-export function sendValidateUsageFile(filePath) {
-    return new Promise((resolve) => {
-        _usageFileValidateResolve = resolve
-        const sent = sendWsMessage({ type: 'claude_code:validate_usage_file', file_path: filePath })
-        if (!sent) {
-            _usageFileValidateResolve = null
-            resolve({ valid: false, message: 'Not connected' })
-        }
-    })
-}
-
 // ─── Anthropic statuspage helpers ────────────────────────────────────────
 
 // Persists the last Anthropic statuspage value seen, so a page refresh
@@ -145,12 +124,6 @@ export const claudeCodeWsHandler = {
             case 'anthropic_status':
                 useClaudeCodeStore().setAnthropicStatus(msg.status)
                 renderAnthropicStatusToast(msg)
-                break
-            case 'usage_file_validated':
-                if (_usageFileValidateResolve) {
-                    _usageFileValidateResolve({ valid: msg.valid, message: msg.message })
-                    _usageFileValidateResolve = null
-                }
                 break
             default:
                 console.warn(`[claude_code:ws] no handler for action "${action}"`, msg)

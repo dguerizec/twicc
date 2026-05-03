@@ -506,6 +506,19 @@ class ClaudeCodeHelpers(BaseProviderHelpers):
     def serialize_model(self, model: str | None) -> dict | None:
         return serialize_model(model)
 
+    def validate_usage_file_payload(self, payload: dict) -> tuple[bool, str]:
+        """Check that ``payload`` matches the Anthropic OAuth usage API shape.
+
+        Required top-level keys: ``five_hour`` and ``seven_day``. Other
+        fields are tolerated (the API may add new ones).
+        """
+        from .usage import USAGE_REQUIRED_KEYS
+
+        missing = USAGE_REQUIRED_KEYS - payload.keys()
+        if missing:
+            return False, f"Missing required keys: {', '.join(sorted(missing))}"
+        return True, "Valid usage file"
+
     async def generate_title(self, prompt: str, system_prompt: str) -> str | None:
         """Run a short Haiku SDK query to suggest a title for ``prompt``."""
         from .title_suggest import generate_title as _generate

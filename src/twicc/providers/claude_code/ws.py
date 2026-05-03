@@ -153,37 +153,7 @@ class ClaudeCodeWSHandler:
             await check_auth_and_broadcast(force=True)
             return True
 
-        if action == "validate_usage_file":
-            await self._handle_validate_usage_file(content)
-            return True
-
         return False
-
-    async def _handle_validate_usage_file(self, content: dict) -> None:
-        """Validate a Claude Code usage JSON file path and reply to the client.
-
-        The check is Claude Code-specific: the file must contain the
-        Anthropic OAuth usage API response shape (``five_hour`` /
-        ``seven_day`` blocks). The response goes back as
-        ``claude_code:usage_file_validated``.
-        """
-        from twicc.providers.claude_code.usage import validate_usage_file
-
-        file_path = content.get("file_path", "")
-        if not isinstance(file_path, str) or not file_path.strip():
-            await self.consumer.send_json({
-                "type": "claude_code:usage_file_validated",
-                "valid": False,
-                "message": "No file path provided",
-            })
-            return
-
-        valid, message = await sync_to_async(validate_usage_file)(file_path.strip())
-        await self.consumer.send_json({
-            "type": "claude_code:usage_file_validated",
-            "valid": valid,
-            "message": message,
-        })
 
     async def _handle_pending_request_response(self, content: dict) -> None:
         """Handle a pending request response from the user.

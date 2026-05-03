@@ -93,6 +93,37 @@ export class BaseProviderHelpers {
         return null
     }
 
+    // ─── Usage read/dump file settings ───────────────────────────────────
+    //
+    // Providers that track usage may also support sourcing the data from
+    // a JSON file (read mode) or persisting the API response to one
+    // (dump mode). The Settings popover loops over every provider that
+    // ``tracksUsage()`` and reads/writes those fields through the hooks
+    // below — each provider proxies them onto its own store, so the on-
+    // disk format and synced settings stay namespaced per provider while
+    // the UI is generic.
+    //
+    // Field names: ``read_enabled`` / ``read_path`` / ``dump_enabled`` /
+    // ``dump_path``. Read and dump are mutually exclusive: a setter that
+    // switches one to ``true`` must clear the other (the provider's
+    // store enforces this).
+
+    /**
+     * Read this provider's persisted value for a usage-file field.
+     * Returns ``null`` when the provider doesn't support usage files.
+     * Default: not supported.
+     */
+    getUsageFileSetting(/* field */) {
+        return null
+    }
+
+    /**
+     * Write this provider's persisted value for a usage-file field.
+     * Type validation is the store's responsibility — invalid values
+     * are silently ignored. Default: no-op.
+     */
+    setUsageFileSetting(/* field, value */) {}
+
     // ─── Service status surface (Statuspage / health) ───────────────────
     //
     // Providers whose backend service publishes a public status (e.g.
