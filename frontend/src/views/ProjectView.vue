@@ -1,15 +1,16 @@
 <script setup>
 import { computed, ref, watch, onMounted, onUnmounted, onBeforeUnmount, provide, nextTick } from 'vue'
+import { useElementHover } from '@vueuse/core'
 import { useRoute, useRouter } from 'vue-router'
 import { useDataStore, ALL_PROJECTS_ID } from '../stores/data'
 import { useSettingsStore } from '../stores/settings'
 import { useWorkspacesStore } from '../stores/workspaces'
-import { COLOR_SCHEME, PROVIDER } from '../constants'
+import { COLOR_SCHEME } from '../constants'
 import { useCommandRegistry } from '../composables/useCommandRegistry'
 import { useStartupPolling } from '../composables/useStartupPolling'
 import { useTerminalCommandStore } from '../stores/terminalCommand'
 import { useClaudeCodeStore } from '../providers/claude_code/store'
-import { getRegisteredProviders, getProviderHelpers } from '../providers'
+import { getRegisteredProviders, getProviderHelpers, getProviderStore } from '../providers'
 import { toWorkspaceProjectId } from '../utils/workspaceIds'
 import { splitProjectsByPriority } from '../utils/projectSort'
 import SessionList from '../components/session/list/SessionList.vue'
@@ -98,12 +99,48 @@ function launchProviderAuthInTerminal(loginCommand) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Usage quotas
+// Usage quotas — rotation across providers that expose a quota
 // ═══════════════════════════════════════════════════════════════════════════
+//
+// Providers opt in via ``helpers.tracksUsage()``. The sidebar slot rotates
+// among them every ``USAGE_ROTATION_INTERVAL_MS``; the rotation is paused
+// while the user hovers the block (which is also when wa-tooltip's hover
+// trigger keeps a tooltip open) so the readings don't shift under the
+// user's eyes mid-inspection.
 
-// Sidebar shows Claude Code usage only for now; the multi-provider switcher
-// will land in a follow-up step.
-const quotaData = computed(() => claudeCodeStore.usage)
+const USAGE_ROTATION_INTERVAL_MS = 15000
+
+const usageProviders = computed(() => getRegisteredProviders().filter(provider => getProviderHelpers(provider).tracksUsage()))
+
+const currentUsageProviderIndex = ref(0)
+
+const currentUsageProvider = computed(() => {
+    const list = usageProviders.value
+    if (list.length === 0) return null
+    return list[currentUsageProviderIndex.value % list.length]
+})
+
+const currentUsageHelpers = computed(() => currentUsageProvider.value ? getProviderHelpers(currentUsageProvider.value) : null)
+const currentUsageStore = computed(() => currentUsageProvider.value ? getProviderStore(currentUsageProvider.value) : null)
+const usageExternalLink = computed(() => currentUsageHelpers.value?.getUsageExternalLink() ?? null)
+
+const usageBlockRef = ref(null)
+const isUsageBlockHovered = useElementHover(usageBlockRef)
+
+let _usageRotationTimer = null
+onMounted(() => {
+    _usageRotationTimer = setInterval(() => {
+        if (isUsageBlockHovered.value) return
+        const total = usageProviders.value.length
+        if (total <= 1) return
+        currentUsageProviderIndex.value = (currentUsageProviderIndex.value + 1) % total
+    }, USAGE_ROTATION_INTERVAL_MS)
+})
+onBeforeUnmount(() => {
+    if (_usageRotationTimer) clearInterval(_usageRotationTimer)
+})
+
+const quotaData = computed(() => currentUsageStore.value?.usage ?? null)
 const quotaComputed = computed(() => quotaData.value?.computed ?? null)
 // Show the usage block whenever usage data is available — the source can be
 // OAuth credentials or a local JSON file; either way the backend signals
@@ -1491,7 +1528,7 @@ function updateSidebarClosedClass(closed) {
             <wa-divider></wa-divider>
 
             <div class="sidebar-footer">
-                <div v-if="quotaHasUsage && quotaComputed" class="sidebar-footer-usage">
+                <div v-if="quotaHasUsage && quotaComputed" ref="usageBlockRef" class="sidebar-footer-usage">
                     <div id="quota-five-hour" class="usage-quota" v-if="quotaFiveHour">
                         <wa-progress-ring
                             class="usage-ring"
@@ -1523,7 +1560,7 @@ function updateSidebarClosedClass(closed) {
                                 <div class="quota-tooltip-note quota-tooltip-row-danger" v-if="quotaFiveHourCost.capped"><wa-icon name="triangle-exclamation"></wa-icon> Based on capped 5h estimate</div>
                             </template>
                             <div class="quota-tooltip-buttons wa-light">
-                                <wa-button size="small" variant="brand" :appearance="quotaButtonAppearance" href="https://claude.ai/settings/usage" target="_blank" rel="noopener"><wa-icon slot="start" name="up-right-from-square"></wa-icon>View on claude.ai</wa-button>
+                                <wa-button v-if="usageExternalLink" size="small" variant="brand" :appearance="quotaButtonAppearance" :href="usageExternalLink.url" target="_blank" rel="noopener"><wa-icon slot="start" name="up-right-from-square"></wa-icon>{{ usageExternalLink.label }}</wa-button>
                                 <wa-button size="small" variant="brand" :appearance="quotaButtonAppearance" @click="openUsageGraph('five-hour')"><wa-icon slot="start" name="chart-line"></wa-icon>View graph</wa-button>
                             </div>
                         </div>
@@ -1559,7 +1596,7 @@ function updateSidebarClosedClass(closed) {
                                 <div class="quota-tooltip-note quota-tooltip-row-danger" v-if="quotaSevenDayCost.capped"><wa-icon name="triangle-exclamation"></wa-icon> Based on capped 7d estimate</div>
                             </template>
                             <div class="quota-tooltip-buttons wa-light">
-                                <wa-button size="small" variant="brand" :appearance="quotaButtonAppearance" href="https://claude.ai/settings/usage" target="_blank" rel="noopener"><wa-icon slot="start" name="up-right-from-square"></wa-icon>View on claude.ai</wa-button>
+                                <wa-button v-if="usageExternalLink" size="small" variant="brand" :appearance="quotaButtonAppearance" :href="usageExternalLink.url" target="_blank" rel="noopener"><wa-icon slot="start" name="up-right-from-square"></wa-icon>{{ usageExternalLink.label }}</wa-button>
                                 <wa-button size="small" variant="brand" :appearance="quotaButtonAppearance" @click="openUsageGraph('seven-day')"><wa-icon slot="start" name="chart-line"></wa-icon>View graph</wa-button>
                             </div>
                         </div>
@@ -1581,7 +1618,7 @@ function updateSidebarClosedClass(closed) {
                             <div class="quota-tooltip-row"><span class="quota-tooltip-label">Monthly limit</span><span>{{ quotaExtraUsage.monthlyLimit ?? '?' }} credits</span></div>
                             <div class="quota-tooltip-row"><span class="quota-tooltip-label">Reset</span><span>{{ formatResetTime(extraUsageResetDate()) }}</span></div>
                             <div class="quota-tooltip-buttons wa-light">
-                               <wa-button size="small" variant="brand" :appearance="quotaButtonAppearance" href="https://claude.ai/settings/usage" target="_blank" rel="noopener" class="quota-stale-button"><wa-icon slot="start" name="up-right-from-square"></wa-icon>View on claude.ai</wa-button>
+                               <wa-button v-if="usageExternalLink" size="small" variant="brand" :appearance="quotaButtonAppearance" :href="usageExternalLink.url" target="_blank" rel="noopener" class="quota-stale-button"><wa-icon slot="start" name="up-right-from-square"></wa-icon>{{ usageExternalLink.label }}</wa-button>
                             </div>
                         </div>
                     </AppTooltip>
@@ -1591,7 +1628,7 @@ function updateSidebarClosedClass(closed) {
                             <div class="quota-stale-header"><wa-icon name="triangle-exclamation" class="quota-stale-header-icon"></wa-icon><span>Data may be outdated</span></div>
                             <div class="quota-tooltip-row"><span class="quota-tooltip-label">Last update</span><span>{{ quotaLastUpdateFormatted }}</span></div>
                             <div class="quota-tooltip-buttons wa-light">
-                                <wa-button size="small" variant="brand" :appearance="quotaButtonAppearance" href="https://claude.ai/settings/usage" target="_blank" rel="noopener" class="quota-stale-button"><wa-icon slot="start" name="up-right-from-square"></wa-icon>View usage on claude.ai</wa-button>
+                                <wa-button v-if="usageExternalLink" size="small" variant="brand" :appearance="quotaButtonAppearance" :href="usageExternalLink.url" target="_blank" rel="noopener" class="quota-stale-button"><wa-icon slot="start" name="up-right-from-square"></wa-icon>{{ usageExternalLink.label }}</wa-button>
                             </div>
                         </div>
                     </AppTooltip>
@@ -1676,7 +1713,7 @@ function updateSidebarClosedClass(closed) {
     <ProjectEditDialog ref="createProjectDialogRef" @saved="handleProjectCreated" />
 
     <!-- Usage graph dialog -->
-    <UsageGraphDialog ref="usageGraphDialogRef" :provider="PROVIDER.CLAUDE_CODE" />
+    <UsageGraphDialog ref="usageGraphDialogRef" :provider="currentUsageProvider" />
 
     <!-- Workspace management dialog -->
     <WorkspaceManageDialog ref="manageWorkspacesDialogRef" />

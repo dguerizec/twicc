@@ -139,6 +139,14 @@ export class ClaudeCodeHelpers extends BaseProviderHelpers {
         sendCheckAuth()
     }
 
+    tracksUsage() {
+        return true
+    }
+
+    getUsageExternalLink() {
+        return { url: 'https://claude.ai/settings/usage', label: 'View usage on claude.ai' }
+    }
+
     getDefaultValue(field) {
         const binding = FIELD_TO_DEFAULT_STORE_BINDING[field]
         if (!binding) return null

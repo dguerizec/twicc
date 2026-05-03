@@ -67,6 +67,32 @@ export class BaseProviderHelpers {
      */
     requestAuthRecheck() {}
 
+    // ─── Usage quota surface ─────────────────────────────────────────────
+    //
+    // Providers that expose a quota / usage payload (consumed by the
+    // sidebar quota block, the usage graph dialog, …) opt in by returning
+    // ``true`` from ``tracksUsage`` and pointing ``getUsageExternalLink``
+    // at their canonical external dashboard.
+
+    /**
+     * Whether this provider exposes a usage payload via its store. The
+     * sidebar's rotation only includes providers that return ``true``.
+     * Default: not tracked.
+     */
+    tracksUsage() {
+        return false
+    }
+
+    /**
+     * External link (provider's own usage dashboard) surfaced in the
+     * stale-data tooltip of the sidebar quota block. Returns
+     * ``{ url, label }`` or ``null`` when the provider doesn't ship one.
+     * Default: ``null``.
+     */
+    getUsageExternalLink() {
+        return null
+    }
+
     // ─── Per-provider default values for agent settings ──────────────────
     //
     // Generic surfaces that need to read or write the provider-scoped
