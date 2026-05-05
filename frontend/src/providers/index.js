@@ -2,6 +2,7 @@ import { ClaudeCodeHelpers, claudeCodeHelpers } from './claude_code/helpers'
 import { claudeCodeWsHandler } from './claude_code/ws'
 import { useClaudeCodeStore } from './claude_code/store'
 import { CodexHelpers, codexHelpers } from './codex/helpers'
+import { codexWsHandler } from './codex/ws'
 import { useCodexStore } from './codex/store'
 
 const PROVIDER_HELPERS = {
@@ -11,6 +12,7 @@ const PROVIDER_HELPERS = {
 
 const PROVIDER_WS_HANDLERS = {
     [ClaudeCodeHelpers.provider]: claudeCodeWsHandler,
+    [CodexHelpers.provider]: codexWsHandler,
 }
 
 // Pinia store factory per provider — used by generic dispatchers (bootstrap

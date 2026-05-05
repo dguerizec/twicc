@@ -5,6 +5,17 @@ import { ref } from 'vue'
 import { CONTEXT_MAX, EFFORT, PERMISSION_MODE } from './constants'
 
 export const useCodexStore = defineStore('codex', () => {
+    // ─── Auth ────────────────────────────────────────────────────────────
+
+    // Codex CLI authentication state (from codex:auth_updated messages).
+    // null = unknown (no message received yet), true/false = known state.
+    // Driven by the backend's auth_task (periodic check) and on-connect push.
+    const authenticated = ref(null)
+
+    function setAuthenticated(value) {
+        authenticated.value = value
+    }
+
     // ─── Per-session agent settings defaults ─────────────────────────────
     //
     // Default values applied to new Codex sessions and used as the fallback
@@ -55,6 +66,8 @@ export const useCodexStore = defineStore('codex', () => {
     }
 
     return {
+        authenticated,
+        setAuthenticated,
         defaultModel,
         defaultEffort,
         defaultPermissionMode,

@@ -66,9 +66,30 @@ export class CodexHelpers extends BaseProviderHelpers {
     static label = 'Codex'
 
     // No agent runtime yet — the send button stays grayed out for any
-    // session whose provider is Codex.
+    // session whose provider is Codex. Even once the runtime lands, we
+    // still need the user to be authenticated against the Codex CLI.
     canSendMessage() {
         return false
+    }
+
+    // ─── Authentication ─────────────────────────────────────────────────
+
+    getAuthState() {
+        return () => useCodexStore().authenticated
+    }
+
+    getAuthLoginCommand() {
+        // We don't bundle a Codex CLI, so we shell out to whatever ``codex``
+        // is on the user's PATH — no twicc launch prefix here, unlike Claude.
+        return 'codex login'
+    }
+
+    async requestAuthRecheck() {
+        // Lazy import to break the cycle between helpers and ws (ws imports
+        // useWebSocket, which depends on providers/index, which imports
+        // helpers).
+        const { sendCheckAuth } = await import('./ws')
+        sendCheckAuth()
     }
 
     getDefaultValue(field) {

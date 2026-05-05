@@ -1,0 +1,156 @@
+"""
+Codex CLI authentication state.
+
+Runs ``codex login status`` to determine whether the user is logged into
+Codex. Unlike Claude Code we don't bundle a CLI binary here — we shell
+out to whatever ``codex`` is on the user's PATH.
+
+Mirrors the surface of ``providers.claude_code.auth`` so the auth_task
+and the WS handler can stay structurally identical between providers.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+
+from channels.layers import get_channel_layer
+
+logger = logging.getLogger(__name__)
+
+# Cached last known auth state (None = never checked yet).
+_last_known_authenticated: bool | None = None
+
+# Event used by the auth_task to break out of its idle (authenticated) state
+# when something (manual recheck, periodic flip to False) suggests the state
+# should be re-checked or polling should resume.
+_auth_wake_event: asyncio.Event | None = None
+
+# Timeout for the ``codex login status`` subprocess call.
+_AUTH_STATUS_TIMEOUT = 10
+
+
+def _build_auth_message(authenticated: bool) -> dict:
+    """Build the ``codex:auth_updated`` message payload."""
+    return {
+        "type": "codex:auth_updated",
+        "authenticated": authenticated,
+    }
+
+
+def get_last_known_authenticated() -> bool | None:
+    """Return the last known auth state (None if never checked yet)."""
+    return _last_known_authenticated
+
+
+def get_auth_wake_event() -> asyncio.Event:
+    """Get (lazily create) the wake event used to interrupt the auth_task's idle state."""
+    global _auth_wake_event
+    if _auth_wake_event is None:
+        _auth_wake_event = asyncio.Event()
+    return _auth_wake_event
+
+
+async def check_auth_status() -> bool:
+    """Run ``codex login status`` and return ``True`` when the exit code is 0.
+
+    The Codex CLI uses the exit code as the source of truth (0 = logged in,
+    1 = not logged in). We don't parse stdout — only the return code.
+
+    Returns ``False`` on any failure (process spawn error, timeout, non-zero
+    exit code, missing binary).
+    """
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "codex", "login", "status",
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+    except FileNotFoundError:
+        logger.warning("Cannot check Codex auth status: 'codex' binary not found on PATH")
+        return False
+    except Exception as e:
+        logger.warning("Cannot launch Codex auth status check: %s", e)
+        return False
+
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=_AUTH_STATUS_TIMEOUT)
+    except asyncio.TimeoutError:
+        logger.warning("Codex auth status check timed out after %ds", _AUTH_STATUS_TIMEOUT)
+        proc.kill()
+        try:
+            await proc.wait()
+        except Exception:
+            pass
+        return False
+
+    return proc.returncode == 0
+
+
+async def get_auth_message_for_connection() -> dict:
+    """Build a ``codex:auth_updated`` message for a single client on WS connect.
+
+    Uses the cached state populated by ``auth_task``. If the cache is still
+    unknown (very first connection in a fresh process), runs one inline so
+    the connecting client doesn't briefly see a wrong "not authenticated"
+    state.
+    """
+    if _last_known_authenticated is None:
+        await check_and_broadcast()
+    return _build_auth_message(bool(_last_known_authenticated))
+
+
+async def check_and_broadcast(*, force: bool = False) -> bool:
+    """Run a Codex auth status check and broadcast ``codex:auth_updated`` on change.
+
+    When ``force`` is True, the message is always broadcast (used to answer
+    a manual "Check again" request from the client).
+
+    Always sets the wake event when the result is False so the auth_task
+    resumes/keeps polling.
+    """
+    global _last_known_authenticated
+
+    authenticated = await check_auth_status()
+    changed = authenticated != _last_known_authenticated
+    _last_known_authenticated = authenticated
+
+    if changed or force:
+        channel_layer = get_channel_layer()
+        await channel_layer.group_send(
+            "updates",
+            {
+                "type": "broadcast",
+                "data": _build_auth_message(authenticated),
+            },
+        )
+
+    if not authenticated:
+        get_auth_wake_event().set()
+
+    return authenticated
+
+
+async def mark_unauthenticated_and_broadcast() -> None:
+    """Force the auth state to ``False`` and broadcast.
+
+    Currently unused (no SDK integration yet), but kept for symmetry with
+    Claude Code's surface so the auth_task and WS handler can stay
+    structurally identical between providers.
+    """
+    global _last_known_authenticated
+
+    changed = _last_known_authenticated is not False
+    _last_known_authenticated = False
+
+    if changed:
+        channel_layer = get_channel_layer()
+        await channel_layer.group_send(
+            "updates",
+            {
+                "type": "broadcast",
+                "data": _build_auth_message(False),
+            },
+        )
+
+    get_auth_wake_event().set()

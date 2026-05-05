@@ -26,6 +26,7 @@ from twicc.agent.registry import get_agent_manager_registry
 from twicc.agent_settings_presets import read_agent_settings_presets, write_agent_settings_presets
 from twicc.core.enums import Provider
 from twicc.providers.claude_code.ws import ClaudeCodeWSHandler
+from twicc.providers.codex.ws import CodexWSHandler
 from twicc.providers.helpers import AgentSettings, get_provider_helpers, get_provider_helpers_registry
 from twicc.synced_settings import _settings_lock, prepare_settings_for_client, read_synced_settings, write_synced_settings
 from twicc.workspaces import read_workspaces, write_workspaces
@@ -298,6 +299,7 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
 
     PROVIDER_HANDLERS: dict[Provider, type] = {
         Provider.CLAUDE_CODE: ClaudeCodeWSHandler,
+        Provider.CODEX: CodexWSHandler,
     }
 
     def __init__(self, *args, **kwargs):

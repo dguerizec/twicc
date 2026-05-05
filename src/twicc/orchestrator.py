@@ -111,9 +111,11 @@ class OrchestratorRegistry:
         # each provider orchestrator imports models / registries that
         # eventually import from this package.
         from twicc.providers.claude_code.orchestrator import ClaudeCodeOrchestrator
+        from twicc.providers.codex.orchestrator import CodexOrchestrator
 
         self.PROVIDER_ORCHESTRATORS = {
             Provider.CLAUDE_CODE: ClaudeCodeOrchestrator,
+            Provider.CODEX: CodexOrchestrator,
         }
         self._orchestrators: dict[Provider, BaseOrchestrator] = {
             key: cls() for key, cls in self.PROVIDER_ORCHESTRATORS.items()
