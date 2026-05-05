@@ -192,7 +192,6 @@ export class ClaudeCodeHelpers extends BaseProviderHelpers {
             ...entry,
             url: 'https://status.claude.com/',
             tooltip: "Claude code status on Anthropic's side",
-            shortLabel: 'CC',
         }
     }
 

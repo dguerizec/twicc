@@ -7,7 +7,7 @@ import { useDataStore } from '../../stores/data'
 import { useAuthStore } from '../../stores/auth'
 import { getProviderHelpers, getProviderLabel, getProviderOptions, getRegisteredProviders } from '../../providers'
 import { useClaudeCodeStore } from '../../providers/claude_code/store'
-import { DISPLAY_MODE, COLOR_SCHEME, SESSION_TIME_FORMAT, DEFAULT_MAX_CACHED_SESSIONS, WA_THEME, WA_THEME_LABELS, WA_BRAND, WA_BRAND_LABELS } from '../../constants'
+import { DISPLAY_MODE, COLOR_SCHEME, SESSION_TIME_FORMAT, DEFAULT_MAX_CACHED_SESSIONS, WA_THEME, WA_THEME_LABELS, WA_BRAND, WA_BRAND_LABELS, PROVIDER_ICON } from '../../constants'
 import NotificationSettings from './NotificationSettings.vue'
 import AppTooltip from '../ui/AppTooltip.vue'
 import ChangelogDialog from './ChangelogDialog.vue'
@@ -328,12 +328,20 @@ const currentStatusDisplay = computed(() => {
     return entry.helpers.getServiceStatusDisplay(status)
 })
 
+const currentStatusIcon = computed(() => {
+    const entry = currentStatusProvider.value
+    return entry ? PROVIDER_ICON[entry.provider] ?? null : null
+})
+
+const hasMultipleStatusProviders = computed(() => _statusAwareProviders.length > 1)
+
 const statusFooterId = useId()
 const statusFooterRef = ref(null)
+const statusNextButtonId = useId()
 
 let _statusRotationTimer = null
-function _startStatusRotation() {
-    if (_statusRotationTimer) return
+function _scheduleStatusRotation() {
+    if (_statusRotationTimer) clearInterval(_statusRotationTimer)
     if (_statusAwareProviders.length <= 1) return
     _statusRotationTimer = setInterval(() => {
         if (statusFooterRef.value && statusFooterRef.value.matches(':hover')) return
@@ -347,7 +355,15 @@ function _stopStatusRotation() {
         _statusRotationTimer = null
     }
 }
-_startStatusRotation()
+function cycleStatusProvider() {
+    const total = _statusAwareProviders.length
+    if (total <= 1) return
+    currentStatusProviderIndex.value = (currentStatusProviderIndex.value + 1) % total
+    // Restart the timer so the freshly selected provider gets the full
+    // rotation interval rather than whatever remained on the previous tick.
+    _scheduleStatusRotation()
+}
+_scheduleStatusRotation()
 onBeforeUnmount(_stopStatusRotation)
 
 // Display mode options for the select
@@ -1138,10 +1154,19 @@ function onChangelogClose() {
                 :class="`settings-footer-status--${currentStatusDisplay.modifier}`"
                 :id="statusFooterId"
             >
+                <wa-icon v-if="currentStatusIcon" family="brands" :name="currentStatusIcon" class="settings-footer-status-icon"></wa-icon>
                 <span class="status-dot"></span>
-                {{ currentStatusDisplay.shortLabel }}: {{ currentStatusDisplay.label }}
+                {{ currentStatusDisplay.label }}
             </a>
             <AppTooltip v-if="currentStatusDisplay" :for="statusFooterId">{{ currentStatusDisplay.tooltip }}</AppTooltip>
+            <wa-icon
+                v-if="currentStatusDisplay && hasMultipleStatusProviders"
+                :id="statusNextButtonId"
+                class="settings-footer-status-next"
+                name="repeat"
+                @click="cycleStatusProvider"
+            ></wa-icon>
+            <AppTooltip v-if="currentStatusDisplay && hasMultipleStatusProviders" :for="statusNextButtonId">Switch to the next provider</AppTooltip>
             <wa-button
                 v-if="showLogout"
                 :id="logoutButtonId"
@@ -1572,6 +1597,11 @@ wa-popover > wa-divider {
 
 .settings-footer-status:hover {
     text-decoration: underline !important;
+}
+
+.settings-footer-status-next {
+    cursor: pointer;
+    margin-left: var(--wa-space-3xs);
 }
 
 .status-dot {

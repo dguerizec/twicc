@@ -146,16 +146,18 @@ export class BaseProviderHelpers {
 
     /**
      * Render-side descriptor for a status value. Returns
-     * ``{ label, modifier, url, tooltip, shortLabel }`` or ``null`` when
-     * the provider doesn't expose a status surface or doesn't recognise
-     * the value.
+     * ``{ label, modifier, url, tooltip }`` or ``null`` when the provider
+     * doesn't expose a status surface or doesn't recognise the value.
      *
      * - ``label``: human-readable status name (e.g. "Operational")
      * - ``modifier``: one of ``ok`` / ``warning`` / ``error`` / ``info``,
      *   used by the footer to colour the dot
      * - ``url``: external link to the public status page
      * - ``tooltip``: hover text (e.g. "Claude code status on Anthropic's side")
-     * - ``shortLabel``: 2–4 char compact label used in the footer ("CC", "CX")
+     *
+     * The provider identifier itself is shown via the ``PROVIDER_ICON`` map
+     * in ``constants.js`` (rendered as ``<wa-icon>``), so the descriptor
+     * does not carry a per-provider label here.
      *
      * Default: ``null``.
      */

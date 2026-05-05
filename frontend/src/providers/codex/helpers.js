@@ -40,6 +40,16 @@ const USAGE_FILE_FIELD_TO_STORE_BINDING = {
     dump_path:    { getter: 'usageDumpFilePath',    setter: 'setUsageDumpFilePath' },
 }
 
+// Statuspage display map: Statuspage v2 status values → footer rendering.
+// Matches the status strings broadcast by the backend statuspage task.
+const OPENAI_STATUS_DISPLAY = {
+    operational:          { label: 'Operational',      modifier: 'ok' },
+    degraded_performance: { label: 'Degraded',         modifier: 'warning' },
+    partial_outage:       { label: 'Partial outage',   modifier: 'warning' },
+    major_outage:         { label: 'Major outage',     modifier: 'error' },
+    under_maintenance:    { label: 'Maintenance',      modifier: 'info' },
+}
+
 // Per-field choice catalogue for the Codex provider.
 // ``selected_model`` is intentionally absent: the model list is served via
 // the model registry (see ``getModelRegistry``).
@@ -189,6 +199,21 @@ export class CodexHelpers extends BaseProviderHelpers {
         const binding = USAGE_FILE_FIELD_TO_STORE_BINDING[field]
         if (!binding) return
         useCodexStore()[binding.setter](value)
+    }
+
+    // ─── Service status (OpenAI statuspage) ──────────────────────────────
+
+    getServiceStatus() {
+        return () => useCodexStore().openaiStatus
+    }
+
+    getServiceStatusDisplay(status) {
+        const entry = OPENAI_STATUS_DISPLAY[status] ?? { label: status, modifier: 'ok' }
+        return {
+            ...entry,
+            url: 'https://status.openai.com/',
+            tooltip: "Codex status on OpenAI's side",
+        }
     }
 
     getDefaultValueLabel(field, value) {

@@ -16,6 +16,17 @@ export const useCodexStore = defineStore('codex', () => {
         authenticated.value = value
     }
 
+    // ─── OpenAI statuspage ───────────────────────────────────────────────
+
+    // OpenAI statuspage component status (from codex:openai_status messages).
+    // Defaults to 'operational' so the UI doesn't flash a warning before the
+    // first push arrives.
+    const openaiStatus = ref('operational')
+
+    function setOpenaiStatus(value) {
+        openaiStatus.value = value
+    }
+
     // ─── Usage quota ─────────────────────────────────────────────────────
 
     // Per-provider usage data. ``null`` until the bootstrap seed or the
@@ -110,6 +121,8 @@ export const useCodexStore = defineStore('codex', () => {
     return {
         authenticated,
         setAuthenticated,
+        openaiStatus,
+        setOpenaiStatus,
         usage,
         setUsage,
         usageReadFileEnabled,
