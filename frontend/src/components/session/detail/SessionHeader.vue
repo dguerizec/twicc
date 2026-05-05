@@ -3,7 +3,7 @@ import { ref, computed, watch, inject } from 'vue'
 import { useDataStore } from '../../../stores/data'
 import { useSettingsStore } from '../../../stores/settings'
 import { formatDate } from '../../../utils/date'
-import { PROCESS_STATE, PROCESS_STATE_COLORS, PROCESS_STATE_NAMES } from '../../../constants'
+import { PROCESS_STATE, PROCESS_STATE_COLORS, PROCESS_STATE_NAMES, PROVIDER_ICON } from '../../../constants'
 import { claudeCodeHelpers } from '../../../providers/claude_code/helpers'
 import { getProviderLabel } from '../../../providers'
 import { stopSubagent } from '../../../composables/useWebSocket'
@@ -53,6 +53,7 @@ const showCosts = computed(() => settingsStore.areCostsShown)
 // Session data from store
 const session = computed(() => store.getSession(props.sessionId))
 const providerLabel = computed(() => getProviderLabel(session.value?.provider))
+const providerIcon = computed(() => PROVIDER_ICON[session.value?.provider] ?? null)
 
 // Get display name for header
 // - Session mode: title if available, "New session" for drafts without title, otherwise session ID
@@ -533,7 +534,8 @@ defineExpose({
 
                 <template v-if="formattedModel">
                     <span :id="`session-header-${sessionId}-model`" class="meta-item">
-                        <wa-icon auto-width name="robot" variant="classic"></wa-icon>
+                        <wa-icon v-if="providerIcon" auto-width family="brands" :name="providerIcon"></wa-icon>
+                        <wa-icon v-else auto-width name="robot" variant="classic"></wa-icon>
                         <span>{{ formattedModel }}</span>
                     </span>
                     <AppTooltip :for="`session-header-${sessionId}-model`">Last used model</AppTooltip>
