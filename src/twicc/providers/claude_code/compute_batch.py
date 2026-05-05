@@ -20,6 +20,13 @@ from typing import NamedTuple
 import orjson
 from django.conf import settings
 
+from twicc.git import resolve_git_from_path
+from twicc.projects import (
+    ensure_project_directory,
+    ensure_project_git_root,
+    get_project_git_root,
+    update_project_metadata,
+)
 from .compute import (
     AGENT_TOOL_NAMES,
     GroupState,
@@ -31,16 +38,11 @@ from .compute import (
     compute_file_change_stats,
     compute_item_cost_and_usage,
     compute_item_metadata,
-    ensure_project_directory,
-    ensure_project_git_root,
     extract_item_timestamp,
     extract_title_from_user_message,
-    get_project_git_root,
     resolve_git_for_item,
-    resolve_git_from_path,
     transform_local_command_output,
     transform_task_notification,
-    update_project_metadata,
 )
 from twicc.core.models import AgentLink, Session, SessionItem, SessionType, ToolResultLink
 

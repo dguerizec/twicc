@@ -951,5 +951,144 @@ def git_discard(git_directory: str, file_path: str) -> None:
         raise GitError(f"git restore failed: {stderr}" if stderr else "git restore failed")
 
 
+# ---------------------------------------------------------------------------
+# Filesystem .git resolution (no subprocess)
+# ---------------------------------------------------------------------------
+# These helpers walk up from a directory to find a ``.git`` folder/file and
+# read its ``HEAD`` directly, instead of shelling out to ``git``. They are
+# called from per-item compute paths where invoking ``git`` per call would
+# dominate the cost. Filesystem-only and provider-agnostic.
+
+
+# Module-level cache for batch compute: directory path → (git_directory, git_branch) or None
+_git_resolution_cache: dict[str, tuple[str, str] | None] = {}
+
+
+def resolve_git_from_path(dir_path: str, *, use_cache: bool = True) -> tuple[str, str] | None:
+    """
+    Walk up from dir_path to find a .git entry and resolve git directory and branch.
+
+    Args:
+        dir_path: An absolute directory path to start from
+        use_cache: Whether to read from and write to the module-level resolution cache.
+                   Set to False for live resolution where fresh results are needed.
+
+    Returns:
+        (git_directory, git_branch) tuple, or None if no .git found
+    """
+    traversed: list[str] = []
+    current = dir_path
+
+    while True:
+        # Check cache for this directory
+        if use_cache and current in _git_resolution_cache:
+            result = _git_resolution_cache[current]
+            # Cache all traversed intermediate paths
+            for path in traversed:
+                _git_resolution_cache[path] = result
+            return result
+
+        traversed.append(current)
+
+        git_path = os.path.join(current, '.git')
+        try:
+            if os.path.isdir(git_path):
+                # Main repo: .git is a directory
+                branch = read_head_branch(os.path.join(git_path, 'HEAD'))
+                result = (current, branch) if branch is not None else None
+                # Cache all traversed paths
+                if use_cache:
+                    for path in traversed:
+                        _git_resolution_cache[path] = result
+                return result
+
+            elif os.path.isfile(git_path):
+                # Worktree: .git is a file containing "gitdir: /path/to/.git/worktrees/name"
+                result = _resolve_worktree_git(current, git_path)
+                # Cache all traversed paths
+                if use_cache:
+                    for path in traversed:
+                        _git_resolution_cache[path] = result
+                return result
+
+        except OSError:
+            # Permission error or other OS issue, skip this level
+            pass
+
+        # Move up one directory
+        parent = os.path.dirname(current)
+        if parent == current:
+            # Reached filesystem root without finding .git
+            if use_cache:
+                for path in traversed:
+                    _git_resolution_cache[path] = None
+            return None
+        current = parent
+
+
+def _resolve_worktree_git(git_directory: str, git_file_path: str) -> tuple[str, str] | None:
+    """
+    Resolve git branch from a worktree's .git file.
+
+    The .git file contains something like:
+        gitdir: /home/user/project/.git/worktrees/worktree-name
+
+    The HEAD file in that gitdir path contains the branch reference.
+
+    Args:
+        git_directory: The directory containing the .git file (the worktree root)
+        git_file_path: Path to the .git file
+
+    Returns:
+        (git_directory, git_branch) tuple, or None on error
+    """
+    try:
+        with open(git_file_path, 'r') as f:
+            content = f.read().strip()
+    except OSError:
+        return None
+
+    if not content.startswith('gitdir: '):
+        return None
+
+    gitdir = content[len('gitdir: '):]
+    head_path = os.path.join(gitdir, 'HEAD')
+    branch = read_head_branch(head_path)
+    if branch is None:
+        return None
+    return (git_directory, branch)
+
+
+def read_head_branch(head_path: str) -> str | None:
+    """
+    Read a git HEAD file and extract the branch name or commit hash.
+
+    HEAD contains either:
+    - "ref: refs/heads/feature/upload" → branch = "feature/upload"
+    - A raw commit hash (40 hex chars) → detached HEAD, return the hash
+
+    Args:
+        head_path: Path to the HEAD file
+
+    Returns:
+        Branch name or commit hash, or None on error
+    """
+    try:
+        with open(head_path, 'r') as f:
+            content = f.read().strip()
+    except OSError:
+        return None
+
+    if content.startswith('ref: refs/heads/'):
+        return content[len('ref: refs/heads/'):]
+    elif content.startswith('ref: '):
+        # Other ref (unlikely but handle it)
+        return content[len('ref: '):]
+    elif len(content) >= 7 and all(c in '0123456789abcdef' for c in content):
+        # Detached HEAD: raw commit hash
+        return content
+    return None
+
+
 class GitError(Exception):
     """Raised when a git operation fails."""

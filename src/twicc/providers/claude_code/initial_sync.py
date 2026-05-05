@@ -17,10 +17,7 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from .compute import (
-    ensure_project_git_root,
-    update_project_total_cost,
-)
+from twicc.projects import ensure_project_git_root, update_project_total_cost
 from .helpers import ClaudeCodeHelpers
 from twicc.core.enums import Provider
 from twicc.core.models import Project, Session, SessionItem, SessionType

@@ -23,18 +23,26 @@ from twicc.providers.claude_code.agent.manager import get_claude_code_agent_mana
 from twicc.providers.claude_code.agent.original_file_cache import pop_original_file as _pop_cached_original_file
 from twicc.providers.helpers import AgentSettings
 from .helpers import ClaudeCodeHelpers
+from twicc.git import read_head_branch, resolve_git_from_path
+from twicc.projects import (
+    ensure_project_directory,
+    ensure_project_git_root,
+    get_project_directory,
+    get_project_git_root,
+    load_project_directories,
+    load_project_git_roots,
+    update_project_metadata as _update_project_metadata_sync,
+)
 from .compute import AgentLinkUpdate, AgentStoppedUpdate, ToolResultUpdate, cache_agent_prompt, \
     check_agent_naturally_stopped, compute_item_cost_and_usage, \
     compute_item_metadata, \
     compute_item_metadata_live, create_agent_link_from_subagent, create_agent_link_from_tool_result, \
-    create_agent_link_from_tool_use, create_tool_result_link_live, ensure_project_directory, ensure_project_git_root, \
+    create_agent_link_from_tool_use, create_tool_result_link_live, \
     extract_item_timestamp, \
     extract_text_from_content, extract_title_from_user_message, get_cached_agent_prompt, get_message_content, \
-    get_project_directory, get_project_git_root, get_tool_result_id, is_agent_link_done, \
-    is_tool_result_item, load_project_directories, \
-    load_project_git_roots, read_head_branch, resolve_git_from_path, \
-    transform_local_command_output, transform_task_notification, \
-    update_project_metadata as _update_project_metadata_sync
+    get_tool_result_id, is_agent_link_done, \
+    is_tool_result_item, \
+    transform_local_command_output, transform_task_notification
 from twicc.core.enums import ItemDisplayLevel, ItemKind, Provider
 from twicc.core.models import Project, Session, SessionItem, SessionType
 from twicc.core.serializers import (
