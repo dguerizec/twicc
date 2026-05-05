@@ -10,6 +10,9 @@ import { computed } from 'vue'
 import { vPopoverFocusFix } from '../../directives/vPopoverFocusFix'
 import { formatPresetSummary } from '../../utils/presetFormat'
 import { DEFAULT_SENTINEL } from '../../composables/useSessionAgentSettings'
+import { getProviderOptions } from '../../providers'
+import { PROVIDER_ICON } from '../../constants'
+import { useDataStore } from '../../stores/data'
 import AgentSettingsPresetsDialog from '../app/AgentSettingsPresetsDialog.vue'
 
 const props = defineProps({
@@ -41,10 +44,41 @@ const {
     presetsDialogOpen,
     handlePresetSelect,
     restoreSettings,
+    resetAllToDefaults,
     startupChanges,
     providerHelpers,
     providerStore,
 } = props.settings
+
+const dataStore = useDataStore()
+
+// Provider switcher (drafts only) — list of registered providers with their
+// icon, current-state flag, and disabled flag for the active one.
+const providerSwitcherOptions = computed(() => {
+    const current = props.session?.provider
+    return getProviderOptions().map(opt => ({
+        value: opt.value,
+        label: opt.label,
+        icon: PROVIDER_ICON[opt.value] ?? null,
+        active: opt.value === current,
+    }))
+})
+
+const currentProviderIcon = computed(() => {
+    const provider = props.session?.provider
+    return provider ? (PROVIDER_ICON[provider] ?? null) : null
+})
+
+const currentProviderLabel = computed(() => providerHelpers.value?.constructor.label ?? null)
+
+function handleProviderSelect(event) {
+    const provider = event.detail?.item?.value
+    if (!provider || provider === props.session?.provider) return
+    dataStore.setDraftProvider(props.settings.sessionId.value, provider)
+    // Reset every per-session override so the bundle follows the new
+    // provider's defaults.
+    resetAllToDefaults()
+}
 
 // Order of the rows below the model row. ``supportsAgentSetting`` filters
 // each entry per-provider so a field nobody declares is silently skipped.
@@ -165,6 +199,37 @@ function resetField(field) {
     >
         <!-- Apply preset / Reset / Manage (non-scrollable) -->
         <div class="settings-panel-presets">
+            <!-- Provider switcher: drafts only. Switching resets every per-
+                 session override so the bundle follows the new provider's
+                 defaults. -->
+            <wa-dropdown v-if="isDraft" @wa-select="handleProviderSelect">
+                <wa-button slot="trigger" size="small" appearance="outlined">
+                    <wa-icon
+                        v-if="currentProviderIcon"
+                        slot="start"
+                        auto-width
+                        family="brands"
+                        :name="currentProviderIcon"
+                    ></wa-icon>
+                    {{ currentProviderLabel ?? 'Provider' }}
+                    <wa-icon slot="end" name="caret-down"></wa-icon>
+                </wa-button>
+                <wa-dropdown-item
+                    v-for="opt in providerSwitcherOptions"
+                    :key="opt.value"
+                    :value="opt.value"
+                    :disabled="opt.active"
+                >
+                    <wa-icon
+                        v-if="opt.icon"
+                        slot="icon"
+                        auto-width
+                        family="brands"
+                        :name="opt.icon"
+                    ></wa-icon>
+                    {{ opt.label }}
+                </wa-dropdown-item>
+            </wa-dropdown>
             <wa-dropdown @wa-select="handlePresetSelect">
                 <wa-button slot="trigger" size="small" appearance="outlined" :disabled="isStarting">
                     <wa-icon slot="start" name="sliders"></wa-icon>
@@ -308,6 +373,7 @@ function resetField(field) {
 .settings-panel-presets {
     display: flex;
     justify-content: center;
+    gap: var(--wa-space-xs);
     flex-shrink: 0;
     padding-bottom: var(--wa-space-s);
     wa-dropdown::part(menu) {

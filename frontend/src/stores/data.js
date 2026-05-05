@@ -786,20 +786,44 @@ export const useDataStore = defineStore('data', {
         createDraftSession(projectId) {
             const id = generateUUID()
             const now = Date.now() / 1000  // Unix timestamp in seconds
+            const provider = useSettingsStore().defaultProvider
             this.sessions[id] = {
                 id,
                 project_id: projectId,
-                provider: useSettingsStore().defaultProvider,
+                provider,
                 title: null,  // null = user hasn't set a title yet, UI will display "New session"
                 mtime: now,
                 last_line: 0,
                 draft: true,
             }
             // Persist to IndexedDB
-            saveDraftSession(id, { projectId }).catch(err =>
+            saveDraftSession(id, { projectId, provider }).catch(err =>
                 console.warn('Failed to save draft session to IndexedDB:', err)
             )
             return id
+        },
+
+        /**
+         * Change the provider of an existing draft session.
+         * No-op if the session is not a draft. Persists the new provider to
+         * IndexedDB so it survives reloads. Caller is responsible for resetting
+         * the per-session agent settings (selected_*) so they follow the new
+         * provider's defaults.
+         * @param {string} sessionId
+         * @param {string} provider - Wire key of the new provider
+         */
+        setDraftProvider(sessionId, provider) {
+            const session = this.sessions[sessionId]
+            if (!session?.draft) return
+            if (session.provider === provider) return
+            session.provider = provider
+            saveDraftSession(sessionId, {
+                projectId: session.project_id,
+                title: session.title,
+                provider,
+            }).catch(err =>
+                console.warn('Failed to save draft session provider to IndexedDB:', err)
+            )
         },
 
         /**
@@ -2861,10 +2885,11 @@ export const useDataStore = defineStore('data', {
             const session = this.sessions[sessionId]
             if (!session?.draft) return
 
-            // Update IndexedDB with projectId and title (fire and forget)
+            // Update IndexedDB with projectId, title, and provider (fire and forget)
             saveDraftSession(sessionId, {
                 projectId: session.project_id,
-                title
+                title,
+                provider: session.provider,
             }).catch(err =>
                 console.warn('Failed to save draft session title to IndexedDB:', err)
             )
@@ -2915,11 +2940,11 @@ export const useDataStore = defineStore('data', {
                 const draftSessions = await getAllDraftSessions()
                 const now = Date.now() / 1000
                 const defaultProvider = useSettingsStore().defaultProvider
-                for (const [sessionId, { projectId, title }] of Object.entries(draftSessions)) {
+                for (const [sessionId, { projectId, title, provider }] of Object.entries(draftSessions)) {
                     this.sessions[sessionId] = {
                         id: sessionId,
                         project_id: projectId,
-                        provider: defaultProvider,
+                        provider: provider || defaultProvider,
                         title: title || null,  // null = user hasn't set a title yet
                         mtime: now,
                         last_line: 0,
