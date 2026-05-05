@@ -123,6 +123,29 @@ Always check your current working directory before starting the servers so you'l
 When the user asks to start the servers in a worktree, give them the localhost urls for the frontend and backend servers based on the ports shown in devctl's output (e.g., `Frontend: http://localhost:5274`, `Backend: http://localhost:3501`).
 When the user asks you to exit/kill/delete (etc...) a worktree, you MUST run the "stop all" command to kill the processes, even if you didn't start them yourself.
 
+#### Running Python / Django code in a worktree without devctl
+
+`paths.py` itself does **not** detect worktrees — only `devctl.py` does, by injecting `TWICC_DATA_DIR=<worktree>` into the backend processes it spawns. Any other Python invocation (one-liners, `manage.py`, Django shell, ad-hoc migrations, scripts) will silently fall back to `~/.twicc/` and hit the **production** data directory, even if you `cd` into the worktree first.
+
+When working inside a worktree, **always** do both of:
+1. `cd` into the worktree root (so the editable install resolves to that worktree's source code, including its migrations).
+2. Set `TWICC_DATA_DIR=<worktree>` in the environment of the command (so `paths.py` returns the worktree's `db/`, `logs/`, etc.).
+
+```bash
+cd <worktree>
+TWICC_DATA_DIR=$PWD uv run python -c "..."
+TWICC_DATA_DIR=$PWD uv run python -m django <command> --settings=twicc.django.settings
+```
+
+Before running any read or write that depends on the data directory (especially migrations or DB writes), print the resolved DB path first as a sanity check:
+
+```python
+from django.conf import settings
+print(settings.DATABASES['default']['NAME'])  # must point inside the worktree
+```
+
+Forgetting this is destructive: a manual `migrate` from the wrong cwd applies the worktree's branch-only migrations to the prod DB, leaving it in a state the `main` code can no longer write to.
+
 ## Operations Reserved to User
 
 Claude never runs these operations on its own initiative. If the user explicitly asks you to run one of these operations, do it without asking for confirmation. Otherwise, notify the user at the end of a task or, if absolutely necessary during your work, pause the task and ask them the permission to do it or to do them manually:
