@@ -54,13 +54,37 @@ class BaseOrchestrator:
                 "Provider enum value."
             )
 
-    async def start(self, shutdown_event: asyncio.Event) -> None:
+        # Cross-provider lifecycle signals owned by the CLI.
+        #
+        # ``initial_sync_done`` and ``compute_done`` are pre-set by default
+        # so providers without those phases (e.g. Codex today) don't make
+        # the CLI wait forever on ``await asyncio.gather(*(o.<event>.wait()
+        # for o in orchestrators))``. Providers that do run the phase reset
+        # the event in their ``__init__`` and call ``.set()`` once their
+        # corresponding ``broadcast_startup_progress(..., completed=True)``
+        # has fired.
+        self.initial_sync_done = asyncio.Event()
+        self.initial_sync_done.set()
+        self.compute_done = asyncio.Event()
+        self.compute_done.set()
+
+        # Set by the CLI after ``init_search_index()`` returns. Providers
+        # that run a JSONL watcher writing to the index must ``await`` this
+        # before their watcher starts; providers without a watcher ignore it.
+        self.search_index_ready: asyncio.Event | None = None
+
+    async def start(self, shutdown_event: asyncio.Event, search_index_ready: asyncio.Event) -> None:
         """Launch this provider's background tasks.
 
         ``shutdown_event`` is the shared CLI-level event set by the
         signal handler when the server begins to stop; long-running
         async loops that this orchestrator owns should watch it and
         bail out promptly.
+
+        ``search_index_ready`` is a CLI-owned event set after the global
+        ``init_search_index()`` returns. Providers whose watcher writes
+        into the search index must ``await`` it before starting that
+        watcher.
         """
         raise NotImplementedError
 
@@ -137,7 +161,11 @@ class OrchestratorRegistry:
     # Aggregate operations driven by the CLI lifecycle
     # ------------------------------------------------------------------
 
-    async def start_all(self, shutdown_event: asyncio.Event) -> None:
+    async def start_all(
+        self,
+        shutdown_event: asyncio.Event,
+        search_index_ready: asyncio.Event,
+    ) -> None:
         """Start every provider's orchestrator in parallel.
 
         Each :meth:`BaseOrchestrator.start` is non-blocking (it schedules
@@ -145,9 +173,13 @@ class OrchestratorRegistry:
         eventual init work. ``return_exceptions=True`` keeps a single
         provider's startup failure from cancelling the others — failures
         are logged so they don't go silent.
+
+        ``search_index_ready`` is forwarded to every orchestrator so the
+        ones that own a watcher (which writes to the global Tantivy
+        index) can ``await`` it before starting that watcher.
         """
         results = await asyncio.gather(
-            *(orch.start(shutdown_event) for orch in self._orchestrators.values()),
+            *(orch.start(shutdown_event, search_index_ready) for orch in self._orchestrators.values()),
             return_exceptions=True,
         )
         for (provider, _), result in zip(self.items(), results):
@@ -156,6 +188,22 @@ class OrchestratorRegistry:
                     "Orchestrator for %s failed to start: %s",
                     provider.value, result, exc_info=result,
                 )
+
+    async def wait_initial_sync_done(self) -> None:
+        """Block until every provider's initial sync has reported completion.
+
+        Providers without an initial sync inherit a pre-set event from
+        :class:`BaseOrchestrator` so this returns instantly for them.
+        """
+        await asyncio.gather(*(orch.initial_sync_done.wait() for orch in self._orchestrators.values()))
+
+    async def wait_compute_done(self) -> None:
+        """Block until every provider's background compute has reported completion.
+
+        Same pre-set default as :meth:`wait_initial_sync_done` for
+        providers without a compute phase.
+        """
+        await asyncio.gather(*(orch.compute_done.wait() for orch in self._orchestrators.values()))
 
     def request_thread_stop_all(self) -> None:
         """Signal every provider's blocking sync threads to stop.

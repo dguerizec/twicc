@@ -1,16 +1,21 @@
 """
-Background search indexing task.
+Cross-provider startup search-indexing task.
 
-Indexes session messages into the Tantivy search index at startup.
-Sessions with an outdated or missing search_version are re-indexed.
-New sessions indexed by the watcher get search_version set inline,
-so they don't need background reprocessing.
+Walks every session whose ``search_version`` is outdated and feeds it
+into the global Tantivy index. The extraction of indexable text from
+``SessionItem.content`` is provider-specific and therefore delegated to
+``BaseProviderHelpers.get_indexable_messages`` — exactly the same path
+used by ``twicc.search.reindex_session`` for live re-indexes. Sessions
+are processed in ``-mtime`` order so the user's most recent activity
+becomes searchable first.
 
-Architecture:
-- Runs as an async task in the main event loop
-- Uses asyncio.to_thread() for Tantivy calls (which are CPU/IO bound)
-- Uses sync_to_async for Django ORM reads
-- Processes one session at a time, committing after each
+Lifecycle:
+- Started by the CLI after every provider's ``compute_done`` event has
+  fired (see ``twicc.cli.run``).
+- Runs as an async task in the main event loop.
+- Uses ``asyncio.to_thread`` for Tantivy calls (CPU/IO bound).
+- Uses ``sync_to_async`` for Django ORM reads.
+- Processes one session at a time, committing after each.
 """
 
 from __future__ import annotations
@@ -19,14 +24,13 @@ import asyncio
 import logging
 import time
 
-import orjson
 from asgiref.sync import sync_to_async
 from django.conf import settings
 
 from twicc import search
-from .compute import get_message_content
 from twicc.core.enums import ItemKind
 from twicc.core.models import Session, SessionType
+from twicc.providers.helpers import get_provider_helpers
 from twicc.startup_progress import broadcast_startup_progress
 
 logger = logging.getLogger(__name__)
@@ -46,11 +50,13 @@ _stop_event: asyncio.Event | None = None
 async def start_search_index_task():
     """Background task to index sessions at startup.
 
-    Queries all sessions needing indexing (search_version != CURRENT_SEARCH_VERSION),
-    reads their user/assistant message items, extracts text, and indexes them
-    into the Tantivy search index.
+    Queries all sessions needing indexing (``search_version != CURRENT_SEARCH_VERSION``),
+    routes their content extraction through the owning provider's
+    helpers, and indexes the resulting messages into Tantivy.
 
-    Progress is broadcast via WebSocket for the frontend startup progress display.
+    Progress is broadcast via WebSocket for the frontend startup
+    progress display under the global ``search_index`` phase
+    (``provider=None``).
     """
     global _stop_event
     _stop_event = asyncio.Event()
@@ -66,11 +72,14 @@ async def start_search_index_task():
 
 async def _run_indexing():
     """Core indexing loop — separated for clean exception handling."""
-    # Find sessions needing indexing
+    # Find sessions needing indexing — recent first so the user can
+    # search through what they were just working on while older
+    # sessions catch up in the background.
     sessions_to_index = await sync_to_async(
         lambda: list(
             Session.objects.filter(type=SessionType.SESSION)
             .exclude(search_version=settings.CURRENT_SEARCH_VERSION)
+            .order_by("-mtime")
             .values_list("id", flat=True)
         )
     )()
@@ -127,8 +136,13 @@ async def _run_indexing():
 
 
 async def _index_session(session_id: str):
-    """Index all user/assistant messages and the session title for a single session."""
-    # Load session and its message items
+    """Index the session title plus every indexable message via the owning provider.
+
+    The text extraction (parsing ``item.content``, picking out role and
+    body) is provider-specific and lives in
+    ``BaseProviderHelpers.get_indexable_messages``. This function only
+    wires Tantivy I/O around it.
+    """
     session = await sync_to_async(Session.objects.get)(id=session_id)
 
     items = await sync_to_async(
@@ -136,9 +150,10 @@ async def _index_session(session_id: str):
             session.items.filter(
                 kind__in=[ItemKind.USER_MESSAGE, ItemKind.ASSISTANT_MESSAGE],
             ).order_by("line_num")
-            .values_list("content", "kind", "line_num", "timestamp", named=True)
         )
     )()
+
+    helpers = get_provider_helpers(session.provider)
 
     # Delete existing documents for this session (re-indexing case)
     await asyncio.to_thread(search.delete_session_documents, session.id)
@@ -156,28 +171,18 @@ async def _index_session(session_id: str):
             session.archived,
         )
 
-    # Index each message item
-    for item in items:
-        try:
-            parsed = orjson.loads(item.content)
-        except (orjson.JSONDecodeError, TypeError):
-            continue
-
-        content = get_message_content(parsed)
-        text = search.extract_indexable_text(content)
-
-        if text:
-            from_role = "user" if item.kind == ItemKind.USER_MESSAGE else "assistant"
-            await asyncio.to_thread(
-                search.index_document,
-                session.id,
-                session.project_id,
-                item.line_num,
-                text,
-                from_role,
-                item.timestamp,
-                session.archived,
-            )
+    # Provider extracts the text + role; we just pipe it into the index.
+    for msg in helpers.get_indexable_messages(items):
+        await asyncio.to_thread(
+            search.index_document,
+            session.id,
+            session.project_id,
+            msg.line_num,
+            msg.text,
+            msg.from_role,
+            msg.timestamp,
+            session.archived,
+        )
 
     # Commit after each session
     await asyncio.to_thread(search.commit)

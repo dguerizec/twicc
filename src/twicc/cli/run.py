@@ -6,9 +6,14 @@ own background tasks (sync, watcher, compute, auth, usage, ...) are
 owned by its :class:`BaseOrchestrator` subclass; the CLI just iterates
 the :class:`OrchestratorRegistry` to start, signal, and shut them down.
 
-The CLI itself owns the cross-provider tasks: the PyPI version check
-and the OpenRouter price sync (one fetch shared across every provider
-that has declared an ``OPENROUTER_MODEL_PREFIX``).
+The CLI itself owns the cross-provider tasks:
+- PyPI version check
+- OpenRouter price sync (one fetch shared across every provider that
+  has declared an ``OPENROUTER_MODEL_PREFIX``)
+- Tantivy search index lifecycle (``init_search_index`` /
+  ``shutdown_search_index``) and the startup search-indexing task,
+  gated on every provider's initial-sync / compute completion via the
+  events on :class:`BaseOrchestrator`.
 
 Used by:
 - ``uvx twicc`` / ``pip install twicc && twicc``  (via project.scripts)
@@ -62,6 +67,8 @@ from django.core.management import call_command  # noqa: E402
 
 from twicc.orchestrator import get_orchestrator_registry  # noqa: E402
 from twicc.pricing_task import start_price_sync_task, sync_all_providers  # noqa: E402
+from twicc.search import init_search_index, shutdown_search_index  # noqa: E402
+from twicc.search_indexing_task import start_search_index_task, stop_search_index_task  # noqa: E402
 from twicc.version_check_task import start_version_check_task, stop_version_check_task  # noqa: E402
 
 
@@ -73,6 +80,42 @@ async def _cancel_task(task: asyncio.Task, name: str) -> None:
     except asyncio.CancelledError:
         pass
     logger.info("%s stopped", name)
+
+
+async def _orchestrate_global_search(
+    orchestrators,
+    shutdown_event: asyncio.Event,
+    search_index_ready: asyncio.Event,
+    state: dict,
+) -> None:
+    """Coordinate the cross-provider parts of the search lifecycle.
+
+    Initializes the global Tantivy index once every provider's initial
+    sync has reported completion, then signals ``search_index_ready``
+    so provider watchers can start writing to it. After every
+    provider's background compute has reported completion, fires the
+    global search-indexing task.
+
+    The ``state`` dict is the bridge back to ``run_server``: when this
+    coroutine creates the search-indexing task, it stores the handle
+    under ``state["search_indexing_task"]`` so ``run_server`` can stop
+    it cleanly during shutdown. ``shutdown_event`` short-circuits both
+    gates so a server stopping mid-startup doesn't leave dangling work.
+    """
+    await orchestrators.wait_initial_sync_done()
+    if shutdown_event.is_set():
+        return
+
+    await asyncio.to_thread(init_search_index)
+    logger.info("Search index initialized (after every provider's initial sync)")
+    search_index_ready.set()
+
+    await orchestrators.wait_compute_done()
+    if shutdown_event.is_set():
+        return
+
+    state["search_indexing_task"] = asyncio.create_task(start_search_index_task())
+    logger.info("Background search indexing started (after every provider's compute)")
 
 
 async def run_server(port: int):
@@ -92,10 +135,26 @@ async def run_server(port: int):
     # ``OPENROUTER_MODEL_PREFIX``; failure here is logged and non-fatal.
     await sync_all_providers()
 
+    # Cross-provider search lifecycle event: set once ``init_search_index()``
+    # has returned, so provider watchers know they can write into the
+    # index. Created here, owned by ``_orchestrate_global_search``,
+    # awaited by every ``BaseOrchestrator.start`` that owns a watcher.
+    search_index_ready = asyncio.Event()
+
     # Per-provider orchestrators (started in parallel; each one is
     # responsible for its own task graph and dependency ordering).
     orchestrators = get_orchestrator_registry()
-    await orchestrators.start_all(shutdown_event)
+    await orchestrators.start_all(shutdown_event, search_index_ready)
+
+    # Cross-provider search-lifecycle coordinator. Runs in parallel to
+    # the server so ``init_search_index`` doesn't gate uvicorn startup.
+    # Stores its background ``search_indexing_task`` handle into the
+    # ``search_state`` dict once compute finishes, so we can stop it
+    # cleanly below.
+    search_state: dict = {"search_indexing_task": None}
+    search_orchestrator_task = asyncio.create_task(
+        _orchestrate_global_search(orchestrators, shutdown_event, search_index_ready, search_state)
+    )
 
     # Cross-provider periodic tasks
     price_sync_task = asyncio.create_task(start_price_sync_task(shutdown_event))
@@ -139,8 +198,26 @@ async def run_server(port: int):
         stop_version_check_task()
         await _cancel_task(version_check_task, "Version check task")
 
+        # Stop the global search-indexing task (if it ever started) and
+        # the coordinator that gated it. Order matters: cancel the
+        # coordinator first so it doesn't spawn a new search task after
+        # we've already stopped the running one.
+        await _cancel_task(search_orchestrator_task, "Search lifecycle coordinator")
+        search_indexing_task = search_state["search_indexing_task"]
+        if search_indexing_task is not None:
+            logger.info("Stopping search index task...")
+            stop_search_index_task()
+            await _cancel_task(search_indexing_task, "Search index task")
+        else:
+            logger.info("Search index task was not started, skipping")
+
         # Then let every provider tear down its own tasks (in parallel).
         await orchestrators.shutdown_all()
+
+        # Finally tear down the search index itself. Done after the
+        # providers' watchers are stopped so no late write races us.
+        logger.info("Shutting down search index...")
+        await asyncio.to_thread(shutdown_search_index)
 
         logger.info("Server shutdown complete")
 

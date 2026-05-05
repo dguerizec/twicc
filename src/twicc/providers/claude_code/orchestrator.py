@@ -3,14 +3,15 @@ Claude Code provider orchestrator.
 
 Owns the lifecycle of every async/background task that belongs to the Claude
 Code provider: initial JSONL sync, sessions watcher, background metadata
-compute, search index, auth/usage/statuspage/slash-commands polling, model
-retirement, cron restart, original file cache cleanup, and the
-ClaudeCodeAgentManager that wraps the Claude Agent SDK.
+compute, auth/usage/statuspage/slash-commands polling, model retirement,
+cron restart, original file cache cleanup, and the ClaudeCodeAgentManager
+that wraps the Claude Agent SDK.
 
 The CLI server entry point (``twicc.cli.run``) instantiates this class and
 delegates start/shutdown of all Claude Code tasks to it. Cross-provider tasks
-(PyPI version check, OpenRouter price sync) stay in the CLI module — pricing
-in particular is shared across every provider that has declared an
+(PyPI version check, OpenRouter price sync, search index lifecycle, global
+startup search-indexing task) stay in the CLI module — pricing in particular
+is shared across every provider that has declared an
 ``OPENROUTER_MODEL_PREFIX``, with a single fetch per cycle.
 """
 
@@ -42,10 +43,6 @@ from twicc.providers.claude_code.model_retirement_task import (
     start_model_retirement_task,
     stop_model_retirement_task,
 )
-from twicc.providers.claude_code.search_indexing_task import (
-    start_search_index_task,
-    stop_search_index_task,
-)
 from twicc.providers.claude_code.sessions_watcher import start_watcher, stop_watcher
 from twicc.providers.claude_code.slash_commands_task import (
     start_slash_commands_task,
@@ -53,7 +50,6 @@ from twicc.providers.claude_code.slash_commands_task import (
 )
 from twicc.providers.claude_code.statuspage_task import start_statuspage_task, stop_statuspage_task
 from twicc.providers.claude_code.usage_task import start_usage_sync_task, stop_usage_sync_task
-from twicc.search import init_search_index, shutdown_search_index
 from twicc.startup_progress import broadcast_startup_progress
 
 logger = logging.getLogger(__name__)
@@ -98,10 +94,15 @@ class ClaudeCodeOrchestrator(BaseOrchestrator):
 
     - initial_sync, usage_sync, auth_check, statuspage, slash_commands,
       original_file_cache_cleanup, model_retirement: start immediately.
-    - search index init + watcher + cron_restart + background_compute:
-      start after initial_sync.
-    - search_indexing: starts after background_compute finishes (via done
-      callback), unless the server is shutting down.
+    - watcher: starts after initial_sync **and** after the CLI has
+      initialized the global search index (so the watcher can write into
+      it as new items arrive).
+    - cron_restart + background_compute: start after initial_sync.
+
+    The cross-provider search-index init/shutdown and the global search
+    indexing background task live in the CLI now — this orchestrator
+    only signals its progress via :attr:`initial_sync_done` and
+    :attr:`compute_done` (inherited from :class:`BaseOrchestrator`).
 
     Pricing is owned by the CLI (cross-provider, single OpenRouter fetch
     shared by every provider that has an ``OPENROUTER_MODEL_PREFIX``); the
@@ -114,13 +115,15 @@ class ClaudeCodeOrchestrator(BaseOrchestrator):
 
     def __init__(self) -> None:
         super().__init__()
+        # This provider owns both phases — reset the inherited pre-set
+        # events so the CLI actually waits for our broadcasts.
+        self.initial_sync_done = asyncio.Event()
+        self.compute_done = asyncio.Event()
+
         # Cooperative stop event for the initial sync thread
         self._sync_stop_event = threading.Event()
         # Set by the host (CLI) when the server begins shutting down
         self._shutdown_event: asyncio.Event | None = None
-
-        # Internal dependency-signaling events
-        self._sync_done = asyncio.Event()
 
         # Tasks started immediately
         self._sync_task: asyncio.Task | None = None
@@ -137,7 +140,6 @@ class ClaudeCodeOrchestrator(BaseOrchestrator):
         self._watcher_task: asyncio.Task | None = None
         self._compute_task: asyncio.Task | None = None
         self._compute_ctx: ComputeContext | None = None
-        self._search_indexing_task: asyncio.Task | None = None
         self._cron_restart_task: asyncio.Task | None = None
 
     def request_thread_stop(self) -> None:
@@ -150,9 +152,10 @@ class ClaudeCodeOrchestrator(BaseOrchestrator):
         """
         self._sync_stop_event.set()
 
-    async def start(self, shutdown_event: asyncio.Event) -> None:
+    async def start(self, shutdown_event: asyncio.Event, search_index_ready: asyncio.Event) -> None:
         """Launch all Claude Code tasks. Returns once tasks are scheduled."""
         self._shutdown_event = shutdown_event
+        self.search_index_ready = search_index_ready
 
         self._sync_task = asyncio.create_task(self._initial_sync_task())
         self._orch_task = asyncio.create_task(self._dependency_orchestrator())
@@ -167,6 +170,13 @@ class ClaudeCodeOrchestrator(BaseOrchestrator):
         """Stop all Claude Code tasks in dependency-safe order."""
         # Make sure the initial sync thread cooperates if it's still running
         self._sync_stop_event.set()
+
+        # Unblock the CLI in case it was awaiting either lifecycle event:
+        # if a task was cancelled before reaching its natural ``set()``,
+        # the CLI's ``wait_initial_sync_done`` / ``wait_compute_done``
+        # would otherwise hang. Both calls are idempotent.
+        self.initial_sync_done.set()
+        self.compute_done.set()
 
         # Cancel startup tasks (may already be done)
         if self._sync_task is not None:
@@ -224,16 +234,6 @@ class ClaudeCodeOrchestrator(BaseOrchestrator):
             logger.info("Stopping model retirement task...")
             stop_model_retirement_task()
             await _cancel_task(self._retirement_task, "Model retirement task")
-
-        # Search index task (may not have started yet) + final index shutdown
-        if self._search_indexing_task is not None:
-            logger.info("Stopping search index task...")
-            stop_search_index_task()
-            await _cancel_task(self._search_indexing_task, "Search index task")
-        else:
-            logger.info("Search index task was not started, skipping")
-        logger.info("Shutting down search index...")
-        await asyncio.to_thread(shutdown_search_index)
 
         # Cron restart (may still be retrying)
         if self._cron_restart_task is not None:
@@ -297,46 +297,49 @@ class ClaudeCodeOrchestrator(BaseOrchestrator):
             subagents_count,
         )
 
-        self._sync_done.set()
+        self.initial_sync_done.set()
 
     async def _dependency_orchestrator(self) -> None:
-        """Wait for the initial sync, then start watcher + cron restart + compute.
+        """Wait for the initial sync, then start compute + cron restart + watcher.
 
         The CLI has already run the cross-provider initial price sync
         before this orchestrator was started, so prices are guaranteed
-        to be in DB by the time background compute kicks in.
+        to be in DB by the time background compute kicks in. The CLI
+        also owns ``init_search_index()`` and signals readiness via
+        :attr:`search_index_ready` — the watcher waits on it so it
+        never writes to an uninitialized index. The background compute
+        does not touch the index, so it starts as soon as the initial
+        sync is done.
         """
-        # Initialize search index before watcher starts, so the watcher can
-        # index new items into the search index as they arrive in real time.
-        await self._sync_done.wait()
-        await asyncio.to_thread(init_search_index)
-        logger.info("Search index initialized (after initial sync)")
+        await self.initial_sync_done.wait()
 
-        self._watcher_task = asyncio.create_task(start_watcher())
-        self._watcher_task.add_done_callback(_on_watcher_done)
-        logger.info("Watcher started (after initial sync)")
+        # Background compute is independent of the search index and can
+        # start as soon as the initial sync is done. The done_callback
+        # signals completion so the CLI's global search-indexing task
+        # can fire — it must run on success, failure, **and** cancel,
+        # otherwise the CLI would block forever.
+        self._compute_ctx = ComputeContext(provider=self.provider.value)
+        self._compute_task = asyncio.create_task(
+            start_background_compute_task(self._compute_ctx)
+        )
+        self._compute_task.add_done_callback(lambda _t: self.compute_done.set())
+        logger.info("Background compute started (after initial sync)")
 
-        # Restart cron jobs from previous process runs.
-        # Must run after watcher is up so that JSONL writes from restarted sessions are detected.
+        # Restart cron jobs from previous process runs. Must run after
+        # the watcher is up (below) so that JSONL writes from restarted
+        # sessions are picked up — but we schedule it now so that
+        # ``shutdown()`` can cancel it cleanly if it never gets a chance
+        # to run.
         assert self._shutdown_event is not None
         self._cron_restart_task = asyncio.create_task(
             restart_all_session_crons(stop_event=self._shutdown_event)
         )
         logger.info("Cron restart task launched")
 
-        self._compute_ctx = ComputeContext(provider=self.provider.value)
-        self._compute_task = asyncio.create_task(
-            start_background_compute_task(self._compute_ctx)
-        )
-        logger.info("Background compute started (after initial sync)")
-
-        # Search indexing task starts automatically when background compute finishes
-        # (via done callback). Uses shutdown_event to skip if server is stopping.
-        # Note: init_search_index was already called above (before watcher start).
-        def _on_compute_done(task: asyncio.Task) -> None:
-            if task.cancelled() or self._shutdown_event.is_set():
-                return
-            self._search_indexing_task = asyncio.create_task(start_search_index_task())
-            logger.info("Background search indexing started (after compute)")
-
-        self._compute_task.add_done_callback(_on_compute_done)
+        # Watcher writes new items into the global search index, so it
+        # must wait until the CLI has called ``init_search_index()``.
+        assert self.search_index_ready is not None, "search_index_ready must be set by start()"
+        await self.search_index_ready.wait()
+        self._watcher_task = asyncio.create_task(start_watcher())
+        self._watcher_task.add_done_callback(_on_watcher_done)
+        logger.info("Watcher started (after initial sync + search index ready)")

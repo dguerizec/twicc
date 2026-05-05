@@ -42,8 +42,14 @@ class CodexOrchestrator(BaseOrchestrator):
         self._usage_sync_task: asyncio.Task | None = None
         self._statuspage_task: asyncio.Task | None = None
 
-    async def start(self, shutdown_event: asyncio.Event) -> None:
-        """Launch the Codex auth check, usage sync, and statuspage tasks."""
+    async def start(self, shutdown_event: asyncio.Event, search_index_ready: asyncio.Event) -> None:
+        """Launch the Codex auth check, usage sync, and statuspage tasks.
+
+        ``search_index_ready`` is unused today: Codex has no JSONL watcher
+        writing into the search index. The signature stays aligned with
+        :meth:`BaseOrchestrator.start` so the CLI can call ``start_all``
+        uniformly.
+        """
         self._auth_check_task = asyncio.create_task(start_auth_task())
         self._usage_sync_task = asyncio.create_task(start_usage_sync_task())
         self._statuspage_task = asyncio.create_task(start_statuspage_task())
