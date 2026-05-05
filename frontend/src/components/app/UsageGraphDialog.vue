@@ -6,6 +6,7 @@
 
 import { ref, computed, watch } from 'vue'
 import { useSettingsStore } from '../../stores/settings'
+import { getProviderOptions, getProviderHelpers } from '../../providers'
 
 const props = defineProps({
     provider: { type: String, required: true },
@@ -16,6 +17,21 @@ const isTouchDevice = computed(() => settingsStore.isTouchDevice)
 
 const dialogRef = ref(null)
 const activeTab = ref('five-hour')
+
+// Currently displayed provider. Initialized from the prop on open(), then
+// driven by the in-dialog wa-select so the user can switch providers
+// without losing the period tab, range slider, Y cap, etc.
+const selectedProvider = ref(props.provider)
+const providerOptions = computed(
+    () => getProviderOptions().filter(o => getProviderHelpers(o.value)?.tracksUsage()),
+)
+const showProviderSelect = computed(() => providerOptions.value.length > 1)
+
+function onProviderChange(event) {
+    const next = event.target.value
+    if (!next || next === selectedProvider.value) return
+    selectedProvider.value = next
+}
 const isLoading = ref(false)     // true only on initial fetch (no data yet)
 const isRefreshing = ref(false)  // true during slider-triggered refetches (old data stays visible)
 const errorMessage = ref('')
@@ -51,6 +67,17 @@ let isOpen = false
 watch(rangeIndex, () => {
     if (!isOpen) return
     _fetchGeneration++ // invalidate any in-flight fetches from previous range
+    clearSnapshots()
+    panOffsetMs.value = 0
+    noMoreDataLeft.value = false
+    fetchData({ isInitial: true })
+})
+
+// Re-fetch when the user switches provider in the header dropdown — keeps
+// every other dimension (period tab, range, Y cap, panning, curve toggles).
+watch(selectedProvider, () => {
+    if (!isOpen) return
+    _fetchGeneration++
     clearSnapshots()
     panOffsetMs.value = 0
     noMoreDataLeft.value = false
@@ -141,7 +168,7 @@ async function fetchData({ isInitial = false, before = null, rangeDays = null, s
         const { days, bucket } = currentRange.value
         // Initial fetch: 3× the display period for panning buffer (2 extra periods to the left)
         const fetchDays = rangeDays ?? (isInitial ? Math.min(1825, days * 3) : days)
-        let url = `/api/usage-history/?provider=${encodeURIComponent(props.provider)}&range_days=${fetchDays}&bucket_minutes=${bucket}`
+        let url = `/api/usage-history/?provider=${encodeURIComponent(selectedProvider.value)}&range_days=${fetchDays}&bucket_minutes=${bucket}`
         if (before) url += `&before=${encodeURIComponent(before)}`
         const res = await fetch(url)
         if (!res.ok) {
@@ -205,6 +232,10 @@ function open(period = 'five-hour') {
     panOffsetMs.value = 0
     noMoreDataLeft.value = false
     rangeIndex.value = DEFAULT_RANGE_INDEX
+    // Re-anchor to the provider currently broadcast by the parent each time
+    // we (re)open — the user's previous in-dialog choice doesn't carry over
+    // a close/reopen cycle.
+    selectedProvider.value = props.provider
     fetchData({ isInitial: true })
     isOpen = true
     dialogRef.value.open = true
@@ -779,6 +810,19 @@ function onTabShow(event) {
                     <wa-icon name="chart-line"></wa-icon>
                     Usage History
                 </h2>
+                <wa-select
+                    v-if="showProviderSelect"
+                    class="usage-graph-provider-select"
+                    size="small"
+                    :value.prop="selectedProvider"
+                    @change="onProviderChange"
+                >
+                    <wa-option
+                        v-for="option in providerOptions"
+                        :key="option.value"
+                        :value="option.value"
+                    >{{ option.label }}</wa-option>
+                </wa-select>
                 <div class="usage-graph-range-control">
                     <span class="usage-graph-range-label">{{ currentRange.label }}</span>
                     <wa-slider
@@ -1065,6 +1109,10 @@ function onTabShow(event) {
     font-weight: var(--wa-font-weight-bold);
     margin: 0;
     white-space: nowrap;
+}
+
+.usage-graph-provider-select {
+    width: 9rem;
 }
 
 /* Range slider control in header */
