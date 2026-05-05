@@ -437,6 +437,14 @@ defineExpose({
                     </wa-dropdown-item>
                 </wa-dropdown>
 
+                <wa-icon
+                    v-if="providerIcon"
+                    auto-width
+                    family="brands"
+                    :name="providerIcon"
+                    class="compact-provider-icon"
+                ></wa-icon>
+
                 <h2 :id="`session-header-${sessionId}-title`">{{ displayName }}</h2>
                 <AppTooltip :for="`session-header-${sessionId}-title`">{{ displayName }}</AppTooltip>
 
@@ -838,6 +846,13 @@ body:not([data-display-mode="debug"]) .cost-breakdown-item {
     align-self: center;
 }
 
+/* Compact provider icon: hidden by default, shown in compact mode when not expanded */
+.compact-provider-icon {
+    display: none;
+    align-self: center;
+    flex-shrink: 0;
+}
+
 wa-divider {
     --width: var(--divider-size);
     --spacing: 0;
@@ -1000,6 +1015,11 @@ wa-divider {
 
     /* Show the compact process indicator when not expanded */
     .session-header.compact-collapsed .compact-process-indicator {
+        display: inline-flex;
+    }
+
+    /* Show the compact provider icon when not expanded */
+    .session-header.compact-collapsed .compact-provider-icon {
         display: inline-flex;
     }
 
