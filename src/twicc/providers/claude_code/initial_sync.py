@@ -253,6 +253,7 @@ def _sync_session_subagents(
                 id=agent_id,
                 project=project,
                 provider=Provider.CLAUDE_CODE,
+                file_path=str(file_path.relative_to(ClaudeCodeHelpers.PROJECTS_DIR)),
                 type=SessionType.SUBAGENT,
                 parent_session=session,
                 agent_id=agent_id,
@@ -354,6 +355,7 @@ def sync_project(
                 id=session_id,
                 project=project,
                 provider=Provider.CLAUDE_CODE,
+                file_path=str(file_path.relative_to(ClaudeCodeHelpers.PROJECTS_DIR)),
                 type=SessionType.SESSION,
             )
             session.save()

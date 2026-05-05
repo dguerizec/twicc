@@ -54,19 +54,22 @@ _REAL_SUBAGENT_RE = re.compile(r"^agent-a[0-9a-f]+\.jsonl$")
 
 class ParsedPath:
     """Result of parsing a JSONL file path."""
-    __slots__ = ('project_id', 'session_id', 'type', 'parent_session_id')
+    __slots__ = ('project_id', 'session_id', 'type', 'parent_session_id', 'file_path')
 
     def __init__(
         self,
         project_id: str,
         session_id: str,
         type: SessionType,
+        file_path: str,
         parent_session_id: str | None = None,
     ):
         self.project_id = project_id
         self.session_id = session_id
         self.type = type
         self.parent_session_id = parent_session_id
+        # Provider-relative path (relative to ClaudeCodeHelpers.PROJECTS_DIR).
+        self.file_path = file_path
 
 
 def parse_jsonl_path(path: Path, projects_dir: Path) -> ParsedPath | None:
@@ -96,7 +99,12 @@ def parse_jsonl_path(path: Path, projects_dir: Path) -> ParsedPath | None:
             return None
         if filename.endswith(".jsonl"):
             session_id = filename.removesuffix(".jsonl")
-            return ParsedPath(project_id, session_id, SessionType.SESSION)
+            return ParsedPath(
+                project_id,
+                session_id,
+                SessionType.SESSION,
+                file_path=str(relative),
+            )
 
     elif len(parts) == 4:
         # Format: project_id/session_id/subagents/agent-a<hex>.jsonl
@@ -111,7 +119,8 @@ def parse_jsonl_path(path: Path, projects_dir: Path) -> ParsedPath | None:
                 project_id,
                 agent_id,
                 SessionType.SUBAGENT,
-                parent_session_id,
+                file_path=str(relative),
+                parent_session_id=parent_session_id,
             )
 
     return None
@@ -170,6 +179,7 @@ def create_session(
             id=parsed.session_id,
             project=project,
             provider=Provider.CLAUDE_CODE,
+            file_path=parsed.file_path,
             type=SessionType.SUBAGENT,
             parent_session=parent_session,
             agent_id=parsed.session_id,
@@ -179,6 +189,7 @@ def create_session(
         id=parsed.session_id,
         project=project,
         provider=Provider.CLAUDE_CODE,
+        file_path=parsed.file_path,
         compute_version=settings.CURRENT_COMPUTE_VERSION,
     )
     if agent_settings is not None:

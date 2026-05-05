@@ -264,6 +264,13 @@ class Session(models.Model):
         related_name="sessions",
     )
     provider = models.CharField(max_length=50)  # Backend provider (see Provider enum)
+    # Provider-relative path to the JSONL file (relative to the provider's data root,
+    # e.g. ~/.claude/projects/ for claude_code, ~/.codex/sessions/ for codex). The file
+    # path is stored explicitly because it cannot always be derived from the session id
+    # alone (e.g. codex files are organised by date, not by project). Unique because
+    # one JSONL file maps to exactly one session — the unique constraint also covers
+    # the path-based lookups done by initial sync and the file watcher.
+    file_path = models.CharField(max_length=500, unique=True)
     last_offset = models.PositiveBigIntegerField(default=0)
     last_line = models.PositiveIntegerField(default=0)
     mtime = models.FloatField(default=0)
