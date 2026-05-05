@@ -13,7 +13,7 @@ import { useCodeCommentsStore } from '../../../stores/codeComments'
 import { useDataStore } from '../../../stores/data'
 import { useSettingsStore } from '../../../stores/settings'
 import { formatDate } from '../../../utils/date'
-import { PROCESS_STATE, PROCESS_STATE_COLORS, PROCESS_STATE_NAMES, SESSION_TIME_FORMAT } from '../../../constants'
+import { PROCESS_STATE, PROCESS_STATE_COLORS, PROCESS_STATE_NAMES, PROVIDER_ICON, SESSION_TIME_FORMAT } from '../../../constants'
 import { markSessionReadState, cancelSessionViewedThrottle } from '../../../composables/useWebSocket'
 import { stopSessionProcess } from '../../../composables/useStopSessionProcess'
 import { useDragHover } from '../../../composables/useDragHover'
@@ -96,6 +96,9 @@ const processState = computed(() => store.getProcessState(props.session.id))
 
 /** Human-readable provider label, used in tooltips/dropdown labels. */
 const providerLabel = computed(() => getProviderLabel(props.session.provider))
+
+/** Web Awesome icon name for the session's provider. */
+const providerIcon = computed(() => PROVIDER_ICON[props.session.provider] ?? null)
 
 /** Whether this session has any pending request waiting for user response. */
 const pendingRequest = computed(() => store.getPendingRequests(props.session.id).length > 0)
@@ -363,6 +366,7 @@ function handleMenuSelect(event) {
                 <wa-icon v-if="session.pinned" name="thumbtack" class="pinned-icon"></wa-icon>
                 <wa-tag v-if="session.archived" size="small" variant="neutral" class="archived-tag">Arch.</wa-tag>
                 <wa-tag v-else-if="session.draft && !processState" size="small" variant="warning" class="draft-tag">Draft</wa-tag>
+                <wa-icon v-if="providerIcon" auto-width family="brands" :name="providerIcon" class="provider-icon"></wa-icon>
                 <span class="session-name">{{ getSessionDisplayName(session) }}</span>
                 <!-- Compact mode: code comments indicator -->
                 <wa-icon
@@ -595,6 +599,10 @@ function handleMenuSelect(event) {
     font-size: var(--wa-font-size-2xs);
     color: var(--wa-color-yellow-80) !important;
     transform: rotate(30deg);
+}
+
+.provider-icon {
+    flex-shrink: 0;
 }
 
 .draft-tag,
