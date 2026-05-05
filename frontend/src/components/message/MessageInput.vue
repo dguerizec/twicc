@@ -10,6 +10,7 @@ import { useRouter, useRoute } from 'vue-router'
 import { useDataStore } from '../../stores/data'
 import { useSettingsStore } from '../../stores/settings'
 import { getProviderHelpers, getProviderLabel } from '../../providers'
+import { PROVIDER_ICON } from '../../constants'
 import { sendWsMessage, notifyUserDraftUpdated } from '../../composables/useWebSocket'
 import { useSessionAgentSettings } from '../../composables/useSessionAgentSettings'
 import { vPopoverFocusFix } from '../../directives/vPopoverFocusFix'
@@ -77,6 +78,7 @@ const emit = defineEmits(['needs-title'])
 const session = computed(() => store.getSession(props.sessionId))
 const isDraft = computed(() => session.value?.draft === true)
 const providerLabel = computed(() => getProviderLabel(session.value?.provider))
+const providerIcon = computed(() => PROVIDER_ICON[session.value?.provider] ?? null)
 
 // Local state for the textarea
 const messageText = ref('')
@@ -1355,7 +1357,13 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
                     size="small"
                     class="settings-button"
                 >
-                    <wa-icon name="gear"></wa-icon>
+                    <wa-icon
+                        v-if="providerIcon"
+                        auto-width
+                        family="brands"
+                        :name="providerIcon"
+                    ></wa-icon>
+                    <wa-icon v-else name="gear"></wa-icon>
                     <AgentSettingsSummary :session="session" :settings="settings" />
                 </wa-button>
                 <AgentSettingsPopover
