@@ -5,11 +5,11 @@ import { useRoute, useRouter } from 'vue-router'
 import { useDataStore, ALL_PROJECTS_ID } from '../stores/data'
 import { useSettingsStore } from '../stores/settings'
 import { useWorkspacesStore } from '../stores/workspaces'
-import { COLOR_SCHEME } from '../constants'
+import { COLOR_SCHEME, PROVIDER_ICON } from '../constants'
 import { useCommandRegistry } from '../composables/useCommandRegistry'
 import { useStartupPolling } from '../composables/useStartupPolling'
 import { useTerminalCommandStore } from '../stores/terminalCommand'
-import { getRegisteredProviders, getProviderHelpers, getProviderStore } from '../providers'
+import { getRegisteredProviders, getProviderHelpers, getProviderStore, getProviderLabel } from '../providers'
 import { toWorkspaceProjectId } from '../utils/workspaceIds'
 import { splitProjectsByPriority } from '../utils/projectSort'
 import SessionList from '../components/session/list/SessionList.vue'
@@ -120,19 +120,34 @@ const currentUsageProvider = computed(() => {
 
 const currentUsageHelpers = computed(() => currentUsageProvider.value ? getProviderHelpers(currentUsageProvider.value) : null)
 const currentUsageStore = computed(() => currentUsageProvider.value ? getProviderStore(currentUsageProvider.value) : null)
+const currentUsageProviderIcon = computed(() => currentUsageProvider.value ? PROVIDER_ICON[currentUsageProvider.value] : null)
+const currentUsageProviderLabel = computed(() => currentUsageProvider.value ? getProviderLabel(currentUsageProvider.value) : null)
+const hasMultipleUsageProviders = computed(() => usageProviders.value.length > 1)
 const usageExternalLink = computed(() => currentUsageHelpers.value?.getUsageExternalLink() ?? null)
 
 const usageBlockRef = ref(null)
 const isUsageBlockHovered = useElementHover(usageBlockRef)
 
 let _usageRotationTimer = null
-onMounted(() => {
+function _scheduleUsageRotation() {
+    if (_usageRotationTimer) clearInterval(_usageRotationTimer)
     _usageRotationTimer = setInterval(() => {
         if (isUsageBlockHovered.value) return
         const total = usageProviders.value.length
         if (total <= 1) return
         currentUsageProviderIndex.value = (currentUsageProviderIndex.value + 1) % total
     }, USAGE_ROTATION_INTERVAL_MS)
+}
+function cycleUsageProvider() {
+    const total = usageProviders.value.length
+    if (total <= 1) return
+    currentUsageProviderIndex.value = (currentUsageProviderIndex.value + 1) % total
+    // Restart the timer so the freshly selected provider gets the full
+    // rotation interval rather than whatever remained on the previous tick.
+    _scheduleUsageRotation()
+}
+onMounted(() => {
+    _scheduleUsageRotation()
 })
 onBeforeUnmount(() => {
     if (_usageRotationTimer) clearInterval(_usageRotationTimer)
@@ -1527,6 +1542,21 @@ function updateSidebarClosedClass(closed) {
 
             <div class="sidebar-footer">
                 <div v-if="quotaHasUsage && quotaComputed" ref="usageBlockRef" class="sidebar-footer-usage">
+                    <wa-icon
+                        v-if="currentUsageProviderIcon"
+                        id="usage-provider-icon"
+                        class="usage-provider-icon"
+                        :class="{ 'usage-provider-icon-clickable': hasMultipleUsageProviders }"
+                        family="brands"
+                        :name="currentUsageProviderIcon"
+                        @click="hasMultipleUsageProviders && cycleUsageProvider()"
+                    ></wa-icon>
+                    <AppTooltip v-if="currentUsageProviderIcon" for="usage-provider-icon" hoist force>
+                        <div class="usage-provider-tooltip">
+                            <span class="usage-provider-tooltip-name">{{ currentUsageProviderLabel }} usage</span>
+                            <span v-if="hasMultipleUsageProviders" class="usage-provider-tooltip-hint">Click to switch to the next provider</span>
+                        </div>
+                    </AppTooltip>
                     <div id="quota-five-hour" class="usage-quota" v-if="quotaFiveHour">
                         <wa-progress-ring
                             class="usage-ring"
@@ -1534,12 +1564,13 @@ function updateSidebarClosedClass(closed) {
                             :style="{ '--indicator-color': quotaFiveHourRingColor }"
                         ><span class="wa-font-weight-bold">{{ Math.round(quotaFiveHour.utilization ?? 0) }}%</span></wa-progress-ring>
                         <div class="usage-quota-info">
-                            <span class="usage-quota-label">5h quota</span>
-                            <wa-relative-time v-if="quotaFiveHour.resetsAt" class="usage-quota-reset" :date.prop="resetsAtToDate(quotaFiveHour.resetsAt)" format="short" numeric="always" sync></wa-relative-time>
+                            <span class="usage-quota-label">5h</span>
+                            <wa-relative-time v-if="quotaFiveHour.resetsAt" class="usage-quota-reset" :date.prop="resetsAtToDate(quotaFiveHour.resetsAt)" format="narrow" numeric="always" sync></wa-relative-time>
                         </div>
                     </div>
                     <AppTooltip v-if="quotaFiveHour" for="quota-five-hour" hoist force>
                         <div class="quota-tooltip">
+                            <div class="quota-tooltip-title">{{ currentUsageProviderLabel }} usage — 5h</div>
                             <div class="quota-tooltip-row"><span class="quota-tooltip-label">Usage</span><span>{{ (quotaFiveHour.utilization ?? 0).toFixed(1) }}%</span></div>
                             <div class="quota-tooltip-note" v-if="!quotaFiveHour.resetsAt"><wa-icon name="info-circle"></wa-icon> Period not started yet</div>
                             <div class="quota-tooltip-row" v-if="quotaFiveHour.timePct != null"><span class="quota-tooltip-label">Time elapsed</span><span>{{ quotaFiveHour.timePct.toFixed(1) }}%</span></div>
@@ -1570,12 +1601,13 @@ function updateSidebarClosedClass(closed) {
                             :style="{ '--indicator-color': quotaSevenDayRingColor }"
                         ><span class="wa-font-weight-bold">{{ Math.round(quotaSevenDay.utilization ?? 0) }}%</span></wa-progress-ring>
                         <div class="usage-quota-info">
-                            <span class="usage-quota-label">7d quota</span>
-                            <wa-relative-time v-if="quotaSevenDay.resetsAt" class="usage-quota-reset" :date.prop="resetsAtToDate(quotaSevenDay.resetsAt)" format="short" numeric="always" sync></wa-relative-time>
+                            <span class="usage-quota-label">7d</span>
+                            <wa-relative-time v-if="quotaSevenDay.resetsAt" class="usage-quota-reset" :date.prop="resetsAtToDate(quotaSevenDay.resetsAt)" format="narrow" numeric="always" sync></wa-relative-time>
                         </div>
                     </div>
                     <AppTooltip v-if="quotaSevenDay" for="quota-seven-day" hoist force>
                         <div class="quota-tooltip">
+                            <div class="quota-tooltip-title">{{ currentUsageProviderLabel }} usage — 7d</div>
                             <div class="quota-tooltip-row"><span class="quota-tooltip-label">Usage</span><span>{{ (quotaSevenDay.utilization ?? 0).toFixed(1) }}%</span></div>
                             <div class="quota-tooltip-note" v-if="!quotaSevenDay.resetsAt"><wa-icon name="info-circle"></wa-icon> Period not started yet</div>
                             <div class="quota-tooltip-row" v-if="quotaSevenDay.timePct != null"><span class="quota-tooltip-label">Time elapsed</span><span>{{ quotaSevenDay.timePct.toFixed(1) }}%</span></div>
@@ -1607,7 +1639,7 @@ function updateSidebarClosedClass(closed) {
                         ><span class="wa-font-weight-bold">{{ Math.round(quotaExtraUsage.utilization ?? 0) }}%</span></wa-progress-ring>
                         <div class="usage-quota-info">
                             <span class="usage-quota-label">Extra usage</span>
-                            <wa-relative-time class="usage-quota-reset" :date.prop="extraUsageResetDate()" format="short" numeric="always" sync></wa-relative-time>
+                            <wa-relative-time class="usage-quota-reset" :date.prop="extraUsageResetDate()" format="narrow" numeric="always" sync></wa-relative-time>
                         </div>
                     </div>
                     <AppTooltip v-if="quotaExtraUsage" for="quota-extra-usage" hoist force>
@@ -2062,8 +2094,8 @@ wa-split-panel::part(divider) {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    justify-content: center;
-    column-gap: var(--wa-space-l);
+    justify-content: space-evenly;
+    column-gap: var(--wa-space-s);
     row-gap: var(--wa-space-xs);
     padding: var(--wa-space-xs) var(--wa-space-s);
 }
@@ -2113,6 +2145,31 @@ wa-split-panel::part(divider) {
     font-size: var(--wa-font-size-2xs);
 }
 
+.usage-provider-icon {
+    font-size: var(--wa-font-size-l);
+    color: var(--wa-color-neutral-content);
+}
+
+.usage-provider-icon-clickable {
+    cursor: pointer;
+}
+
+.usage-provider-tooltip {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--wa-space-3xs);
+}
+
+.usage-provider-tooltip-name {
+    font-weight: var(--wa-font-weight-bold);
+}
+
+.usage-provider-tooltip-hint {
+    font-size: var(--wa-font-size-2xs);
+    color: var(--wa-color-neutral-muted);
+}
+
 .usage-quota-info {
     display: flex;
     flex-direction: column;
@@ -2120,7 +2177,10 @@ wa-split-panel::part(divider) {
 }
 
 /* Remove text in narrow sidebar */
-@container sidebar (width <= 15rem) {
+@container sidebar (width <= 13rem) {
+    .sidebar-footer-usage {
+        column-gap: var(--wa-space-3xs);
+    }
     .usage-quota-info {
         display: none;
     }
@@ -2141,6 +2201,13 @@ wa-split-panel::part(divider) {
     display: flex;
     flex-direction: column;
     gap: var(--wa-space-xs);
+}
+
+.quota-tooltip-title {
+    font-weight: var(--wa-font-weight-bold);
+    text-align: center;
+    padding-bottom: var(--wa-space-3xs);
+    border-bottom: 1px solid var(--wa-color-neutral-border-quiet);
 }
 
 .quota-tooltip-row {

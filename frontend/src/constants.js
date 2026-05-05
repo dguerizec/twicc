@@ -135,6 +135,14 @@ export const PROVIDER = {
 }
 
 /**
+ * Web Awesome icon name (``<wa-icon name="...">``) per provider.
+ */
+export const PROVIDER_ICON = {
+    [PROVIDER.CLAUDE_CODE]: 'claude',
+    [PROVIDER.CODEX]: 'openai',
+}
+
+/**
  * Web Awesome theme values.
  * Controls the visual theme applied to Web Awesome components.
  */
