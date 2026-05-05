@@ -459,6 +459,11 @@ class BaseProviderHelpers:
           Always present — every provider has its own file (even if
           empty), so the front can render the presets dialog without
           guarding on the field's existence.
+        - ``agent_settings_categories``: the live/idle/startup
+          classification, used by the frontend to decide whether a
+          settings change can be applied to a running process.
+        - ``model_registry``: serialised :attr:`MODEL_VERSIONS` so the
+          model dropdowns render uniformly across providers.
         - The usage block (``tracks_usage`` / ``usage``) when this
           provider declares a ``USAGE_SYNC_INTERVAL``:
 
@@ -477,6 +482,11 @@ class BaseProviderHelpers:
 
         data: dict = {
             "agent_settings_presets": read_agent_settings_presets(self.provider),
+            "agent_settings_categories": {
+                category.value: keys
+                for category, keys in self.AGENT_SETTINGS_CATEGORIES.items()
+            },
+            "model_registry": self.serialize_model_registry(),
         }
 
         if self.USAGE_SYNC_INTERVAL is None:
@@ -674,9 +684,11 @@ class ProviderHelpersRegistry:
         # Imported here to avoid a circular import at module load time:
         # each provider helpers module imports from this one.
         from twicc.providers.claude_code.helpers import ClaudeCodeHelpers
+        from twicc.providers.codex.helpers import CodexHelpers
 
         self.PROVIDER_HELPERS = {
             Provider.CLAUDE_CODE: ClaudeCodeHelpers,
+            Provider.CODEX: CodexHelpers,
         }
         self._helpers: dict[Provider, BaseProviderHelpers] = {
             key: cls() for key, cls in self.PROVIDER_HELPERS.items()

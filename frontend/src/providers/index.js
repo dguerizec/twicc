@@ -1,9 +1,12 @@
 import { ClaudeCodeHelpers, claudeCodeHelpers } from './claude_code/helpers'
 import { claudeCodeWsHandler } from './claude_code/ws'
 import { useClaudeCodeStore } from './claude_code/store'
+import { CodexHelpers, codexHelpers } from './codex/helpers'
+import { useCodexStore } from './codex/store'
 
 const PROVIDER_HELPERS = {
     [ClaudeCodeHelpers.provider]: claudeCodeHelpers,
+    [CodexHelpers.provider]: codexHelpers,
 }
 
 const PROVIDER_WS_HANDLERS = {
@@ -15,6 +18,7 @@ const PROVIDER_WS_HANDLERS = {
 // without knowing which provider it is.
 const PROVIDER_STORE_FACTORIES = {
     [ClaudeCodeHelpers.provider]: useClaudeCodeStore,
+    [CodexHelpers.provider]: useCodexStore,
 }
 
 export function getProviderHelpers(provider) {

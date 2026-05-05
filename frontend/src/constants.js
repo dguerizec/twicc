@@ -131,6 +131,7 @@ export const PROCESS_STATE_COLORS = {
  */
 export const PROVIDER = {
     CLAUDE_CODE: 'claude_code',
+    CODEX: 'codex',
 }
 
 /**
