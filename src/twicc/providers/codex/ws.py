@@ -1,8 +1,9 @@
 """
 Codex provider WebSocket handler.
 
-Currently handles auth-only traffic:
-- emits ``codex:auth_updated`` on each new connection (initial state push);
+Handles auth + usage traffic:
+- emits ``codex:auth_updated`` and the latest usage snapshot on each
+  new connection (initial state push);
 - routes the inbound ``codex:check_auth`` action (manual "Check again"
   from the UI) to a forced re-check + broadcast.
 """
@@ -11,6 +12,9 @@ from __future__ import annotations
 
 import logging
 from collections.abc import AsyncIterator
+
+from twicc.core.enums import Provider
+from twicc.usage_task import get_usage_message_for_connection
 
 from .auth import check_and_broadcast, get_auth_message_for_connection
 
@@ -31,6 +35,8 @@ class CodexWSHandler:
     async def get_connect_messages(self) -> AsyncIterator[dict]:
         """Yield messages to send to a newly connected client."""
         yield await get_auth_message_for_connection()
+        # Latest Codex usage snapshot (wire type: ``usage_updated``)
+        yield await get_usage_message_for_connection(Provider.CODEX)
 
     async def dispatch(self, action: str, content: dict) -> bool:
         """Dispatch a Codex-prefixed message."""

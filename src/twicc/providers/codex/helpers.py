@@ -30,6 +30,10 @@ class CodexHelpers(BaseProviderHelpers):
         "codexDefaultEffort": "medium",
         "codexDefaultPermissionMode": "read_only",
         "codexDefaultContextMax": 272_000,
+        "codexUsageReadFileEnabled": False,
+        "codexUsageReadFilePath": "",
+        "codexUsageDumpFileEnabled": False,
+        "codexUsageDumpFilePath": "",
     }
 
     AGENT_SETTINGS_CATEGORIES: ClassVar[dict[AgentSettingCategory, list[str]]] = {
@@ -50,9 +54,13 @@ class CodexHelpers(BaseProviderHelpers):
         "context_max": "codexDefaultContextMax",
     }
 
-    # No external sync (no usage tracking, no OpenRouter pricing) for now —
-    # this is intentional, the first cut keeps Codex purely declarative.
-    USAGE_SYNC_INTERVAL: ClassVar[int | None] = None
+    # Polled every 5 minutes by ``codex.usage_task`` against ChatGPT's
+    # ``/backend-api/wham/usage`` endpoint (the same one the Codex CLI's
+    # /status command hits) to refresh the 5-hour and weekly quotas.
+    USAGE_SYNC_INTERVAL: ClassVar[int | None] = 5 * 60
+
+    # OpenRouter pricing isn't wired yet for Codex — there's no agent
+    # runtime so no per-line cost computation either.
     OPENROUTER_MODEL_PREFIX: ClassVar[str | None] = None
 
     # Single supported model. ``selected_model_value`` will return ``"gpt"``
@@ -69,3 +77,22 @@ class CodexHelpers(BaseProviderHelpers):
             provider_extra=None,
         ),
     ]
+
+    def validate_usage_file_payload(self, payload: dict) -> tuple[bool, str]:
+        """Accept a payload that has the shape of a Codex ``wham/usage`` response.
+
+        The cross-provider envelope (``twicc.usage.validate_usage_file``)
+        already asserts existence + JSON object; here we only check
+        for the Codex-specific top-level ``rate_limit`` block, which is
+        what :func:`twicc.providers.codex.usage.save_usage_snapshot`
+        reads from. We don't drill into ``primary_window`` /
+        ``secondary_window`` because both can legitimately be missing
+        when the user has never consumed any quota in the matching
+        window.
+        """
+        from .usage import USAGE_REQUIRED_KEYS
+
+        missing = USAGE_REQUIRED_KEYS - payload.keys()
+        if missing:
+            return False, f"Missing required keys: {', '.join(sorted(missing))}"
+        return True, "Valid Codex usage file"

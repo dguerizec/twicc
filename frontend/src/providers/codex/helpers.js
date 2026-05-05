@@ -22,6 +22,22 @@ const SYNCED_SETTING_KEYS_TO_STORE = {
     codexDefaultEffort:         { setter: 'setDefaultEffort',         getter: 'defaultEffort' },
     codexDefaultPermissionMode: { setter: 'setDefaultPermissionMode', getter: 'defaultPermissionMode' },
     codexDefaultContextMax:     { setter: 'setDefaultContextMax',     getter: 'defaultContextMax' },
+    codexUsageReadFileEnabled:  { setter: 'setUsageReadFileEnabled',  getter: 'usageReadFileEnabled' },
+    codexUsageReadFilePath:     { setter: 'setUsageReadFilePath',     getter: 'usageReadFilePath' },
+    codexUsageDumpFileEnabled:  { setter: 'setUsageDumpFileEnabled',  getter: 'usageDumpFileEnabled' },
+    codexUsageDumpFilePath:     { setter: 'setUsageDumpFilePath',     getter: 'usageDumpFilePath' },
+}
+
+// Map of usage-file field names (cross-provider) → Codex store
+// getter/setter. Lets the generic ``getUsageFileSetting`` /
+// ``setUsageFileSetting`` hooks proxy to this provider's own
+// ``useCodexStore`` refs, so the on-disk shape and synced settings stay
+// Codex-specific while the Settings UI stays provider-agnostic.
+const USAGE_FILE_FIELD_TO_STORE_BINDING = {
+    read_enabled: { getter: 'usageReadFileEnabled', setter: 'setUsageReadFileEnabled' },
+    read_path:    { getter: 'usageReadFilePath',    setter: 'setUsageReadFilePath' },
+    dump_enabled: { getter: 'usageDumpFileEnabled', setter: 'setUsageDumpFileEnabled' },
+    dump_path:    { getter: 'usageDumpFilePath',    setter: 'setUsageDumpFilePath' },
 }
 
 // Per-field choice catalogue for the Codex provider.
@@ -148,6 +164,31 @@ export class CodexHelpers extends BaseProviderHelpers {
 
     getModelRegistry() {
         return useCodexStore().modelRegistry
+    }
+
+    // ─── Usage quota tracking ────────────────────────────────────────────
+
+    tracksUsage() {
+        return true
+    }
+
+    getUsageExternalLink() {
+        return {
+            url: 'https://chatgpt.com/codex/cloud/settings/analytics#usage',
+            label: 'View usage on chatgpt.com',
+        }
+    }
+
+    getUsageFileSetting(field) {
+        const binding = USAGE_FILE_FIELD_TO_STORE_BINDING[field]
+        if (!binding) return null
+        return useCodexStore()[binding.getter]
+    }
+
+    setUsageFileSetting(field, value) {
+        const binding = USAGE_FILE_FIELD_TO_STORE_BINDING[field]
+        if (!binding) return
+        useCodexStore()[binding.setter](value)
     }
 
     getDefaultValueLabel(field, value) {

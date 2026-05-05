@@ -16,6 +16,48 @@ export const useCodexStore = defineStore('codex', () => {
         authenticated.value = value
     }
 
+    // ─── Usage quota ─────────────────────────────────────────────────────
+
+    // Per-provider usage data. ``null`` until the bootstrap seed or the
+    // first ``usage_updated`` push arrives, then ``{ success, reason, raw,
+    // computed }``. Consumers should treat ``null`` as "not yet loaded".
+    const usage = ref(null)
+
+    function setUsage(success, reason, raw, computed) {
+        usage.value = { success, reason, raw, computed }
+    }
+
+    // ─── Usage read/dump file settings (synced) ──────────────────────────
+    //
+    // ``read`` sources the usage payload from a local JSON file
+    // (validated by the cross-provider ``validate_usage_file`` WS
+    // handler), ``dump`` writes the live-fetched quota to the configured
+    // path. The two modes are mutually exclusive.
+
+    const usageReadFileEnabled = ref(null)
+    const usageReadFilePath = ref(null)
+    const usageDumpFileEnabled = ref(null)
+    const usageDumpFilePath = ref(null)
+
+    function setUsageReadFileEnabled(value) {
+        if (typeof value !== 'boolean') return
+        usageReadFileEnabled.value = value
+        // Mutually exclusive with dump mode.
+        if (value) usageDumpFileEnabled.value = false
+    }
+    function setUsageReadFilePath(value) {
+        if (typeof value === 'string') usageReadFilePath.value = value
+    }
+    function setUsageDumpFileEnabled(value) {
+        if (typeof value !== 'boolean') return
+        usageDumpFileEnabled.value = value
+        // Mutually exclusive with read mode.
+        if (value) usageReadFileEnabled.value = false
+    }
+    function setUsageDumpFilePath(value) {
+        if (typeof value === 'string') usageDumpFilePath.value = value
+    }
+
     // ─── Per-session agent settings defaults ─────────────────────────────
     //
     // Default values applied to new Codex sessions and used as the fallback
@@ -68,6 +110,16 @@ export const useCodexStore = defineStore('codex', () => {
     return {
         authenticated,
         setAuthenticated,
+        usage,
+        setUsage,
+        usageReadFileEnabled,
+        usageReadFilePath,
+        usageDumpFileEnabled,
+        usageDumpFilePath,
+        setUsageReadFileEnabled,
+        setUsageReadFilePath,
+        setUsageDumpFileEnabled,
+        setUsageDumpFilePath,
         defaultModel,
         defaultEffort,
         defaultPermissionMode,
