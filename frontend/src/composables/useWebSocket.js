@@ -900,7 +900,7 @@ export function useWebSocket() {
                 store.streamBlockEnd(msg.session_id, msg.message_id, msg.block_index, msg.uuid)
                 break
             case 'startup_progress':
-                store.setStartupProgress(msg.phase, msg.current, msg.total, msg.completed)
+                store.setStartupProgress(msg.provider, msg.phase, msg.current, msg.total, msg.completed)
                 break
             case 'update_available':
                 store.setLatestVersion(msg.latest_version, msg.release_url)

@@ -50,9 +50,13 @@ class ComputeContext:
     """Mutable state for the background compute pipeline.
 
     Created once at startup and passed explicitly to all functions
-    that need access to the compute infrastructure.
+    that need access to the compute infrastructure. ``provider`` is the
+    wire key (e.g. ``"claude_code"``) attached to startup-progress
+    broadcasts so the frontend can aggregate per-phase totals across
+    providers.
     """
 
+    provider: str
     command_queue: _mp_ctx.Queue = field(default_factory=_mp_ctx.Queue)
     result_queue: _mp_ctx.Queue = field(default_factory=_mp_ctx.Queue)
     worker_stop_event: _mp_ctx.Event = field(default_factory=_mp_ctx.Event)
@@ -301,6 +305,7 @@ async def consume_compute_results(
     *,
     display_session_ids: set[str] | None = None,
     total_display: int = 0,
+    provider: str | None = None,
 ) -> None:
     """
     Consume results from the compute worker and apply DB writes.
@@ -373,7 +378,8 @@ async def consume_compute_results(
                     if display_session_ids is None or session_id in display_session_ids:
                         completed_count += 1
                         await broadcast_startup_progress(
-                            "background_compute", completed_count, total_display
+                            "background_compute", completed_count, total_display,
+                            provider=provider,
                         )
 
                         # Every N normal sessions, broadcast project_updated for all pending projects
@@ -476,7 +482,10 @@ async def start_background_compute_task(ctx: ComputeContext) -> None:
         total_display = await sync_to_async(
             Session.objects.filter(type=SessionType.SESSION).count
         )()
-        await broadcast_startup_progress("background_compute", total_display, total_display, completed=True)
+        await broadcast_startup_progress(
+            "background_compute", total_display, total_display,
+            provider=ctx.provider, completed=True,
+        )
         return
 
     # Count only real sessions (not subagents) for progress display.
@@ -491,7 +500,9 @@ async def start_background_compute_task(ctx: ComputeContext) -> None:
     total_display = len(sessions_to_display)
 
     # Broadcast initial progress state (0/N) — using display total (sessions only)
-    await broadcast_startup_progress("background_compute", 0, total_display)
+    await broadcast_startup_progress(
+        "background_compute", 0, total_display, provider=ctx.provider
+    )
 
     # Load project caches at startup
     await sync_to_async(load_project_directories)()
@@ -507,6 +518,7 @@ async def start_background_compute_task(ctx: ComputeContext) -> None:
             ctx, worker_done_event,
             display_session_ids=sessions_to_display,
             total_display=total_display,
+            provider=ctx.provider,
         )
     )
 
@@ -538,7 +550,10 @@ async def start_background_compute_task(ctx: ComputeContext) -> None:
     await worker_done_event.wait()
 
     # Broadcast completion (using display total — sessions only, not subagents)
-    await broadcast_startup_progress("background_compute", total_display, total_display, completed=True)
+    await broadcast_startup_progress(
+        "background_compute", total_display, total_display,
+        provider=ctx.provider, completed=True,
+    )
 
     # Stop the consumer task gracefully via stop_event
     ctx.stop_event.set()

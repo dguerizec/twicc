@@ -37,6 +37,36 @@ const debouncedSaves = new Map()
 // Special project ID for "All Projects" mode
 export const ALL_PROJECTS_ID = '__all__'
 
+// Aggregate per-provider startup-progress entries for a single phase into the
+// flat ``{ current, total, completed }`` shape consumed by the UI. Returns
+// null when no provider has reported yet so callers can stay falsy-aware.
+function aggregatePhase(byProvider) {
+    if (!byProvider) return null
+    const entries = Object.values(byProvider)
+    if (entries.length === 0) return null
+    let current = 0
+    let total = 0
+    let completed = true
+    for (const entry of entries) {
+        current += entry.current ?? 0
+        total += entry.total ?? 0
+        if (!entry.completed) completed = false
+    }
+    return { current, total, completed }
+}
+
+// Cheap "still booting" probe used by hot getters (unread counts, sessions
+// list) to skip expensive work while any provider is still mid-phase.
+function hasActiveStartupPhase(startupProgress) {
+    for (const byProvider of Object.values(startupProgress)) {
+        if (!byProvider) continue
+        for (const entry of Object.values(byProvider)) {
+            if (entry && !entry.completed) return true
+        }
+    }
+    return false
+}
+
 /**
  * Sort sessions by display priority:
  * 1. Pinned sessions first (top-level split — any non-null pin mode counts).
@@ -204,8 +234,12 @@ export const useDataStore = defineStore('data', {
         // WebSocket connection state (updated by useWebSocket composable)
         wsConnected: false,
 
-        // Startup progress (from WebSocket startup_progress messages)
-        // { initial_sync?: { current, total, completed }, background_compute?: { current, total, completed } }
+        // Startup progress (from WebSocket startup_progress messages).
+        // Indexed by phase, then by provider key — so the per-phase total
+        // displayed in the UI is the sum of every provider that emitted
+        // progress for that phase. Provider-agnostic phases (e.g.
+        // ``search_index``) bucket under ``__global__``.
+        // Shape: { [phase]: { [provider | '__global__']: { current, total, completed } } }
         startupProgress: {},
 
         // Server info (from WebSocket messages)
@@ -345,7 +379,7 @@ export const useDataStore = defineStore('data', {
             // Object.keys() tracks ITERATE_KEY (add/remove triggers re-eval),
             // then toRaw() avoids the ~23K track() calls per eval from filter/sort
             // property accesses. Normal tracking resumes after startup.
-            const isStartup = Object.values(state.startupProgress).some(p => p && !p.completed)
+            const isStartup = hasActiveStartupPhase(state.startupProgress)
             let sessions, pStates
             if (isStartup) {
                 Object.keys(state.sessions)
@@ -370,7 +404,7 @@ export const useDataStore = defineStore('data', {
             // Object.keys() tracks ITERATE_KEY (add/remove triggers re-eval),
             // then toRaw() avoids the ~23K track() calls per eval from filter/sort
             // property accesses. Normal tracking resumes after startup.
-            const isStartup = Object.values(state.startupProgress).some(p => p && !p.completed)
+            const isStartup = hasActiveStartupPhase(state.startupProgress)
             let sessions, pStates
             if (isStartup) {
                 Object.keys(state.sessions)
@@ -435,7 +469,7 @@ export const useDataStore = defineStore('data', {
          * @returns {number} The number of unread sessions
          */
         getProjectUnreadCount: (state) => (projectId) => {
-            if (Object.values(state.startupProgress).some(p => p && !p.completed)) return 0
+            if (hasActiveStartupPhase(state.startupProgress)) return 0
             let count = 0
             for (const session of Object.values(state.sessions)) {
                 if (session.project_id !== projectId) continue
@@ -468,7 +502,7 @@ export const useDataStore = defineStore('data', {
          * @returns {number} The number of unread sessions
          */
         getGlobalUnreadCount: (state) => {
-            if (Object.values(state.startupProgress).some(p => p && !p.completed)) return 0
+            if (hasActiveStartupPhase(state.startupProgress)) return 0
             let count = 0
             for (const session of Object.values(state.sessions)) {
                 if (session.draft || session.archived || session.parent_session_id) continue
@@ -482,15 +516,18 @@ export const useDataStore = defineStore('data', {
             return count
         },
 
-        // Startup progress getters
-        initialSyncProgress: (state) => state.startupProgress.initial_sync || null,
-        backgroundComputeProgress: (state) => state.startupProgress.background_compute || null,
-        searchIndexProgress: (state) => state.startupProgress.search_index || null,
-        isStartupInProgress: (state) =>
-            Object.values(state.startupProgress).some(p => p && !p.completed),
+        // Startup progress getters — aggregate per-phase across every
+        // provider that has reported progress. ``current`` and ``total``
+        // are summed; ``completed`` is true only when every provider in
+        // the phase has reported completion.
+        initialSyncProgress: (state) => aggregatePhase(state.startupProgress.initial_sync),
+        backgroundComputeProgress: (state) => aggregatePhase(state.startupProgress.background_compute),
+        searchIndexProgress: (state) => aggregatePhase(state.startupProgress.search_index),
+        isStartupInProgress: (state) => hasActiveStartupPhase(state.startupProgress),
         isInitialSyncInProgress: (state) => {
-            const sync = state.startupProgress.initial_sync
-            return sync != null && !sync.completed
+            const byProvider = state.startupProgress.initial_sync
+            if (!byProvider) return false
+            return Object.values(byProvider).some(p => p && !p.completed)
         },
 
         // Local state getters - loading
@@ -695,10 +732,14 @@ export const useDataStore = defineStore('data', {
         },
 
         // Startup progress
-        setStartupProgress(phase, current, total, completed) {
+        setStartupProgress(provider, phase, current, total, completed) {
+            const key = provider ?? '__global__'
             this.startupProgress = {
                 ...this.startupProgress,
-                [phase]: { current, total, completed },
+                [phase]: {
+                    ...(this.startupProgress[phase] || {}),
+                    [key]: { current, total, completed },
+                },
             }
         },
 

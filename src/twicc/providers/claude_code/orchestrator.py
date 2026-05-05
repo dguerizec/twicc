@@ -251,10 +251,13 @@ class ClaudeCodeOrchestrator(BaseOrchestrator):
     async def _initial_sync_task(self) -> None:
         """Run sync_all() in a thread with progress broadcasting."""
         loop = asyncio.get_running_loop()
+        provider_value = self.provider.value
 
         total_sessions = await asyncio.to_thread(_count_total_sessions)
 
-        await broadcast_startup_progress("initial_sync", 0, total_sessions)
+        await broadcast_startup_progress(
+            "initial_sync", 0, total_sessions, provider=provider_value
+        )
 
         progress = {"current": 0}
 
@@ -262,7 +265,9 @@ class ClaudeCodeOrchestrator(BaseOrchestrator):
             # idx/total are per-project; we track global progress ourselves
             progress["current"] += 1
             asyncio.run_coroutine_threadsafe(
-                broadcast_startup_progress("initial_sync", progress["current"], total_sessions),
+                broadcast_startup_progress(
+                    "initial_sync", progress["current"], total_sessions, provider=provider_value
+                ),
                 loop,
             )
 
@@ -274,7 +279,8 @@ class ClaudeCodeOrchestrator(BaseOrchestrator):
         )
 
         await broadcast_startup_progress(
-            "initial_sync", total_sessions, total_sessions, completed=True
+            "initial_sync", total_sessions, total_sessions,
+            provider=provider_value, completed=True,
         )
 
         projects_count = await sync_to_async(Project.objects.filter(stale=False).count)()
@@ -318,7 +324,7 @@ class ClaudeCodeOrchestrator(BaseOrchestrator):
         )
         logger.info("Cron restart task launched")
 
-        self._compute_ctx = ComputeContext()
+        self._compute_ctx = ComputeContext(provider=self.provider.value)
         self._compute_task = asyncio.create_task(
             start_background_compute_task(self._compute_ctx)
         )
