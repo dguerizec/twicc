@@ -42,6 +42,7 @@ const providerSections = computed(() =>
             provider,
             label: `${label} settings`,
             navLabel: label,
+            icon: PROVIDER_ICON[provider] ?? null,
             synced: true,
         }
     })
@@ -208,6 +209,9 @@ const forcedChangelogOpen = ref(false)
 // Settings from store
 const defaultProvider = computed(() => store.getDefaultProvider)
 const providerOptions = getProviderOptions()
+function providerIconFor(provider) {
+    return PROVIDER_ICON[provider] ?? null
+}
 const displayMode = computed(() => store.getDisplayMode)
 const fontSize = computed(() => store.getFontSize)
 const colorScheme = computed(() => store.getColorScheme)
@@ -672,6 +676,13 @@ function onChangelogClose() {
                         :class="{ active: activeSection === section.id }"
                         @click="selectSection(section.id)"
                     >
+                        <wa-icon
+                            v-if="section.icon"
+                            auto-width
+                            family="brands"
+                            :name="section.icon"
+                            class="settings-nav-provider-icon"
+                        ></wa-icon>
                         {{ section.navLabel || section.label }}
                         <wa-icon v-if="section.synced" name="cloud" class="synced-icon"></wa-icon>
                     </button>
@@ -780,11 +791,28 @@ function onChangelogClose() {
                             @change="onDefaultProviderChange"
                             size="small"
                         >
+                            <wa-icon
+                                v-if="providerIconFor(defaultProvider)"
+                                slot="start"
+                                auto-width
+                                family="brands"
+                                :name="providerIconFor(defaultProvider)"
+                            ></wa-icon>
                             <wa-option
                                 v-for="option in providerOptions"
                                 :key="option.value"
                                 :value="option.value"
-                            >{{ option.label }}</wa-option>
+                                :label="option.label"
+                            >
+                                <wa-icon
+                                    v-if="providerIconFor(option.value)"
+                                    auto-width
+                                    family="brands"
+                                    :name="providerIconFor(option.value)"
+                                    class="provider-option-icon"
+                                ></wa-icon>
+                                {{ option.label }}
+                            </wa-option>
                         </wa-select>
                     </div>
                 </section>
@@ -1000,8 +1028,18 @@ function onChangelogClose() {
                             size="small"
                         >Only when needed</wa-switch>
                     </div>
-                    <div v-for="provider in usageProviders" :key="provider" class="provider-usage-block">
-                        <h4 class="provider-usage-title">{{ getProviderLabel(provider) }}</h4>
+                    <template v-for="(provider, idx) in usageProviders" :key="provider">
+                        <wa-divider v-if="idx === 0"></wa-divider>
+                        <div class="provider-usage-block">
+                            <h4 class="provider-usage-title">
+                                <wa-icon
+                                    v-if="providerIconFor(provider)"
+                                    auto-width
+                                    family="brands"
+                                    :name="providerIconFor(provider)"
+                                ></wa-icon>
+                                {{ getProviderLabel(provider) }}
+                            </h4>
                         <div class="setting-group">
                             <wa-switch
                                 :checked="getReadEnabled(provider)"
@@ -1076,7 +1114,8 @@ function onChangelogClose() {
                                 >{{ usageDumpValidation[provider].message }}</wa-callout>
                             </template>
                         </div>
-                    </div>
+                        </div>
+                    </template>
                     <!-- Cross-provider explanations rendered once at the bottom, so each
                          provider block above stays compact (just toggles + path inputs).
                          The synced-icon lives next to each provider's read/dump
@@ -1240,6 +1279,9 @@ function onChangelogClose() {
     display: flex;
     align-items: center;
     gap: var(--wa-space-xs);
+    wa-icon {
+        margin-inline: 0 !important;
+    }
 }
 
 .settings-nav-item:hover {
@@ -1713,6 +1755,13 @@ wa-popover > wa-divider {
     margin: 0;
     font-size: var(--wa-font-size-m);
     color: var(--wa-color-text-normal);
+    display: flex;
+    align-items: center;
+    gap: var(--wa-space-xs);
+}
+
+.provider-option-icon {
+    margin-right: 0.5em;
 }
 
 @media (width < 640px) {

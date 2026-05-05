@@ -14,6 +14,7 @@
  */
 import { computed, ref } from 'vue'
 import { getProviderHelpers } from '../../providers'
+import { PROVIDER_ICON } from '../../constants'
 import AgentSettingsPresetsDialog from './AgentSettingsPresetsDialog.vue'
 
 const props = defineProps({
@@ -24,6 +25,7 @@ const props = defineProps({
 })
 
 const helpers = computed(() => getProviderHelpers(props.provider))
+const providerIcon = computed(() => PROVIDER_ICON[props.provider] ?? null)
 
 // Field order matches the session popover for consistency. Fields a
 // provider doesn't support (per ``supportsAgentSetting``) are skipped.
@@ -105,7 +107,16 @@ function openPresetsDialog() {
 
 <template>
     <section class="settings-section">
-        <h3 class="settings-section-title">{{ helpers.constructor.label }} settings <wa-icon name="cloud" class="synced-icon"></wa-icon></h3>
+        <h3 class="settings-section-title">
+            <wa-icon
+                v-if="providerIcon"
+                auto-width
+                family="brands"
+                :name="providerIcon"
+            ></wa-icon>
+            {{ helpers.constructor.label }} settings
+            <wa-icon name="cloud" class="synced-icon"></wa-icon>
+        </h3>
         <div
             v-for="field in supportedFields"
             :key="field"
