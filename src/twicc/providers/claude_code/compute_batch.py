@@ -688,7 +688,7 @@ def compute_session_metadata(session_id: str, result_queue) -> None:
         'agent_links_to_update': agent_links_to_update,
         'agent_links_to_delete': agent_links_to_delete,
         'session_fields': {
-            'compute_version': settings.CURRENT_COMPUTE_VERSION,
+            'compute_version': settings.CLAUDE_CODE_COMPUTE_VERSION,
             'user_message_count': user_message_count,
             'context_usage': last_context_usage,
             'cwd': last_cwd,

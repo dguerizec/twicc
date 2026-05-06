@@ -34,8 +34,9 @@ twicc (entry: run.py → cli.main())
 ├── Startup
 │   ├── Initial sync — scans ~/.claude/projects/, bulk-inserts raw SessionItems (no metadata)
 │   └── Background compute (multiprocessing) — computes metadata for all sessions if
-│       CURRENT_COMPUTE_VERSION changed (display_level, kind, groups, costs, git info).
-│       Runs once at startup for sessions needing it, then exits.
+│       the owning provider's CURRENT_COMPUTE_VERSION (e.g. CLAUDE_CODE_COMPUTE_VERSION)
+│       changed (display_level, kind, groups, costs, git info). Runs once at startup
+│       for sessions needing it, then exits.
 ├── Django ASGI (Uvicorn)
 │   ├── HTTP — REST API + SPA catch-all serving Vue frontend
 │   └── WebSocket

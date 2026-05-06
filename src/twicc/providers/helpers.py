@@ -192,6 +192,32 @@ class BaseProviderHelpers:
     DEFAULT_FAMILY_PRICES: ClassVar[dict[str, FamilyPrices]] = {}
 
     # ------------------------------------------------------------------
+    # Compute version
+    # ------------------------------------------------------------------
+
+    @property
+    def current_compute_version(self) -> int | None:
+        """Return the provider's current compute version, or ``None`` if it has no compute pipeline.
+
+        The compute version travels next to the ``Session.compute_version``
+        column: a session is considered up-to-date when ``session.compute_version
+        == helpers.current_compute_version``. Each provider exposes its own
+        version (typically read from a dedicated ``settings.<PROVIDER>_COMPUTE_VERSION``
+        constant) so that bumping the rules of one provider does not invalidate
+        sessions of another.
+
+        ``None`` declares "this provider has no compute pipeline yet" — sessions
+        keep their default ``compute_version=NULL`` and the equality check
+        (``None == None``) reports them as up-to-date, so the front displays
+        them normally without waiting for a recompute that never comes.
+
+        The base implementation returns ``None`` so a freshly-added provider
+        is treated as compute-less by default; providers with a compute
+        pipeline override this to return their settings constant.
+        """
+        return None
+
+    # ------------------------------------------------------------------
     # Per-provider data files
     # ------------------------------------------------------------------
 

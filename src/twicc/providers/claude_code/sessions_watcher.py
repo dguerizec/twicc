@@ -191,14 +191,14 @@ def create_session(
             type=SessionType.SUBAGENT,
             parent_session=parent_session,
             agent_id=parsed.session_id,
-            compute_version=settings.CURRENT_COMPUTE_VERSION,
+            compute_version=settings.CLAUDE_CODE_COMPUTE_VERSION,
         )
     kwargs: dict = dict(
         id=parsed.session_id,
         project=project,
         provider=Provider.CLAUDE_CODE,
         file_path=parsed.file_path,
-        compute_version=settings.CURRENT_COMPUTE_VERSION,
+        compute_version=settings.CLAUDE_CODE_COMPUTE_VERSION,
     )
     if agent_settings is not None:
         for field, value in agent_settings._asdict().items():

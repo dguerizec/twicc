@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, NamedTuple
 
 import orjson
+from django.conf import settings
 
 from twicc.core.enums import ItemKind, Provider
 from twicc.pricing import FamilyPrices
@@ -158,6 +159,15 @@ class ClaudeCodeHelpers(BaseProviderHelpers):
             cache_write_1h_price=Decimal("2.00"),
         ),
     }
+
+    @property
+    def current_compute_version(self) -> int | None:
+        """Return :data:`settings.CLAUDE_CODE_COMPUTE_VERSION`.
+
+        Bumping that constant invalidates every Claude Code session and
+        triggers the background compute task to recompute their metadata.
+        """
+        return settings.CLAUDE_CODE_COMPUTE_VERSION
 
     def extract_family_and_version(
         self, model_id: str,

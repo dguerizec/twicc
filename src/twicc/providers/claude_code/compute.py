@@ -858,7 +858,7 @@ def compute_item_display_level(parsed_json: dict, kind: ItemKind | None) -> int:
 
     Note:
         Any modification to this function's logic MUST increment
-        CURRENT_COMPUTE_VERSION in settings.py to trigger recomputation.
+        CLAUDE_CODE_COMPUTE_VERSION in settings.py to trigger recomputation.
     """
     # These kinds are always visible
     if kind in (ItemKind.USER_MESSAGE, ItemKind.ASSISTANT_MESSAGE, ItemKind.API_ERROR, ItemKind.COMPACT_SUMMARY):
@@ -896,7 +896,7 @@ def compute_item_kind(parsed_json: dict) -> ItemKind | None:
 
     Note:
         Any modification to this function's logic MUST increment
-        CURRENT_COMPUTE_VERSION in settings.py to trigger recomputation.
+        CLAUDE_CODE_COMPUTE_VERSION in settings.py to trigger recomputation.
     """
     # "Bastard" API error format: type="assistant" but isApiErrorMessage=true
     # The error text is serialized in content[0].text as a raw string

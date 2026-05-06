@@ -13,6 +13,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import ClassVar
 
+from django.conf import settings
+
 from twicc.core.enums import Provider
 from twicc.providers.helpers import (
     AgentSettingCategory,
@@ -85,6 +87,18 @@ class CodexHelpers(BaseProviderHelpers):
             provider_extra=None,
         ),
     ]
+
+    @property
+    def current_compute_version(self) -> int | None:
+        """Return :data:`settings.CODEX_COMPUTE_VERSION`.
+
+        Currently ``None`` — Codex has no compute pipeline yet, so every
+        Codex session is reported up-to-date with its default
+        ``compute_version=NULL``. The day the pipeline lands, this
+        constant moves to ``1`` (or higher) and existing sessions become
+        outdated until the new compute task processes them.
+        """
+        return settings.CODEX_COMPUTE_VERSION
 
     def validate_usage_file_payload(self, payload: dict) -> tuple[bool, str]:
         """Accept a payload that has the shape of a Codex ``wham/usage`` response.

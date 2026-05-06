@@ -180,8 +180,13 @@ LOGGING = {
     },
 }
 
-# Display levels computation
-CURRENT_COMPUTE_VERSION = 89  # Bump when display rules change to trigger recomputation
+# Display levels computation — one constant per provider, accessed by the
+# provider helpers via ``BaseProviderHelpers.current_compute_version``.
+# Bump the relevant constant when the corresponding provider's parsing/compute
+# rules change to trigger recomputation. ``None`` declares "no compute pipeline
+# yet" — sessions of that provider are reported up-to-date as-is.
+CLAUDE_CODE_COMPUTE_VERSION = 89
+CODEX_COMPUTE_VERSION = None
 
 # Search index version
 CURRENT_SEARCH_VERSION = 2  # Bump when search indexing logic changes to trigger reindexing

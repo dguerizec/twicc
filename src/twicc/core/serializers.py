@@ -7,8 +7,6 @@ safe to call from async contexts without sync_to_async wrapping, as long as
 the model instance was already fetched from the database.
 """
 
-from django.conf import settings
-
 from twicc.providers.helpers import get_provider_helpers
 
 
@@ -32,8 +30,13 @@ def serialize_session(session):
     """
     Serialize a Session model to a dictionary.
 
-    Includes compute_version_up_to_date boolean to indicate if the session's
-    metadata has been computed with the current version of rules.
+    Includes ``compute_version_up_to_date`` boolean to indicate if the session's
+    metadata has been computed with the current version of rules. The reference
+    version comes from the owning provider's ``current_compute_version`` so
+    bumping one provider's compute does not invalidate sessions of another;
+    for providers without a compute pipeline (``current_compute_version=None``)
+    sessions match their default ``compute_version=NULL`` and are reported
+    up-to-date.
 
     Works for both regular sessions and subagents. For subagents,
     parent_session_id will be set; for regular sessions it will be None.
@@ -46,6 +49,8 @@ def serialize_session(session):
 
     # Use pending title if available, otherwise use the stored title
     title = get_pending_title(session.id) or session.title
+
+    provider_helpers = get_provider_helpers(session.provider)
 
     return {
         "id": session.id,
@@ -63,8 +68,8 @@ def serialize_session(session):
         "stale": session.stale,
         "title": title,  # Session title (from pending, first user message, or custom-title)
         "user_message_count": session.user_message_count,  # Number of user messages (message turns)
-        # Boolean indicating if session metadata is up-to-date
-        "compute_version_up_to_date": session.compute_version == settings.CURRENT_COMPUTE_VERSION,
+        # Boolean indicating if session metadata is up-to-date for the owning provider
+        "compute_version_up_to_date": session.compute_version == provider_helpers.current_compute_version,
         # Cost and context usage fields
         "context_usage": session.context_usage,  # Current context usage in tokens
         "self_cost": float(session.self_cost) if session.self_cost else None,  # Own items cost in USD
@@ -74,7 +79,7 @@ def serialize_session(session):
         "cwd": session.cwd,  # Current working directory
         "git_branch": session.git_branch or (session.cwd_git_branch if session.git_directory else None),  # Resolved branch, fallback to cwd
         "git_directory": session.git_directory,  # Resolved git root directory
-        "model": get_provider_helpers(session.provider).serialize_model(session.model),  # Model info object
+        "model": provider_helpers.serialize_model(session.model),  # Model info object
         # User-controlled fields
         "archived": session.archived,  # Whether the session is archived
         "pinned": session.pinned,  # Whether the session is pinned

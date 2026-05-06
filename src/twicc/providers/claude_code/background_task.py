@@ -476,7 +476,7 @@ async def start_background_compute_task(ctx: ComputeContext) -> None:
     total_to_compute = await sync_to_async(Session.objects.filter(
         provider=Provider.CLAUDE_CODE,
     ).exclude(
-        compute_version=settings.CURRENT_COMPUTE_VERSION
+        compute_version=settings.CLAUDE_CODE_COMPUTE_VERSION
     ).count)()
 
     if total_to_compute == 0:
@@ -500,7 +500,7 @@ async def start_background_compute_task(ctx: ComputeContext) -> None:
             Session.objects.filter(
                 provider=Provider.CLAUDE_CODE, type=SessionType.SESSION,
             )
-            .exclude(compute_version=settings.CURRENT_COMPUTE_VERSION)
+            .exclude(compute_version=settings.CLAUDE_CODE_COMPUTE_VERSION)
             .values_list("id", flat=True)
         )
     )()
@@ -536,7 +536,7 @@ async def start_background_compute_task(ctx: ComputeContext) -> None:
         lambda: list(
             Session.objects
             .filter(provider=Provider.CLAUDE_CODE)
-            .exclude(compute_version=settings.CURRENT_COMPUTE_VERSION)
+            .exclude(compute_version=settings.CLAUDE_CODE_COMPUTE_VERSION)
             .order_by('-mtime')
             .values_list('id', flat=True)
         )
