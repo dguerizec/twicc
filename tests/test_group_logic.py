@@ -21,12 +21,7 @@ import queue
 import orjson
 import pytest
 
-from twicc.providers.claude_code.compute import (
-    apply_session_complete,
-    compute_item_metadata,
-    compute_item_metadata_live,
-    compute_session_metadata,
-)
+from twicc.providers.claude_code.compute import get_compute
 from twicc.core.models import Project, Session, SessionItem
 
 
@@ -111,7 +106,7 @@ def apply_compute_results(result_queue) -> None:
         msg_type = msg.get('type')
 
         if msg_type == 'session_complete':
-            apply_session_complete(msg)
+            get_compute().apply_session_complete(msg)
 
             # Recalculate activity counters for affected days
             # (in the background process this is batched, but for tests we do it immediately)
@@ -162,7 +157,7 @@ def get_item_state(item: SessionItem) -> tuple[int | None, int | None]:
 def run_batch(session_id: str):
     """Run batch processing."""
     result_queue = queue.Queue()
-    compute_session_metadata(session_id, result_queue)
+    get_compute().compute_session_metadata(session_id, result_queue)
     apply_compute_results(result_queue)
 
 
@@ -178,13 +173,13 @@ def run_live(session_id: str, items: list[SessionItem]):
         parsed = orjson.loads(item.content)
 
         # Step 1: Compute display_level and kind (like the watcher does)
-        metadata = compute_item_metadata(parsed)
+        metadata = get_compute().compute_item_metadata(parsed)
         item.display_level = metadata['display_level']
         item.kind = metadata['kind']
 
         # Step 2: Compute group membership (only for groupable items, like the watcher)
         if item.display_level in (ItemDisplayLevel.COLLAPSIBLE, ItemDisplayLevel.ALWAYS):
-            compute_item_metadata_live(session_id, item, parsed)
+            get_compute().compute_item_metadata_live(session_id, item, parsed)
 
         item.save()
 
