@@ -15,7 +15,7 @@ import orjson
 import logging
 from collections import Counter
 from datetime import datetime
-from typing import NamedTuple
+from typing import ClassVar, NamedTuple
 
 import xmltodict
 from django.core.exceptions import MultipleObjectsReturned
@@ -30,8 +30,10 @@ from twicc.providers.compute_base import (
     AGENTS_PROMPT_CACHE,
     AgentLinkUpdate,
     AgentStoppedUpdate,
+    BaseSessionCompute,
     GroupState,
     ItemGroupInfo,
+    ToolResultInfo,
     ToolResultUpdate,
     cache_agent_prompt,
     get_cached_agent_prompt,
@@ -1571,3 +1573,181 @@ def compute_item_metadata_live(session_id: str, item: SessionItem, parsed_json: 
 
     return modified_line_nums
 
+
+# =============================================================================
+# ClaudeCodeSessionCompute — concrete BaseSessionCompute for Claude Code
+# =============================================================================
+
+
+class ClaudeCodeSessionCompute(BaseSessionCompute):
+    """
+    Concrete compute pipeline for Claude Code sessions.
+
+    Step 2 wires the extraction surface and the live (watcher) machinery
+    to the existing module-level helpers in this file. Each method
+    delegates to the matching free function so the call sites that still
+    use those functions (compute_batch.py, sessions_watcher.py) keep
+    working unchanged.
+
+    Methods left inherited from :class:`BaseSessionCompute` (still raise
+    ``NotImplementedError``):
+
+    - :meth:`analyze_content` — implemented in compute_batch.py for now;
+      moves into this class at step 3 when the batch path migrates.
+    - :meth:`compute_session_metadata`, :meth:`apply_session_complete`
+      — step 3.
+    - :meth:`sync_session_items_from_file` — step 4.
+    """
+
+    provider: ClassVar[Provider] = Provider.CLAUDE_CODE
+
+    # ------------------------------------------------------------------
+    # Extraction
+    # ------------------------------------------------------------------
+
+    def transform_inline(self, parsed_json: dict) -> str | None:
+        new_content = transform_task_notification(parsed_json)
+        if new_content is None:
+            new_content = transform_local_command_output(parsed_json)
+        return new_content
+
+    def compute_item_kind(self, parsed_json: dict) -> ItemKind | None:
+        return compute_item_kind(parsed_json)
+
+    def compute_item_display_level(
+        self, parsed_json: dict, kind: ItemKind | None
+    ) -> int:
+        return compute_item_display_level(parsed_json, kind)
+
+    def compute_item_metadata(self, parsed_json: dict) -> dict:
+        return compute_item_metadata(parsed_json)
+
+    def extract_item_timestamp(self, parsed_json: dict) -> datetime | None:
+        return extract_item_timestamp(parsed_json)
+
+    def extract_title_from_user_message(self, parsed_json: dict) -> str | None:
+        return extract_title_from_user_message(parsed_json)
+
+    def extract_runtime_fields(self, parsed_json: dict) -> dict:
+        # Claude Code carries cwd / gitBranch at the JSONL root, model
+        # inside message.model, and slug at the JSONL root.
+        fields: dict = {
+            'cwd': None,
+            'cwd_git_branch': None,
+            'model': None,
+            'slug': None,
+        }
+        if cwd := parsed_json.get('cwd'):
+            fields['cwd'] = cwd
+        if branch := parsed_json.get('gitBranch'):
+            fields['cwd_git_branch'] = branch
+        if (message := parsed_json.get('message')) and isinstance(message, dict):
+            if model := message.get('model'):
+                fields['model'] = model
+        if slug := parsed_json.get('slug'):
+            fields['slug'] = slug
+        return fields
+
+    def compute_item_cost_and_usage(
+        self,
+        item: SessionItem,
+        parsed_json: dict,
+        seen_message_ids: set[str],
+    ) -> None:
+        compute_item_cost_and_usage(item, parsed_json, seen_message_ids)
+
+    def is_tool_result_item(self, parsed_json: dict) -> bool:
+        return is_tool_result_item(parsed_json)
+
+    def extract_tool_use_entries(self, parsed_json: dict) -> dict[str, str]:
+        return get_tool_use_entries(parsed_json)
+
+    def extract_tool_result_info(self, parsed_json: dict) -> ToolResultInfo | None:
+        tool_use_id = get_tool_result_id(parsed_json)
+        if not tool_use_id:
+            return None
+        error_text = get_tool_result_error(parsed_json)
+        return ToolResultInfo(
+            tool_use_id=tool_use_id,
+            is_error=error_text is not None,
+            error_text=error_text,
+        )
+
+    def extract_agent_info_from_tool_result(
+        self, parsed_json: dict
+    ) -> tuple[str, str] | None:
+        return get_tool_result_agent_info(parsed_json)
+
+    def extract_task_tool_uses(self, parsed_json: dict) -> list[tuple[str, bool]]:
+        return get_task_tool_uses(parsed_json)
+
+    def extract_task_tool_use_prompts(
+        self, parsed_json: dict
+    ) -> list[tuple[str, str, bool]]:
+        content = get_message_content_list(parsed_json, "assistant")
+        if content is None:
+            return []
+        return _extract_task_tool_use_prompts(content)
+
+    def extract_paths_from_tool_uses(self, parsed_json: dict) -> list[str]:
+        return extract_paths_from_tool_uses(parsed_json)
+
+    def compute_file_change_stats(self, parsed_json: dict) -> str | None:
+        return compute_file_change_stats(parsed_json)
+
+    def detect_prefix_suffix(
+        self, parsed_json: dict, kind: ItemKind | None
+    ) -> tuple[bool, bool]:
+        return _detect_prefix_suffix(parsed_json, kind)
+
+    def resolve_git_for_item(
+        self, parsed_json: dict, *, use_cache: bool = True
+    ) -> tuple[str, str] | None:
+        return resolve_git_for_item(parsed_json, use_cache=use_cache)
+
+    # ------------------------------------------------------------------
+    # Live (watcher) machinery
+    # ------------------------------------------------------------------
+
+    def find_open_group_head(
+        self, session_id: str, before_line_num: int
+    ) -> int | None:
+        return _find_open_group_head(session_id, before_line_num)
+
+    def compute_item_metadata_live(
+        self, session_id: str, item: SessionItem, parsed_json: dict
+    ) -> set[int]:
+        return compute_item_metadata_live(session_id, item, parsed_json)
+
+    def create_tool_result_link_live(
+        self, session_id: str, item: SessionItem, parsed_json: dict
+    ) -> ToolResultUpdate | None:
+        return create_tool_result_link_live(session_id, item, parsed_json)
+
+    def check_agent_naturally_stopped(
+        self, session_id: str, tool_result_update: ToolResultUpdate
+    ) -> AgentStoppedUpdate | None:
+        return check_agent_naturally_stopped(session_id, tool_result_update)
+
+    def create_agent_link_from_tool_result(
+        self, session_id: str, item: SessionItem, parsed_json: dict
+    ) -> AgentLinkUpdate | None:
+        return create_agent_link_from_tool_result(session_id, item, parsed_json)
+
+    def create_agent_link_from_subagent(
+        self,
+        parent_session_id: str,
+        agent_id: str,
+        agent_prompt: str,
+    ) -> AgentLinkUpdate | None:
+        return create_agent_link_from_subagent(
+            parent_session_id, agent_id, agent_prompt,
+        )
+
+    def create_agent_link_from_tool_use(
+        self,
+        session_id: str,
+        item: SessionItem,
+        parsed_json: dict,
+    ) -> list[AgentLinkUpdate]:
+        return create_agent_link_from_tool_use(session_id, item, parsed_json)
