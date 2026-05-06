@@ -25,7 +25,7 @@ from channels.layers import get_channel_layer
 from django.conf import settings
 from twicc.startup_progress import broadcast_startup_progress
 
-# NOTE: Django model imports (twicc.core.models, .compute, .compute_batch,
+# NOTE: Django model imports (twicc.core.models, .compute,
 # twicc.core.serializers) are intentionally NOT imported at module level.
 # The "spawn" start method re-imports this module in the child process before
 # django.setup() runs. Top-level model imports would trigger AppRegistryNotReady.
@@ -141,8 +141,9 @@ def compute_worker_main(command_queue, result_queue, stop_event) -> None:
     import logging
     worker_logger = logging.getLogger(__name__)
 
-    from .compute_batch import compute_session_metadata
+    from .compute import get_compute
 
+    compute = get_compute()
     worker_logger.info("Compute worker process started")
 
     while True:
@@ -172,7 +173,7 @@ def compute_worker_main(command_queue, result_queue, stop_event) -> None:
             if session_id:
                 try:
                     # This function reads DB and sends batches via result_queue
-                    compute_session_metadata(session_id, result_queue)
+                    compute.compute_session_metadata(session_id, result_queue)
                 except Exception as e:
                     worker_logger.error(f"Error computing session {session_id}: {e}", exc_info=True)
                     # Flush the file handler so the error survives process termination
@@ -328,7 +329,9 @@ async def consume_compute_results(
     from collections import defaultdict
     from datetime import date as date_cls
 
-    from .compute_batch import apply_session_complete
+    from .compute import get_compute
+
+    compute = get_compute()
 
     try:
         # Accumulate affected days per project across multiple sessions
@@ -365,7 +368,7 @@ async def consume_compute_results(
             try:
                 if msg_type == 'session_complete':
                     # New unified message type - all data in one message
-                    await sync_to_async(apply_session_complete)(msg)
+                    await sync_to_async(compute.apply_session_complete)(msg)
                     await _handle_compute_done(msg['session_id'])
 
                     # Track project as having pending changes
