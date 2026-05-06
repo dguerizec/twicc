@@ -15,7 +15,6 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import NamedTuple
 
 import orjson
 from django.conf import settings
@@ -27,6 +26,7 @@ from twicc.projects import (
     get_project_git_root,
     update_project_metadata,
 )
+from twicc.providers.compute_base import ContentAnalysis
 from .compute import (
     AGENT_TOOL_NAMES,
     GroupState,
@@ -52,43 +52,6 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 # Single-Pass Content Analysis
 # =============================================================================
-
-
-class ContentAnalysis(NamedTuple):
-    """
-    Result of single-pass content analysis for batch computation.
-
-    Extracts all information from a parsed JSONL item's message.content
-    in a single traversal, replacing multiple individual function calls
-    that each scan the content array separately.
-
-    All individual extraction functions (get_tool_use_entries, get_tool_result_id, etc.)
-    are preserved in compute.py for use by the live watcher code path.
-    """
-    # Content visibility (replaces _has_visible_content)
-    has_visible_content: bool
-    # First text block's text value (replaces extract_text_from_content)
-    text_content: str | None
-    # Content is a string starting with system XML prefix (replaces _is_system_xml_content)
-    is_system_xml: bool
-    # User message has a tool_result in content (replaces is_tool_result_item)
-    has_tool_result: bool
-    # First tool_result's tool_use_id (replaces get_tool_result_id)
-    tool_result_id: str | None
-    # Error from first tool_result (replaces get_tool_result_error)
-    tool_result_error: str | None
-    # tool_use_id -> tool_name mapping (replaces get_tool_use_entries)
-    tool_use_entries: dict[str, str]
-    # [(tool_use_id, is_background)] for Task/Agent tools (replaces get_task_tool_uses)
-    task_tool_uses: list[tuple[str, bool]]
-    # Absolute file paths from tool_use inputs (replaces extract_paths_from_tool_uses)
-    file_paths: list[str]
-    # Raw prefix/suffix detection (replaces _has_collapsible_prefix/_suffix)
-    # Caller must filter by kind (only meaningful for USER_MESSAGE / ASSISTANT_MESSAGE)
-    has_prefix: bool
-    has_suffix: bool
-    # (tool_use_id, agent_id) from tool_result with agentId (replaces get_tool_result_agent_info)
-    tool_result_agent_info: tuple[str, str] | None
 
 
 # Shared empty constants to avoid allocating new empty collections for every item
