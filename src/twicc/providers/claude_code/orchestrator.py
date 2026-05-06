@@ -283,12 +283,20 @@ class ClaudeCodeOrchestrator(BaseOrchestrator):
             provider=provider_value, completed=True,
         )
 
-        projects_count = await sync_to_async(Project.objects.filter(stale=False).count)()
+        projects_count = await sync_to_async(
+            Project.objects.filter(
+                stale=False, sessions__provider=Provider.CLAUDE_CODE,
+            ).distinct().count
+        )()
         sessions_count = await sync_to_async(
-            Session.objects.filter(stale=False, type=SessionType.SESSION).count
+            Session.objects.filter(
+                provider=Provider.CLAUDE_CODE, stale=False, type=SessionType.SESSION,
+            ).count
         )()
         subagents_count = await sync_to_async(
-            Session.objects.filter(stale=False, type=SessionType.SUBAGENT).count
+            Session.objects.filter(
+                provider=Provider.CLAUDE_CODE, stale=False, type=SessionType.SUBAGENT,
+            ).count
         )()
         logger.info(
             "Data synchronized (%d projects, %d sessions, %d subagents)",

@@ -202,7 +202,11 @@ def sync_project(
     if project is not None:
         db_sessions = {
             s.id: s
-            for s in Session.objects.filter(project=project, type=SessionType.SESSION)
+            for s in Session.objects.filter(
+                project=project,
+                type=SessionType.SESSION,
+                provider=Provider.CLAUDE_CODE,
+            )
         }
     else:
         db_sessions = {}
@@ -268,10 +272,17 @@ def sync_project(
         new_line_nums = sync_session_items(session, file_path)
         stats["items_added"] += len(new_line_nums)
 
+        update_fields: list[str] = []
+        # The file is on disk (we just read it), so the session is not stale.
+        if session.stale:
+            session.stale = False
+            update_fields.append("stale")
         # If new items were added, reset compute_version to trigger background recompute
         if new_line_nums and session.compute_version is not None:
             session.compute_version = None
-            session.save(update_fields=["compute_version"])
+            update_fields.append("compute_version")
+        if update_fields:
+            session.save(update_fields=update_fields)
 
         if session.last_line > 0:
             if session.mtime > max_mtime:

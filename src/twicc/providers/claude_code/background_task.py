@@ -468,11 +468,14 @@ async def start_background_compute_task(ctx: ComputeContext) -> None:
     Progress logging: Logs progress at 10% intervals during processing.
     """
 
+    from twicc.core.enums import Provider
     from twicc.projects import load_project_directories, load_project_git_roots
     from twicc.core.models import Session, SessionType
 
     # Count sessions needing computation
-    total_to_compute = await sync_to_async(Session.objects.exclude(
+    total_to_compute = await sync_to_async(Session.objects.filter(
+        provider=Provider.CLAUDE_CODE,
+    ).exclude(
         compute_version=settings.CURRENT_COMPUTE_VERSION
     ).count)()
 
@@ -480,7 +483,9 @@ async def start_background_compute_task(ctx: ComputeContext) -> None:
         logger.info("Background compute: no sessions to process")
         # Report the total session count so the frontend can show "N/N" instead of "0/0"
         total_display = await sync_to_async(
-            Session.objects.filter(type=SessionType.SESSION).count
+            Session.objects.filter(
+                provider=Provider.CLAUDE_CODE, type=SessionType.SESSION,
+            ).count
         )()
         await broadcast_startup_progress(
             "background_compute", total_display, total_display,
@@ -492,7 +497,9 @@ async def start_background_compute_task(ctx: ComputeContext) -> None:
     # The actual compute processes ALL sessions, but users only care about session count.
     sessions_to_display = await sync_to_async(
         lambda: set(
-            Session.objects.filter(type=SessionType.SESSION)
+            Session.objects.filter(
+                provider=Provider.CLAUDE_CODE, type=SessionType.SESSION,
+            )
             .exclude(compute_version=settings.CURRENT_COMPUTE_VERSION)
             .values_list("id", flat=True)
         )
@@ -528,6 +535,7 @@ async def start_background_compute_task(ctx: ComputeContext) -> None:
     session_ids_to_compute = await sync_to_async(
         lambda: list(
             Session.objects
+            .filter(provider=Provider.CLAUDE_CODE)
             .exclude(compute_version=settings.CURRENT_COMPUTE_VERSION)
             .order_by('-mtime')
             .values_list('id', flat=True)
