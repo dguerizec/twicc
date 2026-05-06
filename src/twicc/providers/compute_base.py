@@ -29,6 +29,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+from collections import Counter
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple
@@ -139,9 +140,38 @@ class ContentAnalysis(NamedTuple):
     tool_result_agent_info: tuple[str, str] | None
 
 
+# Shared empty constants used by every provider's ``analyze_content`` to
+# avoid allocating fresh empty containers for items that don't carry the
+# corresponding payload. MUST NOT be mutated.
+_EMPTY_TOOL_USE_ENTRIES: dict[str, str] = {}
+_EMPTY_TASK_TOOL_USES: list[tuple[str, bool]] = []
+_EMPTY_FILE_PATHS: list[str] = []
+
+_EMPTY_ANALYSIS = ContentAnalysis(
+    has_visible_content=False,
+    text_content=None,
+    is_system_xml=False,
+    has_tool_result=False,
+    tool_result_id=None,
+    tool_result_error=None,
+    tool_use_entries=_EMPTY_TOOL_USE_ENTRIES,
+    task_tool_uses=_EMPTY_TASK_TOOL_USES,
+    file_paths=_EMPTY_FILE_PATHS,
+    has_prefix=False,
+    has_suffix=False,
+    tool_result_agent_info=None,
+)
+
+
 # =============================================================================
 # Pure utilities — shared helpers that don't depend on provider parsing
 # =============================================================================
+
+
+# Maximum length for extracted titles before truncation (with ellipsis).
+# Provider-agnostic — every provider's title must fit this budget so the
+# UI rendering stays consistent.
+TITLE_MAX_LENGTH = 200
 
 
 _MARKDOWN_PATTERNS = [
@@ -527,8 +557,45 @@ class BaseSessionCompute:
         raise NotImplementedError
 
     def extract_title_from_user_message(self, parsed_json: dict) -> str | None:
-        """Extract a session title candidate from a user message, or ``None``."""
-        raise NotImplementedError
+        """
+        Extract a session title candidate from a user message, or ``None``.
+
+        Generic algorithm shared by every provider:
+
+        1. Pull the raw user-facing text via :meth:`extract_user_message_text`.
+        2. Ask the provider whether the text is a command invocation via
+           :meth:`format_command_for_title` (e.g. Claude Code's ``<command-…>``
+           slash syntax). When it is, the returned string is used verbatim;
+           otherwise the raw text is run through :func:`strip_markdown`.
+        3. Collapse internal whitespace and truncate to
+           :data:`TITLE_MAX_LENGTH` (with an ellipsis when truncated).
+        """
+        text = self.extract_user_message_text(parsed_json)
+        if not text:
+            return None
+        command_title = self.format_command_for_title(text)
+        if command_title is not None:
+            cleaned = command_title
+        else:
+            cleaned = strip_markdown(text).strip()
+        cleaned = re.sub(r'\s+', ' ', cleaned)
+        if not cleaned:
+            return None
+        if len(cleaned) > TITLE_MAX_LENGTH:
+            return cleaned[:TITLE_MAX_LENGTH] + '…'
+        return cleaned
+
+    def format_command_for_title(self, text: str) -> str | None:
+        """
+        Return the title-friendly rendering of a command invocation, or ``None``.
+
+        Default implementation never recognises a command (returns ``None``)
+        so :meth:`extract_title_from_user_message` falls through to the
+        plain-text branch. Providers that have a slash-command syntax
+        embedded in user messages (Claude Code's ``<command-name>...``)
+        override this to extract ``"<name> <args>"`` form.
+        """
+        return None
 
     def extract_runtime_fields(self, parsed_json: dict) -> dict:
         """
@@ -622,13 +689,43 @@ class BaseSessionCompute:
         """
         Resolve ``(git_directory, git_branch)`` for the item, or ``None``.
 
-        Default implementation will live in this base class once step 2
-        lands — it walks the paths returned by
+        Walks the absolute paths returned by
         :meth:`extract_paths_from_tool_uses` through
-        :func:`twicc.git.resolve_git_from_path` and picks the most common
-        resolution. Providers rarely need to override.
+        :func:`twicc.git.resolve_git_from_path`, then picks the most
+        frequently-resolved git root (in case the item references several
+        files in different repos). Only the path extraction is
+        provider-specific.
+
+        ``use_cache`` is forwarded to :func:`resolve_git_from_path`; the
+        watcher path passes ``False`` to bypass the cache for fresh
+        results.
         """
-        raise NotImplementedError
+        paths = self.extract_paths_from_tool_uses(parsed_json)
+        if not paths:
+            return None
+
+        resolutions: list[tuple[str, str]] = []
+        for path in paths:
+            # Use the directory part of the path (for files)
+            dir_path = os.path.dirname(path) if not os.path.isdir(path) else path
+            result = resolve_git_from_path(dir_path, use_cache=use_cache)
+            if result is not None:
+                resolutions.append(result)
+
+        if not resolutions:
+            return None
+
+        if len(resolutions) == 1:
+            return resolutions[0]
+
+        # Multiple resolutions: use the most frequent git_directory
+        counter = Counter(r[0] for r in resolutions)
+        most_common_dir = counter.most_common(1)[0][0]
+        for r in resolutions:
+            if r[0] == most_common_dir:
+                return r
+
+        return resolutions[0]  # Fallback (shouldn't reach here)
 
     def extract_user_message_text(self, parsed_json: dict) -> str | None:
         """

@@ -8,12 +8,10 @@ and the watcher (single item).
 
 from __future__ import annotations
 
-import os
 import re
 
 import orjson
 import logging
-from collections import Counter
 from datetime import datetime
 from typing import ClassVar, NamedTuple
 
@@ -22,9 +20,12 @@ from django.db.models import Q
 
 from twicc.core.enums import ItemKind, Provider
 from twicc.core.models import Session, SessionItem
-from twicc.git import resolve_git_from_path
 from twicc.pricing import calculate_line_context_usage
 from twicc.providers.compute_base import (
+    _EMPTY_ANALYSIS,
+    _EMPTY_FILE_PATHS,
+    _EMPTY_TASK_TOOL_USES,
+    _EMPTY_TOOL_USE_ENTRIES,
     BaseSessionCompute,
     ContentAnalysis,
     ToolResultInfo,
@@ -51,9 +52,6 @@ _SYSTEM_XML_PREFIXES = (
 # Prefix for task notification XML (background agent results)
 _TASK_NOTIFICATION_TAG = '<task-notification>'
 _TASK_NOTIFICATION_CLOSE_TAG = '</task-notification>'
-
-# Maximum length for extracted titles (before truncation)
-TITLE_MAX_LENGTH = 200
 
 logger = logging.getLogger(__name__)
 
@@ -104,51 +102,6 @@ def extract_paths_from_tool_uses(parsed_json: dict) -> list[str]:
         if isinstance(path, str) and path.startswith('/'):
             paths.append(path)
     return paths
-
-
-def resolve_git_for_item(parsed_json: dict, *, use_cache: bool = True) -> tuple[str, str] | None:
-    """
-    Resolve git directory and branch for a session item.
-
-    Extracts paths from tool_use blocks, resolves each to a git root,
-    and returns the most common resolution.
-
-    Args:
-        parsed_json: Parsed JSON content of the item
-        use_cache: Whether to use the module-level git resolution cache.
-                   Set to False for live resolution where fresh results are needed.
-                   Passed through to resolve_git_from_path.
-
-    Returns:
-        (git_directory, git_branch) tuple, or None if no paths or no git found
-    """
-    paths = extract_paths_from_tool_uses(parsed_json)
-    if not paths:
-        return None
-
-    resolutions: list[tuple[str, str]] = []
-    for path in paths:
-        # Use the directory part of the path (for files)
-        dir_path = os.path.dirname(path) if not os.path.isdir(path) else path
-        result = resolve_git_from_path(dir_path, use_cache=use_cache)
-        if result is not None:
-            resolutions.append(result)
-
-    if not resolutions:
-        return None
-
-    if len(resolutions) == 1:
-        return resolutions[0]
-
-    # Multiple resolutions: use the most frequent git_directory
-    counter = Counter(r[0] for r in resolutions)
-    most_common_dir = counter.most_common(1)[0][0]
-    # Return the first resolution matching the most common directory
-    for r in resolutions:
-        if r[0] == most_common_dir:
-            return r
-
-    return resolutions[0]  # Fallback (shouldn't reach here)
 
 
 # =============================================================================
@@ -434,49 +387,6 @@ def _extract_local_command_text(text: str) -> str | None:
             continue
         return stripped[content_start:close_idx]
     return None
-
-
-def extract_title_from_user_message(parsed_json: dict) -> str | None:
-    """
-    Extract a title from a user message JSON.
-
-    Extracts text content, strips markdown and whitespace,
-    truncates to TITLE_MAX_LENGTH characters, and adds ellipsis if truncated.
-
-    Args:
-        parsed_json: Parsed JSON content of a user message item
-
-    Returns:
-        Cleaned title string, or None if no text content found
-    """
-    if (content := get_message_content(parsed_json)) is None:
-        return None
-
-    text = extract_text_from_content(content)
-    if not text:
-        return None
-
-    if (command := extract_command(text)) is not None:
-        # Use command name as title for command invocations
-        cleaned = command.name
-        if command.args:
-            cleaned += f' {strip_markdown(command.args)}'
-
-    else:
-        # Strip markdown and whitespace
-        cleaned = strip_markdown(text).strip()
-
-    # Collapse multiple whitespace into single space
-    cleaned = re.sub(r'\s+', ' ', cleaned)
-
-    if not cleaned:
-        return None
-
-    # Truncate if needed
-    if len(cleaned) > TITLE_MAX_LENGTH:
-        return cleaned[:TITLE_MAX_LENGTH] + '…'
-
-    return cleaned
 
 
 # =============================================================================
@@ -1001,28 +911,6 @@ def _extract_task_tool_use_prompts(content: list) -> list[tuple[str, str, bool]]
 # =============================================================================
 
 
-# Shared empty constants to avoid allocating new empty collections for every item
-# that doesn't have the relevant content. MUST NOT be mutated.
-_EMPTY_TOOL_USE_ENTRIES: dict[str, str] = {}
-_EMPTY_TASK_TOOL_USES: list[tuple[str, bool]] = []
-_EMPTY_FILE_PATHS: list[str] = []
-
-_EMPTY_ANALYSIS = ContentAnalysis(
-    has_visible_content=False,
-    text_content=None,
-    is_system_xml=False,
-    has_tool_result=False,
-    tool_result_id=None,
-    tool_result_error=None,
-    tool_use_entries=_EMPTY_TOOL_USE_ENTRIES,
-    task_tool_uses=_EMPTY_TASK_TOOL_USES,
-    file_paths=_EMPTY_FILE_PATHS,
-    has_prefix=False,
-    has_suffix=False,
-    tool_result_agent_info=None,
-)
-
-
 def analyze_content(parsed_json: dict) -> ContentAnalysis:
     """
     Single-pass content analysis for batch computation.
@@ -1326,8 +1214,19 @@ class ClaudeCodeSessionCompute(BaseSessionCompute):
     def extract_item_timestamp(self, parsed_json: dict) -> datetime | None:
         return extract_item_timestamp(parsed_json)
 
-    def extract_title_from_user_message(self, parsed_json: dict) -> str | None:
-        return extract_title_from_user_message(parsed_json)
+    # extract_title_from_user_message: inherited from base
+    # (base assembles raw text + format_command_for_title + truncation).
+
+    def format_command_for_title(self, text: str) -> str | None:
+        # Claude Code embeds slash commands as <command-name>/<command-args>
+        # XML in the user message text; format them as "name [args]".
+        command = extract_command(text)
+        if command is None:
+            return None
+        formatted = command.name
+        if command.args:
+            formatted += f' {strip_markdown(command.args)}'
+        return formatted
 
     def extract_runtime_fields(self, parsed_json: dict) -> dict:
         # Claude Code carries cwd / gitBranch at the JSONL root, model
@@ -1406,10 +1305,8 @@ class ClaudeCodeSessionCompute(BaseSessionCompute):
     ) -> tuple[bool, bool]:
         return _detect_prefix_suffix(parsed_json, kind)
 
-    def resolve_git_for_item(
-        self, parsed_json: dict, *, use_cache: bool = True
-    ) -> tuple[str, str] | None:
-        return resolve_git_for_item(parsed_json, use_cache=use_cache)
+    # resolve_git_for_item: inherited from base
+    # (base walks self.extract_paths_from_tool_uses through resolve_git_from_path).
 
     def extract_user_message_text(self, parsed_json: dict) -> str | None:
         return extract_text_from_content(get_message_content(parsed_json))
