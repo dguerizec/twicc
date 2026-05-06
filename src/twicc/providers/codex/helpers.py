@@ -10,6 +10,7 @@ this provider, so no Codex session can actually be created.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import ClassVar
 
 from twicc.core.enums import Provider
@@ -58,6 +59,13 @@ class CodexHelpers(BaseProviderHelpers):
     # ``/backend-api/wham/usage`` endpoint (the same one the Codex CLI's
     # /status command hits) to refresh the 5-hour and weekly quotas.
     USAGE_SYNC_INTERVAL: ClassVar[int | None] = 5 * 60
+
+    # Filesystem source for Codex session JSONL files. The Codex CLI
+    # writes one folder per ``YYYY/MM/DD`` (not per-project, unlike
+    # Claude Code), with one ``rollout-*.jsonl`` per session. Read by
+    # the initial sync; not exposed through the registry because it has
+    # no cross-provider meaning.
+    SESSIONS_DIR: ClassVar[Path] = Path.home() / ".codex" / "sessions"
 
     # OpenRouter pricing isn't wired yet for Codex — there's no agent
     # runtime so no per-line cost computation either.
