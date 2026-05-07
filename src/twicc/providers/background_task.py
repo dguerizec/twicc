@@ -34,6 +34,7 @@ from asgiref.sync import sync_to_async
 from channels.layers import get_channel_layer
 
 from twicc.core.enums import Provider
+from twicc.logging_context import current_provider
 from twicc.startup_progress import broadcast_startup_progress
 
 if TYPE_CHECKING:
@@ -190,6 +191,11 @@ def compute_worker_main(command_queue, result_queue, stop_event, compute_factory
     worker_logger = logging.getLogger(__name__)
 
     compute = _resolve_factory(compute_factory)()
+    # Tag every subsequent log line emitted by this worker process with
+    # the provider this worker was spawned for. The worker process has a
+    # fresh ContextVar default, so this set() is what makes log lines
+    # show up under the right provider rather than ``"global"``.
+    current_provider.set(compute.provider.value)
     worker_logger.info("Compute worker process started")
 
     while True:
@@ -512,6 +518,7 @@ async def start_background_compute_task(ctx: ComputeContext) -> None:
 
     Progress logging: Logs progress at 10% intervals during processing.
     """
+    current_provider.set(ctx.provider.value)
 
     from twicc.projects import load_project_directories, load_project_git_roots
     from twicc.core.models import Session, SessionType

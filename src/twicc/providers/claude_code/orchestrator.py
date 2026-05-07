@@ -25,6 +25,7 @@ from asgiref.sync import sync_to_async
 from django.conf import settings
 
 from twicc.core.enums import Provider
+from twicc.logging_context import current_provider
 from twicc.orchestrator import BaseOrchestrator
 from twicc.providers.background_task import (
     ComputeContext,
@@ -251,6 +252,8 @@ class ClaudeCodeOrchestrator(BaseOrchestrator):
 
     async def _initial_sync_task(self) -> None:
         """Run sync_all() in a thread with progress broadcasting."""
+        current_provider.set(self.provider.value)
+
         loop = asyncio.get_running_loop()
         provider_value = self.provider.value
 
@@ -311,6 +314,9 @@ class ClaudeCodeOrchestrator(BaseOrchestrator):
     async def _dependency_orchestrator(self) -> None:
         """Wait for the initial sync, then start compute + cron restart + watcher.
 
+        Tasks created here (background compute, cron restart, watcher)
+        inherit the provider tag from this task's context.
+
         The CLI has already run the cross-provider initial price sync
         before this orchestrator was started, so prices are guaranteed
         to be in DB by the time background compute kicks in. The CLI
@@ -320,6 +326,8 @@ class ClaudeCodeOrchestrator(BaseOrchestrator):
         does not touch the index, so it starts as soon as the initial
         sync is done.
         """
+        current_provider.set(self.provider.value)
+
         await self.initial_sync_done.wait()
 
         # Background compute is independent of the search index and can

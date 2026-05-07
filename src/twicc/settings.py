@@ -152,9 +152,14 @@ FRONTEND_DIST_DIR = PACKAGE_DIR / "static" / "frontend"
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
+    "filters": {
+        "provider": {
+            "()": "twicc.logging_context.ProviderFilter",
+        },
+    },
     "formatters": {
         "standard": {
-            "format": "[{asctime} - {levelname:>6} - {name}] {message}",
+            "format": "[{asctime} - {levelname:>6} - {provider:>11} - {name}] {message}",
             "style": "{",
         },
     },
@@ -164,6 +169,7 @@ LOGGING = {
             "filename": str(get_backend_log_path()),
             "formatter": "standard",
             "encoding": "utf-8",
+            "filters": ["provider"],
         },
     },
     "loggers": {
