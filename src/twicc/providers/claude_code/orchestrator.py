@@ -25,7 +25,6 @@ from asgiref.sync import sync_to_async
 from django.conf import settings
 
 from twicc.core.enums import Provider
-from twicc.logging_context import current_provider
 from twicc.orchestrator import BaseOrchestrator
 from twicc.providers.background_task import (
     ComputeContext,
@@ -155,18 +154,24 @@ class ClaudeCodeOrchestrator(BaseOrchestrator):
         self._sync_stop_event.set()
 
     async def start(self, shutdown_event: asyncio.Event, search_index_ready: asyncio.Event) -> None:
-        """Launch all Claude Code tasks. Returns once tasks are scheduled."""
+        """Launch all Claude Code tasks. Returns once tasks are scheduled.
+
+        Every task goes through :meth:`BaseOrchestrator._create_task` so
+        log records emitted from them (directly or via ``sync_to_async``
+        / ``asyncio.to_thread`` calls they spawn) are tagged with this
+        provider — no per-task ``current_provider.set()`` needed.
+        """
         self._shutdown_event = shutdown_event
         self.search_index_ready = search_index_ready
 
-        self._sync_task = asyncio.create_task(self._initial_sync_task())
-        self._orch_task = asyncio.create_task(self._dependency_orchestrator())
-        self._usage_sync_task = asyncio.create_task(start_usage_sync_task())
-        self._auth_check_task = asyncio.create_task(start_auth_task())
-        self._statuspage_task = asyncio.create_task(start_statuspage_task())
-        self._slash_commands_task = asyncio.create_task(start_slash_commands_task())
-        self._original_file_cache_task = asyncio.create_task(start_original_file_cache_cleanup())
-        self._retirement_task = asyncio.create_task(start_model_retirement_task())
+        self._sync_task = self._create_task(self._initial_sync_task())
+        self._orch_task = self._create_task(self._dependency_orchestrator())
+        self._usage_sync_task = self._create_task(start_usage_sync_task())
+        self._auth_check_task = self._create_task(start_auth_task())
+        self._statuspage_task = self._create_task(start_statuspage_task())
+        self._slash_commands_task = self._create_task(start_slash_commands_task())
+        self._original_file_cache_task = self._create_task(start_original_file_cache_cleanup())
+        self._retirement_task = self._create_task(start_model_retirement_task())
 
     async def shutdown(self) -> None:
         """Stop all Claude Code tasks in dependency-safe order."""
@@ -252,8 +257,6 @@ class ClaudeCodeOrchestrator(BaseOrchestrator):
 
     async def _initial_sync_task(self) -> None:
         """Run sync_all() in a thread with progress broadcasting."""
-        current_provider.set(self.provider.value)
-
         loop = asyncio.get_running_loop()
         provider_value = self.provider.value
 
@@ -326,8 +329,6 @@ class ClaudeCodeOrchestrator(BaseOrchestrator):
         does not touch the index, so it starts as soon as the initial
         sync is done.
         """
-        current_provider.set(self.provider.value)
-
         await self.initial_sync_done.wait()
 
         # Background compute is independent of the search index and can
@@ -340,7 +341,7 @@ class ClaudeCodeOrchestrator(BaseOrchestrator):
             compute_version=settings.CLAUDE_CODE_COMPUTE_VERSION,
             compute_factory="twicc.providers.claude_code.compute:get_compute",
         )
-        self._compute_task = asyncio.create_task(
+        self._compute_task = self._create_task(
             start_background_compute_task(self._compute_ctx)
         )
         self._compute_task.add_done_callback(lambda _t: self.compute_done.set())
@@ -352,7 +353,7 @@ class ClaudeCodeOrchestrator(BaseOrchestrator):
         # ``shutdown()`` can cancel it cleanly if it never gets a chance
         # to run.
         assert self._shutdown_event is not None
-        self._cron_restart_task = asyncio.create_task(
+        self._cron_restart_task = self._create_task(
             restart_all_session_crons(stop_event=self._shutdown_event)
         )
         logger.info("Cron restart task launched")
@@ -361,6 +362,6 @@ class ClaudeCodeOrchestrator(BaseOrchestrator):
         # must wait until the CLI has called ``init_search_index()``.
         assert self.search_index_ready is not None, "search_index_ready must be set by start()"
         await self.search_index_ready.wait()
-        self._watcher_task = asyncio.create_task(get_watcher().start_watcher())
+        self._watcher_task = self._create_task(get_watcher().start_watcher())
         self._watcher_task.add_done_callback(_on_watcher_done)
         logger.info("Watcher started (after initial sync + search index ready)")

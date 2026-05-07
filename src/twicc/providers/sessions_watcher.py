@@ -43,7 +43,6 @@ from twicc.projects import (
     load_project_git_roots,
     update_project_metadata as _update_project_metadata_sync,
 )
-from twicc.logging_context import current_provider
 from twicc.providers.helpers import AgentSettings, get_provider_helpers
 
 if TYPE_CHECKING:
@@ -662,8 +661,6 @@ class BaseSessionsWatcher:
         is called — typically right before a session-start that's about to
         create the directory.
         """
-        current_provider.set(self.get_compute().provider.value)
-
         channel_layer = get_channel_layer()
         projects_dir = self.projects_dir
         stop_event = self.get_stop_event()

@@ -518,7 +518,6 @@ async def start_background_compute_task(ctx: ComputeContext) -> None:
 
     Progress logging: Logs progress at 10% intervals during processing.
     """
-    current_provider.set(ctx.provider.value)
 
     from twicc.projects import load_project_directories, load_project_git_roots
     from twicc.core.models import Session, SessionType

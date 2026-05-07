@@ -15,12 +15,17 @@ helpers (``ProviderHelpersRegistry``), agent managers
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import logging
-from typing import ClassVar
+from collections.abc import Coroutine
+from typing import Any, ClassVar, TypeVar
 
 from twicc.core.enums import Provider
+from twicc.logging_context import current_provider
 
 logger = logging.getLogger(__name__)
+
+T = TypeVar("T")
 
 
 class BaseOrchestrator:
@@ -112,6 +117,32 @@ class BaseOrchestrator:
         them via ``return_exceptions=True``).
         """
         raise NotImplementedError
+
+    def _create_task(
+        self,
+        coro: Coroutine[Any, Any, T],
+        *,
+        name: str | None = None,
+    ) -> asyncio.Task[T]:
+        """Schedule ``coro`` as a task tagged with this orchestrator's provider.
+
+        Wrapper around :func:`asyncio.create_task` that runs the new task
+        in a context where :data:`twicc.logging_context.current_provider`
+        is set to ``self.provider.value``. Any log record emitted from
+        the task — directly or through a ``sync_to_async`` /
+        ``asyncio.to_thread`` call it makes, both of which propagate the
+        context — is stamped with the right provider tag automatically.
+
+        The contextvar is set inside a fresh :func:`contextvars.copy_context`
+        so the orchestrator's own caller (e.g. the CLI startup task) is
+        not retagged when this method returns. Sub-tasks created from
+        within ``coro`` (including :func:`asyncio.create_task` calls)
+        inherit the tagged context, so providers only need to route every
+        long-running task through this helper at the orchestrator level.
+        """
+        ctx = contextvars.copy_context()
+        ctx.run(current_provider.set, self.provider.value)
+        return asyncio.create_task(coro, name=name, context=ctx)
 
 
 class OrchestratorRegistry:

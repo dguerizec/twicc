@@ -17,7 +17,6 @@ from asgiref.sync import sync_to_async
 
 from twicc.core.enums import Provider
 from twicc.core.models import Session, SessionType
-from twicc.logging_context import current_provider
 from twicc.orchestrator import BaseOrchestrator
 from twicc.providers.codex.auth_task import start_auth_task, stop_auth_task
 from twicc.providers.codex.initial_sync import scan_session_files, sync_all
@@ -77,10 +76,10 @@ class CodexOrchestrator(BaseOrchestrator):
         :meth:`BaseOrchestrator.start` so the CLI can call ``start_all``
         uniformly.
         """
-        self._sync_task = asyncio.create_task(self._initial_sync_task())
-        self._auth_check_task = asyncio.create_task(start_auth_task())
-        self._usage_sync_task = asyncio.create_task(start_usage_sync_task())
-        self._statuspage_task = asyncio.create_task(start_statuspage_task())
+        self._sync_task = self._create_task(self._initial_sync_task())
+        self._auth_check_task = self._create_task(start_auth_task())
+        self._usage_sync_task = self._create_task(start_usage_sync_task())
+        self._statuspage_task = self._create_task(start_statuspage_task())
 
     async def shutdown(self) -> None:
         """Stop the Codex tasks (sync first, then the periodic ones)."""
@@ -115,8 +114,6 @@ class CodexOrchestrator(BaseOrchestrator):
 
     async def _initial_sync_task(self) -> None:
         """Run sync_all() in a thread with progress broadcasting."""
-        current_provider.set(self.provider.value)
-
         loop = asyncio.get_running_loop()
         provider_value = self.provider.value
 
