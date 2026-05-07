@@ -1,7 +1,7 @@
 <script setup>
 import { computed } from 'vue'
-import MarkdownContent from '../../../../ui/MarkdownContent.vue'
-import { commandToText } from '../../../../../utils/command'
+import MarkdownContent from '../../../ui/MarkdownContent.vue'
+import { commandToText } from '../../../../utils/command'
 
 const props = defineProps({
     text: {

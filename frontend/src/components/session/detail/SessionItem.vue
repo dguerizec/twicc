@@ -6,6 +6,7 @@ import JsonViewer from '../../json/JsonViewer.vue'
 import ClaudeCodeMessage from './items/claude_code/Message.vue'
 import ClaudeCodeApiError from './items/claude_code/ApiError.vue'
 import ClaudeCodeCompactSummary from './items/claude_code/CompactSummary.vue'
+import CodexMessage from './items/codex/Message.vue'
 import UnknownEntry from './items/UnknownEntry.vue'
 import AppTooltip from '../../ui/AppTooltip.vue'
 import CodeCommentsIndicator from '../../ui/CodeCommentsIndicator.vue'
@@ -207,6 +208,20 @@ function toggleJsonView() {
                     :content="content?.message?.content || ''"
                     :session-id="sessionId"
                     :detail-key="`compact:${lineNum}`"
+                />
+                <UnknownEntry
+                    v-else
+                    :type="entryType"
+                    :data="content"
+                    :session-id="sessionId"
+                    :detail-key="`line:${lineNum}`"
+                />
+            </template>
+            <template v-else-if="sessionProvider === PROVIDER.CODEX">
+                <CodexMessage
+                    v-if="kind === 'user_message' || kind === 'assistant_message'"
+                    :data="content"
+                    :kind="kind"
                 />
                 <UnknownEntry
                     v-else

@@ -1,10 +1,10 @@
 """
 Codex provider orchestrator.
 
-Owns the Codex initial JSONL sync, the Codex CLI auth check task, the
-ChatGPT usage sync task, and the OpenAI statuspage poll. There is no
-JSONL watcher, agent runtime, compute task, or pricing yet — those will
-land when the agent runtime is wired.
+Owns the Codex initial JSONL sync, the background metadata compute,
+the Codex CLI auth check task, the ChatGPT usage sync task, and the
+OpenAI statuspage poll. There is no JSONL watcher or agent runtime
+yet — those will land when the agent runtime is wired.
 """
 
 from __future__ import annotations
@@ -14,10 +14,16 @@ import logging
 import threading
 
 from asgiref.sync import sync_to_async
+from django.conf import settings
 
 from twicc.core.enums import Provider
 from twicc.core.models import Session, SessionType
 from twicc.orchestrator import BaseOrchestrator
+from twicc.providers.background_task import (
+    ComputeContext,
+    start_background_compute_task,
+    stop_background_task,
+)
 from twicc.providers.codex.auth_task import start_auth_task, stop_auth_task
 from twicc.providers.codex.initial_sync import scan_session_files, sync_all
 from twicc.providers.codex.statuspage_task import start_statuspage_task, stop_statuspage_task
@@ -48,17 +54,26 @@ class CodexOrchestrator(BaseOrchestrator):
 
     def __init__(self) -> None:
         super().__init__()
-        # This provider runs an initial sync — reset the inherited pre-set
-        # event so the CLI actually waits for our broadcast.
+        # This provider runs both initial sync and background compute —
+        # reset the inherited pre-set events so the CLI actually waits
+        # for our broadcasts.
         self.initial_sync_done = asyncio.Event()
+        self.compute_done = asyncio.Event()
 
         # Cooperative stop event for the initial sync thread
         self._sync_stop_event = threading.Event()
 
         self._sync_task: asyncio.Task | None = None
+        self._orch_task: asyncio.Task | None = None
         self._auth_check_task: asyncio.Task | None = None
         self._usage_sync_task: asyncio.Task | None = None
         self._statuspage_task: asyncio.Task | None = None
+
+        # Started by the dependency orchestrator coroutine after the
+        # initial sync completes. Stays None when shutdown is requested
+        # before the sync finished.
+        self._compute_task: asyncio.Task | None = None
+        self._compute_ctx: ComputeContext | None = None
 
     def request_thread_stop(self) -> None:
         """Signal the cooperative stop event for the initial sync thread.
@@ -69,7 +84,8 @@ class CodexOrchestrator(BaseOrchestrator):
         self._sync_stop_event.set()
 
     async def start(self, shutdown_event: asyncio.Event, search_index_ready: asyncio.Event) -> None:
-        """Launch the initial sync, auth check, usage sync, and statuspage tasks.
+        """Launch the initial sync, dependency orchestrator, auth check,
+        usage sync, and statuspage tasks.
 
         ``search_index_ready`` is unused today: Codex has no JSONL watcher
         writing into the search index. The signature stays aligned with
@@ -77,21 +93,34 @@ class CodexOrchestrator(BaseOrchestrator):
         uniformly.
         """
         self._sync_task = self._create_task(self._initial_sync_task())
+        self._orch_task = self._create_task(self._dependency_orchestrator())
         self._auth_check_task = self._create_task(start_auth_task())
         self._usage_sync_task = self._create_task(start_usage_sync_task())
         self._statuspage_task = self._create_task(start_statuspage_task())
 
     async def shutdown(self) -> None:
-        """Stop the Codex tasks (sync first, then the periodic ones)."""
+        """Stop the Codex tasks (sync + compute first, then the periodic ones)."""
         # Make sure the initial sync thread cooperates if it's still running
         self._sync_stop_event.set()
 
-        # Unblock the CLI in case it was awaiting the lifecycle event
-        # before our natural ``set()`` could run. Idempotent.
+        # Unblock the CLI in case it was awaiting either lifecycle event
+        # before our natural ``set()`` could run. Both calls are idempotent.
         self.initial_sync_done.set()
+        self.compute_done.set()
 
         if self._sync_task is not None:
             await _cancel_task(self._sync_task, "Codex initial sync task")
+
+        if self._orch_task is not None:
+            await _cancel_task(self._orch_task, "Codex orchestrator task")
+
+        # Background compute (may not have started yet — depends on initial sync)
+        if self._compute_task is not None:
+            logger.info("Stopping Codex background compute task...")
+            stop_background_task(self._compute_ctx)
+            await _cancel_task(self._compute_task, "Codex background compute task")
+        else:
+            logger.info("Codex background compute was not started, skipping")
 
         if self._usage_sync_task is not None:
             logger.info("Stopping Codex usage sync task...")
@@ -155,3 +184,27 @@ class CodexOrchestrator(BaseOrchestrator):
         logger.info("Codex data synchronized (%d sessions)", sessions_count)
 
         self.initial_sync_done.set()
+
+    async def _dependency_orchestrator(self) -> None:
+        """Wait for the initial sync, then start the background compute task.
+
+        Background compute reads existing Codex sessions whose stored
+        ``compute_version`` differs from
+        :data:`settings.CODEX_COMPUTE_VERSION` and recomputes their
+        kind / display_level. The done_callback signals
+        :attr:`compute_done` so the CLI's global search-indexing task
+        can fire — it must run on success, failure, **and** cancel,
+        otherwise the CLI would block forever.
+        """
+        await self.initial_sync_done.wait()
+
+        self._compute_ctx = ComputeContext(
+            provider=self.provider,
+            compute_version=settings.CODEX_COMPUTE_VERSION,
+            compute_factory="twicc.providers.codex.compute:get_compute",
+        )
+        self._compute_task = self._create_task(
+            start_background_compute_task(self._compute_ctx)
+        )
+        self._compute_task.add_done_callback(lambda _t: self.compute_done.set())
+        logger.info("Codex background compute started (after initial sync)")

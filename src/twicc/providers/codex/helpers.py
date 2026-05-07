@@ -98,11 +98,13 @@ class CodexHelpers(BaseProviderHelpers):
     def current_compute_version(self) -> int | None:
         """Return :data:`settings.CODEX_COMPUTE_VERSION`.
 
-        Currently ``None`` — Codex has no compute pipeline yet, so every
-        Codex session is reported up-to-date with its default
-        ``compute_version=NULL``. The day the pipeline lands, this
-        constant moves to ``1`` (or higher) and existing sessions become
-        outdated until the new compute task processes them.
+        V1 (current) classifies user/assistant content from
+        ``event_msg:user_message`` / ``event_msg:agent_message`` and
+        routes every other JSONL line to ``ItemKind.SYSTEM``. Tools,
+        tool results, costs, runtime environment fields, and reasoning
+        items are not yet processed. Bump this constant when the
+        pipeline learns a new mapping so existing sessions are
+        recomputed.
         """
         return settings.CODEX_COMPUTE_VERSION
 
@@ -124,6 +126,28 @@ class CodexHelpers(BaseProviderHelpers):
         if missing:
             return False, f"Missing required keys: {', '.join(sorted(missing))}"
         return True, "Valid Codex usage file"
+
+    def serialize_model(self, model: str | None) -> dict | None:
+        """Serialize a Codex model identifier as ``{raw, family, version}``.
+
+        Returns ``None`` for an empty input. The compute pipeline does
+        not extract Codex models in V1, so ``session.model`` is always
+        ``None`` for now — but ``serialize_session`` still calls this
+        on every broadcast, so we need a real (no-op) implementation.
+
+        For non-empty strings, falls back to a generic split on the
+        first ``-`` (e.g. ``gpt-5-codex`` → family ``gpt``, version
+        ``5-codex``). Replace this with a proper Codex model parser
+        when the compute pipeline learns to extract the active model.
+        """
+        if not model:
+            return None
+        family, sep, version = model.partition("-")
+        return {
+            "raw": model,
+            "family": family or None,
+            "version": version if sep else None,
+        }
 
     # ------------------------------------------------------------------
     # Full-text search indexing — stub (no compute / no search yet)
