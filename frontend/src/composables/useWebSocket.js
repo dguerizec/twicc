@@ -939,7 +939,9 @@ export function useWebSocket() {
                         break
                     }
                 }
-                console.warn('[ws] Unknown message type:', msg.type)
+                if (msg.type !== "pong") {
+                    console.warn('[ws] Unknown message type:', msg.type)
+                }
                 break
             }
         }
