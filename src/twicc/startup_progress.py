@@ -44,9 +44,30 @@ def set_startup_progress(
     *,
     provider: str | None = None,
     completed: bool = False,
-) -> None:
-    """Update the module-level progress state for a (provider, phase) pair."""
-    _current_progress[(provider, phase)] = {
+) -> bool:
+    """Update the module-level progress state for a (provider, phase) pair.
+
+    Monotonic by design: a stale ``completed=False`` message arriving after
+    a ``completed=True`` for the same key, or a ``current`` that would move
+    the counter backwards, is silently dropped. This protects against the
+    race in ``_initial_sync_task`` where ``run_coroutine_threadsafe``
+    schedules progress broadcasts from the sync thread that may execute on
+    the asyncio loop *after* the orchestrator's final ``completed=True``
+    broadcast has already updated the dict.
+
+    Returns ``True`` when the call actually mutated the stored state,
+    ``False`` when the update was rejected as stale. ``broadcast_startup_progress``
+    relies on this to skip the matching WS broadcast when nothing changed —
+    so stale messages don't reach connected clients either.
+    """
+    key = (provider, phase)
+    existing = _current_progress.get(key)
+    if existing is not None:
+        if existing["completed"] and not completed:
+            return False
+        if current < existing["current"]:
+            return False
+    _current_progress[key] = {
         "type": "startup_progress",
         "provider": provider,
         "phase": phase,
@@ -54,6 +75,7 @@ def set_startup_progress(
         "total": total,
         "completed": completed,
     }
+    return True
 
 
 async def broadcast_startup_progress(
@@ -68,8 +90,12 @@ async def broadcast_startup_progress(
 
     Updates the module-level state first (so new connections get the latest),
     then broadcasts to all connected WebSocket clients via the "updates" group.
+    Stale messages rejected by :func:`set_startup_progress` (downgrade of
+    ``completed`` or backwards ``current``) are also skipped on the wire so
+    connected clients never see the regression.
     """
-    set_startup_progress(phase, current, total, provider=provider, completed=completed)
+    if not set_startup_progress(phase, current, total, provider=provider, completed=completed):
+        return
 
     message = {
         "type": "startup_progress",
