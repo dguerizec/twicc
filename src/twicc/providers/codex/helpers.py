@@ -10,8 +10,9 @@ this provider, so no Codex session can actually be created.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from pathlib import Path
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
 from django.conf import settings
 
@@ -19,8 +20,13 @@ from twicc.core.enums import Provider
 from twicc.providers.helpers import (
     AgentSettingCategory,
     BaseProviderHelpers,
+    IndexableMessage,
     ModelVersion,
+    UserMessage,
 )
+
+if TYPE_CHECKING:
+    from twicc.core.models import SessionItem
 
 
 class CodexHelpers(BaseProviderHelpers):
@@ -118,3 +124,27 @@ class CodexHelpers(BaseProviderHelpers):
         if missing:
             return False, f"Missing required keys: {', '.join(sorted(missing))}"
         return True, "Valid Codex usage file"
+
+    # ------------------------------------------------------------------
+    # Full-text search indexing — stub (no compute / no search yet)
+    # ------------------------------------------------------------------
+    #
+    # Codex has no compute pipeline and no parsed content shape yet, so
+    # the search index has nothing to index from a Codex session. These
+    # stubs return empty results to keep the cross-provider search
+    # indexing task (``twicc.search_indexing_task``) from raising
+    # NotImplementedError on every Codex session at startup. When the
+    # Codex compute lands, real implementations replace these.
+
+    def get_user_messages(
+        self,
+        items: Iterable[SessionItem],
+        limit: int | None = None,
+    ) -> list[UserMessage]:
+        return []
+
+    def get_indexable_messages(self, items: Iterable[SessionItem]) -> list[IndexableMessage]:
+        return []
+
+    def extract_indexable_text(self, item: SessionItem) -> str:
+        return ""
