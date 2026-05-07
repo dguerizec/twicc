@@ -1217,12 +1217,6 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
         from twicc.core.serializers import serialize_session
 
         now = timezone.now()
-        reason = content.get("reason", "unknown")
-        viewed_at = content.get("viewed_at", "N/A")
-        logger.debug(
-            "session_viewed for %s: reason=%s, front_viewed_at=%s, back_now=%s",
-            session_id, reason, viewed_at, now.isoformat(),
-        )
 
         rows = await sync_to_async(
             Session.objects.filter(id=session_id).update

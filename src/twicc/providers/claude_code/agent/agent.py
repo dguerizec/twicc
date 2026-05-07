@@ -10,7 +10,6 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlparse
 
-import orjson
 from collections.abc import AsyncIterator, Callable, Coroutine
 from typing import Any
 
@@ -223,7 +222,7 @@ class ClaudeCodeAgent(BaseAgent):
         tool_input = input_data.get("tool_input", {})
         tool_response = input_data.get("tool_response")
 
-        logger.debug(f"CronCreate called with input = {tool_input} and response = {tool_response}")
+        # logger.debug(f"CronCreate called with input = {tool_input} and response = {tool_response}")
 
         if tool_name == "CronCreate" and isinstance(tool_response, dict):
             job_id = tool_response.get("id")
@@ -326,13 +325,13 @@ class ClaudeCodeAgent(BaseAgent):
         """
         if tool_use_id not in self._active_tools:
             return False
-        entry = self._active_tools.pop(tool_use_id, None)
-        logger.debug(
-            "discard_active_tool session=%s tool=%s active_tools=%d",
-            self.session_id,
-            entry["name"] if entry else "?",
-            len(self._active_tools),
-        )
+        self._active_tools.pop(tool_use_id, None)
+        # logger.debug(
+        #     "discard_active_tool session=%s tool=%s active_tools=%d",
+        #     self.session_id,
+        #     entry["name"] if entry else "?",
+        #     len(self._active_tools),
+        # )
         await self._broadcast_process_tools()
         return True
 
@@ -559,12 +558,12 @@ class ClaudeCodeAgent(BaseAgent):
         Returns:
             PermissionResultAllow or PermissionResultDeny from the user's response
         """
-        logger.debug(
-            "can_use_tool called: tool_name=%s, input_data=%s, permission_suggestions=%s",
-            tool_name,
-            orjson.dumps(input_data, option=orjson.OPT_INDENT_2).decode(),
-            getattr(context, "suggestions", None),
-        )
+        # logger.debug(
+        #     "can_use_tool called: tool_name=%s, input_data=%s, permission_suggestions=%s",
+        #     tool_name,
+        #     orjson.dumps(input_data, option=orjson.OPT_INDENT_2).decode(),
+        #     getattr(context, "suggestions", None),
+        # )
 
         request_id = str(uuid.uuid4())
 
@@ -590,10 +589,10 @@ class ClaudeCodeAgent(BaseAgent):
         self._pending_requests[request_id] = request
         self._pending_futures[request_id] = future
 
-        logger.debug(
-            "[session %s] [permission %s] new request: tool=%r, type=%s (in-flight: %d)",
-            self.session_id, request_id, tool_name, request_type, len(self._pending_requests),
-        )
+        # logger.debug(
+        #     "[session %s] [permission %s] new request: tool=%r, type=%s (in-flight: %d)",
+        #     self.session_id, request_id, tool_name, request_type, len(self._pending_requests),
+        # )
 
         # Notify frontend via state change callback (broadcasts WebSocket message)
         await self._notify_state_change()
@@ -609,10 +608,10 @@ class ClaudeCodeAgent(BaseAgent):
             self._pending_futures.pop(request_id, None)
             raise
 
-        logger.debug(
-            "[session %s] [permission %s] resolved: tool=%r, response=%s",
-            self.session_id, request_id, tool_name, type(response).__name__,
-        )
+        # logger.debug(
+        #     "[session %s] [permission %s] resolved: tool=%r, response=%s",
+        #     self.session_id, request_id, tool_name, type(response).__name__,
+        # )
 
         # For ExitPlanMode: Detect if the user modified the plan content
         # Because of a "bug" in claude agent sdk / claude code, the plan passed via the response is not taken into
@@ -652,7 +651,7 @@ class ClaudeCodeAgent(BaseAgent):
         Returns:
             True if resolved, False if no matching pending request or already resolved.
         """
-        request = self._pending_requests.get(request_id)
+        # request = self._pending_requests.get(request_id)
         future = self._pending_futures.get(request_id)
         if future is None or future.done():
             logger.warning(
@@ -664,13 +663,13 @@ class ClaudeCodeAgent(BaseAgent):
                 type(response).__name__,
             )
             return False
-        logger.debug(
-            "[session %s] [permission %s] frontend response received: tool=%r, response=%s",
-            self.session_id,
-            request_id,
-            request.tool_name if request else "?",
-            type(response).__name__,
-        )
+        # logger.debug(
+        #     "[session %s] [permission %s] frontend response received: tool=%r, response=%s",
+        #     self.session_id,
+        #     request_id,
+        #     request.tool_name if request else "?",
+        #     type(response).__name__,
+        # )
         future.set_result(response)
         return True
 
@@ -805,15 +804,15 @@ class ClaudeCodeAgent(BaseAgent):
 
             async def _post_tool_use(input_data: dict, tool_use_id: str | None, context: Any) -> dict:
                 if tool_use_id and tool_use_id in self._active_tools:
-                    entry = self._active_tools.pop(tool_use_id, None)
-                    event = input_data.get("hook_event_name", "PostToolUse")
-                    logger.debug(
-                        "%s session=%s tool=%s active_tools=%d",
-                        event,
-                        self.session_id,
-                        entry["name"] if entry else "?",
-                        len(self._active_tools),
-                    )
+                    self._active_tools.pop(tool_use_id, None)
+                    # event = input_data.get("hook_event_name", "PostToolUse")
+                    # logger.debug(
+                    #     "%s session=%s tool=%s active_tools=%d",
+                    #     event,
+                    #     self.session_id,
+                    #     entry["name"] if entry else "?",
+                    #     len(self._active_tools),
+                    # )
                     await self._broadcast_process_tools()
                 return {"continue_": True}
 
@@ -1305,10 +1304,10 @@ class ClaudeCodeAgent(BaseAgent):
                                 "streaming": True,
                             }
                             self._last_started_tool_id = current_stream_tool_id
-                            logger.debug(
-                                "[ToolUse block_start index=%s tool=%s id=%s] => START",
-                                block_index, current_stream_tool_name, current_stream_tool_id,
-                            )
+                            # logger.debug(
+                            #     "[ToolUse block_start index=%s tool=%s id=%s] => START",
+                            #     block_index, current_stream_tool_name, current_stream_tool_id,
+                            # )
                             await self._broadcast_process_tools()
                         case "content_block_delta" if (
                             current_stream_tool_id
@@ -1328,18 +1327,18 @@ class ClaudeCodeAgent(BaseAgent):
                                     if cleaned != current_stream_tool_input_cleaned:
                                         current_stream_tool_input_cleaned = cleaned
                                         self._active_tools[current_stream_tool_id]["input"] = cleaned
-                                        logger.debug(
-                                            "[ToolUse content_block_delta tool=%s id=%s active_tools=%d] => input=%s",
-                                            current_stream_tool_name, current_stream_tool_id,
-                                            len(self._active_tools), cleaned,
-                                        )
+                                        # logger.debug(
+                                        #     "[ToolUse content_block_delta tool=%s id=%s active_tools=%d] => input=%s",
+                                        #     current_stream_tool_name, current_stream_tool_id,
+                                        #     len(self._active_tools), cleaned,
+                                        # )
                                         await self._broadcast_process_tools()
 
                         case "content_block_stop" if current_stream_tool_id:
-                            logger.debug(
-                                "[ToolUse block_stop tool=%s id=%s] => STOP",
-                                current_stream_tool_name, current_stream_tool_id,
-                            )
+                            # logger.debug(
+                            #     "[ToolUse block_stop tool=%s id=%s] => STOP",
+                            #     current_stream_tool_name, current_stream_tool_id,
+                            # )
                             # Flip streaming=False as soon as the block ends — input is
                             # final, no more deltas. This is the earliest reliable point;
                             # PreToolUse-based flip stays as a redundant safety net.
