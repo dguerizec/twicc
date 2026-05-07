@@ -47,6 +47,34 @@ class ClaudeCodeModelExtra(NamedTuple):
     supports_effort_max: bool
 
 
+def _extract_text_from_message_content(content: str | list | None) -> str:
+    """Concatenate every text payload from Claude Code's message content shape.
+
+    Claude Code messages carry ``content`` as either a plain string or a
+    list of typed parts (``{"type": "text", "text": ...}``). This walks the
+    list and joins every text part with newlines, used for full-text search
+    indexing where we want every block (unlike ``extract_text_from_content``
+    in ``compute.py`` which returns only the first text block). Returns the
+    empty string when nothing extractable is found.
+    """
+    if content is None:
+        return ""
+
+    if isinstance(content, str):
+        return content.strip()
+
+    if isinstance(content, list):
+        texts: list[str] = []
+        for entry in content:
+            if isinstance(entry, dict) and entry.get("type") == "text":
+                text = entry.get("text")
+                if isinstance(text, str) and text.strip():
+                    texts.append(text.strip())
+        return "\n".join(texts)
+
+    return ""
+
+
 @lru_cache(maxsize=32)
 def serialize_model(model: str | None) -> dict | None:
     """Serialize a Claude model identifier as ``{raw, family, version}``.
@@ -450,22 +478,23 @@ class ClaudeCodeHelpers(BaseProviderHelpers):
         """Expose Claude Code's :class:`ClaudeCodeModelExtra` flags on the wire."""
         return mv.provider_extra._asdict()
 
+    def extract_indexable_text(self, item: SessionItem) -> str:
+        try:
+            parsed = orjson.loads(item.content)
+        except (orjson.JSONDecodeError, TypeError):
+            return ""
+        return _extract_text_from_message_content(get_message_content(parsed))
+
     def get_user_messages(
         self,
         items: Iterable[SessionItem],
         limit: int | None = None,
     ) -> list[UserMessage]:
-        from twicc.search import extract_indexable_text
-
         out: list[UserMessage] = []
         for item in items:
             if limit is not None and len(out) >= limit:
                 break
-            try:
-                parsed = orjson.loads(item.content)
-            except (orjson.JSONDecodeError, TypeError):
-                continue
-            text = extract_indexable_text(get_message_content(parsed))
+            text = self.extract_indexable_text(item)
             if text:
                 out.append(UserMessage(
                     line_num=item.line_num,
@@ -475,15 +504,9 @@ class ClaudeCodeHelpers(BaseProviderHelpers):
         return out
 
     def get_indexable_messages(self, items: Iterable[SessionItem]) -> list[IndexableMessage]:
-        from twicc.search import extract_indexable_text
-
         out: list[IndexableMessage] = []
         for item in items:
-            try:
-                parsed = orjson.loads(item.content)
-            except (orjson.JSONDecodeError, TypeError):
-                continue
-            text = extract_indexable_text(get_message_content(parsed))
+            text = self.extract_indexable_text(item)
             if text:
                 from_role = "user" if item.kind == ItemKind.USER_MESSAGE else "assistant"
                 out.append(IndexableMessage(

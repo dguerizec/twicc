@@ -22,9 +22,15 @@ import logging
 import threading
 
 from asgiref.sync import sync_to_async
+from django.conf import settings
 
 from twicc.core.enums import Provider
 from twicc.orchestrator import BaseOrchestrator
+from twicc.providers.background_task import (
+    ComputeContext,
+    start_background_compute_task,
+    stop_background_task,
+)
 from twicc.providers.claude_code.agent import get_claude_code_agent_manager
 from twicc.providers.claude_code.agent.original_file_cache import (
     start_cleanup_task as start_original_file_cache_cleanup,
@@ -32,18 +38,13 @@ from twicc.providers.claude_code.agent.original_file_cache import (
 )
 from twicc.core.models import Project, Session, SessionType
 from twicc.providers.claude_code.auth_task import start_auth_task, stop_auth_task
-from twicc.providers.claude_code.background_task import (
-    ComputeContext,
-    start_background_compute_task,
-    stop_background_task,
-)
 from twicc.providers.claude_code.cron_restart import restart_all_session_crons
 from twicc.providers.claude_code.initial_sync import scan_projects, scan_sessions, sync_all
 from twicc.providers.claude_code.model_retirement_task import (
     start_model_retirement_task,
     stop_model_retirement_task,
 )
-from twicc.providers.claude_code.sessions_watcher import start_watcher, stop_watcher
+from twicc.providers.claude_code.sessions_watcher import get_watcher
 from twicc.providers.claude_code.slash_commands_task import (
     start_slash_commands_task,
     stop_slash_commands_task,
@@ -187,7 +188,7 @@ class ClaudeCodeOrchestrator(BaseOrchestrator):
         # Watcher (may not have started yet)
         if self._watcher_task is not None:
             logger.info("Stopping watcher...")
-            stop_watcher()
+            get_watcher().stop_watcher()
             await _cancel_task(self._watcher_task, "Watcher")
         else:
             logger.info("Watcher was not started, skipping")
@@ -326,7 +327,11 @@ class ClaudeCodeOrchestrator(BaseOrchestrator):
         # signals completion so the CLI's global search-indexing task
         # can fire — it must run on success, failure, **and** cancel,
         # otherwise the CLI would block forever.
-        self._compute_ctx = ComputeContext(provider=self.provider.value)
+        self._compute_ctx = ComputeContext(
+            provider=self.provider,
+            compute_version=settings.CLAUDE_CODE_COMPUTE_VERSION,
+            compute_factory="twicc.providers.claude_code.compute:get_compute",
+        )
         self._compute_task = asyncio.create_task(
             start_background_compute_task(self._compute_ctx)
         )
@@ -348,6 +353,6 @@ class ClaudeCodeOrchestrator(BaseOrchestrator):
         # must wait until the CLI has called ``init_search_index()``.
         assert self.search_index_ready is not None, "search_index_ready must be set by start()"
         await self.search_index_ready.wait()
-        self._watcher_task = asyncio.create_task(start_watcher())
+        self._watcher_task = asyncio.create_task(get_watcher().start_watcher())
         self._watcher_task.add_done_callback(_on_watcher_done)
         logger.info("Watcher started (after initial sync + search index ready)")

@@ -765,8 +765,8 @@ class ClaudeCodeAgent(BaseAgent):
         # in slow-poll mode (30s). The SDK is about to create that directory
         # for this session — boost the watcher to 5s so we pick up the new
         # JSONL file quickly.
-        from twicc.providers.claude_code.sessions_watcher import request_fast_poll
-        request_fast_poll()
+        from twicc.providers.claude_code.sessions_watcher import get_watcher
+        get_watcher().request_fast_poll()
 
         try:
             self._active_tools = {}

@@ -9,27 +9,41 @@ Architecture:
 - The worker process only READS from the database (WAL mode supports multiple readers)
 - All database WRITES happen in the main process via a Queue
 - This eliminates "database is locked" errors by serializing all writes in the event loop
+
+This module is provider-agnostic: each provider's orchestrator builds a
+:class:`ComputeContext` carrying its ``Provider`` enum value, its
+``compute_version`` setting, and a ``compute_factory`` dotted path pointing
+at its own :class:`~twicc.providers.compute_base.BaseSessionCompute`
+factory. The factory is stored as a string so it survives the spawn-worker
+pickle without dragging the provider's compute module into the child
+process before ``django.setup()`` has run.
 """
 
 from __future__ import annotations
 
 import asyncio
+import importlib
 import logging
 import multiprocessing
 import queue
 from contextlib import suppress
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from asgiref.sync import sync_to_async
 from channels.layers import get_channel_layer
-from django.conf import settings
+
+from twicc.core.enums import Provider
 from twicc.startup_progress import broadcast_startup_progress
 
-# NOTE: Django model imports (twicc.core.models, .compute,
-# twicc.core.serializers) are intentionally NOT imported at module level.
-# The "spawn" start method re-imports this module in the child process before
-# django.setup() runs. Top-level model imports would trigger AppRegistryNotReady.
-# All such imports are done inside functions instead.
+if TYPE_CHECKING:
+    from twicc.providers.compute_base import BaseSessionCompute
+
+# NOTE: Django model imports (twicc.core.models, twicc.core.serializers, and
+# any provider compute module that imports them) are intentionally NOT imported
+# at module level. The "spawn" start method re-imports this module in the child
+# process before django.setup() runs. Top-level model imports would trigger
+# AppRegistryNotReady. All such imports are done inside functions instead.
 
 logger = logging.getLogger(__name__)
 
@@ -49,19 +63,49 @@ _mp_ctx = multiprocessing.get_context("spawn")
 class ComputeContext:
     """Mutable state for the background compute pipeline.
 
-    Created once at startup and passed explicitly to all functions
-    that need access to the compute infrastructure. ``provider`` is the
-    wire key (e.g. ``"claude_code"``) attached to startup-progress
-    broadcasts so the frontend can aggregate per-phase totals across
-    providers.
+    Created once at startup by a provider's orchestrator and passed
+    explicitly to all functions that need access to the compute
+    infrastructure. The provider injects:
+
+    - ``provider``: the :class:`~twicc.core.enums.Provider` enum value used
+      both for ORM filters and (via ``.value``) as the wire key on
+      startup-progress broadcasts so the frontend can aggregate per-phase
+      totals across providers.
+    - ``compute_version``: the current target compute version for this
+      provider (sessions whose stored ``compute_version`` differs are the
+      ones that need recomputation).
+    - ``compute_factory``: a ``"module:attribute"`` dotted path to the
+      provider's :class:`~twicc.providers.compute_base.BaseSessionCompute`
+      factory (e.g. ``"twicc.providers.claude_code.compute:get_compute"``).
+      Stored as a string — not a callable — so the spawn worker can carry
+      this value through pickle without importing the provider's compute
+      module before ``django.setup()`` has run in the child process. The
+      module is imported lazily on first :meth:`get_compute` call.
     """
 
-    provider: str
+    provider: Provider
+    compute_version: int
+    compute_factory: str
     command_queue: _mp_ctx.Queue = field(default_factory=_mp_ctx.Queue)
     result_queue: _mp_ctx.Queue = field(default_factory=_mp_ctx.Queue)
     worker_stop_event: _mp_ctx.Event = field(default_factory=_mp_ctx.Event)
     stop_event: asyncio.Event = field(default_factory=asyncio.Event)
     process: _mp_ctx.Process | None = None
+
+    def get_compute(self) -> BaseSessionCompute:
+        """Resolve :attr:`compute_factory` and return a fresh compute instance.
+
+        Imports the provider's compute module on demand. Caller must have
+        already run ``django.setup()`` in its process, since the compute
+        module imports Django models at module level.
+        """
+        return _resolve_factory(self.compute_factory)()
+
+
+def _resolve_factory(dotted_path: str):
+    """Resolve a ``"module:attribute"`` path into the referenced object."""
+    module_name, attr = dotted_path.split(":")
+    return getattr(importlib.import_module(module_name), attr)
 
 
 def stop_background_task(ctx: ComputeContext) -> None:
@@ -118,7 +162,7 @@ def stop_background_task(ctx: ComputeContext) -> None:
 # =============================================================================
 
 
-def compute_worker_main(command_queue, result_queue, stop_event) -> None:
+def compute_worker_main(command_queue, result_queue, stop_event, compute_factory: str) -> None:
     """
     Main function running in the compute worker process.
 
@@ -126,6 +170,10 @@ def compute_worker_main(command_queue, result_queue, stop_event) -> None:
     sends update batches via result_queue.
 
     This function runs in a separate process and must initialize Django itself.
+    ``compute_factory`` is the dotted ``"module:attribute"`` path of the
+    provider's compute factory; it is resolved AFTER ``django.setup()`` so
+    importing the provider's compute module (which pulls in Django models)
+    does not crash the spawn worker before the app registry is ready.
     """
     import signal
 
@@ -141,9 +189,7 @@ def compute_worker_main(command_queue, result_queue, stop_event) -> None:
     import logging
     worker_logger = logging.getLogger(__name__)
 
-    from .compute import get_compute
-
-    compute = get_compute()
+    compute = _resolve_factory(compute_factory)()
     worker_logger.info("Compute worker process started")
 
     while True:
@@ -220,7 +266,7 @@ def start_compute_process(ctx: ComputeContext) -> None:
         ctx.worker_stop_event = _mp_ctx.Event()
         ctx.process = _mp_ctx.Process(
             target=compute_worker_main,
-            args=(ctx.command_queue, ctx.result_queue, ctx.worker_stop_event),
+            args=(ctx.command_queue, ctx.result_queue, ctx.worker_stop_event, ctx.compute_factory),
             daemon=True,
             name="compute-worker",
         )
@@ -289,11 +335,9 @@ async def _broadcast_project_updated(project_id: str) -> None:
 
 
 @sync_to_async
-def _flush_pending_activities(pending_activity_days: dict[str, set]) -> None:
+def _flush_pending_activities(provider: Provider, pending_activity_days: dict[str, set]) -> None:
     """Flush accumulated activity recalculations for all projects."""
-    from twicc.core.enums import Provider
     from twicc.core.models import PeriodicActivity
-    provider = Provider.CLAUDE_CODE
     for project_id, days in pending_activity_days.items():
         PeriodicActivity.recalculate_for_days(project_id, days, provider=provider, do_global=False)
     days = set.union(*pending_activity_days.values())
@@ -306,7 +350,6 @@ async def consume_compute_results(
     *,
     display_session_ids: set[str] | None = None,
     total_display: int = 0,
-    provider: str | None = None,
 ) -> None:
     """
     Consume results from the compute worker and apply DB writes.
@@ -329,9 +372,8 @@ async def consume_compute_results(
     from collections import defaultdict
     from datetime import date as date_cls
 
-    from .compute import get_compute
-
-    compute = get_compute()
+    compute = ctx.get_compute()
+    provider_value = ctx.provider.value
 
     try:
         # Accumulate affected days per project across multiple sessions
@@ -382,7 +424,7 @@ async def consume_compute_results(
                         completed_count += 1
                         await broadcast_startup_progress(
                             "background_compute", completed_count, total_display,
-                            provider=provider,
+                            provider=provider_value,
                         )
 
                         # Every N normal sessions, broadcast project_updated for all pending projects
@@ -418,7 +460,7 @@ async def consume_compute_results(
             # Flush activity recalculations every batch_activity_count sessions
             try:
                 if sessions_since_activities_flush >= batch_activity_count:
-                    await _flush_pending_activities(pending_activity_days)
+                    await _flush_pending_activities(ctx.provider, pending_activity_days)
                     pending_activity_days.clear()
                     sessions_since_activities_flush = 0
             except Exception as e:
@@ -440,7 +482,7 @@ async def consume_compute_results(
         # Flush any remaining pending activity recalculations before shutdown
         if pending_activity_days:
             try:
-                await _flush_pending_activities(pending_activity_days)
+                await _flush_pending_activities(ctx.provider, pending_activity_days)
             except Exception as e:
                 logger.error(f"Error in final activity flush: {e}", exc_info=True)
             pending_activity_days.clear()
@@ -471,15 +513,16 @@ async def start_background_compute_task(ctx: ComputeContext) -> None:
     Progress logging: Logs progress at 10% intervals during processing.
     """
 
-    from twicc.core.enums import Provider
     from twicc.projects import load_project_directories, load_project_git_roots
     from twicc.core.models import Session, SessionType
 
+    provider_value = ctx.provider.value
+
     # Count sessions needing computation
     total_to_compute = await sync_to_async(Session.objects.filter(
-        provider=Provider.CLAUDE_CODE,
+        provider=ctx.provider,
     ).exclude(
-        compute_version=settings.CLAUDE_CODE_COMPUTE_VERSION
+        compute_version=ctx.compute_version
     ).count)()
 
     if total_to_compute == 0:
@@ -487,12 +530,12 @@ async def start_background_compute_task(ctx: ComputeContext) -> None:
         # Report the total session count so the frontend can show "N/N" instead of "0/0"
         total_display = await sync_to_async(
             Session.objects.filter(
-                provider=Provider.CLAUDE_CODE, type=SessionType.SESSION,
+                provider=ctx.provider, type=SessionType.SESSION,
             ).count
         )()
         await broadcast_startup_progress(
             "background_compute", total_display, total_display,
-            provider=ctx.provider, completed=True,
+            provider=provider_value, completed=True,
         )
         return
 
@@ -501,9 +544,9 @@ async def start_background_compute_task(ctx: ComputeContext) -> None:
     sessions_to_display = await sync_to_async(
         lambda: set(
             Session.objects.filter(
-                provider=Provider.CLAUDE_CODE, type=SessionType.SESSION,
+                provider=ctx.provider, type=SessionType.SESSION,
             )
-            .exclude(compute_version=settings.CLAUDE_CODE_COMPUTE_VERSION)
+            .exclude(compute_version=ctx.compute_version)
             .values_list("id", flat=True)
         )
     )()
@@ -511,7 +554,7 @@ async def start_background_compute_task(ctx: ComputeContext) -> None:
 
     # Broadcast initial progress state (0/N) — using display total (sessions only)
     await broadcast_startup_progress(
-        "background_compute", 0, total_display, provider=ctx.provider
+        "background_compute", 0, total_display, provider=provider_value
     )
 
     # Load project caches at startup
@@ -528,7 +571,6 @@ async def start_background_compute_task(ctx: ComputeContext) -> None:
             ctx, worker_done_event,
             display_session_ids=sessions_to_display,
             total_display=total_display,
-            provider=ctx.provider,
         )
     )
 
@@ -538,8 +580,8 @@ async def start_background_compute_task(ctx: ComputeContext) -> None:
     session_ids_to_compute = await sync_to_async(
         lambda: list(
             Session.objects
-            .filter(provider=Provider.CLAUDE_CODE)
-            .exclude(compute_version=settings.CLAUDE_CODE_COMPUTE_VERSION)
+            .filter(provider=ctx.provider)
+            .exclude(compute_version=ctx.compute_version)
             .order_by('-mtime')
             .values_list('id', flat=True)
         )
@@ -563,7 +605,7 @@ async def start_background_compute_task(ctx: ComputeContext) -> None:
     # Broadcast completion (using display total — sessions only, not subagents)
     await broadcast_startup_progress(
         "background_compute", total_display, total_display,
-        provider=ctx.provider, completed=True,
+        provider=provider_value, completed=True,
     )
 
     # Stop the consumer task gracefully via stop_event

@@ -159,46 +159,6 @@ def is_initialized() -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Text extraction
-# ---------------------------------------------------------------------------
-
-
-def extract_indexable_text(content: str | list | None) -> str | None:
-    """Extract ALL text content from a message content field for indexing.
-
-    Unlike compute.py's ``extract_text_from_content()`` which returns only the
-    first text block, this function concatenates ALL text blocks for
-    comprehensive search indexing.
-
-    Args:
-        content: Either a plain string or a list of content items
-                 (dicts with ``type`` and ``text`` keys).
-
-    Returns:
-        The extracted text joined by newlines, or None if no text found.
-    """
-    if content is None:
-        return None
-
-    if isinstance(content, str):
-        stripped = content.strip()
-        return stripped or None
-
-    if isinstance(content, list):
-        texts = []
-        for item in content:
-            if isinstance(item, dict) and item.get("type") == "text":
-                text = item.get("text")
-                if isinstance(text, str) and text.strip():
-                    texts.append(text.strip())
-        if texts:
-            result = "\n".join(texts)
-            return result or None
-
-    return None
-
-
-# ---------------------------------------------------------------------------
 # Indexing
 # ---------------------------------------------------------------------------
 

@@ -396,6 +396,19 @@ class BaseProviderHelpers:
         """
         raise NotImplementedError
 
+    def extract_indexable_text(self, item: SessionItem) -> str:
+        """Return the plain-text payload of ``item`` for full-text search indexing.
+
+        The empty string is returned when the item is not a chat message,
+        cannot be parsed, or carries no extractable text. Each provider
+        parses its own native message shape (the ``content`` layout, the
+        list-of-text-parts vs. plain-string convention, ...) and produces
+        a single concatenated text string. Used both by the watcher's
+        live indexing path and by the building blocks of
+        :meth:`get_user_messages` / :meth:`get_indexable_messages`.
+        """
+        raise NotImplementedError
+
     def get_tool_results(
         self,
         items: Iterable[SessionItem],
