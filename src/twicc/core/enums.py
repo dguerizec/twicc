@@ -20,6 +20,7 @@ class ItemKind(StrEnum):
     USER_MESSAGE = "user_message"
     ASSISTANT_MESSAGE = "assistant_message"
     CONTENT_ITEMS = "content_items"
+    TOOL_USE = "tool_use"
     API_ERROR = "api_error"
     COMPACT_SUMMARY = "compact_summary"
     SYSTEM = "system"

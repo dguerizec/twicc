@@ -3,6 +3,7 @@ import { ClaudeCodeToolHelpers, claudeCodeToolHelpers } from './claude_code/tool
 import { claudeCodeWsHandler } from './claude_code/ws'
 import { useClaudeCodeStore } from './claude_code/store'
 import { CodexHelpers, codexHelpers } from './codex/helpers'
+import { CodexToolHelpers, codexToolHelpers } from './codex/toolHelpers'
 import { codexWsHandler } from './codex/ws'
 import { useCodexStore } from './codex/store'
 
@@ -13,6 +14,7 @@ const PROVIDER_HELPERS = {
 
 const PROVIDER_TOOL_HELPERS = {
     [ClaudeCodeToolHelpers.provider]: claudeCodeToolHelpers,
+    [CodexToolHelpers.provider]: codexToolHelpers,
 }
 
 const PROVIDER_WS_HANDLERS = {

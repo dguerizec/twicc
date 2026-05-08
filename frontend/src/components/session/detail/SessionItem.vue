@@ -7,6 +7,7 @@ import ClaudeCodeMessage from './items/claude_code/Message.vue'
 import ClaudeCodeApiError from './items/claude_code/ApiError.vue'
 import ClaudeCodeCompactSummary from './items/claude_code/CompactSummary.vue'
 import CodexMessage from './items/codex/Message.vue'
+import CodexToolUse from './items/codex/ToolUse.vue'
 import UnknownEntry from './items/UnknownEntry.vue'
 import AppTooltip from '../../ui/AppTooltip.vue'
 import CodeCommentsIndicator from '../../ui/CodeCommentsIndicator.vue'
@@ -222,6 +223,14 @@ function toggleJsonView() {
                     v-if="kind === 'user_message' || kind === 'assistant_message'"
                     :data="content"
                     :kind="kind"
+                />
+                <CodexToolUse
+                    v-else-if="kind === 'tool_use'"
+                    :content="content"
+                    :project-id="projectId"
+                    :session-id="sessionId"
+                    :parent-session-id="parentSessionId"
+                    :line-num="lineNum"
                 />
                 <UnknownEntry
                     v-else
