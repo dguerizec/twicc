@@ -9,7 +9,7 @@ import GroupToggle from '../../GroupToggle.vue'
 import TextContent from '../TextContent.vue'
 import MediaThumbnailGroup from '../../../../media/MediaThumbnailGroup.vue'
 import DocumentContent from './DocumentContent.vue'
-import ToolUseContent from './ToolUseContent.vue'
+import ToolUseContent from '../ToolUseContent.vue'
 import ThinkingContent from './ThinkingContent.vue'
 import UnknownEntry from '../UnknownEntry.vue'
 

@@ -1,4 +1,5 @@
 import { ClaudeCodeHelpers, claudeCodeHelpers } from './claude_code/helpers'
+import { ClaudeCodeToolHelpers, claudeCodeToolHelpers } from './claude_code/toolHelpers'
 import { claudeCodeWsHandler } from './claude_code/ws'
 import { useClaudeCodeStore } from './claude_code/store'
 import { CodexHelpers, codexHelpers } from './codex/helpers'
@@ -8,6 +9,10 @@ import { useCodexStore } from './codex/store'
 const PROVIDER_HELPERS = {
     [ClaudeCodeHelpers.provider]: claudeCodeHelpers,
     [CodexHelpers.provider]: codexHelpers,
+}
+
+const PROVIDER_TOOL_HELPERS = {
+    [ClaudeCodeToolHelpers.provider]: claudeCodeToolHelpers,
 }
 
 const PROVIDER_WS_HANDLERS = {
@@ -25,6 +30,10 @@ const PROVIDER_STORE_FACTORIES = {
 
 export function getProviderHelpers(provider) {
     return PROVIDER_HELPERS[provider] ?? null
+}
+
+export function getToolHelpers(provider) {
+    return PROVIDER_TOOL_HELPERS[provider] ?? null
 }
 
 export function getProviderWsHandler(provider) {

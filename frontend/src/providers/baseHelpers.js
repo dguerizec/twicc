@@ -537,3 +537,221 @@ export class BaseProviderHelpers {
     }
 
 }
+
+/**
+ * Base class for per-provider tool-rendering helpers consumed by the generic
+ * `items/ToolUseContent.vue` shell. Mirrors the `BaseProviderHelpers` pattern:
+ * each provider ships a subclass that overrides only the behaviours that
+ * differ from the neutral defaults defined here. The shell never branches on
+ * provider identity — it asks normalized questions and renders the answers.
+ *
+ * Two return shapes are used by the rendering hooks:
+ *
+ *   { component: VueComponent, props: object }   — explicit descriptor
+ *   null                                          — fall back to JsonHumanView
+ *
+ * The `ctx` argument passed to `getInputRendering` / `getResultRendering`
+ * carries the shell's runtime state. Common fields:
+ *   - ``isSubagent``   — boolean; whether this tool_use lives in a subagent
+ *   - ``backendPatch`` / ``originalFile`` / ``backendPatchLoading`` — for
+ *     Edit/Write rendering when the backend has computed structured patches
+ */
+export class BaseToolHelpers {
+    static provider = null
+
+    // ─── Summary surface (header + working-assistant inline) ─────────────────────────────
+    //
+    // Producers: ToolUseContent.vue (header displayName branch),
+    // WorkingAssistantMessage.vue (status line). Returned shape:
+    //   { displayName: { name, namespace } | null,
+    //     inline:      string | null }
+    //
+    // Variant-specific summary rendering (file/skill/grep/glob/web/todo)
+    // flows through ``getSummaryRendering`` instead — that returns a
+    // ``{ component, props }`` descriptor for the shell to mount.
+
+    /** Build the summary descriptor for a tool_use. Default: minimal stub. */
+    computeToolSummary(/* name, input, baseDir */) {
+        return { displayName: null, inline: null }
+    }
+
+    /**
+     * Convert a tool name + input to a gerund form for the
+     * "{provider} is …ing" status line. Default: ``null`` (no verb known).
+     */
+    getVerb(/* name, input */) {
+        return null
+    }
+
+    /**
+     * Override for the rich card header label when the bare tool name is
+     * not the right thing to display (e.g. a tool called ``TodoWrite``
+     * should appear as ``Todo``). Returns a string, or ``null`` to let the
+     * shell render the raw tool name (``name.replaceAll('__', ' ')``).
+     * Note: this is for static per-name overrides; dynamic overrides driven
+     * by the tool's input (e.g. Task ``subagent_type``) flow through
+     * ``computeToolSummary().displayName`` and the ``isTask && displayName``
+     * template branch. Default: no override.
+     */
+    getHeaderLabel(/* name */) {
+        return null
+    }
+
+    // ─── Input / Result rendering ────────────────────────────────────────
+
+    /**
+     * Return ``{ component, props }`` for the tool's input area, or ``null``
+     * to fall back to ``JsonHumanView``. ``ctx`` carries the shell's runtime
+     * state (see class docstring). Default: always fall back.
+     */
+    getInputRendering(/* name, input, ctx */) {
+        return null
+    }
+
+    /**
+     * Return ``{ component, props }`` for the tool's Result area, or ``null``
+     * to fall back to ``JsonHumanView``. Called when the tool result has been
+     * fetched and is non-empty. Default: always fall back.
+     */
+    getResultRendering(/* name, result, input, ctx */) {
+        return null
+    }
+
+    /**
+     * Return ``{ component, props }`` for the tool's summary description (the
+     * text shown after the tool name and the em-dash separator in the rich
+     * card header), or ``null`` to render no description. ``ctx`` may carry
+     * runtime state in the future; current callers don't pass anything.
+     * Default: no description.
+     */
+    getSummaryRendering(/* name, input, baseDir, ctx */) {
+        return null
+    }
+
+    /**
+     * Per-tool overrides for ``JsonHumanView`` when rendering the input
+     * fallback (e.g. force ``Bash.command`` to render as a code block).
+     * Default: no overrides.
+     */
+    getInputOverrides(/* name */) {
+        return {}
+    }
+
+    /**
+     * Per-tool overrides for ``JsonHumanView`` when rendering the result
+     * fallback. Default: no overrides.
+     */
+    getResultOverrides(/* name */) {
+        return {}
+    }
+
+    // ─── Capability flags driving shell-level features ───────────────────
+
+    /**
+     * Whether this tool's input carries a ``file_path`` field that should
+     * power the View-in-Files button and related affordances. Default: false.
+     */
+    usesFilePath(/* name, input */) {
+        return false
+    }
+
+    /**
+     * Whether this tool modifies a file (so the shell shows ``+N -N`` stats
+     * in the header and may auto-open it for live diffs). Default: false.
+     */
+    isFileChangeTool(/* name */) {
+        return false
+    }
+
+    /**
+     * Whether this tool is an "Agent / Task" spawner (the shell shows the
+     * View-Agent button + spinner / robot icon). Default: false.
+     */
+    isAgentTool(/* name */) {
+        return false
+    }
+
+    /**
+     * Whether the shell should auto-open the details for this tool when the
+     * item arrives live via WebSocket and the user has ``settings.showDiffs``
+     * enabled. Default: false.
+     */
+    shouldAutoOpenLive(/* name, input */) {
+        return false
+    }
+
+    /**
+     * Whether the Result section should remain visible when this tool
+     * errored, even though there is no specialized input renderer claiming
+     * it. Used for tools whose error message is too terse on its own (e.g.
+     * Bash's "Exit code N" — the user wants to see the full stdout/stderr
+     * via the Result fallback). The shell also falls back to showing the
+     * Result for the special ``'Unknown error'`` text regardless of what
+     * this method returns. Default: false.
+     */
+    showsResultOnError(/* name */) {
+        return false
+    }
+
+    /**
+     * Whether the Result section should be shown when this tool has a
+     * specialized input renderer AND the error is the special
+     * ``'Unknown error'`` text. Used to surface diagnostic detail for tools
+     * whose specialized input UI alone isn't enough (Edit/Write opt in;
+     * TodoWrite stays hidden). Default: false.
+     */
+    showsResultOnUnknownError(/* name */) {
+        return false
+    }
+
+    /**
+     * Whether the error text for this tool should be rendered as Markdown
+     * (via ``MarkdownContent``) instead of plain text. Used for tools whose
+     * error message is itself markdown content (e.g. ExitPlanMode emits a
+     * markdown-formatted plan that the user wants to read rendered).
+     * Default: false (render as plain text).
+     */
+    errorIsMarkdown(/* name */) {
+        return false
+    }
+
+    // ─── File-change stats (header ``+N -N``) ────────────────────────────
+    //
+    // The shell does the layout (``+N -N``); the helper provides the values.
+    // ``toolState`` is the dataStore.getToolState(...) entry (carries
+    // ``extra`` JSON when the backend computed stats). ``isSubagent`` flips
+    // the source — backend stats for the main session, computed-from-input
+    // for subagents.
+
+    /**
+     * Compute ``{ lines_added, lines_removed? }`` for the ``+N -N`` header,
+     * or ``null`` when this tool doesn't carry stats. Default: null.
+     */
+    computeFileChangeStats(/* name, input, toolState, isSubagent */) {
+        return null
+    }
+
+    // ─── Backend-patch fetcher (used by Edit/Write to draw full-file diffs)
+    //
+    // Some providers post-process the tool_result item to attach a
+    // structured patch and the original file content. The shell handles
+    // the fetch (the parsed item is read from the store or via
+    // ``loadSessionItemsRanges``); the helper decides whether the fetch is
+    // needed and how to extract the data.
+
+    /**
+     * Whether the shell should fetch the tool_result item and pass extracted
+     * data through ``ctx`` to ``getInputRendering``. Default: false.
+     */
+    needsBackendPatchFetch(/* name */) {
+        return false
+    }
+
+    /**
+     * Extract ``{ patch, originalFile }`` from a parsed tool_result item, or
+     * ``null`` when the data is absent. Default: never extracts.
+     */
+    extractBackendPatchData(/* parsedToolResult */) {
+        return null
+    }
+}

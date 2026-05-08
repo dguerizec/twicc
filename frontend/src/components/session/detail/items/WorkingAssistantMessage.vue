@@ -1,8 +1,7 @@
 <script setup>
 import { computed } from 'vue'
 import { useDataStore } from '../../../../stores/data'
-import { computeToolSummary, getVerb } from '../../../../utils/toolSummary'
-import { getProviderLabel } from '../../../../providers'
+import { getProviderLabel, getToolHelpers } from '../../../../providers'
 import ProcessIndicator from '../../../ui/ProcessIndicator.vue'
 
 const props = defineProps({
@@ -37,16 +36,20 @@ const plainPhrase = computed(() => {
 
 const phraseGroups = computed(() => {
     if (plainPhrase.value !== null) return null
-    return buildPhraseGroups(props.tools, sessionBaseDir.value, props.lastStartedToolId, props.lastToolVisible)
+    if (!props.sessionId) return []
+    const session = dataStore.getSession(props.sessionId)
+    const helpers = getToolHelpers(session?.provider)
+    return buildPhraseGroups(props.tools, sessionBaseDir.value, props.lastStartedToolId, props.lastToolVisible, helpers)
 })
 
-function buildPhraseGroups(tools, baseDir, lastStartedToolId, lastToolVisible) {
+function buildPhraseGroups(tools, baseDir, lastStartedToolId, lastToolVisible, toolHelpers) {
     // Group tools by verb, preserving first-occurrence order from the current frame.
     const map = new Map()
+    if (!toolHelpers) return []
     for (const t of tools) {
-        const verb = getVerb(t.name, t.input)
+        const verb = toolHelpers.getVerb(t.name, t.input)
         if (!verb) continue
-        const { inline } = computeToolSummary(t.name, t.input, baseDir)
+        const { inline } = toolHelpers.computeToolSummary(t.name, t.input, baseDir)
         if (!map.has(verb)) map.set(verb, [])
         map.get(verb).push(inline)
     }

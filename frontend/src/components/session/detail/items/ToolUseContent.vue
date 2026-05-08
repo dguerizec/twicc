@@ -1,31 +1,33 @@
 <script setup>
 import { computed, ref, inject, provide, watch, watchEffect, nextTick, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { useCodeCommentsStore } from '../../../../../stores/codeComments'
-import CodeCommentsIndicator from '../../../../ui/CodeCommentsIndicator.vue'
-import { useDataStore } from '../../../../../stores/data'
-import { useSettingsStore } from '../../../../../stores/settings'
-import { apiFetch } from '../../../../../utils/api'
-import { getLanguageFromPath } from '../../../../../utils/languages'
-import { computeToolSummary } from '../../../../../utils/toolSummary'
-import { AGENT_TOOL_NAMES, PROCESS_STATE, PROCESS_STATE_COLORS } from '../../../../../constants'
-import { stopSubagent } from '../../../../../composables/useWebSocket'
-import { getSessionCutoffMs } from '../../../../../utils/sessions'
-import { getParsedContent, hasContent } from '../../../../../utils/parsedContent'
-import { isValidTodos } from '../../../../../utils/todoList'
-import JsonHumanView from '../../../../json/JsonHumanView.vue'
-import MarkdownContent from '../../../../ui/MarkdownContent.vue'
-import AppTooltip from '../../../../ui/AppTooltip.vue'
-import ProcessDuration from '../../../../ui/ProcessDuration.vue'
-import EditContent from './EditContent.vue'
-import WriteContent from './WriteContent.vue'
-import TodoContent from './TodoContent.vue'
+import { useCodeCommentsStore } from '../../../../stores/codeComments'
+import CodeCommentsIndicator from '../../../ui/CodeCommentsIndicator.vue'
+import { useDataStore } from '../../../../stores/data'
+import { useSettingsStore } from '../../../../stores/settings'
+import { apiFetch } from '../../../../utils/api'
+import { PROCESS_STATE, PROCESS_STATE_COLORS } from '../../../../constants'
+import { stopSubagent } from '../../../../composables/useWebSocket'
+import { getSessionCutoffMs } from '../../../../utils/sessions'
+import { getParsedContent, hasContent } from '../../../../utils/parsedContent'
+import { getToolHelpers } from '../../../../providers'
+import JsonHumanView from '../../../json/JsonHumanView.vue'
+import MarkdownContent from '../../../ui/MarkdownContent.vue'
+import AppTooltip from '../../../ui/AppTooltip.vue'
+import ProcessDuration from '../../../ui/ProcessDuration.vue'
 
 const route = useRoute()
 const router = useRouter()
 const dataStore = useDataStore()
 const settingsStore = useSettingsStore()
 const codeCommentsStore = useCodeCommentsStore()
+
+// Resolve tool helpers from the session's provider. Resolved via a computed so
+// it stays correct if the session reference changes (rare, but keeps reactivity).
+const toolHelpers = computed(() => {
+    const session = dataStore.getSession(props.sessionId)
+    return getToolHelpers(session?.provider)
+})
 
 // Cross-tab file reveal (provided by SessionView)
 const viewFileInFilesTab = inject('viewFileInFilesTab', null)
@@ -314,104 +316,11 @@ const displayResult = computed(() => {
 
 // --- Tool input JHV overrides ---
 // Force specific valueType for certain tool input keys (prevents markdown auto-detection).
-const INPUT_OVERRIDES = {
-    Bash: { command: { valueType: 'string-code', language: 'bash' } },
-}
-
-const inputOverrides = computed(() => INPUT_OVERRIDES[props.name] ?? {})
+const inputOverrides = computed(() => toolHelpers.value?.getInputOverrides(props.name) ?? {})
 
 // --- Tool result JHV overrides ---
 // Force specific valueType for certain tool result keys (prevents markdown auto-detection).
-const RESULT_OVERRIDES = {}
-
-const resultOverrides = computed(() => RESULT_OVERRIDES[props.name] ?? {})
-
-// --- Bash/WebFetch/WebSearch: direct content display (bypass JsonHumanView) ---
-const DIRECT_CONTENT_TOOLS = new Set(['Bash', 'WebFetch', 'WebSearch'])
-const isDirectContentTool = computed(() => DIRECT_CONTENT_TOOLS.has(props.name))
-
-const directContentSource = computed(() => {
-    if (!isDirectContentTool.value || !displayResult.value) return null
-    const result = displayResult.value
-    const content = typeof result === 'string' ? result : result?.content
-    if (typeof content !== 'string' || !content) return null
-
-    if (props.name === 'Bash') {
-        return '```\n' + content + '\n```'
-    }
-    // WebFetch, WebSearch: content is already markdown
-    return content
-})
-
-// --- Read tool: syntax-highlighted result ---
-
-// Regex to match a cat -n formatted line: optional spaces, digits, separator (→ or tab), then content.
-// Old format used → (U+2192 arrow), new format uses \t (standard cat -n). Both must be supported.
-const CAT_N_LINE_RE = /^(\s*\d+)[→\t](.*)$/
-
-/**
- * Parse cat -n formatted content (as produced by Claude's Read tool).
- * Supports both the old format (line numbers separated by → arrow) and
- * the new format (line numbers separated by tab character).
- * Returns the clean code, start line, and end line — or null if the content
- * doesn't match the expected format.
- */
-function parseCatNContent(content) {
-    if (typeof content !== 'string') return null
-
-    const lines = content.split('\n')
-    // Remove trailing empty line (common from trailing newline)
-    if (lines.length > 0 && lines[lines.length - 1] === '') {
-        lines.pop()
-    }
-    if (lines.length === 0) return null
-
-    // Validate that the first non-empty line matches the pattern
-    const firstNonEmpty = lines.find(l => l.length > 0)
-    if (!firstNonEmpty || !CAT_N_LINE_RE.test(firstNonEmpty)) return null
-
-    let startLine = null
-    let endLine = null
-    const codeLines = []
-
-    for (const line of lines) {
-        const match = line.match(CAT_N_LINE_RE)
-        if (match) {
-            const lineNum = parseInt(match[1], 10)
-            if (startLine === null) startLine = lineNum
-            endLine = lineNum
-            codeLines.push(match[2])
-        } else {
-            // Line doesn't match pattern — keep as-is (shouldn't happen in well-formed output)
-            codeLines.push(line)
-        }
-    }
-
-    return { code: codeLines.join('\n'), startLine, endLine }
-}
-
-const isRead = computed(() => props.name === 'Read')
-
-/**
- * For Read tool results: parsed code content with language info for syntax highlighting.
- * Returns { code, language, startLine, endLine, markdownSource } or null.
- */
-const readResultCode = computed(() => {
-    if (!isRead.value || !displayResult.value) return null
-
-    // displayResult is the tool_result object { tool_use_id, type, content }
-    const result = displayResult.value
-    const content = typeof result === 'string' ? result : result?.content
-    const parsed = parseCatNContent(content)
-    if (!parsed) return null
-
-    const language = getLanguageFromPath(props.input?.file_path) || ''
-    return {
-        ...parsed,
-        language,
-        markdownSource: '```' + language + '\n' + parsed.code + '\n```'
-    }
-})
+const resultOverrides = computed(() => toolHelpers.value?.getResultOverrides(props.name) ?? {})
 
 // Make file_path relative to session's working directory when possible
 const sessionBaseDir = computed(() => {
@@ -419,28 +328,34 @@ const sessionBaseDir = computed(() => {
     return session?.git_directory || session?.cwd || null
 })
 
-const summary = computed(() => computeToolSummary(props.name, props.input, sessionBaseDir.value))
+const summary = computed(() => {
+    const helpers = toolHelpers.value
+    if (!helpers) return { displayName: null, inline: null }
+    return helpers.computeToolSummary(props.name, props.input, sessionBaseDir.value)
+})
+
+// Static per-name header label override (e.g. "TodoWrite" → "Todo").
+// Dynamic overrides driven by the tool's input (Task subagent_type, Skill name)
+// continue to flow through summary.displayName.
+const headerLabel = computed(() => toolHelpers.value?.getHeaderLabel(props.name) ?? null)
+
+// Whether the error text should render as Markdown vs plain text.
+const errorAsMarkdown = computed(() => !!toolHelpers.value?.errorIsMarkdown(props.name))
 
 // Convenience refs so the template stays readable without value-piercing.
 const displayName = computed(() => summary.value.displayName)
-const summaryDescription = computed(() => summary.value.rich.description)
-const summaryFileIconSrc = computed(() => summary.value.rich.fileIconSrc)
-const summarySkill = computed(() => summary.value.rich.skill)
-const summaryGrep = computed(() => summary.value.rich.grep)
-const summaryGlob = computed(() => summary.value.rich.globPattern)
-const summaryWebFetchUrl = computed(() => summary.value.rich.webFetchUrl)
-const summaryWebSearchQuery = computed(() => summary.value.rich.webSearchQuery)
-const summaryToolSearchQuery = computed(() => summary.value.rich.toolSearchQuery)
-const summaryTodo = computed(() => summary.value.rich.todoDescription)
 
-// Local guards still used by the body rendering / non-summary code paths.
-const isTodoWrite = computed(() => props.name === 'TodoWrite')
-const todosValid = computed(() => isTodoWrite.value && isValidTodos(props.input?.todos))
+// Per-tool summary description rendering, resolved via the helper.
+// Returns { component, props } or null. The shell renders it via
+// <component :is> after the em-dash separator.
+const summaryRendering = computed(() => {
+    const helpers = toolHelpers.value
+    if (!helpers) return null
+    return helpers.getSummaryRendering(props.name, props.input, sessionBaseDir.value)
+})
 
 // File-path detection still drives canViewInFilesTab and shouldAutoOpen.
-const usesFilePath = computed(
-    () => (props.name === 'Edit' || props.name === 'Write' || props.name === 'Read') && !!props.input?.file_path
-)
+const usesFilePath = computed(() => !!toolHelpers.value?.usesFilePath(props.name, props.input))
 
 // First modified line number from the backend patch (for "View in Files tab" navigation)
 const firstModifiedLine = computed(() => {
@@ -475,14 +390,6 @@ function openInFilesTab() {
     viewFileInFilesTab(props.input.file_path, { lineNum })
 }
 
-// --- Edit tool: dedicated diff display ---
-const isEdit = computed(() => props.name === 'Edit')
-const editValid = computed(() => isEdit.value && 'old_string' in props.input && 'new_string' in props.input)
-
-// --- Write tool: dedicated code display ---
-const isWrite = computed(() => props.name === 'Write')
-const writeValid = computed(() => isWrite.value && 'content' in props.input)
-
 // Input without description for display
 const displayInput = computed(() => {
     if (!props.input || Object.keys(props.input).length === 0) {
@@ -492,9 +399,28 @@ const displayInput = computed(() => {
     return Object.keys(rest).length > 0 ? rest : null
 })
 
+const inputRendering = computed(() => {
+    const helpers = toolHelpers.value
+    if (!helpers) return null
+    return helpers.getInputRendering(props.name, props.input, {
+        isSubagent: !!props.parentSessionId,
+        backendPatch: fileChangeBackendPatch.value,
+        backendPatchLoading: fileChangeBackendPatchLoading.value,
+        originalFile: fileChangeOriginalFile.value,
+    })
+})
+
+const resultRendering = computed(() => {
+    const helpers = toolHelpers.value
+    if (!helpers || !displayResult.value) return null
+    return helpers.getResultRendering(props.name, displayResult.value, props.input, {
+        isSubagent: !!props.parentSessionId,
+    })
+})
+
 // --- Tool running state (unified for all tracked tools) ---
 
-const isTask = computed(() => AGENT_TOOL_NAMES.has(props.name))
+const isTask = computed(() => !!toolHelpers.value?.isAgentTool(props.name))
 const isBackground = computed(() => !!props.input?.run_in_background)
 const toolState = computed(() => dataStore.getToolState(props.sessionId, props.toolId))
 
@@ -506,18 +432,23 @@ const isToolError = computed(() => !!toolErrorText.value)
 // (Bash errors only show "Exit code N" so the full output is useful; Unknown errors need details too)
 const showResultDetailsOnError = computed(() => {
     if (!isToolError.value) return false
-    return props.name === 'Bash' || toolErrorText.value === 'Unknown error'
+    return !!toolHelpers.value?.showsResultOnError(props.name) || toolErrorText.value === 'Unknown error'
 })
 
 // Central guard for Result details visibility
 const showResultDetails = computed(() => {
-    // TodoWrite with valid todos: never show result
-    if (isTodoWrite.value && todosValid.value) return false
-    // Edit/Write with dedicated display: only show result for Unknown error
-    if (editValid.value || writeValid.value) return toolErrorText.value === 'Unknown error'
-    // Tool error: show only for Bash or Unknown error
+    const helpers = toolHelpers.value
+    // A specialized input renderer (Edit/Write/TodoWrite) typically owns the
+    // success-case UI on its own — the Result section stays hidden. Tools
+    // that opt in via showsResultOnUnknownError still surface it for the
+    // special "Unknown error" text (Edit/Write); TodoWrite does not.
+    if (inputRendering.value) {
+        if (toolErrorText.value === 'Unknown error') {
+            return !!helpers?.showsResultOnUnknownError(props.name)
+        }
+        return false
+    }
     if (isToolError.value) return showResultDetailsOnError.value
-    // Default: show
     return true
 })
 
@@ -531,7 +462,7 @@ const shouldAutoOpen = computed(() => {
     if (!settingsStore.showDiffs) return false
     if (isToolError.value) return false
     if (!isLive.value) return false
-    return props.name === 'Edit' || props.name === 'Write'
+    return !!toolHelpers.value?.shouldAutoOpenLive(props.name, props.input)
 })
 
 // Guard: auto-open at most once per component instance
@@ -566,32 +497,15 @@ watch(isToolError, (errored) => {
 })
 
 // Diff stats for Edit/Write tools (parsed from the extra JSON field)
-const FILE_CHANGE_TOOLS = new Set(['Edit', 'Write'])
 const fileChangeStats = computed(() => {
-    if (!FILE_CHANGE_TOOLS.has(props.name)) return null
-
-    // In subagents, compute stats from the tool_use input directly
-    // (backend patch data is not used for subagent rendering)
-    if (props.parentSessionId) {
-        if (props.name === 'Edit' && props.input?.old_string != null && props.input?.new_string != null) {
-            return {
-                lines_removed: props.input.old_string.split('\n').length,
-                lines_added: props.input.new_string.split('\n').length,
-            }
-        }
-        if (props.name === 'Write' && props.input?.content != null) {
-            return { lines_added: props.input.content.split('\n').length }
-        }
-        return null
-    }
-
-    // Main session: stats come from the backend (ToolResultLink.extra)
-    if (!toolState.value?.extra) return null
-    try {
-        return JSON.parse(toolState.value.extra)
-    } catch {
-        return null
-    }
+    const helpers = toolHelpers.value
+    if (!helpers) return null
+    return helpers.computeFileChangeStats(
+        props.name,
+        props.input,
+        toolState.value,
+        !!props.parentSessionId,
+    )
 })
 
 // --- Edit/Write tools: fetch structuredPatch + originalFile from the tool_result item ---
@@ -603,43 +517,37 @@ const fileChangeOriginalFile = ref(null)
 const fileChangeBackendPatchLoading = ref(false)
 
 watchEffect(async () => {
-    // In subagents, Edit/Write tools don't use backend patch data for rendering.
-    // They use the tool_use input directly (old_string/new_string for Edit, content for Write).
+    // Subagent path: helpers don't fetch backend patch (rendering uses input directly).
     if (props.parentSessionId) return
 
-    if ((!editValid.value && !writeValid.value) || !fileChangeStats.value) {
+    const helpers = toolHelpers.value
+    if (!helpers || !helpers.needsBackendPatchFetch(props.name) || !fileChangeStats.value) {
         fileChangeBackendPatch.value = null
         fileChangeOriginalFile.value = null
         return
     }
     const lineNum = toolState.value?.toolResultLineNum
     if (!lineNum) return
-    // Already resolved for this line
     if (fileChangeBackendPatch.value?._lineNum === lineNum) return
 
-    // Extract patch + originalFile from a parsed tool_result item
-    function extractToolResultData(parsed) {
-        const toolUseResult = parsed?.toolUseResult
-        if (!toolUseResult) return
-
-        const patch = toolUseResult.structuredPatch
-        if (Array.isArray(patch) && patch.length > 0) {
-            fileChangeBackendPatch.value = Object.freeze(Object.assign([...patch], { _lineNum: lineNum }))
+    function applyExtracted(parsed) {
+        const data = helpers.extractBackendPatchData(parsed)
+        if (!data) return
+        if (data.patch) {
+            fileChangeBackendPatch.value = Object.freeze(
+                Object.assign([...data.patch], { _lineNum: lineNum })
+            )
         }
-        const origFile = toolUseResult.originalFile
-        if (typeof origFile === 'string') {
-            fileChangeOriginalFile.value = origFile
+        if (typeof data.originalFile === 'string') {
+            fileChangeOriginalFile.value = data.originalFile
         }
     }
 
-    // Check if the item is already in the store
     const item = dataStore.getSessionItem(props.sessionId, lineNum)
     if (item && hasContent(item)) {
-        extractToolResultData(getParsedContent(item))
+        applyExtracted(getParsedContent(item))
         return
     }
-
-    // Fetch the item from the API
     fileChangeBackendPatchLoading.value = true
     try {
         await dataStore.loadSessionItemsRanges(
@@ -647,7 +555,7 @@ watchEffect(async () => {
         )
         const fetched = dataStore.getSessionItem(props.sessionId, lineNum)
         if (fetched && hasContent(fetched)) {
-            extractToolResultData(getParsedContent(fetched))
+            applyExtracted(getParsedContent(fetched))
         }
     } finally {
         fileChangeBackendPatchLoading.value = false
@@ -706,7 +614,7 @@ const isAgentRunning = computed(() => {
 const viewAgentButtonId = computed(() => `view-agent-${props.toolId}`)
 
 // Code comments indicator for Edit/Write tools
-const isEditOrWrite = computed(() => props.name === 'Edit' || props.name === 'Write')
+const isEditOrWrite = computed(() => !!toolHelpers.value?.isFileChangeTool(props.name))
 const toolCommentsCount = computed(() => {
     if (!isEditOrWrite.value || !props.input?.file_path) return 0
     const rootSessionId = props.parentSessionId || props.sessionId
@@ -756,63 +664,12 @@ function handleStopAgent() {
         <span slot="summary" class="items-details-summary">
             <span class="items-details-summary-left">
                 <strong v-if="isTask && displayName" class="items-details-summary-name">{{ displayName.name }}<span v-if="displayName.namespace" class="items-details-summary-quiet"> ({{ displayName.namespace }})</span></strong>
-                <strong v-else-if="isTodoWrite" class="items-details-summary-name">Todo</strong>
+                <strong v-else-if="headerLabel" class="items-details-summary-name">{{ headerLabel }}</strong>
                 <strong v-else class="items-details-summary-name">{{ name.replaceAll('__', ' ') }}</strong>
-                <template v-if="summaryDescription">
+                <template v-if="summaryRendering">
                     <span class="items-details-summary-separator"> — </span>
-                    <span v-if="summaryFileIconSrc" class="items-details-summary-file">
-                        <img :src="summaryFileIconSrc" class="items-details-summary-file-icon" loading="lazy" width="16" height="16" />
-                        <span class="items-details-summary-description">{{ summaryDescription }}</span>
-                    </span>
-                    <span v-else class="items-details-summary-description">{{ summaryDescription }}</span>
+                    <component :is="summaryRendering.component" v-bind="summaryRendering.props" />
                     <CodeCommentsIndicator :count="toolCommentsCount" :show-tooltip="false" class="tool-comments-indicator" />
-                </template>
-                <!-- Skill tool: show skill name, with namespace in quiet mode -->
-                <template v-else-if="summarySkill">
-                    <span class="items-details-summary-separator"> — </span>
-                    <span class="items-details-summary-description">{{ summarySkill.name }}<span v-if="summarySkill.namespace" class="items-details-summary-quiet"> ({{ summarySkill.namespace }})</span></span>
-                </template>
-                <!-- Grep tool: "`pattern` in `type` files in [path]" -->
-                <template v-else-if="summaryGrep">
-                    <span class="items-details-summary-separator"> — </span>
-                    <span class="items-details-summary-description items-details-summary-grep">
-                        <code v-if="summaryGrep.pattern">{{ summaryGrep.pattern }}</code>
-                        <span v-if="summaryGrep.fileType"><span class="grep-connector">in</span> <code>{{ summaryGrep.fileType }}</code> <span class="grep-connector">files</span></span>
-                        <span v-if="summaryGrep.path"><span class="grep-connector">in</span>
-                            <span v-if="summaryGrep.pathIconSrc" class="items-details-summary-file">
-                                <img :src="summaryGrep.pathIconSrc" class="items-details-summary-file-icon" loading="lazy" width="16" height="16" />
-                                <span>{{ summaryGrep.path }}</span>
-                            </span>
-                            <span v-else>{{ summaryGrep.path }}</span>
-                        </span>
-                    </span>
-                </template>
-                <!-- Glob tool: show pattern in code -->
-                <template v-else-if="summaryGlob">
-                    <span class="items-details-summary-separator"> — </span>
-                    <span class="items-details-summary-description"><code>{{ summaryGlob }}</code></span>
-                </template>
-                <!-- WebFetch tool: show URL as a link -->
-                <template v-else-if="summaryWebFetchUrl">
-                    <span class="items-details-summary-separator"> — </span>
-                    <a :href="summaryWebFetchUrl" target="_blank" rel="noopener noreferrer nofollow" class="items-details-summary-description items-details-summary-link" @click.stop>{{ summaryWebFetchUrl }}<wa-icon name="arrow-up-right-from-square" class="items-details-summary-link-icon"></wa-icon></a>
-                </template>
-                <!-- WebSearch tool: show query -->
-                <template v-else-if="summaryWebSearchQuery">
-                    <span class="items-details-summary-separator"> — </span>
-                    <span class="items-details-summary-description">{{ summaryWebSearchQuery }}</span>
-                </template>
-                <!-- ToolSearch tool: show query -->
-                <template v-else-if="summaryToolSearchQuery">
-                    <span class="items-details-summary-separator"> — </span>
-                    <span class="items-details-summary-description">{{ summaryToolSearchQuery }}</span>
-                </template>
-                <!-- TodoWrite tool: show progress description -->
-                <template v-else-if="summaryTodo">
-                    <template v-for="(part, i) in summaryTodo" :key="i">
-                        <span class="items-details-summary-separator"> — </span>
-                        <span class="items-details-summary-description" :class="{ 'no-wrap': !part.status }">{{ part.text }}<wa-icon v-if="part.status === 'completed'" name="check" class="todo-icon todo-icon-completed"></wa-icon></span>
-                    </template>
                 </template>
             </span>
             <!-- View Agent indicator for Task tool_use (only in regular sessions) -->
@@ -881,14 +738,13 @@ function handleStopAgent() {
             </template>
         </span>
         <template v-if="isOpen">
-            <TodoContent v-if="isTodoWrite && todosValid" :todos="input.todos" />
-            <EditContent v-else-if="editValid" :input="input" :backend-patch="fileChangeBackendPatch" :backend-patch-loading="fileChangeBackendPatchLoading" :original-file="fileChangeOriginalFile" :is-subagent="!!parentSessionId" />
-            <WriteContent v-else-if="writeValid" :input="input" :backend-patch="fileChangeBackendPatch" :backend-patch-loading="fileChangeBackendPatchLoading" :original-file="fileChangeOriginalFile" :is-subagent="!!parentSessionId" />
+            <component
+                v-if="inputRendering"
+                :is="inputRendering.component"
+                v-bind="inputRendering.props"
+            />
             <div v-else-if="displayInput" class="tool-input">
-                <JsonHumanView
-                    :value="displayInput"
-                    :overrides="inputOverrides"
-                />
+                <JsonHumanView :value="displayInput" :overrides="inputOverrides" />
             </div>
             <div v-else class="tool-no-input">
                 No input parameters
@@ -896,7 +752,7 @@ function handleStopAgent() {
             <!-- Tool error message (shown directly, replaces the Result details unless Bash/Unknown) -->
             <wa-callout v-if="isToolError" variant="danger" appearance="outlined" class="tool-error-message">
                 <wa-icon slot="icon" name="circle-exclamation"></wa-icon>
-                <MarkdownContent v-if="props.name === 'ExitPlanMode'" :source="toolErrorText" />
+                <MarkdownContent v-if="errorAsMarkdown" :source="toolErrorText" />
                 <template v-else>{{ toolErrorText }}</template>
             </wa-callout>
             <wa-details v-if="showResultDetails" ref="resultDetailsRef" :open="isResultOpen" :style="instantOpen ? { '--show-duration': '0ms', '--hide-duration': '0ms' } : null" class="tool-result" @wa-show="onResultOpen" @wa-hide="onResultClose">
@@ -917,13 +773,10 @@ function handleStopAgent() {
                         No result available
                     </div>
                     <div v-else-if="resultState === 'loaded' && displayResult" class="tool-result-data">
-                        <template v-if="readResultCode">
-                            <div class="read-result-header">Lines {{ readResultCode.startLine }}–{{ readResultCode.endLine }}</div>
-                            <MarkdownContent :source="readResultCode.markdownSource" />
-                        </template>
-                        <MarkdownContent
-                            v-else-if="directContentSource"
-                            :source="directContentSource"
+                        <component
+                            v-if="resultRendering"
+                            :is="resultRendering.component"
+                            v-bind="resultRendering.props"
                         />
                         <JsonHumanView
                             v-else
@@ -1012,66 +865,6 @@ wa-details {
         gap: var(--wa-space-xs);
         max-width: 100%; /* Constrain to parent width so text can wrap */
     }
-
-    .items-details-summary-description {
-        /* Description can wrap on multiple lines */
-        word-wrap: break-word;
-
-        &.no-wrap {
-            white-space: nowrap;
-        }
-    }
-}
-
-.items-details-summary-file {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--wa-space-xs);
-}
-
-.items-details-summary-file-icon {
-    vertical-align: text-bottom;
-    flex-shrink: 0;
-}
-
-.items-details-summary-quiet {
-    color: var(--wa-color-text-quiet);
-}
-
-.items-details-summary-grep {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--wa-space-xs);
-    flex-wrap: wrap;
-    & > span {
-        display: inline-flex;
-        align-items: center;
-        gap: var(--wa-space-xs);
-    }
-    .grep-connector {
-        white-space: nowrap;
-        flex-shrink: 0;
-    }
-}
-
-.items-details-summary-description code {
-    font-size: 1em;
-    background: var(--wa-color-neutral-fill-quiet);
-    border-radius: var(--wa-border-radius-s);
-}
-
-.items-details-summary-link {
-    color: inherit;
-    text-decoration: none;
-    &:hover {
-        text-decoration: underline;
-    }
-}
-
-.items-details-summary-link-icon {
-    font-size: var(--wa-font-size-2xs);
-    margin-left: var(--wa-space-3xs);
-    opacity: 0.6;
 }
 
 /* Hide the "BASH" language label for tool inputs (used for bash tools, so it's always bash) */
@@ -1132,18 +925,42 @@ wa-details {
     margin-bottom: var(--wa-space-xs);
 }
 
-.todo-icon {
-    margin-left: var(--wa-space-xs);
-    font-size: 0.85em;
-    vertical-align: baseline;
-}
-
-.todo-icon-completed {
-    color: var(--wa-color-success-60);
-}
-
 @keyframes pulse {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.4; }
+}
+</style>
+
+<style>
+/* Common summary classes — non-scoped so per-tool summary mini-components
+ * (under items/claude_code/summary/) can use them by name without scoped CSS
+ * isolation. SessionItem.vue (parent) already declares
+ * `.items-details-summary-separator` and base `.items-details-summary-description`
+ * styles globally; we keep the shell-specific `word-wrap: break-word` override
+ * here so the description still wraps the way it did before this refactor. */
+
+.items-details-summary-description {
+    /* Less aggressive than SessionItem.vue's `overflow-wrap: anywhere` —
+     * preserves pre-refactor wrapping behaviour for tool descriptions. */
+    word-wrap: break-word;
+
+    &.no-wrap {
+        white-space: nowrap;
+    }
+}
+
+.items-details-summary-quiet {
+    color: var(--wa-color-text-quiet);
+}
+
+.items-details-summary-file {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--wa-space-xs);
+}
+
+.items-details-summary-file-icon {
+    vertical-align: text-bottom;
+    flex-shrink: 0;
 }
 </style>
