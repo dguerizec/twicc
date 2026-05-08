@@ -127,7 +127,7 @@ onMounted(() => {
     // When result details starts open (restoration), ensure data is fetched
     if (isResultOpen.value) {
         const shouldFetch = resultState.value === 'idle' ||
-            (resultState.value === 'loaded' && (!resultData.value || resultData.value.length === 0))
+            (resultState.value === 'loaded' && (!resultData.value || resultData.value.length < requiredDisplayCount.value))
         if (shouldFetch) {
             fetchResult()
         }
@@ -173,11 +173,16 @@ async function fetchResult() {
         resultData.value = data.results
         resultState.value = 'loaded'
 
-        // If we got data, stop polling
-        if (data.results && data.results.length > 0) {
+        // Stop polling once we've collected every result the helper
+        // needs to render the body (1 for most tools, 2 for Codex
+        // ``exec_command`` and friends that wait for the
+        // ``event_msg.*_end`` row). Anything below that means we'd
+        // still be showing the "not yet available" placeholder, so
+        // we keep polling.
+        const haveAll = data.results && data.results.length >= requiredDisplayCount.value
+        if (haveAll) {
             stopPolling()
         } else if (!isPolling.value) {
-            // No data and not polling yet: start polling
             startPolling()
         }
     } catch (err) {
@@ -228,7 +233,7 @@ function onResultOpen() {
     dataStore.setDetailOpen(props.sessionId, `result:${props.toolId}`, true)
     // Fetch if idle, or if loaded but no data (retry)
     const shouldFetch = resultState.value === 'idle' ||
-        (resultState.value === 'loaded' && (!resultData.value || resultData.value.length === 0))
+        (resultState.value === 'loaded' && (!resultData.value || resultData.value.length < requiredDisplayCount.value))
 
     if (shouldFetch) {
         fetchResult()
@@ -267,7 +272,7 @@ function onToolUseOpen() {
     // Check if result details is open and needs data
     if (isResultOpen.value) {
         const shouldFetch = resultState.value === 'idle' ||
-            (resultState.value === 'loaded' && (!resultData.value || resultData.value.length === 0))
+            (resultState.value === 'loaded' && (!resultData.value || resultData.value.length < requiredDisplayCount.value))
 
         if (shouldFetch) {
             fetchResult()
@@ -294,8 +299,8 @@ watch(sessionActive, (active) => {
         // Reactivated: resume polling only if it was suspended and still needed
         if (resultPollingPaused) {
             resultPollingPaused = false
-            // Resume only if result is still empty (polling is self-limiting)
-            if (!resultData.value || resultData.value.length === 0) {
+            // Resume only if results are still incomplete (polling is self-limiting).
+            if (!resultData.value || resultData.value.length < requiredDisplayCount.value) {
                 startPolling()
             }
         }
@@ -315,9 +320,15 @@ watch(sessionActive, (active) => {
     }
 })
 
-// Computed for display: single result or array of multiple
+// Computed for display: single result or array of multiple.
+// While we haven't reached the helper's ``requiredDisplayCount`` yet,
+// we pretend there's no result so the UI keeps showing the
+// "Result not yet available …" message + polling spinner — matching
+// the empty-result state. Beyond the threshold, behaviour is the
+// pre-existing one: single → object, multiple → array.
 const displayResult = computed(() => {
     if (!resultData.value || resultData.value.length === 0) return null
+    if (resultData.value.length < requiredDisplayCount.value) return null
     if (resultData.value.length === 1) return resultData.value[0]
     return resultData.value
 })
@@ -607,6 +618,16 @@ const toolStartedAt = computed(() => {
 })
 
 // --- Tool running spinner (for all tools except Agent/Task which have their own UI) ---
+
+// Number of result rows the helper says are needed before the Result
+// section can render meaningful content. Drives both the polling
+// loop and the "Result not yet available" placeholder. Default 1
+// (= render whatever arrives first); Codex's exec_command family
+// raises it to 2 so the rich ``event_msg.exec_command_end`` is
+// always part of what's displayed (see helper docs).
+const requiredDisplayCount = computed(() => (
+    toolHelpers.value?.getRequiredResultCountForDisplay(props.name, props.input, helperOptions.value) ?? 1
+))
 
 const isToolRunning = computed(() => {
     if (isTask.value) return false

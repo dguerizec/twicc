@@ -25,6 +25,7 @@ import { getParsedContent } from '../../utils/parsedContent'
 
 import DescriptionSummary from '../../components/session/detail/items/summary/DescriptionSummary.vue'
 import GrepSummary from '../../components/session/detail/items/summary/GrepSummary.vue'
+import ExecResultContent from '../../components/session/detail/items/codex/ExecResultContent.vue'
 
 // ``function_call`` tools whose call is followed by a persisted
 // ``event_msg.<X>_end`` event paired by ``call_id``. Source of truth:
@@ -233,6 +234,18 @@ export class CodexToolHelpers extends BaseToolHelpers {
         return 1
     }
 
+    getRequiredResultCountForDisplay(name, input, options) {
+        // For Codex tools that emit two tool_results, the second row
+        // (``event_msg.*_end``) is the one carrying the structured
+        // outcome we want to render — the first
+        // (``function_call_output``) is a partial LLM-facing snippet.
+        // Wait for both before showing anything; while we're waiting,
+        // the shell renders "Result not yet available …" + spinner +
+        // polling, exactly like a regular foreground tool with no
+        // result yet.
+        return this.getExpectedResultCount(name, input, options)
+    }
+
     getHeaderLabel(name, input, options) {
         if (!PARSED_COMMAND_TOOLS.has(name)) return null
         const parsed = resolveParsedCommand(name, input, options)
@@ -323,6 +336,30 @@ export class CodexToolHelpers extends BaseToolHelpers {
             component: DescriptionSummary,
             props: { description: inline, fileIconSrc: null, truncate: true },
         }
+    }
+
+    getResultRendering(name, result /*, input, ctx */) {
+        if (!PARSED_COMMAND_TOOLS.has(name)) return null
+        // ``result`` is whatever ``displayResult`` handed us — a single
+        // payload object when there's only one row, or an array when
+        // there are several. ``CodexHelpers.get_tool_results`` returns
+        // each row's ``payload`` raw, so we identify the
+        // ``event_msg.exec_command_end`` entry by its
+        // ``aggregated_output`` field (the ``function_call_output``
+        // payload only carries ``output``).
+        const candidates = Array.isArray(result) ? result : [result]
+        const execEnd = candidates.find(
+            (r) => r && typeof r.aggregated_output === 'string',
+        )
+        if (!execEnd) return null
+        return { component: ExecResultContent, props: { result: execEnd } }
+    }
+
+    showsResultOnError(name) {
+        // Same rationale as Claude Code's Bash: the error callout only
+        // surfaces "Exit code N", so the actual stdout/stderr of the
+        // failed command is still useful and should stay visible.
+        return PARSED_COMMAND_TOOLS.has(name)
     }
 }
 

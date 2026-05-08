@@ -721,6 +721,37 @@ export class BaseToolHelpers {
         return 1
     }
 
+    /**
+     * Number of tool_result rows the Result section needs to have in
+     * memory before it can render anything useful. Distinct from
+     * ``getExpectedResultCount``: the latter drives the *running
+     * spinner* (was the tool ever marked complete?), while this one
+     * gates the *Result rendering* (do we already have what we need
+     * to show a meaningful body?).
+     *
+     * Most tools render their result as soon as a single row arrives,
+     * so the default is 1 — including Claude Code's Bash with
+     * ``run_in_background``: there, the first result already carries
+     * the canonical "Command running in background" notice and the
+     * second one is just a completion stub. Codex's ``exec_command``
+     * is the opposite: the first row (``function_call_output``) is a
+     * truncated LLM-facing snippet, and the rich ``aggregated_output``
+     * lives only on the second row (``event_msg.exec_command_end``).
+     * That helper overrides this hook to wait for both, so the user
+     * sees the polling spinner instead of a placeholder snippet.
+     *
+     * Returning ``> resultData.length`` makes the shell:
+     *   - render the "Result not yet available — checking again
+     *     shortly…" message + spinner
+     *   - keep polling the ``/tool-results/`` endpoint at the regular
+     *     interval until the threshold is reached.
+     *
+     * @returns {number} Default: 1.
+     */
+    getRequiredResultCountForDisplay(/* name, input, options */) {
+        return 1
+    }
+
     // ─── Capability flags driving shell-level features ───────────────────
 
     /**

@@ -127,6 +127,29 @@ def _payload(parsed_json: dict) -> dict | None:
     return payload if isinstance(payload, dict) else None
 
 
+def _exit_code_error(payload: dict) -> str | None:
+    """Synthesise an error string from an ``exec_command_end`` payload.
+
+    Codex doesn't carry an ``is_error`` flag the way Anthropic's
+    tool_result blocks do — it carries a structured ``exit_code``
+    integer instead. Whenever that integer is present and non-zero we
+    surface a Bash-style ``"Exit code N"`` message so the shell
+    pipeline (running spinner ✕, danger callout, header tint) lights
+    up the same way it would for a Claude Code Bash failure.
+
+    Restricted to ``exec_command_end`` for now: ``patch_apply_end``,
+    ``mcp_tool_call_end`` etc. carry different success signals and we
+    haven't wired them yet. Returns ``None`` when the field is
+    missing, zero, or non-integer.
+    """
+    if payload.get("type") != "exec_command_end":
+        return None
+    exit_code = payload.get("exit_code")
+    if not isinstance(exit_code, int) or exit_code == 0:
+        return None
+    return f"Exit code {exit_code}"
+
+
 def _event_msg_text(parsed_json: dict, expected_subtype: str) -> str | None:
     """Return the ``message`` string for an ``event_msg`` of the given subtype.
 
@@ -311,14 +334,18 @@ class CodexSessionCompute(BaseSessionCompute):
         # Mirror of ``extract_tool_use_entries`` for the matching result
         # line. Two shapes contribute:
         # - response_item.{function_call_output, custom_tool_call_output}
-        #   — the LLM-facing output string.
+        #   — the LLM-facing output string. Never carries an error
+        #   signal we can read.
         # - event_msg.* with a non-empty ``call_id`` — any persisted
         #   ``*End`` / ``*Response`` event (exec_command_end,
         #   patch_apply_end, mcp_tool_call_end, …). When both shapes
         #   arrive for the same call_id they each become their own
         #   ``ToolResultLink`` row (no dedup); the front knows whether
         #   to wait for both via ``getExpectedResultCount``.
-        # No error detection yet (``is_error=False, error_text=None``).
+        # ``exec_command_end`` carries a numeric ``exit_code``: any
+        # non-zero value is mapped to a synthetic ``"Exit code N"``
+        # error so the shell light-up logic (running spinner ✕,
+        # danger callout) matches Claude Code's Bash behaviour.
         wrapper_type = parsed_json.get("type")
         payload = _payload(parsed_json)
         if payload is None:
@@ -327,16 +354,18 @@ class CodexSessionCompute(BaseSessionCompute):
             if payload.get("type") not in _TOOL_RESULT_PAYLOAD_TYPES:
                 return None
             call_id = payload.get("call_id")
+            error_text = None
         elif wrapper_type == _TYPE_EVENT_MSG:
             call_id = _event_msg_call_id(parsed_json)
+            error_text = _exit_code_error(payload)
         else:
             return None
         if not isinstance(call_id, str) or not call_id:
             return None
         return ToolResultInfo(
             tool_use_id=call_id,
-            is_error=False,
-            error_text=None,
+            is_error=error_text is not None,
+            error_text=error_text,
         )
 
     def extract_agent_info_from_tool_result(
@@ -427,7 +456,7 @@ class CodexSessionCompute(BaseSessionCompute):
                     is_system_xml=False,
                     has_tool_result=True,
                     tool_result_id=event_call_id,
-                    tool_result_error=None,
+                    tool_result_error=_exit_code_error(payload),
                     tool_use_entries=_EMPTY_TOOL_USE_ENTRIES,
                     task_tool_uses=_EMPTY_TASK_TOOL_USES,
                     file_paths=_EMPTY_FILE_PATHS,
