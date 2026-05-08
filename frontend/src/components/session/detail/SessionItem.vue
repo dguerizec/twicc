@@ -226,6 +226,7 @@ function toggleJsonView() {
                 <UnknownEntry
                     v-else
                     :type="entryType"
+                    :sub-type="content?.payload?.type || null"
                     :data="content"
                     :session-id="sessionId"
                     :detail-key="`line:${lineNum}`"

@@ -10,6 +10,12 @@ const props = defineProps({
         type: String,
         default: 'unknown'
     },
+    // Optional sub-discriminator displayed in parentheses after the type
+    // (e.g. Codex's payload.type for response_item / event_msg lines).
+    subType: {
+        type: String,
+        default: null
+    },
     data: {
         type: Object,
         default: null
@@ -53,7 +59,7 @@ function onHide() {
         <span slot="summary" class="items-details-summary">
             <strong class="items-details-summary-name">Unhandled event</strong>
             <span class="items-details-summary-separator"> — </span>
-            <span class="items-details-summary-description">{{ type }}</span>
+            <span class="items-details-summary-description">{{ type }}<template v-if="subType"> ({{ subType }})</template></span>
         </span>
         <template v-if="isOpen">
             <div v-if="data" class="unknown-data">
