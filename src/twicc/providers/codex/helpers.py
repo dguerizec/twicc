@@ -120,13 +120,16 @@ class CodexHelpers(BaseProviderHelpers):
         tool_use with its result through the inherited ``ToolResultLink``
         machinery. Any persisted ``event_msg.*`` carrying a ``call_id``
         (the End / Response shape: ``exec_command_end``,
-        ``patch_apply_end``, ``mcp_tool_call_end``, …) supersedes the
-        matching ``function_call_output`` via the priority dedup
-        (:meth:`CodexSessionCompute.tool_result_priority`). Every other
-        JSONL line goes to ``ItemKind.SYSTEM``. Costs, runtime
-        environment fields, and reasoning items are not yet processed.
-        Bump this constant when the pipeline learns a new mapping so
-        existing sessions are recomputed.
+        ``patch_apply_end``, ``mcp_tool_call_end``, …) gets its own
+        ``ToolResultLink`` row alongside the matching
+        ``function_call_output`` — both coexist for the same call_id.
+        The front decides whether to keep the running spinner via
+        ``getExpectedResultCount`` (a tool with a ``*_end`` event waits
+        for both rows). Every other JSONL line goes to
+        ``ItemKind.SYSTEM``. Costs, runtime environment fields, and
+        reasoning items are not yet processed. Bump this constant when
+        the pipeline learns a new mapping so existing sessions are
+        recomputed.
         """
         return settings.CODEX_COMPUTE_VERSION
 
@@ -206,13 +209,13 @@ class CodexHelpers(BaseProviderHelpers):
     ) -> list[dict]:
         """Return the tool-result payloads matching ``tool_use_id``.
 
-        Two line shapes can be the canonical result for a tool_use,
-        paired by ``call_id``: ``response_item.{function_call_output,
-        custom_tool_call_output}`` and ``event_msg.*`` with a non-empty
-        ``call_id``. ``CodexSessionCompute.tool_result_priority`` makes
-        the event_msg shape supersede the response_item one when both
-        arrive for the same call_id, so ``items`` typically contains
-        only the canonical line(s).
+        Two line shapes can carry a tool_result paired by ``call_id``:
+        ``response_item.{function_call_output, custom_tool_call_output}``
+        (the LLM-facing string) and ``event_msg.*`` with a non-empty
+        ``call_id`` (any persisted End / Response event with the
+        structured outcome). Both are kept as separate
+        :class:`ToolResultLink` rows for the same call_id, so ``items``
+        typically contains both when both shapes arrived.
 
         Callers already filtered ``items`` to the lines linked via
         :class:`ToolResultLink` for this ``tool_use_id``; we parse each

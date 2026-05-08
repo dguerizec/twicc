@@ -14,21 +14,22 @@ Classification rules (any change MUST bump CODEX_COMPUTE_VERSION):
   ``*Response`` event — exec_command_end, patch_apply_end,
   mcp_tool_call_end, web_search_end, image_generation_end,
   collab_*_end, dynamic_tool_call_response, …) → kind stays ``None``;
-  routed to ``DEBUG_ONLY`` via :meth:`is_tool_result_item`. Acts as
-  the canonical tool_result for the matching function_call by
-  ``call_id`` — these events carry the structured outcome of the tool
-  (full aggregated transcript, exit_code, ``changes`` map,
-  ``CallToolResult``, …), strictly richer than the LLM-facing
-  ``function_call_output``. The replacement is enforced by
-  :meth:`tool_result_priority` (1 vs 0).
+  routed to ``DEBUG_ONLY`` via :meth:`is_tool_result_item`. Pairs with
+  the matching function_call by ``call_id`` — these events carry the
+  structured outcome of the tool (full aggregated transcript,
+  exit_code, ``changes`` map, ``CallToolResult``, …), richer than the
+  LLM-facing ``function_call_output``. Both shapes coexist as
+  :class:`ToolResultLink` rows for the same tool_use; the front uses
+  ``getExpectedResultCount`` to know it must wait for both before
+  marking the tool as done.
 - ``response_item.function_call`` / ``custom_tool_call`` → ``TOOL_USE``
   (-> ``COLLAPSIBLE``), except ``function_call name=write_stdin`` which
   is bucketed as ``SYSTEM`` (its trace is captured by the matching
   ``exec_command``'s ``exec_command_end``).
 - ``response_item.{function_call_output, custom_tool_call_output}`` →
-  kind stays ``None`` (-> ``DEBUG_ONLY``). Pairs as a tool_result with
-  priority 0; if the matching event_msg arrives later, the priority
-  dedup drops this link and keeps the event_msg one.
+  kind stays ``None`` (-> ``DEBUG_ONLY``). Pairs as a tool_result —
+  the LLM-facing string is the first of (potentially) two links per
+  tool_use_id, with the matching event_msg.*_end as the second.
 - everything else (``session_meta``, ``turn_context``, other
   ``response_item`` subtypes, other ``event_msg`` subtypes without
   ``call_id``, ``compacted``) → ``SYSTEM`` (lands at ``DEBUG_ONLY``).
@@ -270,10 +271,11 @@ class CodexSessionCompute(BaseSessionCompute):
         #   collab_*_end, dynamic_tool_call_response, …). They carry the
         #   structured outcome of the tool call and are paired with the
         #   originating function_call by the ``call_id``.
-        # Both are routed to DEBUG_ONLY here and surfaced under their tool_use
-        # via ``ToolResultLink``. When both arrive for the same call_id, the
-        # priority assigned by :meth:`tool_result_priority` keeps the
-        # event_msg one as canonical.
+        # Both are routed to DEBUG_ONLY here and each gets its own
+        # ``ToolResultLink`` row when they arrive — they coexist for the
+        # same call_id (no replacement). The front uses the wrapper +
+        # tool name to know how many results to wait for via
+        # ``getExpectedResultCount`` before flipping the spinner off.
         wrapper_type = parsed_json.get("type")
         payload = _payload(parsed_json)
         if payload is None:
@@ -313,8 +315,9 @@ class CodexSessionCompute(BaseSessionCompute):
         # - event_msg.* with a non-empty ``call_id`` — any persisted
         #   ``*End`` / ``*Response`` event (exec_command_end,
         #   patch_apply_end, mcp_tool_call_end, …). When both shapes
-        #   arrive for the same call_id, ``tool_result_priority``
-        #   keeps the event_msg one as canonical.
+        #   arrive for the same call_id they each become their own
+        #   ``ToolResultLink`` row (no dedup); the front knows whether
+        #   to wait for both via ``getExpectedResultCount``.
         # No error detection yet (``is_error=False, error_text=None``).
         wrapper_type = parsed_json.get("type")
         payload = _payload(parsed_json)
@@ -335,18 +338,6 @@ class CodexSessionCompute(BaseSessionCompute):
             is_error=False,
             error_text=None,
         )
-
-    def tool_result_priority(self, parsed_json: dict) -> int:
-        # ``event_msg.*`` End/Response events carry the structured,
-        # canonical outcome (full aggregated transcript, exit_code,
-        # ``changes`` map, ``CallToolResult``, …) while the matching
-        # ``function_call_output`` is the LLM-facing string yielded
-        # mid-process. Priority 1 vs 0 makes the orchestrator pick the
-        # event_msg as the unique :class:`ToolResultLink` whenever both
-        # lines share a ``call_id``.
-        if _event_msg_call_id(parsed_json) is not None:
-            return 1
-        return 0
 
     def extract_agent_info_from_tool_result(
         self, parsed_json: dict
@@ -399,8 +390,9 @@ class CodexSessionCompute(BaseSessionCompute):
         #   SYSTEM and contributes nothing here).
         # - ``response_item.{function_call_output, custom_tool_call_output}``
         #   is a tool_result. When an event_msg counterpart for the same
-        #   ``call_id`` exists, ``tool_result_priority`` makes it
-        #   supersede this output at link-creation time.
+        #   ``call_id`` exists, both shapes coexist as separate
+        #   ``ToolResultLink`` rows (no replacement). The front decides
+        #   when the tool is done via ``getExpectedResultCount``.
         # Every other line falls through to the empty analysis.
         wrapper_type = parsed_json.get("type")
         payload = _payload(parsed_json)
@@ -476,9 +468,6 @@ class CodexSessionCompute(BaseSessionCompute):
                 )
 
             if sub_type in _TOOL_RESULT_PAYLOAD_TYPES:
-                # The link itself may still be dropped downstream by the
-                # priority dedup if a higher-priority event_msg shows up
-                # for the same call_id.
                 return ContentAnalysis(
                     has_visible_content=False,
                     text_content=None,
