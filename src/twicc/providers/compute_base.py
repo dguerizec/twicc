@@ -638,6 +638,29 @@ class BaseSessionCompute:
         """Return :class:`ToolResultInfo` for the first tool_result, or ``None``."""
         raise NotImplementedError
 
+    def tool_result_priority(self, parsed_json: dict) -> int:
+        """Priority of this tool_result line for the same ``tool_use_id``.
+
+        Higher = canonical. The orchestration paths (batch + live) keep
+        the highest-priority link(s) per ``tool_use_id`` in
+        :class:`ToolResultLink`; lines with a strictly lower priority
+        than the current max for that id are skipped, and arrival of a
+        strictly higher one drops the existing lower-priority link(s).
+        Equal-priority arrivals coexist (multi-result tools).
+
+        Used to handle Codex's two-shape tool_result emission, where the
+        LLM-facing ``response_item.function_call_output`` is followed by
+        a strictly richer ``event_msg.<tool>_end`` carrying the same
+        ``call_id`` (with full aggregated transcript, structured exit
+        code, parsed_cmd, file changes, …). The provider returns a
+        higher priority for the event_msg shape so it supersedes the
+        partial output.
+
+        Default: 0 (priority-blind — every tool_result coexists like in
+        Claude Code's multi-result model).
+        """
+        return 0
+
     def extract_agent_info_from_tool_result(
         self, parsed_json: dict
     ) -> tuple[str, str] | None:
@@ -1025,6 +1048,36 @@ class BaseSessionCompute:
             tool_use_entries = self.extract_tool_use_entries(candidate_parsed)
             if tool_use_id in tool_use_entries:
                 tool_name = tool_use_entries[tool_use_id]
+
+                # Priority-based dedup per tool_use_id (see batch path).
+                # Drop existing lower-priority links, skip ours if a
+                # higher one already won the race.
+                new_priority = self.tool_result_priority(parsed_json)
+                existing_links = list(
+                    ToolResultLink.objects.filter(
+                        session_id=session_id, tool_use_id=tool_use_id,
+                    ).only('id', 'tool_result_line_num')
+                )
+                existing_max = -1
+                lower_link_ids: list[int] = []
+                for el in existing_links:
+                    try:
+                        el_item = SessionItem.objects.get(
+                            session_id=session_id, line_num=el.tool_result_line_num,
+                        )
+                        el_parsed = orjson.loads(el_item.content)
+                    except (SessionItem.DoesNotExist, orjson.JSONDecodeError):
+                        continue
+                    el_priority = self.tool_result_priority(el_parsed)
+                    if el_priority < new_priority:
+                        lower_link_ids.append(el.id)
+                    elif el_priority > existing_max:
+                        existing_max = el_priority
+                if existing_max > new_priority:
+                    return None  # superseded
+                if lower_link_ids:
+                    ToolResultLink.objects.filter(id__in=lower_link_ids).delete()
+
                 extra = self.compute_file_change_stats(parsed_json, tool_name)
                 _, created = ToolResultLink.objects.get_or_create(
                     session_id=session_id,
@@ -1452,6 +1505,15 @@ class BaseSessionCompute:
         agent_tool_result_counts: dict[str, tuple[int, datetime | None]] = {}
         agent_stopped_list: list[dict] = []
         original_serialized: dict[int, dict] = {}
+        # Per-link priority used by the per-``tool_use_id`` dedup rule
+        # (cf :meth:`tool_result_priority`). Same key as
+        # ``all_tool_result_links``. Not persisted in the link rows
+        # themselves — only used in this compute pass.
+        link_priorities: dict[tuple[str, int], int] = {}
+        # Subset of link keys whose creation incremented
+        # ``agent_tool_result_counts`` — needed to undo the count
+        # when the link is dropped by a higher-priority replacement.
+        agent_counted_keys: set[tuple[str, int]] = set()
 
         # Load existing links for change detection
         original_tool_result_links: dict[tuple[str, int], dict] = {}
@@ -1560,27 +1622,56 @@ class BaseSessionCompute:
                 task_tool_use_map[tu_id] = (item.line_num, is_background, item.timestamp)
             tool_result_ref = analysis.tool_result_id
             if tool_result_ref and tool_result_ref in tool_use_map:
-                tu_line_num, tu_name = tool_use_map[tool_result_ref]
-                extra = self.compute_file_change_stats(parsed, tu_name)
-                error = analysis.tool_result_error
-                all_tool_result_links[(tool_result_ref, item.line_num)] = serialize_tool_result_link(ToolResultLink(
-                    session_id=session_id,
-                    tool_use_line_num=tu_line_num,
-                    tool_result_line_num=item.line_num,
-                    tool_use_id=tool_result_ref,
-                    tool_name=tu_name,
-                    tool_result_at=item.timestamp,
-                    extra=extra,
-                    error=error,
-                ))
-                # If the matched tool_use spawned an agent, count this result
-                # against the corresponding subagent for stopped detection.
-                if tool_result_ref in task_tool_use_map or any(
-                    link['tool_use_id'] == tool_result_ref
-                    for link in all_agent_links.values()
-                ):
-                    prev_count, _ = agent_tool_result_counts.get(tool_result_ref, (0, None))
-                    agent_tool_result_counts[tool_result_ref] = (prev_count + 1, item.timestamp)
+                # Priority-based dedup per tool_use_id. When two shapes
+                # of the same result arrive (e.g. ``function_call_output``
+                # then ``event_msg.<tool>_end`` for Codex), the higher
+                # priority replaces the lower; equal priorities coexist
+                # (multi-result tools). See :meth:`tool_result_priority`.
+                new_priority = self.tool_result_priority(parsed)
+                existing_keys_for_tu = [
+                    k for k in all_tool_result_links if k[0] == tool_result_ref
+                ]
+                existing_max = max(
+                    (link_priorities[k] for k in existing_keys_for_tu),
+                    default=-1,
+                )
+                if existing_keys_for_tu and new_priority > existing_max:
+                    # Higher arrival supersedes — drop lower-priority entries
+                    # (and stop counting them as agent-stopped triggers).
+                    for k in existing_keys_for_tu:
+                        del all_tool_result_links[k]
+                        link_priorities.pop(k, None)
+                        agent_counted_keys.discard(k)
+                    if tool_result_ref in agent_tool_result_counts:
+                        # We dropped the counted link; drop its tally too.
+                        del agent_tool_result_counts[tool_result_ref]
+                    existing_keys_for_tu = []
+
+                if not existing_keys_for_tu or new_priority >= existing_max:
+                    tu_line_num, tu_name = tool_use_map[tool_result_ref]
+                    extra = self.compute_file_change_stats(parsed, tu_name)
+                    error = analysis.tool_result_error
+                    new_key = (tool_result_ref, item.line_num)
+                    all_tool_result_links[new_key] = serialize_tool_result_link(ToolResultLink(
+                        session_id=session_id,
+                        tool_use_line_num=tu_line_num,
+                        tool_result_line_num=item.line_num,
+                        tool_use_id=tool_result_ref,
+                        tool_name=tu_name,
+                        tool_result_at=item.timestamp,
+                        extra=extra,
+                        error=error,
+                    ))
+                    link_priorities[new_key] = new_priority
+                    # If the matched tool_use spawned an agent, count this result
+                    # against the corresponding subagent for stopped detection.
+                    if tool_result_ref in task_tool_use_map or any(
+                        link['tool_use_id'] == tool_result_ref
+                        for link in all_agent_links.values()
+                    ):
+                        prev_count, _ = agent_tool_result_counts.get(tool_result_ref, (0, None))
+                        agent_tool_result_counts[tool_result_ref] = (prev_count + 1, item.timestamp)
+                        agent_counted_keys.add(new_key)
             if analysis.tool_result_agent_info:
                 tu_id, agent_id = analysis.tool_result_agent_info
                 if tu_id in task_tool_use_map:

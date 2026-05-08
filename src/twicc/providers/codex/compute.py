@@ -4,23 +4,38 @@ Compute pipeline for Codex sessions.
 Each Codex JSONL line is wrapped in ``{timestamp, type, payload}``; this
 pass turns the wrapper into a TwiCC :class:`~twicc.core.enums.ItemKind`
 and, for tool calls, lets the inherited base orchestration build the
-``ToolResultLink`` rows that pair a call with its output.
+``ToolResultLink`` rows that pair a call with its result.
 
-- ``event_msg`` with ``payload.type == "user_message"`` → ``USER_MESSAGE``
-- ``event_msg`` with ``payload.type == "agent_message"`` → ``ASSISTANT_MESSAGE``
-- ``response_item`` with ``payload.type ∈ {"function_call",
-  "custom_tool_call"}`` → ``TOOL_USE`` (-> ``COLLAPSIBLE``)
-- ``response_item`` with ``payload.type ∈ {"function_call_output",
-  "custom_tool_call_output"}`` → kind stays ``None`` so the base routes
-  via :meth:`is_tool_result_item` to ``DEBUG_ONLY``; the line is then
-  surfaced under its tool_use through ``ToolResultLink``.
+Classification rules (any change MUST bump CODEX_COMPUTE_VERSION):
+
+- ``event_msg.user_message`` → ``USER_MESSAGE``
+- ``event_msg.agent_message`` → ``ASSISTANT_MESSAGE``
+- ``event_msg.*`` with a non-empty ``payload.call_id`` (any ``*End`` /
+  ``*Response`` event — exec_command_end, patch_apply_end,
+  mcp_tool_call_end, web_search_end, image_generation_end,
+  collab_*_end, dynamic_tool_call_response, …) → kind stays ``None``;
+  routed to ``DEBUG_ONLY`` via :meth:`is_tool_result_item`. Acts as
+  the canonical tool_result for the matching function_call by
+  ``call_id`` — these events carry the structured outcome of the tool
+  (full aggregated transcript, exit_code, ``changes`` map,
+  ``CallToolResult``, …), strictly richer than the LLM-facing
+  ``function_call_output``. The replacement is enforced by
+  :meth:`tool_result_priority` (1 vs 0).
+- ``response_item.function_call`` / ``custom_tool_call`` → ``TOOL_USE``
+  (-> ``COLLAPSIBLE``), except ``function_call name=write_stdin`` which
+  is bucketed as ``SYSTEM`` (its trace is captured by the matching
+  ``exec_command``'s ``exec_command_end``).
+- ``response_item.{function_call_output, custom_tool_call_output}`` →
+  kind stays ``None`` (-> ``DEBUG_ONLY``). Pairs as a tool_result with
+  priority 0; if the matching event_msg arrives later, the priority
+  dedup drops this link and keeps the event_msg one.
 - everything else (``session_meta``, ``turn_context``, other
-  ``response_item`` subtypes, other ``event_msg`` subtypes,
-  ``compacted``) → ``SYSTEM`` (lands at ``DEBUG_ONLY``).
+  ``response_item`` subtypes, other ``event_msg`` subtypes without
+  ``call_id``, ``compacted``) → ``SYSTEM`` (lands at ``DEBUG_ONLY``).
 
-The ``call_id`` carried by ``function_call`` / ``function_call_output``
-plays the role of Claude's ``tool_use_id`` and is stored as-is in the
-``ToolResultLink.tool_use_id`` column.
+The ``call_id`` carried by every line above is the pairing key,
+stored as-is in ``ToolResultLink.tool_use_id`` (analogous to Claude's
+``tool_use_id``).
 
 Token counts, costs, runtime environment fields (cwd / model / git
 branch), custom titles, session-start detection, file-change stats and
@@ -63,10 +78,46 @@ _PAYLOAD_AGENT_MESSAGE = "agent_message"
 # isn't JSON (apply_patch ships its patch as raw Lark-grammar text).
 _TOOL_CALL_PAYLOAD_TYPES = frozenset({"function_call", "custom_tool_call"})
 
-# Matching tool-result payload types, paired with the calls above by
-# ``call_id``. They are routed to DEBUG_ONLY via :meth:`is_tool_result_item`
-# and surfaced under their tool_use through ``ToolResultLink``.
+# Function-call ``name`` values whose tool_use is bucketed as SYSTEM (no
+# tool card rendered) because the relevant exchange is captured elsewhere.
+# ``write_stdin`` belongs to a previously-spawned ``exec_command`` session;
+# the aggregated transcript ends up in that exec_command's eventual
+# ``exec_command_end`` event_msg (same call_id as the original exec).
+_NON_TOOL_FUNCTION_NAMES = frozenset({"write_stdin"})
+
+# Tool-result payload sub-types from ``response_item`` lines (the
+# LLM-facing string returned to the model). Paired with the calls above
+# by ``call_id`` and routed to DEBUG_ONLY via :meth:`is_tool_result_item`.
 _TOOL_RESULT_PAYLOAD_TYPES = frozenset({"function_call_output", "custom_tool_call_output"})
+
+
+def _event_msg_call_id(parsed_json: dict) -> str | None:
+    """Return ``payload.call_id`` for a persisted Codex ``event_msg`` line.
+
+    Codex's runtime emits a constellation of ``*End`` / ``*Response``
+    events that carry the canonical, structured outcome of a tool call
+    (full ``aggregated_output`` for ``exec_command_end``, ``changes``
+    map for ``patch_apply_end``, ``CallToolResult`` for
+    ``mcp_tool_call_end``, …). Every one of them is paired with the
+    originating ``function_call`` / ``custom_tool_call`` by ``call_id``.
+
+    ``rollout/src/policy.rs`` only persists the ``*End`` shape (the
+    matching ``*Begin`` events are dropped before the rollout is
+    written), so in practice any persisted ``event_msg`` carrying a
+    non-empty ``call_id`` is a tool_result End event — independent of
+    its concrete sub-type. Returns the ``call_id`` if matched, else
+    ``None``. Kept as a module-level helper to keep the discovery rule
+    in one place.
+    """
+    if parsed_json.get("type") != _TYPE_EVENT_MSG:
+        return None
+    payload = parsed_json.get("payload")
+    if not isinstance(payload, dict):
+        return None
+    call_id = payload.get("call_id")
+    if isinstance(call_id, str) and call_id:
+        return call_id
+    return None
 
 
 def _payload(parsed_json: dict) -> dict | None:
@@ -118,33 +169,43 @@ class CodexSessionCompute(BaseSessionCompute):
         # NOTE: any change to this classification MUST bump
         # CODEX_COMPUTE_VERSION so existing sessions are recomputed.
         wrapper_type = parsed_json.get("type")
+        payload = _payload(parsed_json)
 
-        if wrapper_type == _TYPE_EVENT_MSG:
-            payload = _payload(parsed_json)
-            if payload is not None:
-                sub_type = payload.get("type")
-                if sub_type == _PAYLOAD_USER_MESSAGE:
-                    return ItemKind.USER_MESSAGE
-                if sub_type == _PAYLOAD_AGENT_MESSAGE:
-                    return ItemKind.ASSISTANT_MESSAGE
+        if wrapper_type == _TYPE_EVENT_MSG and payload is not None:
+            sub_type = payload.get("type")
+            if sub_type == _PAYLOAD_USER_MESSAGE:
+                return ItemKind.USER_MESSAGE
+            if sub_type == _PAYLOAD_AGENT_MESSAGE:
+                return ItemKind.ASSISTANT_MESSAGE
+            # Any persisted event_msg with a ``call_id`` is a tool_result
+            # End/Response event (see :func:`_event_msg_call_id`).
+            # Kind stays ``None`` so the base falls into the
+            # ``is_tool_result_item`` branch (-> DEBUG_ONLY).
+            if _event_msg_call_id(parsed_json) is not None:
+                return None
 
-        if wrapper_type == _TYPE_RESPONSE_ITEM:
-            payload = _payload(parsed_json)
-            if payload is not None:
-                sub_type = payload.get("type")
-                if sub_type in _TOOL_CALL_PAYLOAD_TYPES:
-                    return ItemKind.TOOL_USE
-                # Tool-result lines: kind stays None so the base
-                # ``compute_item_display_level`` falls into the
-                # ``is_tool_result_item`` branch (-> DEBUG_ONLY) without
-                # also tagging them as plain SYSTEM.
-                if sub_type in _TOOL_RESULT_PAYLOAD_TYPES:
-                    return None
+        if wrapper_type == _TYPE_RESPONSE_ITEM and payload is not None:
+            sub_type = payload.get("type")
+            if sub_type in _TOOL_CALL_PAYLOAD_TYPES:
+                # Some function_call names don't deserve their own tool
+                # card (their meaningful trace is captured by another
+                # tool's event_msg.exec_command_end via the same call_id).
+                if (
+                    sub_type == "function_call"
+                    and payload.get("name") in _NON_TOOL_FUNCTION_NAMES
+                ):
+                    return ItemKind.SYSTEM
+                return ItemKind.TOOL_USE
+            # Tool-result-bearing response_item lines: kind stays None
+            # so the base routes via ``is_tool_result_item`` to
+            # DEBUG_ONLY without also tagging them as plain SYSTEM.
+            if sub_type in _TOOL_RESULT_PAYLOAD_TYPES:
+                return None
 
         # Everything else (session_meta, turn_context, other response_item
-        # subtypes — message/reasoning/…, other event_msg subtypes,
-        # compacted, malformed lines) is bucketed as SYSTEM and ends up
-        # at DEBUG_ONLY display level.
+        # subtypes — message/reasoning/…, other event_msg subtypes
+        # without call_id, ``compacted``, malformed lines) is bucketed
+        # as SYSTEM and ends up at DEBUG_ONLY display level.
         return ItemKind.SYSTEM
 
     # compute_item_display_level + compute_item_metadata: inherited from base.
@@ -200,21 +261,37 @@ class CodexSessionCompute(BaseSessionCompute):
         return None
 
     def is_tool_result_item(self, parsed_json: dict) -> bool:
-        # ``response_item`` lines whose payload type is a tool-result
-        # variant (function_call_output / custom_tool_call_output). They
-        # are routed to DEBUG_ONLY here and surfaced under their tool_use
-        # via ``ToolResultLink``.
-        if parsed_json.get("type") != _TYPE_RESPONSE_ITEM:
-            return False
+        # Two line shapes carry a tool_result for Codex:
+        # - ``response_item`` with a ``*_call_output`` payload (the LLM-facing
+        #   string returned from the function call).
+        # - ``event_msg`` with a non-empty ``call_id`` — any of the
+        #   ``*End`` / ``*Response`` events (exec_command_end, patch_apply_end,
+        #   mcp_tool_call_end, web_search_end, image_generation_end,
+        #   collab_*_end, dynamic_tool_call_response, …). They carry the
+        #   structured outcome of the tool call and are paired with the
+        #   originating function_call by the ``call_id``.
+        # Both are routed to DEBUG_ONLY here and surfaced under their tool_use
+        # via ``ToolResultLink``. When both arrive for the same call_id, the
+        # priority assigned by :meth:`tool_result_priority` keeps the
+        # event_msg one as canonical.
+        wrapper_type = parsed_json.get("type")
         payload = _payload(parsed_json)
         if payload is None:
             return False
-        return payload.get("type") in _TOOL_RESULT_PAYLOAD_TYPES
+        if wrapper_type == _TYPE_RESPONSE_ITEM:
+            return payload.get("type") in _TOOL_RESULT_PAYLOAD_TYPES
+        if wrapper_type == _TYPE_EVENT_MSG:
+            return _event_msg_call_id(parsed_json) is not None
+        return False
 
     def extract_tool_use_entries(self, parsed_json: dict) -> dict[str, str]:
         # One tool_use per JSONL line in Codex (no nesting like Claude),
         # so the returned mapping has at most one entry. Keyed by the
         # OpenAI ``call_id`` — that's what the matching output also carries.
+        # Only function_call names that we actually render as tool cards
+        # contribute here; ``write_stdin`` is bucketed as SYSTEM upstream
+        # so its call_id never enters ``tool_use_map`` and thus never
+        # gets a ToolResultLink.
         if parsed_json.get("type") != _TYPE_RESPONSE_ITEM:
             return _EMPTY_TOOL_USE_ENTRIES
         payload = _payload(parsed_json)
@@ -224,19 +301,33 @@ class CodexSessionCompute(BaseSessionCompute):
         name = payload.get("name")
         if not isinstance(call_id, str) or not call_id:
             return _EMPTY_TOOL_USE_ENTRIES
+        if payload.get("type") == "function_call" and name in _NON_TOOL_FUNCTION_NAMES:
+            return _EMPTY_TOOL_USE_ENTRIES
         return {call_id: name if isinstance(name, str) else ""}
 
     def extract_tool_result_info(self, parsed_json: dict) -> ToolResultInfo | None:
-        # Mirror of ``extract_tool_use_entries`` for the matching output
-        # line. V1: no error detection (the base is happy with
-        # is_error=False, error_text=None — ``ToolResultLink`` is created
-        # purely from the call_id pairing).
-        if parsed_json.get("type") != _TYPE_RESPONSE_ITEM:
-            return None
+        # Mirror of ``extract_tool_use_entries`` for the matching result
+        # line. Two shapes contribute:
+        # - response_item.{function_call_output, custom_tool_call_output}
+        #   — the LLM-facing output string.
+        # - event_msg.* with a non-empty ``call_id`` — any persisted
+        #   ``*End`` / ``*Response`` event (exec_command_end,
+        #   patch_apply_end, mcp_tool_call_end, …). When both shapes
+        #   arrive for the same call_id, ``tool_result_priority``
+        #   keeps the event_msg one as canonical.
+        # No error detection yet (``is_error=False, error_text=None``).
+        wrapper_type = parsed_json.get("type")
         payload = _payload(parsed_json)
-        if payload is None or payload.get("type") not in _TOOL_RESULT_PAYLOAD_TYPES:
+        if payload is None:
             return None
-        call_id = payload.get("call_id")
+        if wrapper_type == _TYPE_RESPONSE_ITEM:
+            if payload.get("type") not in _TOOL_RESULT_PAYLOAD_TYPES:
+                return None
+            call_id = payload.get("call_id")
+        elif wrapper_type == _TYPE_EVENT_MSG:
+            call_id = _event_msg_call_id(parsed_json)
+        else:
+            return None
         if not isinstance(call_id, str) or not call_id:
             return None
         return ToolResultInfo(
@@ -244,6 +335,18 @@ class CodexSessionCompute(BaseSessionCompute):
             is_error=False,
             error_text=None,
         )
+
+    def tool_result_priority(self, parsed_json: dict) -> int:
+        # ``event_msg.*`` End/Response events carry the structured,
+        # canonical outcome (full aggregated transcript, exit_code,
+        # ``changes`` map, ``CallToolResult``, …) while the matching
+        # ``function_call_output`` is the LLM-facing string yielded
+        # mid-process. Priority 1 vs 0 makes the orchestrator pick the
+        # event_msg as the unique :class:`ToolResultLink` whenever both
+        # lines share a ``call_id``.
+        if _event_msg_call_id(parsed_json) is not None:
+            return 1
+        return 0
 
     def extract_agent_info_from_tool_result(
         self, parsed_json: dict
@@ -285,12 +388,20 @@ class CodexSessionCompute(BaseSessionCompute):
     # ------------------------------------------------------------------
 
     def analyze_content(self, parsed_json: dict) -> ContentAnalysis:
-        # Three line shapes contribute to content analysis in Codex:
-        # ``event_msg.user_message`` / ``event_msg.agent_message`` carry
-        # plain text; ``response_item.function_call`` /
-        # ``response_item.custom_tool_call`` declare a tool_use; their
-        # ``*_output`` siblings declare a tool_result. Every other line
-        # falls through to the empty analysis.
+        # Line shapes that contribute to content analysis in Codex:
+        # - ``event_msg.user_message`` / ``event_msg.agent_message`` carry
+        #   plain text.
+        # - ``event_msg.*`` with a non-empty ``call_id`` (see
+        #   :func:`_event_msg_call_id`) is a tool_result End/Response
+        #   event paired by ``call_id`` with the originating function_call.
+        # - ``response_item.function_call`` / ``custom_tool_call`` declares
+        #   a tool_use (except ``write_stdin``, which is bucketed as
+        #   SYSTEM and contributes nothing here).
+        # - ``response_item.{function_call_output, custom_tool_call_output}``
+        #   is a tool_result. When an event_msg counterpart for the same
+        #   ``call_id`` exists, ``tool_result_priority`` makes it
+        #   supersede this output at link-creation time.
+        # Every other line falls through to the empty analysis.
         wrapper_type = parsed_json.get("type")
         payload = _payload(parsed_json)
         if payload is None:
@@ -298,25 +409,42 @@ class CodexSessionCompute(BaseSessionCompute):
 
         if wrapper_type == _TYPE_EVENT_MSG:
             sub_type = payload.get("type")
-            if sub_type not in (_PAYLOAD_USER_MESSAGE, _PAYLOAD_AGENT_MESSAGE):
-                return _EMPTY_ANALYSIS
+            if sub_type in (_PAYLOAD_USER_MESSAGE, _PAYLOAD_AGENT_MESSAGE):
+                message = payload.get("message")
+                text = message.strip() if isinstance(message, str) else None
+                return ContentAnalysis(
+                    has_visible_content=bool(text),
+                    text_content=text,
+                    is_system_xml=False,
+                    has_tool_result=False,
+                    tool_result_id=None,
+                    tool_result_error=None,
+                    tool_use_entries=_EMPTY_TOOL_USE_ENTRIES,
+                    task_tool_uses=_EMPTY_TASK_TOOL_USES,
+                    file_paths=_EMPTY_FILE_PATHS,
+                    has_prefix=False,
+                    has_suffix=False,
+                    tool_result_agent_info=None,
+                )
 
-            message = payload.get("message")
-            text = message.strip() if isinstance(message, str) else None
-            return ContentAnalysis(
-                has_visible_content=bool(text),
-                text_content=text,
-                is_system_xml=False,
-                has_tool_result=False,
-                tool_result_id=None,
-                tool_result_error=None,
-                tool_use_entries=_EMPTY_TOOL_USE_ENTRIES,
-                task_tool_uses=_EMPTY_TASK_TOOL_USES,
-                file_paths=_EMPTY_FILE_PATHS,
-                has_prefix=False,
-                has_suffix=False,
-                tool_result_agent_info=None,
-            )
+            event_call_id = _event_msg_call_id(parsed_json)
+            if event_call_id is not None:
+                return ContentAnalysis(
+                    has_visible_content=False,
+                    text_content=None,
+                    is_system_xml=False,
+                    has_tool_result=True,
+                    tool_result_id=event_call_id,
+                    tool_result_error=None,
+                    tool_use_entries=_EMPTY_TOOL_USE_ENTRIES,
+                    task_tool_uses=_EMPTY_TASK_TOOL_USES,
+                    file_paths=_EMPTY_FILE_PATHS,
+                    has_prefix=False,
+                    has_suffix=False,
+                    tool_result_agent_info=None,
+                )
+
+            return _EMPTY_ANALYSIS
 
         if wrapper_type == _TYPE_RESPONSE_ITEM:
             sub_type = payload.get("type")
@@ -326,6 +454,11 @@ class CodexSessionCompute(BaseSessionCompute):
 
             if sub_type in _TOOL_CALL_PAYLOAD_TYPES:
                 name = payload.get("name")
+                # write_stdin doesn't get a tool card — keep the line
+                # invisible to ``tool_use_map`` so neither it nor any
+                # later line will pair against its call_id.
+                if sub_type == "function_call" and name in _NON_TOOL_FUNCTION_NAMES:
+                    return _EMPTY_ANALYSIS
                 tool_use_entries = {call_id: name if isinstance(name, str) else ""}
                 return ContentAnalysis(
                     has_visible_content=True,
@@ -343,8 +476,9 @@ class CodexSessionCompute(BaseSessionCompute):
                 )
 
             if sub_type in _TOOL_RESULT_PAYLOAD_TYPES:
-                # V1: no error detection. The base creates a
-                # ``ToolResultLink`` from ``tool_result_id`` regardless.
+                # The link itself may still be dropped downstream by the
+                # priority dedup if a higher-priority event_msg shows up
+                # for the same call_id.
                 return ContentAnalysis(
                     has_visible_content=False,
                     text_content=None,

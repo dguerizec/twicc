@@ -14,6 +14,7 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar
 
+import orjson
 from django.conf import settings
 
 from twicc.core.enums import Provider
@@ -24,6 +25,22 @@ from twicc.providers.helpers import (
     ModelVersion,
     UserMessage,
 )
+
+# Wrapper-level types and their tool-result payload sub-types. Mirrors
+# the discovery rules in ``codex.compute``; kept inline to avoid a
+# cross-module dependency for these tiny lookups. Two shapes carry a
+# tool_result and pair with their function_call by ``call_id``:
+# - ``response_item.{function_call_output, custom_tool_call_output}`` —
+#   the LLM-facing output string of a standard / custom function call.
+# - ``event_msg.*`` with a non-empty ``payload.call_id`` — any persisted
+#   ``*End`` / ``*Response`` event (exec_command_end, patch_apply_end,
+#   mcp_tool_call_end, web_search_end, image_generation_end,
+#   collab_*_end, dynamic_tool_call_response, …) carrying the structured
+#   outcome. ``rollout/src/policy.rs`` only persists the End shape, so
+#   the ``call_id`` presence on a persisted event_msg is sufficient.
+_TYPE_RESPONSE_ITEM = "response_item"
+_TYPE_EVENT_MSG = "event_msg"
+_RESPONSE_TOOL_RESULT_PAYLOAD_TYPES = frozenset({"function_call_output", "custom_tool_call_output"})
 
 if TYPE_CHECKING:
     from twicc.core.models import SessionItem
@@ -98,13 +115,18 @@ class CodexHelpers(BaseProviderHelpers):
     def current_compute_version(self) -> int | None:
         """Return :data:`settings.CODEX_COMPUTE_VERSION`.
 
-        V1 (current) classifies user/assistant content from
-        ``event_msg:user_message`` / ``event_msg:agent_message`` and
-        routes every other JSONL line to ``ItemKind.SYSTEM``. Tools,
-        tool results, costs, runtime environment fields, and reasoning
-        items are not yet processed. Bump this constant when the
-        pipeline learns a new mapping so existing sessions are
-        recomputed.
+        Classifies user/assistant messages, tool_use lines (function_call
+        / custom_tool_call, except ``write_stdin``), and pairs each
+        tool_use with its result through the inherited ``ToolResultLink``
+        machinery. Any persisted ``event_msg.*`` carrying a ``call_id``
+        (the End / Response shape: ``exec_command_end``,
+        ``patch_apply_end``, ``mcp_tool_call_end``, …) supersedes the
+        matching ``function_call_output`` via the priority dedup
+        (:meth:`CodexSessionCompute.tool_result_priority`). Every other
+        JSONL line goes to ``ItemKind.SYSTEM``. Costs, runtime
+        environment fields, and reasoning items are not yet processed.
+        Bump this constant when the pipeline learns a new mapping so
+        existing sessions are recomputed.
         """
         return settings.CODEX_COMPUTE_VERSION
 
@@ -172,3 +194,55 @@ class CodexHelpers(BaseProviderHelpers):
 
     def extract_indexable_text(self, item: SessionItem) -> str:
         return ""
+
+    # ------------------------------------------------------------------
+    # Tool results
+    # ------------------------------------------------------------------
+
+    def get_tool_results(
+        self,
+        items: Iterable[SessionItem],
+        tool_use_id: str,
+    ) -> list[dict]:
+        """Return the tool-result payloads matching ``tool_use_id``.
+
+        Two line shapes can be the canonical result for a tool_use,
+        paired by ``call_id``: ``response_item.{function_call_output,
+        custom_tool_call_output}`` and ``event_msg.*`` with a non-empty
+        ``call_id``. ``CodexSessionCompute.tool_result_priority`` makes
+        the event_msg shape supersede the response_item one when both
+        arrive for the same call_id, so ``items`` typically contains
+        only the canonical line(s).
+
+        Callers already filtered ``items`` to the lines linked via
+        :class:`ToolResultLink` for this ``tool_use_id``; we parse each
+        one and return the payload as-is. The frontend's
+        ``JsonHumanView`` fallback renders it without further hints.
+        """
+        results: list[dict] = []
+        for item in items:
+            try:
+                parsed = orjson.loads(item.content)
+            except orjson.JSONDecodeError:
+                continue
+            if not isinstance(parsed, dict):
+                continue
+            wrapper_type = parsed.get("type")
+            payload = parsed.get("payload")
+            if not isinstance(payload, dict):
+                continue
+            if wrapper_type == _TYPE_RESPONSE_ITEM:
+                if payload.get("type") not in _RESPONSE_TOOL_RESULT_PAYLOAD_TYPES:
+                    continue
+            elif wrapper_type == _TYPE_EVENT_MSG:
+                # Persisted event_msg with a call_id is an End / Response
+                # event; mirror the discovery rule used on the compute side.
+                event_call_id = payload.get("call_id")
+                if not isinstance(event_call_id, str) or not event_call_id:
+                    continue
+            else:
+                continue
+            if payload.get("call_id") != tool_use_id:
+                continue
+            results.append(payload)
+        return results
