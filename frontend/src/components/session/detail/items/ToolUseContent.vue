@@ -354,22 +354,32 @@ const summaryRendering = computed(() => {
     return helpers.getSummaryRendering(props.name, props.input, sessionBaseDir.value)
 })
 
-// File-path detection still drives canViewInFilesTab and shouldAutoOpen.
-const usesFilePath = computed(() => !!toolHelpers.value?.usesFilePath(props.name, props.input))
-
 // First modified line number from the backend patch (for "View in Files tab" navigation)
 const firstModifiedLine = computed(() => {
     if (!fileChangeBackendPatch.value?.length) return null
     return fileChangeBackendPatch.value[0].newStart
 })
 
-// "View in Files tab" button: visible when the file_path falls within a valid root
-// Uses the main session's roots (parent for subagents, self for regular sessions)
-// to match what the Files tab can display.
+// View-in-Files target: ``{ filePath, lineHint }`` or ``null``. The helper
+// owns the per-tool wiring (which input key carries the file path, whether to
+// scroll to the first modified line vs. an offset, etc.) so the shell stays
+// neutral about input field names.
+const openInFilesTarget = computed(() => {
+    const helpers = toolHelpers.value
+    if (!helpers) return null
+    return helpers.getOpenInFilesTarget(props.name, props.input, {
+        firstModifiedLine: firstModifiedLine.value,
+    })
+})
+
+// "View in Files tab" button: visible when the target file falls within a
+// valid root. Uses the main session's roots (parent for subagents, self for
+// regular sessions) to match what the Files tab can display.
 const viewInFilesButtonId = computed(() => `view-in-files-${props.toolId}`)
 const canViewInFilesTab = computed(() => {
-    if (!viewFileInFilesTab || !usesFilePath.value) return false
-    const filePath = props.input.file_path
+    if (!viewFileInFilesTab) return false
+    const target = openInFilesTarget.value
+    if (!target) return false
     // Use the main session (parent for subagents, self for regular sessions)
     const mainSessionId = props.parentSessionId || props.sessionId
     const mainSession = dataStore.getSession(mainSessionId)
@@ -380,23 +390,22 @@ const canViewInFilesTab = computed(() => {
         project?.directory,
         project?.git_root,
     ].filter(Boolean)
-    return roots.some(root => filePath.startsWith(root + '/'))
+    return roots.some(root => target.filePath.startsWith(root + '/'))
 })
 
 function openInFilesTab() {
-    // Edit/Write: scroll to the first modified line from the backend patch
-    // Read: scroll to the offset line from the tool input
-    const lineNum = firstModifiedLine.value || props.input.offset || null
-    viewFileInFilesTab(props.input.file_path, { lineNum })
+    const target = openInFilesTarget.value
+    if (!target) return
+    viewFileInFilesTab(target.filePath, { lineNum: target.lineHint })
 }
 
-// Input without description for display
+// Input object for the JsonHumanView fallback. The helper decides whether
+// any field should be hidden (e.g. Claude Code drops ``description`` since
+// it's already rendered in the summary header).
 const displayInput = computed(() => {
-    if (!props.input || Object.keys(props.input).length === 0) {
-        return null
-    }
-    const { description, ...rest } = props.input
-    return Object.keys(rest).length > 0 ? rest : null
+    const helpers = toolHelpers.value
+    if (!helpers) return null
+    return helpers.getDisplayInputObject(props.name, props.input)
 })
 
 const inputRendering = computed(() => {
@@ -421,7 +430,6 @@ const resultRendering = computed(() => {
 // --- Tool running state (unified for all tracked tools) ---
 
 const isTask = computed(() => !!toolHelpers.value?.isAgentTool(props.name))
-const isBackground = computed(() => !!props.input?.run_in_background)
 const toolState = computed(() => dataStore.getToolState(props.sessionId, props.toolId))
 
 // Tool error: non-null error string means the tool_result reported an error
@@ -582,7 +590,7 @@ const isToolRunning = computed(() => {
     if (isTask.value) return false
     if (isStaleToolUse.value) return false
     const resultCount = toolState.value?.resultCount || 0
-    const requiredCount = isBackground.value ? 2 : 1
+    const requiredCount = toolHelpers.value?.getExpectedResultCount(props.name, props.input) ?? 1
     return resultCount < requiredCount
 })
 const toolSpinnerId = computed(() => `tool-spinner-${props.toolId}`)
@@ -613,10 +621,11 @@ const isAgentRunning = computed(() => {
 // Unique ID for the View Agent button (for tooltip targeting)
 const viewAgentButtonId = computed(() => `view-agent-${props.toolId}`)
 
-// Code comments indicator for Edit/Write tools
+// Code comments indicator for file-change tools
 const isEditOrWrite = computed(() => !!toolHelpers.value?.isFileChangeTool(props.name))
 const toolCommentsCount = computed(() => {
-    if (!isEditOrWrite.value || !props.input?.file_path) return 0
+    if (!isEditOrWrite.value) return 0
+    if (!toolHelpers.value?.getFilePath(props.name, props.input)) return 0
     const rootSessionId = props.parentSessionId || props.sessionId
     return codeCommentsStore.getCommentsBySession(props.projectId, rootSessionId)
         .filter(c => c.source === 'tool' && c.sourceRef === props.toolId).length

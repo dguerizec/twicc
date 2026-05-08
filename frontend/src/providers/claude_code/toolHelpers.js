@@ -331,11 +331,38 @@ export class ClaudeCodeToolHelpers extends BaseToolHelpers {
         return INPUT_OVERRIDES[name] ?? {}
     }
 
-    // ─── Capability flags ────────────────────────────────────────────────
+    // ─── Input value extraction ──────────────────────────────────────────
 
-    usesFilePath(name, input) {
-        return FILE_PATH_TOOLS.has(name) && !!input?.file_path
+    getFilePath(name, input) {
+        if (!FILE_PATH_TOOLS.has(name)) return null
+        return input?.file_path ?? null
     }
+
+    getOpenInFilesTarget(name, input, ctx) {
+        const filePath = this.getFilePath(name, input)
+        if (!filePath) return null
+        // Edit/Write: scroll to the first modified line from the backend patch.
+        // Read: scroll to the offset line carried by the tool input.
+        const lineHint = ctx?.firstModifiedLine ?? input?.offset ?? null
+        return { filePath, lineHint }
+    }
+
+    getDisplayInputObject(_name, input) {
+        if (!input || Object.keys(input).length === 0) return null
+        // ``description`` is already rendered in the summary header — strip it
+        // from the JsonHumanView fallback so it isn't shown twice.
+        const { description: _description, ...rest } = input
+        return Object.keys(rest).length > 0 ? rest : null
+    }
+
+    getExpectedResultCount(_name, input) {
+        // Claude Code's Bash tool emits two tool_result events when launched
+        // with ``run_in_background``: one for the start, one for the final
+        // output. Every other tool emits a single result.
+        return input?.run_in_background ? 2 : 1
+    }
+
+    // ─── Capability flags ────────────────────────────────────────────────
 
     isFileChangeTool(name) {
         return FILE_CHANGE_TOOLS.has(name)

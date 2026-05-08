@@ -645,15 +645,58 @@ export class BaseToolHelpers {
         return {}
     }
 
-    // ─── Capability flags driving shell-level features ───────────────────
+    // ─── Tool input value extraction ─────────────────────────────────────
+    //
+    // Hooks the shell uses to read provider-specific values out of an opaque
+    // tool input. Each provider knows the shape of its own input; the shell
+    // only reads the answers and never branches on field names itself.
 
     /**
-     * Whether this tool's input carries a ``file_path`` field that should
-     * power the View-in-Files button and related affordances. Default: false.
+     * Path of the file this tool acts on, or ``null`` when the tool's input
+     * doesn't carry one. Powers the per-tool code-comments grouping and is
+     * the building block for the View-in-Files button (see
+     * ``getOpenInFilesTarget``). Default: no file path.
      */
-    usesFilePath(/* name, input */) {
-        return false
+    getFilePath(/* name, input */) {
+        return null
     }
+
+    /**
+     * Target for the View-in-Files button: ``{ filePath, lineHint }`` or
+     * ``null`` when the button shouldn't surface for this tool. ``ctx`` may
+     * carry runtime state inferred by the shell — currently
+     * ``firstModifiedLine`` (computed from the backend patch for Edit/Write).
+     * Default: derive from ``getFilePath`` with no line hint, so any provider
+     * that overrides ``getFilePath`` automatically gets a working button.
+     */
+    getOpenInFilesTarget(name, input /*, ctx */) {
+        const filePath = this.getFilePath(name, input)
+        return filePath ? { filePath, lineHint: null } : null
+    }
+
+    /**
+     * Input object the JsonHumanView fallback should render, or ``null`` when
+     * the input is empty / fully consumed by other surfaces. Providers strip
+     * fields they've already surfaced elsewhere (e.g. Claude Code's
+     * ``description`` is rendered in the summary header). Default: returns
+     * ``input`` unchanged when non-empty, ``null`` when empty.
+     */
+    getDisplayInputObject(name, input) {
+        if (!input || Object.keys(input).length === 0) return null
+        return input
+    }
+
+    /**
+     * Number of tool_result events the shell should expect before the tool
+     * is considered done. Most tools emit a single result; some (e.g. Claude
+     * Code's Bash with ``run_in_background``) emit two. The shell uses the
+     * answer to drive the running spinner. Default: 1.
+     */
+    getExpectedResultCount(/* name, input */) {
+        return 1
+    }
+
+    // ─── Capability flags driving shell-level features ───────────────────
 
     /**
      * Whether this tool modifies a file (so the shell shows ``+N -N`` stats
