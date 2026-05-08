@@ -50,6 +50,14 @@ const payload = computed(() => {
 const toolName = computed(() => payload.value?.name ?? '')
 const toolId = computed(() => payload.value?.call_id ?? '')
 
+// Forwarded to ``ToolUseContent`` and reaches helper hooks that take a
+// third options argument (e.g. ``getExpectedResultCount``). The wrapper
+// type drives the "how many tool_results to wait for" decision because
+// it disambiguates same-named tools (apply_patch JSON vs Freeform) and
+// because MCP tools are only identifiable through the custom_tool_call
+// wrapper + their ``mcp__`` name prefix.
+const toolExtra = computed(() => ({ wrapperType: payload.value?.type ?? null }))
+
 const toolInput = computed(() => {
     const p = payload.value
     if (!p) return {}
@@ -81,5 +89,6 @@ const toolInput = computed(() => {
         :parent-session-id="parentSessionId"
         :line-num="lineNum"
         :timestamp="content?.timestamp"
+        :extra="toolExtra"
     />
 </template>

@@ -13,9 +13,9 @@
  */
 
 import { PROVIDER, AGENT_TOOL_NAMES } from '../../constants'
-import { getIconUrl, getFileIconId } from '../../utils/fileIcons'
 import { getTodoDescription, isValidTodos } from '../../utils/todoList'
 import { BaseToolHelpers } from '../baseHelpers'
+import { formatRelativePath, fileIconFor } from '../utils/path'
 
 import EditContent from '../../components/session/detail/items/claude_code/EditContent.vue'
 import WriteContent from '../../components/session/detail/items/claude_code/WriteContent.vue'
@@ -24,9 +24,9 @@ import ReadResultContent from '../../components/session/detail/items/claude_code
 import BashResultContent from '../../components/session/detail/items/claude_code/BashResultContent.vue'
 import WebContentResult from '../../components/session/detail/items/claude_code/WebContentResult.vue'
 
-import DescriptionSummary from '../../components/session/detail/items/claude_code/summary/DescriptionSummary.vue'
+import DescriptionSummary from '../../components/session/detail/items/summary/DescriptionSummary.vue'
 import SkillSummary from '../../components/session/detail/items/claude_code/summary/SkillSummary.vue'
-import GrepSummary from '../../components/session/detail/items/claude_code/summary/GrepSummary.vue'
+import GrepSummary from '../../components/session/detail/items/summary/GrepSummary.vue'
 import GlobSummary from '../../components/session/detail/items/claude_code/summary/GlobSummary.vue'
 import WebFetchSummary from '../../components/session/detail/items/claude_code/summary/WebFetchSummary.vue'
 import WebSearchSummary from '../../components/session/detail/items/claude_code/summary/WebSearchSummary.vue'
@@ -52,21 +52,6 @@ const CAT_N_LINE_RE = /^(\s*\d+)[→\t](.*)$/
 
 function capitalize(str) {
     return str.replace(/-/g, ' ').replace(/^\w/, c => c.toUpperCase())
-}
-
-function fileIconFor(filePath) {
-    if (!filePath) return null
-    const filename = filePath.split('/').pop() || filePath
-    const iconId = getFileIconId(filename)
-    return iconId !== 'default-file' ? getIconUrl(iconId) : null
-}
-
-function formatRelativePath(path, baseDir) {
-    if (!path) return path
-    if (baseDir && path.startsWith(baseDir + '/')) {
-        return path.slice(baseDir.length + 1)
-    }
-    return path
 }
 
 function getDisplayName(name, input) {

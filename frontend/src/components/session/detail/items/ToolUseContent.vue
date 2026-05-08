@@ -67,6 +67,14 @@ const props = defineProps({
     timestamp: {
         type: String,
         default: null
+    },
+    // Provider-specific extras forwarded to helper hooks that opt into a
+    // third argument (e.g. ``getExpectedResultCount``). Codex sets
+    // ``{ wrapperType }`` so the helper can branch on the JSONL wrapper
+    // shape without re-parsing the raw line. Other providers leave it null.
+    extra: {
+        type: Object,
+        default: null
     }
 })
 
@@ -334,10 +342,24 @@ const summary = computed(() => {
     return helpers.computeToolSummary(props.name, props.input, sessionBaseDir.value)
 })
 
+// Bundle handed to helper hooks (``getHeaderLabel``,
+// ``getSummaryRendering``, ``getExpectedResultCount``) on top of the
+// raw ``extra`` prop the parent supplied. Adds the session's items
+// list so helpers that care can scan the session for related lines
+// (e.g. Codex looking up the matching ``event_msg.*_end`` to prefer
+// its official ``parsed_cmd``). The shell stays provider-agnostic:
+// it just hands over what's already in the store, and individual
+// helpers decide what to do with it.
+const helperOptions = computed(() => ({
+    ...(props.extra || {}),
+    toolId: props.toolId,
+    sessionItems: dataStore.sessionItems[props.sessionId] || null,
+}))
+
 // Static per-name header label override (e.g. "TodoWrite" → "Todo").
 // Dynamic overrides driven by the tool's input (Task subagent_type, Skill name)
 // continue to flow through summary.displayName.
-const headerLabel = computed(() => toolHelpers.value?.getHeaderLabel(props.name) ?? null)
+const headerLabel = computed(() => toolHelpers.value?.getHeaderLabel(props.name, props.input, helperOptions.value) ?? null)
 
 // Whether the error text should render as Markdown vs plain text.
 const errorAsMarkdown = computed(() => !!toolHelpers.value?.errorIsMarkdown(props.name))
@@ -351,7 +373,7 @@ const displayName = computed(() => summary.value.displayName)
 const summaryRendering = computed(() => {
     const helpers = toolHelpers.value
     if (!helpers) return null
-    return helpers.getSummaryRendering(props.name, props.input, sessionBaseDir.value)
+    return helpers.getSummaryRendering(props.name, props.input, sessionBaseDir.value, helperOptions.value)
 })
 
 // First modified line number from the backend patch (for "View in Files tab" navigation)
@@ -590,7 +612,7 @@ const isToolRunning = computed(() => {
     if (isTask.value) return false
     if (isStaleToolUse.value) return false
     const resultCount = toolState.value?.resultCount || 0
-    const requiredCount = toolHelpers.value?.getExpectedResultCount(props.name, props.input) ?? 1
+    const requiredCount = toolHelpers.value?.getExpectedResultCount(props.name, props.input, helperOptions.value) ?? 1
     return resultCount < requiredCount
 })
 const toolSpinnerId = computed(() => `tool-spinner-${props.toolId}`)
@@ -956,6 +978,26 @@ wa-details {
     &.no-wrap {
         white-space: nowrap;
     }
+
+    /* Single-line ellipsis truncation (opt-in via DescriptionSummary's
+     * ``truncate`` prop — Codex's Exec summary uses it). The
+     * ``min-width: 0`` lets the span shrink below its intrinsic
+     * ``max-content`` inside the inline-flex parent. */
+    &.truncate-summary {
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        min-width: 0;
+    }
+}
+
+/* When the summary uses an icon wrapper, the wrapper itself must be
+ * shrinkable too so its inner truncate-summary span has a width to
+ * work against. */
+.items-details-summary-file.truncate-summary-wrapper {
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
 }
 
 .items-details-summary-quiet {

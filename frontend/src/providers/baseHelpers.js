@@ -588,12 +588,23 @@ export class BaseToolHelpers {
      * not the right thing to display (e.g. a tool called ``TodoWrite``
      * should appear as ``Todo``). Returns a string, or ``null`` to let the
      * shell render the raw tool name (``name.replaceAll('__', ' ')``).
-     * Note: this is for static per-name overrides; dynamic overrides driven
-     * by the tool's input (e.g. Task ``subagent_type``) flow through
+     *
+     * The optional ``input`` argument lets providers compute a label that
+     * depends on the tool_use's input — e.g. Codex's ``exec_command`` is
+     * relabeled ``Read`` / ``List files`` / ``Grep`` / ``Exec`` based on
+     * a parse of ``input.command``. The optional ``options`` carries
+     * provider-specific extras (Codex uses ``{ wrapperType,
+     * toolResultPayload }`` so its helper can prefer the official
+     * ``parsed_cmd`` from the ``event_msg.*_end`` event when it has
+     * arrived). Default helper ignores both.
+     *
+     * Note: this is for per-name static (or per-input) overrides; dynamic
+     * overrides driven by complex input shapes (e.g. Task ``subagent_type``
+     * with namespace) still flow through
      * ``computeToolSummary().displayName`` and the ``isTask && displayName``
      * template branch. Default: no override.
      */
-    getHeaderLabel(/* name */) {
+    getHeaderLabel(/* name, input, options */) {
         return null
     }
 
@@ -620,11 +631,14 @@ export class BaseToolHelpers {
     /**
      * Return ``{ component, props }`` for the tool's summary description (the
      * text shown after the tool name and the em-dash separator in the rich
-     * card header), or ``null`` to render no description. ``ctx`` may carry
-     * runtime state in the future; current callers don't pass anything.
-     * Default: no description.
+     * card header), or ``null`` to render no description.
+     *
+     * The optional ``options`` carries provider-specific extras (Codex
+     * passes ``{ wrapperType, toolResultPayload }`` so its helper can
+     * prefer the official ``parsed_cmd`` from the matching
+     * ``event_msg.*_end`` event when available). Default helper ignores it.
      */
-    getSummaryRendering(/* name, input, baseDir, ctx */) {
+    getSummaryRendering(/* name, input, baseDir, options */) {
         return null
     }
 
@@ -688,11 +702,22 @@ export class BaseToolHelpers {
 
     /**
      * Number of tool_result events the shell should expect before the tool
-     * is considered done. Most tools emit a single result; some (e.g. Claude
-     * Code's Bash with ``run_in_background``) emit two. The shell uses the
-     * answer to drive the running spinner. Default: 1.
+     * is considered done. Most tools emit a single result; some emit two
+     * (e.g. Claude Code's Bash with ``run_in_background``, or Codex tools
+     * that have both a ``function_call_output`` and a richer
+     * ``event_msg.*_end`` paired by ``call_id``). The shell uses the
+     * answer to drive the running spinner.
+     *
+     * @param {string} name - Tool name as it appears in the tool_use.
+     * @param {Object} input - Parsed tool input object.
+     * @param {Object} [options] - Provider-specific extras. Codex passes
+     *   ``{ wrapperType }`` (one of ``function_call``, ``custom_tool_call``,
+     *   ``local_shell_call``, ``web_search_call``, ``image_generation_call``)
+     *   so the helper can branch on the wrapper without re-parsing the
+     *   raw JSONL line. Helpers that don't care just ignore it.
+     * @returns {number} Default: 1.
      */
-    getExpectedResultCount(/* name, input */) {
+    getExpectedResultCount(/* name, input, options */) {
         return 1
     }
 
