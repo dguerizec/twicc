@@ -58,6 +58,49 @@ const PARSED_COMMAND_TOOLS = new Set([
     'exec_command', 'shell', 'shell_command', 'local_shell', 'container.exec',
 ])
 
+// Per-tool ``JsonHumanView`` overrides used when the Result/Input
+// fallback rendering kicks in. Mirrors Claude Code's pattern: a tiny
+// table keyed by tool name → ``{ key: { valueType, language } }``.
+// Add new entries here as more Codex tools get tool-cards.
+const INPUT_OVERRIDES = {
+    exec_command: {
+        // ``cmd`` is the raw shell script the model wants Codex to run.
+        // Render it as a fenced bash block so it's syntax-coloured by
+        // Shiki, the same way Claude Code's Bash ``command`` is shown.
+        cmd: { valueType: 'string-code', language: 'bash' },
+    },
+}
+
+// Per-tool whitelist of input keys to drop from the JSON fallback
+// (kept out of the tool body but not from the raw JSON view, which is
+// always reachable through the ``</>`` toggle). Stripped keys are
+// usually internal knobs the user doesn't need to read on every call.
+// Schema source for ``exec_command``: ``ExecCommandArgs`` in
+// ``codex-rs/core/src/tools/handlers/unified_exec.rs``.
+const STRIPPED_INPUT_KEYS_BY_TOOL = {
+    exec_command: new Set([
+        'workdir',
+        // Internal: how long the runtime waits before yielding partial
+        // output back to the model (default 10s). Implementation knob,
+        // not interesting to readers.
+        'yield_time_ms',
+        // Internal: per-call truncation budget for the aggregated
+        // output. Useful only when comparing it with the actual output
+        // length, which we don't surface here either.
+        'max_output_tokens',
+        // Always present (defaults to false) but rarely meaningful.
+        // We accept that the rare ``tty: true`` case is hidden — that
+        // can come back as a dedicated badge later if needed.
+        'tty',
+        // Permission machinery — technical objects (default profile,
+        // additional grants, command-prefix patterns) that don't
+        // describe what the call *does*.
+        'sandbox_permissions',
+        'additional_permissions',
+        'prefix_rule',
+    ]),
+}
+
 /**
  * Pull the command payload from a tool_use ``input`` according to the
  * tool's input shape. Returns ``null`` when the tool isn't one we
@@ -360,6 +403,21 @@ export class CodexToolHelpers extends BaseToolHelpers {
         // surfaces "Exit code N", so the actual stdout/stderr of the
         // failed command is still useful and should stay visible.
         return PARSED_COMMAND_TOOLS.has(name)
+    }
+
+    getInputOverrides(name) {
+        return INPUT_OVERRIDES[name] ?? {}
+    }
+
+    getDisplayInputObject(name, input) {
+        if (!input || Object.keys(input).length === 0) return null
+        const stripped = STRIPPED_INPUT_KEYS_BY_TOOL[name]
+        if (!stripped || stripped.size === 0) return input
+        const out = {}
+        for (const k of Object.keys(input)) {
+            if (!stripped.has(k)) out[k] = input[k]
+        }
+        return Object.keys(out).length > 0 ? out : null
     }
 }
 
