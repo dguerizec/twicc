@@ -355,16 +355,19 @@ const summary = computed(() => {
 
 // Bundle handed to helper hooks (``getHeaderLabel``,
 // ``getSummaryRendering``, ``getExpectedResultCount``) on top of the
-// raw ``extra`` prop the parent supplied. Adds the session's items
-// list so helpers that care can scan the session for related lines
-// (e.g. Codex looking up the matching ``event_msg.*_end`` to prefer
-// its official ``parsed_cmd``). The shell stays provider-agnostic:
-// it just hands over what's already in the store, and individual
-// helpers decide what to do with it.
+// raw ``extra`` prop the parent supplied. Exposes pre-bound lookup
+// functions that hit the dataStore's existing indexes so helpers can
+// resolve a tool_use's matching tool_result rows in O(k) instead of
+// scanning the session linearly. The shell stays provider-agnostic
+// — it just hands over the lookups, and individual helpers decide
+// which ones they need (Codex iterates ``toolState.toolResultLineNums``
+// to find the ``event_msg.*_end`` row by ``call_id``).
 const helperOptions = computed(() => ({
     ...(props.extra || {}),
     toolId: props.toolId,
-    sessionItems: dataStore.sessionItems[props.sessionId] || null,
+    sessionId: props.sessionId,
+    getSessionItem: (lineNum) => dataStore.getSessionItem(props.sessionId, lineNum),
+    getToolState: (toolUseId) => dataStore.getToolState(props.sessionId, toolUseId),
 }))
 
 // Static per-name header label override (e.g. "TodoWrite" → "Todo").
@@ -572,7 +575,14 @@ watchEffect(async () => {
         fileChangeOriginalFile.value = null
         return
     }
-    const lineNum = toolState.value?.toolResultLineNum
+    // Pick the latest tool_result line for the backend-patch fetch
+    // (preserves the previous ``Max(tool_result_line_num)``
+    // aggregation semantic now that the API surfaces the full list
+    // ordered ASC). Claude Code's Edit / Write only emit a single
+    // result, so first == last in practice; other providers don't
+    // reach this path (``needsBackendPatchFetch`` is false).
+    const resultLineNums = toolState.value?.toolResultLineNums
+    const lineNum = resultLineNums?.length ? resultLineNums[resultLineNums.length - 1] : null
     if (!lineNum) return
     if (fileChangeBackendPatch.value?._lineNum === lineNum) return
 

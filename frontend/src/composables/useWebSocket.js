@@ -756,7 +756,7 @@ export function useWebSocket() {
             }
             case 'tool_state': {
                 // Update tool state for spinner/running display
-                store.setToolState(msg.session_id, msg.tool_use_id, msg.result_count, msg.completed_at, msg.error || null, msg.extra || null, msg.tool_result_line_num ?? null)
+                store.setToolState(msg.session_id, msg.tool_use_id, msg.result_count, msg.completed_at, msg.error || null, msg.extra || null, Array.isArray(msg.tool_result_line_nums) ? msg.tool_result_line_nums : [])
 
                 // For agent tools: remove synthetic process state when done
                 const agentLink = store.getAgentLink(msg.session_id, msg.tool_use_id)

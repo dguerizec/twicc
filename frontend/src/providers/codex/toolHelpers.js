@@ -125,13 +125,27 @@ function extractCommandPayload(name, input) {
  * captured by a Codex CLI < 0.121.0 that didn't persist
  * ``exec_command_end``) or isn't loaded in the store.
  *
- * Linear scan over the session's items. In practice sessions hold a
- * few hundred items at most and Vue memoises this through the
- * ``getSummaryRendering`` computed, so the cost is negligible.
+ * Direct lookup via the ``toolStates`` index (keyed by tool_use_id).
+ * Codex emits two ``ToolResultLink`` rows per tool_use —
+ * ``event_msg.*_end`` and the LLM-facing ``*_call_output`` — at
+ * line numbers that may be far apart (token_count events, other
+ * tool calls etc. can interleave). The API exposes both line numbers
+ * via ``toolState.toolResultLineNums`` so we just iterate that list
+ * (size <= 2 in practice) and return the first ``event_msg`` whose
+ * ``call_id`` matches. O(k) on the result count, independent of the
+ * total number of items in the session.
  */
-function findCodexResultPayload(toolId, sessionItems) {
-    if (!toolId || !Array.isArray(sessionItems) || sessionItems.length === 0) return null
-    for (const item of sessionItems) {
+function findCodexResultPayload(toolId, options) {
+    if (!toolId) return null
+    const toolState = options?.getToolState?.(toolId)
+    const lineNums = toolState?.toolResultLineNums
+    if (!Array.isArray(lineNums) || lineNums.length === 0) return null
+    const getSessionItem = options?.getSessionItem
+    if (typeof getSessionItem !== 'function') return null
+    for (const ln of lineNums) {
+        if (!Number.isInteger(ln) || ln < 1) continue
+        const item = getSessionItem(ln)
+        if (!item) continue
         const parsed = getParsedContent(item)
         if (!parsed || parsed.type !== 'event_msg') continue
         const payload = parsed.payload
@@ -170,8 +184,8 @@ function relPathFromWorkdir(path, input, baseDir) {
  * for ``apply_patch`` should be ``patch_apply_end`` though, so the
  * extra filter is defensive only).
  */
-function findPatchApplyEndPayload(toolId, sessionItems) {
-    const payload = findCodexResultPayload(toolId, sessionItems)
+function findPatchApplyEndPayload(toolId, options) {
+    const payload = findCodexResultPayload(toolId, options)
     if (payload && payload.type === 'patch_apply_end') return payload
     return null
 }
@@ -186,7 +200,7 @@ function findPatchApplyEndPayload(toolId, sessionItems) {
  * Returns ``[]`` when neither source yields anything.
  */
 function resolveApplyPatchPaths(input, options) {
-    const payload = findPatchApplyEndPayload(options?.toolId, options?.sessionItems)
+    const payload = findPatchApplyEndPayload(options?.toolId, options)
     if (payload && payload.changes && typeof payload.changes === 'object') {
         const keys = Object.keys(payload.changes)
         if (keys.length > 0) return keys
@@ -210,7 +224,7 @@ function resolveApplyPatchPaths(input, options) {
  * (Vue recomputes when the result line lands in the store).
  */
 function resolveParsedCommand(name, input, options) {
-    const codexResult = findCodexResultPayload(options?.toolId, options?.sessionItems)
+    const codexResult = findCodexResultPayload(options?.toolId, options)
     const officialParsedCmd = codexResult?.parsed_cmd
     if (Array.isArray(officialParsedCmd) && officialParsedCmd.length > 0) {
         return officialParsedCmd

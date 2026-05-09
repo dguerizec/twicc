@@ -16,8 +16,10 @@
  *     fallback shows it without surprise.
  */
 
-import { computed } from 'vue'
+import { computed, ref, watchEffect } from 'vue'
 import ToolUseContent from '../ToolUseContent.vue'
+import { useDataStore } from '../../../../../stores/data'
+import { hasContent } from '../../../../../utils/parsedContent'
 
 const props = defineProps({
     content: {
@@ -75,6 +77,52 @@ const toolInput = computed(() => {
         return { input: p.input ?? '' }
     }
     return {}
+})
+
+// Force-load the contents of every tool_result row paired with this
+// call. Codex tool_results are DEBUG_ONLY items (event_msg.*_end +
+// custom_tool_call_output / function_call_output), so by default the
+// virtual scroller leaves them at ``content: null`` whenever the user
+// hasn't scrolled them into view in DEBUG mode. The summary / header
+// helpers (``getHeaderLabel``, ``getSummaryRendering``) need that
+// content to surface the runtime's ``parsed_cmd`` / ``changes`` /
+// ``aggregated_output``, and they fall back to a less precise local
+// estimate when missing — that's the bug we're avoiding.
+//
+// Loading is gated on the wrapper being mounted and on the matching
+// links having reached the store: the watchEffect re-runs once
+// ``toolResultLineNums`` shows up, asks the store for the missing
+// content lines (those with ``hasContent === false``) in a single
+// request, and self-disables once everything is filled.
+const dataStore = useDataStore()
+const isLoadingResultItems = ref(false)
+watchEffect(async () => {
+    const tid = toolId.value
+    if (!tid) return
+    const toolState = dataStore.getToolState(props.sessionId, tid)
+    const lineNums = toolState?.toolResultLineNums
+    if (!Array.isArray(lineNums) || lineNums.length === 0) return
+
+    const missing = []
+    for (const ln of lineNums) {
+        if (!Number.isInteger(ln) || ln < 1) continue
+        const item = dataStore.getSessionItem(props.sessionId, ln)
+        if (!item || !hasContent(item)) missing.push(ln)
+    }
+    if (missing.length === 0) return
+    if (isLoadingResultItems.value) return
+
+    isLoadingResultItems.value = true
+    try {
+        await dataStore.loadSessionItemsRanges(
+            props.projectId,
+            props.sessionId,
+            missing,
+            props.parentSessionId,
+        )
+    } finally {
+        isLoadingResultItems.value = false
+    }
 })
 </script>
 

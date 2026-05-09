@@ -557,7 +557,7 @@ class BaseSessionsWatcher:
                         "completed_at": update.completed_at.isoformat() if update.completed_at else None,
                         "extra": update.extra,
                         "error": update.error,
-                        "tool_result_line_num": update.tool_result_line_num,
+                        "tool_result_line_nums": list(update.tool_result_line_nums),
                     })
                     await self._after_tool_result_broadcast(update)
 

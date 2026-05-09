@@ -766,18 +766,31 @@ def tool_states(request, project_id, session_id):
             completed_at=Max('tool_result_at'),
             extra=Max('extra'),
             error=Max('error'),
-            tool_result_line_num=Max('tool_result_line_num'),
         )
     )
 
+    # Collect every link's tool_result_line_num grouped by tool_use_id
+    # so the API exposes the full set rather than just the max — Codex
+    # tools have two ToolResultLink rows per call (event_msg.*_end +
+    # *_call_output) at non-adjacent line numbers, and helpers need to
+    # locate the structured row directly.
+    line_nums_by_tool: dict[str, list[int]] = {}
+    for tool_use_id, line_num in (
+        ToolResultLink.objects.filter(session=session)
+        .order_by('tool_result_line_num')
+        .values_list('tool_use_id', 'tool_result_line_num')
+    ):
+        line_nums_by_tool.setdefault(tool_use_id, []).append(line_num)
+
     tools = {}
     for entry in links:
-        tools[entry['tool_use_id']] = {
+        tool_use_id = entry['tool_use_id']
+        tools[tool_use_id] = {
             'result_count': entry['result_count'],
             'completed_at': entry['completed_at'].isoformat() if entry['completed_at'] else None,
             'error': entry['error'],
             'extra': entry['extra'],
-            'tool_result_line_num': entry['tool_result_line_num'],
+            'tool_result_line_nums': line_nums_by_tool.get(tool_use_id, []),
         }
 
     return JsonResponse({"tools": tools})

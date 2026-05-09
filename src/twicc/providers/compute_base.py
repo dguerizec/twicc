@@ -78,7 +78,12 @@ class ToolResultUpdate(NamedTuple):
     completed_at: datetime | None  # Timestamp of the latest tool_result
     extra: str | None = None  # Optional extra data (e.g. diff stats JSON for Edit tools)
     error: str | None = None  # Error message from tool_result (None = no error)
-    tool_result_line_num: int | None = None  # Line number of the tool_result item
+    # Line numbers of every persisted ``ToolResultLink`` for this tool_use,
+    # ordered ASC. Codex tools have two — ``event_msg.*_end`` plus the
+    # LLM-facing ``*_call_output`` — at non-adjacent line numbers, so
+    # helpers iterate the list to find the row they need. Single-result
+    # tools (Claude Code's Edit / Write / …) carry a single-element list.
+    tool_result_line_nums: tuple[int, ...] = ()
 
 
 class AgentStoppedUpdate(NamedTuple):
@@ -1059,6 +1064,10 @@ class BaseSessionCompute:
                     extra=Max('extra'),
                     error=Max('error'),
                 )
+                line_nums = tuple(
+                    links.order_by('tool_result_line_num')
+                    .values_list('tool_result_line_num', flat=True)
+                )
                 return ToolResultUpdate(
                     session_id=session_id,
                     tool_use_id=tool_use_id,
@@ -1066,7 +1075,7 @@ class BaseSessionCompute:
                     completed_at=aggregated['completed_at'],
                     extra=aggregated['extra'],
                     error=aggregated['error'],
-                    tool_result_line_num=item.line_num,
+                    tool_result_line_nums=line_nums,
                 )
 
         return None

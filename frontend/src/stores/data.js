@@ -297,8 +297,8 @@ export const useDataStore = defineStore('data', {
             // Only caches found agents (not-found triggers polling, not caching)
             agentLinks: {},
 
-            // Tool states - maps tool_use_id to { resultCount, completedAt, error, extra }
-            // { sessionId: { toolUseId: { resultCount, completedAt, error, extra } } }
+            // Tool states - maps tool_use_id to { resultCount, completedAt, error, extra, toolResultLineNums }
+            // { sessionId: { toolUseId: { resultCount, completedAt, error, extra, toolResultLineNums } } }
             // Populated by fetchToolStates on session load and WS tool_state
             toolStates: {},
 
@@ -631,7 +631,7 @@ export const useDataStore = defineStore('data', {
         },
 
         // Get tool state for a tool_use_id in a session
-        // Returns: { resultCount, completedAt, error, extra, toolResultLineNum } or null
+        // Returns: { resultCount, completedAt, error, extra, toolResultLineNums } or null
         getToolState: (state) => (sessionId, toolUseId) => {
             const sessionStates = state.localState.toolStates[sessionId]
             if (!sessionStates) return null
@@ -2142,13 +2142,13 @@ export const useDataStore = defineStore('data', {
          * @param {string|null} completedAt - ISO timestamp of the latest tool_result
          * @param {string|null} error - Error message if the tool errored
          * @param {string|null} extra - Extra JSON data (e.g., file change stats)
-         * @param {number|null} toolResultLineNum - Line number of the tool_result item
+         * @param {number[]} toolResultLineNums - Line numbers of every tool_result row, ordered ASC
          */
-        setToolState(sessionId, toolUseId, resultCount, completedAt, error = null, extra = null, toolResultLineNum = null) {
+        setToolState(sessionId, toolUseId, resultCount, completedAt, error = null, extra = null, toolResultLineNums = []) {
             if (!this.localState.toolStates[sessionId]) {
                 this.localState.toolStates[sessionId] = {}
             }
-            this.localState.toolStates[sessionId][toolUseId] = { resultCount, completedAt, error, extra, toolResultLineNum }
+            this.localState.toolStates[sessionId][toolUseId] = { resultCount, completedAt, error, extra, toolResultLineNums }
         },
 
         /**
@@ -2188,7 +2188,9 @@ export const useDataStore = defineStore('data', {
                             completedAt: state.completed_at,
                             error: state.error ?? null,
                             extra: state.extra ?? null,
-                            toolResultLineNum: state.tool_result_line_num ?? null,
+                            toolResultLineNums: Array.isArray(state.tool_result_line_nums)
+                                ? state.tool_result_line_nums
+                                : [],
                         }
                     }
                     this.localState.toolStates[sessionId] = states

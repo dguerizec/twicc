@@ -62,17 +62,26 @@ const fileTabRoots = computed(() => [
 ].filter(Boolean))
 
 /**
- * Walk the session's items looking for ``event_msg.patch_apply_end``
- * with our ``call_id``. Returns the payload object or ``null``.
+ * Look up the ``event_msg.patch_apply_end`` line that pairs with our
+ * ``call_id`` and return its parsed payload, or ``null`` until the
+ * matching tool_result row reaches the store.
  *
- * Reactive on ``sessionItems`` so the diff transitions from fragment
- * mode (input parser) to full mode (real line numbers) the moment the
- * matching event row reaches the store.
+ * Direct hit through the ``toolStates`` index — Codex creates two
+ * ``ToolResultLink`` rows per tool_use (event_msg.patch_apply_end +
+ * custom_tool_call_output) at line numbers that aren't necessarily
+ * adjacent, so we walk every line number the API surfaces in
+ * ``toolResultLineNums`` and return the first ``event_msg`` whose
+ * payload is a ``patch_apply_end`` for our call. Reactive both on
+ * item arrival (new line content) and on ``toolStates`` update (new
+ * link recorded).
  */
 const patchEndPayload = computed(() => {
-    const items = dataStore.sessionItems[props.sessionId]
-    if (!items) return null
-    for (const item of items) {
+    const toolState = dataStore.getToolState(props.sessionId, props.toolId)
+    const lineNums = toolState?.toolResultLineNums
+    if (!Array.isArray(lineNums) || lineNums.length === 0) return null
+    for (const ln of lineNums) {
+        if (!Number.isInteger(ln) || ln < 1) continue
+        const item = dataStore.getSessionItem(props.sessionId, ln)
         if (!item) continue
         const parsed = getParsedContent(item)
         if (!parsed || parsed.type !== 'event_msg') continue
