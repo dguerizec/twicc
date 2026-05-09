@@ -95,7 +95,7 @@ const patchEndPayload = computed(() => {
 
 /**
  * Per-path lookup table built from the backend's
- * ``compute_file_change_stats`` JSON, exposed by the ``tool-states``
+ * ``compute_link_extra`` JSON, exposed by the ``tool-states``
  * REST view as ``ToolResultLink.extra``. The base orchestration
  * computes stats once when the ``patch_apply_end`` line is recorded;
  * we just read the result here. Returns ``null`` until the link is

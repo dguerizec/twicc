@@ -686,6 +686,72 @@ class BaseSessionCompute:
         """
         raise NotImplementedError
 
+    # ------------------------------------------------------------------
+    # Per-session lifecycle and tool_result remap hooks
+    # ------------------------------------------------------------------
+
+    def begin_session_compute(self, session_id: str) -> None:
+        """
+        Called by the orchestrator before processing any item of a session.
+
+        Default: no-op. Providers may override to initialise per-session
+        state used by their extraction hooks (e.g. Codex maintains a
+        ``{exec_command_id: call_id}`` map populated on the fly so it can
+        remap write_stdin tool_results to the parent exec_command).
+        """
+
+    def end_session_compute(self, session_id: str) -> None:
+        """
+        Called by the orchestrator after the last item of a session.
+
+        Default: no-op. Mirror of :meth:`begin_session_compute` for
+        per-session cleanup. Optional in practice (state can survive
+        between sessions without correctness impact in most providers).
+        """
+
+    def remap_tool_result_id(
+        self,
+        parsed_json: dict,
+        naive_tool_use_id: str,
+        *,
+        session_id: str,
+        tool_use_map: dict[str, ToolUseEntry],
+    ) -> str:
+        """
+        Remap a ``tool_result_id`` before pairing with ``tool_use_map`` (batch).
+
+        Called between :meth:`analyze_content` and the actual pairing in
+        ``compute_session_metadata``. The provider may inspect ``tool_use_map``
+        and the parsed result line to substitute a different ``tool_use_id``
+        — for instance, attach a Codex ``write_stdin`` ``function_call_output``
+        to the parent ``exec_command`` instead of the write_stdin itself.
+
+        Default: identity (return ``naive_tool_use_id`` unchanged).
+        """
+        return naive_tool_use_id
+
+    def remap_tool_result_id_live(
+        self,
+        parsed_json: dict,
+        naive_tool_use_id: str,
+        *,
+        session_id: str,
+        item: SessionItem,
+    ) -> str:
+        """
+        Remap a ``tool_result_id`` before the LIKE search in live mode.
+
+        Called between :meth:`extract_tool_result_info` and the candidate
+        search in ``create_tool_result_link_live``. The live equivalent of
+        :meth:`remap_tool_result_id` — but without an in-memory
+        ``tool_use_map`` (providers that need cross-line resolution must
+        either query the DB or rely on internal per-session caches kept
+        up to date by their other extraction hooks).
+
+        Default: identity (return ``naive_tool_use_id`` unchanged).
+        """
+        return naive_tool_use_id
+
     def extract_agent_info_from_tool_result(
         self, parsed_json: dict
     ) -> tuple[str, str] | None:
@@ -711,17 +777,24 @@ class BaseSessionCompute:
         """
         raise NotImplementedError
 
-    def compute_file_change_stats(
+    def compute_link_extra(
         self, parsed_json: dict, tool_name: str
     ) -> str | None:
         """
-        Compute diff stats (added / removed lines) for a file-mutating tool_result.
+        Compute the ``ToolResultLink.extra`` JSON payload for this result.
 
         ``tool_name`` is the name of the tool whose result is being looked
-        at. Implementations decide which tools they understand (Claude
-        Code accepts Edit / Write; a Codex-style provider would map its
-        own equivalents) and return a JSON string ready to store in
-        :attr:`ToolResultLink.extra`, or ``None`` when no stats apply.
+        at. Implementations return any provider-specific structured data
+        they want to surface to the front-end (diff stats for file-mutating
+        tools, completion flags for streamed tools, etc.) as a JSON string
+        ready to store in :attr:`ToolResultLink.extra`, or ``None`` when no
+        data applies.
+
+        Aggregation across multiple links of the same ``tool_use_id`` is
+        handled downstream via ``Max`` — providers must therefore produce
+        values that compare sensibly under that aggregation when several
+        links coexist (e.g. boolean flags become ``true`` once any link
+        sets them).
         """
         raise NotImplementedError
 
@@ -1043,8 +1116,8 @@ class BaseSessionCompute:
            ``tool_use_id`` (cheap LIKE pre-filter), then verify each
            candidate by parsing it and asking the provider for its
            ``tool_use_entries`` mapping.
-        3. On match, ask the provider for diff stats via
-           :meth:`compute_file_change_stats`, persist the link, and
+        3. On match, ask the provider for the link's structured ``extra``
+           via :meth:`compute_link_extra`, persist the link, and
            emit a :class:`ToolResultUpdate` reflecting the current
            tool-completion state for the front-end (spinner / error
            indicator).
@@ -1052,7 +1125,15 @@ class BaseSessionCompute:
         info = self.extract_tool_result_info(parsed_json, session_id=session_id)
         if info is None or not info.tool_use_id:
             return None
-        tool_use_id = info.tool_use_id
+        # Provider hook: remap the tool_use_id before searching for the
+        # parent (e.g. Codex resolves a ``write_stdin`` ``function_call_output``
+        # back to the parent ``exec_command``). Default is identity.
+        tool_use_id = self.remap_tool_result_id_live(
+            parsed_json,
+            info.tool_use_id,
+            session_id=session_id,
+            item=item,
+        )
         error = info.error_text
 
         # Find candidates by text search (LIKE), ordered most recent first.
@@ -1076,7 +1157,7 @@ class BaseSessionCompute:
             if tool_use_id in tool_use_entries:
                 tool_name = tool_use_entries[tool_use_id]
 
-                extra = self.compute_file_change_stats(parsed_json, tool_name)
+                extra = self.compute_link_extra(parsed_json, tool_name)
                 _, created = ToolResultLink.objects.get_or_create(
                     session_id=session_id,
                     tool_use_line_num=candidate.line_num,
@@ -1421,8 +1502,13 @@ class BaseSessionCompute:
         ``compute_item_metadata``, ``extract_item_timestamp``,
         ``compute_item_cost_and_usage``, ``extract_runtime_fields``,
         ``resolve_git_for_item``, ``extract_title_from_user_message``,
-        ``compute_file_change_stats``, ``is_session_start_marker``,
+        ``compute_link_extra``, ``is_session_start_marker``,
         ``extract_custom_title``).
+
+        Wraps the per-item loop with :meth:`begin_session_compute` /
+        :meth:`end_session_compute` so providers can maintain per-session
+        state used by their other hooks (e.g. Codex's exec_command map for
+        write_stdin remapping).
         """
         from django.db import connection
 
@@ -1531,6 +1617,10 @@ class BaseSessionCompute:
             original_agent_links[key] = serialize_agent_link(link)
             original_agent_links_ids[key] = link.id
 
+        # Provider hook: per-session setup (e.g. Codex initialises its
+        # exec_command map used by remap_tool_result_id below).
+        self.begin_session_compute(session_id)
+
         for item in queryset.iterator(chunk_size=batch_size):
             # Snapshot original state before any computation, for change detection
             original_serialized[item.id] = serialize_item(item)
@@ -1624,11 +1714,22 @@ class BaseSessionCompute:
             for tu_id, is_background in analysis.task_tool_uses:
                 task_tool_use_map[tu_id] = (item.line_num, is_background, item.timestamp)
             tool_result_ref = analysis.tool_result_id
+            if tool_result_ref:
+                # Provider hook: optionally substitute the tool_use_id to point
+                # at a different tool_use than the naive parent (e.g. Codex
+                # rebinds write_stdin function_call_outputs to the parent
+                # exec_command). Default is identity.
+                tool_result_ref = self.remap_tool_result_id(
+                    parsed,
+                    tool_result_ref,
+                    session_id=session_id,
+                    tool_use_map=tool_use_map,
+                )
             if tool_result_ref and tool_result_ref in tool_use_map:
                 tu_entry = tool_use_map[tool_result_ref]
                 tu_line_num = tu_entry.line_num
                 tu_name = tu_entry.tool_name
-                extra = self.compute_file_change_stats(parsed, tu_name)
+                extra = self.compute_link_extra(parsed, tu_name)
                 error = analysis.tool_result_error
                 new_key = (tool_result_ref, item.line_num)
                 all_tool_result_links[new_key] = serialize_tool_result_link(ToolResultLink(
@@ -1694,6 +1795,9 @@ class BaseSessionCompute:
         items_to_update.extend(finalized)
 
         flush_items(items_to_update)
+
+        # Provider hook: per-session teardown — mirror of begin_session_compute.
+        self.end_session_compute(session_id)
 
         # Diff tool result links: create / update / delete
         trl_to_create: list[dict] = []

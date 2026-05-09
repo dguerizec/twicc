@@ -742,10 +742,10 @@ class ClaudeCodeSessionCompute(BaseSessionCompute):
                 paths.append(path)
         return paths
 
-    def compute_file_change_stats(
+    def compute_link_extra(
         self, parsed_json: dict, tool_name: str
     ) -> str | None:
-        """Return the JSON stats string for an Edit / Write tool_result.
+        """Return the JSON ``ToolResultLink.extra`` payload for this result.
 
         Claude Code only emits diff stats for ``Edit`` and ``Write``;
         every other tool returns ``None`` and the inherited machinery

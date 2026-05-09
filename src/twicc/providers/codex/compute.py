@@ -480,10 +480,10 @@ class CodexSessionCompute(BaseSessionCompute):
     def extract_paths_from_tool_uses(self, parsed_json: dict) -> list[str]:
         return _EMPTY_FILE_PATHS
 
-    def compute_file_change_stats(
+    def compute_link_extra(
         self, parsed_json: dict, tool_name: str
     ) -> str | None:
-        """Return the JSON stats string for an ``apply_patch`` tool_result.
+        """Return the JSON ``ToolResultLink.extra`` payload for this result.
 
         Only ``apply_patch`` carries diff stats today, and only its
         ``event_msg.patch_apply_end`` line does (the
