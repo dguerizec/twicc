@@ -637,9 +637,9 @@ const toolStartedAt = computed(() => {
 // Number of result rows the helper says are needed before the Result
 // section can render meaningful content. Drives both the polling
 // loop and the "Result not yet available" placeholder. Default 1
-// (= render whatever arrives first); Codex's exec_command family
-// raises it to 2 so the rich ``event_msg.exec_command_end`` is
-// always part of what's displayed (see helper docs).
+// (= render whatever arrives first); Codex's ``apply_patch`` raises
+// it to 2 so the rich ``event_msg.patch_apply_end`` is always part of
+// what's displayed (see helper docs).
 const requiredDisplayCount = computed(() => (
     toolHelpers.value?.getRequiredResultCountForDisplay(props.name, props.input, helperOptions.value) ?? 1
 ))
@@ -647,9 +647,11 @@ const requiredDisplayCount = computed(() => (
 const isToolRunning = computed(() => {
     if (isTask.value) return false
     if (isStaleToolUse.value) return false
-    const resultCount = toolState.value?.resultCount || 0
-    const requiredCount = toolHelpers.value?.getExpectedResultCount(props.name, props.input, helperOptions.value) ?? 1
-    return resultCount < requiredCount
+    // Defer to the provider-level helper so a tool whose finished-ness
+    // is signalled by content (e.g. Codex's ``exec_command`` chain
+    // reading ``toolState.extra.is_terminated``) overrides the default
+    // count-based check without touching this shell.
+    return toolHelpers.value?.isToolRunning(props.name, props.input, helperOptions.value) ?? false
 })
 const toolSpinnerId = computed(() => `tool-spinner-${props.toolId}`)
 

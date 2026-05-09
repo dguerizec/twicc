@@ -736,12 +736,11 @@ export class BaseToolHelpers {
      * so the default is 1 — including Claude Code's Bash with
      * ``run_in_background``: there, the first result already carries
      * the canonical "Command running in background" notice and the
-     * second one is just a completion stub. Codex's ``exec_command``
-     * is the opposite: the first row (``function_call_output``) is a
-     * truncated LLM-facing snippet, and the rich ``aggregated_output``
-     * lives only on the second row (``event_msg.exec_command_end``).
-     * That helper overrides this hook to wait for both, so the user
-     * sees the polling spinner instead of a placeholder snippet.
+     * second one is just a completion stub. Codex's ``apply_patch``
+     * still raises it to 2 so the rich ``patch_apply_end`` row is
+     * always part of what's displayed; ``exec_command`` returns 1 and
+     * relies on :meth:`isToolRunning` to keep the spinner spinning
+     * across the chain of polled chunks.
      *
      * Returning ``> resultData.length`` makes the shell:
      *   - render the "Result not yet available — checking again
@@ -753,6 +752,48 @@ export class BaseToolHelpers {
      */
     getRequiredResultCountForDisplay(/* name, input, options */) {
         return 1
+    }
+
+    /**
+     * Whether the tool is still running (spinner ON, polling kept alive).
+     *
+     * Default: count-based — the tool is considered running until
+     * ``toolState.resultCount`` reaches ``getExpectedResultCount``.
+     * Providers can override to inspect richer signals when the result
+     * count is variable. Codex's ``exec_command`` family overrides this
+     * to read ``toolState.extra.is_terminated`` (set by
+     * ``compute_link_extra`` on the closing chunk of the chain) since
+     * the number of polling chunks is not known up-front.
+     *
+     * @param {string} name - Tool name as it appears in the tool_use.
+     * @param {Object} input - Parsed tool input object.
+     * @param {Object} [options] - Same shape as the other tool helpers.
+     *   ``options.toolState`` is the per-tool aggregated state from the
+     *   data store (notably ``resultCount`` and ``extra``).
+     * @returns {boolean} Default: ``resultCount < expectedCount``.
+     */
+    isToolRunning(name, input, options) {
+        const resultCount = options?.toolState?.resultCount ?? 0
+        const expected = this.getExpectedResultCount(name, input, options)
+        return resultCount < expected
+    }
+
+    /**
+     * Whether the Result section should aggregate output across multiple
+     * tool_result rows for this tool (chained ``function_call_output``
+     * chunks for Codex's ``exec_command`` family) before handing the
+     * concatenated body to the rendering helper.
+     *
+     * Default: ``false`` (the renderer receives the single row from
+     * ``displayResult`` as-is). Providers that own a chained-result
+     * tool override this to ``true`` so the shell precomputes the
+     * aggregated payload and exposes it to ``getResultRendering`` via
+     * ``options.aggregatedExecOutput``.
+     *
+     * @returns {boolean} Default: false.
+     */
+    shouldAggregateExecOutput(/* name */) {
+        return false
     }
 
     // ─── Capability flags driving shell-level features ───────────────────
