@@ -23,13 +23,16 @@ import { formatRelativePath, fileIconFor, resolveAbsolutePath } from '../utils/p
 import { parseCommand } from './parseCommand'
 import { parseApplyPatchEnvelope } from './parsePatch'
 import { getParsedContent } from '../../utils/parsedContent'
+import { getTodoDescription } from '../../utils/todoList'
 
 import DescriptionSummary from '../../components/session/detail/items/summary/DescriptionSummary.vue'
 import GrepSummary from '../../components/session/detail/items/summary/GrepSummary.vue'
 import MultiFileSummary from '../../components/session/detail/items/summary/MultiFileSummary.vue'
+import TodoSummary from '../../components/session/detail/items/summary/TodoSummary.vue'
 import ExecResultContent from '../../components/session/detail/items/codex/ExecResultContent.vue'
 import ReadResultContent from '../../components/session/detail/items/codex/ReadResultContent.vue'
 import ApplyPatchContent from '../../components/session/detail/items/codex/ApplyPatchContent.vue'
+import TodoContent from '../../components/session/detail/items/TodoContent.vue'
 
 // ``function_call`` tools whose call is followed by a persisted
 // ``event_msg.<X>_end`` event paired by ``call_id``. Source of truth:
@@ -325,6 +328,30 @@ function firstLine(cmd) {
     return idx >= 0 ? cmd.slice(0, idx) + '…' : cmd
 }
 
+// ─── update_plan ────────────────────────────────────────────────────────
+//
+// Codex's ``update_plan`` is the moral equivalent of Claude Code's
+// ``TodoWrite``: a list of plan items, each with a free-form text and
+// one of the same three statuses (pending / in_progress / completed).
+// We map it to the same renderers (``TodoContent`` / ``TodoSummary``)
+// by normalising every entry to ``{ content, status }`` — Claude Code
+// also has an ``activeForm`` field that Codex doesn't, so we leave it
+// undefined and let the shared helpers fall back to ``content``.
+// Source spec: ``codex-rs/core/src/tools/handlers/plan_spec.rs``.
+
+function isValidPlan(plan) {
+    if (!Array.isArray(plan) || plan.length === 0) return false
+    return plan.every(p =>
+        p != null && typeof p === 'object' &&
+        typeof p.step === 'string' &&
+        typeof p.status === 'string',
+    )
+}
+
+function planToTodos(plan) {
+    return plan.map(p => ({ content: p.step, status: p.status }))
+}
+
 export class CodexToolHelpers extends BaseToolHelpers {
     static provider = PROVIDER.CODEX
 
@@ -365,6 +392,10 @@ export class CodexToolHelpers extends BaseToolHelpers {
         // operation. Mirror Claude Code's ``Edit`` header so users see
         // the same word regardless of provider.
         if (name === 'apply_patch') return 'Edit'
+        // Same idea for ``update_plan`` → ``Todo``: the tool plays the
+        // role of Claude Code's ``TodoWrite``, so users see the same
+        // header word across providers.
+        if (name === 'update_plan') return 'Todo'
         if (!PARSED_COMMAND_TOOLS.has(name)) return null
         const parsed = resolveParsedCommand(name, input, options)
         if (!parsed) return null
@@ -374,6 +405,12 @@ export class CodexToolHelpers extends BaseToolHelpers {
     }
 
     getSummaryRendering(name, input, baseDir, options) {
+        if (name === 'update_plan' && isValidPlan(input?.plan)) {
+            return {
+                component: TodoSummary,
+                props: { parts: getTodoDescription(planToTodos(input.plan)) },
+            }
+        }
         if (name === 'apply_patch') {
             const paths = resolveApplyPatchPaths(input, options)
             if (paths.length === 0) return null
@@ -496,6 +533,17 @@ export class CodexToolHelpers extends BaseToolHelpers {
                 },
             }
         }
+        if (name === 'update_plan' && isValidPlan(input?.plan)) {
+            return {
+                component: TodoContent,
+                props: {
+                    todos: planToTodos(input.plan),
+                    explanation: typeof input.explanation === 'string' && input.explanation
+                        ? input.explanation
+                        : null,
+                },
+            }
+        }
         return null
     }
 
@@ -545,6 +593,9 @@ export class CodexToolHelpers extends BaseToolHelpers {
         // so the rich event payload (stdout, stderr, applied changes)
         // is still useful and should stay visible.
         if (name === 'apply_patch') return true
+        // ``update_plan`` errors out when called in Plan mode — the
+        // attempted plan is still informative, keep the body shown.
+        if (name === 'update_plan') return true
         return PARSED_COMMAND_TOOLS.has(name)
     }
 
@@ -558,6 +609,9 @@ export class CodexToolHelpers extends BaseToolHelpers {
         // ``ApplyPatchContent`` renderer takes over the full body, so
         // there's nothing useful left for the JSON fallback.
         if (name === 'apply_patch') return null
+        // ``update_plan`` is fully rendered by ``TodoContent`` (plan +
+        // explanation), so the JSON fallback would only duplicate it.
+        if (name === 'update_plan') return null
         const stripped = STRIPPED_INPUT_KEYS_BY_TOOL[name]
         if (!stripped || stripped.size === 0) return input
         const out = {}

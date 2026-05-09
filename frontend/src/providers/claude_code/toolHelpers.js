@@ -19,7 +19,7 @@ import { formatRelativePath, fileIconFor } from '../utils/path'
 
 import EditContent from '../../components/session/detail/items/claude_code/EditContent.vue'
 import WriteContent from '../../components/session/detail/items/claude_code/WriteContent.vue'
-import TodoContent from '../../components/session/detail/items/claude_code/TodoContent.vue'
+import TodoContent from '../../components/session/detail/items/TodoContent.vue'
 import ReadResultContent from '../../components/session/detail/items/claude_code/ReadResultContent.vue'
 import BashResultContent from '../../components/session/detail/items/claude_code/BashResultContent.vue'
 import WebContentResult from '../../components/session/detail/items/claude_code/WebContentResult.vue'
@@ -31,7 +31,7 @@ import GlobSummary from '../../components/session/detail/items/claude_code/summa
 import WebFetchSummary from '../../components/session/detail/items/claude_code/summary/WebFetchSummary.vue'
 import WebSearchSummary from '../../components/session/detail/items/claude_code/summary/WebSearchSummary.vue'
 import ToolSearchSummary from '../../components/session/detail/items/claude_code/summary/ToolSearchSummary.vue'
-import TodoSummary from '../../components/session/detail/items/claude_code/summary/TodoSummary.vue'
+import TodoSummary from '../../components/session/detail/items/summary/TodoSummary.vue'
 
 const FILE_PATH_TOOLS = new Set(['Edit', 'Write', 'Read'])
 const FILE_CHANGE_TOOLS = new Set(['Edit', 'Write'])

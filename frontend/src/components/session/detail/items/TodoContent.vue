@@ -1,15 +1,28 @@
 <script setup>
-import { getDetail } from '../../../../../utils/todoList'
+import { getDetail } from '../../../../utils/todoList'
 
+// Provider-agnostic todo/plan renderer. Each ``todos`` entry must carry
+// ``status`` plus at least one of ``content`` / ``activeForm`` (see
+// ``utils/todoList.js``). Codex's ``update_plan`` carries a single
+// ``step`` field per item, mapped to ``content`` upstream.
+//
+// ``explanation`` is an optional preamble shown above the list. Only
+// Codex's ``update_plan`` populates it today (no equivalent in Claude
+// Code's TodoWrite); kept optional so other providers can ignore it.
 defineProps({
     todos: {
         type: Array,
-        required: true
-    }
+        required: true,
+    },
+    explanation: {
+        type: String,
+        default: null,
+    },
 })
 </script>
 
 <template>
+    <p v-if="explanation" class="todo-explanation">{{ explanation }}</p>
     <ol class="todo-list">
         <li
             v-for="(todo, i) in todos"
@@ -39,6 +52,12 @@ defineProps({
 </template>
 
 <style scoped>
+.todo-explanation {
+    margin: 0 0 var(--wa-space-xs) 0;
+    color: var(--wa-color-text-quiet);
+    font-style: italic;
+}
+
 .todo-list {
     list-style: none;
     margin: 0;
