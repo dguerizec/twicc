@@ -771,9 +771,11 @@ def tool_states(request, project_id, session_id):
 
     # Collect every link's tool_result_line_num grouped by tool_use_id
     # so the API exposes the full set rather than just the max — Codex
-    # tools have two ToolResultLink rows per call (event_msg.*_end +
-    # *_call_output) at non-adjacent line numbers, and helpers need to
-    # locate the structured row directly.
+    # tools can have multiple ToolResultLink rows per call (apply_patch
+    # / MCP / web / image: function_call_output + event_msg.*_end;
+    # exec_command: the parent's row plus one row per write_stdin polling
+    # chunk rebound to the same tool_use_id) at non-adjacent line
+    # numbers, and helpers need to walk the chain directly.
     line_nums_by_tool: dict[str, list[int]] = {}
     for tool_use_id, line_num in (
         ToolResultLink.objects.filter(session=session)

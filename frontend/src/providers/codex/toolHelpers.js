@@ -38,10 +38,19 @@ import ApplyPatchContent from '../../components/session/detail/items/codex/Apply
 import TodoContent from '../../components/session/detail/items/TodoContent.vue'
 
 // ``function_call`` tools that produce / consume a unified-exec
-// process. Their ``function_call_output`` rows chain together (the
-// parent ``exec_command``'s own row plus one row per ``write_stdin``
-// poll), all rebound to the same ``tool_use_id`` server-side. Status
-// is read from the chain's last chunk via :meth:`isToolRunning`.
+// process. Two facts at once for these tools:
+//   - their ``function_call_output`` rows chain together (the parent
+//     ``exec_command``'s own row plus one row per ``write_stdin``
+//     poll), all rebound to the same ``tool_use_id`` server-side, with
+//     status driven by :meth:`isToolRunning` reading
+//     ``extra.is_terminated``;
+//   - their input carries a parseable shell command we can feed to the
+//     local ``parseCommand`` parser to derive the header label
+//     (Read / List files / Grep / Exec).
+// Two input shapes are in play: ``exec_command`` (unified_exec) ships
+// the raw script as ``input.cmd`` (string); the others ship a
+// ``Vec<String>`` argv as ``input.command``, typically
+// ``["bash", "-lc", "..."]``.
 const FUNCTION_CALL_EXEC_TOOLS = new Set([
     'exec_command',
     'shell',
@@ -73,17 +82,6 @@ const PERSISTED_END_EVENT_TYPES = new Set([
 // the Codex source). We branch on the prefix because the actual name
 // is dynamic (``mcp__<server>__<tool>``).
 const MCP_TOOL_NAME_PREFIX = 'mcp__'
-
-// Tools whose summary header benefits from running ``parseCommand``
-// on the input. Two input shapes are in play in the Codex catalogue:
-//   - ``exec_command`` (unified_exec): ``input.cmd`` is a raw shell
-//     script (string).
-//   - ``shell`` / ``local_shell`` / ``shell_command`` / ``container.exec``:
-//     ``input.command`` is a ``Vec<String>`` argv, typically
-//     ``["bash", "-lc", "..."]``.
-const PARSED_COMMAND_TOOLS = new Set([
-    'exec_command', 'shell', 'shell_command', 'local_shell', 'container.exec',
-])
 
 // Per-tool ``JsonHumanView`` overrides used when the Result/Input
 // fallback rendering kicks in. Mirrors Claude Code's pattern: a tiny
@@ -505,8 +503,8 @@ export class CodexToolHelpers extends BaseToolHelpers {
         // role of Claude Code's ``TodoWrite``, so users see the same
         // header word across providers.
         if (name === 'update_plan') return 'Todo'
-        if (!PARSED_COMMAND_TOOLS.has(name)) return null
-        const parsed = resolveParsedCommand(name, input, options)
+        if (!FUNCTION_CALL_EXEC_TOOLS.has(name)) return null
+        const parsed = resolveParsedCommand(name, input)
         if (!parsed) return null
         const primary = pickPrimary(mergeStages(parsed))
         if (!primary) return null
@@ -546,8 +544,8 @@ export class CodexToolHelpers extends BaseToolHelpers {
                 },
             }
         }
-        if (!PARSED_COMMAND_TOOLS.has(name)) return null
-        const parsed = resolveParsedCommand(name, input, options)
+        if (!FUNCTION_CALL_EXEC_TOOLS.has(name)) return null
+        const parsed = resolveParsedCommand(name, input)
         if (!parsed) return null
         const primary = pickPrimary(mergeStages(parsed))
         if (!primary) return null
@@ -706,7 +704,7 @@ export class CodexToolHelpers extends BaseToolHelpers {
         // ``update_plan`` errors out when called in Plan mode — the
         // attempted plan is still informative, keep the body shown.
         if (name === 'update_plan') return true
-        return PARSED_COMMAND_TOOLS.has(name)
+        return FUNCTION_CALL_EXEC_TOOLS.has(name)
     }
 
     getInputOverrides(name) {

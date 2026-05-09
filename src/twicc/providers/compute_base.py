@@ -1175,11 +1175,16 @@ class BaseSessionCompute:
 
                 # Emit ToolResultUpdate for all tools (spinner + error indicator).
                 # Aggregate ``extra`` / ``error`` across every link of this
-                # tool_use_id (Codex emits two — the LLM-facing
-                # ``*_call_output`` carries neither, while the structured
-                # ``event_msg.*_end`` carries both — so falling back to
-                # ``Max`` keeps the rich values regardless of arrival order
-                # and matches the ``tool_states`` REST view's aggregation).
+                # tool_use_id: Codex routinely emits multiple links per
+                # call (apply_patch / MCP / web / image: the LLM-facing
+                # ``*_call_output`` plus the structured ``event_msg.*_end``;
+                # exec_command shells: one chunk per ``write_stdin`` poll
+                # chained to the parent's call_id). Falling back to ``Max``
+                # keeps the rich values regardless of arrival order and
+                # matches the ``tool_states`` REST view's aggregation —
+                # importantly, the ``is_terminated: true`` flag carried
+                # by the closing chunk's ``extra`` flips the whole tool
+                # to "done" via this exact path.
                 links = ToolResultLink.objects.filter(
                     session_id=session_id,
                     tool_use_id=tool_use_id,
