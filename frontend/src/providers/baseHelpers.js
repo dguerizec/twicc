@@ -796,6 +796,29 @@ export class BaseToolHelpers {
         return false
     }
 
+    /**
+     * Compute the aggregated payload to feed ``getResultRendering`` for
+     * a chained-result tool. Only invoked by the shell when
+     * :meth:`shouldAggregateExecOutput` returned ``true`` for this
+     * tool, so the default implementation can stay null.
+     *
+     * Providers walk their result chain (e.g. Codex iterates the
+     * ``toolState.toolResultLineNums`` to concatenate every
+     * ``function_call_output``'s body and parse the trailing status)
+     * and return the aggregate ready for rendering. The shape is
+     * provider-specific — the shell only exposes it via
+     * ``options.aggregatedExecOutput``.
+     *
+     * @param {string} _toolId - tool_use_id whose chain to aggregate.
+     * @param {Object} _options - same shape as the other helpers; in
+     *   particular carries ``getSessionItem`` / ``getToolState`` so the
+     *   helper can reach the chain rows in the data store.
+     * @returns {*} Default: ``null``.
+     */
+    getAggregatedExecOutput(/* toolId, options */) {
+        return null
+    }
+
     // ─── Capability flags driving shell-level features ───────────────────
 
     /**

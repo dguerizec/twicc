@@ -15,7 +15,10 @@ import { getLanguageFromPath } from '../../../../../utils/languages'
  */
 
 const props = defineProps({
-    // ``aggregated_output`` from the matching ``event_msg.exec_command_end``.
+    // Concatenated body of the chain — produced by
+    // ``aggregateExecCommandOutput`` from every ``function_call_output``
+    // row attached to this tool_use_id (the parent exec_command's own
+    // output plus any write_stdin polling chunk).
     aggregatedOutput: { type: String, required: true },
     // Path of the file that was read, taken from the primary
     // ``ParsedCommand`` (``read.path``). Drives Shiki's language

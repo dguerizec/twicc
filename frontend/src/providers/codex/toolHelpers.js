@@ -3,18 +3,21 @@
  *
  * Codex's ``exec_command`` tool is a single shell-running entry point —
  * the model packs ``cat foo``, ``rg PATTERN``, ``ls`` and arbitrary
- * scripts under the same name. The Rust runtime classifies each call
- * into a ``ParsedCommand`` (Read / ListFiles / Search / Unknown) and
- * surfaces the result via the ``event_msg.exec_command_end`` event.
- * We mimic that classification on the front (see ``parseCommand.js``)
- * so the tool_use card already has a meaningful header label and
- * summary line *before* the result arrives — and even on sessions
- * captured by older Codex CLIs that don't persist
- * ``exec_command_end``. When the real ``parsed_cmd`` arrives via the
- * tool_result, we'll happily prefer it over our local estimate (TBD).
+ * scripts under the same name. The Rust runtime used to surface a
+ * structured ``parsed_cmd`` (Read / ListFiles / Search / Unknown) on
+ * ``event_msg.exec_command_end``, but the CLI no longer persists that
+ * event. We rely on our local ``parseCommand`` classifier
+ * (see ``parseCommand.js``) for the header label and summary line, and
+ * we reconstruct the rich aggregated output by walking the chain of
+ * ``function_call_output`` rows that the backend rebinds to a single
+ * ``tool_use_id`` (the parent ``exec_command``'s ``call_id`` — the
+ * write_stdin polling outputs hang off it via
+ * ``CodexSessionCompute.remap_tool_result_id``).
  *
- * Other helpers (``getExpectedResultCount``) drive the running spinner
- * — see the comment block at the top of the file's previous revision.
+ * The shell still uses ``getExpectedResultCount`` for tools that have
+ * a persisted ``*_end`` event (apply_patch, MCP, web_search,
+ * image_generation) and switches to a status-based ``isToolRunning``
+ * for the exec_command family.
  */
 
 import { PROVIDER } from '../../constants'
@@ -34,18 +37,35 @@ import ReadResultContent from '../../components/session/detail/items/codex/ReadR
 import ApplyPatchContent from '../../components/session/detail/items/codex/ApplyPatchContent.vue'
 import TodoContent from '../../components/session/detail/items/TodoContent.vue'
 
-// ``function_call`` tools whose call is followed by a persisted
-// ``event_msg.<X>_end`` event paired by ``call_id``. Source of truth:
-// ``rollout/src/policy.rs`` in the Codex repo (Limited persistence).
-// ``apply_patch`` is listed here for its JSON variant; its Freeform
-// variant is dispatched as ``custom_tool_call`` and handled below.
-const FUNCTION_CALL_TOOLS_WITH_END_EVENT = new Set([
+// ``function_call`` tools that produce / consume a unified-exec
+// process. Their ``function_call_output`` rows chain together (the
+// parent ``exec_command``'s own row plus one row per ``write_stdin``
+// poll), all rebound to the same ``tool_use_id`` server-side. Status
+// is read from the chain's last chunk via :meth:`isToolRunning`.
+const FUNCTION_CALL_EXEC_TOOLS = new Set([
     'exec_command',
     'shell',
     'shell_command',
     'local_shell',
     'container.exec',
+])
+
+// ``function_call`` tools with a persisted ``event_msg.*_end`` event
+// paired by ``call_id``. Source of truth: ``rollout/src/policy.rs`` in
+// the Codex repo (Limited persistence). ``apply_patch``'s JSON variant
+// is here; its Freeform variant lands as a ``custom_tool_call`` and is
+// handled inline in :meth:`getExpectedResultCount`.
+const FUNCTION_CALL_TOOLS_WITH_END_EVENT = new Set([
     'apply_patch',
+])
+
+// ``event_msg.*_end`` sub-types we still consume — mirrors the backend
+// whitelist :data:`twicc.providers.codex.compute._PERSISTED_END_EVENT_TYPES`.
+const PERSISTED_END_EVENT_TYPES = new Set([
+    'patch_apply_end',
+    'mcp_tool_call_end',
+    'web_search_end',
+    'image_generation_end',
 ])
 
 // MCP tools are dispatched as ``custom_tool_call`` and their names are
@@ -123,22 +143,18 @@ function extractCommandPayload(name, input) {
 
 /**
  * Locate the ``event_msg.*_end`` line that pairs with this tool_use
- * by ``call_id`` and return its parsed payload. Returns ``null`` when
- * the result line hasn't arrived yet (live session, or session
- * captured by a Codex CLI < 0.121.0 that didn't persist
- * ``exec_command_end``) or isn't loaded in the store.
+ * by ``call_id`` and return its parsed payload. Used for tools that
+ * still get a structured End event in the rollout (apply_patch, MCP,
+ * web_search, image_generation). Returns ``null`` when the result line
+ * hasn't arrived yet (live session) or isn't loaded in the store.
  *
  * Direct lookup via the ``toolStates`` index (keyed by tool_use_id).
- * Codex emits two ``ToolResultLink`` rows per tool_use —
- * ``event_msg.*_end`` and the LLM-facing ``*_call_output`` — at
- * line numbers that may be far apart (token_count events, other
- * tool calls etc. can interleave). The API exposes both line numbers
- * via ``toolState.toolResultLineNums`` so we just iterate that list
- * (size <= 2 in practice) and return the first ``event_msg`` whose
- * ``call_id`` matches. O(k) on the result count, independent of the
- * total number of items in the session.
+ * The API exposes every persisted ``ToolResultLink`` line number via
+ * ``toolState.toolResultLineNums`` so we just iterate that list and
+ * return the first ``event_msg`` whose ``call_id`` and sub-type match
+ * the whitelist :data:`PERSISTED_END_EVENT_TYPES`.
  */
-function findCodexResultPayload(toolId, options) {
+function findCodexEndEventPayload(toolId, options) {
     if (!toolId) return null
     const toolState = options?.getToolState?.(toolId)
     const lineNums = toolState?.toolResultLineNums
@@ -153,10 +169,83 @@ function findCodexResultPayload(toolId, options) {
         if (!parsed || parsed.type !== 'event_msg') continue
         const payload = parsed.payload
         if (!payload || typeof payload !== 'object') continue
+        if (!PERSISTED_END_EVENT_TYPES.has(payload.type)) continue
         if (payload.call_id !== toolId) continue
         return payload
     }
     return null
+}
+
+// Match the formatted trailer Codex emits on every exec_command /
+// write_stdin ``function_call_output`` (see
+// ``codex-rs/core/src/tools/context.rs``). Mirrors the backend's
+// :func:`twicc.providers.codex.compute.parse_exec_command_status`
+// — kept inline here so the front isn't tied to backend regex churn.
+const EXEC_COMMAND_STATUS_RE = /^Process (?:running with session ID (?<run>-?\d+)|exited with code (?<exit>-?\d+))$/m
+
+// The body of a Codex tool output starts with this marker. Anything
+// before it (Chunk ID / Wall time / Process … / Original token count)
+// is structured trailer; the actual stdout/stderr lives after.
+const OUTPUT_BODY_PREFIX_RE = /^Output:\n?/m
+
+/**
+ * Walk the chain of ``function_call_output`` rows attached to this
+ * tool_use_id and concatenate every body in order. Used by the
+ * exec_command family — the backend rebinds every ``write_stdin``
+ * polling output to the parent ``exec_command``'s tool_use_id, so
+ * ``toolState.toolResultLineNums`` lists every chunk in source order
+ * and we just stitch them back together.
+ *
+ * Returns ``null`` when nothing usable is in the store yet, otherwise
+ * an object ready to feed :class:`ExecResultContent` /
+ * :class:`ReadResultContent`:
+ *   - ``aggregatedOutput``: concatenated bodies (string).
+ *   - ``isTerminated``: ``true`` once any chunk reported a
+ *     ``Process exited`` line.
+ *   - ``exitCode``: parsed code on the closing chunk (or ``null``).
+ */
+function aggregateExecCommandOutput(toolId, options) {
+    if (!toolId) return null
+    const toolState = options?.getToolState?.(toolId)
+    const lineNums = toolState?.toolResultLineNums
+    if (!Array.isArray(lineNums) || lineNums.length === 0) return null
+    const getSessionItem = options?.getSessionItem
+    if (typeof getSessionItem !== 'function') return null
+    const bodies = []
+    let isTerminated = false
+    let exitCode = null
+    for (const ln of lineNums) {
+        if (!Number.isInteger(ln) || ln < 1) continue
+        const item = getSessionItem(ln)
+        if (!item) continue
+        const parsed = getParsedContent(item)
+        if (!parsed || parsed.type !== 'response_item') continue
+        const payload = parsed.payload
+        if (!payload || typeof payload !== 'object') continue
+        if (payload.type !== 'function_call_output' && payload.type !== 'custom_tool_call_output') continue
+        const output = typeof payload.output === 'string' ? payload.output : ''
+        if (!output) continue
+        // Status trailer (running/exited).
+        const statusMatch = EXEC_COMMAND_STATUS_RE.exec(output)
+        if (statusMatch?.groups?.exit !== undefined) {
+            isTerminated = true
+            const code = parseInt(statusMatch.groups.exit, 10)
+            if (Number.isFinite(code)) exitCode = code
+        }
+        // Body lives after ``Output:\n`` (which is always emitted, even
+        // when the body is empty). Anything without that marker is
+        // either malformed or not a unified-exec output — skip.
+        const bodyMatch = OUTPUT_BODY_PREFIX_RE.exec(output)
+        if (!bodyMatch) continue
+        const body = output.slice(bodyMatch.index + bodyMatch[0].length)
+        if (body) bodies.push(body)
+    }
+    if (bodies.length === 0 && !isTerminated) return null
+    return {
+        aggregatedOutput: bodies.join(''),
+        isTerminated,
+        exitCode,
+    }
 }
 
 /**
@@ -180,15 +269,13 @@ function relPathFromWorkdir(path, input, baseDir) {
 
 /**
  * Locate the matching ``event_msg.patch_apply_end`` payload for an
- * ``apply_patch`` call. Same shape as ``findCodexResultPayload`` but
- * filtered on the patch-specific subtype, since other ``*_end``
- * events can land on the same ``call_id`` (the LLM-facing
- * ``custom_tool_call_output`` is one — the only persisted ``*_end``
- * for ``apply_patch`` should be ``patch_apply_end`` though, so the
- * extra filter is defensive only).
+ * ``apply_patch`` call. Same shape as ``findCodexEndEventPayload``
+ * but filtered on the patch-specific subtype (defensive — the
+ * whitelist already excludes the unrelated end events but a tool_use
+ * could in theory share a call_id with a different shape).
  */
 function findPatchApplyEndPayload(toolId, options) {
-    const payload = findCodexResultPayload(toolId, options)
+    const payload = findCodexEndEventPayload(toolId, options)
     if (payload && payload.type === 'patch_apply_end') return payload
     return null
 }
@@ -214,24 +301,14 @@ function resolveApplyPatchPaths(input, options) {
 
 /**
  * Resolve the ``ParsedCommand[]`` to feed ``mergeStages`` /
- * ``pickPrimary``. Strict preference order:
- *   1. The official ``parsed_cmd`` carried by the matching
- *      ``event_msg.*_end`` event when loaded in the store. Codex's
- *      runtime parser is strictly richer than ours (tree-sitter-bash,
- *      full bin catalogue), so we always defer to it once available.
- *   2. Our local ``parseCommand`` estimate, used while the result
- *      hasn't arrived yet or for sessions where ``exec_command_end``
- *      isn't persisted (< 0.121.0).
- * The fallback ensures the summary header is meaningful immediately
- * — before any tool_result — and the supersedence is transparent
- * (Vue recomputes when the result line lands in the store).
+ * ``pickPrimary``. Codex used to surface a tree-sitter-bash
+ * ``parsed_cmd`` on the ``exec_command_end`` event but no longer
+ * persists it (TUI flipped to ``persist_extended_history=false`` on
+ * 2026-04-30), so the local ``parseCommand`` estimate is now the
+ * canonical source. Returns ``null`` when the command shape isn't one
+ * we know how to extract.
  */
-function resolveParsedCommand(name, input, options) {
-    const codexResult = findCodexResultPayload(options?.toolId, options)
-    const officialParsedCmd = codexResult?.parsed_cmd
-    if (Array.isArray(officialParsedCmd) && officialParsedCmd.length > 0) {
-        return officialParsedCmd
-    }
+function resolveParsedCommand(name, input) {
     const payload = extractCommandPayload(name, input)
     if (payload === null) return null
     return parseCommand(payload)
@@ -358,6 +435,11 @@ export class CodexToolHelpers extends BaseToolHelpers {
     getExpectedResultCount(name, _input, options) {
         const wrapperType = options?.wrapperType
         if (wrapperType === 'function_call') {
+            // shell family chains a variable number of
+            // ``function_call_output`` rows; the spinner is driven by
+            // :meth:`isToolRunning` reading ``extra.is_terminated``
+            // instead of a fixed count.
+            if (FUNCTION_CALL_EXEC_TOOLS.has(name)) return 1
             return FUNCTION_CALL_TOOLS_WITH_END_EVENT.has(name) ? 2 : 1
         }
         if (wrapperType === 'custom_tool_call') {
@@ -376,15 +458,42 @@ export class CodexToolHelpers extends BaseToolHelpers {
     }
 
     getRequiredResultCountForDisplay(name, input, options) {
-        // For Codex tools that emit two tool_results, the second row
-        // (``event_msg.*_end``) is the one carrying the structured
-        // outcome we want to render — the first
-        // (``function_call_output``) is a partial LLM-facing snippet.
-        // Wait for both before showing anything; while we're waiting,
-        // the shell renders "Result not yet available …" + spinner +
-        // polling, exactly like a regular foreground tool with no
-        // result yet.
+        // Shell tools render progressively from a single chunk (the
+        // ``aggregateExecCommandOutput`` helper concatenates whatever
+        // is in the store), so 1 is enough; everything else mirrors
+        // ``getExpectedResultCount``.
+        if (FUNCTION_CALL_EXEC_TOOLS.has(name)) return 1
         return this.getExpectedResultCount(name, input, options)
+    }
+
+    isToolRunning(name, input, options) {
+        // Shell tools: status comes from the chain's last chunk via the
+        // ``is_terminated`` flag the backend set on
+        // ``ToolResultLink.extra``. ``Max``-aggregated across links so
+        // any closing chunk flips the whole tool to "done".
+        if (FUNCTION_CALL_EXEC_TOOLS.has(name)) {
+            const extra = options?.toolState?.extra
+            if (!extra) return true
+            // ``extra`` is the JSON string set by
+            // :meth:`compute_link_extra` — parse defensively so the
+            // shell never crashes on unexpected shapes (live race,
+            // malformed payload).
+            try {
+                const parsed = typeof extra === 'string' ? JSON.parse(extra) : extra
+                return !parsed?.is_terminated
+            } catch {
+                return true
+            }
+        }
+        return super.isToolRunning(name, input, options)
+    }
+
+    shouldAggregateExecOutput(name) {
+        return FUNCTION_CALL_EXEC_TOOLS.has(name)
+    }
+
+    getAggregatedExecOutput(toolId, options) {
+        return aggregateExecCommandOutput(toolId, options)
     }
 
     getHeaderLabel(name, input, options) {
@@ -547,44 +656,45 @@ export class CodexToolHelpers extends BaseToolHelpers {
         return null
     }
 
-    getResultRendering(name, result, input /*, ctx */) {
-        if (!PARSED_COMMAND_TOOLS.has(name)) return null
-        // ``result`` is whatever ``displayResult`` handed us — a single
-        // payload object when there's only one row, or an array when
-        // there are several. ``CodexHelpers.get_tool_results`` returns
-        // each row's ``payload`` raw, so we identify the
-        // ``event_msg.exec_command_end`` entry by its
-        // ``aggregated_output`` field (the ``function_call_output``
-        // payload only carries ``output``).
-        const candidates = Array.isArray(result) ? result : [result]
-        const execEnd = candidates.find(
-            (r) => r && typeof r.aggregated_output === 'string',
-        )
-        if (!execEnd) return null
+    getResultRendering(name, _result, input, options) {
+        if (!FUNCTION_CALL_EXEC_TOOLS.has(name)) return null
+        // The shell precomputed the chain aggregate when
+        // :meth:`shouldAggregateExecOutput` returned ``true``; reach
+        // for it through ``options.aggregatedExecOutput``. ``_result``
+        // (the raw row from ``displayResult``) is unused here — for
+        // long-running shells it's just one chunk among many, and for
+        // synchronous one-shots the aggregator already collapsed it.
+        const aggregated = options?.aggregatedExecOutput
+        if (!aggregated || typeof aggregated.aggregatedOutput !== 'string') return null
+        if (!aggregated.aggregatedOutput && !aggregated.isTerminated) return null
 
         // ``read``-classified calls get the same treatment as Claude
         // Code's Read tool: try to extract ``cat -n`` / ``nl -ba``
         // line numbers, surface them as a "Lines X–Y" header, and
-        // colour the code by the file's extension. Sourced from
-        // Codex's own ``parsed_cmd`` (carried on ``execEnd``); we
-        // fall back to our local parser if Codex didn't supply one
-        // (older CLIs / unexpected shapes).
-        const officialParsedCmd = Array.isArray(execEnd.parsed_cmd) && execEnd.parsed_cmd.length > 0
-            ? execEnd.parsed_cmd
-            : null
-        const stages = officialParsedCmd ?? parseCommand(extractCommandPayload(name, input))
+        // colour the code by the file's extension. The
+        // tree-sitter-bash ``parsed_cmd`` Codex used to surface on
+        // ``exec_command_end`` is gone, so the local ``parseCommand``
+        // estimate is now the only source.
+        const stages = parseCommand(extractCommandPayload(name, input))
         const primary = pickPrimary(mergeStages(stages || []))
         if (primary?.type === 'read' && primary.path) {
             return {
                 component: ReadResultContent,
                 props: {
-                    aggregatedOutput: execEnd.aggregated_output,
+                    aggregatedOutput: aggregated.aggregatedOutput,
                     path: primary.path,
                 },
             }
         }
 
-        return { component: ExecResultContent, props: { result: execEnd } }
+        // ``ExecResultContent`` originally received the raw
+        // ``exec_command_end`` payload as ``result``; we hand it a
+        // synthetic object with the same ``aggregated_output`` shape so
+        // the component itself doesn't need to know the source changed.
+        return {
+            component: ExecResultContent,
+            props: { result: { aggregated_output: aggregated.aggregatedOutput } },
+        }
     }
 
     showsResultOnError(name) {

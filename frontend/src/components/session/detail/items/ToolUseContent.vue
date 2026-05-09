@@ -173,13 +173,19 @@ async function fetchResult() {
         resultData.value = data.results
         resultState.value = 'loaded'
 
-        // Stop polling once we've collected every result the helper
-        // needs to render the body (1 for most tools, 2 for Codex
-        // ``exec_command`` and friends that wait for the
-        // ``event_msg.*_end`` row). Anything below that means we'd
-        // still be showing the "not yet available" placeholder, so
-        // we keep polling.
-        const haveAll = data.results && data.results.length >= requiredDisplayCount.value
+        // Stop polling once two conditions both hold:
+        //   1. We have at least ``requiredDisplayCount`` rows
+        //      (placeholder is replaced by real content).
+        //   2. The helper says the tool isn't running anymore — count-based
+        //      tools flip this when ``resultCount`` reaches the expected
+        //      total; chained-result shells flip it when their final
+        //      chunk arrives carrying ``extra.is_terminated``.
+        // Either condition unmet → keep polling so progressive output
+        // (Codex's exec_command stream) keeps refreshing the body.
+        const stillRunning = toolHelpers.value?.isToolRunning(props.name, props.input, helperOptions.value) ?? false
+        const haveAll = !stillRunning
+            && data.results
+            && data.results.length >= requiredDisplayCount.value
         if (haveAll) {
             stopPolling()
         } else if (!isPolling.value) {
@@ -366,9 +372,22 @@ const helperOptions = computed(() => ({
     ...(props.extra || {}),
     toolId: props.toolId,
     sessionId: props.sessionId,
+    toolState: dataStore.getToolState(props.sessionId, props.toolId),
     getSessionItem: (lineNum) => dataStore.getSessionItem(props.sessionId, lineNum),
     getToolState: (toolUseId) => dataStore.getToolState(props.sessionId, toolUseId),
 }))
+
+// Aggregated payload for chained-result tools (Codex's exec_command
+// family). Computed lazily — the helper short-circuits to ``null`` for
+// every other tool, so the cost is paid only when the tool opted in
+// via :meth:`shouldAggregateExecOutput`. Recomputes whenever the
+// toolState changes (new chunk arrives via WS), which is exactly what
+// drives the progressive rendering downstream.
+const aggregatedExecOutput = computed(() => {
+    const helpers = toolHelpers.value
+    if (!helpers?.shouldAggregateExecOutput?.(props.name)) return null
+    return helpers.getAggregatedExecOutput?.(props.toolId, helperOptions.value) ?? null
+})
 
 // Static per-name header label override (e.g. "TodoWrite" → "Todo").
 // Dynamic overrides driven by the tool's input (Task subagent_type, Skill name)
@@ -465,6 +484,9 @@ const resultRendering = computed(() => {
     if (!helpers || !displayResult.value) return null
     return helpers.getResultRendering(props.name, displayResult.value, props.input, {
         isSubagent: !!props.parentSessionId,
+        // Chained-result tools read this instead of the raw
+        // ``displayResult`` row; null for everyone else.
+        aggregatedExecOutput: aggregatedExecOutput.value,
     })
 })
 

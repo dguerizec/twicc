@@ -2,14 +2,13 @@
  * JS port of Codex's ``ParsedCommand`` parser.
  *
  * Why we have this in the front: Codex's tool_use line carries the raw
- * ``input.command`` (a ``Vec<String>``), but the rich ``parsed_cmd``
- * lives only in the matching ``event_msg.exec_command_end`` event,
- * which we won't necessarily have at the moment we render the tool_use
- * summary (and which doesn't exist at all for sessions produced by
- * Codex CLI versions older than 0.121.0). We approximate the parser
- * here so the summary is useful immediately. When the real
- * ``parsed_cmd`` arrives via the tool_result, the helper supersedes
- * our estimate transparently.
+ * ``input.command`` (a ``Vec<String>``), and the matching
+ * ``parsed_cmd`` used to live on the ``event_msg.exec_command_end``
+ * event — but the CLI no longer persists that event (TUI flipped to
+ * ``persist_extended_history=false`` on 2026-04-30). This local parser
+ * is therefore the **only** source of the Read / ListFiles / Search /
+ * Unknown classification that drives the tool_use header label and
+ * summary line.
  *
  * This is a pragmatic, lossy port — not the full Rust algorithm:
  *   - No tree-sitter validation of the bash script: we look for a
