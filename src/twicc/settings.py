@@ -192,7 +192,7 @@ LOGGING = {
 # rules change to trigger recomputation. ``None`` declares "no compute pipeline
 # yet" — sessions of that provider are reported up-to-date as-is.
 CLAUDE_CODE_COMPUTE_VERSION = 89
-CODEX_COMPUTE_VERSION = 6
+CODEX_COMPUTE_VERSION = 10
 
 # Search index version
 CURRENT_SEARCH_VERSION = 2  # Bump when search indexing logic changes to trigger reindexing

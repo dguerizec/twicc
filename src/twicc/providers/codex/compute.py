@@ -39,16 +39,20 @@ stored as-is in ``ToolResultLink.tool_use_id`` (analogous to Claude's
 ``tool_use_id``).
 
 Token counts, costs, runtime environment fields (cwd / model / git
-branch), custom titles, session-start detection, file-change stats and
-subagent linkage are still out of scope at this stage. Their hooks
-return empty / no-op values so the inherited base machinery (group
-state, batch compute, title extraction) still runs cleanly.
+branch), custom titles, session-start detection and subagent linkage
+are still out of scope at this stage. File-change stats are wired for
+``apply_patch`` (aggregated ``+`` / ``-`` from the
+``patch_apply_end.changes`` map). Their hooks return empty / no-op
+values so the inherited base machinery (group state, batch compute,
+title extraction) still runs cleanly.
 """
 
 from __future__ import annotations
 
 from datetime import datetime
 from typing import ClassVar
+
+import orjson
 
 from twicc.core.enums import ItemKind, Provider
 from twicc.core.models import SessionItem
@@ -137,10 +141,10 @@ def _exit_code_error(payload: dict) -> str | None:
     pipeline (running spinner ✕, danger callout, header tint) lights
     up the same way it would for a Claude Code Bash failure.
 
-    Restricted to ``exec_command_end`` for now: ``patch_apply_end``,
-    ``mcp_tool_call_end`` etc. carry different success signals and we
-    haven't wired them yet. Returns ``None`` when the field is
-    missing, zero, or non-integer.
+    Restricted to ``exec_command_end`` for now: ``mcp_tool_call_end``
+    etc. carry different success signals and aren't wired yet (see
+    :func:`_patch_apply_error` for the apply_patch counterpart).
+    Returns ``None`` when the field is missing, zero, or non-integer.
     """
     if payload.get("type") != "exec_command_end":
         return None
@@ -148,6 +152,65 @@ def _exit_code_error(payload: dict) -> str | None:
     if not isinstance(exit_code, int) or exit_code == 0:
         return None
     return f"Exit code {exit_code}"
+
+
+def _patch_apply_error(payload: dict) -> str | None:
+    """Synthesise an error string from a ``patch_apply_end`` payload.
+
+    Codex emits a structured ``success`` boolean alongside ``status``
+    (``completed`` / ``failed`` / ``declined``) and a ``stderr`` line
+    describing the failure (e.g. ``"Failed to delete file …"`` or
+    ``"patch rejected by user"``). We surface that text verbatim when
+    available so the front-end's error callout shows the actual
+    parser/IO error, falling back to a generic label when it isn't.
+
+    Returns ``None`` on success or when the payload isn't a
+    ``patch_apply_end``.
+    """
+    if payload.get("type") != "patch_apply_end":
+        return None
+    if payload.get("success") is True and payload.get("status") == "completed":
+        return None
+    stderr = payload.get("stderr")
+    if isinstance(stderr, str) and stderr.strip():
+        return stderr.strip()
+    if payload.get("status") == "declined":
+        return "Patch declined"
+    return "Patch failed"
+
+
+def _event_msg_payload_error(payload: dict) -> str | None:
+    """Dispatch ``payload`` to the matching ``*_end`` error helper.
+
+    Each Codex ``event_msg.*_end`` carries its own success signal —
+    ``exec_command_end`` an ``exit_code`` int, ``patch_apply_end`` a
+    ``success`` bool — so we route through the per-subtype helpers and
+    return the first error string any of them produce.
+    """
+    return _exit_code_error(payload) or _patch_apply_error(payload)
+
+
+def _count_diff_lines(unified_diff: str) -> tuple[int, int]:
+    """Count ``+`` / ``-`` body lines in a unified-diff string.
+
+    Header lines (``--- a/foo``, ``+++ b/foo``) and hunk markers
+    (``@@ ...``) are ignored — only payload mutations are counted.
+    Returns ``(added, removed)``.
+    """
+    added = 0
+    removed = 0
+    for line in unified_diff.splitlines():
+        if not line:
+            continue
+        if line.startswith("+++") or line.startswith("---"):
+            continue
+        if line.startswith("@@"):
+            continue
+        if line.startswith("+"):
+            added += 1
+        elif line.startswith("-"):
+            removed += 1
+    return added, removed
 
 
 def _event_msg_text(parsed_json: dict, expected_subtype: str) -> str | None:
@@ -265,10 +328,31 @@ class CodexSessionCompute(BaseSessionCompute):
     # Codex feature lands (tools, costs, runtime env, ...).
 
     def extract_runtime_fields(self, parsed_json: dict) -> dict:
-        # cwd / cwd_git_branch / model / slug are out of scope for V1.
+        # ``model`` / ``slug`` are still out of scope for V1.
+        # ``cwd`` and ``cwd_git_branch`` both live on the
+        # ``session_meta`` opening line (one per session): ``cwd`` is
+        # ``payload.cwd`` and the branch reported by Codex itself is
+        # ``payload.git.branch``. Filesystem-based ``git_branch``
+        # resolution can drift (worktree gone, branch renamed since)
+        # so we still capture the provider's own value as a stable
+        # historical fallback (cf. the matching ``Session.cwd_git_branch``
+        # comment).
+        cwd: str | None = None
+        cwd_git_branch: str | None = None
+        if parsed_json.get("type") == "session_meta":
+            payload = _payload(parsed_json)
+            if payload is not None:
+                value = payload.get("cwd")
+                if isinstance(value, str) and value:
+                    cwd = value
+                git_info = payload.get("git")
+                if isinstance(git_info, dict):
+                    branch = git_info.get("branch")
+                    if isinstance(branch, str) and branch:
+                        cwd_git_branch = branch
         return {
-            "cwd": None,
-            "cwd_git_branch": None,
+            "cwd": cwd,
+            "cwd_git_branch": cwd_git_branch,
             "model": None,
             "slug": None,
         }
@@ -342,10 +426,11 @@ class CodexSessionCompute(BaseSessionCompute):
         #   arrive for the same call_id they each become their own
         #   ``ToolResultLink`` row (no dedup); the front knows whether
         #   to wait for both via ``getExpectedResultCount``.
-        # ``exec_command_end`` carries a numeric ``exit_code``: any
-        # non-zero value is mapped to a synthetic ``"Exit code N"``
-        # error so the shell light-up logic (running spinner ✕,
-        # danger callout) matches Claude Code's Bash behaviour.
+        # ``exec_command_end`` and ``patch_apply_end`` carry their own
+        # success signals (``exit_code`` int / ``success`` bool); we
+        # synthesise an error string for each non-success outcome so
+        # the shell light-up logic (running spinner ✕, danger callout,
+        # header tint) matches Claude Code's Bash / Edit behaviour.
         wrapper_type = parsed_json.get("type")
         payload = _payload(parsed_json)
         if payload is None:
@@ -357,7 +442,7 @@ class CodexSessionCompute(BaseSessionCompute):
             error_text = None
         elif wrapper_type == _TYPE_EVENT_MSG:
             call_id = _event_msg_call_id(parsed_json)
-            error_text = _exit_code_error(payload)
+            error_text = _event_msg_payload_error(payload)
         else:
             return None
         if not isinstance(call_id, str) or not call_id:
@@ -387,7 +472,99 @@ class CodexSessionCompute(BaseSessionCompute):
     def compute_file_change_stats(
         self, parsed_json: dict, tool_name: str
     ) -> str | None:
-        return None
+        """Return the JSON stats string for an ``apply_patch`` tool_result.
+
+        Only ``apply_patch`` carries diff stats today, and only its
+        ``event_msg.patch_apply_end`` line does (the
+        ``custom_tool_call_output`` companion never has them). Returns
+        ``None`` for any other shape, in which case the inherited
+        machinery stores ``ToolResultLink.extra = NULL`` for that link.
+
+        Output JSON shape (``orjson.dumps`` of the dict)::
+
+            {
+                # Aggregated totals across every entry in ``changes``.
+                "lines_added":   <int>,    # always present
+                "lines_removed": <int>,    # always present (0 when only adds)
+
+                # Per-file breakdown, in the order ``changes.items()``
+                # iterates (i.e. insertion order from the Codex JSONL).
+                # ``path`` is the absolute path Codex applied the patch
+                # to. Always present, even for a single-file call.
+                "files": [
+                    {
+                        "path":          <str>,
+                        "lines_added":   <int>,
+                        "lines_removed": <int>,
+                    },
+                    ...
+                ],
+            }
+
+        Per-entry counting rules:
+
+        - ``update``: ``+`` / ``-`` body lines of ``unified_diff``
+          (header / hunk-marker lines are excluded by
+          :func:`_count_diff_lines`).
+        - ``add``: every line of ``content`` counts as ``+1``.
+        - ``delete``: every line of ``content`` counts as ``-1``.
+
+        The frontend reads ``lines_added`` / ``lines_removed`` for the
+        per-tool ``+N -M`` summary badge; the per-file breakdown is
+        provided for future surfaces (it is not consumed yet today).
+        """
+        if tool_name != "apply_patch":
+            return None
+        if parsed_json.get("type") != _TYPE_EVENT_MSG:
+            return None
+        payload = _payload(parsed_json)
+        if payload is None or payload.get("type") != "patch_apply_end":
+            return None
+        changes = payload.get("changes")
+        if not isinstance(changes, dict) or not changes:
+            return None
+
+        lines_added = 0
+        lines_removed = 0
+        files: list[dict] = []
+        for path, entry in changes.items():
+            if not isinstance(entry, dict) or not isinstance(path, str):
+                continue
+            file_added = 0
+            file_removed = 0
+            change_type = entry.get("type")
+            if change_type == "update":
+                unified_diff = entry.get("unified_diff")
+                if isinstance(unified_diff, str):
+                    file_added, file_removed = _count_diff_lines(unified_diff)
+            elif change_type == "add":
+                content = entry.get("content")
+                if isinstance(content, str) and content:
+                    file_added = content.count("\n") + (
+                        0 if content.endswith("\n") else 1
+                    )
+            elif change_type == "delete":
+                content = entry.get("content")
+                if isinstance(content, str) and content:
+                    file_removed = content.count("\n") + (
+                        0 if content.endswith("\n") else 1
+                    )
+
+            files.append({
+                "path": path,
+                "lines_added": file_added,
+                "lines_removed": file_removed,
+            })
+            lines_added += file_added
+            lines_removed += file_removed
+
+        if not files:
+            return None
+        return orjson.dumps({
+            "lines_added": lines_added,
+            "lines_removed": lines_removed,
+            "files": files,
+        }).decode()
 
     def detect_prefix_suffix(
         self, parsed_json: dict, kind: ItemKind | None
@@ -456,7 +633,7 @@ class CodexSessionCompute(BaseSessionCompute):
                     is_system_xml=False,
                     has_tool_result=True,
                     tool_result_id=event_call_id,
-                    tool_result_error=_exit_code_error(payload),
+                    tool_result_error=_event_msg_payload_error(payload),
                     tool_use_entries=_EMPTY_TOOL_USE_ENTRIES,
                     task_tool_uses=_EMPTY_TASK_TOOL_USES,
                     file_paths=_EMPTY_FILE_PATHS,

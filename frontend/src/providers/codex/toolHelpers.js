@@ -19,14 +19,17 @@
 
 import { PROVIDER } from '../../constants'
 import { BaseToolHelpers } from '../baseHelpers'
-import { formatRelativePath, fileIconFor } from '../utils/path'
+import { formatRelativePath, fileIconFor, resolveAbsolutePath } from '../utils/path'
 import { parseCommand } from './parseCommand'
+import { parseApplyPatchEnvelope } from './parsePatch'
 import { getParsedContent } from '../../utils/parsedContent'
 
 import DescriptionSummary from '../../components/session/detail/items/summary/DescriptionSummary.vue'
 import GrepSummary from '../../components/session/detail/items/summary/GrepSummary.vue'
+import MultiFileSummary from '../../components/session/detail/items/summary/MultiFileSummary.vue'
 import ExecResultContent from '../../components/session/detail/items/codex/ExecResultContent.vue'
 import ReadResultContent from '../../components/session/detail/items/codex/ReadResultContent.vue'
+import ApplyPatchContent from '../../components/session/detail/items/codex/ApplyPatchContent.vue'
 
 // ``function_call`` tools whose call is followed by a persisted
 // ``event_msg.<X>_end`` event paired by ``call_id``. Source of truth:
@@ -137,6 +140,59 @@ function findCodexResultPayload(toolId, sessionItems) {
         return payload
     }
     return null
+}
+
+/**
+ * Make ``path`` (as parsed out of a shell command) absolute against
+ * the call's ``workdir`` (when present), then relative to the session
+ * base dir. Required because ``parseCommand`` returns paths verbatim
+ * from the command — typically already relative to the call's working
+ * directory — so a literal ``formatRelativePath`` against the session
+ * cwd misses the case where the model ran the tool from a sub-folder
+ * (e.g. ``cd frontend && rg foo src/`` → path is ``src/`` relative to
+ * ``frontend/``, not the session root). Absolute paths short-circuit
+ * the ``workdir`` step. Falls back to ``baseDir`` when ``workdir``
+ * isn't supplied so the legacy behaviour is preserved.
+ */
+function relPathFromWorkdir(path, input, baseDir) {
+    if (!path) return path
+    const workdir = (input && typeof input.workdir === 'string' && input.workdir) || baseDir
+    const absPath = resolveAbsolutePath(path, workdir)
+    return formatRelativePath(absPath, baseDir)
+}
+
+/**
+ * Locate the matching ``event_msg.patch_apply_end`` payload for an
+ * ``apply_patch`` call. Same shape as ``findCodexResultPayload`` but
+ * filtered on the patch-specific subtype, since other ``*_end``
+ * events can land on the same ``call_id`` (the LLM-facing
+ * ``custom_tool_call_output`` is one — the only persisted ``*_end``
+ * for ``apply_patch`` should be ``patch_apply_end`` though, so the
+ * extra filter is defensive only).
+ */
+function findPatchApplyEndPayload(toolId, sessionItems) {
+    const payload = findCodexResultPayload(toolId, sessionItems)
+    if (payload && payload.type === 'patch_apply_end') return payload
+    return null
+}
+
+/**
+ * Resolve the file paths an ``apply_patch`` call touches, with
+ * supersedence:
+ *   1. ``patch_apply_end.changes`` keys when loaded — the canonical,
+ *      absolute paths the runtime actually applied to.
+ *   2. Local v4a parser otherwise — what the model declared in its
+ *      ``input``, available immediately on the tool_use line.
+ * Returns ``[]`` when neither source yields anything.
+ */
+function resolveApplyPatchPaths(input, options) {
+    const payload = findPatchApplyEndPayload(options?.toolId, options?.sessionItems)
+    if (payload && payload.changes && typeof payload.changes === 'object') {
+        const keys = Object.keys(payload.changes)
+        if (keys.length > 0) return keys
+    }
+    const parsed = parseApplyPatchEnvelope(typeof input === 'string' ? input : input?.input)
+    return parsed.map((f) => f.path).filter(Boolean)
 }
 
 /**
@@ -291,6 +347,10 @@ export class CodexToolHelpers extends BaseToolHelpers {
     }
 
     getHeaderLabel(name, input, options) {
+        // ``apply_patch`` is the model's verb, not the user-facing
+        // operation. Mirror Claude Code's ``Edit`` header so users see
+        // the same word regardless of provider.
+        if (name === 'apply_patch') return 'Edit'
         if (!PARSED_COMMAND_TOOLS.has(name)) return null
         const parsed = resolveParsedCommand(name, input, options)
         if (!parsed) return null
@@ -300,6 +360,32 @@ export class CodexToolHelpers extends BaseToolHelpers {
     }
 
     getSummaryRendering(name, input, baseDir, options) {
+        if (name === 'apply_patch') {
+            const paths = resolveApplyPatchPaths(input, options)
+            if (paths.length === 0) return null
+            if (paths.length === 1) {
+                return {
+                    component: DescriptionSummary,
+                    props: {
+                        description: formatRelativePath(paths[0], baseDir),
+                        fileIconSrc: fileIconFor(paths[0]),
+                    },
+                }
+            }
+            // Multi-file: each file gets its own icon + relative path,
+            // separated by commas. No truncation — the summary line is
+            // free to wrap if needed (like ``WorkingAssistantMessage``
+            // does for long status lines).
+            return {
+                component: MultiFileSummary,
+                props: {
+                    files: paths.map((p) => ({
+                        path: formatRelativePath(p, baseDir),
+                        fileIconSrc: fileIconFor(p),
+                    })),
+                },
+            }
+        }
         if (!PARSED_COMMAND_TOOLS.has(name)) return null
         const parsed = resolveParsedCommand(name, input, options)
         if (!parsed) return null
@@ -307,7 +393,7 @@ export class CodexToolHelpers extends BaseToolHelpers {
         if (!primary) return null
 
         if (primary.type === 'read') {
-            const relPath = formatRelativePath(primary.path, baseDir)
+            const relPath = relPathFromWorkdir(primary.path, input, baseDir)
             // ``query`` is set when ``mergeStages`` paired this read
             // with a downstream search filter (``cat foo | grep bar``).
             // Show the query alongside the path via GrepSummary.
@@ -335,7 +421,7 @@ export class CodexToolHelpers extends BaseToolHelpers {
             // No icon for list_files: directories don't have a file-icon
             // mapping and the generic ``default-file`` glyph would be
             // misleading (we'd be claiming the path is a file).
-            const relPath = formatRelativePath(primary.path, baseDir)
+            const relPath = relPathFromWorkdir(primary.path, input, baseDir)
             if (!relPath) return null
             // ``query`` is set when ``mergeStages`` paired this listing
             // with a downstream search filter on file names
@@ -359,7 +445,7 @@ export class CodexToolHelpers extends BaseToolHelpers {
         }
 
         if (primary.type === 'search') {
-            const relPath = primary.path ? formatRelativePath(primary.path, baseDir) : null
+            const relPath = primary.path ? relPathFromWorkdir(primary.path, input, baseDir) : null
             return {
                 component: GrepSummary,
                 props: {
@@ -380,6 +466,23 @@ export class CodexToolHelpers extends BaseToolHelpers {
             component: DescriptionSummary,
             props: { description: inline, fileIconSrc: null, truncate: true },
         }
+    }
+
+    getInputRendering(name, input, ctx) {
+        if (name === 'apply_patch') {
+            const raw = typeof input === 'string' ? input : input?.input
+            if (typeof raw !== 'string' || !raw) return null
+            return {
+                component: ApplyPatchContent,
+                props: {
+                    input: raw,
+                    sessionId: ctx?.sessionId ?? '',
+                    toolId: ctx?.toolId ?? '',
+                    isSubagent: !!ctx?.isSubagent,
+                },
+            }
+        }
+        return null
     }
 
     getResultRendering(name, result, input /*, ctx */) {
@@ -424,8 +527,10 @@ export class CodexToolHelpers extends BaseToolHelpers {
 
     showsResultOnError(name) {
         // Same rationale as Claude Code's Bash: the error callout only
-        // surfaces "Exit code N", so the actual stdout/stderr of the
-        // failed command is still useful and should stay visible.
+        // surfaces a short label (``Exit code N`` / ``Patch failed``),
+        // so the rich event payload (stdout, stderr, applied changes)
+        // is still useful and should stay visible.
+        if (name === 'apply_patch') return true
         return PARSED_COMMAND_TOOLS.has(name)
     }
 
@@ -435,6 +540,10 @@ export class CodexToolHelpers extends BaseToolHelpers {
 
     getDisplayInputObject(name, input) {
         if (!input || Object.keys(input).length === 0) return null
+        // ``apply_patch`` only has the raw v4a envelope as input; the
+        // ``ApplyPatchContent`` renderer takes over the full body, so
+        // there's nothing useful left for the JSON fallback.
+        if (name === 'apply_patch') return null
         const stripped = STRIPPED_INPUT_KEYS_BY_TOOL[name]
         if (!stripped || stripped.size === 0) return input
         const out = {}
@@ -442,6 +551,39 @@ export class CodexToolHelpers extends BaseToolHelpers {
             if (!stripped.has(k)) out[k] = input[k]
         }
         return Object.keys(out).length > 0 ? out : null
+    }
+
+    isFileChangeTool(name) {
+        return name === 'apply_patch'
+    }
+
+    getFilePath(name, input) {
+        if (name !== 'apply_patch') return null
+        const parsed = parseApplyPatchEnvelope(typeof input === 'string' ? input : input?.input)
+        // Single-file: surface the path so the shell shows a
+        // ``View in Files tab`` button next to the summary, like Edit
+        // / Write. Multi-file: bail — a single button can only point
+        // to one path, so each per-file header inside the body adds
+        // its own button instead.
+        if (parsed.length !== 1) return null
+        return parsed[0]?.path ?? null
+    }
+
+    shouldAutoOpenLive(name) {
+        // Same UX as Claude Code's Edit / Write: when the user has
+        // ``showDiffs`` enabled, an apply_patch tool_use that arrives
+        // live is auto-expanded so the diff is visible without a click.
+        return name === 'apply_patch'
+    }
+
+    computeFileChangeStats(name, _input, toolState, _isSubagent) {
+        if (name !== 'apply_patch') return null
+        if (!toolState?.extra) return null
+        try {
+            return JSON.parse(toolState.extra)
+        } catch {
+            return null
+        }
     }
 }
 

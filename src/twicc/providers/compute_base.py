@@ -36,7 +36,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple
 
 import orjson
 from django.core.exceptions import MultipleObjectsReturned
-from django.db.models import QuerySet
+from django.db.models import Count, Max, QuerySet
 
 from twicc.core.enums import ItemDisplayLevel, ItemKind, Provider
 from twicc.core.models import AgentLink, Session, SessionItem, SessionType, ToolResultLink
@@ -1042,22 +1042,30 @@ class BaseSessionCompute:
                 if not created:
                     return None
 
-                # Emit ToolResultUpdate for all tools (spinner + error indicator)
+                # Emit ToolResultUpdate for all tools (spinner + error indicator).
+                # Aggregate ``extra`` / ``error`` across every link of this
+                # tool_use_id (Codex emits two — the LLM-facing
+                # ``*_call_output`` carries neither, while the structured
+                # ``event_msg.*_end`` carries both — so falling back to
+                # ``Max`` keeps the rich values regardless of arrival order
+                # and matches the ``tool_states`` REST view's aggregation).
                 links = ToolResultLink.objects.filter(
                     session_id=session_id,
                     tool_use_id=tool_use_id,
                 )
-                result_count = links.count()
-                max_timestamp = links.order_by('-tool_result_at').values_list(
-                    'tool_result_at', flat=True,
-                ).first()
+                aggregated = links.aggregate(
+                    result_count=Count('id'),
+                    completed_at=Max('tool_result_at'),
+                    extra=Max('extra'),
+                    error=Max('error'),
+                )
                 return ToolResultUpdate(
                     session_id=session_id,
                     tool_use_id=tool_use_id,
-                    result_count=result_count,
-                    completed_at=max_timestamp,
-                    extra=extra,
-                    error=error,
+                    result_count=aggregated['result_count'],
+                    completed_at=aggregated['completed_at'],
+                    extra=aggregated['extra'],
+                    error=aggregated['error'],
                     tool_result_line_num=item.line_num,
                 )
 

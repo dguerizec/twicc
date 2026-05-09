@@ -555,6 +555,9 @@ export class BaseProviderHelpers {
  *   - ``isSubagent``   — boolean; whether this tool_use lives in a subagent
  *   - ``backendPatch`` / ``originalFile`` / ``backendPatchLoading`` — for
  *     Edit/Write rendering when the backend has computed structured patches
+ *   - ``sessionId`` / ``toolId`` — for input renderers that need to scan
+ *     the store for a matching tool_result row on their own (e.g. Codex's
+ *     ``apply_patch`` reading the linked ``patch_apply_end`` event)
  */
 export class BaseToolHelpers {
     static provider = null

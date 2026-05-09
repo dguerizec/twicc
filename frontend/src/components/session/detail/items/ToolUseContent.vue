@@ -449,6 +449,11 @@ const inputRendering = computed(() => {
         backendPatch: fileChangeBackendPatch.value,
         backendPatchLoading: fileChangeBackendPatchLoading.value,
         originalFile: fileChangeOriginalFile.value,
+        // Plumbed through so per-provider input renderers can locate
+        // the matching tool_result rows in the store on their own
+        // (e.g. Codex's ``apply_patch`` reading ``patch_apply_end``).
+        sessionId: props.sessionId,
+        toolId: props.toolId,
     })
 })
 

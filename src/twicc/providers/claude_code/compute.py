@@ -734,7 +734,38 @@ class ClaudeCodeSessionCompute(BaseSessionCompute):
     def compute_file_change_stats(
         self, parsed_json: dict, tool_name: str
     ) -> str | None:
-        # Claude Code only emits diff stats for Edit and Write tool_results.
+        """Return the JSON stats string for an Edit / Write tool_result.
+
+        Claude Code only emits diff stats for ``Edit`` and ``Write``;
+        every other tool returns ``None`` and the inherited machinery
+        stores ``ToolResultLink.extra = NULL`` for that link. Source
+        of truth is the JSONL ``toolUseResult`` block.
+
+        Output JSON shape (``orjson.dumps`` of the dict):
+
+        - ``Write`` create (empty ``structuredPatch``, full new file
+          content carried under ``content``)::
+
+              {"lines_added": <int>}
+              # ``lines_removed`` omitted — there's nothing to remove.
+
+        - ``Edit`` or ``Write`` update (non-empty ``structuredPatch``)::
+
+              {
+                  "lines_added":   <int>,    # always present
+                  "lines_removed": <int>,    # always present
+                  # ``hunks`` only when more than one hunk was applied.
+                  "hunks":         <int>,    # optional
+              }
+
+        Counting rules: iterate ``structuredPatch[].lines`` and tally
+        ``+`` / ``-`` prefixes; context lines (space prefix) and
+        diff metadata lines are ignored.
+
+        The frontend reads ``lines_added`` / ``lines_removed`` for the
+        per-tool ``+N -M`` summary badge; ``hunks`` is informational
+        and not consumed today.
+        """
         if tool_name not in ('Edit', 'Write'):
             return None
         tool_use_result = parsed_json.get('toolUseResult')
