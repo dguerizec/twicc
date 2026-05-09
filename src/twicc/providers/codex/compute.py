@@ -10,26 +10,33 @@ Classification rules (any change MUST bump CODEX_COMPUTE_VERSION):
 
 - ``event_msg.user_message`` → ``USER_MESSAGE``
 - ``event_msg.agent_message`` → ``ASSISTANT_MESSAGE``
-- ``event_msg.*`` with a non-empty ``payload.call_id`` (any ``*End`` /
-  ``*Response`` event — exec_command_end, patch_apply_end,
-  mcp_tool_call_end, web_search_end, image_generation_end,
-  collab_*_end, dynamic_tool_call_response, …) → kind stays ``None``;
-  routed to ``DEBUG_ONLY`` via :meth:`is_tool_result_item`. Pairs with
-  the matching function_call by ``call_id`` — these events carry the
-  structured outcome of the tool (full aggregated transcript,
-  exit_code, ``changes`` map, ``CallToolResult``, …), richer than the
-  LLM-facing ``function_call_output``. Both shapes coexist as
-  :class:`ToolResultLink` rows for the same tool_use; the front uses
-  ``getExpectedResultCount`` to know it must wait for both before
-  marking the tool as done.
+- ``event_msg.*`` whose sub-type is in :data:`_PERSISTED_END_EVENT_TYPES`
+  (``patch_apply_end``, ``mcp_tool_call_end``, ``web_search_end``,
+  ``image_generation_end``) → kind stays ``None``; routed to
+  ``DEBUG_ONLY`` via :meth:`is_tool_result_item`. Pairs with the
+  matching ``function_call`` / ``custom_tool_call`` by ``call_id``.
+  These events carry the structured outcome of the tool (``changes``
+  map, ``CallToolResult``, …) and coexist as a second
+  :class:`ToolResultLink` row alongside the LLM-facing
+  ``function_call_output`` for the same tool_use_id.
+- ``event_msg.exec_command_end`` is intentionally **not** in the list:
+  Codex CLI no longer persists it (TUI sets
+  ``persist_extended_history=false`` since 2026-04-30) so we
+  reconstruct the same surface from the chain of
+  ``function_call_output`` lines instead — the original ``exec_command``
+  output plus every ``write_stdin`` polling output sharing the same
+  unified-exec process id (called ``session_id`` by Codex,
+  ``exec_command_id`` here).
 - ``response_item.function_call`` / ``custom_tool_call`` → ``TOOL_USE``
   (-> ``COLLAPSIBLE``), except ``function_call name=write_stdin`` which
-  is bucketed as ``SYSTEM`` (its trace is captured by the matching
-  ``exec_command``'s ``exec_command_end``).
+  is bucketed as ``SYSTEM`` (no tool card). Its
+  ``function_call_output`` is rebound to the parent ``exec_command``'s
+  ``call_id`` via :meth:`CodexSessionCompute.remap_tool_result_id`.
 - ``response_item.{function_call_output, custom_tool_call_output}`` →
-  kind stays ``None`` (-> ``DEBUG_ONLY``). Pairs as a tool_result —
-  the LLM-facing string is the first of (potentially) two links per
-  tool_use_id, with the matching event_msg.*_end as the second.
+  kind stays ``None`` (-> ``DEBUG_ONLY``). Pairs as a tool_result.
+  For exec_command long-running shells the chain accumulates one row
+  per polling write_stdin; for everything else there's a single row
+  (plus the matching event_msg.*_end when applicable).
 - everything else (``session_meta``, ``turn_context``, other
   ``response_item`` subtypes, other ``event_msg`` subtypes without
   ``call_id``, ``compacted``) → ``SYSTEM`` (lands at ``DEBUG_ONLY``).
@@ -49,8 +56,9 @@ title extraction) still runs cleanly.
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
-from typing import ClassVar
+from typing import ClassVar, NamedTuple
 
 import orjson
 
@@ -64,6 +72,7 @@ from twicc.providers.compute_base import (
     BaseSessionCompute,
     ContentAnalysis,
     ToolResultInfo,
+    ToolUseEntry,
     parse_timestamp_to_datetime,
 )
 
@@ -86,8 +95,15 @@ _TOOL_CALL_PAYLOAD_TYPES = frozenset({"function_call", "custom_tool_call"})
 # Function-call ``name`` values whose tool_use is bucketed as SYSTEM (no
 # tool card rendered) because the relevant exchange is captured elsewhere.
 # ``write_stdin`` belongs to a previously-spawned ``exec_command`` session;
-# the aggregated transcript ends up in that exec_command's eventual
-# ``exec_command_end`` event_msg (same call_id as the original exec).
+# its ``function_call_output`` is rebound to the parent exec_command's
+# ``call_id`` via :meth:`CodexSessionCompute.remap_tool_result_id` so the
+# polled chunks all land on the same ``ToolResultLink`` chain.
+#
+# NOTE: this list governs UI rendering only (``compute_item_kind`` returns
+# ``SYSTEM`` for these). The pairing path (``extract_tool_use_entries``,
+# ``analyze_content``) still records the call_id in ``tool_use_map`` so
+# the remap hook can resolve a write_stdin output to its parent
+# exec_command — without an entry in the map, there's nothing to remap.
 _NON_TOOL_FUNCTION_NAMES = frozenset({"write_stdin"})
 
 # Tool-result payload sub-types from ``response_item`` lines (the
@@ -95,29 +111,141 @@ _NON_TOOL_FUNCTION_NAMES = frozenset({"write_stdin"})
 # by ``call_id`` and routed to DEBUG_ONLY via :meth:`is_tool_result_item`.
 _TOOL_RESULT_PAYLOAD_TYPES = frozenset({"function_call_output", "custom_tool_call_output"})
 
+# function_call ``name`` values that produce / consume a unified-exec
+# process. ``exec_command`` spawns the process; ``write_stdin`` polls
+# (and optionally writes to) it. Their ``function_call_output`` lines
+# carry the structured ``Chunk ID / Wall time / Process … / Output:``
+# trailer parsed by :func:`parse_exec_command_status`.
+_EXEC_COMMAND_TOOLS = frozenset({"exec_command", "write_stdin"})
+
+# ``event_msg.*_end`` (and ``*Response``) sub-types we still consume as
+# tool_results. ``exec_command_end`` is intentionally excluded — Codex
+# CLI no longer persists it (TUI sets ``persist_extended_history=false``)
+# so we reconstruct the equivalent state from the chain of
+# ``function_call_output`` lines instead (exec_command direct +
+# write_stdin children sharing the same exec_command_id).
+_PERSISTED_END_EVENT_TYPES = frozenset({
+    "patch_apply_end",
+    "mcp_tool_call_end",
+    "web_search_end",
+    "image_generation_end",
+})
+
+
+class ExecCommandStatus(NamedTuple):
+    """Parsed status of a Codex ``function_call_output`` for an exec tool.
+
+    Codex formats its exec_command / write_stdin tool outputs as a flat
+    string with a structured trailer; we parse it once with
+    :func:`parse_exec_command_status` and surface the bits we need.
+
+    Fields:
+
+    - ``exec_command_id``: the unified-exec process id (called ``session_id``
+      by Codex itself, but we name it ``exec_command_id`` here to avoid
+      colliding with TwiCC's own ``Session`` notion). Only set when the
+      output reports a process *running* — the *exited* shape doesn't
+      include the id, so callers resolve it via the
+      ``_exec_command_maps`` cache instead.
+    - ``is_terminated``: ``True`` iff a ``Process exited with code N``
+      line was matched.
+    - ``exit_code``: the integer code; meaningful only when
+      ``is_terminated`` is ``True``.
+    """
+    exec_command_id: int | None
+    is_terminated: bool
+    exit_code: int | None
+
+
+# Single-pass regex with alternation, anchored at line start (multiline
+# mode). Either a "running" line or an "exited" line matches per output
+# (they are mutually exclusive in Codex's formatter, see
+# ``codex-rs/core/src/tools/context.rs``).
+_EXEC_COMMAND_STATUS_RE = re.compile(
+    r"^Process (?:running with session ID (?P<run>-?\d+)"
+    r"|exited with code (?P<exit>-?\d+))$",
+    re.MULTILINE,
+)
+
+
+def parse_exec_command_status(output: str) -> ExecCommandStatus:
+    """Extract the status trailer from an exec_command/write_stdin output.
+
+    Returns a default :class:`ExecCommandStatus` (``None`` / ``False`` /
+    ``None``) when neither pattern is present (defensive — Codex always
+    emits one when the output is well-formed).
+    """
+    if not isinstance(output, str) or not output:
+        return ExecCommandStatus(None, False, None)
+    match = _EXEC_COMMAND_STATUS_RE.search(output)
+    if match is None:
+        return ExecCommandStatus(None, False, None)
+    if match.group("run") is not None:
+        return ExecCommandStatus(int(match.group("run")), False, None)
+    return ExecCommandStatus(None, True, int(match.group("exit")))
+
+
+def _exit_code_error_from_output(output: str) -> str | None:
+    """Render ``"Exit code N"`` for a non-zero exit, else ``None``.
+
+    Replaces the legacy ``_exit_code_error`` helper that read
+    ``payload.exit_code`` off the disappeared ``exec_command_end`` event.
+    The exit code now lives in the formatted trailer of the matching
+    ``function_call_output`` (parsed via :func:`parse_exec_command_status`).
+    Returns ``None`` while the process is still running (``is_terminated``
+    is ``False``) and on a clean exit (code ``0``).
+    """
+    status = parse_exec_command_status(output)
+    if not status.is_terminated or status.exit_code is None or status.exit_code == 0:
+        return None
+    return f"Exit code {status.exit_code}"
+
+
+def _extract_write_stdin_exec_command_id(parsed_json: dict) -> int | None:
+    """Read ``arguments.session_id`` from a ``write_stdin`` function_call line.
+
+    Codex stores function arguments as a JSON-encoded **string** on the
+    tool_use line (not a nested object), so we orjson-decode them.
+    The ``session_id`` field is the unified-exec process id (named
+    ``exec_command_id`` everywhere on TwiCC's side). Returns ``None`` for
+    malformed payloads, missing fields, or non-integer ids.
+    """
+    payload = _payload(parsed_json)
+    if payload is None:
+        return None
+    raw_args = payload.get("arguments")
+    if not isinstance(raw_args, str):
+        return None
+    try:
+        args = orjson.loads(raw_args)
+    except orjson.JSONDecodeError:
+        return None
+    if not isinstance(args, dict):
+        return None
+    sid = args.get("session_id")
+    return sid if isinstance(sid, int) else None
+
 
 def _event_msg_call_id(parsed_json: dict) -> str | None:
     """Return ``payload.call_id`` for a persisted Codex ``event_msg`` line.
 
     Codex's runtime emits a constellation of ``*End`` / ``*Response``
     events that carry the canonical, structured outcome of a tool call
-    (full ``aggregated_output`` for ``exec_command_end``, ``changes``
-    map for ``patch_apply_end``, ``CallToolResult`` for
-    ``mcp_tool_call_end``, …). Every one of them is paired with the
-    originating ``function_call`` / ``custom_tool_call`` by ``call_id``.
+    (``changes`` map for ``patch_apply_end``, ``CallToolResult`` for
+    ``mcp_tool_call_end``, …). Each one is paired with the originating
+    ``function_call`` / ``custom_tool_call`` by ``call_id``.
 
-    ``rollout/src/policy.rs`` only persists the ``*End`` shape (the
-    matching ``*Begin`` events are dropped before the rollout is
-    written), so in practice any persisted ``event_msg`` carrying a
-    non-empty ``call_id`` is a tool_result End event — independent of
-    its concrete sub-type. Returns the ``call_id`` if matched, else
-    ``None``. Kept as a module-level helper to keep the discovery rule
-    in one place.
+    Only sub-types listed in :data:`_PERSISTED_END_EVENT_TYPES` qualify;
+    notably ``exec_command_end`` is excluded because the CLI no longer
+    persists it. ``response_item`` lines are filtered out at the wrapper
+    level. Returns the ``call_id`` for a matching event, else ``None``.
     """
     if parsed_json.get("type") != _TYPE_EVENT_MSG:
         return None
     payload = parsed_json.get("payload")
     if not isinstance(payload, dict):
+        return None
+    if payload.get("type") not in _PERSISTED_END_EVENT_TYPES:
         return None
     call_id = payload.get("call_id")
     if isinstance(call_id, str) and call_id:
@@ -129,29 +257,6 @@ def _payload(parsed_json: dict) -> dict | None:
     """Return ``parsed_json["payload"]`` if it's a dict, else ``None``."""
     payload = parsed_json.get("payload")
     return payload if isinstance(payload, dict) else None
-
-
-def _exit_code_error(payload: dict) -> str | None:
-    """Synthesise an error string from an ``exec_command_end`` payload.
-
-    Codex doesn't carry an ``is_error`` flag the way Anthropic's
-    tool_result blocks do — it carries a structured ``exit_code``
-    integer instead. Whenever that integer is present and non-zero we
-    surface a Bash-style ``"Exit code N"`` message so the shell
-    pipeline (running spinner ✕, danger callout, header tint) lights
-    up the same way it would for a Claude Code Bash failure.
-
-    Restricted to ``exec_command_end`` for now: ``mcp_tool_call_end``
-    etc. carry different success signals and aren't wired yet (see
-    :func:`_patch_apply_error` for the apply_patch counterpart).
-    Returns ``None`` when the field is missing, zero, or non-integer.
-    """
-    if payload.get("type") != "exec_command_end":
-        return None
-    exit_code = payload.get("exit_code")
-    if not isinstance(exit_code, int) or exit_code == 0:
-        return None
-    return f"Exit code {exit_code}"
 
 
 def _patch_apply_error(payload: dict) -> str | None:
@@ -182,12 +287,14 @@ def _patch_apply_error(payload: dict) -> str | None:
 def _event_msg_payload_error(payload: dict) -> str | None:
     """Dispatch ``payload`` to the matching ``*_end`` error helper.
 
-    Each Codex ``event_msg.*_end`` carries its own success signal —
-    ``exec_command_end`` an ``exit_code`` int, ``patch_apply_end`` a
-    ``success`` bool — so we route through the per-subtype helpers and
-    return the first error string any of them produce.
+    Currently only ``patch_apply_end`` exposes a usable error signal at
+    the event level. Other persisted ends (``mcp_tool_call_end``,
+    ``web_search_end``, ``image_generation_end``) don't surface one we
+    can read, so the helper returns ``None`` for those. Errors for the
+    exec_command family are now derived from the
+    ``function_call_output`` text via :func:`_exit_code_error_from_output`.
     """
-    return _exit_code_error(payload) or _patch_apply_error(payload)
+    return _patch_apply_error(payload)
 
 
 def _count_diff_lines(unified_diff: str) -> tuple[int, int]:
@@ -237,11 +344,286 @@ class CodexSessionCompute(BaseSessionCompute):
 
     Classifies user/assistant messages and tool_use lines, plus pairs
     each tool_use with its output via the inherited ``ToolResultLink``
-    machinery. Everything else is ``SYSTEM``. The class is stateless;
+    machinery. Everything else is ``SYSTEM``.
+
+    Carries a small per-session cache (``_exec_command_maps``) used to
+    rebind ``write_stdin`` polling outputs to the parent ``exec_command``
+    they belong to, since Codex CLI no longer persists the
+    ``exec_command_end`` event that previously tied the chain together.
+    The cache is keyed by ``Session.id`` so the singleton stays safe
+    even if the watcher interleaves multiple sessions.
     :func:`get_compute` returns a per-process singleton.
     """
 
     provider: ClassVar[Provider] = Provider.CODEX
+
+    def __init__(self) -> None:
+        super().__init__()
+        # {session_id: {exec_command_id: exec_command_call_id}}.
+        # Populated by :meth:`analyze_content` (batch) and
+        # :meth:`extract_tool_result_info` (live) when they see a Codex
+        # ``function_call_output`` for an ``exec_command`` whose trailer
+        # reports a still-running unified-exec process. Read by the
+        # remap hooks to resolve a ``write_stdin`` polling output back to
+        # the parent ``exec_command``'s ``call_id``. Entries are cleared
+        # both eagerly (when a "Process exited" status is observed) and
+        # lazily (in :meth:`end_session_compute`).
+        self._exec_command_maps: dict[str, dict[int, str]] = {}
+
+    def _proc_map(self, session_id: str) -> dict[int, str]:
+        """Return the per-session ``{exec_command_id: call_id}`` map.
+
+        Lazily creates the map on first access — the live path may call
+        the extraction hooks before any explicit :meth:`begin_session_compute`,
+        so we tolerate a missing entry instead of treating it as a bug.
+        """
+        return self._exec_command_maps.setdefault(session_id, {})
+
+    def begin_session_compute(self, session_id: str) -> None:
+        # Reset the map at the start of a batch compute so a previous
+        # run's leftover state can never leak into the new pass.
+        self._exec_command_maps[session_id] = {}
+
+    def end_session_compute(self, session_id: str) -> None:
+        # Free the cache after a batch compute finishes. Live mode never
+        # calls this, which is fine: the cache is bounded by the number
+        # of concurrently-running unified-exec processes (usually 0–2)
+        # and entries get evicted on "Process exited".
+        self._exec_command_maps.pop(session_id, None)
+
+    def _release_exec_command_for_call(
+        self, session_id: str, call_id: str
+    ) -> None:
+        """Drop any map entry that points at ``call_id``.
+
+        Used after observing a terminating ``Process exited`` line in
+        the function_call_output chain (either the exec_command's own
+        output or one of its write_stdin polls). We don't always know
+        the ``exec_command_id`` (the "exited" trailer doesn't include
+        it), so we scan by value — the map stays small in practice.
+        """
+        proc_map = self._exec_command_maps.get(session_id)
+        if not proc_map:
+            return
+        for exec_command_id, mapped_call_id in list(proc_map.items()):
+            if mapped_call_id == call_id:
+                proc_map.pop(exec_command_id, None)
+
+    def remap_tool_result_id(
+        self,
+        parsed_json: dict,
+        naive_tool_use_id: str,
+        *,
+        session_id: str,
+        tool_use_map: dict[str, ToolUseEntry],
+    ) -> str:
+        """Rebind a write_stdin function_call_output to its parent exec_command.
+
+        Codex's ``write_stdin`` tool polls (and optionally writes to) a
+        unified-exec process previously spawned by ``exec_command``; its
+        ``function_call_output`` therefore carries chunks of the parent
+        shell's transcript, not its own. We rebind the result row so it
+        lands on the parent's ``ToolResultLink`` chain, keyed by the
+        exec_command's call_id.
+
+        The chain is resolved through ``self._exec_command_maps``, which
+        :meth:`analyze_content` populated when it saw the parent
+        exec_command's first ``Process running with session ID N`` line.
+        Falls back to identity when the chain can't be resolved
+        (malformed write_stdin payload, missing map entry, …) so the
+        link still gets created — just under the naive id.
+
+        Also handles eviction for the write_stdin side: when this poll's
+        output reports a terminating ``Process exited``, the entry is
+        removed from the map AFTER we resolved the parent_call_id, so
+        analyze_content's reading order stays correct (it had already
+        populated / read the map by the time we got here).
+        """
+        parent = tool_use_map.get(naive_tool_use_id)
+        if parent is None or parent.tool_name != "write_stdin":
+            return naive_tool_use_id
+        exec_command_id = _extract_write_stdin_exec_command_id(parent.parsed_json)
+        if exec_command_id is None:
+            return naive_tool_use_id
+        proc_map = self._exec_command_maps.get(session_id)
+        if not proc_map:
+            return naive_tool_use_id
+        parent_call_id = proc_map.get(exec_command_id, naive_tool_use_id)
+        # Evict the entry on a terminating poll so any stray future
+        # write_stdin against the same id doesn't latch onto a stale
+        # call_id (Codex would never reissue, but defensive cleanup is
+        # cheap).
+        payload = _payload(parsed_json)
+        if payload is not None:
+            output = payload.get("output", "")
+            if (
+                isinstance(output, str)
+                and parse_exec_command_status(output).is_terminated
+            ):
+                proc_map.pop(exec_command_id, None)
+        return parent_call_id
+
+    def remap_tool_result_id_live(
+        self,
+        parsed_json: dict,  # noqa: ARG002 (parent is identified from the candidate row)
+        naive_tool_use_id: str,
+        *,
+        session_id: str,
+        item: SessionItem,
+    ) -> str:
+        """Live equivalent of :meth:`remap_tool_result_id` (no in-memory map).
+
+        Since live mode doesn't carry a ``tool_use_map``, we resolve the
+        chain through two DB lookups: first the write_stdin function_call
+        line (to read its ``arguments.session_id``), then the
+        exec_command function_call_output that announced the same
+        unified-exec process id.
+
+        The cost is incurred only on a write_stdin's result line, which
+        is rare per session — falls back to identity at every step that
+        can't be resolved so other tools' result rows are unaffected.
+        """
+        parent_payload = self._lookup_write_stdin_call_payload(
+            session_id, item.line_num, naive_tool_use_id
+        )
+        if parent_payload is None:
+            return naive_tool_use_id
+        raw_args = parent_payload.get("arguments")
+        if not isinstance(raw_args, str):
+            return naive_tool_use_id
+        try:
+            args = orjson.loads(raw_args)
+        except orjson.JSONDecodeError:
+            return naive_tool_use_id
+        if not isinstance(args, dict):
+            return naive_tool_use_id
+        exec_command_id = args.get("session_id")
+        if not isinstance(exec_command_id, int):
+            return naive_tool_use_id
+        return self._lookup_exec_command_call_id(
+            session_id, item.line_num, exec_command_id, naive_tool_use_id
+        )
+
+    def _lookup_write_stdin_call_payload(
+        self, session_id: str, max_line_num: int, naive_tool_use_id: str
+    ) -> dict | None:
+        """Find the function_call payload for a write_stdin id, or ``None``.
+
+        Returns the payload dict only when the candidate is a
+        ``function_call`` named ``write_stdin`` matching the given
+        call_id — anything else (including non-write_stdin tool_uses, or
+        text containing the id) yields ``None`` so callers can fall
+        through to identity remap.
+        """
+        candidates = SessionItem.objects.filter(
+            session_id=session_id,
+            line_num__lt=max_line_num,
+            content__contains=naive_tool_use_id,
+        ).order_by('-line_num')
+        for candidate in candidates.iterator(chunk_size=10):
+            try:
+                parsed = orjson.loads(candidate.content)
+            except orjson.JSONDecodeError:
+                continue
+            if parsed.get("type") != _TYPE_RESPONSE_ITEM:
+                continue
+            payload = _payload(parsed)
+            if payload is None:
+                continue
+            if payload.get("type") != "function_call":
+                continue
+            if payload.get("call_id") != naive_tool_use_id:
+                continue
+            if payload.get("name") != "write_stdin":
+                return None
+            return payload
+        return None
+
+    def _lookup_exec_command_call_id(
+        self,
+        session_id: str,
+        max_line_num: int,
+        exec_command_id: int,
+        fallback: str,
+    ) -> str:
+        """Resolve the exec_command call_id that owns ``exec_command_id``.
+
+        Searches for the function_call_output line carrying the
+        ``Process running with session ID <exec_command_id>`` marker —
+        that line's ``call_id`` IS the parent exec_command's call_id
+        (Codex routes the response through the same identifier).
+        Returns ``fallback`` when nothing is found, so the live link is
+        still created (just under the naive id).
+        """
+        marker = f"Process running with session ID {exec_command_id}"
+        candidates = SessionItem.objects.filter(
+            session_id=session_id,
+            line_num__lt=max_line_num,
+            content__contains=marker,
+        ).order_by('line_num')
+        for candidate in candidates.iterator(chunk_size=10):
+            try:
+                parsed = orjson.loads(candidate.content)
+            except orjson.JSONDecodeError:
+                continue
+            if parsed.get("type") != _TYPE_RESPONSE_ITEM:
+                continue
+            payload = _payload(parsed)
+            if payload is None:
+                continue
+            if payload.get("type") not in _TOOL_RESULT_PAYLOAD_TYPES:
+                continue
+            call_id = payload.get("call_id")
+            if isinstance(call_id, str) and call_id:
+                return call_id
+        return fallback
+
+    def _maintain_exec_command_map(
+        self,
+        session_id: str,
+        call_id: str,
+        payload: dict,
+        tool_use_map: dict[str, ToolUseEntry],
+    ) -> str | None:
+        """Update the per-session exec_command map and surface an error string.
+
+        Called from :meth:`analyze_content` for every Codex
+        ``function_call_output`` / ``custom_tool_call_output``. Looks up
+        the parent tool_use in ``tool_use_map`` to identify
+        exec_command / write_stdin lines and updates the map for the
+        ``exec_command`` side only:
+
+        - On an exec_command output reporting ``Process running with
+          session ID N``, register ``map[N] = call_id`` so future
+          write_stdin children can be remapped to this exec_command.
+        - On an exec_command output reporting ``Process exited``,
+          evict any entry that points to this call_id (covers both the
+          synchronous one-shot — no entry to evict — and the long-running
+          parent's own final poll).
+
+        write_stdin's contribution to the map is handled in
+        :meth:`remap_tool_result_id` instead, so the eviction happens
+        AFTER the orchestrator has read the parent_call_id from the map
+        for the pairing.
+
+        Returns the synthesised ``"Exit code N"`` error string for a
+        non-zero exit (or ``None`` otherwise) so the caller can stuff it
+        into ``ContentAnalysis.tool_result_error``.
+        """
+        parent = tool_use_map.get(call_id)
+        if parent is None or parent.tool_name not in _EXEC_COMMAND_TOOLS:
+            return None
+        output = payload.get("output", "")
+        if not isinstance(output, str):
+            output = ""
+        if parent.tool_name == "exec_command":
+            status = parse_exec_command_status(output)
+            proc_map = self._proc_map(session_id)
+            if status.exec_command_id is not None and not status.is_terminated:
+                proc_map[status.exec_command_id] = call_id
+            elif status.is_terminated:
+                self._release_exec_command_for_call(session_id, call_id)
+        return _exit_code_error_from_output(output)
 
     # ------------------------------------------------------------------
     # Extraction — content classification
@@ -264,9 +646,9 @@ class CodexSessionCompute(BaseSessionCompute):
                 return ItemKind.USER_MESSAGE
             if sub_type == _PAYLOAD_AGENT_MESSAGE:
                 return ItemKind.ASSISTANT_MESSAGE
-            # Any persisted event_msg with a ``call_id`` is a tool_result
-            # End/Response event (see :func:`_event_msg_call_id`).
-            # Kind stays ``None`` so the base falls into the
+            # event_msg lines whose sub-type is in
+            # :data:`_PERSISTED_END_EVENT_TYPES` are tool_result End
+            # events. Kind stays ``None`` so the base falls into the
             # ``is_tool_result_item`` branch (-> DEBUG_ONLY).
             if _event_msg_call_id(parsed_json) is not None:
                 return None
@@ -274,9 +656,10 @@ class CodexSessionCompute(BaseSessionCompute):
         if wrapper_type == _TYPE_RESPONSE_ITEM and payload is not None:
             sub_type = payload.get("type")
             if sub_type in _TOOL_CALL_PAYLOAD_TYPES:
-                # Some function_call names don't deserve their own tool
-                # card (their meaningful trace is captured by another
-                # tool's event_msg.exec_command_end via the same call_id).
+                # ``write_stdin`` doesn't get its own tool card —
+                # its result chunks are rebound to the parent
+                # ``exec_command``'s ``ToolResultLink`` chain by
+                # :meth:`remap_tool_result_id`.
                 if (
                     sub_type == "function_call"
                     and payload.get("name") in _NON_TOOL_FUNCTION_NAMES
@@ -371,18 +754,17 @@ class CodexSessionCompute(BaseSessionCompute):
     def is_tool_result_item(self, parsed_json: dict) -> bool:
         # Two line shapes carry a tool_result for Codex:
         # - ``response_item`` with a ``*_call_output`` payload (the LLM-facing
-        #   string returned from the function call).
-        # - ``event_msg`` with a non-empty ``call_id`` — any of the
-        #   ``*End`` / ``*Response`` events (exec_command_end, patch_apply_end,
-        #   mcp_tool_call_end, web_search_end, image_generation_end,
-        #   collab_*_end, dynamic_tool_call_response, …). They carry the
-        #   structured outcome of the tool call and are paired with the
-        #   originating function_call by the ``call_id``.
-        # Both are routed to DEBUG_ONLY here and each gets its own
-        # ``ToolResultLink`` row when they arrive — they coexist for the
-        # same call_id (no replacement). The front uses the wrapper +
-        # tool name to know how many results to wait for via
-        # ``getExpectedResultCount`` before flipping the spinner off.
+        #   string returned from the function call). For exec_command
+        #   shells this is the chunked transcript; for write_stdin it's
+        #   one chunk of the parent exec_command's transcript (rebound
+        #   via :meth:`remap_tool_result_id`).
+        # - ``event_msg`` whose sub-type is in
+        #   :data:`_PERSISTED_END_EVENT_TYPES` (patch_apply_end,
+        #   mcp_tool_call_end, web_search_end, image_generation_end).
+        #   They carry the structured outcome of the tool call and are
+        #   paired with the originating function_call by ``call_id``.
+        # Both are routed to DEBUG_ONLY; the front uses the tool's
+        # ``isToolRunning`` hook to know when the chain is complete.
         wrapper_type = parsed_json.get("type")
         payload = _payload(parsed_json)
         if payload is None:
@@ -402,10 +784,12 @@ class CodexSessionCompute(BaseSessionCompute):
         # One tool_use per JSONL line in Codex (no nesting like Claude),
         # so the returned mapping has at most one entry. Keyed by the
         # OpenAI ``call_id`` — that's what the matching output also carries.
-        # Only function_call names that we actually render as tool cards
-        # contribute here; ``write_stdin`` is bucketed as SYSTEM upstream
-        # so its call_id never enters ``tool_use_map`` and thus never
-        # gets a ToolResultLink.
+        # ``write_stdin`` is included here even though its
+        # :meth:`compute_item_kind` returns ``SYSTEM`` (no tool card):
+        # we still need its call_id in ``tool_use_map`` so
+        # :meth:`remap_tool_result_id` can recognise its
+        # ``function_call_output`` and rebind it to the parent
+        # ``exec_command``'s call_id.
         if parsed_json.get("type") != _TYPE_RESPONSE_ITEM:
             return _EMPTY_TOOL_USE_ENTRIES
         payload = _payload(parsed_json)
@@ -414,8 +798,6 @@ class CodexSessionCompute(BaseSessionCompute):
         call_id = payload.get("call_id")
         name = payload.get("name")
         if not isinstance(call_id, str) or not call_id:
-            return _EMPTY_TOOL_USE_ENTRIES
-        if payload.get("type") == "function_call" and name in _NON_TOOL_FUNCTION_NAMES:
             return _EMPTY_TOOL_USE_ENTRIES
         return {call_id: name if isinstance(name, str) else ""}
 
@@ -429,19 +811,19 @@ class CodexSessionCompute(BaseSessionCompute):
         # Mirror of ``extract_tool_use_entries`` for the matching result
         # line. Two shapes contribute:
         # - response_item.{function_call_output, custom_tool_call_output}
-        #   — the LLM-facing output string. Never carries an error
-        #   signal we can read.
-        # - event_msg.* with a non-empty ``call_id`` — any persisted
-        #   ``*End`` / ``*Response`` event (exec_command_end,
-        #   patch_apply_end, mcp_tool_call_end, …). When both shapes
-        #   arrive for the same call_id they each become their own
-        #   ``ToolResultLink`` row (no dedup); the front knows whether
+        #   — the LLM-facing output string. For exec_command / write_stdin
+        #   shells the formatted trailer carries a ``Process exited with
+        #   code N`` line on terminal turns; we parse that into a
+        #   ``"Exit code N"`` error string when N != 0 (no shell-tool
+        #   discrimination needed: the pattern is unique to unified-exec
+        #   outputs, so :func:`_exit_code_error_from_output` returns
+        #   ``None`` for any other tool's output).
+        # - event_msg.* whose sub-type is in
+        #   :data:`_PERSISTED_END_EVENT_TYPES` (patch_apply_end,
+        #   mcp_tool_call_end, web_search_end, image_generation_end).
+        #   Both shapes coexist as separate ``ToolResultLink`` rows
+        #   for the same call_id (no dedup); the front knows whether
         #   to wait for both via ``getExpectedResultCount``.
-        # ``exec_command_end`` and ``patch_apply_end`` carry their own
-        # success signals (``exit_code`` int / ``success`` bool); we
-        # synthesise an error string for each non-success outcome so
-        # the shell light-up logic (running spinner ✕, danger callout,
-        # header tint) matches Claude Code's Bash / Edit behaviour.
         wrapper_type = parsed_json.get("type")
         payload = _payload(parsed_json)
         if payload is None:
@@ -450,7 +832,12 @@ class CodexSessionCompute(BaseSessionCompute):
             if payload.get("type") not in _TOOL_RESULT_PAYLOAD_TYPES:
                 return None
             call_id = payload.get("call_id")
-            error_text = None
+            output = payload.get("output", "")
+            error_text = (
+                _exit_code_error_from_output(output)
+                if isinstance(output, str)
+                else None
+            )
         elif wrapper_type == _TYPE_EVENT_MSG:
             call_id = _event_msg_call_id(parsed_json)
             error_text = _event_msg_payload_error(payload)
@@ -485,13 +872,29 @@ class CodexSessionCompute(BaseSessionCompute):
     ) -> str | None:
         """Return the JSON ``ToolResultLink.extra`` payload for this result.
 
-        Only ``apply_patch`` carries diff stats today, and only its
-        ``event_msg.patch_apply_end`` line does (the
-        ``custom_tool_call_output`` companion never has them). Returns
-        ``None`` for any other shape, in which case the inherited
-        machinery stores ``ToolResultLink.extra = NULL`` for that link.
+        Two shapes contribute today:
 
-        Output JSON shape (``orjson.dumps`` of the dict)::
+        - ``exec_command`` / ``write_stdin`` ``function_call_output``
+          rows whose trailer reports ``Process exited`` produce
+          ``{"is_terminated": true}``. Other rows in the same chain
+          (still-running polls, the synchronous one-shot's own running
+          status, the parent's first chunk) return ``None`` so the
+          tool_state's ``Max``-aggregated ``extra`` only flips to
+          terminated once we've seen the closing chunk.
+        - ``apply_patch`` ``event_msg.patch_apply_end`` rows produce
+          ``{"lines_added": N, "lines_removed": M, "files": [...]}``
+          so the front can show the per-tool badge.
+
+        Returns ``None`` everywhere else (most rows don't need an
+        ``extra`` payload).
+
+        Output JSON shapes (``orjson.dumps`` of the dict):
+
+        For exec_command / write_stdin completion::
+
+            {"is_terminated": true}
+
+        For apply_patch::
 
             {
                 # Aggregated totals across every entry in ``changes``.
@@ -524,6 +927,20 @@ class CodexSessionCompute(BaseSessionCompute):
         per-tool ``+N -M`` summary badge; the per-file breakdown is
         provided for future surfaces (it is not consumed yet today).
         """
+        # Shell family: emit the terminated flag on the closing chunk.
+        if tool_name in _EXEC_COMMAND_TOOLS:
+            if parsed_json.get("type") != _TYPE_RESPONSE_ITEM:
+                return None
+            payload = _payload(parsed_json)
+            if payload is None or payload.get("type") not in _TOOL_RESULT_PAYLOAD_TYPES:
+                return None
+            output = payload.get("output", "")
+            if not isinstance(output, str):
+                return None
+            if not parse_exec_command_status(output).is_terminated:
+                return None
+            return orjson.dumps({"is_terminated": True}).decode()
+
         if tool_name != "apply_patch":
             return None
         if parsed_json.get("type") != _TYPE_EVENT_MSG:
@@ -599,23 +1016,28 @@ class CodexSessionCompute(BaseSessionCompute):
         self,
         parsed_json: dict,
         *,
-        session_id: str,  # noqa: ARG002 (kept for signature compatibility; future remap may use it)
-        tool_use_map: dict,  # noqa: ARG002
+        session_id: str,
+        tool_use_map: dict[str, ToolUseEntry],
     ) -> ContentAnalysis:
         # Line shapes that contribute to content analysis in Codex:
         # - ``event_msg.user_message`` / ``event_msg.agent_message`` carry
         #   plain text.
-        # - ``event_msg.*`` with a non-empty ``call_id`` (see
-        #   :func:`_event_msg_call_id`) is a tool_result End/Response
-        #   event paired by ``call_id`` with the originating function_call.
+        # - ``event_msg.*`` whose sub-type is in
+        #   :data:`_PERSISTED_END_EVENT_TYPES` is a tool_result End event
+        #   paired by ``call_id`` with the originating function_call.
         # - ``response_item.function_call`` / ``custom_tool_call`` declares
-        #   a tool_use (except ``write_stdin``, which is bucketed as
-        #   SYSTEM and contributes nothing here).
+        #   a tool_use. ``write_stdin`` lands in ``tool_use_map`` here so
+        #   :meth:`remap_tool_result_id` can later rebind its output to
+        #   the parent ``exec_command``; it stays bucketed as ``SYSTEM``
+        #   for rendering via :meth:`compute_item_kind`.
         # - ``response_item.{function_call_output, custom_tool_call_output}``
-        #   is a tool_result. When an event_msg counterpart for the same
-        #   ``call_id`` exists, both shapes coexist as separate
-        #   ``ToolResultLink`` rows (no replacement). The front decides
-        #   when the tool is done via ``getExpectedResultCount``.
+        #   is a tool_result. For exec_command / write_stdin lines we
+        #   also (a) parse the trailer to derive an error string from
+        #   the formatted ``Process exited with code N`` line, and
+        #   (b) maintain ``self._exec_command_maps[session_id]`` —
+        #   adding an entry on ``Process running with session ID N`` and
+        #   evicting on a terminating exit so the remap hook can resolve
+        #   write_stdin children to their parent exec_command.
         # Every other line falls through to the empty analysis.
         wrapper_type = parsed_json.get("type")
         payload = _payload(parsed_json)
@@ -669,11 +1091,6 @@ class CodexSessionCompute(BaseSessionCompute):
 
             if sub_type in _TOOL_CALL_PAYLOAD_TYPES:
                 name = payload.get("name")
-                # write_stdin doesn't get a tool card — keep the line
-                # invisible to ``tool_use_map`` so neither it nor any
-                # later line will pair against its call_id.
-                if sub_type == "function_call" and name in _NON_TOOL_FUNCTION_NAMES:
-                    return _EMPTY_ANALYSIS
                 tool_use_entries = {call_id: name if isinstance(name, str) else ""}
                 return ContentAnalysis(
                     has_visible_content=True,
@@ -691,13 +1108,21 @@ class CodexSessionCompute(BaseSessionCompute):
                 )
 
             if sub_type in _TOOL_RESULT_PAYLOAD_TYPES:
+                # For exec_command / write_stdin outputs, parse the
+                # formatted trailer to (a) maintain the per-session
+                # ``exec_command_id`` map and (b) surface a
+                # ``"Exit code N"`` error string so the front lights up
+                # the same way it would for any other failed shell.
+                tool_result_error = self._maintain_exec_command_map(
+                    session_id, call_id, payload, tool_use_map
+                )
                 return ContentAnalysis(
                     has_visible_content=False,
                     text_content=None,
                     is_system_xml=False,
                     has_tool_result=True,
                     tool_result_id=call_id,
-                    tool_result_error=None,
+                    tool_result_error=tool_result_error,
                     tool_use_entries=_EMPTY_TOOL_USE_ENTRIES,
                     task_tool_uses=_EMPTY_TASK_TOOL_USES,
                     file_paths=_EMPTY_FILE_PATHS,

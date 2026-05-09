@@ -32,15 +32,20 @@ from twicc.providers.helpers import (
 # tool_result and pair with their function_call by ``call_id``:
 # - ``response_item.{function_call_output, custom_tool_call_output}`` —
 #   the LLM-facing output string of a standard / custom function call.
-# - ``event_msg.*`` with a non-empty ``payload.call_id`` — any persisted
-#   ``*End`` / ``*Response`` event (exec_command_end, patch_apply_end,
-#   mcp_tool_call_end, web_search_end, image_generation_end,
-#   collab_*_end, dynamic_tool_call_response, …) carrying the structured
-#   outcome. ``rollout/src/policy.rs`` only persists the End shape, so
-#   the ``call_id`` presence on a persisted event_msg is sufficient.
+# - ``event_msg.*`` whose sub-type is in :data:`_PERSISTED_END_EVENT_TYPES`
+#   — patch_apply_end, mcp_tool_call_end, web_search_end,
+#   image_generation_end. ``exec_command_end`` is intentionally absent:
+#   Codex CLI no longer persists it, so we reconstruct shell transcripts
+#   from the chain of function_call_output rows instead.
 _TYPE_RESPONSE_ITEM = "response_item"
 _TYPE_EVENT_MSG = "event_msg"
 _RESPONSE_TOOL_RESULT_PAYLOAD_TYPES = frozenset({"function_call_output", "custom_tool_call_output"})
+_PERSISTED_END_EVENT_TYPES = frozenset({
+    "patch_apply_end",
+    "mcp_tool_call_end",
+    "web_search_end",
+    "image_generation_end",
+})
 
 if TYPE_CHECKING:
     from twicc.core.models import SessionItem
@@ -115,21 +120,20 @@ class CodexHelpers(BaseProviderHelpers):
     def current_compute_version(self) -> int | None:
         """Return :data:`settings.CODEX_COMPUTE_VERSION`.
 
-        Classifies user/assistant messages, tool_use lines (function_call
-        / custom_tool_call, except ``write_stdin``), and pairs each
-        tool_use with its result through the inherited ``ToolResultLink``
-        machinery. Any persisted ``event_msg.*`` carrying a ``call_id``
-        (the End / Response shape: ``exec_command_end``,
-        ``patch_apply_end``, ``mcp_tool_call_end``, …) gets its own
-        ``ToolResultLink`` row alongside the matching
-        ``function_call_output`` — both coexist for the same call_id.
-        The front decides whether to keep the running spinner via
-        ``getExpectedResultCount`` (a tool with a ``*_end`` event waits
-        for both rows). Every other JSONL line goes to
-        ``ItemKind.SYSTEM``. Costs, runtime environment fields, and
-        reasoning items are not yet processed. Bump this constant when
-        the pipeline learns a new mapping so existing sessions are
-        recomputed.
+        Classifies user/assistant messages, tool_use lines
+        (function_call / custom_tool_call), and pairs each tool_use with
+        its result through the inherited ``ToolResultLink`` machinery.
+        Persisted ``event_msg`` ends in :data:`_PERSISTED_END_EVENT_TYPES`
+        (``patch_apply_end``, ``mcp_tool_call_end``, ``web_search_end``,
+        ``image_generation_end``) get their own ``ToolResultLink`` row
+        alongside the matching ``function_call_output``.
+        ``exec_command_end`` is no longer persisted by Codex CLI, so for
+        long-running shells we instead chain the parent ``exec_command``
+        and every ``write_stdin`` polling output onto a single
+        ``tool_use_id`` via :meth:`CodexSessionCompute.remap_tool_result_id`.
+        Every other JSONL line goes to ``ItemKind.SYSTEM``. Bump this
+        constant when the pipeline learns a new mapping so existing
+        sessions are recomputed.
         """
         return settings.CODEX_COMPUTE_VERSION
 
@@ -211,11 +215,13 @@ class CodexHelpers(BaseProviderHelpers):
 
         Two line shapes can carry a tool_result paired by ``call_id``:
         ``response_item.{function_call_output, custom_tool_call_output}``
-        (the LLM-facing string) and ``event_msg.*`` with a non-empty
-        ``call_id`` (any persisted End / Response event with the
-        structured outcome). Both are kept as separate
-        :class:`ToolResultLink` rows for the same call_id, so ``items``
-        typically contains both when both shapes arrived.
+        (the LLM-facing string — for long-running shells, multiple of
+        these chain together via :meth:`CodexSessionCompute.remap_tool_result_id`)
+        and ``event_msg`` lines whose sub-type is in
+        :data:`_PERSISTED_END_EVENT_TYPES` (the structured End events
+        we still consume). Each is kept as its own
+        :class:`ToolResultLink` row, so ``items`` typically contains
+        every chunk plus the structured end event when applicable.
 
         Callers already filtered ``items`` to the lines linked via
         :class:`ToolResultLink` for this ``tool_use_id``; we parse each
@@ -238,8 +244,10 @@ class CodexHelpers(BaseProviderHelpers):
                 if payload.get("type") not in _RESPONSE_TOOL_RESULT_PAYLOAD_TYPES:
                     continue
             elif wrapper_type == _TYPE_EVENT_MSG:
-                # Persisted event_msg with a call_id is an End / Response
-                # event; mirror the discovery rule used on the compute side.
+                # Only structured End events from the whitelist count —
+                # mirror the compute side's :func:`_event_msg_call_id`.
+                if payload.get("type") not in _PERSISTED_END_EVENT_TYPES:
+                    continue
                 event_call_id = payload.get("call_id")
                 if not isinstance(event_call_id, str) or not event_call_id:
                     continue
