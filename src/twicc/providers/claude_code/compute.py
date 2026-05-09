@@ -598,7 +598,12 @@ class ClaudeCodeSessionCompute(BaseSessionCompute):
             for item in content
         )
 
-    def extract_tool_use_entries(self, parsed_json: dict) -> dict[str, str]:
+    def extract_tool_use_entries(
+        self,
+        parsed_json: dict,
+        *,
+        session_id: str,  # noqa: ARG002 (kept for signature compatibility)
+    ) -> dict[str, str]:
         content = get_message_content_list(parsed_json, "assistant")
         if content is None:
             return {}
@@ -608,7 +613,13 @@ class ClaudeCodeSessionCompute(BaseSessionCompute):
             if isinstance(item, dict) and item.get('type') == 'tool_use' and item.get('id')
         }
 
-    def extract_tool_result_info(self, parsed_json: dict) -> ToolResultInfo | None:
+    def extract_tool_result_info(
+        self,
+        parsed_json: dict,
+        *,
+        session_id: str,  # noqa: ARG002 (kept for signature compatibility)
+        tool_use_map: dict | None = None,  # noqa: ARG002
+    ) -> ToolResultInfo | None:
         content = get_message_content_list(parsed_json, "user")
         if content is None:
             return None
@@ -931,7 +942,13 @@ class ClaudeCodeSessionCompute(BaseSessionCompute):
     # Batch compute
     # ------------------------------------------------------------------
 
-    def analyze_content(self, parsed_json: dict) -> ContentAnalysis:
+    def analyze_content(
+        self,
+        parsed_json: dict,
+        *,
+        session_id: str,  # noqa: ARG002 (kept for signature compatibility)
+        tool_use_map: dict,  # noqa: ARG002
+    ) -> ContentAnalysis:
         message = parsed_json.get('message')
         if not isinstance(message, dict):
             return _EMPTY_ANALYSIS

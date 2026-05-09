@@ -393,7 +393,12 @@ class CodexSessionCompute(BaseSessionCompute):
             return _event_msg_call_id(parsed_json) is not None
         return False
 
-    def extract_tool_use_entries(self, parsed_json: dict) -> dict[str, str]:
+    def extract_tool_use_entries(
+        self,
+        parsed_json: dict,
+        *,
+        session_id: str,  # noqa: ARG002 (kept for signature compatibility; future remap may use it)
+    ) -> dict[str, str]:
         # One tool_use per JSONL line in Codex (no nesting like Claude),
         # so the returned mapping has at most one entry. Keyed by the
         # OpenAI ``call_id`` — that's what the matching output also carries.
@@ -414,7 +419,13 @@ class CodexSessionCompute(BaseSessionCompute):
             return _EMPTY_TOOL_USE_ENTRIES
         return {call_id: name if isinstance(name, str) else ""}
 
-    def extract_tool_result_info(self, parsed_json: dict) -> ToolResultInfo | None:
+    def extract_tool_result_info(
+        self,
+        parsed_json: dict,
+        *,
+        session_id: str,  # noqa: ARG002 (kept for signature compatibility; future remap may use it)
+        tool_use_map: dict | None = None,  # noqa: ARG002
+    ) -> ToolResultInfo | None:
         # Mirror of ``extract_tool_use_entries`` for the matching result
         # line. Two shapes contribute:
         # - response_item.{function_call_output, custom_tool_call_output}
@@ -584,7 +595,13 @@ class CodexSessionCompute(BaseSessionCompute):
     # Batch compute
     # ------------------------------------------------------------------
 
-    def analyze_content(self, parsed_json: dict) -> ContentAnalysis:
+    def analyze_content(
+        self,
+        parsed_json: dict,
+        *,
+        session_id: str,  # noqa: ARG002 (kept for signature compatibility; future remap may use it)
+        tool_use_map: dict,  # noqa: ARG002
+    ) -> ContentAnalysis:
         # Line shapes that contribute to content analysis in Codex:
         # - ``event_msg.user_message`` / ``event_msg.agent_message`` carry
         #   plain text.

@@ -111,6 +111,19 @@ class ItemGroupInfo(NamedTuple):
     closed_items: list[Any] = []  # Items whose group was just closed
 
 
+class ToolUseEntry(NamedTuple):
+    """Entry stored in the batch orchestrator's ``tool_use_map``.
+
+    Indexed by tool_use_id (Claude's ``id``, Codex's ``call_id``), this carries
+    everything a provider may need to resolve a later tool_result back to its
+    originating tool_use — including the parsed payload of the tool_use line
+    so providers can read its arguments without re-parsing or hitting the DB.
+    """
+    line_num: int
+    tool_name: str
+    parsed_json: dict
+
+
 class ContentAnalysis(NamedTuple):
     """
     Single-pass extraction output used by the batch compute path.
@@ -496,13 +509,25 @@ class BaseSessionCompute:
         """
         raise NotImplementedError
 
-    def analyze_content(self, parsed_json: dict) -> ContentAnalysis:
+    def analyze_content(
+        self,
+        parsed_json: dict,
+        *,
+        session_id: str,
+        tool_use_map: dict[str, ToolUseEntry],
+    ) -> ContentAnalysis:
         """
         Single-pass content extraction used by the batch compute path.
 
         Returns a :class:`ContentAnalysis` populated from the provider's
         native content layout. Each provider produces the same neutral
         shape so the batch orchestration stays format-agnostic.
+
+        ``session_id`` lets providers stash per-session state if needed
+        (see :meth:`begin_session_compute` / :meth:`end_session_compute`).
+        ``tool_use_map`` is the orchestrator's batch-only map of every
+        tool_use seen so far; providers may inspect it to resolve cross-line
+        relationships (e.g. Codex's exec_command/write_stdin pairing).
         """
         raise NotImplementedError
 
@@ -635,12 +660,30 @@ class BaseSessionCompute:
         """Return ``True`` when the line carries a tool_result block."""
         raise NotImplementedError
 
-    def extract_tool_use_entries(self, parsed_json: dict) -> dict[str, str]:
-        """Return a ``{tool_use_id: tool_name}`` mapping for the line, possibly empty."""
+    def extract_tool_use_entries(
+        self, parsed_json: dict, *, session_id: str
+    ) -> dict[str, str]:
+        """Return a ``{tool_use_id: tool_name}`` mapping for the line, possibly empty.
+
+        ``session_id`` lets providers route to per-session state when needed.
+        """
         raise NotImplementedError
 
-    def extract_tool_result_info(self, parsed_json: dict) -> ToolResultInfo | None:
-        """Return :class:`ToolResultInfo` for the first tool_result, or ``None``."""
+    def extract_tool_result_info(
+        self,
+        parsed_json: dict,
+        *,
+        session_id: str,
+        tool_use_map: dict[str, ToolUseEntry] | None = None,
+    ) -> ToolResultInfo | None:
+        """Return :class:`ToolResultInfo` for the first tool_result, or ``None``.
+
+        ``tool_use_map`` is provided by the batch orchestrator (used when a
+        provider needs to resolve relationships across lines, e.g. Codex's
+        exec_command/write_stdin pairing). It is ``None`` in live mode
+        (``create_tool_result_link_live``) where the map does not exist
+        in memory.
+        """
         raise NotImplementedError
 
     def extract_agent_info_from_tool_result(
@@ -1006,7 +1049,7 @@ class BaseSessionCompute:
            tool-completion state for the front-end (spinner / error
            indicator).
         """
-        info = self.extract_tool_result_info(parsed_json)
+        info = self.extract_tool_result_info(parsed_json, session_id=session_id)
         if info is None or not info.tool_use_id:
             return None
         tool_use_id = info.tool_use_id
@@ -1027,7 +1070,9 @@ class BaseSessionCompute:
             except orjson.JSONDecodeError:
                 continue
 
-            tool_use_entries = self.extract_tool_use_entries(candidate_parsed)
+            tool_use_entries = self.extract_tool_use_entries(
+                candidate_parsed, session_id=session_id
+            )
             if tool_use_id in tool_use_entries:
                 tool_name = tool_use_entries[tool_use_id]
 
@@ -1448,7 +1493,7 @@ class BaseSessionCompute:
                 'started_at': link.started_at.isoformat() if link.started_at else None,
             }
 
-        tool_use_map: dict[str, tuple[int, str]] = {}
+        tool_use_map: dict[str, ToolUseEntry] = {}
         task_tool_use_map: dict[str, tuple[int, bool, datetime]] = {}
         initial_title_set = False
         session_titles: dict[str, str] = {}
@@ -1504,7 +1549,9 @@ class BaseSessionCompute:
                 content_overrides.append({'id': item.id, 'content': new_content})
 
             # Single-pass content analysis (avoids redundant traversals)
-            analysis = self.analyze_content(parsed)
+            analysis = self.analyze_content(
+                parsed, session_id=session_id, tool_use_map=tool_use_map
+            )
 
             # Compute display_level and kind
             metadata = self.compute_item_metadata(parsed)
@@ -1573,12 +1620,14 @@ class BaseSessionCompute:
 
             # Use analysis fields instead of individual function calls
             for tu_id, tu_name in analysis.tool_use_entries.items():
-                tool_use_map[tu_id] = (item.line_num, tu_name)
+                tool_use_map[tu_id] = ToolUseEntry(item.line_num, tu_name, parsed)
             for tu_id, is_background in analysis.task_tool_uses:
                 task_tool_use_map[tu_id] = (item.line_num, is_background, item.timestamp)
             tool_result_ref = analysis.tool_result_id
             if tool_result_ref and tool_result_ref in tool_use_map:
-                tu_line_num, tu_name = tool_use_map[tool_result_ref]
+                tu_entry = tool_use_map[tool_result_ref]
+                tu_line_num = tu_entry.line_num
+                tu_name = tu_entry.tool_name
                 extra = self.compute_file_change_stats(parsed, tu_name)
                 error = analysis.tool_result_error
                 new_key = (tool_result_ref, item.line_num)
