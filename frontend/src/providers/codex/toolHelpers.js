@@ -26,6 +26,7 @@ import { getParsedContent } from '../../utils/parsedContent'
 import DescriptionSummary from '../../components/session/detail/items/summary/DescriptionSummary.vue'
 import GrepSummary from '../../components/session/detail/items/summary/GrepSummary.vue'
 import ExecResultContent from '../../components/session/detail/items/codex/ExecResultContent.vue'
+import ReadResultContent from '../../components/session/detail/items/codex/ReadResultContent.vue'
 
 // ``function_call`` tools whose call is followed by a persisted
 // ``event_msg.<X>_end`` event paired by ``call_id``. Source of truth:
@@ -381,7 +382,7 @@ export class CodexToolHelpers extends BaseToolHelpers {
         }
     }
 
-    getResultRendering(name, result /*, input, ctx */) {
+    getResultRendering(name, result, input /*, ctx */) {
         if (!PARSED_COMMAND_TOOLS.has(name)) return null
         // ``result`` is whatever ``displayResult`` handed us — a single
         // payload object when there's only one row, or an array when
@@ -395,6 +396,29 @@ export class CodexToolHelpers extends BaseToolHelpers {
             (r) => r && typeof r.aggregated_output === 'string',
         )
         if (!execEnd) return null
+
+        // ``read``-classified calls get the same treatment as Claude
+        // Code's Read tool: try to extract ``cat -n`` / ``nl -ba``
+        // line numbers, surface them as a "Lines X–Y" header, and
+        // colour the code by the file's extension. Sourced from
+        // Codex's own ``parsed_cmd`` (carried on ``execEnd``); we
+        // fall back to our local parser if Codex didn't supply one
+        // (older CLIs / unexpected shapes).
+        const officialParsedCmd = Array.isArray(execEnd.parsed_cmd) && execEnd.parsed_cmd.length > 0
+            ? execEnd.parsed_cmd
+            : null
+        const stages = officialParsedCmd ?? parseCommand(extractCommandPayload(name, input))
+        const primary = pickPrimary(mergeStages(stages || []))
+        if (primary?.type === 'read' && primary.path) {
+            return {
+                component: ReadResultContent,
+                props: {
+                    aggregatedOutput: execEnd.aggregated_output,
+                    path: primary.path,
+                },
+            }
+        }
+
         return { component: ExecResultContent, props: { result: execEnd } }
     }
 
