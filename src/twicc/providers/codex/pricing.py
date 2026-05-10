@@ -1,6 +1,6 @@
 """Codex-specific pricing primitives.
 
-A single narrow helper lives here:
+Two narrow helpers live here, both shaped by Codex's JSONL output:
 
 - :func:`extract_model_info` parses the raw model name written to the
   Codex JSONL ``turn_context.payload.model`` field (e.g. ``"gpt-5-codex"``,
@@ -11,6 +11,13 @@ A single narrow helper lives here:
   OpenRouter ids); both must agree on ``(family, version)`` for the
   same model — exercised by ``tests/test_codex_pricing_parsing.py``.
 
+- :func:`to_token_usage` flattens an OpenAI Responses-API
+  ``last_token_usage`` dict (carried by Codex's
+  ``event_msg.token_count`` events) into the cross-provider
+  :class:`TokenUsage` that :func:`twicc.pricing.calculate_line_cost`
+  consumes — splitting OpenAI's "input includes cache hits" total into
+  the (fresh, cache_read) pair the cost calculator expects.
+
 Everything else (OpenRouter fetch, ``ModelPrice`` sync, the actual cost
 math, the periodic sync loop) lives in cross-provider modules
 (:mod:`twicc.pricing`, :mod:`twicc.pricing_task`).
@@ -18,6 +25,8 @@ math, the periodic sync loop) lives in cross-provider modules
 
 from functools import lru_cache
 from typing import NamedTuple
+
+from twicc.pricing import TokenUsage
 
 
 class ModelInfo(NamedTuple):
@@ -77,3 +86,44 @@ def extract_model_info(raw_name: str) -> ModelInfo | None:
     ]
     family = "gpt" if not extras else f"gpt-{'-'.join(extras)}"
     return ModelInfo(family=family, version=first)
+
+
+def to_token_usage(last: dict) -> TokenUsage:
+    """Convert a Codex JSONL ``last_token_usage`` dict to :class:`TokenUsage`.
+
+    Codex ``event_msg.token_count`` events carry the OpenAI Responses-API
+    counter shape under ``info.last_token_usage`` (and an identical
+    cumulative shape under ``info.total_token_usage``):
+
+    - ``input_tokens`` is the **total** prompt size for the call,
+      cache hits included (unlike Anthropic's, where ``input_tokens``
+      excludes cache reads);
+    - ``cached_input_tokens`` is the cached subset of ``input_tokens``;
+    - ``output_tokens`` is the total completion size, reasoning tokens
+      included (OpenAI bills reasoning at the output rate — there's no
+      separate pricing tier, so the per-line cost calculator doesn't
+      need a dedicated counter for it);
+    - ``reasoning_output_tokens`` and ``total_tokens`` are observability
+      duplicates of subsets / sums of the above; ignored here.
+
+    The cross-provider :class:`TokenUsage` expects ``input_tokens`` to
+    be the **fresh** input only — :func:`twicc.pricing.calculate_line_cost`
+    multiplies it by the full input price and then multiplies
+    ``cache_read_input_tokens`` by the discounted cache-read price
+    separately. To avoid double-billing we subtract the cached subset
+    before storing it.
+
+    OpenAI has no explicit cache-write tier today (cache writes are
+    absorbed in the regular input price, with 5-minute TTL behaviour
+    managed server-side), so both cache-write counters stay at zero.
+    """
+    cached = last.get("cached_input_tokens", 0) or 0
+    total_input = last.get("input_tokens", 0) or 0
+    fresh_input = max(total_input - cached, 0)
+    return TokenUsage(
+        input_tokens=fresh_input,
+        output_tokens=last.get("output_tokens", 0) or 0,
+        cache_read_input_tokens=cached,
+        cache_write_input_tokens_5m=0,
+        cache_write_input_tokens_1h=0,
+    )

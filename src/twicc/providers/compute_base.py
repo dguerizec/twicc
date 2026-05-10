@@ -637,6 +637,14 @@ class BaseSessionCompute:
         - ``cwd_git_branch``: native git branch reported alongside ``cwd``
         - ``model``: model identifier last seen
         - ``slug``: session slug last seen
+        - ``context_max``: model context window in tokens. Only emitted
+          by providers that publish the active window in their JSONL
+          (Codex's ``event_msg.task_started.model_context_window``).
+          Providers that don't expose it leave the key absent so the
+          base loop falls back to the persisted ``Session.context_max``
+          — important for Claude Code, where this field is set by the
+          user via the agent settings dialog and must not be wiped on
+          re-compute.
         """
         raise NotImplementedError
 
@@ -645,6 +653,7 @@ class BaseSessionCompute:
         item: SessionItem,
         parsed_json: dict,
         seen_message_ids: set[str],
+        current_model: str | None,
     ) -> None:
         """
         Compute cost / context usage and assign them on ``item`` in place.
@@ -653,6 +662,17 @@ class BaseSessionCompute:
         assigned the first time a given ``message_id`` is encountered
         (providers that stream multiple lines per API call share the
         same ``message_id``).
+
+        ``current_model`` is the running ``extract_runtime_fields``
+        ``model`` accumulated up to and including the current item
+        ("last non-null value seen" semantics), so it reflects the model
+        in effect when the line was emitted even if the model identifier
+        lives on a previous line. Providers whose billable lines don't
+        carry the model (e.g. Codex emits costs on
+        ``event_msg.token_count`` between two ``turn_context`` lines)
+        read the active model from this argument. Providers whose
+        billable lines carry their own model (e.g. Claude Code's
+        ``message.model``) ignore it.
         """
         raise NotImplementedError
 
@@ -1600,6 +1620,7 @@ class BaseSessionCompute:
         last_cwd_git_branch: str | None = None
         last_model: str | None = None
         last_slug: str | None = None
+        last_context_max: int | None = None
         last_resolved_git_directory: str | None = None
         last_resolved_git_branch: str | None = None
         found_compact_summary = False
@@ -1668,11 +1689,6 @@ class BaseSessionCompute:
             if item.timestamp is not None and self.is_session_start_marker(parsed):
                 last_started_at = item.timestamp
 
-            # Compute cost and context usage
-            self.compute_item_cost_and_usage(item, parsed, seen_message_ids)
-            if item.context_usage is not None:
-                last_context_usage = item.context_usage
-
             # Extract runtime environment fields
             runtime = self.extract_runtime_fields(parsed)
             if runtime.get('cwd'):
@@ -1685,6 +1701,15 @@ class BaseSessionCompute:
                 last_model = runtime['model']
             if runtime.get('slug'):
                 last_slug = runtime['slug']
+            if runtime.get('context_max') is not None:
+                last_context_max = runtime['context_max']
+
+            # Compute cost and context usage with the running model state
+            self.compute_item_cost_and_usage(
+                item, parsed, seen_message_ids, last_model,
+            )
+            if item.context_usage is not None:
+                last_context_usage = item.context_usage
 
             # Resolve git directory/branch from tool_use paths
             if item.git_directory is not None:
@@ -1879,6 +1904,13 @@ class BaseSessionCompute:
                 'git_branch': last_resolved_git_branch,
                 'model': last_model,
                 'slug': last_slug,
+                # Only emit ``context_max`` when the JSONL gave us a real
+                # value (Codex's ``task_started.model_context_window``).
+                # Providers that don't expose it (Claude Code) leave the
+                # accumulator at ``None`` and we must NOT serialise the
+                # key — otherwise the bulk update would clobber the
+                # user-set value coming from the agent settings dialog.
+                **({'context_max': last_context_max} if last_context_max is not None else {}),
                 'compacted': found_compact_summary,
                 'created_at': first_timestamp.isoformat() if first_timestamp else None,
                 'last_started_at': last_started_at.isoformat() if last_started_at else None,
@@ -2156,6 +2188,7 @@ class BaseSessionCompute:
         last_cwd_git_branch: str | None = None
         last_model: str | None = None
         last_slug: str | None = None
+        last_context_max: int | None = None
 
         # Updates to broadcast after processing
         agent_link_updates: list[AgentLinkUpdate] = []
@@ -2239,11 +2272,6 @@ class BaseSessionCompute:
             if item.timestamp is not None and self.is_session_start_marker(parsed):
                 last_started_at_update = item.timestamp
 
-            # Compute cost and context usage (with deduplication)
-            self.compute_item_cost_and_usage(item, parsed, seen_message_ids)
-
-            items_to_create.append((item, parsed))
-
             # Extract runtime environment fields (keep last non-null value)
             runtime = self.extract_runtime_fields(parsed)
             if runtime.get('cwd'):
@@ -2256,6 +2284,19 @@ class BaseSessionCompute:
                 last_model = runtime['model']
             if runtime.get('slug'):
                 last_slug = runtime['slug']
+            if runtime.get('context_max') is not None:
+                last_context_max = runtime['context_max']
+
+            # Compute cost and context usage with the running model state.
+            # Live mode only tracks ``last_model`` within the current batch,
+            # so we fall back to the persisted ``Session.model`` when this
+            # batch hasn't yet observed a fresh ``turn_context`` (typical
+            # for Codex billing items arriving mid-turn).
+            self.compute_item_cost_and_usage(
+                item, parsed, seen_message_ids, last_model or session.model,
+            )
+
+            items_to_create.append((item, parsed))
 
             # Handle title extraction
             if item.kind == ItemKind.USER_MESSAGE and initial_title_needs_set:
@@ -2399,6 +2440,12 @@ class BaseSessionCompute:
             session.model = last_model
         if last_slug and last_slug != session.slug:
             session.slug = last_slug
+        # Only override the persisted ``context_max`` when this batch
+        # actually saw a JSONL value (Codex's task_started window). For
+        # providers that don't expose it, ``last_context_max`` stays at
+        # ``None`` and the user-set window survives untouched.
+        if last_context_max is not None and last_context_max != session.context_max:
+            session.context_max = last_context_max
 
         # Update resolved git directory/branch from the latest item that has one
         # (items are processed in order, so the last one wins)

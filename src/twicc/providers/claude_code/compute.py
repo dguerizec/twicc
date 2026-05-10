@@ -557,6 +557,7 @@ class ClaudeCodeSessionCompute(BaseSessionCompute):
         item: SessionItem,
         parsed_json: dict,
         seen_message_ids: set[str],
+        current_model: str | None,  # noqa: ARG002 (model lives on the line itself)
     ) -> None:
         message = parsed_json.get("message", {})
         if not isinstance(message, dict):

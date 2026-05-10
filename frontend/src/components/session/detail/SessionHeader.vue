@@ -4,8 +4,7 @@ import { useDataStore } from '../../../stores/data'
 import { useSettingsStore } from '../../../stores/settings'
 import { formatDate } from '../../../utils/date'
 import { PROCESS_STATE, PROCESS_STATE_COLORS, PROCESS_STATE_NAMES, PROVIDER_ICON } from '../../../constants'
-import { claudeCodeHelpers } from '../../../providers/claude_code/helpers'
-import { getProviderLabel } from '../../../providers'
+import { getProviderHelpers, getProviderLabel } from '../../../providers'
 import { stopSubagent } from '../../../composables/useWebSocket'
 import { stopSessionProcess } from '../../../composables/useStopSessionProcess'
 import ProjectBadge from '../../project/ProjectBadge.vue'
@@ -101,9 +100,15 @@ const contextUsagePercentage = computed(() => {
     return Math.round((usage / contextMax.value) * 100)
 })
 
-// Tooltip text for context usage ring
+// Tooltip text for context usage ring. Resolve the choice label through
+// the session's own provider helpers so non-Claude providers (Codex,
+// future ones) can render their own ``context_max`` choice catalogue
+// (e.g. "272K" for gpt-5). Falls back to a rounded "XK" label when the
+// helper returns nothing — covers absent helpers and values not in the
+// provider's choice list.
 const contextUsageTooltip = computed(() => {
-    const label = claudeCodeHelpers.getChoiceLabel('context_max', contextMax.value) || `${Math.round(contextMax.value / 1000)}K`
+    const helpers = getProviderHelpers(session.value?.provider)
+    const label = helpers?.getChoiceLabel('context_max', contextMax.value) || `${Math.round(contextMax.value / 1000)}K`
     return `Context window usage (${label} max)`
 })
 

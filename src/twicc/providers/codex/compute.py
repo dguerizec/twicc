@@ -45,15 +45,26 @@ The ``call_id`` carried by every line above is the pairing key,
 stored as-is in ``ToolResultLink.tool_use_id`` (analogous to Claude's
 ``tool_use_id``).
 
-Token counts, costs, custom titles, session-start detection and
-subagent linkage are still out of scope at this stage. Runtime
-environment fields are partially wired: ``cwd`` and ``cwd_git_branch``
-come from the opening ``session_meta`` line, and ``cwd`` plus ``model``
-also come from each ``turn_context`` line (the base orchestrator's
-"last non-null wins" rule means a mid-session ``cd`` or model swap is
-reflected on ``Session.cwd`` / ``Session.model``). ``slug`` is unused
-(Codex doesn't expose one). File-change stats are wired for
-``apply_patch`` (aggregated ``+`` / ``-`` from the
+Token counts and costs are computed by
+:meth:`CodexSessionCompute.compute_item_cost_and_usage` from
+``event_msg.token_count`` events: ``last_token_usage`` is mapped to
+the cross-provider :class:`TokenUsage` via :func:`to_token_usage` and
+priced with the model carried by the running ``turn_context``;
+``info.total_token_usage.total_tokens`` acts as a monotonic clock to
+filter non-billable events (bootstrap snapshot, inter-turn
+re-emission, compaction-zero) — see the method docstring for details.
+
+Custom titles, session-start detection and subagent linkage remain
+out of scope at this stage. Runtime environment fields are partially
+wired: ``cwd`` and ``cwd_git_branch`` come from the opening
+``session_meta`` line, ``cwd`` plus ``model`` come from each
+``turn_context`` line, and ``context_max`` comes from the
+``event_msg.task_started.model_context_window`` emitted at every turn
+start (the base orchestrator's "last non-null wins" rule means a
+mid-session ``cd`` / model swap / window change is reflected on
+``Session.cwd`` / ``Session.model`` / ``Session.context_max``).
+``slug`` is unused (Codex doesn't expose one). File-change stats are
+wired for ``apply_patch`` (aggregated ``+`` / ``-`` from the
 ``patch_apply_end.changes`` map). Other hooks return empty / no-op
 values so the inherited base machinery (group state, batch compute,
 title extraction) still runs cleanly.
@@ -69,6 +80,7 @@ import orjson
 
 from twicc.core.enums import ItemKind, Provider
 from twicc.core.models import SessionItem
+from twicc.pricing import calculate_line_context_usage
 from twicc.providers.compute_base import (
     _EMPTY_ANALYSIS,
     _EMPTY_FILE_PATHS,
@@ -80,6 +92,8 @@ from twicc.providers.compute_base import (
     ToolUseEntry,
     parse_timestamp_to_datetime,
 )
+
+from .pricing import extract_model_info, to_token_usage
 
 
 # Keys at the wrapper level. Every Codex JSONL line is
@@ -95,6 +109,32 @@ _TYPE_SESSION_META = "session_meta"
 _TYPE_TURN_CONTEXT = "turn_context"
 _PAYLOAD_USER_MESSAGE = "user_message"
 _PAYLOAD_AGENT_MESSAGE = "agent_message"
+# ``event_msg.token_count`` is the only Codex line that carries usage
+# counters (``info.last_token_usage`` for the last LLM call,
+# ``info.total_token_usage`` for the cumulative session totals). Read
+# by :meth:`CodexSessionCompute.compute_item_cost_and_usage`.
+_PAYLOAD_TOKEN_COUNT = "token_count"
+# ``event_msg.task_started`` is emitted at the start of every turn and
+# carries the active model's context window in ``model_context_window``.
+# That value is **not** the nominal input window of the model: Codex
+# CLI publishes its internal compaction threshold instead — 95% of the
+# nominal input window, the rest left as headroom for the auto-compact
+# logic. For ``gpt-5.x`` the nominal input window is 272K (the
+# advertised 400K total = 272K input + 128K output reserved), so the
+# JSONL reports 272_000 × 0.95 = 258_400 on every ``task_started``.
+# We divide back by the factor below to recover the nominal window
+# the user expects to see in the UI (and to keep the ring meaningful
+# across the auto-compact step). Read by
+# :meth:`CodexSessionCompute.extract_runtime_fields` to populate
+# ``Session.context_max`` for sessions imported from JSONL.
+_PAYLOAD_TASK_STARTED = "task_started"
+# Compaction headroom Codex CLI reserves on top of the model's nominal
+# input window, expressed as the ratio of "published" to "nominal".
+# Used to recover the nominal window from
+# ``task_started.model_context_window``. If Codex changes the
+# headroom in a future release this constant will need adjusting (or
+# the math replaced by an explicit per-model lookup).
+_TASK_STARTED_WINDOW_HEADROOM_FACTOR = 0.95
 
 # response_item payload sub-types that represent a tool call. Each is its
 # own JSONL line (mono-block), unlike Claude where tool_uses live inside a
@@ -380,6 +420,19 @@ class CodexSessionCompute(BaseSessionCompute):
         # both eagerly (when a "Process exited" status is observed) and
         # lazily (in :meth:`end_session_compute`).
         self._exec_command_maps: dict[str, dict[int, str]] = {}
+        # {session_id: last seen ``info.total_token_usage.total_tokens``}.
+        # Updated by :meth:`compute_item_cost_and_usage` on every
+        # billable token_count event. The cumulative total advances only
+        # when the LLM call actually consumed tokens, so a token_count
+        # whose total matches the previous one carries no new activity:
+        # it's the bootstrap (``info: null``), an inter-turn re-emission
+        # (Codex republishes the previous totals at the start of a new
+        # turn), or the zero-snapshot emitted alongside a compaction.
+        # All three paths are filtered with a single equality check
+        # against this map. Initialised by :meth:`begin_session_compute`
+        # in batch mode and lazily seeded from the DB
+        # (:meth:`_lookup_prev_total_tokens`) in live mode.
+        self._prev_total_tokens: dict[str, int] = {}
 
     def _proc_map(self, session_id: str) -> dict[int, str]:
         """Return the per-session ``{exec_command_id: call_id}`` map.
@@ -391,16 +444,21 @@ class CodexSessionCompute(BaseSessionCompute):
         return self._exec_command_maps.setdefault(session_id, {})
 
     def begin_session_compute(self, session_id: str) -> None:
-        # Reset the map at the start of a batch compute so a previous
-        # run's leftover state can never leak into the new pass.
+        # Reset per-session state at the start of a batch compute so a
+        # previous run's leftover values can never leak into the new
+        # pass. Batch always reprocesses every line of the session, so
+        # starting the running total at zero is correct.
         self._exec_command_maps[session_id] = {}
+        self._prev_total_tokens[session_id] = 0
 
     def end_session_compute(self, session_id: str) -> None:
-        # Free the cache after a batch compute finishes. Live mode never
-        # calls this, which is fine: the cache is bounded by the number
-        # of concurrently-running unified-exec processes (usually 0–2)
-        # and entries get evicted on "Process exited".
+        # Free the per-session caches after a batch compute finishes.
+        # Live mode never calls this, which is fine: the exec_command
+        # map is bounded by concurrent unified-exec processes (usually
+        # 0–2) and entries get evicted on "Process exited"; the
+        # token-count map carries one int per active session.
         self._exec_command_maps.pop(session_id, None)
+        self._prev_total_tokens.pop(session_id, None)
 
     def _release_exec_command_for_call(
         self, session_id: str, call_id: str
@@ -722,7 +780,7 @@ class CodexSessionCompute(BaseSessionCompute):
     # Codex feature lands (tools, costs, runtime env, ...).
 
     def extract_runtime_fields(self, parsed_json: dict) -> dict:
-        # ``slug`` is out of scope (Codex doesn't expose one). Two line
+        # ``slug`` is out of scope (Codex doesn't expose one). Three line
         # shapes contribute to runtime fields:
         #
         # - ``session_meta`` (opening line, one per session) carries the
@@ -739,9 +797,22 @@ class CodexSessionCompute(BaseSessionCompute):
         #   keeps its initial value from ``session_meta``; the resolved
         #   ``Session.git_directory`` / ``Session.git_branch`` get
         #   re-derived from the new ``cwd`` downstream by the base.
+        # - ``event_msg.task_started`` (emitted alongside every new turn)
+        #   carries ``payload.model_context_window`` — Codex's published
+        #   compaction threshold, equal to 95% of the model's nominal
+        #   input window. We divide it back by
+        #   :data:`_TASK_STARTED_WINDOW_HEADROOM_FACTOR` and snap to the
+        #   nearest 1000 to recover the nominal window (272K for
+        #   ``gpt-5.x``: advertised 400K total = 272K input + 128K
+        #   output reserved), then surface it as ``context_max`` so the
+        #   base loop can write it onto ``Session.context_max``. This
+        #   gives us a real window value for sessions imported from
+        #   JSONL (and a tracking value if the user switches to a model
+        #   with a different window mid-session).
         cwd: str | None = None
         cwd_git_branch: str | None = None
         model: str | None = None
+        context_max: int | None = None
         wrapper_type = parsed_json.get("type")
         payload = _payload(parsed_json)
         if payload is not None:
@@ -761,23 +832,155 @@ class CodexSessionCompute(BaseSessionCompute):
                 value = payload.get("model")
                 if isinstance(value, str) and value:
                     model = value
+            elif (
+                wrapper_type == _TYPE_EVENT_MSG
+                and payload.get("type") == _PAYLOAD_TASK_STARTED
+            ):
+                window = payload.get("model_context_window")
+                if isinstance(window, int) and window > 0:
+                    # Recover the nominal window from Codex's published
+                    # 95%-of-nominal value, then snap to the nearest
+                    # 1000 so we get the round numbers a user expects
+                    # in the UI (272_000 instead of 271_999, etc.) and
+                    # tolerate small drift if Codex changes its rounding.
+                    nominal = window / _TASK_STARTED_WINDOW_HEADROOM_FACTOR
+                    context_max = round(nominal / 1000) * 1000
         return {
             "cwd": cwd,
             "cwd_git_branch": cwd_git_branch,
             "model": model,
             "slug": None,
+            "context_max": context_max,
         }
 
     def compute_item_cost_and_usage(
         self,
         item: SessionItem,
         parsed_json: dict,
-        seen_message_ids: set[str],
+        seen_message_ids: set[str],  # noqa: ARG002 (Codex dedups via total_tokens, not message_id)
+        current_model: str | None,
     ) -> None:
-        # No cost / context_usage assignment in V1. Codex emits
-        # token_count event_msgs but mapping them onto items + computing
-        # USD cost from OpenAI prices is a later step.
-        return None
+        """Assign ``cost`` and ``context_usage`` for Codex billing items.
+
+        Only ``event_msg.token_count`` lines carry usage data — every
+        other JSONL shape returns immediately. For matching lines the
+        algorithm is:
+
+        1. Skip lines whose ``info`` is null (the bootstrap snapshot
+           emitted before the first LLM call) or malformed.
+        2. Read ``info.total_token_usage.total_tokens`` and compare to
+           the previous value tracked in ``self._prev_total_tokens``.
+           When the cumulative total hasn't moved, this token_count is
+           non-billable:
+
+           - inter-turn re-emission (Codex republishes the previous
+             totals at the start of a new turn so its UI has the latest
+             snapshot before any new call lands);
+           - compaction-zero (a ``last_token_usage`` of ``0/0/0``
+             emitted alongside the ``compacted`` event).
+
+           Both are filtered by the same equality check.
+        3. Otherwise, advance the running total, convert
+           ``last_token_usage`` to the cross-provider :class:`TokenUsage`
+           via :func:`to_token_usage`, and assign ``context_usage`` plus
+           (when a current model and a timestamp are known) ``cost``.
+
+        The cumulative ``total_token_usage`` itself is **never** read
+        for billing — every call to :func:`calculate_line_cost` works
+        off the per-event ``last_token_usage``. The total only acts as
+        a monotonic clock for the dedup test above.
+
+        Live mode never calls :meth:`begin_session_compute`, so the
+        first time a session shows up here we lazy-seed
+        ``self._prev_total_tokens[session_id]`` from the DB via
+        :meth:`_lookup_prev_total_tokens` to avoid double-counting an
+        inter-turn re-emission that happens to be the first line of the
+        live batch.
+        """
+        if parsed_json.get("type") != _TYPE_EVENT_MSG:
+            return
+        payload = _payload(parsed_json)
+        if payload is None or payload.get("type") != _PAYLOAD_TOKEN_COUNT:
+            return
+        info = payload.get("info")
+        if not isinstance(info, dict):
+            return  # bootstrap snapshot (info: null), no billable activity
+        total_usage = info.get("total_token_usage")
+        if not isinstance(total_usage, dict):
+            return
+        cur_total = total_usage.get("total_tokens", 0) or 0
+
+        session_id = item.session_id
+        if session_id not in self._prev_total_tokens:
+            # Live mode: seed the running total from the most recent
+            # already-processed token_count in the DB so dedup works on
+            # the first batch line.
+            self._prev_total_tokens[session_id] = self._lookup_prev_total_tokens(
+                session_id, item.line_num,
+            )
+
+        if cur_total == self._prev_total_tokens[session_id]:
+            return  # no new billable activity (re-emission / compaction-zero)
+        self._prev_total_tokens[session_id] = cur_total
+
+        last_usage = info.get("last_token_usage")
+        if not isinstance(last_usage, dict):
+            return
+
+        token_usage = to_token_usage(last_usage)
+        item.context_usage = calculate_line_context_usage(token_usage)
+
+        if not current_model or item.timestamp is None:
+            return  # cost requires both an active model and a date
+        if extract_model_info(current_model) is None:
+            return  # unrecognised model name — no fallback bucket
+        from twicc.providers.helpers import get_provider_helpers
+        helpers = get_provider_helpers(Provider.CODEX)
+        model_id = f"{helpers.OPENROUTER_MODEL_PREFIX}{current_model}"
+        item.cost = helpers.calculate_line_cost(
+            token_usage, model_id, item.timestamp.date(),
+        )
+
+    def _lookup_prev_total_tokens(
+        self, session_id: str, current_line_num: int,
+    ) -> int:
+        """Return the latest already-processed ``total_tokens`` for the session.
+
+        Walks ``SessionItem`` rows of ``session_id`` whose ``line_num``
+        is below ``current_line_num``, in reverse, and returns the
+        ``info.total_token_usage.total_tokens`` of the first parseable
+        ``event_msg.token_count`` found. Returns ``0`` when the session
+        has no prior token_count (genuinely first event of a fresh
+        session) — then any subsequent token_count with a non-zero
+        total advances the dedup cursor as expected.
+
+        Used only by the live path; batch mode resets to ``0`` via
+        :meth:`begin_session_compute`. The scan stops at the first hit,
+        so it costs at most one row read on a healthy session.
+        """
+        candidates = SessionItem.objects.filter(
+            session_id=session_id,
+            line_num__lt=current_line_num,
+            content__contains='"type":"token_count"',
+        ).order_by('-line_num')
+        for candidate in candidates.iterator(chunk_size=10):
+            try:
+                parsed = orjson.loads(candidate.content)
+            except orjson.JSONDecodeError:
+                continue
+            if parsed.get("type") != _TYPE_EVENT_MSG:
+                continue
+            payload = _payload(parsed)
+            if payload is None or payload.get("type") != _PAYLOAD_TOKEN_COUNT:
+                continue
+            info = payload.get("info")
+            if not isinstance(info, dict):
+                continue
+            total_usage = info.get("total_token_usage")
+            if not isinstance(total_usage, dict):
+                continue
+            return total_usage.get("total_tokens", 0) or 0
+        return 0
 
     def is_tool_result_item(self, parsed_json: dict) -> bool:
         # Two line shapes carry a tool_result for Codex:

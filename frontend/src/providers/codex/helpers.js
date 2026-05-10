@@ -160,6 +160,28 @@ export class CodexHelpers extends BaseProviderHelpers {
     }
 
     /**
+     * Effective context window for a Codex session.
+     *
+     * Codex CLI exposes a single context_max bucket today (272K, the
+     * gpt-5 family window), so the override is just the standard
+     * fallback chain: the persisted ``session.context_max`` first, then
+     * the synced default the user chose in their global settings, then
+     * the hard-coded ``CONTEXT_MAX.DEFAULT`` baked into Codex CLI.
+     *
+     * The last fallback is what makes this override matter in practice:
+     * sessions imported from a JSONL file have ``context_max`` set to
+     * ``NULL`` in the DB (the compute pipeline doesn't populate it —
+     * Codex doesn't write the window into its JSONL anywhere we could
+     * read it), and would otherwise surface as ``null`` in the
+     * progress ring → ``Infinity%`` divide-by-zero in
+     * ``SessionHeader.vue``.
+     */
+    getEffectiveContextMax(session) {
+        const store = useCodexStore()
+        return session?.context_max ?? store.defaultContextMax ?? CONTEXT_MAX.DEFAULT
+    }
+
+    /**
      * Build a human-friendly label for a Codex ``selected_model`` value.
      * "gpt" → "GPT", "gpt-5.5" → "GPT 5.5".
      */
