@@ -11,6 +11,7 @@ this provider, so no Codex session can actually be created.
 from __future__ import annotations
 
 from collections.abc import Iterable
+from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar
 
@@ -18,6 +19,7 @@ import orjson
 from django.conf import settings
 
 from twicc.core.enums import Provider
+from twicc.pricing import FamilyPrices
 from twicc.providers.helpers import (
     AgentSettingCategory,
     BaseProviderHelpers,
@@ -25,6 +27,8 @@ from twicc.providers.helpers import (
     ModelVersion,
     UserMessage,
 )
+
+from .pricing import extract_model_info
 
 # Wrapper-level types and their tool-result payload sub-types. Mirrors
 # the discovery rules in ``codex.compute``; kept inline to avoid a
@@ -97,9 +101,40 @@ class CodexHelpers(BaseProviderHelpers):
     # no cross-provider meaning.
     SESSIONS_DIR: ClassVar[Path] = Path.home() / ".codex" / "sessions"
 
-    # OpenRouter pricing isn't wired yet for Codex — there's no agent
-    # runtime so no per-line cost computation either.
-    OPENROUTER_MODEL_PREFIX: ClassVar[str | None] = None
+    OPENROUTER_MODEL_PREFIX: ClassVar[str | None] = "openai/"
+
+    # Per-family default prices (USD per million tokens) — fallback when no
+    # ``ModelPrice`` row matches and no other version of the same family is
+    # in the DB. Restricted to the families actually observed in Codex CLI
+    # JSONLs (``gpt`` / ``gpt-codex`` / ``gpt-codex-max``); other OpenAI
+    # families (``gpt-mini``, ``gpt-pro``, …) get parsed correctly by
+    # :meth:`extract_family_and_version` but rely entirely on the synced
+    # OpenRouter rows since Codex CLI doesn't run them today. OpenRouter
+    # doesn't expose a separate ``input_cache_write`` price for OpenAI
+    # models, so the cache-write defaults are zero.
+    DEFAULT_FAMILY_PRICES: ClassVar[dict[str, FamilyPrices]] = {
+        "gpt": FamilyPrices(  # baseline gpt-5.4 pricing as of 2026-05
+            input_price=Decimal("2.50"),
+            output_price=Decimal("15.00"),
+            cache_read_price=Decimal("0.25"),
+            cache_write_5m_price=Decimal("0"),
+            cache_write_1h_price=Decimal("0"),
+        ),
+        "gpt-codex": FamilyPrices(  # gpt-5-codex pricing
+            input_price=Decimal("1.25"),
+            output_price=Decimal("10.00"),
+            cache_read_price=Decimal("0.125"),
+            cache_write_5m_price=Decimal("0"),
+            cache_write_1h_price=Decimal("0"),
+        ),
+        "gpt-codex-max": FamilyPrices(  # gpt-5.1-codex-max pricing
+            input_price=Decimal("1.25"),
+            output_price=Decimal("10.00"),
+            cache_read_price=Decimal("0.125"),
+            cache_write_5m_price=Decimal("0"),
+            cache_write_1h_price=Decimal("0"),
+        ),
+    }
 
     # Single supported model. ``selected_model_value`` will return ``"gpt"``
     # for this entry (latest of its family), matching the Claude Code
@@ -156,27 +191,57 @@ class CodexHelpers(BaseProviderHelpers):
             return False, f"Missing required keys: {', '.join(sorted(missing))}"
         return True, "Valid Codex usage file"
 
+    def extract_family_and_version(
+        self, model_id: str,
+    ) -> tuple[str | None, str | None]:
+        """Parse an OpenAI OpenRouter ``model_id`` into ``(family, version)``.
+
+        Handles the layout used by every OpenAI entry on OpenRouter:
+        ``openai/gpt-<version>[-<variant>...]`` where ``<version>`` is
+        the dotted-numeric portion (``"5"``, ``"5.1"``, ``"5.4"``) and
+        the optional variant suffix names a pricing-equivalence bucket
+        folded into the family so siblings under the same variant
+        share a single fallback bucket:
+
+        - ``openai/gpt-5-codex``       → ``("gpt-codex", "5")``
+        - ``openai/gpt-5.1-codex-max`` → ``("gpt-codex-max", "5.1")``
+        - ``openai/gpt-5.4``           → ``("gpt", "5.4")``
+        - ``openai/gpt-5.4-mini``      → ``("gpt-mini", "5.4")``
+        - ``openai/gpt-5.5-pro``       → ``("gpt-pro", "5.5")``
+
+        Returns ``(None, None)`` for ids that don't follow the
+        ``gpt-<version>...`` pattern: missing ``openai/`` prefix, bare
+        prefix without a body, non-numeric first segment
+        (``openai/gpt-audio``, ``openai/gpt-chat-latest``,
+        ``openai/gpt-oss-120b``), version mixing digits with letters
+        (``openai/gpt-4o``, ``openai/gpt-4o-mini``), or anything outside
+        the ``openai/gpt-`` namespace (``openai/o3-deep-research``,
+        ``anthropic/claude-opus-4.5``).
+        """
+        prefix = "openai/"
+        if not model_id.startswith(prefix):
+            return None, None
+        info = extract_model_info(model_id.removeprefix(prefix))
+        if info is None:
+            return None, None
+        return info.family, info.version
+
     def serialize_model(self, model: str | None) -> dict | None:
         """Serialize a Codex model identifier as ``{raw, family, version}``.
 
-        Returns ``None`` for an empty input. The compute pipeline does
-        not extract Codex models in V1, so ``session.model`` is always
-        ``None`` for now — but ``serialize_session`` still calls this
-        on every broadcast, so we need a real (no-op) implementation.
-
-        For non-empty strings, falls back to a generic split on the
-        first ``-`` (e.g. ``gpt-5-codex`` → family ``gpt``, version
-        ``5-codex``). Replace this with a proper Codex model parser
-        when the compute pipeline learns to extract the active model.
+        Returns ``None`` for an empty input. Defers to
+        :func:`extract_model_info` so the wire shape matches the
+        pricing-equivalence buckets used by
+        :meth:`extract_family_and_version` (e.g. ``"gpt-5-codex"`` →
+        family ``"gpt-codex"`` on both sides). Falls back to
+        ``{raw, None, None}`` when the format is not recognised.
         """
         if not model:
             return None
-        family, sep, version = model.partition("-")
-        return {
-            "raw": model,
-            "family": family or None,
-            "version": version if sep else None,
-        }
+        info = extract_model_info(model)
+        if info is None:
+            return {"raw": model, "family": None, "version": None}
+        return {"raw": model, "family": info.family, "version": info.version}
 
     # ------------------------------------------------------------------
     # Full-text search indexing — stub (no compute / no search yet)
