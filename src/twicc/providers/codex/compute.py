@@ -1096,7 +1096,24 @@ class CodexSessionCompute(BaseSessionCompute):
         return []
 
     def extract_paths_from_tool_uses(self, parsed_json: dict) -> list[str]:
-        return _EMPTY_FILE_PATHS
+        # Codex only exposes absolute file paths through
+        # ``event_msg.patch_apply_end.changes`` (a ``{abs_path: change_entry}``
+        # map). The matching ``custom_tool_call name=apply_patch`` ships
+        # its patch as raw Lark grammar with paths that may be relative,
+        # and ``exec_command`` / ``write_stdin`` carry arbitrary shell
+        # text — neither is a reliable source for git resolution. So
+        # only ``patch_apply_end`` rows contribute paths here, and any
+        # session that doesn't apply a patch falls back on the cwd-based
+        # git resolution in the orchestrator (see ``compute_base``).
+        if parsed_json.get("type") != _TYPE_EVENT_MSG:
+            return _EMPTY_FILE_PATHS
+        payload = _payload(parsed_json)
+        if payload is None or payload.get("type") != "patch_apply_end":
+            return _EMPTY_FILE_PATHS
+        changes = payload.get("changes")
+        if not isinstance(changes, dict):
+            return _EMPTY_FILE_PATHS
+        return [p for p in changes if isinstance(p, str) and p.startswith("/")]
 
     def compute_link_extra(
         self, parsed_json: dict, tool_name: str

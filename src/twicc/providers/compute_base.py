@@ -1014,19 +1014,16 @@ class BaseSessionCompute:
         """
         Compute group membership for ``item`` during live watcher sync.
 
-        Updates ``item.group_head`` / ``item.group_tail`` (and possibly
-        ``git_directory`` / ``git_branch``) in place, and returns the
-        set of pre-existing item line numbers whose ``group_tail`` was
-        updated as a side effect.
+        Updates ``item.group_head`` / ``item.group_tail`` in place, and
+        returns the set of pre-existing item line numbers whose
+        ``group_tail`` was updated as a side effect.
 
-        Algorithm is shared across providers; only the git resolution and
-        prefix/suffix detection are dispatched through provider hooks.
+        Algorithm is shared across providers; only prefix/suffix
+        detection is dispatched through a provider hook. Git resolution
+        is handled separately at the call site so it runs for every
+        item, including DEBUG_ONLY ones that carry tool paths
+        (e.g. Codex's ``event_msg.patch_apply_end``).
         """
-        # Resolve git directory/branch from tool_use paths (no cache for live resolution)
-        git_resolution = self.resolve_git_for_item(parsed_json, use_cache=False)
-        if git_resolution is not None:
-            item.git_directory, item.git_branch = git_resolution
-
         # Initialize group fields
         item.group_head = None
         item.group_tail = None
@@ -2361,14 +2358,23 @@ class BaseSessionCompute:
                 'timestamp': item.timestamp,
             }
 
+            # Resolve git directory/branch from tool_use paths for every
+            # item, mirroring the bulk-compute path. This must happen
+            # outside the COLLAPSIBLE/ALWAYS gate so DEBUG_ONLY items
+            # carrying tool paths (e.g. Codex's event_msg.patch_apply_end)
+            # also contribute to git resolution.
+            git_resolution = self.resolve_git_for_item(parsed, use_cache=False)
+            if git_resolution is not None:
+                item.git_directory, item.git_branch = git_resolution
+                update_fields['git_directory'] = item.git_directory
+                update_fields['git_branch'] = item.git_branch
+
             # Group membership for COLLAPSIBLE and ALWAYS items
             if item.display_level in (ItemDisplayLevel.COLLAPSIBLE, ItemDisplayLevel.ALWAYS):
                 item_modified_lines = self.compute_item_metadata_live(session.id, item, parsed)
                 modified_line_nums.update(item_modified_lines)
                 update_fields['group_head'] = item.group_head
                 update_fields['group_tail'] = item.group_tail
-                update_fields['git_directory'] = item.git_directory
-                update_fields['git_branch'] = item.git_branch
 
             # Update the item in DB with all computed fields
             SessionItem.objects.filter(
