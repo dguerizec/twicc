@@ -45,11 +45,16 @@ The ``call_id`` carried by every line above is the pairing key,
 stored as-is in ``ToolResultLink.tool_use_id`` (analogous to Claude's
 ``tool_use_id``).
 
-Token counts, costs, runtime environment fields (cwd / model / git
-branch), custom titles, session-start detection and subagent linkage
-are still out of scope at this stage. File-change stats are wired for
+Token counts, costs, custom titles, session-start detection and
+subagent linkage are still out of scope at this stage. Runtime
+environment fields are partially wired: ``cwd`` and ``cwd_git_branch``
+come from the opening ``session_meta`` line, and ``cwd`` plus ``model``
+also come from each ``turn_context`` line (the base orchestrator's
+"last non-null wins" rule means a mid-session ``cd`` or model swap is
+reflected on ``Session.cwd`` / ``Session.model``). ``slug`` is unused
+(Codex doesn't expose one). File-change stats are wired for
 ``apply_patch`` (aggregated ``+`` / ``-`` from the
-``patch_apply_end.changes`` map). Their hooks return empty / no-op
+``patch_apply_end.changes`` map). Other hooks return empty / no-op
 values so the inherited base machinery (group state, batch compute,
 title extraction) still runs cleanly.
 """
@@ -82,6 +87,12 @@ from twicc.providers.compute_base import (
 # go through ``payload`` to reach Codex-specific fields.
 _TYPE_EVENT_MSG = "event_msg"
 _TYPE_RESPONSE_ITEM = "response_item"
+# ``session_meta`` is the opening line of a Codex JSONL (one per
+# session) — carries the initial cwd + native git branch. ``turn_context``
+# is emitted on every turn — carries the current cwd and model. Both
+# feed :meth:`CodexSessionCompute.extract_runtime_fields`.
+_TYPE_SESSION_META = "session_meta"
+_TYPE_TURN_CONTEXT = "turn_context"
 _PAYLOAD_USER_MESSAGE = "user_message"
 _PAYLOAD_AGENT_MESSAGE = "agent_message"
 
@@ -711,20 +722,30 @@ class CodexSessionCompute(BaseSessionCompute):
     # Codex feature lands (tools, costs, runtime env, ...).
 
     def extract_runtime_fields(self, parsed_json: dict) -> dict:
-        # ``model`` / ``slug`` are still out of scope for V1.
-        # ``cwd`` and ``cwd_git_branch`` both live on the
-        # ``session_meta`` opening line (one per session): ``cwd`` is
-        # ``payload.cwd`` and the branch reported by Codex itself is
-        # ``payload.git.branch``. Filesystem-based ``git_branch``
-        # resolution can drift (worktree gone, branch renamed since)
-        # so we still capture the provider's own value as a stable
-        # historical fallback (cf. the matching ``Session.cwd_git_branch``
-        # comment).
+        # ``slug`` is out of scope (Codex doesn't expose one). Two line
+        # shapes contribute to runtime fields:
+        #
+        # - ``session_meta`` (opening line, one per session) carries the
+        #   initial ``payload.cwd`` and ``payload.git.branch``. The latter
+        #   is captured as a stable historical fallback for
+        #   ``cwd_git_branch`` — filesystem-based resolution can drift
+        #   (worktree gone, branch renamed since) (cf. the matching
+        #   ``Session.cwd_git_branch`` comment).
+        # - ``turn_context`` (emitted on every turn) carries
+        #   ``payload.cwd`` and ``payload.model``. The base orchestrator's
+        #   "last non-null wins" rule means a mid-session ``cd`` updates
+        #   ``Session.cwd`` and a model swap updates ``Session.model``.
+        #   ``turn_context`` does NOT carry git info — ``cwd_git_branch``
+        #   keeps its initial value from ``session_meta``; the resolved
+        #   ``Session.git_directory`` / ``Session.git_branch`` get
+        #   re-derived from the new ``cwd`` downstream by the base.
         cwd: str | None = None
         cwd_git_branch: str | None = None
-        if parsed_json.get("type") == "session_meta":
-            payload = _payload(parsed_json)
-            if payload is not None:
+        model: str | None = None
+        wrapper_type = parsed_json.get("type")
+        payload = _payload(parsed_json)
+        if payload is not None:
+            if wrapper_type == _TYPE_SESSION_META:
                 value = payload.get("cwd")
                 if isinstance(value, str) and value:
                     cwd = value
@@ -733,10 +754,17 @@ class CodexSessionCompute(BaseSessionCompute):
                     branch = git_info.get("branch")
                     if isinstance(branch, str) and branch:
                         cwd_git_branch = branch
+            elif wrapper_type == _TYPE_TURN_CONTEXT:
+                value = payload.get("cwd")
+                if isinstance(value, str) and value:
+                    cwd = value
+                value = payload.get("model")
+                if isinstance(value, str) and value:
+                    model = value
         return {
             "cwd": cwd,
             "cwd_git_branch": cwd_git_branch,
-            "model": None,
+            "model": model,
             "slug": None,
         }
 
