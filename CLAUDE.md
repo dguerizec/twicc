@@ -104,6 +104,8 @@ When starting the backend, devctl passes `TWICC_DATA_DIR` to the backend process
 
 ### Worktree Support
 
+**IMPORTANT:** When working in a worktree, every Bash command must be prefixed with `cd <worktree-path> && ` — never rely on the Bash tool's persistent cwd to still be the worktree from a previous command. A wrong cwd on a destructive command (`devctl.py restart`, `devctl.py stop`, manual `migrate`, …) will hit the main project's servers / data dir instead of the worktree's, killing real work.
+
 devctl automatically detects git worktrees (by comparing `git rev-parse --git-dir` vs `--git-common-dir`). When running in a worktree, it sets `TWICC_DATA_DIR` to the worktree root, so database, logs, and `.env` are all local to that worktree.
 
 Each worktree has its own:
