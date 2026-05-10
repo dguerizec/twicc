@@ -2,25 +2,32 @@
 Claude Code file watcher.
 
 Thin :class:`~twicc.providers.sessions_watcher.BaseSessionsWatcher` subclass
-that plugs in Claude Code's directory layout, compute object, and agent
-manager hook. Everything else (watchfiles loop, ORM updates, broadcasts,
-search indexing, polling) lives in the base.
+that plugs in Claude Code's directory layout, compute object, agent manager
+hook, and project-directory tracking. Everything else (watchfiles loop, ORM
+updates, broadcasts, search indexing, polling) lives in the base.
 """
 from __future__ import annotations
 
 import logging
+import os
 import re
 from pathlib import Path
 from typing import ClassVar
 
+from asgiref.sync import sync_to_async
+from watchfiles import Change
+
 from twicc.core.models import SessionType
+from twicc.core.serializers import serialize_project
 
 from .compute import get_compute as _get_compute
 from .helpers import ClaudeCodeHelpers
 from twicc.providers.compute_base import BaseSessionCompute, ToolResultUpdate
 from twicc.providers.sessions_watcher import (
     BaseSessionsWatcher,
-    ParsedPath,
+    ParsedSessionFile,
+    broadcast_message,
+    get_project_by_id,
 )
 
 logger = logging.getLogger(__name__)
@@ -40,11 +47,16 @@ class ClaudeCodeSessionsWatcher(BaseSessionsWatcher):
     - ``project_id/session_id/subagents/agent-a<hex>.jsonl`` →
       :class:`SessionType.SUBAGENT` (sidechain files like
       ``agent-acompact-*`` or ``agent-aprompt_suggestion-*`` are skipped).
+
+    Direct children of :attr:`projects_dir` are project directories: their
+    creation/deletion is handled by :meth:`maybe_handle_special_change`,
+    which broadcasts a ``project_updated`` event when the working
+    directory referenced by the project disappears.
     """
 
     projects_dir: ClassVar[Path] = ClaudeCodeHelpers.PROJECTS_DIR
 
-    def parse_jsonl_path(self, path: Path) -> ParsedPath | None:
+    async def parse_session_file(self, path: Path) -> ParsedSessionFile | None:
         try:
             relative = path.relative_to(self.projects_dir)
         except ValueError:
@@ -60,7 +72,7 @@ class ClaudeCodeSessionsWatcher(BaseSessionsWatcher):
                 return None
             if filename.endswith(".jsonl"):
                 session_id = filename.removesuffix(".jsonl")
-                return ParsedPath(
+                return ParsedSessionFile(
                     project_id,
                     session_id,
                     SessionType.SESSION,
@@ -76,7 +88,7 @@ class ClaudeCodeSessionsWatcher(BaseSessionsWatcher):
                 and _REAL_SUBAGENT_RE.match(filename) is not None
             ):
                 agent_id = filename.removeprefix("agent-").removesuffix(".jsonl")
-                return ParsedPath(
+                return ParsedSessionFile(
                     project_id,
                     agent_id,
                     SessionType.SUBAGENT,
@@ -88,6 +100,52 @@ class ClaudeCodeSessionsWatcher(BaseSessionsWatcher):
 
     def get_compute(self) -> BaseSessionCompute:
         return _get_compute()
+
+    async def maybe_handle_special_change(
+        self,
+        path: Path,
+        change_type: Change,
+        channel_layer,
+    ) -> bool:
+        """Handle direct children of :attr:`projects_dir` as project dirs."""
+        if path.parent != self.projects_dir:
+            return False
+        if not (path.is_dir() or change_type == Change.deleted):
+            return False
+        await self._sync_project_and_broadcast(path, channel_layer)
+        return True
+
+    async def _sync_project_and_broadcast(
+        self,
+        path: Path,
+        channel_layer,
+    ) -> None:
+        """
+        React to a project directory being created or deleted.
+
+        Projects are NOT created eagerly here. They are created lazily
+        when the first session with content appears (in
+        ``sync_and_broadcast``). This avoids polluting the project list
+        with empty folders (e.g. folders left behind after Claude
+        sublimates old sessions).
+
+        This handler only updates the stale flag on existing projects.
+        Stale is based on working directory existence, not the provider folder.
+        """
+        project = await get_project_by_id(path.name)
+        if project is None:
+            return
+
+        should_be_stale = (
+            project.directory is not None and not os.path.isdir(project.directory)
+        )
+        if project.stale != should_be_stale:
+            project.stale = should_be_stale
+            await sync_to_async(project.save)(update_fields=["stale"])
+            await broadcast_message(channel_layer, {
+                "type": "project_updated",
+                "project": serialize_project(project),
+            })
 
     async def _after_tool_result_broadcast(self, update: ToolResultUpdate) -> None:
         """Drop the active-tool entry left over by hooks that never fired.

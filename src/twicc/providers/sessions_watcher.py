@@ -4,7 +4,7 @@ Provider-agnostic file watcher for JSONL session files.
 Each provider stores session files under a native directory layout below its
 own ``projects_dir`` (e.g. Claude Code uses ``~/.claude/projects/``). A
 provider-specific subclass of :class:`BaseSessionsWatcher` plugs that layout
-in by overriding :meth:`BaseSessionsWatcher.parse_jsonl_path` and the
+in by overriding :meth:`BaseSessionsWatcher.parse_session_file` and the
 ``projects_dir`` class attribute. The base class owns the watchfiles loop,
 ORM updates, WebSocket broadcasts, full-text search indexing, and the
 projects-dir polling phase — all generic across providers.
@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar
@@ -58,8 +57,14 @@ PROJECTS_DIR_POLL_INTERVAL_FAST = 5
 FAST_POLL_DURATION = 30
 
 
-class ParsedPath:
-    """Result of parsing a JSONL file path. Generic across providers."""
+class ParsedSessionFile:
+    """Identity of a session file as recognized by a provider.
+
+    Built by :meth:`BaseSessionsWatcher.parse_session_file`, which may
+    inspect both the path and (optionally) the file content. Codex for
+    instance reads the first JSONL line to recover ``project_id`` from
+    the session's ``cwd``, since the file path itself does not encode it.
+    """
     __slots__ = ('project_id', 'session_id', 'type', 'parent_session_id', 'file_path')
 
     def __init__(
@@ -175,7 +180,7 @@ async def broadcast_message(channel_layer, message: dict) -> None:
 class BaseSessionsWatcher:
     """Provider-agnostic file watcher for JSONL session files.
 
-    Subclasses set :attr:`projects_dir` and implement :meth:`parse_jsonl_path`
+    Subclasses set :attr:`projects_dir` and implement :meth:`parse_session_file`
     and :meth:`get_compute`. The base orchestrates everything else:
     incremental sync via the compute object, broadcast of session/project
     updates, full-text search indexing, and the projects-dir polling phase
@@ -197,13 +202,17 @@ class BaseSessionsWatcher:
     # Provider extension surface — overridden by each subclass
     # ------------------------------------------------------------------
 
-    def parse_jsonl_path(self, path: Path) -> ParsedPath | None:
-        """Parse a JSONL file path into a :class:`ParsedPath`.
+    async def parse_session_file(self, path: Path) -> ParsedSessionFile | None:
+        """Identify a JSONL file as a provider-recognized session.
 
         Returns ``None`` if ``path`` does not match any known layout for
         this provider (the watcher silently skips such paths). The
         returned ``file_path`` must be the path relative to
         :attr:`projects_dir`.
+
+        Implementations may need to read the file (e.g. Codex extracts
+        ``project_id`` from the first JSONL line); they should offload
+        any blocking I/O via :func:`asyncio.to_thread`.
         """
         raise NotImplementedError
 
@@ -229,6 +238,26 @@ class BaseSessionsWatcher:
         fired (e.g. CLI-side validation rejection).
         """
         return None
+
+    async def maybe_handle_special_change(
+        self,
+        path: Path,
+        change_type: Change,
+        channel_layer,
+    ) -> bool:
+        """Hook for provider-specific path patterns that aren't ``.jsonl`` files.
+
+        Called for every change before the default ``.jsonl`` handling.
+        Returning ``True`` consumes the event (default loop ``continue``);
+        returning ``False`` lets the base watcher proceed with its normal
+        dispatch (skip non-jsonl, parse session file, sync, broadcast).
+
+        Default implementation is a no-op that returns ``False``. Claude
+        Code overrides this to detect direct children of
+        :attr:`projects_dir` as project directories and broadcast their
+        creation/deletion as ``project_*`` events.
+        """
+        return False
 
     # ------------------------------------------------------------------
     # Per-instance event accessors
@@ -275,7 +304,7 @@ class BaseSessionsWatcher:
 
     def create_session_sync(
         self,
-        parsed: ParsedPath,
+        parsed: ParsedSessionFile,
         project: Project,
         parent_session: Session | None = None,
         agent_settings: AgentSettings | None = None,
@@ -367,42 +396,10 @@ class BaseSessionsWatcher:
     # Change handlers
     # ------------------------------------------------------------------
 
-    async def sync_project_and_broadcast(
-        self,
-        path: Path,
-        change_type: Change,
-        channel_layer,
-    ) -> None:
-        """
-        Handle a project directory being created or deleted.
-
-        Projects are NOT created eagerly here. They are created lazily when the
-        first session with content appears (in ``sync_and_broadcast``). This
-        avoids polluting the project list with empty folders (e.g. folders
-        left behind after Claude sublimates old sessions).
-
-        This handler only updates the stale flag on existing projects.
-        Stale is based on working directory existence, not the provider folder.
-        """
-        project = await get_project_by_id(path.name)
-        if project is None:
-            return
-
-        should_be_stale = (
-            project.directory is not None and not os.path.isdir(project.directory)
-        )
-        if project.stale != should_be_stale:
-            project.stale = should_be_stale
-            await sync_to_async(project.save)(update_fields=["stale"])
-            await broadcast_message(channel_layer, {
-                "type": "project_updated",
-                "project": serialize_project(project),
-            })
-
     async def sync_and_broadcast(
         self,
         path: Path,
-        parsed: ParsedPath,
+        parsed: ParsedSessionFile,
         change_type: Change,
         channel_layer,
     ) -> None:
@@ -687,9 +684,10 @@ class BaseSessionsWatcher:
                 try:
                     path = Path(path_str)
 
-                    # Handle project directories (direct children of projects_dir)
-                    if path.parent == projects_dir and (path.is_dir() or change_type == Change.deleted):
-                        await self.sync_project_and_broadcast(path, change_type, channel_layer)
+                    # Provider-specific path patterns (e.g. project directory
+                    # creation/deletion for Claude Code). No-op for providers
+                    # that only care about jsonl files (e.g. Codex).
+                    if await self.maybe_handle_special_change(path, change_type, channel_layer):
                         continue
 
                     # Skip non-jsonl files
@@ -697,7 +695,7 @@ class BaseSessionsWatcher:
                         continue
 
                     # Parse path to determine type (session or subagent)
-                    parsed = self.parse_jsonl_path(path)
+                    parsed = await self.parse_session_file(path)
                     if parsed is None:
                         # Invalid path — silently skip
                         continue

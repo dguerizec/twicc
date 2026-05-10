@@ -2,9 +2,9 @@
 Codex provider orchestrator.
 
 Owns the Codex initial JSONL sync, the background metadata compute,
-the Codex CLI auth check task, the ChatGPT usage sync task, and the
-OpenAI statuspage poll. There is no JSONL watcher or agent runtime
-yet — those will land when the agent runtime is wired.
+the JSONL sessions watcher, the Codex CLI auth check task, the ChatGPT
+usage sync task, and the OpenAI statuspage poll. The agent runtime is
+not wired yet — it will land alongside the Codex CLI integration.
 """
 
 from __future__ import annotations
@@ -26,6 +26,7 @@ from twicc.providers.background_task import (
 )
 from twicc.providers.codex.auth_task import start_auth_task, stop_auth_task
 from twicc.providers.codex.initial_sync import scan_session_files, sync_all
+from twicc.providers.codex.sessions_watcher import get_watcher
 from twicc.providers.codex.statuspage_task import start_statuspage_task, stop_statuspage_task
 from twicc.providers.codex.usage_task import start_usage_sync_task, stop_usage_sync_task
 from twicc.startup_progress import broadcast_startup_progress
@@ -45,6 +46,21 @@ async def _cancel_task(task: asyncio.Task, name: str) -> None:
     except asyncio.CancelledError:
         pass
     logger.info("%s stopped", name)
+
+
+def _on_watcher_done(task: asyncio.Task) -> None:
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.error(
+            "Watcher task crashed with exception — file changes will no longer be detected!",
+            exc_info=exc,
+        )
+    else:
+        logger.warning(
+            "Watcher task ended unexpectedly (no exception) — file changes will no longer be detected"
+        )
 
 
 class CodexOrchestrator(BaseOrchestrator):
@@ -70,10 +86,12 @@ class CodexOrchestrator(BaseOrchestrator):
         self._statuspage_task: asyncio.Task | None = None
 
         # Started by the dependency orchestrator coroutine after the
-        # initial sync completes. Stays None when shutdown is requested
-        # before the sync finished.
+        # initial sync completes (compute) or after the search index is
+        # also ready (watcher). Both stay None when shutdown is requested
+        # before their prerequisites complete.
         self._compute_task: asyncio.Task | None = None
         self._compute_ctx: ComputeContext | None = None
+        self._watcher_task: asyncio.Task | None = None
 
     def request_thread_stop(self) -> None:
         """Signal the cooperative stop event for the initial sync thread.
@@ -84,19 +102,20 @@ class CodexOrchestrator(BaseOrchestrator):
         self._sync_stop_event.set()
 
     async def start(self, shutdown_event: asyncio.Event, search_index_ready: asyncio.Event) -> None:
-        """Launch the initial sync, dependency orchestrator, auth check,
-        usage sync, and statuspage tasks.
+        """Launch the initial sync, dependency orchestrator, watcher, auth
+        check, usage sync, and statuspage tasks.
 
-        ``search_index_ready`` is unused today: Codex has no JSONL
-        watcher, so all FTS indexing happens through the cross-provider
-        startup task (``twicc.search_indexing_task``) once
-        :attr:`compute_done` fires — the helpers in
-        :class:`twicc.providers.codex.helpers.CodexHelpers` extract the
-        searchable text from the JSONL ``event_msg.{user,agent}_message``
-        payloads. The signature stays aligned with
-        :meth:`BaseOrchestrator.start` so the CLI can call ``start_all``
-        uniformly.
+        ``shutdown_event`` is currently unused (Codex has no cron-style
+        loops that need to watch it directly — the watcher uses its own
+        per-instance stop event, set in :meth:`shutdown`). The parameter
+        stays in the signature to match :meth:`BaseOrchestrator.start`.
+
+        ``search_index_ready`` is awaited by :meth:`_dependency_orchestrator`
+        before launching the JSONL watcher, since the watcher writes new
+        items into the global Tantivy index as they arrive.
         """
+        self.search_index_ready = search_index_ready
+
         self._sync_task = self._create_task(self._initial_sync_task())
         self._orch_task = self._create_task(self._dependency_orchestrator())
         self._auth_check_task = self._create_task(start_auth_task())
@@ -118,6 +137,14 @@ class CodexOrchestrator(BaseOrchestrator):
 
         if self._orch_task is not None:
             await _cancel_task(self._orch_task, "Codex orchestrator task")
+
+        # Watcher (may not have started yet — depends on initial sync + search index ready)
+        if self._watcher_task is not None:
+            logger.info("Stopping Codex watcher...")
+            get_watcher().stop_watcher()
+            await _cancel_task(self._watcher_task, "Codex watcher")
+        else:
+            logger.info("Codex watcher was not started, skipping")
 
         # Background compute (may not have started yet — depends on initial sync)
         if self._compute_task is not None:
@@ -191,7 +218,8 @@ class CodexOrchestrator(BaseOrchestrator):
         self.initial_sync_done.set()
 
     async def _dependency_orchestrator(self) -> None:
-        """Wait for the initial sync, then start the background compute task.
+        """Wait for the initial sync, then start the background compute and
+        the JSONL watcher.
 
         Background compute reads existing Codex sessions whose stored
         ``compute_version`` differs from
@@ -200,6 +228,12 @@ class CodexOrchestrator(BaseOrchestrator):
         :attr:`compute_done` so the CLI's global search-indexing task
         can fire — it must run on success, failure, **and** cancel,
         otherwise the CLI would block forever.
+
+        The watcher writes new items into the global Tantivy index, so
+        it must wait until the CLI has called ``init_search_index()``
+        and signalled :attr:`search_index_ready`. Background compute
+        does not touch the index, so it starts as soon as the initial
+        sync is done.
         """
         await self.initial_sync_done.wait()
 
@@ -213,3 +247,9 @@ class CodexOrchestrator(BaseOrchestrator):
         )
         self._compute_task.add_done_callback(lambda _t: self.compute_done.set())
         logger.info("Codex background compute started (after initial sync)")
+
+        assert self.search_index_ready is not None, "search_index_ready must be set by start()"
+        await self.search_index_ready.wait()
+        self._watcher_task = self._create_task(get_watcher().start_watcher())
+        self._watcher_task.add_done_callback(_on_watcher_done)
+        logger.info("Codex watcher started (after initial sync + search index ready)")

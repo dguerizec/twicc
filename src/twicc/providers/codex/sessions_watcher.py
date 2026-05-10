@@ -1,0 +1,100 @@
+"""
+Codex file watcher.
+
+Thin :class:`~twicc.providers.sessions_watcher.BaseSessionsWatcher` subclass
+that plugs in Codex's directory layout and compute object. Everything else
+(watchfiles loop, ORM updates, broadcasts, search indexing, polling) lives
+in the base.
+
+Codex uses a date-based layout — ``~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl``
+— with no per-project subfolder, so we cannot derive ``project_id`` from
+the path itself. :meth:`CodexSessionsWatcher.parse_session_file` instead
+reads the first JSONL line (the ``session_meta`` event) to recover the
+session UUID and the working directory, then maps that ``cwd`` to the
+canonical TwiCC project id via :func:`twicc.paths.path_to_project_id` —
+matching exactly what :func:`twicc.providers.codex.initial_sync.sync_all`
+does for brand-new files.
+"""
+from __future__ import annotations
+
+import asyncio
+import logging
+from pathlib import Path
+from typing import ClassVar
+
+from twicc.core.models import SessionType
+from twicc.paths import path_to_project_id
+from twicc.providers.compute_base import BaseSessionCompute
+from twicc.providers.sessions_watcher import (
+    BaseSessionsWatcher,
+    ParsedSessionFile,
+)
+
+from .compute import get_compute as _get_compute
+from .helpers import CodexHelpers
+from .initial_sync import extract_session_meta, is_session_file
+
+logger = logging.getLogger(__name__)
+
+
+class CodexSessionsWatcher(BaseSessionsWatcher):
+    """File watcher for Codex's ``~/.codex/sessions/`` layout.
+
+    Recognized layout: ``YYYY/MM/DD/rollout-<uuid>.jsonl`` →
+    :class:`SessionType.SESSION`. Codex has no subagent concept today;
+    every recognized file is a top-level session.
+    """
+
+    projects_dir: ClassVar[Path] = CodexHelpers.SESSIONS_DIR
+
+    async def parse_session_file(self, path: Path) -> ParsedSessionFile | None:
+        if not is_session_file(path):
+            return None
+
+        try:
+            relative = path.relative_to(self.projects_dir)
+        except ValueError:
+            return None
+
+        # Codex stores files under YYYY/MM/DD/, never directly under
+        # SESSIONS_DIR. Anything shallower is unrecognized.
+        if len(relative.parts) < 2:
+            return None
+
+        # Extract session_id + cwd from the first JSONL line. This is
+        # blocking I/O (open + readline + orjson parse), so we offload
+        # it to a worker thread to keep the watcher event loop snappy.
+        meta = await asyncio.to_thread(extract_session_meta, path)
+        if meta is None:
+            # Empty file, unreadable, or missing session_meta — silently
+            # skip; sync_and_broadcast won't be called.
+            return None
+
+        project_id = path_to_project_id(meta.cwd)
+        return ParsedSessionFile(
+            project_id,
+            meta.session_id,
+            SessionType.SESSION,
+            file_path=str(relative),
+        )
+
+    def get_compute(self) -> BaseSessionCompute:
+        return _get_compute()
+
+
+# ---- Singleton accessor ----
+
+_watcher: CodexSessionsWatcher | None = None
+
+
+def get_watcher() -> CodexSessionsWatcher:
+    """Return the process-local Codex watcher singleton.
+
+    Callers (orchestrator) should go through this rather than
+    instantiating their own watcher, so the stop/boost events and
+    fast-poll deadline are shared.
+    """
+    global _watcher
+    if _watcher is None:
+        _watcher = CodexSessionsWatcher()
+    return _watcher
