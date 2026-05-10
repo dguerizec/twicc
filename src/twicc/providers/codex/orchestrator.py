@@ -87,8 +87,13 @@ class CodexOrchestrator(BaseOrchestrator):
         """Launch the initial sync, dependency orchestrator, auth check,
         usage sync, and statuspage tasks.
 
-        ``search_index_ready`` is unused today: Codex has no JSONL watcher
-        writing into the search index. The signature stays aligned with
+        ``search_index_ready`` is unused today: Codex has no JSONL
+        watcher, so all FTS indexing happens through the cross-provider
+        startup task (``twicc.search_indexing_task``) once
+        :attr:`compute_done` fires — the helpers in
+        :class:`twicc.providers.codex.helpers.CodexHelpers` extract the
+        searchable text from the JSONL ``event_msg.{user,agent}_message``
+        payloads. The signature stays aligned with
         :meth:`BaseOrchestrator.start` so the CLI can call ``start_all``
         uniformly.
         """

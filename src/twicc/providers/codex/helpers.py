@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, ClassVar
 import orjson
 from django.conf import settings
 
-from twicc.core.enums import Provider
+from twicc.core.enums import ItemKind, Provider
 from twicc.pricing import FamilyPrices
 from twicc.providers.helpers import (
     AgentSettingCategory,
@@ -50,6 +50,12 @@ _PERSISTED_END_EVENT_TYPES = frozenset({
     "web_search_end",
     "image_generation_end",
 })
+# event_msg sub-types that carry an indexable chat message body. Mirrors
+# the matching constants in ``codex.compute``; kept inline for the same
+# reason as the tool-result lookups above.
+_PAYLOAD_USER_MESSAGE = "user_message"
+_PAYLOAD_AGENT_MESSAGE = "agent_message"
+_INDEXABLE_PAYLOAD_TYPES = frozenset({_PAYLOAD_USER_MESSAGE, _PAYLOAD_AGENT_MESSAGE})
 
 if TYPE_CHECKING:
     from twicc.core.models import SessionItem
@@ -244,28 +250,62 @@ class CodexHelpers(BaseProviderHelpers):
         return {"raw": model, "family": info.family, "version": info.version}
 
     # ------------------------------------------------------------------
-    # Full-text search indexing — stub (no compute / no search yet)
+    # Full-text search indexing
     # ------------------------------------------------------------------
     #
-    # Codex has no compute pipeline and no parsed content shape yet, so
-    # the search index has nothing to index from a Codex session. These
-    # stubs return empty results to keep the cross-provider search
-    # indexing task (``twicc.search_indexing_task``) from raising
-    # NotImplementedError on every Codex session at startup. When the
-    # Codex compute lands, real implementations replace these.
+    # Codex stores chat message bodies as a flat ``payload.message``
+    # string on ``event_msg.user_message`` / ``event_msg.agent_message``
+    # lines (no content array, no nested blocks — see
+    # :func:`codex.compute._event_msg_text`). We use that single string
+    # both as the searchable text and as the title-suggest input.
+
+    def extract_indexable_text(self, item: SessionItem) -> str:
+        try:
+            parsed = orjson.loads(item.content)
+        except (orjson.JSONDecodeError, TypeError):
+            return ""
+        if not isinstance(parsed, dict) or parsed.get("type") != _TYPE_EVENT_MSG:
+            return ""
+        payload = parsed.get("payload")
+        if not isinstance(payload, dict) or payload.get("type") not in _INDEXABLE_PAYLOAD_TYPES:
+            return ""
+        message = payload.get("message")
+        if isinstance(message, str) and message.strip():
+            return message
+        return ""
 
     def get_user_messages(
         self,
         items: Iterable[SessionItem],
         limit: int | None = None,
     ) -> list[UserMessage]:
-        return []
+        out: list[UserMessage] = []
+        for item in items:
+            if limit is not None and len(out) >= limit:
+                break
+            text = self.extract_indexable_text(item)
+            if text:
+                out.append(UserMessage(
+                    line_num=item.line_num,
+                    timestamp=item.timestamp,
+                    text=text,
+                ))
+        return out
 
     def get_indexable_messages(self, items: Iterable[SessionItem]) -> list[IndexableMessage]:
-        return []
-
-    def extract_indexable_text(self, item: SessionItem) -> str:
-        return ""
+        out: list[IndexableMessage] = []
+        for item in items:
+            text = self.extract_indexable_text(item)
+            if not text:
+                continue
+            from_role = "user" if item.kind == ItemKind.USER_MESSAGE else "assistant"
+            out.append(IndexableMessage(
+                line_num=item.line_num,
+                text=text,
+                from_role=from_role,
+                timestamp=item.timestamp,
+            ))
+        return out
 
     # ------------------------------------------------------------------
     # Tool results
