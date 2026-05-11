@@ -641,6 +641,24 @@ export function useWebSocket() {
             case 'project_updated':
                 store.updateProject(msg.project)
                 break
+            case 'session_bound': {
+                // The backend has confirmed the provider-side canonical id
+                // bound to a local draft. If the canonical session is already
+                // in the store, finalize immediately; otherwise arm a pending
+                // draft binding that will fire when the watcher lands the
+                // session via `session_updated` (handled in addSession /
+                // updateSession). For providers that accept a client-supplied
+                // id (Claude Code), draft_session_id === session_id and
+                // bindDraftSession is a no-op.
+                const draftId = msg.draft_session_id
+                const sessionId = msg.session_id
+                if (store.getSession(sessionId)) {
+                    store.bindDraftSession(draftId, sessionId)
+                } else {
+                    store.localState.pendingDraftBindings[draftId] = sessionId
+                }
+                break
+            }
             case 'session_updated': {
                 const existingSession = store.getSession(msg.session.id)
                 if (existingSession?.draft) {

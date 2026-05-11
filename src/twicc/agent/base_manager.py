@@ -13,10 +13,13 @@ import asyncio
 import logging
 import time
 from collections.abc import Callable, Coroutine
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .base_agent import BaseAgent
 from .states import AgentInfo, AgentState
+
+if TYPE_CHECKING:
+    from twicc.providers.helpers import AgentSettings
 
 logger = logging.getLogger(__name__)
 
@@ -165,6 +168,59 @@ class BaseAgentManager:
     # Lifecycle helpers (called by subclasses)
     # ------------------------------------------------------------------
 
+    async def _start_agent(
+        self,
+        session_id: str,
+        project_id: str,
+        cwd: str,
+        text: str,
+        resume: bool,
+        *,
+        settings: AgentSettings,
+        **start_kwargs: Any,
+    ) -> None:
+        """Build a provider agent, bind it to its canonical id, register and start.
+
+        Common entry point for both new sessions (``resume=False``, the
+        ``session_id`` argument is the frontend-side draft) and resumes
+        (``resume=True``, ``session_id`` is the canonical id already known
+        to the frontend).
+
+        For brand-new sessions, the provider's ``_create_agent`` is expected
+        to return an agent whose ``session_id`` is the canonical id. If the
+        provider accepts a client-supplied id (Claude Code) the two are
+        equal; if it mints its own (Codex) they differ — in either case,
+        ``notify_session_bound`` tells the frontend which canonical id was
+        bound to its local draft so it can reconcile its state.
+
+        Provider-specific factory kwargs go through ``settings`` (universal)
+        and ``_create_agent`` overrides. Provider-specific start kwargs
+        (e.g. ``images``/``documents`` for Claude Code) are forwarded through
+        ``start_kwargs`` to ``_register_and_start`` and ultimately to
+        ``agent.start``.
+
+        Must be called while holding ``self._lock``.
+        """
+        label = "session" if resume else "draft session"
+        logger.debug(
+            "Creating agent for %s %s, project %s",
+            label, session_id, project_id,
+        )
+        agent = await self._create_agent(
+            session_id, project_id, cwd, resume=resume, settings=settings,
+        )
+
+        # Brand-new sessions: tell the frontend which canonical id is bound
+        # to its local draft, so it can reconcile (redirect or discard).
+        # On resume the frontend already knows the canonical id — skip it.
+        if not resume:
+            await self.notify_session_bound(
+                draft_session_id=session_id,
+                session_id=agent.session_id,
+            )
+
+        await self._register_and_start(agent, text, resume=resume, **start_kwargs)
+
     async def _register_and_start(
         self,
         agent: BaseAgent,
@@ -176,6 +232,10 @@ class BaseAgentManager:
 
         Must be called while holding ``self._lock``. Failures inside
         ``agent.start`` should be reported via the DEAD state, not raised.
+
+        By the time this method runs, ``agent.session_id`` is the canonical
+        provider-side id (the draft → canonical resolution, if any, happens
+        earlier in ``_start_agent``). Everything below operates on that id.
         """
         from django.utils import timezone as dj_timezone
 
@@ -294,6 +354,47 @@ class BaseAgentManager:
                 "Error broadcasting session_updated for %s: %s", session_id, e,
             )
 
+    async def notify_session_bound(
+        self, draft_session_id: str, session_id: str,
+    ) -> None:
+        """Broadcast the canonical session id bound to a local draft.
+
+        The frontend mints a ``draft_session_id`` (UUID) when the user starts a
+        new conversation and uses it locally — store key, URL, IndexedDB draft.
+        Providers that accept a client-supplied id (Claude Code) reuse it as
+        the canonical id; providers that mint their own (Codex) return a
+        different id. This broadcast tells the frontend which canonical id is
+        now bound to the draft so it can reconcile its local state: redirect
+        ``/sessions/{draft_session_id}`` to ``/sessions/{session_id}`` if the
+        user is still on the draft, or just discard the local draft otherwise.
+
+        Called once per new session, as early as the provider can confirm the
+        canonical id. Not called on resume (the frontend already knows the id).
+        When ``draft_session_id == session_id`` the frontend treats it as a
+        no-op (the existing ``session_updated`` path upgrades the draft in
+        place).
+        """
+        from channels.layers import get_channel_layer
+
+        channel_layer = get_channel_layer()
+        try:
+            await channel_layer.group_send(
+                "updates",
+                {
+                    "type": "broadcast",
+                    "data": {
+                        "type": "session_bound",
+                        "draft_session_id": draft_session_id,
+                        "session_id": session_id,
+                    },
+                },
+            )
+        except Exception as e:
+            logger.error(
+                "Error broadcasting session_bound for draft=%s, session=%s: %s",
+                draft_session_id, session_id, e,
+            )
+
     # ------------------------------------------------------------------
     # Timeout monitor
     # ------------------------------------------------------------------
@@ -360,8 +461,28 @@ class BaseAgentManager:
     # Hooks — override in subclasses
     # ------------------------------------------------------------------
 
-    async def _create_agent(self, *args: Any, **kwargs: Any) -> BaseAgent:
-        """Factory hook: build a provider-specific agent instance."""
+    async def _create_agent(
+        self,
+        session_id: str,
+        project_id: str,
+        cwd: str,
+        *,
+        resume: bool,
+        settings: AgentSettings,
+        **kwargs: Any,
+    ) -> BaseAgent:
+        """Factory hook: build a provider-specific agent instance.
+
+        For providers that accept a client-supplied id (Claude Code), build
+        the agent with ``session_id`` as-is — that becomes the canonical id.
+        For providers that mint their own id (Codex), ignore ``session_id``
+        when ``resume`` is ``False`` and obtain the canonical id from the
+        provider (e.g. via ``thread/start``) before constructing the agent.
+        When ``resume`` is ``True``, ``session_id`` is the canonical id
+        already known to the frontend in every case.
+
+        The returned agent must carry the canonical id in ``agent.session_id``.
+        """
         raise NotImplementedError
 
     async def _check_agent_timeout(

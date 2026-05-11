@@ -359,6 +359,14 @@ export const useDataStore = defineStore('data', {
             // but uuid not yet known). While any block has stopped=false, the
             // WorkingAssistantMessage is hidden (streaming is actively showing content).
             streamingBlocks: {},
+
+            // Pending draft → canonical session bindings, armed when a
+            // `session_bound` WS message arrives before the canonical
+            // session is in the store (i.e. before the watcher's
+            // `session_updated`). { draftSessionId: sessionId }
+            // Drained by tryFinalizePendingBinding() the moment the
+            // canonical session lands in the store.
+            pendingDraftBindings: {},
         }
     }),
 
@@ -800,6 +808,7 @@ export const useDataStore = defineStore('data', {
         // Sessions
         addSession(session) {
             this.$patch({ sessions: { [session.id]: session } })
+            this.tryFinalizePendingBinding(session.id)
         },
         updateSession(session) {
             // When lifecycle timestamps change, clean up stale synthetic process states
@@ -817,6 +826,7 @@ export const useDataStore = defineStore('data', {
                 session = { ...session, last_new_content_at: prev.last_new_content_at }
             }
             this.$patch({ sessions: { [session.id]: session } })
+            this.tryFinalizePendingBinding(session.id)
         },
         /**
          * Create a draft session for a project.
@@ -884,6 +894,59 @@ export const useDataStore = defineStore('data', {
                 deleteDraftSessionFromDb(sessionId).catch(err =>
                     console.warn('Failed to delete draft session from IndexedDB:', err)
                 )
+            }
+        },
+
+        /**
+         * Bind a local draft session to its canonical id, once both the
+         * `session_bound` WS message and the canonical session itself are
+         * available in the store. Decisions are taken at this point, not when
+         * `session_bound` arrived: if the user has navigated away from the
+         * draft in the meantime, no redirect happens.
+         *
+         * No-op when `draftId === sessionId`: the provider accepted the
+         * client-supplied id (Claude Code) and the existing `session_updated`
+         * path will upgrade the draft entry in place.
+         *
+         * @param {string} draftId - The local draft session id (URL key).
+         * @param {string} sessionId - The provider's canonical session id.
+         */
+        async bindDraftSession(draftId, sessionId) {
+            delete this.localState.pendingDraftBindings[draftId]
+
+            if (draftId === sessionId) {
+                return
+            }
+
+            const { router } = await import('../router')
+            const onDraft = router.currentRoute.value.params.sessionId === draftId
+
+            if (onDraft) {
+                const currentRoute = router.currentRoute.value
+                await router.replace({
+                    name: currentRoute.name,
+                    params: { ...currentRoute.params, sessionId },
+                    query: currentRoute.query,
+                })
+            }
+
+            this.deleteDraftSession(draftId)
+        },
+
+        /**
+         * Check whether a pending draft binding targets the given session id
+         * and, if so, finalize it. Called from `addSession` / `updateSession`
+         * after the store patch so the canonical session is already visible
+         * to `bindDraftSession`.
+         * @param {string} sessionId - The session that just landed in the store.
+         */
+        tryFinalizePendingBinding(sessionId) {
+            const pending = this.localState.pendingDraftBindings
+            for (const draftId of Object.keys(pending)) {
+                if (pending[draftId] === sessionId) {
+                    this.bindDraftSession(draftId, sessionId)
+                    return
+                }
             }
         },
 

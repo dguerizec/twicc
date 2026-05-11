@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from django.conf import settings
 
@@ -343,7 +343,7 @@ class ClaudeCodeAgentManager(BaseAgentManager):
         return agent.resolve_pending_request(request_id, response)
 
     # ------------------------------------------------------------------
-    # Factory + lifecycle helper (Claude Code–specific kwargs)
+    # Factory hook (Claude Code agent construction)
     # ------------------------------------------------------------------
 
     async def _create_agent(
@@ -352,9 +352,17 @@ class ClaudeCodeAgentManager(BaseAgentManager):
         project_id: str,
         cwd: str,
         *,
+        resume: bool,
         settings: AgentSettings,
+        **kwargs: Any,
     ) -> ClaudeCodeAgent:
-        """Build a ClaudeCodeAgent wired to this manager's cron callbacks."""
+        """Build a ClaudeCodeAgent wired to this manager's cron callbacks.
+
+        Claude Code's SDK accepts a client-supplied session id, so ``session_id``
+        is the canonical id in both ``resume=True`` and ``resume=False`` cases.
+        ``resume`` is therefore unused here (the resume vs new-session decision
+        is handled by ``agent.start(..., resume=resume, ...)`` downstream).
+        """
         return ClaudeCodeAgent(
             session_id=session_id,
             project_id=project_id,
@@ -363,35 +371,6 @@ class ClaudeCodeAgentManager(BaseAgentManager):
             get_session_slug=get_session_slug,
             on_cron_created=self._on_cron_created,
             on_cron_deleted=self._on_cron_deleted,
-        )
-
-    async def _start_agent(
-        self,
-        session_id: str,
-        project_id: str,
-        cwd: str,
-        text: str,
-        resume: bool,
-        settings: AgentSettings,
-        *,
-        images: list[dict] | None = None,
-        documents: list[dict] | None = None,
-    ) -> None:
-        """Create and start a new Claude Code agent.
-
-        Common implementation for both send_to_session (resume=True) and
-        create_session (resume=False). Must be called while holding self._lock.
-        """
-        logger.debug(
-            "Creating agent for session %s, project %s (resume=%s)",
-            session_id, project_id, resume,
-        )
-        agent = await self._create_agent(
-            session_id, project_id, cwd,
-            settings=settings,
-        )
-        await self._register_and_start(
-            agent, text, resume=resume, images=images, documents=documents,
         )
 
     # ------------------------------------------------------------------
