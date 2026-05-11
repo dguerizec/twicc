@@ -25,7 +25,7 @@ from twicc.core.models import UsageSnapshot
 
 from .credentials import (
     get_credentials,
-    refresh_token_via_codex_cli,
+    refresh_token_via_codex_sdk,
 )
 
 logger = logging.getLogger(__name__)
@@ -48,9 +48,10 @@ USAGE_API_BASE_HEADERS = {
 def fetch_usage(*, refresh_token_if_needed: bool = True) -> dict | None:
     """Fetch raw usage data from ChatGPT's ``/backend-api/wham/usage``.
 
-    On 401/403, attempts to refresh the token by nudging the Codex CLI
-    via :func:`refresh_token_via_codex_cli`, then retries the fetch
-    once when the refresh actually moved ``last_refresh`` forward.
+    On 401/403, attempts to refresh the token by running a throwaway
+    SDK turn against the bundled binary via
+    :func:`refresh_token_via_codex_sdk`, then retries the fetch once
+    when the refresh actually moved ``last_refresh`` forward.
 
     Returns the raw JSON payload (the unmodified ChatGPT response) on
     success, ``None`` on failure.
@@ -72,7 +73,7 @@ def fetch_usage(*, refresh_token_if_needed: bool = True) -> dict | None:
     except httpx.HTTPStatusError as e:
         if e.response.status_code in (401, 403) and refresh_token_if_needed:
             logger.warning("Codex usage API returned %d, attempting token refresh", e.response.status_code)
-            if refresh_token_via_codex_cli(creds.last_refresh):
+            if refresh_token_via_codex_sdk(creds.last_refresh):
                 return fetch_usage(refresh_token_if_needed=False)
             return None
         logger.warning("Codex usage API HTTP error: %s", e)

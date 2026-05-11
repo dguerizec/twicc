@@ -31,6 +31,16 @@ from pathlib import Path
 from typing import NamedTuple
 
 import orjson
+from codex_app_server import (
+    AppServerConfig,
+    AskForApproval,
+    AsyncCodex,
+    ReasoningEffort,
+    SandboxMode,
+    TextInput,
+)
+
+from .bundled import resolve_bundled_codex_bin
 
 logger = logging.getLogger(__name__)
 
@@ -48,19 +58,26 @@ CREDENTIALS_PATH = CODEX_HOME / "auth.json"
 KEYRING_SERVICE = "Codex Auth"
 
 # Cached parsed credentials. Populated on first ``get_credentials()`` call
-# and reused on subsequent calls. Invalidated by :func:`refresh_token_via_codex_cli`
+# and reused on subsequent calls. Invalidated by :func:`refresh_token_via_codex_sdk`
 # so a refreshed token is picked up on the next call.
 _cached_credentials: "Credentials | None" = None
 
 # Track ``last_refresh`` values for which a refresh has already been
-# attempted (and failed), to avoid retrying the subprocess call for the
-# same stale token. Mirrors the equivalent guard in the Claude Code
+# attempted (and failed), to avoid retrying the SDK throwaway call for
+# the same stale token. Mirrors the equivalent guard in the Claude Code
 # refresh path.
 _failed_refresh_keys: set[str] = set()
 
-# Timeout for the ``codex login status`` subprocess call used to nudge
-# the CLI into refreshing its tokens.
+# Timeout (seconds) for the throwaway SDK turn used to nudge the Codex
+# binary into refreshing its tokens — covers the full spawn + initialize
+# + thread_start + turn streaming round-trip.
 _TOKEN_REFRESH_TIMEOUT = 30
+
+# Fixed model + prompt for the throwaway turn. We don't care about the
+# answer; the act of opening a thread and running one turn is what makes
+# the codex-app-server binary check / refresh its OAuth tokens.
+_REFRESH_MODEL = "gpt-5.4-mini"
+_REFRESH_PROMPT = "What model are you?"
 
 
 class Credentials(NamedTuple):
@@ -157,7 +174,7 @@ def _read_credentials_data() -> dict | None:
 def get_credentials() -> Credentials | None:
     """Return the cached :class:`Credentials`, reading storage on first call.
 
-    The cache is invalidated by :func:`refresh_token_via_codex_cli` so a
+    The cache is invalidated by :func:`refresh_token_via_codex_sdk` so a
     refreshed token is picked up on the next call without paying the
     keyring/file read cost on every usage sync.
 
@@ -208,21 +225,21 @@ def invalidate_credentials_cache() -> None:
     _cached_credentials = None
 
 
-def refresh_token_via_codex_cli(last_refresh: str) -> bool:
-    """Attempt to refresh the Codex OAuth token by nudging the Codex CLI.
+def refresh_token_via_codex_sdk(last_refresh: str) -> bool:
+    """Attempt to refresh the Codex OAuth token by running a throwaway SDK turn.
 
-    Codex doesn't ship a Python SDK, so we shell out to the ``codex``
-    binary on the user's PATH. The CLI has a built-in refresh-and-retry
-    path on 401 and rewrites ``auth.json`` (or the keyring blob) with
-    the fresh tokens. We use ``codex login status`` as the nudge — it's
-    the lightest CLI command that touches the auth subsystem.
+    Mirrors the Claude Code refresh path: spin up a one-shot AsyncCodex
+    session against the wheel-bundled binary, run an ephemeral
+    ``thread.turn`` with a trivial prompt, drain the stream, and let the
+    codex-app-server binary refresh-and-rewrite ``auth.json`` /
+    keyring blob during its session bootstrap. We discard the answer.
 
     ``last_refresh`` is the value seen on the failed call; we use it as
     a cache key so a permanently-stale token doesn't trigger an endless
-    refresh loop. The cache is invalidated before the subprocess call,
-    then re-read after to detect whether ``last_refresh`` actually moved
-    forward — that's the success signal, since the CLI doesn't surface a
-    refresh outcome on stdout.
+    refresh loop. The credential cache is invalidated before the SDK
+    call, then re-read after to detect whether ``last_refresh`` actually
+    moved forward — that's the success signal, since the binary doesn't
+    surface a refresh outcome on its own channel.
 
     Returns ``True`` when ``last_refresh`` changed (refresh succeeded),
     ``False`` otherwise.
@@ -234,46 +251,57 @@ def refresh_token_via_codex_cli(last_refresh: str) -> bool:
     if last_refresh:
         _failed_refresh_keys.add(last_refresh)
 
-    logger.info("Attempting Codex token refresh via 'codex login status' (current last_refresh=%s)", last_refresh)
+    logger.info("Attempting Codex token refresh via throwaway SDK turn (current last_refresh=%s)", last_refresh)
 
     invalidate_credentials_cache()
 
     try:
-        asyncio.run(_codex_status_throwaway_call())
+        asyncio.run(
+            asyncio.wait_for(_codex_sdk_throwaway_call(), timeout=_TOKEN_REFRESH_TIMEOUT),
+        )
+    except asyncio.TimeoutError:
+        logger.warning("Codex SDK refresh call timed out after %ds", _TOKEN_REFRESH_TIMEOUT)
+        return False
     except Exception as e:
-        logger.warning("Codex CLI refresh call failed: %s", e)
+        logger.warning("Codex SDK refresh call failed: %s", e)
         return False
 
     new_creds = get_credentials()
     new_last_refresh = new_creds.last_refresh if new_creds else ""
     if new_last_refresh == last_refresh:
         logger.warning(
-            "Codex token was not refreshed by CLI (last_refresh unchanged: %s)",
+            "Codex token was not refreshed by SDK turn (last_refresh unchanged: %s)",
             last_refresh,
         )
         return False
 
-    logger.info("Codex token refreshed via CLI: last_refresh %s → %s", last_refresh, new_last_refresh)
+    logger.info("Codex token refreshed via SDK turn: last_refresh %s → %s", last_refresh, new_last_refresh)
     return True
 
 
-async def _codex_status_throwaway_call() -> None:
-    """Run ``codex login status`` to nudge the CLI into refreshing tokens."""
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            "codex", "login", "status",
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
-    except FileNotFoundError as e:
-        raise RuntimeError("'codex' binary not found on PATH") from e
+async def _codex_sdk_throwaway_call() -> None:
+    """Run one ephemeral AsyncCodex turn against the bundled binary.
 
-    try:
-        await asyncio.wait_for(proc.wait(), timeout=_TOKEN_REFRESH_TIMEOUT)
-    except asyncio.TimeoutError:
-        proc.kill()
-        try:
-            await proc.wait()
-        except Exception:
-            pass
-        raise RuntimeError(f"'codex login status' timed out after {_TOKEN_REFRESH_TIMEOUT}s")
+    The point is the side effect: launching the codex-app-server
+    subprocess, walking its initialize handshake, and running a real
+    turn forces the binary to validate its OAuth tokens against the
+    upstream API. A stale ``access_token`` triggers the binary's
+    built-in refresh-and-retry path, which rewrites the credentials
+    store. We drain the stream so the turn completes cleanly and the
+    transport closes without leaking the subprocess.
+    """
+    bundled_bin = resolve_bundled_codex_bin()
+    config = AppServerConfig(codex_bin=str(bundled_bin))
+    async with AsyncCodex(config=config) as codex:
+        thread = await codex.thread_start(
+            model=_REFRESH_MODEL,
+            ephemeral=True,
+            sandbox=SandboxMode.danger_full_access,
+            approval_policy=AskForApproval.model_validate("never"),
+        )
+        turn_handle = await thread.turn(
+            TextInput(_REFRESH_PROMPT),
+            effort=ReasoningEffort.low,
+        )
+        async for _event in turn_handle.stream():
+            pass  # drain — we don't care about the reply, just the side effect
