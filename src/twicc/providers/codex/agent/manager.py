@@ -114,6 +114,11 @@ class CodexAgentManager(BaseAgentManager):
                         # Settings-only update: Codex has no live settings to
                         # apply on a running thread (v1), so this is a no-op.
                         return
+                    # Refresh the bundle on the live agent so the upcoming turn
+                    # picks up any field changed since creation (currently the
+                    # only user-facing one is ``effort``, which the agent reads
+                    # off ``agent_settings`` for every ``thread.turn`` call).
+                    agent.agent_settings = settings
                     await agent.send(text)
                     return
 

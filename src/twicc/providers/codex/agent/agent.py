@@ -20,6 +20,7 @@ from codex_app_server import (
     AsyncCodex,
     AsyncThread,
     AsyncTurnHandle,
+    ReasoningEffort,
     TextInput,
     TransportClosedError,
 )
@@ -66,6 +67,22 @@ class CodexAgent(BaseAgent):
         # active turn instead of yanking the whole transport.
         self._current_turn: AsyncTurnHandle | None = None
         self._turn_task: asyncio.Task[None] | None = None
+
+    @staticmethod
+    def _sdk_effort(effort: str | None) -> ReasoningEffort | None:
+        """Map our wire effort string to the SDK enum, ``None`` for unset/unknown.
+
+        Unknown values fall through to ``None`` so Codex CLI picks its own
+        default rather than crashing the turn — the dropdown only ever
+        produces validated values today, this is a defensive guard.
+        """
+        if not effort:
+            return None
+        try:
+            return ReasoningEffort(effort)
+        except ValueError:
+            logger.warning("Unknown Codex effort %r, falling back to CLI default", effort)
+            return None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -124,8 +141,14 @@ class CodexAgent(BaseAgent):
         # ``Thread.run`` accepts a bare str via internal normalization. We don't
         # use ``run`` because it consumes the turn stream and hides the
         # ``TurnHandle`` we need for clean ``interrupt`` later on.
+        #
+        # ``effort`` is read off ``agent_settings`` per turn so live updates
+        # via ``send_to_session`` (which refreshes the bundle just before
+        # calling ``send``) take effect immediately on the next turn. ``None``
+        # lets Codex CLI use the model's default (medium today).
+        effort = self._sdk_effort(self.agent_settings.effort)
         try:
-            turn_handle = await self._thread.turn(TextInput(text))
+            turn_handle = await self._thread.turn(TextInput(text), effort=effort)
         except asyncio.CancelledError:
             raise
         except Exception as e:
