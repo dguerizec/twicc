@@ -1864,20 +1864,16 @@ export const useDataStore = defineStore('data', {
                 group_head: null,
                 group_tail: null
             }
-            // Build the content blocks: images/documents first, then text
-            // (same order as the backend in process.py)
-            const contentBlocks = []
-            if (attachments?.images?.length) contentBlocks.push(...attachments.images)
-            if (attachments?.documents?.length) contentBlocks.push(...attachments.documents)
-            contentBlocks.push({ type: 'text', text })
-            setParsedContent(optimisticItem, {
-                type: 'user',
-                syntheticKind,
-                message: {
-                    role: 'user',
-                    content: contentBlocks
-                }
-            })
+            // The parsed-content shape is provider-specific: each renderer in
+            // ``SessionItem.vue`` expects its own native JSONL layout (Claude
+            // Code reads ``message.content[]``, Codex reads
+            // ``payload.message``). The provider's helpers own that mapping.
+            const provider = this.getSession(sessionId)?.provider
+            const helpers = getProviderHelpers(provider)
+            setParsedContent(
+                optimisticItem,
+                helpers.buildOptimisticUserMessageContent(text, attachments),
+            )
             this.localState.optimisticMessages[sessionId] = optimisticItem
             this.recomputeVisualItems(sessionId)
         },

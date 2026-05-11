@@ -1,5 +1,5 @@
 import { BaseProviderHelpers } from '../baseHelpers'
-import { PROVIDER } from '../../constants'
+import { PROVIDER, SYNTHETIC_ITEM } from '../../constants'
 import { CONTEXT_MAX, EFFORT, PERMISSION_MODE } from './constants'
 import { useCodexStore } from './store'
 
@@ -93,6 +93,18 @@ export class CodexHelpers extends BaseProviderHelpers {
 
     canSendMessage() {
         return true
+    }
+
+    buildOptimisticUserMessageContent(text, _attachments) {
+        // Codex JSONL shape for user input: ``{ type: 'event_msg', payload:
+        // { type: 'user_message', message: '...' } }``. ``payload.message`` is
+        // a flat string — Codex doesn't model images/documents at this layer
+        // in v1, so the ``attachments`` argument is intentionally dropped.
+        return {
+            type: 'event_msg',
+            syntheticKind: SYNTHETIC_ITEM.OPTIMISTIC_USER_MESSAGE.kind,
+            payload: { type: 'user_message', message: text },
+        }
     }
 
     // ─── Authentication ─────────────────────────────────────────────────

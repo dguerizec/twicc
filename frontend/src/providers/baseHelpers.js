@@ -29,6 +29,32 @@ export class BaseProviderHelpers {
         return []
     }
 
+    /**
+     * Build the parsed-content payload for the synthetic "optimistic" user
+     * message — the bubble displayed in the chat the instant a user clicks
+     * Send, before any backend round-trip. Provider-specific because the
+     * item dispatcher in ``SessionItem.vue`` hands off to the provider's
+     * own message renderer, which expects its own native JSONL shape (e.g.
+     * Claude Code reads ``data.message.content[]``, Codex reads
+     * ``data.payload.message``).
+     *
+     * Implementations return a plain object suitable for ``setParsedContent``
+     * — it must include the ``syntheticKind`` marker
+     * (``SYNTHETIC_ITEM.OPTIMISTIC_USER_MESSAGE.kind``) so visual-item
+     * stabilization and cleanup (``recomputeVisualItems`` /
+     * ``computeVisualItems``) treat it correctly.
+     *
+     * @param {string} text - The text the user just submitted (already trimmed).
+     * @param {{ images?: Array, documents?: Array } | undefined} attachments
+     *        Attachment blocks in SDK format. Providers that don't support
+     *        attachments may safely ignore the argument.
+     */
+    buildOptimisticUserMessageContent(/* text, attachments */) {
+        throw new Error(
+            `buildOptimisticUserMessageContent() not implemented for provider ${this.constructor.provider}`,
+        )
+    }
+
     // ─── Authentication ──────────────────────────────────────────────────
     //
     // Some providers gate sending on an external authentication step (e.g.

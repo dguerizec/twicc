@@ -1,5 +1,5 @@
 import { BaseProviderHelpers } from '../baseHelpers'
-import { PROVIDER } from '../../constants'
+import { PROVIDER, SYNTHETIC_ITEM } from '../../constants'
 import { CONTEXT_MAX, EFFORT, PERMISSION_MODE } from './constants'
 import { useClaudeCodeStore } from './store'
 import { useSettingsStore } from '../../stores/settings'
@@ -144,6 +144,22 @@ export class ClaudeCodeHelpers extends BaseProviderHelpers {
 
     getBuiltInSlashCommands() {
         return BUILTIN_SLASH_COMMANDS
+    }
+
+    buildOptimisticUserMessageContent(text, attachments) {
+        // Claude Code's user_message JSONL shape: a transport-style envelope
+        // ``{ type: 'user', message: { role, content: [...] } }`` whose
+        // ``content`` is the same block array the SDK accepts. Images /
+        // documents come in already-SDK-shaped, so we just concatenate.
+        const content = []
+        if (attachments?.images?.length) content.push(...attachments.images)
+        if (attachments?.documents?.length) content.push(...attachments.documents)
+        content.push({ type: 'text', text })
+        return {
+            type: 'user',
+            syntheticKind: SYNTHETIC_ITEM.OPTIMISTIC_USER_MESSAGE.kind,
+            message: { role: 'user', content },
+        }
     }
 
     getAuthState() {
