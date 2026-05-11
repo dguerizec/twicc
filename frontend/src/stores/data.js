@@ -918,6 +918,21 @@ export const useDataStore = defineStore('data', {
                 return
             }
 
+            // Carry the optimistic user message over to the canonical key so
+            // it stays visible across the router.replace below. Without this
+            // migration, the bubble would disappear the moment the URL flips
+            // (optimisticMessages is keyed by sessionId, so the draft entry
+            // becomes orphan) and reappear only when the watcher catches the
+            // real user_message from the JSONL — a short flicker we want to
+            // avoid. ``addSessionItems`` clears the entry as soon as the real
+            // message arrives, so this is purely about closing the gap.
+            const optimistic = this.localState.optimisticMessages[draftId]
+            if (optimistic) {
+                this.localState.optimisticMessages[sessionId] = optimistic
+                delete this.localState.optimisticMessages[draftId]
+                this.recomputeVisualItems(sessionId)
+            }
+
             const { router } = await import('../router')
             const onDraft = router.currentRoute.value.params.sessionId === draftId
 
