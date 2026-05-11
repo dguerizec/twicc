@@ -774,10 +774,9 @@ class CodexSessionCompute(BaseSessionCompute):
     # ------------------------------------------------------------------
     #
     # These hooks all return empty / no-op values so the inherited
-    # machinery (group state, batch orchestration, watcher live sync —
-    # the latter is not wired yet anyway) still runs without errors.
-    # Each one will get a real implementation when the matching
-    # Codex feature lands (tools, costs, runtime env, ...).
+    # machinery (group state, batch orchestration, watcher live sync)
+    # still runs without errors. Each one will get a real implementation
+    # when the matching Codex feature lands (tools, costs, runtime env, ...).
 
     def extract_runtime_fields(self, parsed_json: dict) -> dict:
         # ``slug`` is out of scope (Codex doesn't expose one). Three line
@@ -1383,16 +1382,8 @@ class CodexSessionCompute(BaseSessionCompute):
 
     # compute_session_metadata + apply_session_complete: inherited from base.
     # The base orchestrates DB I/O and dispatches every parsing hook
-    # declared above.
-
-    # ------------------------------------------------------------------
-    # Watcher live sync — not wired for Codex yet
-    # ------------------------------------------------------------------
-    #
-    # ``sync_session_items_from_file`` is inherited from the base, but
-    # CodexOrchestrator does not start a JSONL watcher today, so it
-    # never runs in practice. New lines reach the DB only through the
-    # next ``initial_sync`` (i.e. after a TwiCC restart).
+    # declared above. ``sync_session_items_from_file`` (also inherited) is
+    # driven by ``CodexSessionsWatcher`` for live updates.
 
 
 # =============================================================================

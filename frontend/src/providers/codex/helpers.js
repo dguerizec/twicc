@@ -91,11 +91,8 @@ export class CodexHelpers extends BaseProviderHelpers {
     static provider = PROVIDER.CODEX
     static label = 'Codex'
 
-    // No agent runtime yet — the send button stays grayed out for any
-    // session whose provider is Codex. Even once the runtime lands, we
-    // still need the user to be authenticated against the Codex CLI.
     canSendMessage() {
-        return false
+        return true
     }
 
     // ─── Authentication ─────────────────────────────────────────────────

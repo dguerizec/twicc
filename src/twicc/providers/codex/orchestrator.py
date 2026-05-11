@@ -3,8 +3,8 @@ Codex provider orchestrator.
 
 Owns the Codex initial JSONL sync, the background metadata compute,
 the JSONL sessions watcher, the Codex CLI auth check task, the ChatGPT
-usage sync task, and the OpenAI statuspage poll. The agent runtime is
-not wired yet — it will land alongside the Codex CLI integration.
+usage sync task, the OpenAI statuspage poll, and the shutdown of the
+Codex agent manager (its construction is lazy via the agent registry).
 """
 
 from __future__ import annotations
@@ -24,6 +24,7 @@ from twicc.providers.background_task import (
     start_background_compute_task,
     stop_background_task,
 )
+from twicc.providers.codex.agent import get_codex_agent_manager
 from twicc.providers.codex.auth_task import start_auth_task, stop_auth_task
 from twicc.providers.codex.initial_sync import scan_session_files, sync_all
 from twicc.providers.codex.sessions_watcher import get_watcher
@@ -168,6 +169,13 @@ class CodexOrchestrator(BaseOrchestrator):
             logger.info("Stopping Codex statuspage task...")
             stop_statuspage_task()
             await _cancel_task(self._statuspage_task, "Codex statuspage task")
+
+        # Stop every live Codex agent. The manager itself is owned by the
+        # AgentManagerRegistry singleton, so we just ask it to drain — its
+        # internal timeout monitor, agent registry and locks are reset to a
+        # fresh state, mirroring the shutdown happening on the Claude side.
+        logger.info("Stopping Codex agent manager...")
+        await get_codex_agent_manager().shutdown(timeout=5.0)
 
     # ------------------------------------------------------------------
     # Internal task coroutines
