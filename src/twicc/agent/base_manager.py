@@ -214,6 +214,24 @@ class BaseAgentManager:
         # to its local draft, so it can reconcile (redirect or discard).
         # On resume the frontend already knows the canonical id — skip it.
         if not resume:
+            # When the provider mints its own canonical id (Codex), the WS
+            # handler stored the pending agent settings under the draft id we
+            # received. Re-key them under the canonical id so the watcher
+            # pops them when it creates the Session row from the JSONL —
+            # otherwise selected_model / effort / ... stay NULL until the
+            # next user-initiated settings update. No-op when ids match
+            # (Claude Code): the existing pending entry is already under the
+            # canonical key.
+            if session_id != agent.session_id:
+                from twicc.pending_agent_settings import (
+                    pop_pending_agent_settings,
+                    set_pending_agent_settings,
+                )
+
+                pending = pop_pending_agent_settings(session_id)
+                if pending is not None:
+                    set_pending_agent_settings(agent.session_id, pending)
+
             await self.notify_session_bound(
                 draft_session_id=session_id,
                 session_id=agent.session_id,
