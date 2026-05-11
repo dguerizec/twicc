@@ -165,6 +165,16 @@ def claude(ctx: typer.Context) -> None:
     claude_main(ctx.args)
 
 
+@app.command(
+    context_settings={"allow_extra_args": True, "allow_interspersed_args": False, "ignore_unknown_options": True, "help_option_names": []},
+)
+def codex(ctx: typer.Context) -> None:
+    """Run the Codex CLI bundled with codex-app-server."""
+    from twicc.cli.codex import main as codex_main
+
+    codex_main(ctx.args)
+
+
 @app.command()
 def search(
     query: str = typer.Argument(help="Tantivy query string (e.g. 'websocket', 'body:websocket AND from_role:user')"),

@@ -1,5 +1,6 @@
 import { BaseProviderHelpers } from '../baseHelpers'
 import { PROVIDER, SYNTHETIC_ITEM } from '../../constants'
+import { useSettingsStore } from '../../stores/settings'
 import { CONTEXT_MAX, EFFORT, PERMISSION_MODE } from './constants'
 import { useCodexStore } from './store'
 
@@ -114,9 +115,7 @@ export class CodexHelpers extends BaseProviderHelpers {
     }
 
     getAuthLoginCommand() {
-        // We don't bundle a Codex CLI, so we shell out to whatever ``codex``
-        // is on the user's PATH — no twicc launch prefix here, unlike Claude.
-        return 'codex login'
+        return `${useSettingsStore().twiccLaunchPrefix} codex login`
     }
 
     async requestAuthRecheck() {

@@ -40,7 +40,7 @@ from codex_app_server import (
     TextInput,
 )
 
-from .bundled import resolve_bundled_codex_bin
+from .bin import resolve_bundled_binary
 
 logger = logging.getLogger(__name__)
 
@@ -290,7 +290,7 @@ async def _codex_sdk_throwaway_call() -> None:
     store. We drain the stream so the turn completes cleanly and the
     transport closes without leaking the subprocess.
     """
-    bundled_bin = resolve_bundled_codex_bin()
+    bundled_bin = resolve_bundled_binary()
     config = AppServerConfig(codex_bin=str(bundled_bin))
     async with AsyncCodex(config=config) as codex:
         thread = await codex.thread_start(

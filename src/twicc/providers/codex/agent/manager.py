@@ -23,7 +23,7 @@ from twicc.agent import AgentState, BaseAgentManager
 from twicc.core.enums import Provider
 from twicc.providers.helpers import AgentSettings, get_provider_helpers
 
-from ..bundled import resolve_bundled_codex_bin
+from ..bin import resolve_bundled_binary
 from .agent import CodexAgent
 
 logger = logging.getLogger(__name__)
@@ -185,7 +185,7 @@ class CodexAgentManager(BaseAgentManager):
         resolved through the helpers; the rest of the live/idle/startup
         categories carry no hot-applicable values in this v1.
         """
-        bundled_bin = resolve_bundled_codex_bin()
+        bundled_bin = resolve_bundled_binary()
         config = AppServerConfig(codex_bin=str(bundled_bin), cwd=cwd)
         codex = AsyncCodex(config=config)
 

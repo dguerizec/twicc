@@ -255,13 +255,11 @@ async def check_auth_status() -> bool:
     stored token is still server-side accepted, which we cannot tell by
     just reading the credentials file.
     """
-    from twicc.cli.claude import get_claude_binary
+    from .bin import resolve_bundled_binary
 
     try:
-        binary = get_claude_binary()
-    except SystemExit:
-        # get_claude_binary() prints to stderr and raises SystemExit when
-        # the bundled binary is missing — turn that into a False result here.
+        binary = resolve_bundled_binary()
+    except FileNotFoundError:
         logger.warning("Cannot check Claude Code auth status: bundled CLI not found")
         return False
 

@@ -1,13 +1,13 @@
-"""Proxy to the Claude Code CLI bundled in claude-agent-sdk."""
+"""Proxy to the Codex CLI bundled in codex_app_server."""
 
 import os
 import sys
 
-from twicc.providers.claude_code.bin import resolve_bundled_binary
+from twicc.providers.codex.bin import resolve_bundled_binary
 
 
 def main(args: list[str]) -> None:
-    """Replace the current process with the bundled Claude Code CLI."""
+    """Replace the current process with the bundled Codex CLI."""
     try:
         binary = str(resolve_bundled_binary())
     except FileNotFoundError as e:

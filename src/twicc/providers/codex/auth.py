@@ -1,9 +1,9 @@
 """
 Codex CLI authentication state.
 
-Runs ``codex login status`` to determine whether the user is logged into
-Codex. Unlike Claude Code we don't bundle a CLI binary here — we shell
-out to whatever ``codex`` is on the user's PATH.
+Runs ``codex login status`` against the wheel-bundled Codex binary to
+determine whether the user is logged into Codex. The exit code is the
+source of truth (0 = logged in, 1 = not logged in).
 
 Mirrors the surface of ``providers.claude_code.auth`` so the auth_task
 and the WS handler can stay structurally identical between providers.
@@ -15,6 +15,8 @@ import asyncio
 import logging
 
 from channels.layers import get_channel_layer
+
+from .bin import resolve_bundled_binary
 
 logger = logging.getLogger(__name__)
 
@@ -52,23 +54,26 @@ def get_auth_wake_event() -> asyncio.Event:
 
 
 async def check_auth_status() -> bool:
-    """Run ``codex login status`` and return ``True`` when the exit code is 0.
+    """Run ``codex login status`` on the bundled binary and return whether exit code is 0.
 
     The Codex CLI uses the exit code as the source of truth (0 = logged in,
     1 = not logged in). We don't parse stdout — only the return code.
 
     Returns ``False`` on any failure (process spawn error, timeout, non-zero
-    exit code, missing binary).
+    exit code, missing bundled binary).
     """
     try:
+        binary = str(resolve_bundled_binary())
+    except FileNotFoundError as e:
+        logger.warning("Cannot check Codex auth status: %s", e)
+        return False
+
+    try:
         proc = await asyncio.create_subprocess_exec(
-            "codex", "login", "status",
+            binary, "login", "status",
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL,
         )
-    except FileNotFoundError:
-        logger.warning("Cannot check Codex auth status: 'codex' binary not found on PATH")
-        return False
     except Exception as e:
         logger.warning("Cannot launch Codex auth status check: %s", e)
         return False

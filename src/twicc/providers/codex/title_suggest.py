@@ -30,7 +30,7 @@ from codex_app_server import (
     TextInput,
 )
 
-from .bundled import resolve_bundled_codex_bin
+from .bin import resolve_bundled_binary
 
 logger = logging.getLogger(__name__)
 
@@ -127,7 +127,7 @@ async def _call_codex(
 
     full_prompt = system_prompt.replace("{text}", user_message)
 
-    bundled_bin = resolve_bundled_codex_bin()
+    bundled_bin = resolve_bundled_binary()
     config = AppServerConfig(codex_bin=str(bundled_bin))
     codex = AsyncCodex(config=config)
 

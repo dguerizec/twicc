@@ -14,7 +14,7 @@ import logging
 
 from codex_app_server import AppServerConfig, AsyncCodex
 
-from .bundled import resolve_bundled_codex_bin
+from .bin import resolve_bundled_binary
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +34,7 @@ async def rename_thread_via_sdk(thread_id: str, title: str) -> None:
     rename endpoint currently swallows the error (the DB title is
     already updated; the watcher / next session reload will reconcile).
     """
-    bundled_bin = resolve_bundled_codex_bin()
+    bundled_bin = resolve_bundled_binary()
     config = AppServerConfig(codex_bin=str(bundled_bin))
     try:
         async with AsyncCodex(config=config) as codex:
