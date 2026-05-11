@@ -35,6 +35,7 @@ dependencies = [
     "keyring~=25.7.0; sys_platform == 'darwin'",
     "orjson~=3.11.8",
     "psutil~=7.2.2",
+    "pydantic>=2.12",  # required by the vendored codex_app_server SDK
     "python-dotenv~=1.2.2",
     "tantivy~=0.25.1",
     "typer~=0.24.1",
@@ -59,15 +60,28 @@ Releases = "https://github.com/twidi/twicc/releases"
 [project.scripts]
 twicc = "twicc:main"
 
-[tool.hatch.build]
-# Built frontend assets are gitignored but must be included in the package.
-artifacts = ["src/twicc/static/frontend/**"]
-
 [tool.hatch.build.targets.wheel]
-packages = ["src/twicc"]
+# Two top-level packages ship inside the wheel: the TwiCC app itself, and the
+# vendored Codex Python SDK (extracted from openai/codex tag
+# rust-v0.131.0-alpha.4 — see hatch_build.py). The SDK is vendored rather than
+# pulled from PyPI because its companion runtime `openai-codex-cli-bin` does
+# not publish a manylinux wheel (only musllinux), which `uv` refuses to install
+# on glibc systems even though the binary itself runs everywhere. We bundle the
+# binary directly into our wheel and stamp a regular `linux_*` platform tag.
+packages = ["src/twicc", "src/codex_app_server"]
+# Gitignored, hook-produced artifact (built frontend). The codex binary that
+# lives in src/codex_app_server/_bundled/ is added to the wheel by the build
+# hook via build_data["force_include"], precisely targeting the binary for the
+# platform currently being built — listing the dir as a glob here would drag
+# in stale binaries from previous cross-builds.
+artifacts = [
+    "src/twicc/static/frontend/**",
+]
 
-# Build hook (hatch_build.py) runs npm ci + npm run build before packaging.
-# Applied globally so both sdist and wheel contain fresh frontend assets.
+# Build hook (hatch_build.py) runs npm ci + npm run build before packaging,
+# fetches the matching Codex binary for the target platform, and stamps the
+# wheel as platform-specific. Applied globally so both sdist and wheel pick up
+# the frontend assets; the binary fetch only fires on wheel targets.
 [tool.hatch.build.hooks.custom]
 
 [tool.pytest.ini_options]

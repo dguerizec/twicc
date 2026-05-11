@@ -20,6 +20,7 @@
 | Database         | SQLite (WAL mode)                           |
 | File Watching    | watchfiles                                  |
 | Claude SDK       | claude-agent-sdk (for interactive sessions) |
+| Codex SDK        | codex_app_server (vendored at `src/codex_app_server/` + bundled binary — see README "Codex Python SDK — vendored" for the why and how to update) |
 | Frontend         | Vue.js 3 (SFC, Composition API) + Vite 7    |
 | State Management | Pinia + VueUse                              |
 | UI Components    | Web Awesome 3+ (wa-* elements)              |
@@ -267,12 +268,17 @@ When the user asks to make a new release, follow these steps in order:
 
 3. **Update CHANGELOG.md:** Set the version number on the `[Unreleased]` section (if not already done) and add the release date (`YYYY-MM-DD`).
 
-4. **Build:** Run `uv build` (takes a moment).
+4. **Build:** Run `./scripts/build-release.sh` (~3-5 min). This produces:
+   - `dist/twicc-{version}.tar.gz` (single sdist, platform-agnostic)
+   - One wheel per supported platform: `dist/twicc-{version}-py3-none-{platform}.whl` for `linux_x86_64`, `macosx_11_0_arm64`, `macosx_10_9_x86_64`, `win_amd64`
 
-5. **User testing (mandatory):** Ask the user to test the build before continuing. Provide the command:
+   The script downloads the matching Codex CLI binary for each platform and bundles it into the wheel — that's why we ship N wheels instead of a single `py3-none-any` like before. See `hatch_build.py` for the gory details.
+
+5. **User testing (mandatory):** Ask the user to test the build before continuing. Provide the command for the user's local platform (typically `linux_x86_64` on the dev machine):
    ```
-   uvx --from dist/twicc-{version}-py3-none-any.whl twicc
+   uvx --from dist/twicc-{version}-py3-none-linux_x86_64.whl twicc
    ```
+   (Swap the platform tag if testing from macOS, Windows, etc.)
    Remind them to stop any running TwiCC instance first, then visit `http://localhost:3500` to test. **Do not run `uvx` yourself** — this requires user interaction.
 
 6. **Wait for user confirmation.** Only proceed if they say it's OK.
@@ -301,7 +307,7 @@ When the user asks to make a new release, follow these steps in order:
     ```
     uvx uv-publish /home/twidi/dev/twicc-poc/dist/twicc-{version}*
     ```
-    **Do not run this yourself** unless the user explicitly asks you to.
+    The glob picks up the sdist and every per-platform wheel in one shot. **Do not run this yourself** unless the user explicitly asks you to.
 
 ## Dialog Forms Pattern
 

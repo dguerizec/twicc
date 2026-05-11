@@ -236,8 +236,12 @@ logs/
 # Development process controller runtime data
 .devctl/
 
-# Git worktrees
-.worktrees/
+# Git worktrees — anchored to repo root only. An un-anchored `.worktrees/`
+# would match any segment of the path, including the worktree's own root
+# (`.../.worktrees/<name>/`), which trips up hatchling's sdist exclusion
+# logic: hatchling drops every gitignore pattern when it detects the project
+# root itself is gitignored.
+/.worktrees/
 
 # TwiCC config files (synced settings, stored in data dir — appear in worktrees)
 settings.json
@@ -253,3 +257,6 @@ CLAUDE.local.md
 /.claude/
 .superpowers/
 .codex
+
+# Bundled Codex binary — fetched at build time by hatch_build.py
+src/codex_app_server/_bundled/
