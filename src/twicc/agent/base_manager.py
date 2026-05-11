@@ -330,14 +330,26 @@ class BaseAgentManager:
             del self._agents[agent.session_id]
 
     async def _broadcast_session_updated(self, session_id: str) -> None:
-        """Push a ``session_updated`` message via WebSocket."""
+        """Push a ``session_updated`` message via WebSocket.
+
+        No-op when the ``Session`` row does not exist yet. That's the
+        expected state for brand-new sessions between ``_register_and_start``
+        and the moment the watcher inserts the row from the first JSONL
+        line — the watcher then broadcasts its own ``session_updated`` so
+        nothing is lost. Resume / DEAD call sites observe an existing
+        row and broadcast normally.
+        """
         from channels.layers import get_channel_layer
 
         from twicc.core.models import Session
         from twicc.core.serializers import serialize_session
 
         try:
-            session = await asyncio.to_thread(Session.objects.get, id=session_id)
+            session = await asyncio.to_thread(
+                lambda: Session.objects.filter(id=session_id).first()
+            )
+            if session is None:
+                return
             channel_layer = get_channel_layer()
             await channel_layer.group_send(
                 "updates",
