@@ -223,6 +223,7 @@ function toggleJsonView() {
                     v-if="kind === 'user_message' || kind === 'assistant_message'"
                     :data="content"
                     :kind="kind"
+                    :session-id="sessionId"
                 />
                 <CodexToolUse
                     v-else-if="kind === 'tool_use'"
