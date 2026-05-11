@@ -917,7 +917,7 @@ function onChangelogClose() {
                             :checked="titleGenerationEnabled"
                             @change="onTitleGenerationChange"
                             size="small"
-                        >Enabled (Haiku)</wa-switch>
+                        >Enabled (Using Haiku for Claude, GPT 5.4 mini for Codex)</wa-switch>
                         <wa-switch
                             v-if="titleGenerationEnabled"
                             :checked="titleAutoApply"

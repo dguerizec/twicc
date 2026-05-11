@@ -26,13 +26,12 @@ from twicc.providers.helpers import (
     BaseProviderHelpers,
     IndexableMessage,
     ModelVersion,
-    TitleValidationResult,
     UserMessage,
 )
 
 from .compute import get_message_content, get_message_content_list
 from .pricing import CLAUDE_FAMILIES, extract_model_info
-from .titles import protect_title, rename_session_in_jsonl, validate_title
+from .titles import protect_title, rename_session_in_jsonl
 
 if TYPE_CHECKING:
     from twicc.core.models import SessionItem
@@ -557,10 +556,6 @@ class ClaudeCodeHelpers(BaseProviderHelpers):
         from .title_suggest import generate_title as _generate
 
         return await _generate(prompt, system_prompt)
-
-    def validate_title(self, title: str | None) -> TitleValidationResult:
-        normalized, error = validate_title(title)
-        return TitleValidationResult(title=normalized, error=error)
 
     def rename_session(self, session_id: str, title: str) -> None:
         """Append the title to the JSONL and mark it protected against CLI stale re-appends.

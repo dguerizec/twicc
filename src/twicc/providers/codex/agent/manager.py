@@ -10,11 +10,8 @@ via ``sandbox=danger_full_access`` and ``approval_policy="never"``.
 from __future__ import annotations
 
 import logging
-import sys
-from pathlib import Path
 from typing import Any
 
-import codex_app_server
 from codex_app_server import (
     AppServerConfig,
     AskForApproval,
@@ -26,28 +23,10 @@ from twicc.agent import AgentState, BaseAgentManager
 from twicc.core.enums import Provider
 from twicc.providers.helpers import AgentSettings, get_provider_helpers
 
+from ..bundled import resolve_bundled_codex_bin
 from .agent import CodexAgent
 
 logger = logging.getLogger(__name__)
-
-
-def _resolve_bundled_codex_bin() -> Path:
-    """Return the path to the codex binary shipped inside our wheel.
-
-    The build hook (``hatch_build.py``) drops the platform-matching binary at
-    ``codex_app_server/_bundled/{codex,codex.exe}``. Editable installs can
-    populate it via ``python hatch_build.py`` if the hook didn't run.
-    """
-    bundled_dir = Path(codex_app_server.__file__).resolve().parent / "_bundled"
-    bin_name = "codex.exe" if sys.platform == "win32" else "codex"
-    bin_path = bundled_dir / bin_name
-    if not bin_path.is_file():
-        raise FileNotFoundError(
-            f"Bundled Codex binary not found at {bin_path}. Did the build "
-            "hook run? See hatch_build.py for the install/build path, or run "
-            "`python hatch_build.py` to populate it in an editable install.",
-        )
-    return bin_path
 
 
 class CodexAgentManager(BaseAgentManager):
@@ -206,7 +185,7 @@ class CodexAgentManager(BaseAgentManager):
         resolved through the helpers; the rest of the live/idle/startup
         categories carry no hot-applicable values in this v1.
         """
-        bundled_bin = _resolve_bundled_codex_bin()
+        bundled_bin = resolve_bundled_codex_bin()
         config = AppServerConfig(codex_bin=str(bundled_bin), cwd=cwd)
         codex = AsyncCodex(config=config)
 

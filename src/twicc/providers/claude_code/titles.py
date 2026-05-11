@@ -1,11 +1,12 @@
 """
 Claude Code title management.
 
-Provides title validation, a thin wrapper around the Claude Agent
-SDK's ``rename_session()`` for writing custom-title entries to JSONL
-files, and the protected-title machinery that blocks stale CLI
-re-appends after a user rename. The cross-provider pending-title
-buffer lives in :mod:`twicc.pending_titles`.
+Provides a thin wrapper around the Claude Agent SDK's
+``rename_session()`` for writing custom-title entries to JSONL files,
+and the protected-title machinery that blocks stale CLI re-appends
+after a user rename. The cross-provider pending-title buffer lives in
+:mod:`twicc.pending_titles`; the provider-agnostic title validation
+sits on :class:`BaseProviderHelpers`.
 """
 
 import logging
@@ -26,30 +27,6 @@ class TitleCheck(NamedTuple):
 # Set when the user renames via the API; cleared when the CLI absorbs the
 # correct value or when the process dies.
 _protected_titles: dict[str, str] = {}
-
-# Max title length (matches frontend validation)
-MAX_TITLE_LENGTH = 200
-
-
-def validate_title(title: str | None) -> tuple[str | None, str | None]:
-    """Validate and normalize a session title.
-
-    Returns:
-        A tuple of (normalized_title, error_message).
-        - If valid: (trimmed_title, None)
-        - If invalid: (None, error_message)
-    """
-    if title is None:
-        return None, "Title cannot be empty"
-
-    title = title.strip()
-    if not title:
-        return None, "Title cannot be empty"
-
-    if len(title) > MAX_TITLE_LENGTH:
-        return None, f"Title must be {MAX_TITLE_LENGTH} characters or less"
-
-    return title, None
 
 
 def rename_session_in_jsonl(session_id: str, title: str) -> None:

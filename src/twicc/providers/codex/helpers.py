@@ -312,6 +312,28 @@ class CodexHelpers(BaseProviderHelpers):
         mv = self.find_model(selected_model)
         return mv.full_name if mv else selected_model
 
+    async def generate_title(self, prompt: str, system_prompt: str) -> str | None:
+        """Run a short gpt-5.4-mini SDK query to suggest a title for ``prompt``."""
+        from .title_suggest import generate_title as _generate
+
+        return await _generate(prompt, system_prompt)
+
+    def rename_session(self, session_id: str, title: str) -> None:
+        """Persist the new title in Codex's state DB via ``thread/name/set``.
+
+        The Codex SDK is async-first; we hop into an event loop with
+        ``async_to_sync`` so the sync REST handler in ``views.py``
+        keeps its current signature. No JSONL append and no
+        ``protect_title`` machinery: the Codex thread name lives in
+        its own state DB, the rollout JSONL never carries it, and no
+        side actor can re-append a stale value.
+        """
+        from asgiref.sync import async_to_sync
+
+        from .titles import rename_thread_via_sdk
+
+        async_to_sync(rename_thread_via_sdk)(session_id, title)
+
     # ------------------------------------------------------------------
     # Full-text search indexing
     # ------------------------------------------------------------------

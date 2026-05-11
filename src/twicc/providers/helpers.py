@@ -191,6 +191,12 @@ class BaseProviderHelpers:
     # :meth:`extract_family_and_version` produces for this provider.
     DEFAULT_FAMILY_PRICES: ClassVar[dict[str, FamilyPrices]] = {}
 
+    # Maximum length (characters) of a user-supplied session title, used
+    # by the default :meth:`validate_title`. Providers may override if
+    # their backing store imposes a stricter cap; the frontend mirrors
+    # the same constant so client-side validation matches.
+    MAX_TITLE_LENGTH: ClassVar[int] = 200
+
     # ------------------------------------------------------------------
     # Compute version
     # ------------------------------------------------------------------
@@ -435,17 +441,32 @@ class BaseProviderHelpers:
         ``system_prompt`` contains a ``{text}`` placeholder that the
         implementation replaces with ``prompt``. Default implementation
         returns ``None`` (provider has no title generation surface);
-        providers override to call their own model — e.g. Claude Code
-        runs a short Haiku query via the SDK.
+        providers override to call their own model — Claude Code runs
+        a short Haiku query and Codex runs a short gpt-5.4-mini query,
+        both via their respective SDKs.
         """
         return None
 
     def validate_title(self, title: str | None) -> TitleValidationResult:
         """Validate and normalize a user-supplied session title.
 
-        Each provider may apply its own length / format rules.
+        Default implementation: trim, reject empty, cap at
+        :attr:`MAX_TITLE_LENGTH` characters. Providers may override to
+        apply their own format rules or stricter limits (the constant is
+        a class attribute so a subclass needs only to rebind it for a
+        different cap).
         """
-        raise NotImplementedError
+        if title is None:
+            return TitleValidationResult(title=None, error="Title cannot be empty")
+        title = title.strip()
+        if not title:
+            return TitleValidationResult(title=None, error="Title cannot be empty")
+        if len(title) > self.MAX_TITLE_LENGTH:
+            return TitleValidationResult(
+                title=None,
+                error=f"Title must be {self.MAX_TITLE_LENGTH} characters or less",
+            )
+        return TitleValidationResult(title=title, error=None)
 
     def rename_session(self, session_id: str, title: str) -> None:
         """Persist a new title in the provider's session storage.
