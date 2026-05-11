@@ -102,13 +102,23 @@ export function stopSubagent(sessionId, subagentId) {
 /**
  * Request a title suggestion for a session.
  * The result will arrive via WebSocket as title_suggested message.
- * @param {string} sessionId - The session ID
+ * @param {string} sessionId - The session ID (draft or canonical)
  * @param {string|null} prompt - Optional prompt text (for draft/new sessions)
  * @param {string} systemPrompt - System prompt with {text} placeholder
- * @returns {boolean} - True if message was sent, false if not connected
+ * @returns {boolean} - True if message was sent, false if no provider could be resolved or WS is down
  */
 export function requestTitleSuggestion(sessionId, prompt = null, systemPrompt) {
-    const message = { type: 'suggest_title', sessionId, systemPrompt }
+    // ``provider`` travels in the payload because draft sessions don't exist in
+    // the backend DB yet — the backend can't resolve them via the ``Session``
+    // table, so the frontend (which knows the provider from draft creation
+    // onwards) hands it over explicitly. Resolved against the same store entry
+    // for both draft and real sessions.
+    const provider = useDataStore().getSession(sessionId)?.provider
+    if (!provider) {
+        console.warn(`[useWebSocket] requestTitleSuggestion: unknown provider for session ${sessionId}`)
+        return false
+    }
+    const message = { type: 'suggest_title', sessionId, provider, systemPrompt }
     if (prompt) {
         message.prompt = prompt
     }

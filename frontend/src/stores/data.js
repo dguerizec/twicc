@@ -328,6 +328,25 @@ export const useDataStore = defineStore('data', {
             // Format: { sessionId: { suggestion: string, sourcePrompt?: string } }
             titleSuggestions: {},
 
+            // Map { draftId: canonicalId } populated by ``bindDraftSession`` so
+            // any backend message that still carries the draft id (e.g. a
+            // ``title_suggested`` whose ``suggest_title`` was sent before the
+            // bind) can be redirected to the canonical key. Lives for the
+            // session's lifetime; entries don't go stale because the canonical
+            // id is what every consumer now uses.
+            draftAliases: {},
+
+            // Sessions waiting on an auto-applied title — populated when the
+            // user sends the first message of a draft and ``titleAutoApply`` is
+            // enabled. The App-level watcher (in ``App.vue``) reacts to entries
+            // here, waits for the matching ``titleSuggestions`` entry, applies
+            // it to the session and persists it via :meth:`renameSession` once
+            // the session has stopped being a draft. Each entry stores the
+            // ``projectId`` because that's what ``renameSession`` needs and
+            // the watcher otherwise has no way to recover it.
+            // Format: { sessionId: { projectId: string } }
+            pendingTitleAutoApply: {},
+
             // Draft attachments - media files pending send per session
             // { sessionId: Map<mediaId, DraftMedia> }
             // Stored separately from draftMessages to avoid rewriting large blobs on each keystroke
@@ -932,6 +951,32 @@ export const useDataStore = defineStore('data', {
                 delete this.localState.optimisticMessages[draftId]
                 this.recomputeVisualItems(sessionId)
             }
+
+            // Same rekey for an already-arrived title suggestion. The
+            // ``suggest_title`` request was sent under the draft id (only id
+            // known at request time), so a fast response can have landed in
+            // ``titleSuggestions[draftId]`` before this bind runs. Move it to
+            // the canonical key so the SessionView watcher — which queries by
+            // canonical id after the router.replace below — picks it up.
+            const titleSuggestion = this.localState.titleSuggestions[draftId]
+            if (titleSuggestion) {
+                this.localState.titleSuggestions[sessionId] = titleSuggestion
+                delete this.localState.titleSuggestions[draftId]
+            }
+
+            // Same migration for an in-flight auto-apply intent — the
+            // App-level watcher is observing the draft id at the moment of
+            // bind, so the entry must follow the session to its canonical id.
+            const pendingAuto = this.localState.pendingTitleAutoApply[draftId]
+            if (pendingAuto) {
+                this.localState.pendingTitleAutoApply[sessionId] = pendingAuto
+                delete this.localState.pendingTitleAutoApply[draftId]
+            }
+
+            // Late ``title_suggested`` messages may still arrive with the
+            // draft id long after this bind has finished, so register a
+            // forwarding alias that ``handleTitleSuggested`` will resolve.
+            this.localState.draftAliases[draftId] = sessionId
 
             const { router } = await import('../router')
             const onDraft = router.currentRoute.value.params.sessionId === draftId
@@ -3131,9 +3176,14 @@ export const useDataStore = defineStore('data', {
          */
         handleTitleSuggested(data) {
             const { sessionId, suggestion, sourcePrompt } = data
+            // Resolve the draft alias if the backend echoed the draft id back
+            // (the ``suggest_title`` payload was sent under the draft id; for
+            // providers that rebind to a canonical id, we want the response
+            // to land on the canonical key so the SessionView watcher sees it).
+            const sid = this.localState.draftAliases[sessionId] || sessionId
             // Always store the response so the frontend knows the request completed
             // (distinguishes "no response yet" from "response received with failure")
-            this.localState.titleSuggestions[sessionId] = {
+            this.localState.titleSuggestions[sid] = {
                 suggestion: suggestion || null,
                 sourcePrompt: sourcePrompt || null,
             }
@@ -3145,6 +3195,25 @@ export const useDataStore = defineStore('data', {
          */
         clearTitleSuggestion(sessionId) {
             delete this.localState.titleSuggestions[sessionId]
+        },
+
+        /**
+         * Register a session as waiting on an auto-applied title.
+         * Consumed by the App-level watcher which reacts to the matching
+         * ``titleSuggestions`` entry.
+         * @param {string} sessionId
+         * @param {string} projectId
+         */
+        registerPendingTitleAutoApply(sessionId, projectId) {
+            this.localState.pendingTitleAutoApply[sessionId] = { projectId }
+        },
+
+        /**
+         * Drop a pending auto-apply entry (after success or definitive failure).
+         * @param {string} sessionId
+         */
+        clearPendingTitleAutoApply(sessionId) {
+            delete this.localState.pendingTitleAutoApply[sessionId]
         },
 
         // =========================================================================

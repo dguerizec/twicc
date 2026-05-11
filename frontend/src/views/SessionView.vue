@@ -743,51 +743,14 @@ function handleNeedsTitle() {
         const prompt = store.getDraftMessage(sid)?.message?.trim()
         if (!prompt) return
 
+        // Register the intent in the store BEFORE firing the WS request so
+        // the global auto-apply watcher (set up in main.js via
+        // ``startAutoApplyTitleWatcher``) is already observing this session
+        // even if the backend reply comes back in the same tick. The
+        // watcher lives at module scope and survives the router.replace
+        // that ``bindDraftSession`` performs for Codex drafts.
+        store.registerPendingTitleAutoApply(sid, pid)
         requestTitleSuggestion(sid, prompt, settingsStore.getTitleSystemPrompt)
-
-        // Track the suggested title once received. This variable is captured by the
-        // watcher closure and survives across reactive flushes (broadcasts, etc.).
-        let pendingTitle = null
-
-        const unwatch = watch(
-            () => ({
-                suggestion: store.getTitleSuggestion(sid),
-                suggestionEntry: store.getTitleSuggestionEntry(sid),
-                session: store.getSession(sid),
-            }),
-            ({ suggestion, suggestionEntry, session }) => {
-                if (!session) return
-
-                // Generation definitively failed (response received but no suggestion
-                // after all backend retries) — stop watching, leave session untitled.
-                if (suggestionEntry && !suggestion) {
-                    unwatch()
-                    return
-                }
-
-                // Capture the title from the first valid suggestion
-                if (suggestion && !pendingTitle) {
-                    pendingTitle = suggestion
-                }
-
-                if (!pendingTitle) return
-
-                // Re-apply the suggested title only if the session has no title
-                // (broadcast replaced the session object without the title yet).
-                // If the session has a different non-empty title (user renamed
-                // manually, or watcher detected a custom-title), respect it.
-                if (!session.title) {
-                    session.title = pendingTitle
-                }
-
-                // Once the session is real (exists in DB), persist via API and
-                // stop watching. renameSession does optimistic update + PATCH.
-                if (!session.draft) {
-                    unwatch()
-                    store.renameSession(pid, sid, pendingTitle)
-                }
-            }
-        )
     } else {
         sessionHeaderRef.value?.openRenameDialog({ showHint: true })
     }

@@ -916,31 +916,36 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
         {
             "type": "suggest_title",
             "sessionId": "...",
+            "provider": "claude_code" | "codex",
             "systemPrompt": "System prompt with {text} placeholder",
             "prompt": "optional prompt text for draft/new sessions"
         }
 
-        Requires systemPrompt from frontend (no fallback).
+        Requires systemPrompt and provider from the frontend (no fallback).
+        ``provider`` travels in the payload because draft sessions don't exist
+        in the DB yet — the backend can't resolve them via ``Session.provider``.
 
         Modes:
         - prompt provided: Use prompt directly (draft/new session or regenerate)
-        - sessionId only: Fetch first message from DB (existing session)
+        - sessionId only (existing session): Fetch first message from DB
 
-        Always returns the prompt used for generation, so frontend can regenerate.
-        Provider is resolved from the session row; the matching helpers'
-        ``generate_title`` does the actual model call.
+        Always returns the prompt used for generation, so the frontend can
+        regenerate.
         """
         session_id = content.get("sessionId")
+        provider_key = content.get("provider")
         system_prompt = content.get("systemPrompt")
         prompt = content.get("prompt")
 
-        if not session_id or not system_prompt:
+        if not session_id or not system_prompt or not provider_key:
             return
         if "{text}" not in system_prompt:
             return
 
-        provider = await get_session_provider(session_id)
-        if provider is None:
+        try:
+            provider = Provider(provider_key)
+        except ValueError:
+            logger.warning("suggest_title: unknown provider %r", provider_key)
             return
         helpers = get_provider_helpers(provider)
 

@@ -191,6 +191,12 @@ if (!authStore.needsLogin) {
         dataStore.hydrateAttachments()
     })
 
+    // Wire the global auto-apply title watcher. Module-level watchEffect that
+    // survives router.replace (which would otherwise tear down a watcher held
+    // inside SessionView when a draft binds to its canonical id).
+    const { startAutoApplyTitleWatcher } = await import('./composables/useAutoApplyTitle')
+    startAutoApplyTitleWatcher()
+
     // Periodically clean up orphan draft sessions (every 2 hours).
     // A draft becomes orphan when its session was created on the backend but the
     // IndexedDB entry was never removed (e.g. tab closed mid-send, crash).
