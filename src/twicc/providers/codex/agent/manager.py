@@ -24,7 +24,7 @@ from codex_app_server import (
 
 from twicc.agent import AgentState, BaseAgentManager
 from twicc.core.enums import Provider
-from twicc.providers.helpers import AgentSettings
+from twicc.providers.helpers import AgentSettings, get_provider_helpers
 
 from .agent import CodexAgent
 
@@ -197,8 +197,9 @@ class CodexAgentManager(BaseAgentManager):
 
         The agent_settings bundle is stored on the agent for
         :attr:`BaseAgent.agent_settings` contract compliance but otherwise
-        ignored: the model is hardcoded (see below), and none of the
-        live/idle/startup categories carry hot-applicable values in this v1.
+        ignored: the model is read from ``settings.selected_model`` and
+        resolved through the helpers; the rest of the live/idle/startup
+        categories carry no hot-applicable values in this v1.
         """
         bundled_bin = _resolve_bundled_codex_bin()
         config = AppServerConfig(codex_bin=str(bundled_bin), cwd=cwd)
@@ -223,11 +224,15 @@ class CodexAgentManager(BaseAgentManager):
                     approval_policy=approval_policy,
                 )
             else:
-                # v1 hardcodes the model to ``gpt-5.4`` to mirror the Codex SDK
-                # examples — the bundled CLI's default model can drift across
-                # releases, so an explicit pin keeps behavior reproducible.
+                # Resolve the user's selected_model alias (e.g. "gpt",
+                # "gpt-5.4", "gpt-mini") to the SDK full name the Codex CLI
+                # expects (e.g. "gpt-5.5", "gpt-5.4", "gpt-5.4-mini").
+                # Falls back to ``None`` for an empty input — Codex CLI then
+                # picks its own default.
+                helpers = get_provider_helpers(Provider.CODEX)
+                sdk_model = helpers.resolve_sdk_model(settings.selected_model)
                 thread = await codex.thread_start(
-                    model="gpt-5.4",
+                    model=sdk_model,
                     sandbox=sandbox,
                     approval_policy=approval_policy,
                 )

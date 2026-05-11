@@ -142,15 +142,35 @@ class CodexHelpers(BaseProviderHelpers):
         ),
     }
 
-    # Single supported model. ``selected_model_value`` will return ``"gpt"``
-    # for this entry (latest of its family), matching the Claude Code
-    # convention of bare-alias-for-latest / versioned-alias for the rest.
+    # Codex CLI models the bundled binary accepts (verified at startup time
+    # via ``codex.models()``). ``selected_model_value`` returns the bare
+    # alias for ``latest=True`` entries (``"gpt"``, ``"gpt-mini"``) and the
+    # versioned alias for the rest (``"gpt-5.4"``), matching the Claude
+    # Code convention of bare-alias-for-latest / versioned-alias.
     MODEL_VERSIONS: ClassVar[list[ModelVersion]] = [
         ModelVersion(
             provider=Provider.CODEX,
             model="gpt",
             version="5.5",
             full_name="gpt-5.5",
+            retirement_date=None,
+            latest=True,
+            provider_extra=None,
+        ),
+        ModelVersion(
+            provider=Provider.CODEX,
+            model="gpt",
+            version="5.4",
+            full_name="gpt-5.4",
+            retirement_date=None,
+            latest=False,
+            provider_extra=None,
+        ),
+        ModelVersion(
+            provider=Provider.CODEX,
+            model="gpt-mini",
+            version="5.4",
+            full_name="gpt-5.4-mini",
             retirement_date=None,
             latest=True,
             provider_extra=None,
@@ -248,6 +268,49 @@ class CodexHelpers(BaseProviderHelpers):
         if info is None:
             return {"raw": model, "family": None, "version": None}
         return {"raw": model, "family": info.family, "version": info.version}
+
+    # ------------------------------------------------------------------
+    # Model registry — alias resolution
+    # ------------------------------------------------------------------
+
+    def find_model(self, identifier: str) -> ModelVersion | None:
+        """Look up a Codex model by its ``selected_model`` alias.
+
+        ``Session.selected_model`` (and the WS / preset wire) stores the
+        compact alias produced by :meth:`selected_model_value`, not the
+        SDK ``full_name``:
+
+        - ``"gpt"``       → latest of family ``gpt`` (gpt-5.5 today)
+        - ``"gpt-5.4"``   → versioned alias (family=gpt, version=5.4)
+        - ``"gpt-mini"``  → latest of family ``gpt-mini`` (gpt-5.4-mini today)
+
+        We check the bare alias first to disambiguate family names that
+        themselves contain a dash (``"gpt-mini"``), then fall back to the
+        versioned form. The base implementation matches on ``full_name``
+        which would never hit our alias-shaped identifiers.
+        """
+        for mv in self.MODEL_VERSIONS:
+            if mv.latest and mv.model == identifier:
+                return mv
+        for mv in self.MODEL_VERSIONS:
+            if identifier == f"{mv.model}-{mv.version}":
+                return mv
+        return None
+
+    def resolve_sdk_model(self, selected_model: str | None) -> str | None:
+        """Resolve a ``selected_model`` alias to the Codex SDK model name.
+
+        The SDK's ``thread_start(model=...)`` expects an exact id such as
+        ``"gpt-5.5"`` or ``"gpt-5.4-mini"``, but our wire-side identifiers
+        are aliases (see :meth:`find_model`). When the alias matches a
+        known entry, return its ``full_name``; otherwise pass the input
+        through so a hand-typed value still reaches the CLI (which will
+        reject it server-side with a clear error if unknown).
+        """
+        if not selected_model:
+            return None
+        mv = self.find_model(selected_model)
+        return mv.full_name if mv else selected_model
 
     # ------------------------------------------------------------------
     # Full-text search indexing
