@@ -3,6 +3,7 @@ import { computed } from 'vue'
 import { SYNTHETIC_ITEM } from '../../../../../constants'
 import UserMessage from './UserMessage.vue'
 import AssistantMessage from './AssistantMessage.vue'
+import Reasoning from './Reasoning.vue'
 import WorkingAssistantMessage from '../WorkingAssistantMessage.vue'
 
 const props = defineProps({
@@ -10,8 +11,9 @@ const props = defineProps({
     //  - Real Codex line: ``{ timestamp, type: 'event_msg', payload: { type:
     //    'user_message' | 'agent_message', message: string, ... } }``
     //  - Synthetic placeholder injected by the store (optimistic user
-    //    message, or STARTING / WORKING assistant message). These carry
-    //    ``syntheticKind`` at the top level and rely on the dispatch below.
+    //    message, or STARTING / WORKING assistant message, or live
+    //    streaming text/thinking block). These carry ``syntheticKind``
+    //    at the top level and rely on the dispatch below.
     data: {
         type: Object,
         required: true
@@ -26,6 +28,12 @@ const props = defineProps({
     // label and the session's base directory for tool summaries.
     sessionId: {
         type: String,
+        required: true
+    },
+    // Used by the streaming ``Reasoning`` placeholder to build a stable
+    // persisted open/closed key on the synthetic negative line number.
+    lineNum: {
+        type: Number,
         required: true
     }
 })
@@ -42,14 +50,23 @@ const isStreamingBlock = computed(() =>
     props.data?.syntheticKind === SYNTHETIC_ITEM.STREAMING_BLOCK.kind
 )
 
-// Two text shapes need to flow through to ``AssistantMessage``:
+// A streaming placeholder paints a single content block at index 0;
+// inspect its ``type`` to route ``thinking`` blocks to ``Reasoning`` and
+// regular ``text`` blocks to ``AssistantMessage`` (same dispatch Claude
+// does inside its ``ContentList``).
+const streamingBlockType = computed(() => {
+    if (!isStreamingBlock.value) return null
+    return props.data?.message?.content?.[0]?.type ?? null
+})
+
+// Plain text source for the ``AssistantMessage`` path. Two shapes feed in:
 //
 //  - Real Codex line: the flat string sits under ``payload.message``
 //    (event_msg.agent_message) — no content array, no nested blocks.
-//  - Streaming placeholder: the store paints the live SDK delta into a
-//    Claude-style content array under ``message.content`` so the same
-//    rendering plumbing can carry both providers. Images on
-//    user_message events (``payload.images``) are out of scope for now.
+//  - Streaming text placeholder: the store paints the live SDK delta into
+//    a Claude-style content array under ``message.content`` so the same
+//    rendering plumbing can carry both providers. Images on user_message
+//    events (``payload.images``) are out of scope for now.
 const text = computed(() => {
     if (isStreamingBlock.value) {
         const content = props.data?.message?.content
@@ -72,6 +89,12 @@ const text = computed(() => {
     <WorkingAssistantMessage
         v-else-if="isWorkingAssistantMessage"
         :session-id="sessionId"
+    />
+    <Reasoning
+        v-else-if="streamingBlockType === 'thinking'"
+        :data="data"
+        :session-id="sessionId"
+        :line-num="lineNum"
     />
     <UserMessage v-else-if="kind === 'user_message'" :text="text" />
     <AssistantMessage v-else-if="kind === 'assistant_message'" :text="text" />

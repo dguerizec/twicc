@@ -93,6 +93,13 @@ class CodexAgent(BaseAgent):
         # active turn instead of yanking the whole transport.
         self._current_turn: AsyncTurnHandle | None = None
         self._turn_task: asyncio.Task[None] | None = None
+        # ``reasoning`` items can fan out into several summary parts (each
+        # with its own ``summaryIndex``). The SDK fires one
+        # ``summaryPartAdded`` per part but a single ``item/completed`` for
+        # the whole item, so we remember which indices we already started
+        # streaming and emit a matching ``stream_block_stop`` + ``end`` for
+        # each at completion time. Keyed by Codex ``item_id``.
+        self._reasoning_summary_indices: dict[str, set[int]] = {}
 
     @staticmethod
     def _sdk_effort(effort: str | None) -> ReasoningEffort | None:
@@ -313,19 +320,40 @@ class CodexAgent(BaseAgent):
     async def _handle_stream_event(self, event: Any) -> None:
         """Translate one Codex SDK stream notification into TwiCC's WS protocol.
 
-        We only handle ``agentMessage`` items in this iteration — reasoning,
-        tool calls, etc. flow exclusively through the JSONL → watcher path
-        for now. The mapping to the Claude-shared ``stream_block_*`` wire
-        format is:
+        We handle two item kinds today; everything else flows through the
+        JSONL → watcher path. The mapping to the Claude-shared
+        ``stream_block_*`` wire format is:
 
-        - ``item/started`` on an ``agentMessage`` → ``stream_block_start``
-          (``message_id`` carries the Codex ``item_id``; ``block_index``
-          is always ``0`` because a Codex agentMessage is mono-block).
-        - ``item/agentMessage/delta``             → ``stream_block_delta``
-        - ``item/completed`` on an ``agentMessage`` → ``stream_block_stop``
-          + ``stream_block_end`` (``uuid`` = ``item_id``, same value the
-          watcher will stamp onto ``SessionItem.stream_uuid`` after popping
-          the FIFO registry).
+        - ``item/started`` on an ``agentMessage``
+            → ``stream_block_start`` (``block_type="text"``, ``block_index=0``,
+              ``message_id`` = Codex ``item_id``).
+        - ``item/agentMessage/delta`` → ``stream_block_delta``.
+        - ``item/completed`` on an ``agentMessage``
+            → ``stream_block_stop`` + ``stream_block_end`` (``uuid`` =
+              ``item_id``). Pushes the ``item_id`` onto the FIFO registry
+              so the watcher can stamp the matching SessionItem.
+
+        - ``item/reasoning/summaryPartAdded``
+            → ``stream_block_start`` on the first summary part we see for
+              this item (``block_type="thinking"``, ``block_index=0``).
+              Subsequent summary parts emit a ``stream_block_delta`` with
+              text ``"\\n\\n"`` instead, so the streaming view shows the
+              same single concatenated reasoning card the JSONL line will
+              render once flushed (the post-flush ``Reasoning.vue`` joins
+              every ``summary_text`` with ``\\n\\n``). We deliberately
+              ignore ``item/started`` on reasoning items because OpenAI
+              sometimes returns an empty summary — we only want to paint
+              a card when there's actual text to display, which is what
+              ``summaryPartAdded`` signals.
+        - ``item/reasoning/summaryTextDelta`` → ``stream_block_delta``
+              (always on ``block_index=0`` — the summary_index of the
+              specific part is hidden from the wire so the frontend sees
+              one continuous block).
+        - ``item/completed`` on a ``reasoning`` with non-empty summary
+            → ``stream_block_stop`` + ``stream_block_end`` on
+              ``block_index=0``, then a single registry push (the JSONL
+              persists the whole reasoning as a single line, so a single
+              pop on the watcher side will pair them).
         """
         method = event.method
         payload = event.payload
@@ -358,30 +386,117 @@ class CodexAgent(BaseAgent):
             })
             return
 
-        if method == "item/completed":
-            agent_msg = _agent_message_item(payload)
-            if agent_msg is None:
+        if method == "item/reasoning/summaryPartAdded":
+            item_id = getattr(payload, "item_id", None)
+            summary_index = getattr(payload, "summary_index", None)
+            if not item_id or summary_index is None:
                 return
-            item_id = agent_msg.id
-            await self._broadcast_stream_event({
-                "type": "stream_block_stop",
-                "session_id": self.session_id,
-                "message_id": item_id,
-                "block_index": 0,
-                "block_type": "text",
-            })
-            await self._broadcast_stream_event({
-                "type": "stream_block_end",
-                "session_id": self.session_id,
-                "message_id": item_id,
-                "block_index": 0,
-                "block_type": "text",
-                "uuid": item_id,
-            })
-            # Hand the item_id off to the watcher so it can stamp the
-            # matching SessionItem when the JSONL line lands.
-            get_streamed_item_registry().push(self.session_id, item_id)
+            indices = self._reasoning_summary_indices.setdefault(item_id, set())
+            if summary_index in indices:
+                # Already started; the SDK shouldn't fire ``summaryPartAdded``
+                # twice for the same (item_id, summary_index), but the guard
+                # keeps us idempotent if it ever did.
+                return
+            first_part = not indices
+            indices.add(summary_index)
+            if first_part:
+                await self._broadcast_stream_event({
+                    "type": "stream_block_start",
+                    "session_id": self.session_id,
+                    "message_id": item_id,
+                    "block_index": 0,
+                    "block_type": "thinking",
+                })
+            else:
+                # Subsequent summary part — paint a paragraph separator into
+                # the same block instead of opening a new one, so the user
+                # sees the same single Reasoning card the JSONL will render.
+                await self._broadcast_stream_event({
+                    "type": "stream_block_delta",
+                    "session_id": self.session_id,
+                    "message_id": item_id,
+                    "block_index": 0,
+                    "block_type": "thinking",
+                    "text": "\n\n",
+                })
             return
+
+        if method == "item/reasoning/summaryTextDelta":
+            item_id = getattr(payload, "item_id", None)
+            delta = getattr(payload, "delta", None)
+            if not item_id or delta is None:
+                return
+            await self._broadcast_stream_event({
+                "type": "stream_block_delta",
+                "session_id": self.session_id,
+                "message_id": item_id,
+                "block_index": 0,
+                "block_type": "thinking",
+                "text": delta,
+            })
+            return
+
+        if method == "item/completed":
+            item = getattr(payload, "item", None)
+            if item is None:
+                return
+            inner = getattr(item, "root", item)
+            item_type = getattr(inner, "type", None)
+
+            if item_type == "agentMessage":
+                item_id = inner.id
+                await self._broadcast_stream_event({
+                    "type": "stream_block_stop",
+                    "session_id": self.session_id,
+                    "message_id": item_id,
+                    "block_index": 0,
+                    "block_type": "text",
+                })
+                await self._broadcast_stream_event({
+                    "type": "stream_block_end",
+                    "session_id": self.session_id,
+                    "message_id": item_id,
+                    "block_index": 0,
+                    "block_type": "text",
+                    "uuid": item_id,
+                })
+                # Hand the item_id off to the watcher so it can stamp the
+                # matching SessionItem when the JSONL line lands.
+                get_streamed_item_registry().push(self.session_id, item_id)
+                return
+
+            if item_type == "reasoning":
+                item_id = inner.id
+                # If we never received a ``summaryPartAdded`` for this item
+                # the set is empty (or absent) — typical when OpenAI didn't
+                # produce a summary at all, in which case the JSONL line
+                # carries ``summary: []`` and the watcher classifies it as
+                # SYSTEM. No SessionItem to retire, no push needed.
+                indices = self._reasoning_summary_indices.pop(item_id, set())
+                if not indices:
+                    return
+                # Single block per reasoning item (block_index=0) regardless
+                # of how many summary parts we saw — see ``summaryPartAdded``
+                # above for the rationale.
+                await self._broadcast_stream_event({
+                    "type": "stream_block_stop",
+                    "session_id": self.session_id,
+                    "message_id": item_id,
+                    "block_index": 0,
+                    "block_type": "thinking",
+                })
+                await self._broadcast_stream_event({
+                    "type": "stream_block_end",
+                    "session_id": self.session_id,
+                    "message_id": item_id,
+                    "block_index": 0,
+                    "block_type": "thinking",
+                    "uuid": item_id,
+                })
+                # One JSONL line per reasoning item, so a single registry
+                # push regardless of how many summary parts streamed.
+                get_streamed_item_registry().push(self.session_id, item_id)
+                return
 
     async def _broadcast_stream_event(self, data: dict[str, Any]) -> None:
         """Broadcast a streaming event to all connected WebSocket clients.

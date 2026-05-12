@@ -225,6 +225,7 @@ function toggleJsonView() {
                     :data="content"
                     :kind="kind"
                     :session-id="sessionId"
+                    :line-num="lineNum"
                 />
                 <CodexToolUse
                     v-else-if="kind === 'tool_use'"

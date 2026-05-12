@@ -2579,7 +2579,27 @@ export const useDataStore = defineStore('data', {
         streamBlockStart(sessionId, messageId, blockIndex, blockType) {
             const existing = this.localState.streamingBlocks[sessionId]
             if (!existing || existing.messageId !== messageId) {
-                // New message — start fresh (destroy any old buffers)
+                // New message — start fresh (destroy any old buffers).
+                // Before dropping the previous entry we close any of its
+                // streaming detailKeys we may have left open: the next
+                // synthetic block will land at the same negative ``lineNum``
+                // and ``Reasoning.vue`` / ``ThinkingContent.vue`` initialize
+                // ``isOpen`` from ``isDetailOpen``, so a stale ``true`` from
+                // the previous reasoning would auto-open the next one.
+                // ``_retireStreamingBlocks`` does the same reset when the
+                // real SessionItem arrives — this branch handles the race
+                // where the next stream starts before the previous JSONL
+                // line lands (typical for back-to-back Codex reasonings).
+                if (existing) {
+                    const { baseLineNum } = SYNTHETIC_ITEM.STREAMING_BLOCK
+                    for (const oldBlock of existing.blocks) {
+                        this.setDetailOpen(
+                            sessionId,
+                            `line:${baseLineNum - oldBlock.blockIndex}:0`,
+                            false,
+                        )
+                    }
+                }
                 destroySessionBuffers(sessionId)
                 this.localState.streamingBlocks[sessionId] = {
                     messageId,
@@ -2692,7 +2712,7 @@ export const useDataStore = defineStore('data', {
             if (!items) return
             for (let i = items.length - 1; i >= 0; i--) {
                 const item = items[i]
-                if (item.kind !== 'assistant_message' && item.kind !== 'content_items') continue
+                if (item.kind !== 'assistant_message' && item.kind !== 'content_items' && item.kind !== 'reasoning') continue
                 // Provider-agnostic uuid path: when the backend stamped a
                 // ``stream_uuid`` on the wire item (Codex live-sync), that
                 // single field is sufficient — no need to parse content or
@@ -2731,7 +2751,7 @@ export const useDataStore = defineStore('data', {
             if (!streaming) return
 
             for (const item of newItems) {
-                if (item.kind !== 'assistant_message' && item.kind !== 'content_items') continue
+                if (item.kind !== 'assistant_message' && item.kind !== 'content_items' && item.kind !== 'reasoning') continue
 
                 let itemUuid = item.stream_uuid
                 let parsed = null
@@ -2751,20 +2771,33 @@ export const useDataStore = defineStore('data', {
 
                     // Transfer wa-details open state from streaming to real item
                     if (block.blockType === 'thinking') {
-                        // Only Claude streams thinking blocks today, so we lazily
-                        // parse only when we get here (Codex went through the
-                        // stream_uuid short-circuit and ``parsed`` may still be null).
+                        // Lazy parse: Codex went through the stream_uuid
+                        // short-circuit and ``parsed`` may still be null. Claude
+                        // already had it loaded by the parent loop.
                         if (!parsed) parsed = getParsedContent(item)
                         const { baseLineNum } = SYNTHETIC_ITEM.STREAMING_BLOCK
                         const streamingDetailKey = `line:${baseLineNum - block.blockIndex}:0`
                         if (this.isDetailOpen(sessionId, streamingDetailKey)) {
-                            // Find the thinking block's index in the real item's content
-                            const content = parsed?.message?.content
-                            if (Array.isArray(content)) {
-                                const thinkingIdx = content.findIndex(c => c.type === 'thinking')
-                                if (thinkingIdx !== -1) {
-                                    this.setDetailOpen(sessionId, `line:${item.line_num}:${thinkingIdx}`, true)
+                            // The real item's detailKey depends on the provider:
+                            //   - Codex: the JSONL line itself *is* the reasoning
+                            //     item (kind=reasoning), mono-block, ``:0`` suffix.
+                            //   - Claude: the thinking sits inside an
+                            //     assistant_message's content array; look up its
+                            //     position to build ``line:${lineNum}:${idx}``.
+                            let targetKey = null
+                            if (item.kind === 'reasoning') {
+                                targetKey = `line:${item.line_num}:0`
+                            } else {
+                                const content = parsed?.message?.content
+                                if (Array.isArray(content)) {
+                                    const thinkingIdx = content.findIndex(c => c.type === 'thinking')
+                                    if (thinkingIdx !== -1) {
+                                        targetKey = `line:${item.line_num}:${thinkingIdx}`
+                                    }
                                 }
+                            }
+                            if (targetKey) {
+                                this.setDetailOpen(sessionId, targetKey, true)
                             }
                             this.setDetailOpen(sessionId, streamingDetailKey, false)
                         }
