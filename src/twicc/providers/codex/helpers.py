@@ -29,6 +29,7 @@ from twicc.providers.helpers import (
 )
 
 from .pricing import extract_model_info
+from .streaming_registry import get_streamed_item_registry
 
 # Wrapper-level types and their tool-result payload sub-types. Mirrors
 # the discovery rules in ``codex.compute``; kept inline to avoid a
@@ -447,3 +448,31 @@ class CodexHelpers(BaseProviderHelpers):
                 continue
             results.append(payload)
         return results
+
+    def enrich_live_items_payload(self, session_id: str, items: list[dict]) -> None:
+        """Attach ``stream_uuid`` to each newly broadcast ``assistant_message``.
+
+        The Codex agent pushes one SDK ``item_id`` per completed
+        ``agentMessage`` onto the :class:`StreamedItemRegistry`. Here we
+        pop one entry per ``ASSISTANT_MESSAGE`` payload in the order the
+        watcher serialized them — the FIFO invariant (single Codex CLI
+        process emits SDK events and JSONL lines in lockstep) makes
+        that pairing safe without comparing text or timestamps.
+
+        ``pop_next`` returning ``None`` is the expected path on sessions
+        synced outside a live agent run (initial sync, recompute, agent
+        already dead): we simply don't attach ``stream_uuid`` and the
+        frontend has no placeholder to retire anyway. The sibling
+        ``response_item.message`` line for the same exchange is
+        bucketed as ``SYSTEM``/``DEBUG_ONLY`` by :meth:`compute_item_kind`
+        so it doesn't consume the queue.
+        """
+        if not items:
+            return
+        registry = get_streamed_item_registry()
+        for item in items:
+            if item.get("kind") != ItemKind.ASSISTANT_MESSAGE:
+                continue
+            stream_uuid = registry.pop_next(session_id)
+            if stream_uuid is not None:
+                item["stream_uuid"] = stream_uuid

@@ -2693,6 +2693,16 @@ export const useDataStore = defineStore('data', {
             for (let i = items.length - 1; i >= 0; i--) {
                 const item = items[i]
                 if (item.kind !== 'assistant_message' && item.kind !== 'content_items') continue
+                // Provider-agnostic uuid path: when the backend stamped a
+                // ``stream_uuid`` on the wire item (Codex live-sync), that
+                // single field is sufficient — no need to parse content or
+                // match message.id. For Claude the uuid lives inside the
+                // parsed JSONL ``uuid`` field, gated by ``message.id``.
+                if (item.stream_uuid === uuid) {
+                    this._retireStreamingBlocks(sessionId, [item])
+                    this.recomputeVisualItems(sessionId)
+                    return
+                }
                 const parsed = getParsedContent(item)
                 if (!parsed) continue
                 if (parsed.message?.id !== messageId) continue
@@ -2708,9 +2718,13 @@ export const useDataStore = defineStore('data', {
          * Try to retire streaming blocks whose real SessionItem has arrived.
          * Called from addSessionItems after new items are placed in the array.
          *
-         * Match strategy: for each new item of kind assistant_message or
-         * content_items, check parsed content's message.id against the streaming
-         * messageId, then match uuid (top-level in parsed JSON) against block uuid.
+         * Match strategy (in order):
+         *   1. ``item.stream_uuid`` (Codex live-sync) — the backend popped
+         *      the streaming registry and stamped the SDK ``item_id`` on
+         *      the wire payload. We retire the block whose uuid matches,
+         *      no parsed content needed.
+         *   2. Otherwise, parse the JSONL ``uuid`` and ``message.id``
+         *      (Claude path) and match those against the streaming entry.
          */
         _retireStreamingBlocks(sessionId, newItems) {
             const streaming = this.localState.streamingBlocks[sessionId]
@@ -2718,12 +2732,17 @@ export const useDataStore = defineStore('data', {
 
             for (const item of newItems) {
                 if (item.kind !== 'assistant_message' && item.kind !== 'content_items') continue
-                const parsed = getParsedContent(item)
-                if (!parsed) continue
-                const itemMessageId = parsed.message?.id
-                if (itemMessageId !== streaming.messageId) continue
-                const itemUuid = parsed.uuid
-                if (!itemUuid) continue
+
+                let itemUuid = item.stream_uuid
+                let parsed = null
+                if (!itemUuid) {
+                    parsed = getParsedContent(item)
+                    if (!parsed) continue
+                    const itemMessageId = parsed.message?.id
+                    if (itemMessageId !== streaming.messageId) continue
+                    itemUuid = parsed.uuid
+                    if (!itemUuid) continue
+                }
 
                 // Find and remove the matching block
                 const idx = streaming.blocks.findIndex(b => b.uuid === itemUuid)
@@ -2732,11 +2751,15 @@ export const useDataStore = defineStore('data', {
 
                     // Transfer wa-details open state from streaming to real item
                     if (block.blockType === 'thinking') {
+                        // Only Claude streams thinking blocks today, so we lazily
+                        // parse only when we get here (Codex went through the
+                        // stream_uuid short-circuit and ``parsed`` may still be null).
+                        if (!parsed) parsed = getParsedContent(item)
                         const { baseLineNum } = SYNTHETIC_ITEM.STREAMING_BLOCK
                         const streamingDetailKey = `line:${baseLineNum - block.blockIndex}:0`
                         if (this.isDetailOpen(sessionId, streamingDetailKey)) {
                             // Find the thinking block's index in the real item's content
-                            const content = parsed.message?.content
+                            const content = parsed?.message?.content
                             if (Array.isArray(content)) {
                                 const thinkingIdx = content.findIndex(c => c.type === 'thinking')
                                 if (thinkingIdx !== -1) {

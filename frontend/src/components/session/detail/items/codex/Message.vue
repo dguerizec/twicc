@@ -38,10 +38,28 @@ const isWorkingAssistantMessage = computed(() =>
     props.data?.syntheticKind === SYNTHETIC_ITEM.WORKING_ASSISTANT_MESSAGE.kind
 )
 
-// V1: Codex stores the human input / agent reply as a flat string in
-// payload.message — no content array, no nested blocks. Images on
-// user_message events (data.payload.images) are out of scope for now.
-const text = computed(() => props.data?.payload?.message || '')
+const isStreamingBlock = computed(() =>
+    props.data?.syntheticKind === SYNTHETIC_ITEM.STREAMING_BLOCK.kind
+)
+
+// Two text shapes need to flow through to ``AssistantMessage``:
+//
+//  - Real Codex line: the flat string sits under ``payload.message``
+//    (event_msg.agent_message) — no content array, no nested blocks.
+//  - Streaming placeholder: the store paints the live SDK delta into a
+//    Claude-style content array under ``message.content`` so the same
+//    rendering plumbing can carry both providers. Images on
+//    user_message events (``payload.images``) are out of scope for now.
+const text = computed(() => {
+    if (isStreamingBlock.value) {
+        const content = props.data?.message?.content
+        if (Array.isArray(content) && content.length > 0) {
+            return content[0].text || ''
+        }
+        return ''
+    }
+    return props.data?.payload?.message || ''
+})
 </script>
 
 <template>

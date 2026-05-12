@@ -16,6 +16,8 @@ import logging
 import time
 from typing import Any, ClassVar
 
+from channels.layers import get_channel_layer
+
 from codex_app_server import (
     AsyncCodex,
     AsyncThread,
@@ -29,7 +31,31 @@ from twicc.agent import AgentState, BaseAgent, StateChangeCallback
 from twicc.core.enums import Provider
 from twicc.providers.helpers import AgentSettings
 
+from ..streaming_registry import get_streamed_item_registry
+
 logger = logging.getLogger(__name__)
+
+
+def _agent_message_item(payload: Any) -> Any | None:
+    """Unwrap a ``ThreadItem`` payload to its ``AgentMessageThreadItem`` inner.
+
+    ``ItemStarted`` / ``ItemCompleted`` notifications carry the freshly
+    minted (or finalized) ``ThreadItem`` under ``payload.item``. That
+    ``ThreadItem`` is a Pydantic ``RootModel`` whose actual variant lives
+    on ``.root`` — ``item.type`` is *not* a passthrough, it returns
+    ``None``. We need the real inner instance to read ``type``/``id``.
+
+    Returns the unwrapped instance only when it's an ``agentMessage``;
+    any other type (reasoning, command_execution, plan, …) flows through
+    the JSONL → watcher path and isn't streamed live in this iteration.
+    """
+    item = getattr(payload, "item", None)
+    if item is None:
+        return None
+    inner = getattr(item, "root", item)
+    if getattr(inner, "type", None) != "agentMessage":
+        return None
+    return inner
 
 
 class CodexAgent(BaseAgent):
@@ -157,8 +183,21 @@ class CodexAgent(BaseAgent):
 
         self._current_turn = turn_handle
 
+        # Consume the turn's notification stream ourselves (instead of the
+        # blackbox ``turn_handle.run()``) so we can:
+        #   - Broadcast ``stream_block_*`` WS events that paint the live
+        #     assistant text in the frontend before the JSONL line lands.
+        #   - Push each completed ``agentMessage`` item_id onto the FIFO
+        #     registry so the watcher can stamp the matching SessionItem
+        #     with ``stream_uuid`` and the frontend can retire the synthetic
+        #     placeholder. (See ``streaming_registry.py`` for the why.)
         try:
-            await turn_handle.run()
+            stream = turn_handle.stream()
+            try:
+                async for event in stream:
+                    await self._handle_stream_event(event)
+            finally:
+                await stream.aclose()
         except TransportClosedError:
             # Manager closed the transport — expected during interrupt_or_kill
             # or shutdown. _handle_error already ran (or will run); avoid a
@@ -231,6 +270,13 @@ class CodexAgent(BaseAgent):
                     self.session_id, exc_info=True,
                 )
 
+        # Drop any item_ids buffered for this session. The agent is going
+        # away, so the watcher will never get matching JSONL lines for
+        # whatever was streamed and not yet completed (or whatever was
+        # completed in the SDK after we tore the transport down). Keeping
+        # them would corrupt the FIFO for the next agent on the same id.
+        get_streamed_item_registry().clear_session(self.session_id)
+
         if self.state != AgentState.DEAD:
             self._set_state(AgentState.DEAD)
             self.last_activity = time.time()
@@ -255,6 +301,97 @@ class CodexAgent(BaseAgent):
                 "codex.close() during error handling failed for session %s",
                 self.session_id, exc_info=True,
             )
+        get_streamed_item_registry().clear_session(self.session_id)
         self._set_state(AgentState.DEAD)
         self.last_activity = time.time()
         await self._notify_state_change()
+
+    # ------------------------------------------------------------------
+    # Stream event handling
+    # ------------------------------------------------------------------
+
+    async def _handle_stream_event(self, event: Any) -> None:
+        """Translate one Codex SDK stream notification into TwiCC's WS protocol.
+
+        We only handle ``agentMessage`` items in this iteration — reasoning,
+        tool calls, etc. flow exclusively through the JSONL → watcher path
+        for now. The mapping to the Claude-shared ``stream_block_*`` wire
+        format is:
+
+        - ``item/started`` on an ``agentMessage`` → ``stream_block_start``
+          (``message_id`` carries the Codex ``item_id``; ``block_index``
+          is always ``0`` because a Codex agentMessage is mono-block).
+        - ``item/agentMessage/delta``             → ``stream_block_delta``
+        - ``item/completed`` on an ``agentMessage`` → ``stream_block_stop``
+          + ``stream_block_end`` (``uuid`` = ``item_id``, same value the
+          watcher will stamp onto ``SessionItem.stream_uuid`` after popping
+          the FIFO registry).
+        """
+        method = event.method
+        payload = event.payload
+
+        if method == "item/started":
+            agent_msg = _agent_message_item(payload)
+            if agent_msg is None:
+                return
+            await self._broadcast_stream_event({
+                "type": "stream_block_start",
+                "session_id": self.session_id,
+                "message_id": agent_msg.id,
+                "block_index": 0,
+                "block_type": "text",
+            })
+            return
+
+        if method == "item/agentMessage/delta":
+            item_id = getattr(payload, "item_id", None)
+            delta = getattr(payload, "delta", None)
+            if not item_id or delta is None:
+                return
+            await self._broadcast_stream_event({
+                "type": "stream_block_delta",
+                "session_id": self.session_id,
+                "message_id": item_id,
+                "block_index": 0,
+                "block_type": "text",
+                "text": delta,
+            })
+            return
+
+        if method == "item/completed":
+            agent_msg = _agent_message_item(payload)
+            if agent_msg is None:
+                return
+            item_id = agent_msg.id
+            await self._broadcast_stream_event({
+                "type": "stream_block_stop",
+                "session_id": self.session_id,
+                "message_id": item_id,
+                "block_index": 0,
+                "block_type": "text",
+            })
+            await self._broadcast_stream_event({
+                "type": "stream_block_end",
+                "session_id": self.session_id,
+                "message_id": item_id,
+                "block_index": 0,
+                "block_type": "text",
+                "uuid": item_id,
+            })
+            # Hand the item_id off to the watcher so it can stamp the
+            # matching SessionItem when the JSONL line lands.
+            get_streamed_item_registry().push(self.session_id, item_id)
+            return
+
+    async def _broadcast_stream_event(self, data: dict[str, Any]) -> None:
+        """Broadcast a streaming event to all connected WebSocket clients.
+
+        Mirror of ``ClaudeCodeAgent._broadcast_stream_event``: pushes through
+        the ``"updates"`` channel group; the consumer's ``broadcast`` handler
+        forwards ``data`` verbatim as a WS message.
+        """
+        channel_layer = get_channel_layer()
+        await channel_layer.group_send(
+            "updates",
+            {"type": "broadcast", "data": data},
+        )
