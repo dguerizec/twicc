@@ -371,6 +371,30 @@ def _count_diff_lines(unified_diff: str) -> tuple[int, int]:
     return added, removed
 
 
+def _has_summary_text(reasoning_payload: dict) -> bool:
+    """Return ``True`` when a ``response_item.reasoning`` payload has visible summary text.
+
+    OpenAI publishes a summary at the model's discretion: most reasoning
+    blocks come back with an empty ``summary: []`` array (no useful text
+    to render), and occasionally one carries one or more
+    ``{"type": "summary_text", "text": "..."}`` entries. Only the latter
+    are worth rendering — the former would amount to an empty collapsible
+    card and is better hidden behind DEBUG_ONLY.
+    """
+    summary = reasoning_payload.get("summary")
+    if not isinstance(summary, list):
+        return False
+    for entry in summary:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("type") != "summary_text":
+            continue
+        text = entry.get("text")
+        if isinstance(text, str) and text.strip():
+            return True
+    return False
+
+
 def _event_msg_text(parsed_json: dict, expected_subtype: str) -> str | None:
     """Return the ``message`` string for an ``event_msg`` of the given subtype.
 
@@ -740,11 +764,20 @@ class CodexSessionCompute(BaseSessionCompute):
             # DEBUG_ONLY without also tagging them as plain SYSTEM.
             if sub_type in _TOOL_RESULT_PAYLOAD_TYPES:
                 return None
+            # Reasoning lines are rendered only when the model produced an
+            # actual summary block — the encrypted_content is opaque to us
+            # so a reasoning whose ``summary`` is empty has nothing visible
+            # to show. We bucket the empty case back to SYSTEM (-> DEBUG_ONLY)
+            # via the fall-through below; the non-empty case becomes its own
+            # COLLAPSIBLE kind so it joins tool_use et al. in the group
+            # machinery and gets a dedicated frontend renderer.
+            if sub_type == "reasoning" and _has_summary_text(payload):
+                return ItemKind.REASONING
 
         # Everything else (session_meta, turn_context, other response_item
-        # subtypes — message/reasoning/…, other event_msg subtypes
-        # without call_id, ``compacted``, malformed lines) is bucketed
-        # as SYSTEM and ends up at DEBUG_ONLY display level.
+        # subtypes — message/reasoning-without-summary/…, other event_msg
+        # subtypes without call_id, ``compacted``, malformed lines) is
+        # bucketed as SYSTEM and ends up at DEBUG_ONLY display level.
         return ItemKind.SYSTEM
 
     # compute_item_display_level + compute_item_metadata: inherited from base.

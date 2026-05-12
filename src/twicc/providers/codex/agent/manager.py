@@ -197,6 +197,19 @@ class CodexAgentManager(BaseAgentManager):
         try:
             approval_policy = AskForApproval.model_validate("never")
             sandbox = SandboxMode.danger_full_access
+            # Per-thread config overrides. ``config`` on thread_start /
+            # thread_resume reaches the server as a fresh ``ConfigToml`` patch
+            # scoped to this thread, which is more reliable than ``-c`` CLI
+            # overrides (those bind at app-server boot and can be ignored by
+            # the per-thread request layer). We force ``detailed`` reasoning
+            # summaries so the JSONL captures the model's thinking text —
+            # needed for the TwiCC "thinking" stream support we're wiring
+            # next. Every model in the catalog already has
+            # ``supports_reasoning_summaries=true``; the only knob that
+            # actually moves the needle is the summary verbosity itself.
+            thread_config: dict[str, Any] = {
+                "model_reasoning_summary": "detailed",
+            }
             if resume:
                 # Model is sticky to the existing thread server-side — leave it
                 # unset so the resumed thread keeps whatever model it was started
@@ -206,6 +219,7 @@ class CodexAgentManager(BaseAgentManager):
                     session_id,
                     sandbox=sandbox,
                     approval_policy=approval_policy,
+                    config=thread_config,
                 )
             else:
                 # Resolve the user's selected_model alias (e.g. "gpt",
@@ -219,6 +233,7 @@ class CodexAgentManager(BaseAgentManager):
                     model=sdk_model,
                     sandbox=sandbox,
                     approval_policy=approval_policy,
+                    config=thread_config,
                 )
         except Exception:
             try:

@@ -24,6 +24,14 @@ class ItemKind(StrEnum):
     API_ERROR = "api_error"
     COMPACT_SUMMARY = "compact_summary"
     SYSTEM = "system"
+    # ``reasoning`` lines from providers that expose model reasoning as a
+    # standalone JSONL line (Codex ``response_item.reasoning`` with a
+    # non-empty ``summary``). Falls through to ``COLLAPSIBLE`` display level,
+    # so it joins tool_use et al. in the natural group_head/group_tail
+    # machinery. A reasoning line whose ``summary`` is empty stays bucketed
+    # as ``SYSTEM`` (the encrypted_content is opaque to us and useless to
+    # render) and lands at ``DEBUG_ONLY``.
+    REASONING = "reasoning"
 
 
 class Provider(StrEnum):

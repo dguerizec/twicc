@@ -8,6 +8,7 @@ import ClaudeCodeApiError from './items/claude_code/ApiError.vue'
 import ClaudeCodeCompactSummary from './items/claude_code/CompactSummary.vue'
 import CodexMessage from './items/codex/Message.vue'
 import CodexToolUse from './items/codex/ToolUse.vue'
+import CodexReasoning from './items/codex/Reasoning.vue'
 import UnknownEntry from './items/UnknownEntry.vue'
 import AppTooltip from '../../ui/AppTooltip.vue'
 import CodeCommentsIndicator from '../../ui/CodeCommentsIndicator.vue'
@@ -231,6 +232,12 @@ function toggleJsonView() {
                     :project-id="projectId"
                     :session-id="sessionId"
                     :parent-session-id="parentSessionId"
+                    :line-num="lineNum"
+                />
+                <CodexReasoning
+                    v-else-if="kind === 'reasoning'"
+                    :data="content"
+                    :session-id="sessionId"
                     :line-num="lineNum"
                 />
                 <UnknownEntry
