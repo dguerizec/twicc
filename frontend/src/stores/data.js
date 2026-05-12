@@ -34,6 +34,24 @@ import { initBuffer, feedDelta, flushBuffer, destroySessionBuffers, destroyAllBu
 // Map of debounced save functions per session (to avoid mixing debounces)
 const debouncedSaves = new Map()
 
+// How long a ``text`` streaming block can stay quiet before we flip its
+// ``stopped`` flag and let the WorkingAssistantMessage placeholder reappear.
+// Used by streamBlockDelta below. Codex's ``item/completed`` event can lag
+// the last actual ``agentMessage/delta`` by several seconds (15+ observed),
+// during which the SDK has nothing more to say but the agent is technically
+// still working — without this nudge the UI looks frozen with no indicator.
+const STREAM_BLOCK_INACTIVITY_MS = 500
+
+// Cancel any pending inactivity timer attached to a streaming block. Safe
+// to call when no timer is set. Called from streamBlockStop / start /
+// retire / process-state-dead paths so we never leak a setTimeout.
+function clearBlockInactivityTimer(block) {
+    if (block?._inactivityTimer) {
+        clearTimeout(block._inactivityTimer)
+        block._inactivityTimer = null
+    }
+}
+
 // Special project ID for "All Projects" mode
 export const ALL_PROJECTS_ID = '__all__'
 
@@ -2495,6 +2513,12 @@ export const useDataStore = defineStore('data', {
                 // Remove dead processes from the map
                 delete this.processStates[sessionId]
                 // Clean up any lingering streaming blocks and buffers
+                const lingering = this.localState.streamingBlocks[sessionId]
+                if (lingering) {
+                    for (const block of lingering.blocks) {
+                        clearBlockInactivityTimer(block)
+                    }
+                }
                 destroySessionBuffers(sessionId)
                 delete this.localState.streamingBlocks[sessionId]
             } else {
@@ -2593,6 +2617,7 @@ export const useDataStore = defineStore('data', {
                 if (existing) {
                     const { baseLineNum } = SYNTHETIC_ITEM.STREAMING_BLOCK
                     for (const oldBlock of existing.blocks) {
+                        clearBlockInactivityTimer(oldBlock)
                         this.setDetailOpen(
                             sessionId,
                             `line:${baseLineNum - oldBlock.blockIndex}:0`,
@@ -2631,6 +2656,29 @@ export const useDataStore = defineStore('data', {
 
             block.text += text
             feedDelta(sessionId, blockIndex, text)
+
+            // (Re)arm the inactivity timer for text blocks. If the SDK goes
+            // quiet for STREAM_BLOCK_INACTIVITY_MS we'll flip ``stopped`` so
+            // the WorkingAssistantMessage indicator reappears, even though
+            // ``item/completed`` from Codex may still be seconds away. If a
+            // delta arrives after the flip, we revert ``stopped`` back to
+            // false so the indicator hides again while new content streams.
+            // Thinking blocks are excluded: they don't gate the
+            // WorkingAssistantMessage (``hasActiveTextStreaming`` only looks
+            // at text blocks).
+            if (block.blockType === 'text') {
+                clearBlockInactivityTimer(block)
+                if (block.stopped) {
+                    block.stopped = false
+                    this.recomputeVisualItems(sessionId)
+                }
+                block._inactivityTimer = setTimeout(() => {
+                    block._inactivityTimer = null
+                    if (block.stopped) return
+                    block.stopped = true
+                    this.recomputeVisualItems(sessionId)
+                }, STREAM_BLOCK_INACTIVITY_MS)
+            }
         },
 
         /**
@@ -2686,6 +2734,7 @@ export const useDataStore = defineStore('data', {
                 // Don't flush the buffer here — let it keep draining naturally.
                 // The remaining chars will be displayed over the next few hundred ms
                 // before the real item arrives and retires the block.
+                clearBlockInactivityTimer(block)
                 block.stopped = true
                 this.recomputeVisualItems(sessionId)
             }
@@ -2823,6 +2872,7 @@ export const useDataStore = defineStore('data', {
                         }
                     }
 
+                    clearBlockInactivityTimer(block)
                     flushBuffer(sessionId, block.blockIndex)
                     streaming.blocks.splice(idx, 1)
                 }
