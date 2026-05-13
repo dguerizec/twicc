@@ -199,6 +199,16 @@ const INPUT_OVERRIDES = {
         // array when rendering as ``string-code``.
         command: { valueType: 'string-code', language: 'bash' },
     },
+    exec: {
+        // Codex's ``code_mode`` exec tool (``custom_tool_call name=exec``,
+        // public name ``PUBLIC_TOOL_NAME = "exec"`` in
+        // ``codex-rs/core/src/tools/code_mode/``). The ``input`` is raw
+        // JavaScript source — the handler explicitly rejects anything
+        // else (cf. ``execute_handler.rs:120``). Render it as a fenced
+        // JS code-block. ``input`` here is the wrapper key set by
+        // ``ToolUse.vue`` for ``custom_tool_call`` (``{ input: p.input }``).
+        input: { valueType: 'string-code', language: 'javascript' },
+    },
 }
 
 // Per-tool whitelist of input keys to drop from the JSON fallback
@@ -830,6 +840,10 @@ export class CodexToolHelpers extends BaseToolHelpers {
         if (name === 'web_search_call') {
             return input?.type === 'search' ? 'WebSearch' : 'WebFetch'
         }
+        // ``exec`` is Codex's ``code_mode`` tool — runs a JavaScript
+        // snippet as a sandboxed code cell. "Run code" reads better
+        // than the bare ``exec`` for users.
+        if (name === 'exec') return 'Run code'
         if (!FUNCTION_CALL_EXEC_TOOLS.has(name)) return null
         const parsed = resolveParsedCommand(name, input)
         if (!parsed) return null
