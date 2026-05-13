@@ -14,7 +14,11 @@ import { PROVIDER_ICON } from '../../constants'
 import { sendWsMessage, notifyUserDraftUpdated } from '../../composables/useWebSocket'
 import { useSessionAgentSettings } from '../../composables/useSessionAgentSettings'
 import { vPopoverFocusFix } from '../../directives/vPopoverFocusFix'
-import { draftMediaToMediaItem } from '../../utils/fileUtils'
+import {
+    draftMediaToMediaItem,
+    mediasToSdkFormat,
+    resizeImageIfNeeded,
+} from '../../utils/fileUtils'
 import { toast } from '../../composables/useToast'
 import { useCodeCommentsStore, formatAllComments } from '../../stores/codeComments'
 import { getParsedContent } from '../../utils/parsedContent'
@@ -955,9 +959,32 @@ async function handleSend() {
         emit('needs-title')
     }
 
-    // Include attachments in SDK format if any
+    // Include attachments in SDK format if any. Stored images are at
+    // ``MAX_IMAGE_DIMENSION`` (2576 px, Opus 4.7's native resolution);
+    // each provider's helper decides whether to ship that as-is or to
+    // re-resize down for the active model — Sonnet/Haiku want 1568 px,
+    // Anthropic enforces a 2000 px cap on requests with >20 images, and
+    // Codex re-resizes server-side so we hand it the stored blob.
     if (attachmentCount.value > 0) {
-        const { images, documents } = store.getAttachmentsForSdk(props.sessionId)
+        const medias = store.getAttachments(props.sessionId)
+        const imageCount = medias.filter(m => m.type === 'image').length
+        const helpersForSend = getProviderHelpers(session.value?.provider)
+        const effectiveModel = selectedModel.value ?? settings.providerStore.value?.defaultModel
+        const targetDim = helpersForSend?.getEffectiveImageDimension({
+            model: effectiveModel,
+            numImages: imageCount,
+        }) ?? null
+        const processedMedias = targetDim === null
+            ? medias
+            : await Promise.all(medias.map(async media => {
+                if (media.type !== 'image') return media
+                const { data, mimeType } = await resizeImageIfNeeded(
+                    media.data, media.mimeType, targetDim,
+                )
+                if (data === media.data && mimeType === media.mimeType) return media
+                return { ...media, data, mimeType }
+            }))
+        const { images, documents } = mediasToSdkFormat(processedMedias)
         if (images.length > 0) {
             payload.images = images
         }

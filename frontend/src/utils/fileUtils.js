@@ -22,13 +22,43 @@ export const SUPPORTED_DOCUMENT_TYPES = ['application/pdf']
 export const SUPPORTED_TEXT_TYPES = ['text/plain']
 
 /**
- * Maximum image dimension in pixels (width or height) for the client-side
- * resize step. Anthropic recommends 1568px as the optimal max — beyond
- * this, the API downscales server-side anyway. Resizing client-side saves
- * bandwidth and avoids the API 400 error for images exceeding 2000px.
- * Providers opt in to the resize via ``getAttachmentSupport().resizeImages``.
+ * Maximum image dimension in pixels (long edge) used as the storage
+ * target across all providers. 2576px matches Claude Opus 4.7's native
+ * resolution — the most generous supported by any model we target —
+ * so an image resized at upload time is ready to be sent to any
+ * provider without re-encoding loss when the active model can exploit
+ * the full resolution.
+ *
+ * At send time, ``MessageInput.handleSend`` may re-resize down to the
+ * effective target of the active (provider, model, num_images) combo
+ * (e.g. 1568 for Sonnet/Haiku, 2000 when >20 images, no resize for
+ * Codex / Opus 4.7+ which accept the stored size as-is). Two-pass
+ * resize is accepted in exchange for a single canonical IndexedDB
+ * representation that survives provider/model switches.
+ *
+ * Providers opt in to the storage-time resize via
+ * ``getAttachmentSupport().resizeImages``.
  */
-export const MAX_IMAGE_DIMENSION = 1568
+export const MAX_IMAGE_DIMENSION = 2576
+
+/**
+ * Hard cap on the number of attachments allowed per draft. Matches the
+ * lowest documented Anthropic per-request limit (100 images, on 200k-
+ * context models) so a draft built up to this ceiling will always pass
+ * the API check on either provider.
+ */
+export const MAX_FILES_PER_DRAFT = 100
+
+/**
+ * Hard cap on the cumulative size of all attachments in a draft, in
+ * bytes. Matches Anthropic's 32 MB per-request payload ceiling for
+ * standard endpoints — once stored attachments approach this size, no
+ * further uploads are accepted. The check uses each new file's raw
+ * source size (pre-resize) summed with the already-stored post-resize
+ * total: conservative, but avoids running the resize pipeline for an
+ * upload that would push the draft over the limit anyway.
+ */
+export const MAX_TOTAL_BYTES_PER_DRAFT = 32 * 1024 * 1024
 
 /** File type categories */
 export const FILE_TYPES = {
@@ -168,28 +198,32 @@ export function detectImageMimeType(base64Data, fallbackMimeType) {
 // =============================================================================
 
 /**
- * Resize an image if either dimension exceeds MAX_IMAGE_DIMENSION.
- * Preserves aspect ratio. Output format: JPEG stays JPEG, everything else
- * becomes PNG (lossless — ideal for screenshots with text/UI).
+ * Resize an image if either dimension exceeds ``maxDim``. Preserves
+ * aspect ratio. Output format: JPEG stays JPEG, everything else becomes
+ * PNG (lossless — ideal for screenshots with text/UI).
  *
  * @param {string} base64Data - The base64 encoded image data (no data URL prefix)
  * @param {string} mimeType - The original MIME type (e.g., 'image/png')
+ * @param {number} [maxDim=MAX_IMAGE_DIMENSION] - Long-edge cap in pixels.
+ *   Defaults to the storage ceiling; the send-time pipeline passes a
+ *   smaller value (e.g. 1568, 2000) when the active (provider, model,
+ *   num_images) combo requires a tighter cap than the stored size.
  * @returns {Promise<{ data: string, mimeType: string }>} Resized base64 data and output MIME type
  */
-export function resizeImageIfNeeded(base64Data, mimeType) {
+export function resizeImageIfNeeded(base64Data, mimeType, maxDim = MAX_IMAGE_DIMENSION) {
     return new Promise((resolve, reject) => {
         const img = new Image()
         img.onload = () => {
             const { width, height } = img
 
             // No resize needed — return original data unchanged
-            if (width <= MAX_IMAGE_DIMENSION && height <= MAX_IMAGE_DIMENSION) {
+            if (width <= maxDim && height <= maxDim) {
                 resolve({ data: base64Data, mimeType })
                 return
             }
 
             // Compute new dimensions preserving aspect ratio
-            const scale = Math.min(MAX_IMAGE_DIMENSION / width, MAX_IMAGE_DIMENSION / height)
+            const scale = Math.min(maxDim / width, maxDim / height)
             const newWidth = Math.round(width * scale)
             const newHeight = Math.round(height * scale)
 
@@ -377,6 +411,37 @@ export function mediaToDataUrl(media) {
     }
     // Images and PDFs: already base64
     return `data:${media.mimeType};base64,${media.data}`
+}
+
+// =============================================================================
+// Size estimation
+// =============================================================================
+
+/**
+ * Approximate the decoded size of a DraftMedia object in bytes.
+ *
+ * Used by the per-draft 32 MB ceiling check at upload time. The cost of
+ * a single TextEncoder pass on a 5 MB text file is negligible so we do
+ * the exact computation for ``txt``; for ``image`` / ``pdf`` we
+ * approximate from the base64 string length (``length * 3 / 4`` minus
+ * the 0-2 padding chars), since the encoded blob can be many MB and we
+ * want a cheap lookup.
+ *
+ * @param {DraftMedia} media - The media object
+ * @returns {number} Approximate decoded size in bytes
+ */
+export function getDraftMediaBytes(media) {
+    if (!media) return 0
+    if (media.type === FILE_TYPES.TXT) {
+        return new TextEncoder().encode(media.data || '').byteLength
+    }
+    const data = media.data || ''
+    if (!data) return 0
+    // base64-decoded byte count: every 4 chars encode 3 bytes, minus
+    // padding (each '=' is one byte less). Tolerates strings without
+    // a trailing padding (uncommon, but cheap to guard).
+    const padding = (data.endsWith('==') ? 2 : data.endsWith('=') ? 1 : 0)
+    return Math.max(0, Math.floor(data.length * 3 / 4) - padding)
 }
 
 // =============================================================================

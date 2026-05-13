@@ -6,11 +6,11 @@
 // resolved through hooks on the session's provider helpers — see the
 // "Agent settings popover/summary rendering hooks" section in
 // ``BaseProviderHelpers``.
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { vPopoverFocusFix } from '../../directives/vPopoverFocusFix'
 import { formatPresetSummary } from '../../utils/presetFormat'
 import { DEFAULT_SENTINEL } from '../../composables/useSessionAgentSettings'
-import { getProviderOptions } from '../../providers'
+import { getProviderOptions, getProviderHelpers } from '../../providers'
 import { PROVIDER_ICON } from '../../constants'
 import { useDataStore } from '../../stores/data'
 import AgentSettingsPresetsDialog from '../app/AgentSettingsPresetsDialog.vue'
@@ -52,8 +52,20 @@ const {
 
 const dataStore = useDataStore()
 
-// Provider switcher (drafts only) — list of registered providers with their
-// icon, current-state flag, and disabled flag for the active one.
+// Non-image attachments currently held by the draft. Computed off the
+// store's reactive Map so the labelled wa-callout below reacts to add /
+// remove without ad-hoc wiring.
+const nonImageAttachments = computed(() => {
+    const sid = props.settings.sessionId.value
+    if (!sid) return []
+    return dataStore.getAttachments(sid).filter(m => m.type !== 'image')
+})
+
+// Provider switcher (drafts only) — list of registered providers with
+// their icon and active-disabled flag. Options that don't accept the
+// draft's current attachment mix stay clickable: the click handler
+// intercepts the switch, surfaces a callout, and lets the user resolve
+// the conflict before retrying.
 const providerSwitcherOptions = computed(() => {
     const current = props.session?.provider
     return getProviderOptions().map(opt => ({
@@ -71,13 +83,58 @@ const currentProviderIcon = computed(() => {
 
 const currentProviderLabel = computed(() => providerHelpers.value?.constructor.label ?? null)
 
+// Provider id of the most recent rejected switch attempt — used to
+// surface a transient warning callout asking the user to drop the
+// blocking attachments before retrying. Cleared automatically when the
+// blocking attachments are gone (so removing them via any other path,
+// e.g. the attachments popover, also dismisses the callout).
+const blockedSwitchTargetProvider = ref(null)
+const blockedSwitchTargetLabel = computed(() => {
+    const target = blockedSwitchTargetProvider.value
+    if (!target) return null
+    if (nonImageAttachments.value.length === 0) return null
+    const opt = providerSwitcherOptions.value.find(o => o.value === target)
+    return opt?.label ?? null
+})
+
 function handleProviderSelect(event) {
     const provider = event.detail?.item?.value
-    if (!provider || provider === props.session?.provider) return
+    if (!provider) return
+    if (provider === props.session?.provider) return
+
+    // Intercept the switch when the target provider can't accept the
+    // current non-image attachments: surface the callout and leave the
+    // session on its current provider. The user can either drop the
+    // attachments via the callout's inline action (which retries the
+    // switch automatically) or back out by selecting something else.
+    const optHelpers = getProviderHelpers(provider)
+    const support = optHelpers?.getAttachmentSupport() ?? null
+    const docsBlocked = nonImageAttachments.value.length > 0 && support?.documents === false
+    if (docsBlocked) {
+        blockedSwitchTargetProvider.value = provider
+        return
+    }
+
+    blockedSwitchTargetProvider.value = null
     dataStore.setDraftProvider(props.settings.sessionId.value, provider)
     // Reset every per-session override so the bundle follows the new
     // provider's defaults.
     resetAllToDefaults()
+}
+
+async function removeBlockingDocuments() {
+    const sid = props.settings.sessionId.value
+    if (!sid) return
+    const target = blockedSwitchTargetProvider.value
+    await dataStore.removeNonImageAttachments(sid)
+    // Auto-retry the switch the user originally asked for so the click
+    // sequence "select Codex → Remove them" doesn't require a third
+    // click on the dropdown.
+    blockedSwitchTargetProvider.value = null
+    if (target && target !== props.session?.provider) {
+        dataStore.setDraftProvider(sid, target)
+        resetAllToDefaults()
+    }
 }
 
 // Order of the rows below the model row. ``supportsAgentSetting`` filters
@@ -197,6 +254,24 @@ function resetField(field) {
         placement="top"
         class="settings-popover"
     >
+        <!-- Provider switch blocked by non-image attachments — appears
+             only after the user actually attempts a switch to a
+             provider that doesn't accept the current attachments, so an
+             otherwise-uninterested user never sees the callout. -->
+        <wa-callout
+            v-if="isDraft && blockedSwitchTargetLabel"
+            variant="warning"
+            class="provider-blocked-callout"
+        >
+            <wa-icon name="triangle-exclamation" slot="icon"></wa-icon>
+            {{ blockedSwitchTargetLabel }}
+            cannot accept the {{ nonImageAttachments.length }} non-image
+            attachment{{ nonImageAttachments.length > 1 ? 's' : '' }} on this draft.
+            <a class="settings-action-link" @click.prevent="removeBlockingDocuments">
+                Remove {{ nonImageAttachments.length > 1 ? 'them' : 'it' }} and switch
+            </a>
+        </wa-callout>
+
         <!-- Apply preset / Reset / Manage (non-scrollable) -->
         <div class="settings-panel-presets">
             <!-- Provider switcher: drafts only. Switching resets every per-
@@ -365,9 +440,24 @@ function resetField(field) {
 }
 
 .settings-info-callout,
-.startup-warning-callout {
-    font-size: var(--wa-font-size-xs);
+.startup-warning-callout,
+.provider-blocked-callout {
+    font-size: var(--wa-font-size-s);
     width: 100%;
+}
+
+.provider-blocked-callout {
+    flex-shrink: 0;
+    margin-bottom: var(--wa-space-l);
+
+    /* The "Remove …" affordance rides inline with the explanatory
+       sentence rather than dropping onto its own line — overrides the
+       default block-flex layout the shared link class carries elsewhere. */
+    .settings-action-link {
+        display: inline;
+        color: inherit;
+        text-decoration: underline;
+    }
 }
 
 .settings-panel-presets {
@@ -400,7 +490,7 @@ function resetField(field) {
 }
 
 .settings-action-link {
-    font-size: var(--wa-font-size-xs);
+    font-size: var(--wa-font-size-s);
     color: var(--wa-color-brand-60);
     cursor: pointer;
     text-decoration: none;

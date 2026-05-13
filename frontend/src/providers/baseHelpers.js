@@ -599,6 +599,30 @@ export class BaseProviderHelpers {
         }
     }
 
+    /**
+     * Long-edge pixel cap to apply to images at send time for this
+     * provider / model / batch-size combination, or ``null`` to leave
+     * the stored images at their upload-time resolution.
+     *
+     * Images are stored at the shared ``MAX_IMAGE_DIMENSION`` (2576 px,
+     * Opus 4.7's native resolution) regardless of the provider. The
+     * send-time pipeline calls this hook with the (model, numImages)
+     * context of the active turn so the provider can demand a tighter
+     * cap — typically because the target model downscales below 2576
+     * (Claude Sonnet/Haiku → 1568 px), or because Anthropic enforces a
+     * 2000 px ceiling once a request carries more than 20 images.
+     *
+     * Returning ``null`` means "ship the stored blob as-is": correct
+     * for Codex (its CLI does its own resize at 2048 px) and for
+     * Claude Opus 4.7+ at ≤20 images.
+     *
+     * @param {{model?: string|null, numImages?: number}} _context
+     * @returns {number|null} Pixel cap on the long edge, or null
+     */
+    getEffectiveImageDimension(/* { model, numImages } */) {
+        return null
+    }
+
 }
 
 /**

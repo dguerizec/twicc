@@ -23,7 +23,13 @@ import {
     deleteAllDraftMediasForSession,
     getAllDraftMedias
 } from '../utils/draftStorage'
-import { processFile, mediasToSdkFormat } from '../utils/fileUtils'
+import {
+    processFile,
+    mediasToSdkFormat,
+    getDraftMediaBytes,
+    MAX_FILES_PER_DRAFT,
+    MAX_TOTAL_BYTES_PER_DRAFT,
+} from '../utils/fileUtils'
 import { generateUUID } from '../utils/crypto'
 import { debounce } from '../utils/debounce'
 import { apiFetch } from '../utils/api'
@@ -3353,6 +3359,35 @@ export const useDataStore = defineStore('data', {
                 acceptedMimeTypes: [], resizeImages: false,
             }
 
+            // Per-draft hard caps (uniform across providers): refuse the
+            // upload up front rather than running the (potentially slow)
+            // resize pipeline only to discover the draft can't take more.
+            const existing = this.localState.attachments[sessionId]
+            const existingCount = existing?.size ?? 0
+            if (existingCount >= MAX_FILES_PER_DRAFT) {
+                throw new Error(
+                    `Maximum ${MAX_FILES_PER_DRAFT} files per draft reached`,
+                )
+            }
+            let storedBytes = 0
+            if (existing) {
+                for (const media of existing.values()) {
+                    storedBytes += getDraftMediaBytes(media)
+                }
+            }
+            // Conservative check: compare stored (post-resize) total to
+            // 32 MB minus the new file's raw source size. The new file
+            // will shrink after resize, but blocking on the raw size is
+            // safer and avoids running the encode pipeline for an upload
+            // we'd reject anyway.
+            if (storedBytes + file.size > MAX_TOTAL_BYTES_PER_DRAFT) {
+                const totalMB = (MAX_TOTAL_BYTES_PER_DRAFT / 1024 / 1024).toFixed(0)
+                const storedMB = (storedBytes / 1024 / 1024).toFixed(1)
+                throw new Error(
+                    `Draft total size limit reached (${totalMB} MB max; ${storedMB} MB already attached)`,
+                )
+            }
+
             // Track that a file is being processed (blocks the send button)
             this.localState.processingAttachments[sessionId] =
                 (this.localState.processingAttachments[sessionId] || 0) + 1
@@ -3404,6 +3439,31 @@ export const useDataStore = defineStore('data', {
                 draft.mediaIds = draft.mediaIds.filter(id => id !== mediaId)
                 await saveDraftMessage(sessionId, draft)
             }
+        },
+
+        /**
+         * Remove every non-image attachment (PDF, TXT) from a draft.
+         *
+         * Used by the provider-switcher UX in the agent settings popover:
+         * Codex has no protocol for documents, so when a draft holds any
+         * PDF/TXT the Codex option is gated behind an explicit "remove
+         * the documents to continue" affordance. Returns the count of
+         * removed attachments so the caller can toast a confirmation.
+         *
+         * @param {string} sessionId - The session ID
+         * @returns {Promise<number>} Number of attachments removed
+         */
+        async removeNonImageAttachments(sessionId) {
+            const map = this.localState.attachments[sessionId]
+            if (!map || map.size === 0) return 0
+            const toRemove = []
+            for (const media of map.values()) {
+                if (media.type !== 'image') toRemove.push(media.id)
+            }
+            for (const id of toRemove) {
+                await this.removeAttachment(sessionId, id)
+            }
+            return toRemove.length
         },
 
         /**
