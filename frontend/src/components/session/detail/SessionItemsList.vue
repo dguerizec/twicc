@@ -4,7 +4,6 @@ import { useDebounceFn } from '@vueuse/core'
 import { useDataStore } from '../../../stores/data'
 import { INITIAL_ITEMS_COUNT, DISPLAY_MODE } from '../../../constants'
 import { useSettingsStore } from '../../../stores/settings'
-import { isSupportedMimeType, MAX_FILE_SIZE } from '../../../utils/fileUtils'
 import { toast } from '../../../composables/useToast'
 import { apiFetch } from '../../../utils/api'
 import { getParsedContent, hasContent } from '../../../utils/parsedContent'
@@ -989,28 +988,12 @@ async function onDrop(event) {
 }
 
 /**
- * Process a single dropped file.
- * Validates and adds to attachments if valid.
+ * Process a single dropped file. Validation against the active provider's
+ * attachment capabilities (MIME, max bytes) happens inside
+ * ``store.addAttachment``; any failure surfaces here as a thrown ``Error``
+ * with a user-friendly message that we toast.
  */
 async function processDroppedFile(file) {
-    // Validate MIME type
-    if (!isSupportedMimeType(file.type)) {
-        const extension = file.name.split('.').pop()?.toLowerCase() || 'unknown'
-        toast.error(`Unsupported file type: .${extension}`, {
-            title: 'Cannot attach file'
-        })
-        return
-    }
-
-    // Validate file size
-    if (file.size > MAX_FILE_SIZE) {
-        const sizeMB = (file.size / 1024 / 1024).toFixed(1)
-        toast.error(`File too large: ${sizeMB} MB (max 5 MB)`, {
-            title: 'Cannot attach file'
-        })
-        return
-    }
-
     try {
         await store.addAttachment(props.sessionId, file)
     } catch (error) {

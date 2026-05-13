@@ -14,7 +14,7 @@ import { PROVIDER_ICON } from '../../constants'
 import { sendWsMessage, notifyUserDraftUpdated } from '../../composables/useWebSocket'
 import { useSessionAgentSettings } from '../../composables/useSessionAgentSettings'
 import { vPopoverFocusFix } from '../../directives/vPopoverFocusFix'
-import { isSupportedMimeType, MAX_FILE_SIZE, SUPPORTED_IMAGE_TYPES, draftMediaToMediaItem } from '../../utils/fileUtils'
+import { draftMediaToMediaItem } from '../../utils/fileUtils'
 import { toast } from '../../composables/useToast'
 import { useCodeCommentsStore, formatAllComments } from '../../stores/codeComments'
 import { getParsedContent } from '../../utils/parsedContent'
@@ -79,6 +79,31 @@ const session = computed(() => store.getSession(props.sessionId))
 const isDraft = computed(() => session.value?.draft === true)
 const providerLabel = computed(() => getProviderLabel(session.value?.provider))
 const providerIcon = computed(() => PROVIDER_ICON[session.value?.provider] ?? null)
+
+// Provider's attachment capabilities (file types, max bytes, resize policy).
+// Drives the file picker's accept attribute, the paste handler's MIME
+// filter, the tooltip wording, and whether the paperclip button is even
+// rendered. Defaults to "nothing accepted" when the provider is unknown
+// so the surface fails closed.
+const attachmentSupport = computed(() => {
+    const helpers = getProviderHelpers(session.value?.provider)
+    return helpers?.getAttachmentSupport() ?? {
+        images: false,
+        documents: false,
+        maxBytes: 0,
+        acceptedMimeTypes: [],
+        resizeImages: false,
+    }
+})
+const acceptedMimeTypesString = computed(() => attachmentSupport.value.acceptedMimeTypes.join(','))
+const canAttachAnything = computed(() => attachmentSupport.value.images || attachmentSupport.value.documents)
+const attachTooltipLabel = computed(() => {
+    const { images, documents } = attachmentSupport.value
+    if (images && documents) return 'Attach files (images, PDF, text)'
+    if (images) return 'Attach images'
+    if (documents) return 'Attach files (PDF, text)'
+    return 'Attachments not supported'
+})
 
 // Local state for the textarea
 const messageText = ref('')
@@ -800,15 +825,18 @@ async function openAtFromButton() {
 
 /**
  * Handle paste event to capture images from clipboard.
- * Only processes image files from clipboard.
+ * Only processes image files from clipboard, and only when the active
+ * provider actually accepts images.
  */
 async function onPaste(event) {
+    if (!attachmentSupport.value.images) return
+
     const items = event.clipboardData?.items
     if (!items) return
 
+    const accepted = attachmentSupport.value.acceptedMimeTypes
     for (const item of items) {
-        // Only handle image files from clipboard
-        if (item.kind === 'file' && SUPPORTED_IMAGE_TYPES.includes(item.type)) {
+        if (item.kind === 'file' && accepted.includes(item.type)) {
             const file = item.getAsFile()
             if (file) {
                 event.preventDefault()
@@ -820,27 +848,13 @@ async function onPaste(event) {
 }
 
 /**
- * Process and add a file as an attachment.
+ * Process and add a file as an attachment. Validation (MIME, size) is
+ * performed inside ``store.addAttachment`` against the provider's
+ * capabilities, so a stray drag-drop or paste on a Codex session is
+ * rejected with a meaningful toast even if the picker ``accept``
+ * attribute was bypassed.
  */
 async function processFile(file) {
-    // Validate MIME type
-    if (!isSupportedMimeType(file.type)) {
-        const extension = file.name.split('.').pop()?.toLowerCase() || 'unknown'
-        toast.error(`Unsupported file type: .${extension}`, {
-            title: 'Cannot attach file'
-        })
-        return
-    }
-
-    // Validate file size
-    if (file.size > MAX_FILE_SIZE) {
-        const sizeMB = (file.size / 1024 / 1024).toFixed(1)
-        toast.error(`File too large: ${sizeMB} MB (max 5 MB)`, {
-            title: 'Cannot attach file'
-        })
-        return
-    }
-
     try {
         await store.addAttachment(props.sessionId, file)
         // Notify server that user is actively preparing a message
@@ -1286,25 +1300,28 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
             <div class="message-input-attachments">
                 <!-- Hidden file input -->
                 <input
+                    v-if="canAttachAnything"
                     ref="fileInputRef"
                     type="file"
                     multiple
-                    accept="image/png,image/jpeg,image/gif,image/webp,application/pdf,text/plain"
+                    :accept="acceptedMimeTypesString"
                     style="display: none;"
                     @change="onFileSelected"
                 />
 
-                <!-- Attach button -->
-                <wa-button
-                    variant="neutral"
-                    appearance="plain"
-                    size="small"
-                    @click="openFilePicker"
-                    :id="attachButtonId"
-                >
-                    <wa-icon name="paperclip"></wa-icon>
-                </wa-button>
-                <AppTooltip :for="attachButtonId">Attach files (images, PDF, text)</AppTooltip>
+                <!-- Attach button — hidden entirely when the provider takes no attachments -->
+                <template v-if="canAttachAnything">
+                    <wa-button
+                        variant="neutral"
+                        appearance="plain"
+                        size="small"
+                        @click="openFilePicker"
+                        :id="attachButtonId"
+                    >
+                        <wa-icon name="paperclip"></wa-icon>
+                    </wa-button>
+                    <AppTooltip :for="attachButtonId">{{ attachTooltipLabel }}</AppTooltip>
+                </template>
 
                 <!-- Attachment badge + popover -->
                 <template v-if="attachmentCount > 0">

@@ -22,6 +22,8 @@ from codex_app_server import (
     AsyncCodex,
     AsyncThread,
     AsyncTurnHandle,
+    ImageInput,
+    InputItem,
     ReasoningEffort,
     TextInput,
     TransportClosedError,
@@ -126,9 +128,17 @@ class CodexAgent(BaseAgent):
         text: str,
         on_state_change: StateChangeCallback,
         resume: bool,
+        *,
+        images: list[dict] | None = None,
         **kwargs: Any,
     ) -> None:
-        """Wire the state-change callback and schedule the first turn."""
+        """Wire the state-change callback and schedule the first turn.
+
+        ``images`` is the WS attachment payload (Claude-shaped image blocks)
+        forwarded by the manager. ``documents`` is intentionally absent —
+        Codex has no protocol for them, the manager drops them upstream
+        with a warning.
+        """
         self._state_change_callback = on_state_change
 
         # Flip to ASSISTANT_TURN immediately so the UI gates the input as
@@ -137,9 +147,15 @@ class CodexAgent(BaseAgent):
         self.last_activity = time.time()
         await self._notify_state_change()
 
-        self._schedule_turn(text)
+        self._schedule_turn(text, images)
 
-    async def send(self, text: str, **kwargs: Any) -> None:
+    async def send(
+        self,
+        text: str,
+        *,
+        images: list[dict] | None = None,
+        **kwargs: Any,
+    ) -> None:
         """Schedule a new turn on the live thread."""
         if self.state == AgentState.DEAD:
             raise RuntimeError("Cannot send message: agent is dead")
@@ -152,16 +168,53 @@ class CodexAgent(BaseAgent):
         self.last_activity = time.time()
         await self._notify_state_change()
 
-        self._schedule_turn(text)
+        self._schedule_turn(text, images)
 
-    def _schedule_turn(self, text: str) -> None:
+    def _schedule_turn(self, text: str, images: list[dict] | None) -> None:
         """Spawn the background task that drives one turn end-to-end."""
         self._turn_task = asyncio.create_task(
-            self._run_turn(text),
+            self._run_turn(text, images),
             name=f"codex-turn-{self.session_id}",
         )
 
-    async def _run_turn(self, text: str) -> None:
+    @staticmethod
+    def _build_turn_input(
+        text: str,
+        images: list[dict] | None,
+    ) -> list[InputItem]:
+        """Convert the WS attachment payload to a Codex SDK ``Input`` list.
+
+        Each WS image block is the Claude-shaped::
+
+            {"type": "image",
+             "source": {"type": "base64", "media_type": "image/...", "data": "..."}}
+
+        Codex CLI's Rust core accepts ``ImageInput.url`` as either an
+        http(s) URL or a base64 data URL — and even converts
+        ``LocalImageInput(path)`` to the latter internally at request
+        serialization time. We therefore re-pack the base64 + media_type
+        pair into a single ``data:`` URL and let the SDK forward it
+        verbatim. Blocks whose ``source.type`` is not ``"base64"`` are
+        skipped defensively (the WS contract guarantees base64 today).
+
+        Order: images first, then the text — mirrors Claude Code's
+        content-block ordering so the two providers feel consistent when
+        the user attaches references before phrasing the prompt.
+        """
+        items: list[InputItem] = []
+        for block in images or ():
+            source = block.get("source") or {}
+            if source.get("type") != "base64":
+                continue
+            media_type = source.get("media_type") or "image/png"
+            data = source.get("data") or ""
+            if not data:
+                continue
+            items.append(ImageInput(url=f"data:{media_type};base64,{data}"))
+        items.append(TextInput(text))
+        return items
+
+    async def _run_turn(self, text: str, images: list[dict] | None) -> None:
         """Open one turn, wait for it to complete, transition to USER_TURN.
 
         Errors raised by the SDK (transport closed, RPC errors, ...) are
@@ -180,8 +233,9 @@ class CodexAgent(BaseAgent):
         # calling ``send``) take effect immediately on the next turn. ``None``
         # lets Codex CLI use the model's default (medium today).
         effort = self._sdk_effort(self.agent_settings.effort)
+        turn_input = self._build_turn_input(text, images)
         try:
-            turn_handle = await self._thread.turn(TextInput(text), effort=effort)
+            turn_handle = await self._thread.turn(turn_input, effort=effort)
         except asyncio.CancelledError:
             raise
         except Exception as e:

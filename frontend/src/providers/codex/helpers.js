@@ -1,8 +1,16 @@
 import { BaseProviderHelpers } from '../baseHelpers'
 import { PROVIDER, SYNTHETIC_ITEM } from '../../constants'
 import { useSettingsStore } from '../../stores/settings'
+import { SUPPORTED_IMAGE_TYPES } from '../../utils/fileUtils'
 import { CONTEXT_MAX, EFFORT, PERMISSION_MODE } from './constants'
 import { useCodexStore } from './store'
+
+// Per-file ceiling for Codex uploads (20 MB). Codex CLI downscales server-
+// side to a 2048px longest-side image before sending to the model, so we
+// skip the client-side resize and let users upload larger originals than
+// the Claude path allows. The cap is still useful as a sanity net against
+// pathological payloads that would balloon the WS message.
+const CODEX_MAX_FILE_BYTES = 20 * 1024 * 1024
 
 // Map of agent-setting wire names → store getter/setter for the persisted
 // default. Used by ``getDefaultValue`` / ``setDefaultValue`` so generic
@@ -96,15 +104,30 @@ export class CodexHelpers extends BaseProviderHelpers {
         return true
     }
 
-    buildOptimisticUserMessageContent(text, _attachments) {
+    buildOptimisticUserMessageContent(text, attachments) {
         // Codex JSONL shape for user input: ``{ type: 'event_msg', payload:
-        // { type: 'user_message', message: '...' } }``. ``payload.message`` is
-        // a flat string — Codex doesn't model images/documents at this layer
-        // in v1, so the ``attachments`` argument is intentionally dropped.
+        // { type: 'user_message', message: '...', images: [...] } }``.
+        // ``payload.message`` is the flat text; attached images live in
+        // ``payload.images`` as full ``data:`` URLs (one per attachment).
+        //
+        // The frontend ships images through the Claude-shaped block format
+        // (``{ type, source: { type: 'base64', media_type, data } }``), so
+        // we re-pack each block into the ``data:`` URL the renderer will
+        // see once the real JSONL line lands — that way ``Message.vue``
+        // and ``UserMessage.vue`` run the exact same code path on both
+        // the optimistic placeholder and the persisted item, and the
+        // visual-item stabilizer can swap one for the other without
+        // remounting the thumbnail group. ``documents`` are dropped:
+        // Codex has no protocol equivalent (the frontend's capability
+        // gating refuses them at attach time anyway, this is just
+        // defensive).
+        const images = (attachments?.images ?? [])
+            .filter(block => block.source?.type === 'base64' && block.source?.data)
+            .map(block => `data:${block.source.media_type || 'image/png'};base64,${block.source.data}`)
         return {
             type: 'event_msg',
             syntheticKind: SYNTHETIC_ITEM.OPTIMISTIC_USER_MESSAGE.kind,
-            payload: { type: 'user_message', message: text },
+            payload: { type: 'user_message', message: text, images },
         }
     }
 
@@ -271,6 +294,24 @@ export class CodexHelpers extends BaseProviderHelpers {
                 })),
             },
         ]
+    }
+
+    /**
+     * Codex accepts images only. The Codex CLI core forwards
+     * ``ImageInput.url`` as either an http(s) URL or a base64 data URL,
+     * and downscales server-side to 2048px on the longest side — so we
+     * skip the Anthropic-style client-side resize. PDFs and text files
+     * have no input-block equivalent in the Codex protocol and are
+     * intentionally excluded.
+     */
+    getAttachmentSupport() {
+        return {
+            images: true,
+            documents: false,
+            maxBytes: CODEX_MAX_FILE_BYTES,
+            acceptedMimeTypes: [...SUPPORTED_IMAGE_TYPES],
+            resizeImages: false,
+        }
     }
 }
 

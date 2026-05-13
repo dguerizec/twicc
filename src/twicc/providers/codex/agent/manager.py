@@ -2,9 +2,11 @@
 Codex agent manager: tracks active Codex agents and creates new ones.
 
 Minimal v1: no live settings (Codex doesn't expose a hot path for permission
-or model changes on a running thread the way Claude Code does), no
-subagents, no images/documents. Approvals are bypassed at the server level
-via ``sandbox=danger_full_access`` and ``approval_policy="never"``.
+or model changes on a running thread the way Claude Code does) and no
+subagents. Images are forwarded to the Codex SDK as ``ImageInput`` data
+URLs; documents (PDF / TXT) have no Codex protocol equivalent and are
+silently dropped with a warning. Approvals are bypassed at the server
+level via ``sandbox=danger_full_access`` and ``approval_policy="never"``.
 """
 
 from __future__ import annotations
@@ -52,6 +54,24 @@ class CodexAgentManager(BaseAgentManager):
     # Public API (Codex-specific signatures)
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _warn_about_documents(session_id: str, documents: list[dict] | None) -> None:
+        """Defensive log when the frontend ships ``documents`` to a Codex session.
+
+        The frontend's :class:`CodexHelpers.getAttachmentSupport` declares
+        ``documents: false`` and refuses them at the file picker / paste /
+        drop layer, so reaching this point means either a UI bug or a
+        custom WebSocket client. Either way, Codex has no protocol for
+        PDF / TXT input, so we drop them and surface the discrepancy to
+        the logs rather than failing the whole turn.
+        """
+        if documents:
+            logger.warning(
+                "Codex session %s received %d document attachment(s); "
+                "Codex has no protocol for documents — dropping them silently.",
+                session_id, len(documents),
+            )
+
     async def send_to_session(
         self,
         session_id: str,
@@ -74,9 +94,12 @@ class CodexAgentManager(BaseAgentManager):
         - ``STARTING``: same — safety net only; in practice the state has
           flipped to ``ASSISTANT_TURN`` by the time ``_start_agent`` returns.
 
-        Images / documents are accepted for signature parity with
-        :class:`ClaudeCodeAgentManager.send_to_session`, but ignored in v1.
+        ``images`` are forwarded to the SDK as ``ImageInput`` data URLs;
+        ``documents`` are dropped with a warning (Codex protocol has no
+        equivalent input block).
         """
+        self._warn_about_documents(session_id, documents)
+
         async with self._lock:
             if session_id in self._agents:
                 agent = self._agents[session_id]
@@ -89,7 +112,7 @@ class CodexAgentManager(BaseAgentManager):
                     del self._agents[session_id]
 
                 elif agent.state == AgentState.USER_TURN:
-                    if not text:
+                    if not text and not images:
                         # Settings-only update: Codex has no live settings to
                         # apply on a running thread (v1), so this is a no-op.
                         return
@@ -98,7 +121,7 @@ class CodexAgentManager(BaseAgentManager):
                     # only user-facing one is ``effort``, which the agent reads
                     # off ``agent_settings`` for every ``thread.turn`` call).
                     agent.agent_settings = settings
-                    await agent.send(text)
+                    await agent.send(text, images=images)
                     return
 
                 elif agent.state == AgentState.ASSISTANT_TURN:
@@ -112,13 +135,14 @@ class CodexAgentManager(BaseAgentManager):
                         f"Cannot send message: agent is in state {agent.state}",
                     )
 
-            # No live agent — text is required to spin one up.
-            if not text:
+            # No live agent — text or at least one image is required to
+            # spin one up.
+            if not text and not images:
                 raise RuntimeError("Cannot start a new agent without a message")
 
             await self._start_agent(
                 session_id, project_id, cwd, text, resume=True,
-                settings=settings,
+                settings=settings, images=images,
             )
 
     async def create_session(
@@ -139,7 +163,12 @@ class CodexAgentManager(BaseAgentManager):
         canonical id returned by ``thread_start``, and the base
         ``_start_agent`` broadcasts a ``session_bound`` event so the
         frontend can reconcile its local draft state.
+
+        Same image / document policy as ``send_to_session``: images go
+        through; documents are warned-and-dropped.
         """
+        self._warn_about_documents(session_id, documents)
+
         async with self._lock:
             # No "session already exists" guard: by construction the draft id
             # is fresh per attempt; even if the frontend reuses one, Codex
@@ -147,7 +176,7 @@ class CodexAgentManager(BaseAgentManager):
             # is harmless — it will be GCed by its own DEAD transition.
             await self._start_agent(
                 session_id, project_id, cwd, text, resume=False,
-                settings=settings,
+                settings=settings, images=images,
             )
 
     # ------------------------------------------------------------------

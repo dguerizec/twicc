@@ -3328,20 +3328,38 @@ export const useDataStore = defineStore('data', {
 
         /**
          * Add a file attachment to a session.
-         * Processes the file (validation + encoding) and stores in IndexedDB.
+         *
+         * Processes the file (validation + encoding) using the provider's
+         * attachment capabilities and stores in IndexedDB. The provider is
+         * resolved from the session row so call sites don't have to thread
+         * the capabilities through themselves — a stray drop on a Codex
+         * session validates against Codex rules without the caller knowing.
+         *
          * @param {string} sessionId - The session ID
          * @param {File} file - The file to add
          * @returns {Promise<DraftMedia>} The processed media object
          * @throws {Error} If validation fails or file cannot be processed
          */
         async addAttachment(sessionId, file) {
+            // Resolve provider capabilities lazily — the import lives in
+            // ``providers/index.js`` which depends on the data store, so a
+            // static import would re-introduce the circular import that
+            // breaks Vite HMR (see CLAUDE.md "Avoiding Circular Imports").
+            const { getProviderHelpers } = await import('../providers')
+            const session = this.getSession(sessionId)
+            const helpers = getProviderHelpers(session?.provider)
+            const capabilities = helpers?.getAttachmentSupport() ?? {
+                images: false, documents: false, maxBytes: 0,
+                acceptedMimeTypes: [], resizeImages: false,
+            }
+
             // Track that a file is being processed (blocks the send button)
             this.localState.processingAttachments[sessionId] =
                 (this.localState.processingAttachments[sessionId] || 0) + 1
 
             try {
                 // Process file (validates and encodes)
-                const media = await processFile(file, sessionId)
+                const media = await processFile(file, sessionId, capabilities)
 
                 // Save to IndexedDB
                 await saveDraftMedia(media)

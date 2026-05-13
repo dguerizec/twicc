@@ -59,14 +59,15 @@ const streamingBlockType = computed(() => {
     return props.data?.message?.content?.[0]?.type ?? null
 })
 
-// Plain text source for the ``AssistantMessage`` path. Two shapes feed in:
+// Plain text source for the ``AssistantMessage`` / ``UserMessage`` path.
+// Two shapes feed in:
 //
 //  - Real Codex line: the flat string sits under ``payload.message``
-//    (event_msg.agent_message) — no content array, no nested blocks.
+//    (event_msg.user_message / event_msg.agent_message) — no content
+//    array, no nested blocks.
 //  - Streaming text placeholder: the store paints the live SDK delta into
 //    a Claude-style content array under ``message.content`` so the same
-//    rendering plumbing can carry both providers. Images on user_message
-//    events (``payload.images``) are out of scope for now.
+//    rendering plumbing can carry both providers.
 const text = computed(() => {
     if (isStreamingBlock.value) {
         const content = props.data?.message?.content
@@ -76,6 +77,18 @@ const text = computed(() => {
         return ''
     }
     return props.data?.payload?.message || ''
+})
+
+// Attached images on a user_message line. Codex CLI persists them in
+// ``payload.images`` as full ``data:image/...;base64,...`` URLs (one per
+// attachment). ``local_images`` / ``text_elements`` are protocol fields
+// the CLI uses when input is referenced by path or annotated with byte
+// ranges — neither shape is produced by TwiCC's send pipeline today, so
+// only the ``images`` array is consumed here.
+const images = computed(() => {
+    if (props.kind !== 'user_message') return []
+    const list = props.data?.payload?.images
+    return Array.isArray(list) ? list : []
 })
 </script>
 
@@ -96,6 +109,6 @@ const text = computed(() => {
         :session-id="sessionId"
         :line-num="lineNum"
     />
-    <UserMessage v-else-if="kind === 'user_message'" :text="text" />
+    <UserMessage v-else-if="kind === 'user_message'" :text="text" :images="images" />
     <AssistantMessage v-else-if="kind === 'assistant_message'" :text="text" />
 </template>

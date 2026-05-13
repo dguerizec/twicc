@@ -21,21 +21,12 @@ export const SUPPORTED_DOCUMENT_TYPES = ['application/pdf']
 /** Supported text MIME types */
 export const SUPPORTED_TEXT_TYPES = ['text/plain']
 
-/** All supported MIME types for attachments */
-export const SUPPORTED_MIME_TYPES = [
-    ...SUPPORTED_IMAGE_TYPES,
-    ...SUPPORTED_DOCUMENT_TYPES,
-    ...SUPPORTED_TEXT_TYPES
-]
-
-/** Maximum file size in bytes (5 MB - Claude API limit) */
-export const MAX_FILE_SIZE = 5 * 1024 * 1024
-
 /**
- * Maximum image dimension in pixels (width or height).
- * Anthropic recommends 1568px as the optimal max — beyond this, the API
- * downscales server-side anyway. Resizing client-side saves bandwidth and
- * avoids the API 400 error for images exceeding 2000px.
+ * Maximum image dimension in pixels (width or height) for the client-side
+ * resize step. Anthropic recommends 1568px as the optimal max — beyond
+ * this, the API downscales server-side anyway. Resizing client-side saves
+ * bandwidth and avoids the API 400 error for images exceeding 2000px.
+ * Providers opt in to the resize via ``getAttachmentSupport().resizeImages``.
  */
 export const MAX_IMAGE_DIMENSION = 1568
 
@@ -61,28 +52,30 @@ export function getFileType(mimeType) {
     return FILE_TYPES.TXT
 }
 
-/**
- * Check if a MIME type is supported for upload.
- * @param {string} mimeType - The MIME type to check
- * @returns {boolean} True if the MIME type is supported
- */
-export function isSupportedMimeType(mimeType) {
-    return SUPPORTED_MIME_TYPES.includes(mimeType)
-}
-
 // =============================================================================
 // Validation
 // =============================================================================
 
 /**
- * Validate a file for upload.
- * Checks MIME type and file size.
+ * Validate a file against a provider's attachment capabilities.
+ *
+ * ``capabilities`` is the object returned by the active provider's
+ * ``getAttachmentSupport()`` helper:
+ *   { images, documents, maxBytes, acceptedMimeTypes, resizeImages }
+ *
+ * Only ``acceptedMimeTypes`` and ``maxBytes`` are consulted here — the
+ * ``images`` / ``documents`` booleans are an artifact of the helper API
+ * for the UI shell; whitelist enforcement happens through the explicit
+ * MIME list (which is the union of the supported types this provider
+ * actually accepts).
+ *
  * @param {File} file - The file to validate
+ * @param {Object} capabilities - Provider attachment capabilities
  * @returns {{ valid: boolean, error?: string }} Validation result
  */
-export function validateFile(file) {
-    // Check MIME type
-    if (!isSupportedMimeType(file.type)) {
+export function validateFile(file, capabilities) {
+    const accepted = capabilities?.acceptedMimeTypes ?? []
+    if (!accepted.includes(file.type)) {
         const extension = file.name.split('.').pop()?.toLowerCase() || 'unknown'
         return {
             valid: false,
@@ -90,12 +83,13 @@ export function validateFile(file) {
         }
     }
 
-    // Check file size
-    if (file.size > MAX_FILE_SIZE) {
+    const maxBytes = capabilities?.maxBytes ?? 0
+    if (maxBytes > 0 && file.size > maxBytes) {
         const sizeMB = (file.size / 1024 / 1024).toFixed(1)
+        const maxMB = (maxBytes / 1024 / 1024).toFixed(0)
         return {
             valid: false,
-            error: `File too large: ${sizeMB} MB (max 5 MB)`
+            error: `File too large: ${sizeMB} MB (max ${maxMB} MB)`
         }
     }
 
@@ -228,8 +222,12 @@ export function resizeImageIfNeeded(base64Data, mimeType) {
  * - Images and PDFs are encoded to base64
  * - Text files are read as plain text
  *
+ * Validation, max-size, and resize behaviour are all driven by the
+ * provider's ``capabilities`` bundle (see ``validateFile`` above).
+ *
  * @param {File} file - The file to process
  * @param {string} sessionId - The session this media belongs to
+ * @param {Object} capabilities - Provider attachment capabilities
  * @returns {Promise<DraftMedia>} The processed media object
  * @throws {Error} If validation fails or file cannot be read
  *
@@ -242,9 +240,9 @@ export function resizeImageIfNeeded(base64Data, mimeType) {
  * @property {string} data - Encoded data (base64 for images/pdf, plain text for txt)
  * @property {number} createdAt - Timestamp
  */
-export async function processFile(file, sessionId) {
+export async function processFile(file, sessionId, capabilities) {
     // Validate first
-    const validation = validateFile(file)
+    const validation = validateFile(file, capabilities)
     if (!validation.valid) {
         throw new Error(validation.error)
     }
@@ -260,16 +258,17 @@ export async function processFile(file, sessionId) {
         // Images and PDFs: store as base64
         data = await fileToBase64(file)
 
-        // Resize images that exceed the API dimension limit
         if (type === FILE_TYPES.IMAGE) {
             // Detect actual format from magic bytes — file.type can be wrong
             // (e.g., WebP file saved with .png extension)
             mimeType = detectImageMimeType(data, mimeType)
-            const resized = await resizeImageIfNeeded(data, mimeType)
-            data = resized.data
-            // Re-detect after resize — canvas.toDataURL() may not honor the
-            // requested output format in all browsers
-            mimeType = detectImageMimeType(resized.data, resized.mimeType)
+            if (capabilities?.resizeImages) {
+                const resized = await resizeImageIfNeeded(data, mimeType)
+                data = resized.data
+                // Re-detect after resize — canvas.toDataURL() may not honor
+                // the requested output format in all browsers
+                mimeType = detectImageMimeType(resized.data, resized.mimeType)
+            }
         }
     }
 

@@ -3,6 +3,16 @@ import { PROVIDER, SYNTHETIC_ITEM } from '../../constants'
 import { CONTEXT_MAX, EFFORT, PERMISSION_MODE } from './constants'
 import { useClaudeCodeStore } from './store'
 import { useSettingsStore } from '../../stores/settings'
+import {
+    SUPPORTED_DOCUMENT_TYPES,
+    SUPPORTED_IMAGE_TYPES,
+    SUPPORTED_TEXT_TYPES,
+} from '../../utils/fileUtils'
+
+// Claude API per-file ceiling (5 MB) — applies before resize. Beyond this
+// the server rejects the request, so the frontend enforces it client-side
+// to fail fast on the toast surface instead of waiting for an SDK error.
+const CLAUDE_MAX_FILE_BYTES = 5 * 1024 * 1024
 
 function formatRetirementDate(isoDate) {
     return new Date(isoDate + 'T00:00:00').toLocaleDateString(undefined, {
@@ -460,6 +470,28 @@ export class ClaudeCodeHelpers extends BaseProviderHelpers {
                 })),
             },
         ]
+    }
+
+    /**
+     * Claude Code supports images, PDF, and plain-text uploads via the SDK's
+     * content-block protocol. Images are downscaled client-side to the
+     * Anthropic recommended ceiling (1568px on the longest side) before
+     * encoding, since the API would otherwise downscale server-side
+     * anyway — doing it locally saves bandwidth and avoids the >2000px
+     * 400 error.
+     */
+    getAttachmentSupport() {
+        return {
+            images: true,
+            documents: true,
+            maxBytes: CLAUDE_MAX_FILE_BYTES,
+            acceptedMimeTypes: [
+                ...SUPPORTED_IMAGE_TYPES,
+                ...SUPPORTED_DOCUMENT_TYPES,
+                ...SUPPORTED_TEXT_TYPES,
+            ],
+            resizeImages: true,
+        }
     }
 
     getRetiredModelUpgrade(selectedModel) {
