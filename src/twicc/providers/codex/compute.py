@@ -11,15 +11,28 @@ Classification rules (any change MUST bump CODEX_COMPUTE_VERSION):
 - ``event_msg.user_message`` → ``USER_MESSAGE``
 - ``event_msg.agent_message`` → ``ASSISTANT_MESSAGE``
 - ``event_msg.*`` whose sub-type is in :data:`_PERSISTED_END_EVENT_TYPES`
-  (``patch_apply_end``, ``mcp_tool_call_end``, ``image_generation_end``)
-  → kind stays ``None``; routed to ``DEBUG_ONLY`` via
-  :meth:`is_tool_result_item`. Pairs with the matching ``function_call``
-  / ``custom_tool_call`` by ``call_id``. These events carry the
-  structured outcome of the tool (``changes`` map, ``CallToolResult``, …)
-  and coexist as a second :class:`ToolResultLink` row alongside the
-  LLM-facing ``function_call_output`` for the same tool_use_id.
-  ``web_search_end`` is intentionally absent — see the
+  (``patch_apply_end``, ``mcp_tool_call_end``) → kind stays ``None``;
+  routed to ``DEBUG_ONLY`` via :meth:`is_tool_result_item`. Pairs with the
+  matching ``function_call`` / ``custom_tool_call`` by ``call_id``. These
+  events carry the structured outcome of the tool (``changes`` map,
+  ``CallToolResult``, …) and coexist as a second :class:`ToolResultLink`
+  row alongside the LLM-facing ``function_call_output`` for the same
+  tool_use_id. ``web_search_end`` is intentionally absent — see the
   ``response_item.web_search_call`` rule below.
+- ``event_msg.image_generation_end`` → ``IMAGE`` (-> ``ALWAYS``). Codex
+  emits this line right after generating an image; the payload carries
+  the ``revised_prompt`` (the actual prompt the image generator received
+  after the model rewrote the user's request), the base64-encoded PNG
+  ``result``, and the on-disk ``saved_path`` (typically under
+  ``~/.codex/generated_images/<session>/<call_id>.png``). The matching
+  ``response_item.image_generation_call`` duplicates ``revised_prompt``
+  and ``result`` (no ``saved_path``), so we ignore it — it falls through
+  to ``SYSTEM`` / ``DEBUG_ONLY`` like any other unhandled response_item.
+  No tool_use → tool_result pairing: the event alone carries everything
+  the frontend needs to render the image, the prompt and the path inline,
+  and the image is already fully baked when the line lands (no streaming,
+  no spinner). The matching frontend component is
+  ``items/codex/ImageGeneration.vue``.
 - ``event_msg.exec_command_end`` is intentionally **not** in the list:
   Codex CLI no longer persists it (TUI sets
   ``persist_extended_history=false`` since 2026-04-30) so we
@@ -152,6 +165,12 @@ _TYPE_TURN_CONTEXT = "turn_context"
 _TYPE_COMPACTED = "compacted"
 _PAYLOAD_USER_MESSAGE = "user_message"
 _PAYLOAD_AGENT_MESSAGE = "agent_message"
+# Codex emits ``event_msg.image_generation_end`` once an image generation
+# call has produced its file. The payload carries the base64 PNG, the
+# revised prompt and the on-disk path — see the header docstring's
+# ``event_msg.image_generation_end → IMAGE`` rule for the full contract.
+# Referenced by :meth:`compute_item_kind` and :meth:`analyze_content`.
+_PAYLOAD_IMAGE_GENERATION_END = "image_generation_end"
 # ``event_msg.token_count`` is the only Codex line that carries usage
 # counters (``info.last_token_usage`` for the last LLM call,
 # ``info.total_token_usage`` for the cumulative session totals). Read
@@ -299,10 +318,17 @@ _EXEC_COMMAND_TOOLS = frozenset({"exec_command", "write_stdin"})
 # as a resultless tool (see :data:`_RESULTLESS_TOOL_SUB_TYPES`) and let
 # the ``event_msg.web_search_end`` line fall through to ``SYSTEM`` /
 # ``DEBUG_ONLY`` like any other unmatched event_msg.
+#
+# ``image_generation_end`` is intentionally excluded too — it doesn't
+# slot into the tool_use/tool_result pairing at all: the event alone
+# carries everything we need (prompt, base64 PNG, saved_path) and the
+# matching ``response_item.image_generation_call`` duplicates the same
+# data minus the saved_path. We classify the event directly as
+# :attr:`ItemKind.IMAGE` in :meth:`compute_item_kind` and the matching
+# response_item falls through to ``SYSTEM`` / ``DEBUG_ONLY``.
 _PERSISTED_END_EVENT_TYPES = frozenset({
     "patch_apply_end",
     "mcp_tool_call_end",
-    "image_generation_end",
 })
 
 
@@ -614,10 +640,12 @@ def _event_msg_payload_error(payload: dict) -> str | None:
     """Dispatch ``payload`` to the matching ``*_end`` error helper.
 
     ``patch_apply_end`` and ``mcp_tool_call_end`` expose a usable error
-    signal today; ``web_search_end`` and ``image_generation_end`` don't,
-    so the helper returns ``None`` for those. Errors for the
-    exec_command family are derived from the ``function_call_output``
-    text via :func:`_exit_code_error_from_output` instead.
+    signal today; ``web_search_end`` doesn't, so the helper returns
+    ``None`` for it. Errors for the exec_command family are derived from
+    the ``function_call_output`` text via
+    :func:`_exit_code_error_from_output` instead.
+    ``image_generation_end`` is classified as ``IMAGE`` (not a tool
+    result) and never reaches this helper.
     """
     err = _patch_apply_error(payload)
     if err is not None:
@@ -1026,6 +1054,14 @@ class CodexSessionCompute(BaseSessionCompute):
                 return ItemKind.USER_MESSAGE
             if sub_type == _PAYLOAD_AGENT_MESSAGE:
                 return ItemKind.ASSISTANT_MESSAGE
+            # ``image_generation_end`` is a standalone visible row, not a
+            # tool_result. Its payload carries the base64 PNG, the revised
+            # prompt and the on-disk path — everything the frontend needs
+            # to render the image inline. The matching
+            # ``response_item.image_generation_call`` duplicates the same
+            # data (minus saved_path) and falls through to SYSTEM below.
+            if sub_type == _PAYLOAD_IMAGE_GENERATION_END:
+                return ItemKind.IMAGE
             # event_msg lines whose sub-type is in
             # :data:`_PERSISTED_END_EVENT_TYPES` are tool_result End
             # events. Kind stays ``None`` so the base falls into the
@@ -1311,9 +1347,10 @@ class CodexSessionCompute(BaseSessionCompute):
         #   via :meth:`remap_tool_result_id`).
         # - ``event_msg`` whose sub-type is in
         #   :data:`_PERSISTED_END_EVENT_TYPES` (patch_apply_end,
-        #   mcp_tool_call_end, web_search_end, image_generation_end).
-        #   They carry the structured outcome of the tool call and are
-        #   paired with the originating function_call by ``call_id``.
+        #   mcp_tool_call_end). They carry the structured outcome of
+        #   the tool call and are paired with the originating function_call
+        #   by ``call_id``. ``web_search_end`` and ``image_generation_end``
+        #   are intentionally absent (see their set's docstring).
         # Both are routed to DEBUG_ONLY; the front uses the tool's
         # ``isToolRunning`` hook to know when the chain is complete.
         wrapper_type = parsed_json.get("type")
@@ -1387,10 +1424,10 @@ class CodexSessionCompute(BaseSessionCompute):
         #       helpers return ``None`` and ``error_text`` stays ``None``.
         # - event_msg.* whose sub-type is in
         #   :data:`_PERSISTED_END_EVENT_TYPES` (patch_apply_end,
-        #   mcp_tool_call_end, web_search_end, image_generation_end).
-        #   Both shapes coexist as separate ``ToolResultLink`` rows
-        #   for the same call_id (no dedup); the front knows whether
-        #   to wait for both via ``getExpectedResultCount``.
+        #   mcp_tool_call_end). Both shapes coexist as separate
+        #   ``ToolResultLink`` rows for the same call_id (no dedup);
+        #   the front knows whether to wait for both via
+        #   ``getExpectedResultCount``.
         wrapper_type = parsed_json.get("type")
         payload = _payload(parsed_json)
         if payload is None:
@@ -1674,6 +1711,27 @@ class CodexSessionCompute(BaseSessionCompute):
                 return ContentAnalysis(
                     has_visible_content=bool(text),
                     text_content=text,
+                    is_system_xml=False,
+                    has_tool_result=False,
+                    tool_result_id=None,
+                    tool_result_error=None,
+                    tool_use_entries=_EMPTY_TOOL_USE_ENTRIES,
+                    task_tool_uses=_EMPTY_TASK_TOOL_USES,
+                    file_paths=_EMPTY_FILE_PATHS,
+                    has_prefix=False,
+                    has_suffix=False,
+                    tool_result_agent_info=None,
+                )
+
+            # ``image_generation_end`` is a standalone visible row (see
+            # :meth:`compute_item_kind`). No tool_result pairing, no text
+            # content surfaced here — the frontend pulls ``revised_prompt``,
+            # ``result`` and ``saved_path`` straight from the payload via
+            # the ImageGeneration component.
+            if sub_type == _PAYLOAD_IMAGE_GENERATION_END:
+                return ContentAnalysis(
+                    has_visible_content=True,
+                    text_content=None,
                     is_system_xml=False,
                     has_tool_result=False,
                     tool_result_id=None,

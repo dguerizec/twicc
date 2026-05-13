@@ -557,6 +557,7 @@ class BaseSessionCompute:
             ItemKind.ASSISTANT_MESSAGE,
             ItemKind.API_ERROR,
             ItemKind.COMPACT_SUMMARY,
+            ItemKind.IMAGE,
         ):
             return ItemDisplayLevel.ALWAYS
 

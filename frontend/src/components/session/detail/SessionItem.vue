@@ -9,6 +9,7 @@ import CompactSummary from './items/CompactSummary.vue'
 import CodexMessage from './items/codex/Message.vue'
 import CodexToolUse from './items/codex/ToolUse.vue'
 import CodexReasoning from './items/codex/Reasoning.vue'
+import CodexImageGeneration from './items/codex/ImageGeneration.vue'
 import UnknownEntry from './items/UnknownEntry.vue'
 import AppTooltip from '../../ui/AppTooltip.vue'
 import CodeCommentsIndicator from '../../ui/CodeCommentsIndicator.vue'
@@ -238,6 +239,12 @@ function toggleJsonView() {
                 />
                 <CodexReasoning
                     v-else-if="kind === 'reasoning'"
+                    :data="content"
+                    :session-id="sessionId"
+                    :line-num="lineNum"
+                />
+                <CodexImageGeneration
+                    v-else-if="kind === 'image'"
                     :data="content"
                     :session-id="sessionId"
                     :line-num="lineNum"

@@ -32,6 +32,14 @@ class ItemKind(StrEnum):
     # as ``SYSTEM`` (the encrypted_content is opaque to us and useless to
     # render) and lands at ``DEBUG_ONLY``.
     REASONING = "reasoning"
+    # Generated-image lines from providers that emit an image alongside its
+    # prompt and an on-disk path (Codex ``event_msg.image_generation_end``).
+    # Treated as standalone content rather than as a tool_use → tool_result
+    # pair: the JSONL line itself already carries the base64 image, the
+    # revised prompt and the saved path, so there's nothing left to wait
+    # for. Lands at ``ALWAYS`` so the rendered image stays visible across
+    # all display modes (Normal, Simplified, Debug).
+    IMAGE = "image"
 
 
 class Provider(StrEnum):
