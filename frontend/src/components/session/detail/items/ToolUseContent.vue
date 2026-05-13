@@ -335,6 +335,17 @@ watch(sessionActive, (active) => {
 const displayResult = computed(() => {
     if (!resultData.value || resultData.value.length === 0) return null
     if (resultData.value.length < requiredDisplayCount.value) return null
+    // Providers may opt into a custom pick/transform when several
+    // ToolResultLink rows back the same call but only one carries the
+    // user-facing payload (Codex MCP tools, for example, push aside the
+    // ``function_call_output`` and surface the richer
+    // ``event_msg.mcp_tool_call_end`` instead). ``undefined`` means
+    // "default behaviour" — single row collapses to the row itself,
+    // multiple rows stay as an array.
+    const transformed = toolHelpers.value?.transformDisplayResult(
+        props.name, resultData.value, helperOptions.value,
+    )
+    if (transformed !== undefined) return transformed
     if (resultData.value.length === 1) return resultData.value[0]
     return resultData.value
 })
@@ -706,6 +717,25 @@ const isAgentRunning = computed(() => {
     return resultCount < requiredCount
 })
 
+/**
+ * Fallback header label for tools that have neither a static
+ * ``headerLabel`` nor a Task ``displayName``. Splits on ``__`` (the
+ * separator used both by Claude Code's MCP tools ``mcp__server__tool``
+ * and by Codex's fully-qualified names like
+ * ``mcp__codex_apps__github___search_repositories``), trims any
+ * leading / trailing underscores from each segment (Codex bare MCP
+ * names often start with ``_``), drops empty segments, and joins back
+ * with spaces. Plain tool names without ``__`` pass through unchanged.
+ */
+function formatToolNameForHeader(rawName) {
+    if (typeof rawName !== 'string') return ''
+    return rawName
+        .split('__')
+        .map((s) => s.replace(/^_+|_+$/g, ''))
+        .filter(Boolean)
+        .join(' ')
+}
+
 // Unique ID for the View Agent button (for tooltip targeting)
 const viewAgentButtonId = computed(() => `view-agent-${props.toolId}`)
 
@@ -762,7 +792,7 @@ function handleStopAgent() {
             <span class="items-details-summary-left">
                 <strong v-if="isTask && displayName" class="items-details-summary-name">{{ displayName.name }}<span v-if="displayName.namespace" class="items-details-summary-quiet"> ({{ displayName.namespace }})</span></strong>
                 <strong v-else-if="headerLabel" class="items-details-summary-name">{{ headerLabel }}</strong>
-                <strong v-else class="items-details-summary-name">{{ name.replaceAll('__', ' ') }}</strong>
+                <strong v-else class="items-details-summary-name">{{ formatToolNameForHeader(name) }}</strong>
                 <template v-if="summaryRendering">
                     <span class="items-details-summary-separator"> — </span>
                     <component :is="summaryRendering.component" v-bind="summaryRendering.props" />

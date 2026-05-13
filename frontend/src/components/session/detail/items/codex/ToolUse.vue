@@ -65,6 +65,17 @@ const payload = computed(() => {
 const toolName = computed(() => {
     const p = payload.value
     if (!p) return ''
+    // MCP tools land as ``function_call`` with a ``namespace`` field
+    // carrying the ``mcp__server__app`` prefix and a ``name`` carrying
+    // only the leaf tool name (often starting with an underscore like
+    // ``"_search_repositories"``). Combine them so the canonical
+    // tool_name has the same ``mcp__server__app__tool`` shape as
+    // Claude Code's MCP tools — that's what powers the
+    // ``startsWith("mcp__")`` checks in the helpers and what the
+    // shell header formatter splits on ``__`` to display.
+    if (p.namespace && typeof p.namespace === 'string' && typeof p.name === 'string') {
+        return `${p.namespace}__${p.name}`
+    }
     // ``local_shell_call`` and other native tool-call shapes don't carry
     // a ``name`` field — fall back to the payload sub_type which serves
     // as the canonical tool name in those cases.

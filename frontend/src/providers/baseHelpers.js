@@ -848,6 +848,33 @@ export class BaseToolHelpers {
         return null
     }
 
+    /**
+     * Pick / transform the value passed to ``getResultRendering`` and
+     * ``JsonHumanView`` from the raw array of ToolResultLink rows that
+     * the shell loaded for this tool. Returning ``undefined`` leaves the
+     * default behaviour in place (single → object, multiple → array);
+     * any other return value (including ``null``) overrides it.
+     *
+     * Use case: tools that accumulate several ToolResultLinks for the
+     * same call_id but where only one of them carries the user-facing
+     * payload. Codex's MCP tools, for example, get both a
+     * ``function_call_output`` (LLM-facing text) and an
+     * ``event_msg.mcp_tool_call_end`` (parsed result with
+     * ``structuredContent``) — only the latter is worth showing in the
+     * Result section. The hook lets the provider helper pick it out
+     * without changing how ``ToolResultLink`` rows are stored or counted.
+     *
+     * @param {string} _name - Tool name.
+     * @param {Array} _resultData - Array of parsed result rows (same
+     *   shape as ``data.results`` from the ``/tool-results/`` endpoint).
+     * @param {Object} _options - Provider-specific extras.
+     * @returns {*} ``undefined`` to keep default; any other value to
+     *   override.
+     */
+    transformDisplayResult(/* name, resultData, options */) {
+        return undefined
+    }
+
     // ─── Capability flags driving shell-level features ───────────────────
 
     /**

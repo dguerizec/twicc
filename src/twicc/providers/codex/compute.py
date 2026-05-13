@@ -500,6 +500,35 @@ def _payload(parsed_json: dict) -> dict | None:
     return payload if isinstance(payload, dict) else None
 
 
+def _qualified_function_call_name(payload: dict) -> str:
+    """Return the fully-qualified tool name for a ``function_call`` payload.
+
+    For most tools the canonical name is just ``payload.name``. MCP tools
+    additionally carry a ``payload.namespace`` (e.g.
+    ``"mcp__codex_apps__github"``) — without it, the bare ``name`` (often
+    starting with an underscore like ``"_search_repositories"``) is
+    ambiguous and indistinguishable from any other function_call. We
+    prepend the namespace with ``__`` so the resulting name keeps the
+    same ``mcp__server__app__tool`` shape Claude Code's MCP tools use,
+    and so ``startsWith("mcp__")`` becomes a reliable detection point in
+    both backend and frontend. The frontend formatter strips leading /
+    trailing ``_`` from each segment when splitting on ``__`` for
+    display, so the bare-name leading underscore stays out of the
+    header label.
+
+    Returns the empty string when ``payload.name`` is missing or
+    not a string — same fallback as the previous logic, so a malformed
+    payload doesn't blow up the pipeline.
+    """
+    name = payload.get("name")
+    if not isinstance(name, str):
+        name = ""
+    namespace = payload.get("namespace")
+    if isinstance(namespace, str) and namespace:
+        return f"{namespace}__{name}"
+    return name
+
+
 def _patch_apply_error(payload: dict) -> str | None:
     """Synthesise an error string from a ``patch_apply_end`` payload.
 
@@ -525,17 +554,56 @@ def _patch_apply_error(payload: dict) -> str | None:
     return "Patch failed"
 
 
+def _mcp_tool_call_end_error(payload: dict) -> str | None:
+    """Synthesise an error string from a ``mcp_tool_call_end`` payload.
+
+    The wire shape of ``payload.result`` mirrors the Rust
+    ``Result<CallToolResult, String>`` (cf. ``codex-rs/protocol/src/protocol.rs``)
+    so two distinct error cases exist:
+
+    - ``{"Err": "<message>"}`` — the invocation itself failed (transport,
+      MCP server unreachable, …). The string carries a usable error
+      label.
+    - ``{"Ok": {"isError": true, "content": [...], ...}}`` — the
+      invocation reached the server but the tool returned an error
+      (``CallToolResult.is_error`` in Rust, serialised as ``isError``
+      in camelCase per ``mcp.rs:138-151``). The content may carry a
+      message but extracting it reliably across MCP servers is
+      brittle, so we surface a generic ``"Tool error"`` label for now
+      — adjust later if we see consistent shapes worth parsing.
+
+    Returns ``None`` when the payload isn't an ``mcp_tool_call_end`` or
+    when no error is reported.
+    """
+    if payload.get("type") != "mcp_tool_call_end":
+        return None
+    result = payload.get("result")
+    if not isinstance(result, dict):
+        return None
+    if "Err" in result:
+        err = result.get("Err")
+        if isinstance(err, str) and err.strip():
+            return err.strip()
+        return "Tool error"
+    ok = result.get("Ok")
+    if isinstance(ok, dict) and ok.get("isError") is True:
+        return "Tool error"
+    return None
+
+
 def _event_msg_payload_error(payload: dict) -> str | None:
     """Dispatch ``payload`` to the matching ``*_end`` error helper.
 
-    Currently only ``patch_apply_end`` exposes a usable error signal at
-    the event level. Other persisted ends (``mcp_tool_call_end``,
-    ``web_search_end``, ``image_generation_end``) don't surface one we
-    can read, so the helper returns ``None`` for those. Errors for the
-    exec_command family are now derived from the
-    ``function_call_output`` text via :func:`_exit_code_error_from_output`.
+    ``patch_apply_end`` and ``mcp_tool_call_end`` expose a usable error
+    signal today; ``web_search_end`` and ``image_generation_end`` don't,
+    so the helper returns ``None`` for those. Errors for the
+    exec_command family are derived from the ``function_call_output``
+    text via :func:`_exit_code_error_from_output` instead.
     """
-    return _patch_apply_error(payload)
+    err = _patch_apply_error(payload)
+    if err is not None:
+        return err
+    return _mcp_tool_call_end_error(payload)
 
 
 def _count_diff_lines(unified_diff: str) -> tuple[int, int]:
@@ -1257,8 +1325,7 @@ class CodexSessionCompute(BaseSessionCompute):
         native_name = _NATIVE_TOOL_NAME_BY_SUB_TYPE.get(sub_type)
         if native_name is not None:
             return {call_id: native_name}
-        name = payload.get("name")
-        return {call_id: name if isinstance(name, str) else ""}
+        return {call_id: _qualified_function_call_name(payload)}
 
     def extract_tool_result_info(
         self,
@@ -1620,8 +1687,7 @@ class CodexSessionCompute(BaseSessionCompute):
                 if native_name is not None:
                     name = native_name
                 else:
-                    raw_name = payload.get("name")
-                    name = raw_name if isinstance(raw_name, str) else ""
+                    name = _qualified_function_call_name(payload)
                 tool_use_entries = {call_id: name}
                 return ContentAnalysis(
                     has_visible_content=True,

@@ -752,6 +752,17 @@ export class CodexToolHelpers extends BaseToolHelpers {
         // before any wrapper-specific branch.
         if (RESULTLESS_TOOLS.has(name)) return 0
 
+        // MCP tools land as ``function_call`` with a fully-qualified
+        // ``name`` starting with ``mcp__`` (assembled from
+        // ``payload.namespace + "__" + payload.name`` by ``ToolUse.vue``
+        // and the backend's ``_qualified_function_call_name``). They
+        // always emit two ToolResultLinks: the LLM-facing
+        // ``function_call_output`` and the richer
+        // ``event_msg.mcp_tool_call_end`` paired by ``call_id``. We keep
+        // both in the store; ``transformDisplayResult`` picks the
+        // mcp_tool_call_end for the Result section.
+        if (typeof name === 'string' && name.startsWith(MCP_TOOL_NAME_PREFIX)) return 2
+
         const wrapperType = options?.wrapperType
         if (wrapperType === 'function_call') {
             // Shell-family tools (``FUNCTION_CALL_EXEC_TOOLS``): the
@@ -766,12 +777,10 @@ export class CodexToolHelpers extends BaseToolHelpers {
             return FUNCTION_CALL_TOOLS_WITH_END_EVENT.has(name) ? 2 : 1
         }
         if (wrapperType === 'custom_tool_call') {
-            // apply_patch (Freeform variant) and any MCP tool both have
-            // a persisted ``*_end`` / ``mcp_tool_call_end`` paired by
-            // call_id. The third known custom_tool_call shape — the
-            // code_mode ``exec`` tool — does *not*, so it falls through.
+            // apply_patch (Freeform variant) is the only custom_tool_call
+            // that pairs with a persisted ``*_end`` event today.
+            // The code_mode ``exec`` tool falls through to 1.
             if (name === 'apply_patch') return 2
-            if (typeof name === 'string' && name.startsWith(MCP_TOOL_NAME_PREFIX)) return 2
             return 1
         }
         if (wrapperType === 'local_shell_call') {
@@ -1093,7 +1102,44 @@ export class CodexToolHelpers extends BaseToolHelpers {
         // ``update_plan`` errors out when called in Plan mode — the
         // attempted plan is still informative, keep the body shown.
         if (name === 'update_plan') return true
+        // MCP tools surface a generic ``Tool error`` label that doesn't
+        // tell the user anything actionable — keep the rich result body
+        // visible so they can see what the server actually returned.
+        if (typeof name === 'string' && name.startsWith(MCP_TOOL_NAME_PREFIX)) return true
         return FUNCTION_CALL_EXEC_TOOLS.has(name)
+    }
+
+    transformDisplayResult(name, resultData, _options) {
+        // MCP tools accumulate two ToolResultLinks per call: the
+        // LLM-facing ``function_call_output`` (text with a
+        // ``Wall time: / Output: { ... }`` trailer) and the richer
+        // ``event_msg.mcp_tool_call_end`` (parsed ``invocation``,
+        // ``structuredContent``, ``isError``). The latter is strictly
+        // more useful for rendering, so we pick it out of the array
+        // and hand its parsed body to ``JsonHumanView``.
+        if (typeof name !== 'string' || !name.startsWith(MCP_TOOL_NAME_PREFIX)) {
+            return undefined
+        }
+        if (!Array.isArray(resultData)) return undefined
+        const mcpEnd = resultData.find((row) =>
+            row?.type === 'event_msg' && row?.payload?.type === 'mcp_tool_call_end'
+        )
+        if (!mcpEnd) return undefined
+        // Prefer the already-parsed ``structuredContent`` when the
+        // server provided one; fall back to the full ``Ok`` body
+        // otherwise (still strictly richer than the function_call_output
+        // text). On the ``Err`` branch we hand the error string back
+        // verbatim — JsonHumanView will render it as a single string.
+        const result = mcpEnd.payload?.result
+        if (result && typeof result === 'object') {
+            if ('Ok' in result && result.Ok && typeof result.Ok === 'object') {
+                return result.Ok.structuredContent ?? result.Ok
+            }
+            if ('Err' in result) {
+                return result.Err
+            }
+        }
+        return mcpEnd.payload
     }
 
     getInputOverrides(name) {
