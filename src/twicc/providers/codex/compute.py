@@ -172,25 +172,31 @@ _NATIVE_TOOL_NAME_BY_SUB_TYPE = {
     "local_shell_call": "local_shell_call",
 }
 
-# Tool names whose ``function_call_output`` lands once per call (no
-# chained ``write_stdin`` polls like ``exec_command``). For these we
-# emit ``{"is_terminated": true}`` on every matching result row in
-# :meth:`compute_link_extra` so the frontend's ``Max``-aggregated extra
-# flips to done on arrival and the shell card stops spinning.
+# Shell-family tools that share the shell-card rendering path on the
+# frontend. Membership here drives :meth:`compute_link_extra`'s
+# ``extra.is_terminated`` logic — see :data:`_EXEC_COMMAND_TOOLS` for
+# the chained subset.
 #
-# Today:
-#   - ``local_shell_call`` (the native Responses-API shell, sub_type
-#     wire-level) and ``shell`` (the ``function_call`` flavour) both
-#     route through ``ToolEmitter::Shell { freeform: false }`` ->
-#     ``format_exec_output_for_model_structured`` (JSON output).
-#   - ``shell_command`` routes through
-#     ``ToolEmitter::Shell { freeform: true }`` ->
-#     ``format_exec_output_for_model_freeform`` (text output starting
-#     with ``Exit code: N``).
+# The rule of thumb: any new shell-like tool we want to surface should
+# go in this set, and is treated as **atomic** (single
+# ``function_call_output`` per call, terminated on arrival) by default.
+# Only ``exec_command`` and ``write_stdin`` (the unified-exec pair
+# already in :data:`_EXEC_COMMAND_TOOLS`) can chain multiple result
+# rows for the same call_id — Codex CLI only spawns ``write_stdin``
+# polls against an ``exec_command`` parent, never against ``shell`` /
+# ``shell_command`` / ``local_shell_call`` whose output is always a
+# complete one-shot payload (cf. their handlers — they don't expose a
+# unified-exec process id to poll).
 #
-# ``container.exec`` isn't here yet — its output dialect hasn't been
-# audited; revisit when adding its result parsing.
-_SINGLE_OUTPUT_SHELL_TOOLS = frozenset({"local_shell_call", "shell", "shell_command"})
+# ``container.exec`` is intentionally absent here pending an audit of
+# its wire output dialect.
+_SHELL_FAMILY_TOOLS = frozenset({
+    "exec_command",
+    "write_stdin",
+    "shell",
+    "shell_command",
+    "local_shell_call",
+})
 
 # Function-call ``name`` values whose tool_use is bucketed as SYSTEM (no
 # tool card rendered) because the relevant exchange is captured elsewhere.
@@ -216,6 +222,13 @@ _TOOL_RESULT_PAYLOAD_TYPES = frozenset({"function_call_output", "custom_tool_cal
 # (and optionally writes to) it. Their ``function_call_output`` lines
 # carry the structured ``Chunk ID / Wall time / Process … / Output:``
 # trailer parsed by :func:`parse_exec_command_status`.
+#
+# Also the **chained** subset of :data:`_SHELL_FAMILY_TOOLS`: these are
+# the only shell-family tools whose output can chain across multiple
+# ``function_call_output`` rows for the same call_id (the parent
+# ``exec_command``'s own row plus one row per ``write_stdin`` poll,
+# all rebinded by :meth:`remap_tool_result_id`). Anything else in the
+# family is atomic by definition.
 _EXEC_COMMAND_TOOLS = frozenset({"exec_command", "write_stdin"})
 
 # ``event_msg.*_end`` (and ``*Response``) sub-types we still consume as
@@ -1362,34 +1375,33 @@ class CodexSessionCompute(BaseSessionCompute):
         per-tool ``+N -M`` summary badge; the per-file breakdown is
         provided for future surfaces (it is not consumed yet today).
         """
-        # Shell family: emit the terminated flag on the closing chunk.
-        if tool_name in _EXEC_COMMAND_TOOLS:
+        # Shell family: ``is_terminated`` flagged on the closing chunk
+        # for chained tools (``exec_command`` / ``write_stdin``), and
+        # immediately on arrival for atomic tools (everything else in
+        # :data:`_SHELL_FAMILY_TOOLS`). Listing only the chained set
+        # explicitly means every new shell-like tool added to the
+        # family defaults to atomic — see the comments on those two
+        # frozensets above.
+        if tool_name in _SHELL_FAMILY_TOOLS:
             if parsed_json.get("type") != _TYPE_RESPONSE_ITEM:
                 return None
             payload = _payload(parsed_json)
             if payload is None or payload.get("type") not in _TOOL_RESULT_PAYLOAD_TYPES:
                 return None
-            output = payload.get("output", "")
-            if not isinstance(output, str):
-                return None
-            if not parse_exec_command_status(output).is_terminated:
-                return None
-            return orjson.dumps({"is_terminated": True}).decode()
-
-        # Single-output shell tools (``local_shell_call`` and ``shell``)
-        # share the shell-card rendering path but emit a single
-        # ``function_call_output`` per call — no polled chain like
-        # ``exec_command`` / ``write_stdin``, and no Codex unified-exec
-        # status trailer to parse. The result lands once, so the card
-        # should stop spinning right away. Flag every matching result
-        # row as terminated so the ``Max``-aggregated ``extra`` flips
-        # to done on arrival. See :data:`_SINGLE_OUTPUT_SHELL_TOOLS`.
-        if tool_name in _SINGLE_OUTPUT_SHELL_TOOLS:
-            if parsed_json.get("type") != _TYPE_RESPONSE_ITEM:
-                return None
-            payload = _payload(parsed_json)
-            if payload is None or payload.get("type") not in _TOOL_RESULT_PAYLOAD_TYPES:
-                return None
+            if tool_name in _EXEC_COMMAND_TOOLS:
+                # Chained: a closing chunk is recognised by the
+                # ``Process exited with code N`` line in the Codex
+                # unified-exec status trailer. While the process is
+                # still running we explicitly emit nothing so the
+                # ``Max``-aggregated extra stays at its starting value
+                # and the frontend keeps the spinner alive.
+                output = payload.get("output", "")
+                if not isinstance(output, str):
+                    return None
+                if not parse_exec_command_status(output).is_terminated:
+                    return None
+            # Atomic result row, or the closing chunk of a chained
+            # sequence — flag it so the card stops spinning.
             return orjson.dumps({"is_terminated": True}).decode()
 
         if tool_name != "apply_patch":
