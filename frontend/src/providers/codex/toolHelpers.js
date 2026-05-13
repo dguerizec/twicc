@@ -508,7 +508,7 @@ export class CodexToolHelpers extends BaseToolHelpers {
         if (!parsed) return null
         const primary = pickPrimary(mergeStages(parsed))
         if (!primary) return null
-        return HEADER_LABELS_BY_VARIANT[primary.type] ?? 'Exec'
+        return HEADER_LABELS_BY_VARIANT[primary.type] ?? 'Shell'
     }
 
     getSummaryRendering(name, input, baseDir, options) {

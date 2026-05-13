@@ -105,7 +105,7 @@ function onHide() {
         @wa-hide="onHide"
     >
         <span slot="summary" class="items-details-summary">
-            <strong class="items-details-summary-name">Reasoning</strong>
+            <strong class="items-details-summary-name">Thinking</strong>
             <wa-spinner v-if="streaming"></wa-spinner>
         </span>
         <div v-if="isOpen" class="reasoning-body">
