@@ -11,14 +11,15 @@ Classification rules (any change MUST bump CODEX_COMPUTE_VERSION):
 - ``event_msg.user_message`` → ``USER_MESSAGE``
 - ``event_msg.agent_message`` → ``ASSISTANT_MESSAGE``
 - ``event_msg.*`` whose sub-type is in :data:`_PERSISTED_END_EVENT_TYPES`
-  (``patch_apply_end``, ``mcp_tool_call_end``, ``web_search_end``,
-  ``image_generation_end``) → kind stays ``None``; routed to
-  ``DEBUG_ONLY`` via :meth:`is_tool_result_item`. Pairs with the
-  matching ``function_call`` / ``custom_tool_call`` by ``call_id``.
-  These events carry the structured outcome of the tool (``changes``
-  map, ``CallToolResult``, …) and coexist as a second
-  :class:`ToolResultLink` row alongside the LLM-facing
-  ``function_call_output`` for the same tool_use_id.
+  (``patch_apply_end``, ``mcp_tool_call_end``, ``image_generation_end``)
+  → kind stays ``None``; routed to ``DEBUG_ONLY`` via
+  :meth:`is_tool_result_item`. Pairs with the matching ``function_call``
+  / ``custom_tool_call`` by ``call_id``. These events carry the
+  structured outcome of the tool (``changes`` map, ``CallToolResult``, …)
+  and coexist as a second :class:`ToolResultLink` row alongside the
+  LLM-facing ``function_call_output`` for the same tool_use_id.
+  ``web_search_end`` is intentionally absent — see the
+  ``response_item.web_search_call`` rule below.
 - ``event_msg.exec_command_end`` is intentionally **not** in the list:
   Codex CLI no longer persists it (TUI sets
   ``persist_extended_history=false`` since 2026-04-30) so we
@@ -28,10 +29,10 @@ Classification rules (any change MUST bump CODEX_COMPUTE_VERSION):
   unified-exec process id (called ``session_id`` by Codex,
   ``exec_command_id`` here).
 - ``response_item.function_call`` / ``custom_tool_call`` /
-  ``local_shell_call`` → ``TOOL_USE`` (-> ``COLLAPSIBLE``), except
-  ``function_call name=write_stdin`` which is bucketed as ``SYSTEM``
-  (no tool card). Its ``function_call_output`` is rebound to the parent
-  ``exec_command``'s ``call_id`` via
+  ``local_shell_call`` / ``web_search_call`` → ``TOOL_USE`` (->
+  ``COLLAPSIBLE``), except ``function_call name=write_stdin`` which is
+  bucketed as ``SYSTEM`` (no tool card). Its ``function_call_output``
+  is rebound to the parent ``exec_command``'s ``call_id`` via
   :meth:`CodexSessionCompute.remap_tool_result_id`. ``local_shell_call``
   doesn't carry a ``name`` field — its tool name is the sub_type itself
   (``"local_shell_call"``), supplied via
@@ -48,6 +49,13 @@ Classification rules (any change MUST bump CODEX_COMPUTE_VERSION):
   :func:`_structured_exec_output_error` (JSON decode + ``metadata.exit_code``
   test), and :meth:`compute_link_extra` flags the matching result row as
   terminated on arrival so the frontend stops the spinner.
+  ``web_search_call`` is a **resultless** tool (see
+  :data:`_RESULTLESS_TOOL_SUB_TYPES`): no ``call_id`` is serialised
+  on the call, so the matching ``event_msg.web_search_end`` can't be
+  paired from the JSONL and is intentionally ignored (kept out of
+  :data:`_PERSISTED_END_EVENT_TYPES`). The tool_use card stands alone
+  — no ``ToolResultLink``, no spinner; ``analyze_content`` emits a
+  visible-but-unpaired :class:`ContentAnalysis` for it.
 - ``response_item.{function_call_output, custom_tool_call_output}`` →
   kind stays ``None`` (-> ``DEBUG_ONLY``). Pairs as a tool_result.
   For exec_command long-running shells the chain accumulates one row
@@ -160,8 +168,15 @@ _TASK_STARTED_WINDOW_HEADROOM_FACTOR = 0.95
 # ``local_shell_call`` is the native shell tool exposed directly by the
 # Responses API — it doesn't carry a ``name`` field (the sub_type IS the
 # tool name) and ships its argv via ``payload.action`` instead of a JSON
-# ``arguments`` string. See :data:`_NATIVE_TOOL_NAME_BY_SUB_TYPE`.
-_TOOL_CALL_PAYLOAD_TYPES = frozenset({"function_call", "custom_tool_call", "local_shell_call"})
+# ``arguments`` string; ``web_search_call`` is the native web-search tool
+# (also nameless, also payload.action-based) — see
+# :data:`_NATIVE_TOOL_NAME_BY_SUB_TYPE` and :data:`_RESULTLESS_TOOL_SUB_TYPES`.
+_TOOL_CALL_PAYLOAD_TYPES = frozenset({
+    "function_call",
+    "custom_tool_call",
+    "local_shell_call",
+    "web_search_call",
+})
 
 # Sub-types whose canonical tool name is the sub_type itself — used as a
 # fallback in :meth:`extract_tool_use_entries` / :meth:`analyze_content`
@@ -170,7 +185,23 @@ _TOOL_CALL_PAYLOAD_TYPES = frozenset({"function_call", "custom_tool_call", "loca
 # card / helpers (label, summary, INPUT_OVERRIDES, …) key off.
 _NATIVE_TOOL_NAME_BY_SUB_TYPE = {
     "local_shell_call": "local_shell_call",
+    "web_search_call": "web_search_call",
 }
+
+# Sub-types of :data:`_TOOL_CALL_PAYLOAD_TYPES` that never produce a
+# paired ``function_call_output`` (or equivalent) — the tool_use card
+# stands alone with no result to wait for, so the frontend's spinner
+# stays off from the start.
+#
+# Today: ``web_search_call``. Codex emits a ``response_item.web_search_call``
+# alongside an ``event_msg.web_search_end``, but the call doesn't carry
+# a ``call_id`` or any serialised id (``id`` is ``skip_serializing``
+# on ``WebSearchCall``), so the event can't be paired with the call from
+# the JSONL — and the call has nothing else to wait for. ``analyze_content``
+# therefore short-circuits to a visible-but-unpaired ContentAnalysis for
+# these sub-types (no ``call_id`` requirement, empty ``tool_use_entries``).
+# Frontend mirrors via the ``RESULTLESS_TOOLS`` set in toolHelpers.js.
+_RESULTLESS_TOOL_SUB_TYPES = frozenset({"web_search_call"})
 
 # Shell-family tools that share the shell-card rendering path on the
 # frontend. Membership here drives :meth:`compute_link_extra`'s
@@ -241,10 +272,17 @@ _EXEC_COMMAND_TOOLS = frozenset({"exec_command", "write_stdin"})
 # so we reconstruct the equivalent state from the chain of
 # ``function_call_output`` lines instead (exec_command direct +
 # write_stdin children sharing the same exec_command_id).
+#
+# ``web_search_end`` is also intentionally excluded: it carries a
+# ``call_id`` derived from a ``WebSearchItem.id`` that the matching
+# ``response_item.web_search_call`` never serialises to the JSONL, so
+# the two can't be paired from disk. We instead treat ``web_search_call``
+# as a resultless tool (see :data:`_RESULTLESS_TOOL_SUB_TYPES`) and let
+# the ``event_msg.web_search_end`` line fall through to ``SYSTEM`` /
+# ``DEBUG_ONLY`` like any other unmatched event_msg.
 _PERSISTED_END_EVENT_TYPES = frozenset({
     "patch_apply_end",
     "mcp_tool_call_end",
-    "web_search_end",
     "image_generation_end",
 })
 
@@ -1552,6 +1590,27 @@ class CodexSessionCompute(BaseSessionCompute):
 
         if wrapper_type == _TYPE_RESPONSE_ITEM:
             sub_type = payload.get("type")
+
+            # Resultless tool calls (``web_search_call``) have no
+            # ``call_id`` and never pair with anything — short-circuit
+            # to a visible TOOL_USE row with no tool_use_entries so the
+            # frontend renders the card without waiting for a result.
+            if sub_type in _RESULTLESS_TOOL_SUB_TYPES:
+                return ContentAnalysis(
+                    has_visible_content=True,
+                    text_content=None,
+                    is_system_xml=False,
+                    has_tool_result=False,
+                    tool_result_id=None,
+                    tool_result_error=None,
+                    tool_use_entries=_EMPTY_TOOL_USE_ENTRIES,
+                    task_tool_uses=_EMPTY_TASK_TOOL_USES,
+                    file_paths=_EMPTY_FILE_PATHS,
+                    has_prefix=False,
+                    has_suffix=False,
+                    tool_result_agent_info=None,
+                )
+
             call_id = payload.get("call_id")
             if not isinstance(call_id, str) or not call_id:
                 return _EMPTY_ANALYSIS

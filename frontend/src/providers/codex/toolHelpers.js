@@ -32,6 +32,8 @@ import DescriptionSummary from '../../components/session/detail/items/summary/De
 import GrepSummary from '../../components/session/detail/items/summary/GrepSummary.vue'
 import MultiFileSummary from '../../components/session/detail/items/summary/MultiFileSummary.vue'
 import TodoSummary from '../../components/session/detail/items/summary/TodoSummary.vue'
+import WebFetchSummary from '../../components/session/detail/items/summary/WebFetchSummary.vue'
+import WebSearchSummary from '../../components/session/detail/items/summary/WebSearchSummary.vue'
 import ExecResultContent from '../../components/session/detail/items/codex/ExecResultContent.vue'
 import ReadResultContent from '../../components/session/detail/items/codex/ReadResultContent.vue'
 import ApplyPatchContent from '../../components/session/detail/items/codex/ApplyPatchContent.vue'
@@ -115,6 +117,20 @@ const FREEFORM_TEXT_OUTPUT_TOOLS = new Set([
     'shell_command',
 ])
 
+// Tools that never produce a matched ``function_call_output`` or
+// ``event_msg.*_end``. The tool_use card stands alone — no spinner, no
+// expected result count, no chained outputs. Mirrors the backend
+// :data:`twicc.providers.codex.compute._RESULTLESS_TOOL_SUB_TYPES`.
+//
+// Today: ``web_search_call``. Codex emits both a
+// ``response_item.web_search_call`` and an ``event_msg.web_search_end``,
+// but the call doesn't carry a serialised id so the two can't be paired
+// from disk — we ignore the event_msg side entirely (it falls through
+// to DEBUG_ONLY) and treat the call as a leaf node.
+const RESULTLESS_TOOLS = new Set([
+    'web_search_call',
+])
+
 // ``function_call`` tools with a persisted ``event_msg.*_end`` event
 // paired by ``call_id``. Source of truth: ``rollout/src/policy.rs`` in
 // the Codex repo (Limited persistence). ``apply_patch``'s JSON variant
@@ -126,10 +142,12 @@ const FUNCTION_CALL_TOOLS_WITH_END_EVENT = new Set([
 
 // ``event_msg.*_end`` sub-types we still consume — mirrors the backend
 // whitelist :data:`twicc.providers.codex.compute._PERSISTED_END_EVENT_TYPES`.
+// ``web_search_end`` is intentionally absent: the matching
+// ``response_item.web_search_call`` doesn't serialise its id, so the
+// pair can't be reconciled from disk (see :data:`RESULTLESS_TOOLS`).
 const PERSISTED_END_EVENT_TYPES = new Set([
     'patch_apply_end',
     'mcp_tool_call_end',
-    'web_search_end',
     'image_generation_end',
 ])
 
@@ -282,6 +300,18 @@ const STRIPPED_INPUT_KEYS_BY_TOOL = {
         'justification',
         'prefix_rule',
         'additional_permissions',
+    ]),
+    // ``web_search_call`` input is the unwrapped ``payload.action``
+    // (``WebSearchAction`` in ``codex-rs/protocol/src/models.rs:1163``).
+    // Kept visible: ``query`` / ``queries`` (for ``type: search``),
+    // ``url`` (for ``open_page`` / ``find_in_page``), ``pattern`` (for
+    // ``find_in_page`` — even though the summary treats find_in_page
+    // like an open_page, the pattern is still useful in the detail view).
+    web_search_call: new Set([
+        // The action's enum tag — already surfaced by the header label
+        // (WebSearch vs WebFetch), so showing it again in the body is
+        // pure duplication.
+        'type',
     ]),
 }
 
@@ -700,6 +730,10 @@ export class CodexToolHelpers extends BaseToolHelpers {
     static provider = PROVIDER.CODEX
 
     getExpectedResultCount(name, _input, options) {
+        // Resultless tools never produce a paired output — short-circuit
+        // before any wrapper-specific branch.
+        if (RESULTLESS_TOOLS.has(name)) return 0
+
         const wrapperType = options?.wrapperType
         if (wrapperType === 'function_call') {
             // Shell-family tools (``FUNCTION_CALL_EXEC_TOOLS``): the
@@ -730,9 +764,9 @@ export class CodexToolHelpers extends BaseToolHelpers {
             // spinner flips to done as soon as the result lands.
             return 1
         }
-        // web_search_call, image_generation_call: the ``*_end`` event is
-        // the only result (no separate ``*_call_output`` payload). Single
-        // ToolResultLink, single result.
+        // image_generation_call: the ``*_end`` event is the only result
+        // (no separate ``*_call_output`` payload). Single ToolResultLink,
+        // single result.
         return 1
     }
 
@@ -746,6 +780,9 @@ export class CodexToolHelpers extends BaseToolHelpers {
     }
 
     isToolRunning(name, input, options) {
+        // Resultless tools never wait for a result — they're "done" from
+        // the moment they land in the store.
+        if (RESULTLESS_TOOLS.has(name)) return false
         // Shell tools: status comes from the chain's last chunk via the
         // ``is_terminated`` flag the backend set on
         // ``ToolResultLink.extra``. ``Max``-aggregated across links so
@@ -784,6 +821,15 @@ export class CodexToolHelpers extends BaseToolHelpers {
         // role of Claude Code's ``TodoWrite``, so users see the same
         // header word across providers.
         if (name === 'update_plan') return 'Todo'
+        // ``web_search_call`` splits into two user-facing surfaces
+        // depending on the action variant: WebSearch for ``search``
+        // (one or more queries), WebFetch for ``open_page`` /
+        // ``find_in_page`` (URL retrieval). Mirrors Claude Code's
+        // ``WebSearch`` / ``WebFetch`` headers so the user gets the
+        // same word across providers.
+        if (name === 'web_search_call') {
+            return input?.type === 'search' ? 'WebSearch' : 'WebFetch'
+        }
         if (!FUNCTION_CALL_EXEC_TOOLS.has(name)) return null
         const parsed = resolveParsedCommand(name, input)
         if (!parsed) return null
@@ -798,6 +844,46 @@ export class CodexToolHelpers extends BaseToolHelpers {
                 component: TodoSummary,
                 props: { parts: getTodoDescription(planToTodos(input.plan)) },
             }
+        }
+        if (name === 'web_search_call') {
+            // ``payload.action`` shape:
+            //   - ``{type:"search", query?, queries?}`` — when ``queries``
+            //     is set (one or more items), it's the canonical source
+            //     and we render the comma-separated list; otherwise fall
+            //     back to the single ``query`` string. The summary
+            //     component (:class:`WebSearchSummary`) accepts both.
+            //   - ``{type:"open_page", url}`` / ``{type:"find_in_page",
+            //     url, pattern}`` — render the URL via the same link
+            //     summary as Claude Code's WebFetch. We intentionally
+            //     ignore ``pattern`` here so find_in_page reads like a
+            //     plain page fetch in the summary line (it stays
+            //     visible in the body via the JSON view).
+            const actionType = input?.type
+            if (actionType === 'search') {
+                if (Array.isArray(input.queries) && input.queries.length > 0) {
+                    return {
+                        component: WebSearchSummary,
+                        props: { query: input.queries },
+                    }
+                }
+                if (typeof input.query === 'string' && input.query) {
+                    return {
+                        component: WebSearchSummary,
+                        props: { query: input.query },
+                    }
+                }
+                return null
+            }
+            if (actionType === 'open_page' || actionType === 'find_in_page') {
+                if (typeof input.url === 'string' && input.url) {
+                    return {
+                        component: WebFetchSummary,
+                        props: { url: input.url },
+                    }
+                }
+                return null
+            }
+            return null
         }
         if (name === 'apply_patch') {
             const paths = resolveApplyPatchPaths(input, options)
@@ -1002,10 +1088,35 @@ export class CodexToolHelpers extends BaseToolHelpers {
         // explanation), so the JSON fallback would only duplicate it.
         if (name === 'update_plan') return null
         const stripped = STRIPPED_INPUT_KEYS_BY_TOOL[name]
-        if (!stripped || stripped.size === 0) return input
-        const out = {}
-        for (const k of Object.keys(input)) {
-            if (!stripped.has(k)) out[k] = input[k]
+        const out = stripped && stripped.size > 0 ? {} : { ...input }
+        if (stripped && stripped.size > 0) {
+            for (const k of Object.keys(input)) {
+                if (!stripped.has(k)) out[k] = input[k]
+            }
+        }
+        // ``web_search_call`` special case: Codex sometimes ships both
+        // ``query`` (string) and ``queries`` (array) carrying the same
+        // single value — showing both is pure duplication. Normalise to
+        // a single field based on how many distinct queries the call
+        // actually issued: a single query (or none) collapses to
+        // ``query`` (string); multiple queries keep ``queries`` and drop
+        // the redundant string. The summary helper still privileges
+        // ``queries`` so the array form drives the rendered list.
+        if (name === 'web_search_call') {
+            const queries = Array.isArray(out.queries)
+                ? out.queries.filter((q) => typeof q === 'string' && q)
+                : null
+            if (queries) {
+                if (queries.length >= 2) {
+                    out.queries = queries
+                    delete out.query
+                } else {
+                    if (queries.length === 1 && (typeof out.query !== 'string' || !out.query)) {
+                        out.query = queries[0]
+                    }
+                    delete out.queries
+                }
+            }
         }
         return Object.keys(out).length > 0 ? out : null
     }

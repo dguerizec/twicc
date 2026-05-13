@@ -509,6 +509,12 @@ const showResultDetailsOnError = computed(() => {
 // Central guard for Result details visibility
 const showResultDetails = computed(() => {
     const helpers = toolHelpers.value
+    // Resultless tools (``getExpectedResultCount`` returns 0) have no
+    // matched output anywhere — opening the section would only trigger
+    // an HTTP fetch that returns 404. Hide the section entirely.
+    if (helpers?.getExpectedResultCount(props.name, props.input, helperOptions.value) === 0) {
+        return false
+    }
     // A specialized input renderer (Edit/Write/TodoWrite) typically owns the
     // success-case UI on its own — the Result section stays hidden. Tools
     // that opt in via showsResultOnUnknownError still surface it for the

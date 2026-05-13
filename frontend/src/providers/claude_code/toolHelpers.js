@@ -28,8 +28,8 @@ import DescriptionSummary from '../../components/session/detail/items/summary/De
 import SkillSummary from '../../components/session/detail/items/claude_code/summary/SkillSummary.vue'
 import GrepSummary from '../../components/session/detail/items/summary/GrepSummary.vue'
 import GlobSummary from '../../components/session/detail/items/claude_code/summary/GlobSummary.vue'
-import WebFetchSummary from '../../components/session/detail/items/claude_code/summary/WebFetchSummary.vue'
-import WebSearchSummary from '../../components/session/detail/items/claude_code/summary/WebSearchSummary.vue'
+import WebFetchSummary from '../../components/session/detail/items/summary/WebFetchSummary.vue'
+import WebSearchSummary from '../../components/session/detail/items/summary/WebSearchSummary.vue'
 import ToolSearchSummary from '../../components/session/detail/items/claude_code/summary/ToolSearchSummary.vue'
 import TodoSummary from '../../components/session/detail/items/summary/TodoSummary.vue'
 

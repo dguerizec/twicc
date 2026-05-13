@@ -8,7 +8,7 @@
  * line so the dispatcher in ``SessionItem.vue`` only has to mount us with
  * the raw content.
  *
- * Three payload shapes contribute:
+ * Four payload shapes contribute:
  *   - ``function_call``: the standard OpenAI form. ``arguments`` is a
  *     JSON-string that we parse into the input object.
  *   - ``custom_tool_call``: the freeform variant (apply_patch). ``input``
@@ -21,6 +21,12 @@
  *     it over verbatim so ``parseCommand`` keeps the array form (it
  *     unwraps ``bash -lc <script>`` and classifies Read / Grep / List),
  *     and JsonHumanView auto-joins the array for the bash code-block.
+ *   - ``web_search_call``: the native web-search / web-fetch tool. No
+ *     ``name`` field, no ``call_id``, no result. Its ``payload.action``
+ *     is a tagged enum (``{type:"search", query|queries}`` /
+ *     ``{type:"open_page", url}`` / ``{type:"find_in_page", url, pattern}``)
+ *     forwarded verbatim — toolHelpers picks the header label and the
+ *     summary component off ``action.type``.
  */
 
 import { computed, ref, watchEffect } from 'vue'
@@ -98,6 +104,14 @@ const toolInput = computed(() => {
         // and classify Read / Grep / List for the header label; the
         // JsonHumanView ``string-code`` override flattens the array to a
         // bash line for the body display.
+        return p.action && typeof p.action === 'object' ? p.action : {}
+    }
+    if (p.type === 'web_search_call') {
+        // Same pattern as ``local_shell_call``: ``payload.action`` is a
+        // tagged enum (search / open_page / find_in_page) — we forward
+        // it as-is so the helpers can branch on ``action.type`` for
+        // the header label (WebSearch / WebFetch) and the summary
+        // component (query string/array, or URL link).
         return p.action && typeof p.action === 'object' ? p.action : {}
     }
     return {}
