@@ -45,7 +45,7 @@ Classification rules (any change MUST bump CODEX_COMPUTE_VERSION):
   ``format_exec_output_for_model_structured`` in
   ``codex-rs/core/src/tools/mod.rs``). The exit-code surface for
   :class:`ToolResultLink.is_error` therefore goes through
-  :func:`_local_shell_output_error` (JSON decode + ``metadata.exit_code``
+  :func:`_structured_exec_output_error` (JSON decode + ``metadata.exit_code``
   test), and :meth:`compute_link_extra` flags the matching result row as
   terminated on arrival so the frontend stops the spinner.
 - ``response_item.{function_call_output, custom_tool_call_output}`` →
@@ -172,6 +172,26 @@ _NATIVE_TOOL_NAME_BY_SUB_TYPE = {
     "local_shell_call": "local_shell_call",
 }
 
+# Tool names whose ``function_call_output`` lands once per call (no
+# chained ``write_stdin`` polls like ``exec_command``). For these we
+# emit ``{"is_terminated": true}`` on every matching result row in
+# :meth:`compute_link_extra` so the frontend's ``Max``-aggregated extra
+# flips to done on arrival and the shell card stops spinning.
+#
+# Today:
+#   - ``local_shell_call`` (the native Responses-API shell, sub_type
+#     wire-level) and ``shell`` (the ``function_call`` flavour) both
+#     route through ``ToolEmitter::Shell { freeform: false }`` ->
+#     ``format_exec_output_for_model_structured`` (JSON output).
+#   - ``shell_command`` routes through
+#     ``ToolEmitter::Shell { freeform: true }`` ->
+#     ``format_exec_output_for_model_freeform`` (text output starting
+#     with ``Exit code: N``).
+#
+# ``container.exec`` isn't here yet — its output dialect hasn't been
+# audited; revisit when adding its result parsing.
+_SINGLE_OUTPUT_SHELL_TOOLS = frozenset({"local_shell_call", "shell", "shell_command"})
+
 # Function-call ``name`` values whose tool_use is bucketed as SYSTEM (no
 # tool card rendered) because the relevant exchange is captured elsewhere.
 # ``write_stdin`` belongs to a previously-spawned ``exec_command`` session;
@@ -247,6 +267,16 @@ _EXEC_COMMAND_STATUS_RE = re.compile(
     re.MULTILINE,
 )
 
+# ``shell_command`` (and any other tool using
+# ``format_exec_output_for_model_freeform`` in
+# ``codex-rs/core/src/tools/mod.rs``) emits a freeform text trailer that
+# starts with this line — anchored at line start so we never match a
+# stray occurrence inside the body. The pattern is intentionally distinct
+# from the ``exec_command`` trailer (``Process exited with code N``) so
+# :func:`_freeform_exec_output_error` and :func:`_exit_code_error_from_output`
+# can both be tried defensively without ever cross-matching.
+_FREEFORM_EXIT_CODE_RE = re.compile(r"^Exit code: (-?\d+)$", re.MULTILINE)
+
 
 def parse_exec_command_status(output: str) -> ExecCommandStatus:
     """Extract the status trailer from an exec_command/write_stdin output.
@@ -281,22 +311,64 @@ def _exit_code_error_from_output(output: str) -> str | None:
     return f"Exit code {status.exit_code}"
 
 
-def _local_shell_output_error(output: str) -> str | None:
-    """Render ``"Exit code N"`` from a ``local_shell_call`` function_call_output.
+def _freeform_exec_output_error(output: str) -> str | None:
+    """Render ``"Exit code N"`` from a freeform-text shell tool output.
 
-    Codex serialises the result of a ``local_shell_call`` as a JSON
-    string ``{"output":"<body>","metadata":{"exit_code":N,"duration_seconds":N.N}}``
-    (see ``format_exec_output_for_model_structured`` in
-    ``codex-rs/core/src/tools/mod.rs``). The whole JSON sits as a plain
-    string under ``function_call_output.output`` (collapsed by
-    ``function_tool_response`` to ``FunctionCallOutputBody::Text`` when
-    the inner ``InputText`` is a single item), so we orjson-decode and
+    Applies to every Codex tool whose ``function_call_output.output`` is
+    produced by ``format_exec_output_for_model_freeform``
+    (``codex-rs/core/src/tools/mod.rs``) — today: ``shell_command``. The
+    wire shape is plain text starting with ::
+
+        Exit code: N
+        Wall time: X.X seconds
+        [Total output lines: N]
+        Output:
+        <body>
+
+    We match the first line with :data:`_FREEFORM_EXIT_CODE_RE` (anchored
+    at line start, so a stray occurrence inside the body can't fool us)
+    and surface ``"Exit code N"`` for a non-zero exit.
+
+    Defensive: returns ``None`` when no match, when the captured code
+    doesn't parse, or when it's zero — so the caller can chain it with
+    :func:`_structured_exec_output_error` and
+    :func:`_exit_code_error_from_output` and let the matching output
+    shape win.
+    """
+    if not isinstance(output, str) or not output:
+        return None
+    match = _FREEFORM_EXIT_CODE_RE.search(output)
+    if match is None:
+        return None
+    try:
+        code = int(match.group(1))
+    except ValueError:
+        return None
+    if code == 0:
+        return None
+    return f"Exit code {code}"
+
+
+def _structured_exec_output_error(output: str) -> str | None:
+    """Render ``"Exit code N"`` from a structured-JSON shell tool output.
+
+    Applies to every Codex tool whose ``function_call_output.output`` is
+    produced by ``format_exec_output_for_model_structured``
+    (``codex-rs/core/src/tools/mod.rs``) — today: ``local_shell_call``
+    and ``shell``. The wire shape is a JSON string
+    ``{"output":"<body>","metadata":{"exit_code":N,"duration_seconds":N.N}}``,
+    collapsed by ``function_tool_response`` to ``FunctionCallOutputBody::Text``
+    when the inner ``InputText`` is a single item. We orjson-decode and
     pull ``metadata.exit_code`` to surface a non-zero exit the same way
     :func:`_exit_code_error_from_output` does for ``exec_command``.
 
     Defensive: returns ``None`` on parse failure, shape mismatch, or
     ``exit_code == 0`` so the caller can fall back to other detection
     paths (notably the legacy exec_command trailer) without crashing.
+    The function is intentionally self-detecting — it doesn't take the
+    parent tool name, so :meth:`extract_tool_result_info` can chain it
+    with :func:`_exit_code_error_from_output` and let the matching
+    output shape win.
     """
     if not isinstance(output, str) or not output:
         return None
@@ -1146,15 +1218,21 @@ class CodexSessionCompute(BaseSessionCompute):
         #   — the LLM-facing output string. Three error-detection paths
         #   coexist here, all guarded by their own shape so they're
         #   mutually exclusive in practice:
-        #     * ``local_shell_call`` outputs are a JSON string carrying
-        #       ``{"output":..., "metadata":{"exit_code":N, ...}}`` —
-        #       :func:`_local_shell_output_error` decodes it and surfaces
-        #       ``"Exit code N"`` for a non-zero exit.
+        #     * ``local_shell_call`` / ``shell`` outputs are a JSON
+        #       string carrying ``{"output":..., "metadata":{"exit_code":N,
+        #       ...}}`` (cf. ``format_exec_output_for_model_structured``
+        #       in ``codex-rs/core/src/tools/mod.rs``) —
+        #       :func:`_structured_exec_output_error` decodes it and
+        #       surfaces ``"Exit code N"`` for a non-zero exit.
+        #     * ``shell_command`` outputs carry a freeform text trailer
+        #       starting with ``Exit code: N`` (cf.
+        #       ``format_exec_output_for_model_freeform``) —
+        #       :func:`_freeform_exec_output_error` handles it.
         #     * ``exec_command`` / ``write_stdin`` outputs carry a Codex
         #       formatted trailer with a ``Process exited with code N``
         #       line — :func:`_exit_code_error_from_output` handles it.
-        #     * everything else has no exit signal here, so both helpers
-        #       return ``None`` and ``error_text`` stays ``None``.
+        #     * everything else has no exit signal here, so all three
+        #       helpers return ``None`` and ``error_text`` stays ``None``.
         # - event_msg.* whose sub-type is in
         #   :data:`_PERSISTED_END_EVENT_TYPES` (patch_apply_end,
         #   mcp_tool_call_end, web_search_end, image_generation_end).
@@ -1172,7 +1250,8 @@ class CodexSessionCompute(BaseSessionCompute):
             output = payload.get("output", "")
             if isinstance(output, str):
                 error_text = (
-                    _local_shell_output_error(output)
+                    _structured_exec_output_error(output)
+                    or _freeform_exec_output_error(output)
                     or _exit_code_error_from_output(output)
                 )
             else:
@@ -1297,14 +1376,15 @@ class CodexSessionCompute(BaseSessionCompute):
                 return None
             return orjson.dumps({"is_terminated": True}).decode()
 
-        # Native ``local_shell_call`` shares the shell-card rendering path
-        # but emits a single ``function_call_output`` (no polled chain like
-        # ``exec_command`` / ``write_stdin``). It also doesn't carry the
-        # Codex unified-exec status trailer, so there's nothing to parse —
-        # the result lands once, and the card should stop spinning right
-        # away. Flag every matching result row as terminated so the
-        # ``Max``-aggregated ``extra`` flips to done on arrival.
-        if tool_name == "local_shell_call":
+        # Single-output shell tools (``local_shell_call`` and ``shell``)
+        # share the shell-card rendering path but emit a single
+        # ``function_call_output`` per call — no polled chain like
+        # ``exec_command`` / ``write_stdin``, and no Codex unified-exec
+        # status trailer to parse. The result lands once, so the card
+        # should stop spinning right away. Flag every matching result
+        # row as terminated so the ``Max``-aggregated ``extra`` flips
+        # to done on arrival. See :data:`_SINGLE_OUTPUT_SHELL_TOOLS`.
+        if tool_name in _SINGLE_OUTPUT_SHELL_TOOLS:
             if parsed_json.get("type") != _TYPE_RESPONSE_ITEM:
                 return None
             payload = _payload(parsed_json)
