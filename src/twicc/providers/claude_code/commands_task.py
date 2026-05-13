@@ -1,9 +1,9 @@
 """
-Background task for periodic slash command discovery.
+Background task for periodic command discovery.
 
-Scans the filesystem every 5 minutes to discover slash commands from
+Scans the filesystem every 5 minutes to discover commands from
 user-level, project-level, and plugin sources, and synchronizes them
-to the SlashCommand database table.
+to the Command database table.
 """
 
 from __future__ import annotations
@@ -14,36 +14,39 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# Stop event for slash commands sync task
+# Stop event for commands sync task
 _stop_event: asyncio.Event | None = None
 
 # Interval: 5 minutes
 SYNC_INTERVAL = 5 * 60
 
+# Activation character used by Claude Code to invoke commands.
+ACTIVATION_CHAR = "/"
+
 
 def get_stop_event() -> asyncio.Event:
-    """Get or create the stop event for the slash commands sync task."""
+    """Get or create the stop event for the commands sync task."""
     global _stop_event
     if _stop_event is None:
         _stop_event = asyncio.Event()
     return _stop_event
 
 
-def stop_slash_commands_task() -> None:
-    """Signal the slash commands sync task to stop."""
+def stop_commands_task() -> None:
+    """Signal the commands sync task to stop."""
     global _stop_event
     if _stop_event is not None:
         _stop_event.set()
 
 
 def _sync_to_database() -> dict[str, int]:
-    """Discover all slash commands and sync them to the database.
+    """Discover all commands and sync them to the database.
 
     Returns a dict with keys: created, updated, deleted, unchanged.
     """
     from twicc.core.enums import Provider
-    from twicc.core.models import Project, SlashCommand
-    from .slash_commands import (
+    from twicc.core.models import Project, Command
+    from .commands import (
         DiscoveredCommand,
         PluginEntry,
         discover_global_commands,
@@ -117,8 +120,8 @@ def _sync_to_database() -> dict[str, int]:
     # --- 4. Load current state from database ---
     # Scope strictly to this provider so the diff/delete loop never
     # touches rows owned by another backend.
-    existing: dict[tuple[str | None, str], SlashCommand] = {}
-    for obj in SlashCommand.objects.filter(provider=cc_provider):
+    existing: dict[tuple[str | None, str], Command] = {}
+    for obj in Command.objects.filter(provider=cc_provider):
         existing[(obj.project_id, obj.name)] = obj
 
     # --- 5. Diff and apply ---
@@ -132,11 +135,11 @@ def _sync_to_database() -> dict[str, int]:
             to_delete_ids.append(obj.pk)
             stats["deleted"] += 1
     if to_delete_ids:
-        SlashCommand.objects.filter(pk__in=to_delete_ids).delete()
+        Command.objects.filter(pk__in=to_delete_ids).delete()
 
     # Create or update
-    to_create: list[SlashCommand] = []
-    to_update: list[SlashCommand] = []
+    to_create: list[Command] = []
+    to_update: list[Command] = []
 
     for key, fields in desired.items():
         project_id, name = key
@@ -144,10 +147,11 @@ def _sync_to_database() -> dict[str, int]:
 
         if obj is None:
             # New command
-            to_create.append(SlashCommand(
+            to_create.append(Command(
                 provider=cc_provider,
                 project_id=project_id,
                 name=name,
+                activation_char=ACTIVATION_CHAR,
                 **fields,
             ))
             stats["created"] += 1
@@ -165,15 +169,15 @@ def _sync_to_database() -> dict[str, int]:
                 stats["unchanged"] += 1
 
     if to_create:
-        SlashCommand.objects.bulk_create(to_create)
+        Command.objects.bulk_create(to_create)
     if to_update:
-        SlashCommand.objects.bulk_update(to_update, compare_fields)
+        Command.objects.bulk_update(to_update, compare_fields)
 
     return stats
 
 
-async def start_slash_commands_task() -> None:
-    """Background task that periodically discovers and syncs slash commands.
+async def start_commands_task() -> None:
+    """Background task that periodically discovers and syncs commands.
 
     Runs until stop event is set:
     - Syncs immediately on startup
@@ -182,27 +186,27 @@ async def start_slash_commands_task() -> None:
     """
     stop_event = get_stop_event()
 
-    logger.info("Slash commands sync task started")
+    logger.info("Commands sync task started")
 
     while not stop_event.is_set():
         try:
             stats = await asyncio.to_thread(_sync_to_database)
             if stats["created"] or stats["updated"] or stats["deleted"]:
                 logger.info(
-                    "Slash commands sync: %d created, %d updated, %d deleted, %d unchanged",
+                    "Commands sync: %d created, %d updated, %d deleted, %d unchanged",
                     stats["created"], stats["updated"], stats["deleted"], stats["unchanged"],
                 )
             else:
                 logger.debug(
-                    "Slash commands sync: %d unchanged",
+                    "Commands sync: %d unchanged",
                     stats["unchanged"],
                 )
         except Exception as e:
-            logger.error("Slash commands sync failed: %s", e, exc_info=True)
+            logger.error("Commands sync failed: %s", e, exc_info=True)
 
         try:
             await asyncio.wait_for(stop_event.wait(), timeout=SYNC_INTERVAL)
         except asyncio.TimeoutError:
             pass
 
-    logger.info("Slash commands sync task stopped")
+    logger.info("Commands sync task stopped")

@@ -5,7 +5,7 @@
  * Opens a wa-popup anchored to a given element, showing a filterable list
  * of previous user messages fetched from the backend API.
  *
- * Design and keyboard navigation are identical to SlashCommandPickerPopup.
+ * Design and keyboard navigation are identical to CommandPickerPopup.
  *
  * Props:
  *   projectId: current project id

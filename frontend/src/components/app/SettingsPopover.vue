@@ -6,6 +6,7 @@ import { useSettingsStore, SETTINGS_SCHEMA } from '../../stores/settings'
 import { useDataStore } from '../../stores/data'
 import { useAuthStore } from '../../stores/auth'
 import { getProviderHelpers, getProviderLabel, getProviderOptions, getRegisteredProviders } from '../../providers'
+import { getActivationCharMetadata } from '../../utils/commandActivation'
 import { useClaudeCodeStore } from '../../providers/claude_code/store'
 import { DISPLAY_MODE, COLOR_SCHEME, SESSION_TIME_FORMAT, DEFAULT_MAX_CACHED_SESSIONS, WA_THEME, WA_THEME_LABELS, WA_BRAND, WA_BRAND_LABELS, PROVIDER_ICON } from '../../constants'
 import NotificationSettings from './NotificationSettings.vue'
@@ -110,6 +111,33 @@ function goBackToNav() {
 
 const shortcutGroups = computed(() => {
     const mod = store.isMac ? '⌘' : 'Ctrl'
+
+    // Collect command activation chars across every registered provider so
+    // the cheat sheet stays in sync with what the message input actually
+    // reacts to. A char shared by several providers (e.g. ``/`` may be
+    // claimed by both Claude Code and Codex once Codex lands) collapses to
+    // a single row whose description lists every provider that handles it.
+    const charToProviderLabels = new Map()
+    for (const provider of getRegisteredProviders()) {
+        const helpers = getProviderHelpers(provider)
+        const label = getProviderLabel(provider)
+        for (const char of helpers?.getCommandActivationChars() ?? []) {
+            if (!charToProviderLabels.has(char)) charToProviderLabels.set(char, [])
+            const labels = charToProviderLabels.get(char)
+            if (!labels.includes(label)) labels.push(label)
+        }
+    }
+
+    const commandShortcuts = []
+    for (const [char, labels] of charToProviderLabels.entries()) {
+        const meta = getActivationCharMetadata(char)
+        if (!meta) continue
+        commandShortcuts.push({
+            keys: [char],
+            description: `${meta.tooltip} (at start of input — ${labels.join(', ')})`,
+        })
+    }
+
     return [
         {
             label: 'Global',
@@ -153,7 +181,7 @@ const shortcutGroups = computed(() => {
             shortcuts: [
                 { keys: [mod, '↵'], description: 'Send message' },
                 { keys: ['@'], description: 'Insert file path (after a space or at start)' },
-                { keys: ['/'], description: 'Slash commands (at start of input)' },
+                ...commandShortcuts,
                 { keys: ['!'], description: 'Message history (at start of input)' },
                 { keys: ['PageUp'], description: 'Message history (cursor on first line)' },
             ]

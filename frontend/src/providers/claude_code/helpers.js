@@ -20,10 +20,10 @@ function formatRetirementDate(isoDate) {
     })
 }
 
-// Claude CLI's built-in slash commands. Hardcoded here because the CLI
-// never exposes the list programmatically; entries are sourced from the
-// CLI documentation.
-const BUILTIN_SLASH_COMMANDS = [
+// Claude CLI's built-in commands (invoked with ``/``). Hardcoded here because
+// the CLI never exposes the list programmatically; entries are sourced from
+// the CLI documentation. Surface order matches the CLI's own.
+const BUILTIN_COMMANDS = [
     { name: 'compact', plugin_name: null, source: 'builtin', is_global: true, description: 'Clear conversation history but keep a summary in context', argument_hint: '[instructions for summarization]' },
     { name: 'cost', plugin_name: null, source: 'builtin', is_global: true, description: 'Show the cost of the current session', argument_hint: null },
     { name: 'context', plugin_name: null, source: 'builtin', is_global: true, description: 'Show the current context window usage', argument_hint: null },
@@ -152,8 +152,12 @@ export class ClaudeCodeHelpers extends BaseProviderHelpers {
         return useClaudeCodeStore().authenticated !== false
     }
 
-    getBuiltInSlashCommands() {
-        return BUILTIN_SLASH_COMMANDS
+    getCommandActivationChars() {
+        return ['/']
+    }
+
+    getBuiltInCommands(activationChar) {
+        return activationChar === '/' ? BUILTIN_COMMANDS : []
     }
 
     buildOptimisticUserMessageContent(text, attachments) {

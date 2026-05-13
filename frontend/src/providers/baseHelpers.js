@@ -21,11 +21,25 @@ export class BaseProviderHelpers {
     }
 
     /**
-     * Built-in slash commands provided by the provider's runtime/CLI.
-     * Returned items are merged with the user-defined commands fetched
-     * from the backend by the slash command picker. Default: no built-ins.
+     * Activation prefixes this provider supports, in the order the snippets
+     * bar should render their buttons. Each char drives one ``open-command``
+     * button and one ``/api/projects/<id>/commands/?activation_char=<char>``
+     * fetch when the picker opens. Providers that don't expose a command
+     * vocabulary return ``[]`` (default). For example Claude Code returns
+     * ``['/']``; Codex will eventually return ``['/', '$']``.
      */
-    getBuiltInSlashCommands() {
+    getCommandActivationChars() {
+        return []
+    }
+
+    /**
+     * Built-in commands hardcoded by the provider's runtime/CLI for a given
+     * activation prefix. Merged with the user-defined commands fetched from
+     * the backend by the picker. The ``activationChar`` argument lets a
+     * provider that exposes several prefixes (e.g. Codex's ``/`` and ``$``)
+     * return a different list per prefix. Default: no built-ins.
+     */
+    getBuiltInCommands(/* activationChar */) {
         return []
     }
 

@@ -1024,21 +1024,25 @@ class SessionCron(models.Model):
         )
 
 
-class SlashCommandSource(models.TextChoices):
-    """Origin of a slash command."""
+class CommandSource(models.TextChoices):
+    """Origin of a command."""
     COMMANDS_DIR = "commands_dir", "Commands directory"
     SKILLS_DIR = "skills_dir", "Skills directory"
     PLUGIN = "plugin", "Plugin"
 
 
-class SlashCommand(models.Model):
-    """One slash command discovered for a given backend provider.
+class Command(models.Model):
+    """One command discovered for a given backend provider.
 
     Each provider runs its own discovery / sync task — typically scanning
     user-level, project-level, and plugin sources on disk — and writes
     its findings here. Rows scope to ``provider`` so two providers can
-    expose the same ``name`` (e.g. ``/commit``) without colliding, and so
-    each provider's task only touches its own subset.
+    expose the same ``name`` without colliding, and so each provider's
+    task only touches its own subset.
+
+    The ``activation_char`` field captures the prefix the user types to
+    invoke the command (e.g. ``/`` for Claude Code; Codex supports both
+    ``/`` and ``$``).
 
     Commands with ``project=None`` are global (available for all projects
     of that provider).
@@ -1048,12 +1052,13 @@ class SlashCommand(models.Model):
     project = models.ForeignKey(
         Project,
         on_delete=models.CASCADE,
-        related_name="slash_commands",
+        related_name="commands",
         null=True,
         blank=True,  # NULL = global (available for all projects)
     )
     name = models.CharField(max_length=200)  # e.g. "commit", "superpowers:brainstorming"
-    source = models.CharField(max_length=20, choices=SlashCommandSource.choices)
+    activation_char = models.CharField(max_length=1)  # Prefix character used to invoke the command (e.g. "/" or "$")
+    source = models.CharField(max_length=20, choices=CommandSource.choices)
     plugin_name = models.CharField(max_length=100, null=True, blank=True)  # e.g. "superpowers" (when source=plugin)
     description = models.TextField()
     argument_hint = models.CharField(max_length=200, null=True, blank=True)  # e.g. "[review-aspects]"
@@ -1061,10 +1066,11 @@ class SlashCommand(models.Model):
     class Meta:
         indexes = [
             # Leftmost-prefix on ``provider`` so the per-provider sync
-            # task and the per-project lookup both hit the index.
-            models.Index(fields=["provider", "project", "name"], name="idx_slash_prov_proj_name"),
+            # task hits it on its own, and the API lookup also hits the
+            # full triple ``(provider, activation_char, project)``.
+            models.Index(fields=["provider", "activation_char", "project"], name="idx_command_prov_act_proj"),
         ]
 
     def __str__(self):
         scope = self.project_id or "global"
-        return f"[{self.provider}] /{self.name} ({scope})"
+        return f"[{self.provider}] {self.activation_char}{self.name} ({scope})"

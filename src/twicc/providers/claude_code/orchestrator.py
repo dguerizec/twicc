@@ -3,7 +3,7 @@ Claude Code provider orchestrator.
 
 Owns the lifecycle of every async/background task that belongs to the Claude
 Code provider: initial JSONL sync, sessions watcher, background metadata
-compute, auth/usage/statuspage/slash-commands polling, model retirement,
+compute, auth/usage/statuspage/commands polling, model retirement,
 cron restart, original file cache cleanup, and the ClaudeCodeAgentManager
 that wraps the Claude Agent SDK.
 
@@ -45,9 +45,9 @@ from twicc.providers.claude_code.model_retirement_task import (
     stop_model_retirement_task,
 )
 from twicc.providers.claude_code.sessions_watcher import get_watcher
-from twicc.providers.claude_code.slash_commands_task import (
-    start_slash_commands_task,
-    stop_slash_commands_task,
+from twicc.providers.claude_code.commands_task import (
+    start_commands_task,
+    stop_commands_task,
 )
 from twicc.providers.claude_code.statuspage_task import start_statuspage_task, stop_statuspage_task
 from twicc.providers.claude_code.usage_task import start_usage_sync_task, stop_usage_sync_task
@@ -93,7 +93,7 @@ class ClaudeCodeOrchestrator(BaseOrchestrator):
 
     Task dependency graph (started by ``start()``):
 
-    - initial_sync, usage_sync, auth_check, statuspage, slash_commands,
+    - initial_sync, usage_sync, auth_check, statuspage, commands,
       original_file_cache_cleanup, model_retirement: start immediately.
     - watcher: starts after initial_sync **and** after the CLI has
       initialized the global search index (so the watcher can write into
@@ -132,7 +132,7 @@ class ClaudeCodeOrchestrator(BaseOrchestrator):
         self._usage_sync_task: asyncio.Task | None = None
         self._auth_check_task: asyncio.Task | None = None
         self._statuspage_task: asyncio.Task | None = None
-        self._slash_commands_task: asyncio.Task | None = None
+        self._commands_task: asyncio.Task | None = None
         self._original_file_cache_task: asyncio.Task | None = None
         self._retirement_task: asyncio.Task | None = None
 
@@ -169,7 +169,7 @@ class ClaudeCodeOrchestrator(BaseOrchestrator):
         self._usage_sync_task = self._create_task(start_usage_sync_task())
         self._auth_check_task = self._create_task(start_auth_task())
         self._statuspage_task = self._create_task(start_statuspage_task())
-        self._slash_commands_task = self._create_task(start_slash_commands_task())
+        self._commands_task = self._create_task(start_commands_task())
         self._original_file_cache_task = self._create_task(start_original_file_cache_cleanup())
         self._retirement_task = self._create_task(start_model_retirement_task())
 
@@ -225,11 +225,11 @@ class ClaudeCodeOrchestrator(BaseOrchestrator):
             stop_statuspage_task()
             await _cancel_task(self._statuspage_task, "Statuspage task")
 
-        # Slash commands
-        if self._slash_commands_task is not None:
-            logger.info("Stopping slash commands task...")
-            stop_slash_commands_task()
-            await _cancel_task(self._slash_commands_task, "Slash commands task")
+        # Commands
+        if self._commands_task is not None:
+            logger.info("Stopping commands task...")
+            stop_commands_task()
+            await _cancel_task(self._commands_task, "Commands task")
 
         # Original file cache cleanup
         if self._original_file_cache_task is not None:

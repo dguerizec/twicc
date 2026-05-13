@@ -1,9 +1,15 @@
 <script setup>
 /**
- * SlashCommandPickerPopup - A popup for selecting slash commands triggered by /.
+ * CommandPickerPopup - A popup for selecting a provider command triggered by
+ * an activation character (e.g. ``/`` for Claude Code; Codex will eventually
+ * also expose ``$``). One instance is mounted per ``MessageInput`` and reused
+ * across activation chars by swapping the ``activationChar`` prop — the
+ * consumer sets it to whatever char triggered the open and the popup fetches
+ * and inserts using that char.
  *
- * Opens a wa-popup anchored to a given element, showing a filterable list
- * of available slash commands fetched from the backend API.
+ * Opens a wa-popup anchored to a given element, showing a filterable list of
+ * available commands fetched from the backend API for the current
+ * (provider, activationChar) pair.
  *
  * Keyboard navigation follows the same two-handler pattern as FileTreePanel:
  * - The search input handles ArrowDown/PageDown to move focus into the list
@@ -12,6 +18,11 @@
  *
  * Props:
  *   projectId: current project id
+ *   provider: provider key of the current session (may be ``null`` briefly)
+ *   activationChar: prefix char the popup was opened for (e.g. "/"). Used as
+ *                   the backend query param, as the leading char stripped
+ *                   from the search field, and as the prefix inserted with
+ *                   the selected command.
  *   anchorId: id of the element to anchor the popup to
  *
  * Events:
@@ -33,6 +44,13 @@ const props = defineProps({
     // eagerly via Teleport but ``open()`` is gated by the consumer, which
     // only triggers it once a provider is known.
     provider: {
+        type: String,
+        default: null,
+    },
+    // Activation prefix the popup is opened for. The consumer flips this
+    // prop just before calling ``open()``; the rest of the lifecycle reads
+    // it through the prop directly.
+    activationChar: {
         type: String,
         default: null,
     },
@@ -94,14 +112,14 @@ const filteredCommands = computed(() => {
 // ─── API fetch ────────────────────────────────────────────────────────────
 
 async function fetchCommands() {
-    if (!props.provider) {
+    if (!props.provider || !props.activationChar) {
         allCommands.value = []
         return
     }
     loading.value = true
     error.value = null
     try {
-        const res = await apiFetch(`/api/projects/${props.projectId}/slash-commands/?provider=${encodeURIComponent(props.provider)}`)
+        const res = await apiFetch(`/api/projects/${props.projectId}/commands/?provider=${encodeURIComponent(props.provider)}&activation_char=${encodeURIComponent(props.activationChar)}`)
         if (!res.ok) {
             const data = await res.json()
             error.value = data.error || `HTTP ${res.status}`
@@ -110,7 +128,7 @@ async function fetchCommands() {
         }
         const data = await res.json()
         const helpers = getProviderHelpers(props.provider)
-        const builtins = helpers ? helpers.getBuiltInSlashCommands() : []
+        const builtins = helpers ? helpers.getBuiltInCommands(props.activationChar) : []
         const all = [...builtins, ...(data.commands || [])]
         all.sort((a, b) => a.name.localeCompare(b.name))
         allCommands.value = all
@@ -163,18 +181,21 @@ function focusSearchInput() {
 
 function onSearchInput(event) {
     const raw = event.target.value
-    // Strip leading "/" — the user already typed it to open the popup
-    searchQuery.value = raw.startsWith('/') ? raw.slice(1) : raw
+    // Strip the leading activation char — the user already typed it to open
+    // the popup, so it's not part of the filter the picker matches against.
+    const prefix = props.activationChar
+    searchQuery.value = prefix && raw.startsWith(prefix) ? raw.slice(prefix.length) : raw
 }
 
 // ─── Selection ────────────────────────────────────────────────────────────
 
 function selectCommand(cmd) {
+    const prefix = props.activationChar ?? ''
     let text
     if (cmd.plugin_name) {
-        text = `/${cmd.plugin_name}:${cmd.name} `
+        text = `${prefix}${cmd.plugin_name}:${cmd.name} `
     } else {
-        text = `/${cmd.name} `
+        text = `${prefix}${cmd.name} `
     }
     emit('select', text)
     close()
@@ -420,7 +441,7 @@ defineExpose({ open, close, isOpen })
                         @mouseenter="activeIndex = index"
                     >
                         <div class="item-header">
-                            <span class="cmd-name">/{{ cmd.name }}</span>
+                            <span class="cmd-name">{{ activationChar }}{{ cmd.name }}</span>
                             <span v-if="cmd.argument_hint" class="cmd-hint">{{ cmd.argument_hint }}</span>
                             <span class="cmd-tag">({{ commandTag(cmd) }})</span>
                         </div>

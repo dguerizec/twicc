@@ -1,5 +1,5 @@
 """
-Slash command discovery from the filesystem.
+Command discovery from the filesystem.
 
 Scans user-level, project-level, and plugin sources for both legacy commands
 (.claude/commands/*.md) and skills (.claude/skills/<name>/SKILL.md).
@@ -117,7 +117,7 @@ def _is_user_invocable(fm: dict) -> bool:
 
 
 class DiscoveredCommand(NamedTuple):
-    """A slash command discovered from the filesystem."""
+    """A command discovered from the filesystem."""
     name: str
     source: str  # "commands_dir", "skills_dir", "plugin"
     plugin_name: str | None
@@ -444,7 +444,7 @@ def _walk_up_to_home(directory: Path) -> list[Path]:
 
 
 def discover_global_commands(plugin_entries: list[PluginEntry] | None = None) -> list[DiscoveredCommand]:
-    """Discover all global (user-level) slash commands.
+    """Discover all global (user-level) commands.
 
     Includes:
     - User commands from ~/.claude/commands/
@@ -472,7 +472,7 @@ def discover_project_commands(
     plugin_entries: list[PluginEntry] | None = None,
     scanned_dirs: set[Path] | None = None,
 ) -> list[DiscoveredCommand]:
-    """Discover slash commands specific to a project.
+    """Discover commands specific to a project.
 
     Includes:
     - Project commands/skills from .claude/ directories (walking up from project_directory to HOME)

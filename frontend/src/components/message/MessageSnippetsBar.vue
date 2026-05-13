@@ -4,6 +4,7 @@
 import { useMessageSnippetsStore } from '../../stores/messageSnippets'
 import { useDataStore } from '../../stores/data'
 import { useWorkspacesStore } from '../../stores/workspaces'
+import { getActivationCharMetadata } from '../../utils/commandActivation'
 import AppTooltip from '../ui/AppTooltip.vue'
 
 defineProps({
@@ -17,8 +18,17 @@ defineProps({
         type: Boolean,
         default: false,
     },
-    /** Whether the slash command button is enabled (disabled when textarea is not empty). */
-    canOpenSlash: {
+    /**
+     * Activation chars exposed by the current provider's command vocabulary.
+     * The bar renders one button per char (icon + tooltip resolved from
+     * ``commandActivation.js``); click emits ``open-command`` with the char.
+     */
+    activationChars: {
+        type: Array,
+        default: () => [],
+    },
+    /** Whether the command-picker buttons are enabled (disabled when textarea is not empty). */
+    canOpenCommand: {
         type: Boolean,
         default: true,
     },
@@ -29,9 +39,21 @@ const emit = defineEmits([
     'snippet-disabled-press',
     'manage-snippets',
     'open-history',
-    'open-slash',
+    'open-command',
     'open-at',
 ])
+
+// Lookup helper exposed to the template — keeps the v-for tidy.
+function activationMeta(char) {
+    return getActivationCharMetadata(char)
+}
+
+// Stable, CSS-class-safe id for the per-char button (used for the AppTooltip
+// ``for`` binding when the button is disabled). The codepoint avoids any
+// trouble with special chars like ``/`` or ``$`` in DOM ids.
+function commandBtnDisabledId(char) {
+    return `command-btn-disabled-${char.charCodeAt(0)}`
+}
 
 const messageSnippetsStore = useMessageSnippetsStore()
 const dataStore = useDataStore()
@@ -78,18 +100,22 @@ function handleSnippetClick(snippet) {
         >
             <wa-icon name="arrow-up"></wa-icon>
         </button>
-        <button
-            :id="canOpenSlash ? undefined : 'slash-btn-disabled'"
-            class="snippet-btn slash-btn"
-            :class="{ 'snippet-disabled': !canOpenSlash }"
-            :title="canOpenSlash ? 'Insert a slash command' : undefined"
-            @click="canOpenSlash && emit('open-slash')"
-        >
-            <wa-icon name="slash"></wa-icon>
-        </button>
-        <AppTooltip v-if="!canOpenSlash" for="slash-btn-disabled">
-            Clear the message first to use a slash command
-        </AppTooltip>
+        <template v-for="char in activationChars" :key="char">
+            <template v-if="activationMeta(char)">
+                <button
+                    :id="canOpenCommand ? undefined : commandBtnDisabledId(char)"
+                    class="snippet-btn command-btn"
+                    :class="{ 'snippet-disabled': !canOpenCommand }"
+                    :title="canOpenCommand ? activationMeta(char).tooltip : undefined"
+                    @click="canOpenCommand && emit('open-command', char)"
+                >
+                    <wa-icon :name="activationMeta(char).icon" :style="activationMeta(char).iconStyle"></wa-icon>
+                </button>
+                <AppTooltip v-if="!canOpenCommand" :for="commandBtnDisabledId(char)">
+                    Clear the message first to use a command
+                </AppTooltip>
+            </template>
+        </template>
         <button
             class="snippet-btn at-btn"
             title="Insert a file path"
@@ -284,16 +310,11 @@ button {
     align-self: center;
 }
 
-/* ── Icon-only buttons (history, slash, at) ──────────────────────── */
+/* ── Icon-only buttons (history, command, at) ────────────────────── */
 .snippet-btn.history-btn,
-.snippet-btn.slash-btn,
+.snippet-btn.command-btn,
 .snippet-btn.at-btn {
     padding: 0 var(--wa-space-2xs);
-}
-
-/* Mirror the "slash" icon since Web Awesome free tier lacks "slash-forward". */
-.snippet-btn.slash-btn wa-icon {
-    transform: scaleX(-1);
 }
 
 .history-divider {

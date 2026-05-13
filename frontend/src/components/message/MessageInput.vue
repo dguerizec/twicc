@@ -25,7 +25,7 @@ import { getParsedContent } from '../../utils/parsedContent'
 import MediaThumbnailGroup from '../media/MediaThumbnailGroup.vue'
 import AppTooltip from '../ui/AppTooltip.vue'
 import FilePickerPopup from '../files/FilePickerPopup.vue'
-import SlashCommandPickerPopup from './SlashCommandPickerPopup.vue'
+import CommandPickerPopup from './CommandPickerPopup.vue'
 import MessageHistoryPickerPopup from './MessageHistoryPickerPopup.vue'
 import MessageSnippetsBar from './MessageSnippetsBar.vue'
 import MessageSnippetsDialog from './MessageSnippetsDialog.vue'
@@ -101,6 +101,15 @@ const attachmentSupport = computed(() => {
 })
 const acceptedMimeTypesString = computed(() => attachmentSupport.value.acceptedMimeTypes.join(','))
 const canAttachAnything = computed(() => attachmentSupport.value.images || attachmentSupport.value.documents)
+
+// Activation chars the current provider exposes for its command picker
+// (e.g. ``['/']`` for Claude Code; ``['/', '$']`` for Codex when both
+// land). Drives both the typed-trigger detection in ``onInput`` and the
+// snippets-bar buttons. Falls back to ``[]`` when no provider is set yet.
+const commandActivationChars = computed(() => {
+    const helpers = getProviderHelpers(session.value?.provider)
+    return helpers?.getCommandActivationChars() ?? []
+})
 const attachTooltipLabel = computed(() => {
     const { images, documents } = attachmentSupport.value
     if (images && documents) return 'Attach files (images, PDF, text)'
@@ -128,12 +137,15 @@ const atButtonMode = ref(false)     // true when opened via snippets bar button 
 const atInsertPosition = ref(null)  // cursor position where the file path will be inserted (button mode)
 let atLastCloseTime = 0             // timestamp of last close (to prevent reopen on same click)
 
-// Slash command picker popup state (/ at start)
-const slashPickerRef = ref(null)
-const slashCursorPosition = ref(null)  // cursor position right after the '/' character (typed-trigger mode)
-const slashMirroredLength = ref(0)     // length of filter text mirrored into textarea after '/' (typed-trigger mode)
-const slashButtonMode = ref(false)     // true when opened via snippets bar button (no trigger char inserted)
-let slashLastCloseTime = 0             // timestamp of last close (to prevent reopen on same click)
+// Command picker popup state — opens when the user either types one of the
+// provider's activation chars at position 0 or clicks the matching snippets-
+// bar button. The active char is the prefix the picker fetches/inserts with.
+const commandPickerRef = ref(null)
+const commandCursorPosition = ref(null)  // cursor position right after the activation char (typed-trigger mode)
+const commandMirroredLength = ref(0)     // length of filter text mirrored into textarea after the activation char (typed-trigger mode)
+const commandButtonMode = ref(false)     // true when opened via snippets bar button (no trigger char inserted)
+const activeCommandChar = ref(null)      // activation char the picker is currently opened with (e.g. '/')
+let commandLastCloseTime = 0             // timestamp of last close (to prevent reopen on same click)
 
 // Message history picker popup state (! at start, or PageUp on first line)
 const historyPickerRef = ref(null)
@@ -379,7 +391,7 @@ function adjustTextareaHeight() {
 /**
  * Handle textarea input event.
  * Detects '@' insertion to trigger the file picker popup.
- * Detects '/' at position 0 to trigger the slash command picker popup.
+ * Detects a provider activation char at position 0 to trigger the command picker popup.
  * Also notifies the server that the user is actively drafting (debounced).
  */
 function onInput(event) {
@@ -399,11 +411,17 @@ function onInput(event) {
             nextTick(() => filePickerRef.value?.open())
         }
 
-        // Detect '/' at position 0 (first character of the message) to trigger slash command picker
-        if (!slashPickerRef.value?.isOpen && cursorPos === 1 && newText[0] === '/') {
-            slashCursorPosition.value = cursorPos  // right after the '/'
-            slashMirroredLength.value = 0
-            nextTick(() => slashPickerRef.value?.open())
+        // Detect any of the provider's activation chars at position 0 (first
+        // character of the message) to trigger the command picker. The first
+        // matching char wins (providers list them in priority order).
+        if (!commandPickerRef.value?.isOpen && cursorPos === 1) {
+            const triggered = commandActivationChars.value.find(c => newText[0] === c)
+            if (triggered) {
+                activeCommandChar.value = triggered
+                commandCursorPosition.value = cursorPos  // right after the activation char
+                commandMirroredLength.value = 0
+                nextTick(() => commandPickerRef.value?.open())
+            }
         }
 
         // Detect '!' at position 0 (first character of the message) to trigger message history picker
@@ -469,13 +487,13 @@ function onFilePickerFilterChange(filterText) {
 }
 
 /**
- * Handle filter text changes from the slash command picker popup.
- * Mirrors the typed filter text into the textarea right after the '/'.
+ * Handle filter text changes from the command picker popup.
+ * Mirrors the typed filter text into the textarea right after the activation char.
  * In button mode, no mirroring — the filter stays inside the popup.
  */
-function onSlashPickerFilterChange(filterText) {
-    if (slashButtonMode.value) return
-    mirrorFilterToTextarea(slashCursorPosition.value, slashMirroredLength, filterText)
+function onCommandPickerFilterChange(filterText) {
+    if (commandButtonMode.value) return
+    mirrorFilterToTextarea(commandCursorPosition.value, commandMirroredLength, filterText)
 }
 
 /**
@@ -571,15 +589,16 @@ function onFilePickerClose() {
 }
 
 /**
- * Handle slash command selection from the slash command picker popup.
+ * Handle command selection from the command picker popup.
  * Replaces the entire textarea content with the selected command text.
  * (The button is only enabled when textarea is empty, so typed-trigger and
  * button-mode behave identically here: the final textarea is just the command.)
  */
-async function onSlashCommandSelect(commandText) {
-    slashCursorPosition.value = null
-    slashMirroredLength.value = 0
-    slashButtonMode.value = false
+async function onCommandSelect(commandText) {
+    commandCursorPosition.value = null
+    commandMirroredLength.value = 0
+    commandButtonMode.value = false
+    activeCommandChar.value = null
     messageText.value = commandText
 
     // Force update the web component and inner textarea
@@ -599,18 +618,19 @@ async function onSlashCommandSelect(commandText) {
 }
 
 /**
- * Handle slash command picker popup close (without selection).
+ * Handle command picker popup close (without selection).
  * Returns focus to the textarea and positions the cursor after the
- * trigger character + any filter text that was mirrored.
+ * activation char + any filter text that was mirrored.
  */
-function onSlashCommandPickerClose() {
-    slashLastCloseTime = Date.now()
-    const isButtonMode = slashButtonMode.value
-    const pos = slashCursorPosition.value
-    const mirrorLen = slashMirroredLength.value
-    slashCursorPosition.value = null
-    slashMirroredLength.value = 0
-    slashButtonMode.value = false
+function onCommandPickerClose() {
+    commandLastCloseTime = Date.now()
+    const isButtonMode = commandButtonMode.value
+    const pos = commandCursorPosition.value
+    const mirrorLen = commandMirroredLength.value
+    commandCursorPosition.value = null
+    commandMirroredLength.value = 0
+    commandButtonMode.value = false
+    activeCommandChar.value = null
 
     // Button mode: nothing to restore — textarea was never modified
     if (isButtonMode) {
@@ -781,25 +801,30 @@ function openHistoryFromButton() {
 }
 
 /**
- * Open the slash command picker from the snippets bar button.
- * Only available when the textarea is empty. Does NOT insert '/' in the
- * textarea — the trigger character is added only if the user actually
- * selects a command. If the popup is already open, clicking elsewhere
- * closes it via the popup's click-outside handler; the 300ms guard
- * prevents reopening on the same click.
+ * Open the command picker from the snippets bar button.
+ * Only available when the textarea is empty. Does NOT insert the activation
+ * char in the textarea — the prefix is added only if the user actually selects
+ * a command. If the popup is already open, clicking elsewhere closes it via
+ * the popup's click-outside handler; the 300ms guard prevents reopening on
+ * the same click.
+ *
+ * @param {string} char - Activation char the button was clicked for. The
+ *   picker uses it as the backend ``activation_char`` query param and as the
+ *   prefix it inserts with the selected command.
  */
-async function openSlashFromButton() {
+async function openCommandFromButton(char) {
     // If the picker just closed (via click-outside from this same click), skip reopening
-    if (Date.now() - slashLastCloseTime < 300) return
-    if (slashPickerRef.value?.isOpen) return
+    if (Date.now() - commandLastCloseTime < 300) return
+    if (commandPickerRef.value?.isOpen) return
     // Guard: button should already be disabled when not empty, but double-check
     if (messageText.value.length > 0) return
 
-    slashButtonMode.value = true
-    slashCursorPosition.value = null
-    slashMirroredLength.value = 0
+    activeCommandChar.value = char
+    commandButtonMode.value = true
+    commandCursorPosition.value = null
+    commandMirroredLength.value = 0
     await nextTick()
-    slashPickerRef.value?.open()
+    commandPickerRef.value?.open()
 }
 
 /**
@@ -1277,15 +1302,16 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
                 @filter-change="onFilePickerFilterChange"
             />
 
-            <!-- Slash command picker popup triggered by / at start -->
-            <SlashCommandPickerPopup
-                ref="slashPickerRef"
+            <!-- Command picker popup, opened on a provider activation char (e.g. '/') -->
+            <CommandPickerPopup
+                ref="commandPickerRef"
                 :project-id="projectId"
                 :provider="session?.provider"
+                :activation-char="activeCommandChar"
                 :anchor-id="textareaAnchorId"
-                @select="onSlashCommandSelect"
-                @close="onSlashCommandPickerClose"
-                @filter-change="onSlashPickerFilterChange"
+                @select="onCommandSelect"
+                @close="onCommandPickerClose"
+                @filter-change="onCommandPickerFilterChange"
             />
 
             <!-- Message history picker popup triggered by ! at start -->
@@ -1305,12 +1331,13 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
         <MessageSnippetsBar
             :snippets="snippetsForProject"
             :show-history-button="!isDraft"
-            :can-open-slash="messageText.length === 0"
+            :activation-chars="commandActivationChars"
+            :can-open-command="messageText.length === 0"
             @snippet-press="handleSnippetPress"
             @snippet-disabled-press="handleSnippetDisabledPress"
             @manage-snippets="openMessageSnippetsDialog"
             @open-history="openHistoryFromButton"
-            @open-slash="openSlashFromButton"
+            @open-command="openCommandFromButton"
             @open-at="openAtFromButton"
         />
 

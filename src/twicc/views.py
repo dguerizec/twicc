@@ -14,7 +14,7 @@ import orjson
 
 from twicc import search
 from twicc.core.enums import ItemKind, Provider
-from twicc.core.models import AgentLink, DailyActivity, PinMode, Project, Session, SessionItem, SessionType, SlashCommand, ToolResultLink, UsageSnapshot, WeeklyActivity
+from twicc.core.models import AgentLink, Command, DailyActivity, PinMode, Project, Session, SessionItem, SessionType, ToolResultLink, UsageSnapshot, WeeklyActivity
 from twicc.core.serializers import (
     serialize_project,
     serialize_session,
@@ -339,14 +339,16 @@ def project_detail(request, project_id):
     return JsonResponse(serialize_project(project))
 
 
-def slash_commands(request, project_id):
-    """GET /api/projects/<id>/slash-commands/?provider=<key> — slash commands for a project.
+def commands(request, project_id):
+    """GET /api/projects/<id>/commands/?provider=<key>&activation_char=<char> — commands for a project.
 
     Returns global commands (``project=NULL``) and project-specific
-    commands, sorted by name. The ``provider`` query parameter is
-    required: slash command sets are not interchangeable across
-    backends (each provider's CLI has its own command vocabulary), so
-    there is no implicit default.
+    commands, sorted by name. Both ``provider`` and ``activation_char``
+    query parameters are required: command sets are not interchangeable
+    across backends (each provider's CLI has its own command vocabulary),
+    and a single provider can expose multiple activation prefixes (e.g.
+    Codex uses both ``/`` and ``$``), so there is no implicit default
+    for either.
     """
     try:
         Project.objects.get(id=project_id)
@@ -361,11 +363,20 @@ def slash_commands(request, project_id):
     except ValueError:
         return JsonResponse({"error": f"Unknown provider {provider_str!r}."}, status=400)
 
+    activation_char = request.GET.get("activation_char")
+    if not activation_char:
+        return JsonResponse({"error": "activation_char is required."}, status=400)
+    if len(activation_char) != 1:
+        return JsonResponse(
+            {"error": "activation_char must be a single character."},
+            status=400,
+        )
+
     from django.db.models import Q
 
-    commands = (
-        SlashCommand.objects
-        .filter(provider=provider.value)
+    qs = (
+        Command.objects
+        .filter(provider=provider.value, activation_char=activation_char)
         .filter(Q(project__isnull=True) | Q(project_id=project_id))
         .order_by("name")
         .values("name", "plugin_name", "description", "argument_hint", "source", "project_id")
@@ -381,7 +392,7 @@ def slash_commands(request, project_id):
                 "source": cmd["source"],
                 "is_global": cmd["project_id"] is None,
             }
-            for cmd in commands
+            for cmd in qs
         ]
     })
 
