@@ -79,14 +79,19 @@ const FUNCTION_CALL_EXEC_TOOLS = new Set([
 // branches on this set to ``JSON.parse`` the wrapper and surface the
 // inner ``output`` as the body.
 //
-// Two members today:
+// Members today:
 //   - ``shell``: ``ShellHandler`` uses ``ToolEmitter::Shell { freeform: false }``
 //     which routes to ``format_exec_output_for_model_structured``.
 //   - ``local_shell_call``: ``LocalShellHandler`` uses the same emitter
 //     variant via ``run_exec_like(freeform=false)`` (``local_shell.rs:116``).
+//   - ``container.exec``: ``ContainerExecHandler`` calls
+//     ``run_exec_like(freeform=false)`` too — same output shape, same
+//     ``ShellToolCallParams`` arguments schema as ``shell``
+//     (``shell/container_exec.rs:62``).
 const STRUCTURED_JSON_OUTPUT_TOOLS = new Set([
     'shell',
     'local_shell_call',
+    'container.exec',
 ])
 
 // Subset of :data:`FUNCTION_CALL_EXEC_TOOLS` whose
@@ -168,6 +173,12 @@ const INPUT_OVERRIDES = {
         // ``string-code`` override renders it as a fenced bash block;
         // JsonHumanView passes the string through unchanged (no array
         // join needed, contrast with ``shell.command``).
+        command: { valueType: 'string-code', language: 'bash' },
+    },
+    'container.exec': {
+        // Legacy alias of ``shell`` — same ``ShellToolCallParams`` schema
+        // (``command`` is an argv array). JsonHumanView auto-joins the
+        // array when rendering as ``string-code``.
         command: { valueType: 'string-code', language: 'bash' },
     },
 }
@@ -256,6 +267,17 @@ const STRIPPED_INPUT_KEYS_BY_TOOL = {
         // has ``allow_login_shell`` enabled. Implementation detail,
         // not what the script does.
         'login',
+        'sandbox_permissions',
+        'justification',
+        'prefix_rule',
+        'additional_permissions',
+    ]),
+    // ``container.exec`` shares ``shell``'s ``ShellToolCallParams``
+    // schema and approval mechanism, so the stripped set mirrors
+    // ``shell`` 1:1.
+    'container.exec': new Set([
+        'workdir',
+        'timeout_ms',
         'sandbox_permissions',
         'justification',
         'prefix_rule',

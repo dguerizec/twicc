@@ -188,14 +188,18 @@ _NATIVE_TOOL_NAME_BY_SUB_TYPE = {
 # complete one-shot payload (cf. their handlers — they don't expose a
 # unified-exec process id to poll).
 #
-# ``container.exec`` is intentionally absent here pending an audit of
-# its wire output dialect.
 _SHELL_FAMILY_TOOLS = frozenset({
     "exec_command",
     "write_stdin",
     "shell",
     "shell_command",
     "local_shell_call",
+    # ``container.exec`` is a legacy alias of ``shell`` — same wire shape
+    # (function_call, ``ShellToolCallParams`` arguments) and same output
+    # path (``run_exec_like(freeform=false)`` ->
+    # ``format_exec_output_for_model_structured``). Hosted by
+    # ``ContainerExecHandler`` (``codex-rs/core/src/tools/handlers/shell/container_exec.rs``).
+    "container.exec",
 })
 
 # Function-call ``name`` values whose tool_use is bucketed as SYSTEM (no
