@@ -82,19 +82,13 @@ const PAGE_SIZE = 10
 
 // ─── Display tag ──────────────────────────────────────────────────────────
 // Builds the parenthesized tag shown next to the command name.
-// Examples: (built-in) — (superpowers, project) — (global command) — (project skill)
+// Examples: (built-in) — (superpowers plugin, project) — (global) — (project)
 
 function commandTag(cmd) {
+    if (cmd.is_builtin) return 'built-in'
     const scope = cmd.is_global ? 'global' : 'project'
-
-    if (cmd.source === 'builtin') return 'built-in'
-
-    if (cmd.plugin_name) {
-        return `${cmd.plugin_name} plugin, ${scope}`
-    }
-
-    const kind = cmd.source === 'commands_dir' ? 'command' : 'skill'
-    return `${scope} ${kind}`
+    if (cmd.plugin_name) return `${cmd.plugin_name} plugin, ${scope}`
+    return scope
 }
 
 // ─── Filtered commands ────────────────────────────────────────────────────

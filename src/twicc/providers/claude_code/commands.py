@@ -119,7 +119,6 @@ def _is_user_invocable(fm: dict) -> bool:
 class DiscoveredCommand(NamedTuple):
     """A command discovered from the filesystem."""
     name: str
-    source: str  # "commands_dir", "skills_dir", "plugin"
     plugin_name: str | None
     description: str
     argument_hint: str | None
@@ -162,7 +161,6 @@ def _scan_commands_dir(directory: Path) -> list[DiscoveredCommand]:
 
         results.append(DiscoveredCommand(
             name=cmd_name,
-            source="commands_dir",
             plugin_name=None,
             description=description,
             argument_hint=argument_hint,
@@ -212,7 +210,6 @@ def _scan_skills_dir(directory: Path) -> list[DiscoveredCommand]:
 
         results.append(DiscoveredCommand(
             name=skill_name,
-            source="skills_dir",
             plugin_name=None,
             description=description,
             argument_hint=argument_hint,
@@ -280,7 +277,6 @@ def _scan_single_skill_dir(skill_dir: Path, plugin_name: str) -> DiscoveredComma
 
     return DiscoveredCommand(
         name=skill_name,
-        source="plugin",
         plugin_name=plugin_name,
         description=description,
         argument_hint=argument_hint,
@@ -329,10 +325,7 @@ def _scan_plugin(plugin_name: str, install_path: Path) -> list[DiscoveredCommand
         skills_dir = install_path / "skills"
         if skills_dir.is_dir():
             for skill in _scan_skills_dir(skills_dir):
-                results.append(skill._replace(
-                    source="plugin",
-                    plugin_name=plugin_name,
-                ))
+                results.append(skill._replace(plugin_name=plugin_name))
 
     # Determine which directories to scan for commands
     manifest_commands = manifest.get("commands") if manifest else None
@@ -344,19 +337,13 @@ def _scan_plugin(plugin_name: str, install_path: Path) -> list[DiscoveredCommand
             cmd_dir = (install_path / cmd_path_str).resolve()
             if cmd_dir.is_dir():
                 for cmd in _scan_commands_dir(cmd_dir):
-                    results.append(cmd._replace(
-                        source="plugin",
-                        plugin_name=plugin_name,
-                    ))
+                    results.append(cmd._replace(plugin_name=plugin_name))
     else:
         # Fallback: scan commands/ directory at plugin root
         commands_dir = install_path / "commands"
         if commands_dir.is_dir():
             for cmd in _scan_commands_dir(commands_dir):
-                results.append(cmd._replace(
-                    source="plugin",
-                    plugin_name=plugin_name,
-                ))
+                results.append(cmd._replace(plugin_name=plugin_name))
 
     return results
 

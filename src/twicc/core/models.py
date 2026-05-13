@@ -1024,13 +1024,6 @@ class SessionCron(models.Model):
         )
 
 
-class CommandSource(models.TextChoices):
-    """Origin of a command."""
-    COMMANDS_DIR = "commands_dir", "Commands directory"
-    SKILLS_DIR = "skills_dir", "Skills directory"
-    PLUGIN = "plugin", "Plugin"
-
-
 class Command(models.Model):
     """One command discovered for a given backend provider.
 
@@ -1058,8 +1051,7 @@ class Command(models.Model):
     )
     name = models.CharField(max_length=200)  # e.g. "commit", "superpowers:brainstorming"
     activation_char = models.CharField(max_length=1)  # Prefix character used to invoke the command (e.g. "/" or "$")
-    source = models.CharField(max_length=20, choices=CommandSource.choices)
-    plugin_name = models.CharField(max_length=100, null=True, blank=True)  # e.g. "superpowers" (when source=plugin)
+    plugin_name = models.CharField(max_length=100, null=True, blank=True)  # e.g. "superpowers" when shipped by a plugin
     description = models.TextField()
     argument_hint = models.CharField(max_length=200, null=True, blank=True)  # e.g. "[review-aspects]"
 

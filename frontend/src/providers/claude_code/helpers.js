@@ -23,12 +23,16 @@ function formatRetirementDate(isoDate) {
 // Claude CLI's built-in commands (invoked with ``/``). Hardcoded here because
 // the CLI never exposes the list programmatically; entries are sourced from
 // the CLI documentation. Surface order matches the CLI's own.
+//
+// ``is_builtin`` is a frontend-only sentinel the picker tag uses to render
+// the ``(built-in)`` label — these rows never reach the backend, so it
+// doesn't need a matching column on ``Command``.
 const BUILTIN_COMMANDS = [
-    { name: 'compact', plugin_name: null, source: 'builtin', is_global: true, description: 'Clear conversation history but keep a summary in context', argument_hint: '[instructions for summarization]' },
-    { name: 'cost', plugin_name: null, source: 'builtin', is_global: true, description: 'Show the cost of the current session', argument_hint: null },
-    { name: 'context', plugin_name: null, source: 'builtin', is_global: true, description: 'Show the current context window usage', argument_hint: null },
-    { name: 'init', plugin_name: null, source: 'builtin', is_global: true, description: 'Initialize a new CLAUDE.md file with codebase documentation', argument_hint: null },
-    { name: 'loop', plugin_name: null, source: 'builtin', is_global: true, description: "Run a prompt or slash command on a recurring interval until the session ends (e.g. /loop 5m /foo, defaults to 10m)", argument_hint: '[interval] [command or prompt]' },
+    { name: 'compact', plugin_name: null, is_builtin: true, is_global: true, description: 'Clear conversation history but keep a summary in context', argument_hint: '[instructions for summarization]' },
+    { name: 'cost', plugin_name: null, is_builtin: true, is_global: true, description: 'Show the cost of the current session', argument_hint: null },
+    { name: 'context', plugin_name: null, is_builtin: true, is_global: true, description: 'Show the current context window usage', argument_hint: null },
+    { name: 'init', plugin_name: null, is_builtin: true, is_global: true, description: 'Initialize a new CLAUDE.md file with codebase documentation', argument_hint: null },
+    { name: 'loop', plugin_name: null, is_builtin: true, is_global: true, description: "Run a prompt or slash command on a recurring interval until the session ends (e.g. /loop 5m /foo, defaults to 10m)", argument_hint: '[interval] [command or prompt]' },
 ]
 
 // Map of usage-file field names (cross-provider) → Claude Code store

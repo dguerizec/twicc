@@ -100,7 +100,6 @@ def _sync_to_database() -> dict[str, int]:
         # First occurrence wins (avoids duplicates from multiple plugin sources)
         if key not in desired:
             desired[key] = {
-                "source": cmd.source,
                 "plugin_name": cmd.plugin_name,
                 "description": cmd.description,
                 "argument_hint": cmd.argument_hint,
@@ -111,7 +110,6 @@ def _sync_to_database() -> dict[str, int]:
             key = (project_id, cmd.name)
             if key not in desired:
                 desired[key] = {
-                    "source": cmd.source,
                     "plugin_name": cmd.plugin_name,
                     "description": cmd.description,
                     "argument_hint": cmd.argument_hint,
@@ -126,7 +124,7 @@ def _sync_to_database() -> dict[str, int]:
 
     # --- 5. Diff and apply ---
     # Fields to compare for updates
-    compare_fields = ("source", "plugin_name", "description", "argument_hint")
+    compare_fields = ("plugin_name", "description", "argument_hint")
 
     # Delete commands no longer discovered
     to_delete_ids = []
