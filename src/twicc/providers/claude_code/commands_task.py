@@ -45,7 +45,8 @@ def _sync_to_database() -> dict[str, int]:
     Returns a dict with keys: created, updated, deleted, unchanged.
     """
     from twicc.core.enums import Provider
-    from twicc.core.models import Project, Command
+    from twicc.core.models import Project
+    from twicc.providers.commands_sync import apply_desired_commands
     from .commands import (
         DiscoveredCommand,
         PluginEntry,
@@ -55,8 +56,6 @@ def _sync_to_database() -> dict[str, int]:
     )
 
     cc_provider = Provider.CLAUDE_CODE.value
-
-    stats = {"created": 0, "updated": 0, "deleted": 0, "unchanged": 0}
 
     plugin_entries = read_plugin_entries()
 
@@ -93,6 +92,9 @@ def _sync_to_database() -> dict[str, int]:
             project_commands[project_id] = cmds
 
     # --- 3. Build the desired state: (project_id_or_None, name) -> fields ---
+    # Claude Code's hardcoded CLI built-ins live in the frontend
+    # ``BUILTIN_COMMANDS`` constant and never reach this table, so every
+    # row this task writes is non-builtin by design.
     desired: dict[tuple[str | None, str], dict] = {}
 
     for cmd in global_commands:
@@ -103,6 +105,7 @@ def _sync_to_database() -> dict[str, int]:
                 "plugin_name": cmd.plugin_name,
                 "description": cmd.description,
                 "argument_hint": cmd.argument_hint,
+                "is_builtin": False,
             }
 
     for project_id, cmds in project_commands.items():
@@ -113,65 +116,15 @@ def _sync_to_database() -> dict[str, int]:
                     "plugin_name": cmd.plugin_name,
                     "description": cmd.description,
                     "argument_hint": cmd.argument_hint,
+                    "is_builtin": False,
                 }
 
-    # --- 4. Load current state from database ---
-    # Scope strictly to this provider so the diff/delete loop never
-    # touches rows owned by another backend.
-    existing: dict[tuple[str | None, str], Command] = {}
-    for obj in Command.objects.filter(provider=cc_provider):
-        existing[(obj.project_id, obj.name)] = obj
-
-    # --- 5. Diff and apply ---
-    # Fields to compare for updates
-    compare_fields = ("plugin_name", "description", "argument_hint")
-
-    # Delete commands no longer discovered
-    to_delete_ids = []
-    for key, obj in existing.items():
-        if key not in desired:
-            to_delete_ids.append(obj.pk)
-            stats["deleted"] += 1
-    if to_delete_ids:
-        Command.objects.filter(pk__in=to_delete_ids).delete()
-
-    # Create or update
-    to_create: list[Command] = []
-    to_update: list[Command] = []
-
-    for key, fields in desired.items():
-        project_id, name = key
-        obj = existing.get(key)
-
-        if obj is None:
-            # New command
-            to_create.append(Command(
-                provider=cc_provider,
-                project_id=project_id,
-                name=name,
-                activation_char=ACTIVATION_CHAR,
-                **fields,
-            ))
-            stats["created"] += 1
-        else:
-            # Check if any field changed
-            changed = False
-            for field_name in compare_fields:
-                if getattr(obj, field_name) != fields[field_name]:
-                    changed = True
-                    setattr(obj, field_name, fields[field_name])
-            if changed:
-                to_update.append(obj)
-                stats["updated"] += 1
-            else:
-                stats["unchanged"] += 1
-
-    if to_create:
-        Command.objects.bulk_create(to_create)
-    if to_update:
-        Command.objects.bulk_update(to_update, compare_fields)
-
-    return stats
+    # --- 4. Reconcile against the database ---
+    return apply_desired_commands(
+        provider=cc_provider,
+        activation_char=ACTIVATION_CHAR,
+        desired=desired,
+    )
 
 
 async def start_commands_task() -> None:

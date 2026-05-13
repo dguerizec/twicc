@@ -19,7 +19,12 @@ const ACTIVATION_CHAR_METADATA = {
     '/': {
         icon: 'slash',
         iconStyle: { transform: 'scaleX(-1)' },
-        tooltip: 'Insert a slash command',
+        tooltip: 'Insert a /command',
+    },
+    '$': {
+        icon: 'dollar-sign',
+        iconStyle: null,
+        tooltip: 'Insert a $command',
     },
 }
 

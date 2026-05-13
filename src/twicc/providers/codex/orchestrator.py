@@ -3,8 +3,10 @@ Codex provider orchestrator.
 
 Owns the Codex initial JSONL sync, the background metadata compute,
 the JSONL sessions watcher, the Codex CLI auth check task, the ChatGPT
-usage sync task, the OpenAI statuspage poll, and the shutdown of the
-Codex agent manager (its construction is lazy via the agent registry).
+usage sync task, the OpenAI statuspage poll, the periodic skill
+catalogue sync (``skills/list`` → ``Command`` rows under the ``$``
+prefix), and the shutdown of the Codex agent manager (its construction
+is lazy via the agent registry).
 """
 
 from __future__ import annotations
@@ -26,6 +28,7 @@ from twicc.providers.background_task import (
 )
 from twicc.providers.codex.agent import get_codex_agent_manager
 from twicc.providers.codex.auth_task import start_auth_task, stop_auth_task
+from twicc.providers.codex.commands_task import start_commands_task, stop_commands_task
 from twicc.providers.codex.initial_sync import scan_session_files, sync_all
 from twicc.providers.codex.sessions_watcher import get_watcher
 from twicc.providers.codex.statuspage_task import start_statuspage_task, stop_statuspage_task
@@ -85,6 +88,7 @@ class CodexOrchestrator(BaseOrchestrator):
         self._auth_check_task: asyncio.Task | None = None
         self._usage_sync_task: asyncio.Task | None = None
         self._statuspage_task: asyncio.Task | None = None
+        self._commands_task: asyncio.Task | None = None
 
         # Started by the dependency orchestrator coroutine after the
         # initial sync completes (compute) or after the search index is
@@ -122,6 +126,7 @@ class CodexOrchestrator(BaseOrchestrator):
         self._auth_check_task = self._create_task(start_auth_task())
         self._usage_sync_task = self._create_task(start_usage_sync_task())
         self._statuspage_task = self._create_task(start_statuspage_task())
+        self._commands_task = self._create_task(start_commands_task())
 
     async def shutdown(self) -> None:
         """Stop the Codex tasks (sync + compute first, then the periodic ones)."""
@@ -169,6 +174,11 @@ class CodexOrchestrator(BaseOrchestrator):
             logger.info("Stopping Codex statuspage task...")
             stop_statuspage_task()
             await _cancel_task(self._statuspage_task, "Codex statuspage task")
+
+        if self._commands_task is not None:
+            logger.info("Stopping Codex commands task...")
+            stop_commands_task()
+            await _cancel_task(self._commands_task, "Codex commands task")
 
         # Stop every live Codex agent. The manager itself is owned by the
         # AgentManagerRegistry singleton, so we just ask it to drain — its

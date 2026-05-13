@@ -104,6 +104,16 @@ export class CodexHelpers extends BaseProviderHelpers {
         return true
     }
 
+    getCommandActivationChars() {
+        // Codex exposes its skill catalogue under the ``$`` prefix; the
+        // matching backend rows land in the ``Command`` table via the
+        // ``commands_task`` skill-list sync. No ``getBuiltInCommands``
+        // override needed — system/admin skills come back from the
+        // backend with ``is_builtin=true`` rather than from a frontend
+        // constant.
+        return ['$']
+    }
+
     buildOptimisticUserMessageContent(text, attachments) {
         // Codex JSONL shape for user input: ``{ type: 'event_msg', payload:
         // { type: 'user_message', message: '...', images: [...] } }``.
