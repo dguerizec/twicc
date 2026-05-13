@@ -61,9 +61,19 @@ Classification rules (any change MUST bump CODEX_COMPUTE_VERSION):
   For exec_command long-running shells the chain accumulates one row
   per polling write_stdin; for everything else there's a single row
   (plus the matching event_msg.*_end when applicable).
+- top-level ``compacted`` → ``COMPACT_SUMMARY`` (lands at ``ALWAYS``).
+  Codex CLI writes this line on auto-compaction; the payload carries
+  a ``replacement_history`` of the messages that were summarised plus
+  an encrypted summary in
+  ``replacement_history[-1].encrypted_content``. We pick this wrapper
+  over the redundant ``event_msg.context_compacted`` event because
+  the encrypted field gives us a future-proof landing spot if Codex
+  ever ships a readable summary. The matching
+  ``event_msg.context_compacted`` line stays bucketed as ``SYSTEM``.
 - everything else (``session_meta``, ``turn_context``, other
   ``response_item`` subtypes, other ``event_msg`` subtypes without
-  ``call_id``, ``compacted``) → ``SYSTEM`` (lands at ``DEBUG_ONLY``).
+  ``call_id`` including ``event_msg.context_compacted``) → ``SYSTEM``
+  (lands at ``DEBUG_ONLY``).
 
 The ``call_id`` carried by every line above is the pairing key,
 stored as-is in ``ToolResultLink.tool_use_id`` (analogous to Claude's
@@ -131,6 +141,15 @@ _TYPE_RESPONSE_ITEM = "response_item"
 # feed :meth:`CodexSessionCompute.extract_runtime_fields`.
 _TYPE_SESSION_META = "session_meta"
 _TYPE_TURN_CONTEXT = "turn_context"
+# ``compacted`` is the top-level wrapper Codex CLI writes when it auto-
+# compacts the rolling context. The payload carries a ``replacement_history``
+# of the messages that were summarised plus a trailing
+# ``{"type":"compaction","encrypted_content":"..."}`` entry — the
+# summary itself is encrypted, so we can't surface a body, only mark
+# the item as a ``COMPACT_SUMMARY`` so the UI shows the standard
+# divider. The matching ``event_msg.context_compacted`` event is
+# redundant for our purposes and stays bucketed as SYSTEM.
+_TYPE_COMPACTED = "compacted"
 _PAYLOAD_USER_MESSAGE = "user_message"
 _PAYLOAD_AGENT_MESSAGE = "agent_message"
 # ``event_msg.token_count`` is the only Codex line that carries usage
@@ -991,6 +1010,16 @@ class CodexSessionCompute(BaseSessionCompute):
         wrapper_type = parsed_json.get("type")
         payload = _payload(parsed_json)
 
+        # ``compacted`` is the top-level wrapper Codex CLI writes when
+        # auto-compacting the rolling context. We pick this one (rather
+        # than the redundant ``event_msg.context_compacted`` event)
+        # because the payload carries a future-proof ``encrypted_content``
+        # — if Codex ever ships a readable summary in there, the item is
+        # already at the right kind/display level to surface it. Today
+        # the content is opaque so the frontend renders a placeholder.
+        if wrapper_type == _TYPE_COMPACTED:
+            return ItemKind.COMPACT_SUMMARY
+
         if wrapper_type == _TYPE_EVENT_MSG and payload is not None:
             sub_type = payload.get("type")
             if sub_type == _PAYLOAD_USER_MESSAGE:
@@ -1034,8 +1063,9 @@ class CodexSessionCompute(BaseSessionCompute):
 
         # Everything else (session_meta, turn_context, other response_item
         # subtypes — message/reasoning-without-summary/…, other event_msg
-        # subtypes without call_id, ``compacted``, malformed lines) is
-        # bucketed as SYSTEM and ends up at DEBUG_ONLY display level.
+        # subtypes without call_id including ``event_msg.context_compacted``,
+        # malformed lines) is bucketed as SYSTEM and ends up at
+        # DEBUG_ONLY display level.
         return ItemKind.SYSTEM
 
     # compute_item_display_level + compute_item_metadata: inherited from base.
@@ -1615,6 +1645,26 @@ class CodexSessionCompute(BaseSessionCompute):
         payload = _payload(parsed_json)
         if payload is None:
             return _EMPTY_ANALYSIS
+
+        # Top-level ``compacted`` wrapper: classified as COMPACT_SUMMARY
+        # by :meth:`compute_item_kind`. The encrypted summary is opaque
+        # so we don't surface a ``text_content`` body, but the row is
+        # still visible (the frontend renders a placeholder).
+        if wrapper_type == _TYPE_COMPACTED:
+            return ContentAnalysis(
+                has_visible_content=True,
+                text_content=None,
+                is_system_xml=False,
+                has_tool_result=False,
+                tool_result_id=None,
+                tool_result_error=None,
+                tool_use_entries=_EMPTY_TOOL_USE_ENTRIES,
+                task_tool_uses=_EMPTY_TASK_TOOL_USES,
+                file_paths=_EMPTY_FILE_PATHS,
+                has_prefix=False,
+                has_suffix=False,
+                tool_result_agent_info=None,
+            )
 
         if wrapper_type == _TYPE_EVENT_MSG:
             sub_type = payload.get("type")

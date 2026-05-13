@@ -5,7 +5,7 @@ import { useDataStore } from '../../../stores/data'
 import JsonViewer from '../../json/JsonViewer.vue'
 import ClaudeCodeMessage from './items/claude_code/Message.vue'
 import ClaudeCodeApiError from './items/claude_code/ApiError.vue'
-import ClaudeCodeCompactSummary from './items/claude_code/CompactSummary.vue'
+import CompactSummary from './items/CompactSummary.vue'
 import CodexMessage from './items/codex/Message.vue'
 import CodexToolUse from './items/codex/ToolUse.vue'
 import CodexReasoning from './items/codex/Reasoning.vue'
@@ -205,9 +205,10 @@ function toggleJsonView() {
                     v-else-if="kind === 'api_error'"
                     :data="content"
                 />
-                <ClaudeCodeCompactSummary
+                <CompactSummary
                     v-else-if="kind === 'compact_summary'"
                     :content="content?.message?.content || ''"
+                    :provider="sessionProvider"
                     :session-id="sessionId"
                     :detail-key="`compact:${lineNum}`"
                 />
@@ -240,6 +241,13 @@ function toggleJsonView() {
                     :data="content"
                     :session-id="sessionId"
                     :line-num="lineNum"
+                />
+                <CompactSummary
+                    v-else-if="kind === 'compact_summary'"
+                    :content="content?.payload?.message || ''"
+                    :provider="sessionProvider"
+                    :session-id="sessionId"
+                    :detail-key="`compact:${lineNum}`"
                 />
                 <UnknownEntry
                     v-else
