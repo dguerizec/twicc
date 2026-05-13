@@ -1054,6 +1054,12 @@ class Command(models.Model):
     plugin_name = models.CharField(max_length=100, null=True, blank=True)  # e.g. "superpowers" when shipped by a plugin
     description = models.TextField()
     argument_hint = models.CharField(max_length=200, null=True, blank=True)  # e.g. "[review-aspects]"
+    # Whether this row is a built-in command shipped by the provider's
+    # runtime (e.g. Codex's ``System`` / ``Admin`` skills). Drives the
+    # ``(built-in)`` tag in the picker. Claude Code's built-ins still
+    # live in a frontend constant and never reach this table, so every
+    # existing Claude row stays at the default ``False``.
+    is_builtin = models.BooleanField(default=False)
 
     class Meta:
         indexes = [

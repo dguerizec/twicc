@@ -379,7 +379,7 @@ def commands(request, project_id):
         .filter(provider=provider.value, activation_char=activation_char)
         .filter(Q(project__isnull=True) | Q(project_id=project_id))
         .order_by("name")
-        .values("name", "plugin_name", "description", "argument_hint", "project_id")
+        .values("name", "plugin_name", "description", "argument_hint", "is_builtin", "project_id")
     )
 
     return JsonResponse({
@@ -389,6 +389,7 @@ def commands(request, project_id):
                 "plugin_name": cmd["plugin_name"],
                 "description": cmd["description"],
                 "argument_hint": cmd["argument_hint"],
+                "is_builtin": cmd["is_builtin"],
                 "is_global": cmd["project_id"] is None,
             }
             for cmd in qs
