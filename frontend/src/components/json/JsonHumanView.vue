@@ -300,6 +300,23 @@ function effectiveType() {
 }
 
 /**
+ * Value to feed the ``string-code`` branch of the template. When the
+ * underlying ``value`` is an array (typical for argv-shaped tool inputs
+ * like Codex's ``local_shell_call.action.command``) we join with a
+ * single space so the fenced code block / inline ``<code>`` / editor
+ * see a proper bash-like line instead of the array's default comma
+ * stringification. Used uniformly across the ``string-code`` template
+ * so ``isMultiLine`` / ``editorHeight`` / display all observe the same
+ * string.
+ *
+ * Returns ``value`` unchanged for non-array inputs — strings keep their
+ * exact content (whitespace, newlines, etc.).
+ */
+function codeValue() {
+    return Array.isArray(props.value) ? props.value.join(' ') : props.value
+}
+
+/**
  * Computed content block source info for the current value (only meaningful when value is an object).
  * Detects source objects with embedded data (image or binary) so the "data" key can be rendered specially.
  */
@@ -639,18 +656,21 @@ const readDiffEditorRefs = reactive({})
             </div>
         </template>
 
-        <!-- String: code (not auto-detected, only via override) -->
+        <!-- String: code (not auto-detected, only via override).
+             ``codeValue()`` joins array inputs with a single space so
+             argv-shaped values (e.g. ``["bash","-lc","echo hi"]``) render
+             as a bash line — strings pass through unchanged. -->
         <template v-else-if="effectiveType() === 'string-code'">
             <template v-if="editable">
                 <!-- Multi-line code: CodeMirror editor -->
-                <template v-if="override?.language || isMultiLine(value)">
+                <template v-if="override?.language || isMultiLine(codeValue())">
                     <div v-if="name != null" class="jhv-key jhv-block-key">{{ formatLabel(name) }}:</div>
                     <JhvEditorToolbar mode="code" :editor-ref="codeEditorRef">
                         <template #default="{ wordWrap: ww }">
-                            <div class="jhv-edit-editor" :style="{ height: editorHeight(value) }">
+                            <div class="jhv-edit-editor" :style="{ height: editorHeight(codeValue()) }">
                                 <CodeEditor
                                     ref="codeEditorRef"
-                                    :model-value="value"
+                                    :model-value="codeValue()"
                                     :language="resolveJhvLanguage(override)"
                                     :line-numbers="false"
                                     :word-wrap="ww"
@@ -669,7 +689,7 @@ const readDiffEditorRefs = reactive({})
                         <wa-input
                             size="small"
                             class="jhv-edit-input"
-                            :value.prop="value"
+                            :value.prop="codeValue()"
                             @input="onStringInput"
                         ></wa-input>
                     </div>
@@ -677,10 +697,10 @@ const readDiffEditorRefs = reactive({})
             </template>
             <template v-else>
                 <!-- With language or multi-line: fenced code block -->
-                <template v-if="override?.language || isMultiLine(value)">
+                <template v-if="override?.language || isMultiLine(codeValue())">
                     <div v-if="name != null" class="jhv-key jhv-block-key">{{ formatLabel(name) }}:</div>
                     <div class="jhv-markdown">
-                        <MarkdownContent :source="'```' + (override?.language ?? '') + '\n' + value + '\n```'" />
+                        <MarkdownContent :source="'```' + (override?.language ?? '') + '\n' + codeValue() + '\n```'" />
                     </div>
                 </template>
                 <!-- Single-line without language: inline code -->
@@ -688,7 +708,7 @@ const readDiffEditorRefs = reactive({})
                     <div class="jhv-entry">
                         <span v-if="name != null" class="jhv-key">{{ formatLabel(name) }}</span>
                         <span v-if="name != null" class="jhv-separator">: </span>
-                        <code class="jhv-code">{{ value }}</code>
+                        <code class="jhv-code">{{ codeValue() }}</code>
                     </div>
                 </template>
             </template>

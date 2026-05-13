@@ -8,12 +8,19 @@
  * line so the dispatcher in ``SessionItem.vue`` only has to mount us with
  * the raw content.
  *
- * Two payload shapes contribute:
+ * Three payload shapes contribute:
  *   - ``function_call``: the standard OpenAI form. ``arguments`` is a
  *     JSON-string that we parse into the input object.
  *   - ``custom_tool_call``: the freeform variant (apply_patch). ``input``
  *     is raw text — we wrap it in an object so the shell's JsonHumanView
  *     fallback shows it without surprise.
+ *   - ``local_shell_call``: the native shell tool exposed by the Responses
+ *     API. No ``name`` field — the sub_type is the tool name. The argv
+ *     ships through ``payload.action`` (which is itself a tagged enum,
+ *     today always ``{type:"exec", command, timeout_ms, ...}``); we hand
+ *     it over verbatim so ``parseCommand`` keeps the array form (it
+ *     unwraps ``bash -lc <script>`` and classifies Read / Grep / List),
+ *     and JsonHumanView auto-joins the array for the bash code-block.
  */
 
 import { computed, ref, watchEffect } from 'vue'
@@ -49,7 +56,14 @@ const payload = computed(() => {
     return p && typeof p === 'object' ? p : null
 })
 
-const toolName = computed(() => payload.value?.name ?? '')
+const toolName = computed(() => {
+    const p = payload.value
+    if (!p) return ''
+    // ``local_shell_call`` and other native tool-call shapes don't carry
+    // a ``name`` field — fall back to the payload sub_type which serves
+    // as the canonical tool name in those cases.
+    return p.name ?? p.type ?? ''
+})
 const toolId = computed(() => payload.value?.call_id ?? '')
 
 // Forwarded to ``ToolUseContent`` and reaches helper hooks that take a
@@ -75,6 +89,16 @@ const toolInput = computed(() => {
     }
     if (p.type === 'custom_tool_call') {
         return { input: p.input ?? '' }
+    }
+    if (p.type === 'local_shell_call') {
+        // The native ``local_shell`` tool ships its argv-shaped command
+        // through ``payload.action`` instead of an ``arguments`` JSON
+        // string. Forward the action object as-is — the ``command`` array
+        // is preserved so ``parseCommand`` can unwrap ``bash -lc <script>``
+        // and classify Read / Grep / List for the header label; the
+        // JsonHumanView ``string-code`` override flattens the array to a
+        // bash line for the body display.
+        return p.action && typeof p.action === 'object' ? p.action : {}
     }
     return {}
 })

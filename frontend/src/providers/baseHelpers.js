@@ -835,13 +835,16 @@ export class BaseToolHelpers {
      * provider-specific — the shell only exposes it via
      * ``options.aggregatedExecOutput``.
      *
+     * @param {string} _name - tool name (e.g. ``"exec_command"``,
+     *   ``"local_shell_call"``). Providers that handle several chained
+     *   tools with different output dialects branch on this.
      * @param {string} _toolId - tool_use_id whose chain to aggregate.
      * @param {Object} _options - same shape as the other helpers; in
      *   particular carries ``getSessionItem`` / ``getToolState`` so the
      *   helper can reach the chain rows in the data store.
      * @returns {*} Default: ``null``.
      */
-    getAggregatedExecOutput(/* toolId, options */) {
+    getAggregatedExecOutput(/* name, toolId, options */) {
         return null
     }
 

@@ -386,7 +386,7 @@ const helperOptions = computed(() => ({
 const aggregatedExecOutput = computed(() => {
     const helpers = toolHelpers.value
     if (!helpers?.shouldAggregateExecOutput?.(props.name)) return null
-    return helpers.getAggregatedExecOutput?.(props.toolId, helperOptions.value) ?? null
+    return helpers.getAggregatedExecOutput?.(props.name, props.toolId, helperOptions.value) ?? null
 })
 
 // Static per-name header label override (e.g. "TodoWrite" → "Todo").

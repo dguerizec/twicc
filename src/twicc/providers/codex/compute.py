@@ -27,11 +27,27 @@ Classification rules (any change MUST bump CODEX_COMPUTE_VERSION):
   output plus every ``write_stdin`` polling output sharing the same
   unified-exec process id (called ``session_id`` by Codex,
   ``exec_command_id`` here).
-- ``response_item.function_call`` / ``custom_tool_call`` → ``TOOL_USE``
-  (-> ``COLLAPSIBLE``), except ``function_call name=write_stdin`` which
-  is bucketed as ``SYSTEM`` (no tool card). Its
-  ``function_call_output`` is rebound to the parent ``exec_command``'s
-  ``call_id`` via :meth:`CodexSessionCompute.remap_tool_result_id`.
+- ``response_item.function_call`` / ``custom_tool_call`` /
+  ``local_shell_call`` → ``TOOL_USE`` (-> ``COLLAPSIBLE``), except
+  ``function_call name=write_stdin`` which is bucketed as ``SYSTEM``
+  (no tool card). Its ``function_call_output`` is rebound to the parent
+  ``exec_command``'s ``call_id`` via
+  :meth:`CodexSessionCompute.remap_tool_result_id`. ``local_shell_call``
+  doesn't carry a ``name`` field — its tool name is the sub_type itself
+  (``"local_shell_call"``), supplied via
+  :data:`_NATIVE_TOOL_NAME_BY_SUB_TYPE` in
+  :meth:`extract_tool_use_entries` / :meth:`analyze_content`. Its result
+  is a single ``function_call_output`` paired by ``call_id`` (no chained
+  ``write_stdin`` polls, and unlike ``exec_command`` it does **not**
+  emit a Codex unified-exec status trailer — instead its ``output`` is
+  a JSON-encoded string ``{"output":"<body>","metadata":{"exit_code":N,
+  "duration_seconds":N.N}}`` produced by
+  ``format_exec_output_for_model_structured`` in
+  ``codex-rs/core/src/tools/mod.rs``). The exit-code surface for
+  :class:`ToolResultLink.is_error` therefore goes through
+  :func:`_local_shell_output_error` (JSON decode + ``metadata.exit_code``
+  test), and :meth:`compute_link_extra` flags the matching result row as
+  terminated on arrival so the frontend stops the spinner.
 - ``response_item.{function_call_output, custom_tool_call_output}`` →
   kind stays ``None`` (-> ``DEBUG_ONLY``). Pairs as a tool_result.
   For exec_command long-running shells the chain accumulates one row
@@ -140,8 +156,21 @@ _TASK_STARTED_WINDOW_HEADROOM_FACTOR = 0.95
 # own JSONL line (mono-block), unlike Claude where tool_uses live inside a
 # message.content array. ``function_call`` is the standard OpenAI form;
 # ``custom_tool_call`` is the freeform variant used for tools whose input
-# isn't JSON (apply_patch ships its patch as raw Lark-grammar text).
-_TOOL_CALL_PAYLOAD_TYPES = frozenset({"function_call", "custom_tool_call"})
+# isn't JSON (apply_patch ships its patch as raw Lark-grammar text);
+# ``local_shell_call`` is the native shell tool exposed directly by the
+# Responses API — it doesn't carry a ``name`` field (the sub_type IS the
+# tool name) and ships its argv via ``payload.action`` instead of a JSON
+# ``arguments`` string. See :data:`_NATIVE_TOOL_NAME_BY_SUB_TYPE`.
+_TOOL_CALL_PAYLOAD_TYPES = frozenset({"function_call", "custom_tool_call", "local_shell_call"})
+
+# Sub-types whose canonical tool name is the sub_type itself — used as a
+# fallback in :meth:`extract_tool_use_entries` / :meth:`analyze_content`
+# when the payload doesn't carry a ``name`` field. The frontend reads
+# this name verbatim (no rewriting) so the value here is what the tool
+# card / helpers (label, summary, INPUT_OVERRIDES, …) key off.
+_NATIVE_TOOL_NAME_BY_SUB_TYPE = {
+    "local_shell_call": "local_shell_call",
+}
 
 # Function-call ``name`` values whose tool_use is bucketed as SYSTEM (no
 # tool card rendered) because the relevant exchange is captured elsewhere.
@@ -250,6 +279,40 @@ def _exit_code_error_from_output(output: str) -> str | None:
     if not status.is_terminated or status.exit_code is None or status.exit_code == 0:
         return None
     return f"Exit code {status.exit_code}"
+
+
+def _local_shell_output_error(output: str) -> str | None:
+    """Render ``"Exit code N"`` from a ``local_shell_call`` function_call_output.
+
+    Codex serialises the result of a ``local_shell_call`` as a JSON
+    string ``{"output":"<body>","metadata":{"exit_code":N,"duration_seconds":N.N}}``
+    (see ``format_exec_output_for_model_structured`` in
+    ``codex-rs/core/src/tools/mod.rs``). The whole JSON sits as a plain
+    string under ``function_call_output.output`` (collapsed by
+    ``function_tool_response`` to ``FunctionCallOutputBody::Text`` when
+    the inner ``InputText`` is a single item), so we orjson-decode and
+    pull ``metadata.exit_code`` to surface a non-zero exit the same way
+    :func:`_exit_code_error_from_output` does for ``exec_command``.
+
+    Defensive: returns ``None`` on parse failure, shape mismatch, or
+    ``exit_code == 0`` so the caller can fall back to other detection
+    paths (notably the legacy exec_command trailer) without crashing.
+    """
+    if not isinstance(output, str) or not output:
+        return None
+    try:
+        parsed = orjson.loads(output)
+    except orjson.JSONDecodeError:
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    metadata = parsed.get("metadata")
+    if not isinstance(metadata, dict):
+        return None
+    exit_code = metadata.get("exit_code")
+    if not isinstance(exit_code, int) or exit_code == 0:
+        return None
+    return f"Exit code {exit_code}"
 
 
 def _extract_write_stdin_exec_command_id(parsed_json: dict) -> int | None:
@@ -1056,12 +1119,18 @@ class CodexSessionCompute(BaseSessionCompute):
         if parsed_json.get("type") != _TYPE_RESPONSE_ITEM:
             return _EMPTY_TOOL_USE_ENTRIES
         payload = _payload(parsed_json)
-        if payload is None or payload.get("type") not in _TOOL_CALL_PAYLOAD_TYPES:
+        if payload is None:
+            return _EMPTY_TOOL_USE_ENTRIES
+        sub_type = payload.get("type")
+        if sub_type not in _TOOL_CALL_PAYLOAD_TYPES:
             return _EMPTY_TOOL_USE_ENTRIES
         call_id = payload.get("call_id")
-        name = payload.get("name")
         if not isinstance(call_id, str) or not call_id:
             return _EMPTY_TOOL_USE_ENTRIES
+        native_name = _NATIVE_TOOL_NAME_BY_SUB_TYPE.get(sub_type)
+        if native_name is not None:
+            return {call_id: native_name}
+        name = payload.get("name")
         return {call_id: name if isinstance(name, str) else ""}
 
     def extract_tool_result_info(
@@ -1074,13 +1143,18 @@ class CodexSessionCompute(BaseSessionCompute):
         # Mirror of ``extract_tool_use_entries`` for the matching result
         # line. Two shapes contribute:
         # - response_item.{function_call_output, custom_tool_call_output}
-        #   — the LLM-facing output string. For exec_command / write_stdin
-        #   shells the formatted trailer carries a ``Process exited with
-        #   code N`` line on terminal turns; we parse that into a
-        #   ``"Exit code N"`` error string when N != 0 (no shell-tool
-        #   discrimination needed: the pattern is unique to unified-exec
-        #   outputs, so :func:`_exit_code_error_from_output` returns
-        #   ``None`` for any other tool's output).
+        #   — the LLM-facing output string. Three error-detection paths
+        #   coexist here, all guarded by their own shape so they're
+        #   mutually exclusive in practice:
+        #     * ``local_shell_call`` outputs are a JSON string carrying
+        #       ``{"output":..., "metadata":{"exit_code":N, ...}}`` —
+        #       :func:`_local_shell_output_error` decodes it and surfaces
+        #       ``"Exit code N"`` for a non-zero exit.
+        #     * ``exec_command`` / ``write_stdin`` outputs carry a Codex
+        #       formatted trailer with a ``Process exited with code N``
+        #       line — :func:`_exit_code_error_from_output` handles it.
+        #     * everything else has no exit signal here, so both helpers
+        #       return ``None`` and ``error_text`` stays ``None``.
         # - event_msg.* whose sub-type is in
         #   :data:`_PERSISTED_END_EVENT_TYPES` (patch_apply_end,
         #   mcp_tool_call_end, web_search_end, image_generation_end).
@@ -1096,11 +1170,13 @@ class CodexSessionCompute(BaseSessionCompute):
                 return None
             call_id = payload.get("call_id")
             output = payload.get("output", "")
-            error_text = (
-                _exit_code_error_from_output(output)
-                if isinstance(output, str)
-                else None
-            )
+            if isinstance(output, str):
+                error_text = (
+                    _local_shell_output_error(output)
+                    or _exit_code_error_from_output(output)
+                )
+            else:
+                error_text = None
         elif wrapper_type == _TYPE_EVENT_MSG:
             call_id = _event_msg_call_id(parsed_json)
             error_text = _event_msg_payload_error(payload)
@@ -1218,6 +1294,21 @@ class CodexSessionCompute(BaseSessionCompute):
             if not isinstance(output, str):
                 return None
             if not parse_exec_command_status(output).is_terminated:
+                return None
+            return orjson.dumps({"is_terminated": True}).decode()
+
+        # Native ``local_shell_call`` shares the shell-card rendering path
+        # but emits a single ``function_call_output`` (no polled chain like
+        # ``exec_command`` / ``write_stdin``). It also doesn't carry the
+        # Codex unified-exec status trailer, so there's nothing to parse —
+        # the result lands once, and the card should stop spinning right
+        # away. Flag every matching result row as terminated so the
+        # ``Max``-aggregated ``extra`` flips to done on arrival.
+        if tool_name == "local_shell_call":
+            if parsed_json.get("type") != _TYPE_RESPONSE_ITEM:
+                return None
+            payload = _payload(parsed_json)
+            if payload is None or payload.get("type") not in _TOOL_RESULT_PAYLOAD_TYPES:
                 return None
             return orjson.dumps({"is_terminated": True}).decode()
 
@@ -1370,8 +1461,13 @@ class CodexSessionCompute(BaseSessionCompute):
                 return _EMPTY_ANALYSIS
 
             if sub_type in _TOOL_CALL_PAYLOAD_TYPES:
-                name = payload.get("name")
-                tool_use_entries = {call_id: name if isinstance(name, str) else ""}
+                native_name = _NATIVE_TOOL_NAME_BY_SUB_TYPE.get(sub_type)
+                if native_name is not None:
+                    name = native_name
+                else:
+                    raw_name = payload.get("name")
+                    name = raw_name if isinstance(raw_name, str) else ""
+                tool_use_entries = {call_id: name}
                 return ContentAnalysis(
                     has_visible_content=True,
                     text_content=None,

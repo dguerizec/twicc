@@ -37,25 +37,30 @@ import ReadResultContent from '../../components/session/detail/items/codex/ReadR
 import ApplyPatchContent from '../../components/session/detail/items/codex/ApplyPatchContent.vue'
 import TodoContent from '../../components/session/detail/items/TodoContent.vue'
 
-// ``function_call`` tools that produce / consume a unified-exec
-// process. Two facts at once for these tools:
-//   - their ``function_call_output`` rows chain together (the parent
-//     ``exec_command``'s own row plus one row per ``write_stdin``
-//     poll), all rebound to the same ``tool_use_id`` server-side, with
-//     status driven by :meth:`isToolRunning` reading
-//     ``extra.is_terminated``;
+// Tool names that produce / consume a shell process and share the
+// shell-card rendering path. Two facts at once for these tools:
+//   - their result rows are paired by ``call_id`` and the spinner is
+//     driven by :meth:`isToolRunning` reading ``extra.is_terminated``;
 //   - their input carries a parseable shell command we can feed to the
 //     local ``parseCommand`` parser to derive the header label
 //     (Read / List files / Grep / Exec).
-// Two input shapes are in play: ``exec_command`` (unified_exec) ships
-// the raw script as ``input.cmd`` (string); the others ship a
-// ``Vec<String>`` argv as ``input.command``, typically
-// ``["bash", "-lc", "..."]``.
+// Three input shapes are in play: ``exec_command`` (unified_exec) ships
+// the raw script as ``input.cmd`` (string); the ``shell`` /
+// ``shell_command`` / ``local_shell`` / ``container.exec`` variants
+// ship a ``Vec<String>`` argv as ``input.command``, typically
+// ``["bash", "-lc", "..."]``; ``local_shell_call`` is the native
+// Responses-API shell tool (not a ``function_call`` wire-level, it's a
+// distinct ``response_item`` sub_type — see ``ToolUse.vue`` for the
+// unwrap). Its input is ``payload.action`` with the same ``command``
+// argv array, so it slots into this set transparently. A single
+// ``function_call_output`` closes it (no chained ``write_stdin``
+// polls); the backend sets ``extra.is_terminated`` on arrival.
 const FUNCTION_CALL_EXEC_TOOLS = new Set([
     'exec_command',
     'shell',
     'shell_command',
     'local_shell',
+    'local_shell_call',
     'container.exec',
 ])
 
@@ -94,6 +99,16 @@ const INPUT_OVERRIDES = {
         // Shiki, the same way Claude Code's Bash ``command`` is shown.
         cmd: { valueType: 'string-code', language: 'bash' },
     },
+    local_shell_call: {
+        // ``command`` is an argv array (e.g. ``["bash", "-lc", "echo hi"]``)
+        // passed verbatim from ``payload.action``. ``JsonHumanView``
+        // auto-joins arrays with a single space when rendering them as
+        // ``string-code``, so we get the same fenced bash block as
+        // ``exec_command.cmd`` without having to flatten upstream — and
+        // the array form remains intact for ``parseCommand`` which can
+        // unwrap ``bash -lc <script>`` and classify Read / Grep / List.
+        command: { valueType: 'string-code', language: 'bash' },
+    },
 }
 
 // Per-tool whitelist of input keys to drop from the JSON fallback
@@ -123,6 +138,28 @@ const STRIPPED_INPUT_KEYS_BY_TOOL = {
         'sandbox_permissions',
         'additional_permissions',
         'prefix_rule',
+    ]),
+    // ``local_shell_call`` input is the unwrapped ``payload.action``.
+    // Schema source: ``LocalShellExecAction`` in
+    // ``codex-rs/protocol/src/models.rs``. Kept visible: ``command``
+    // (the argv) and ``env`` (the model can inject ``LANG=C`` /
+    // ``DEBUG=1`` / etc. which changes what the command does, so it
+    // belongs in the body). Stripped:
+    local_shell_call: new Set([
+        // The action's enum tag — always ``"exec"`` today (single variant
+        // ``LocalShellAction::Exec``), so it carries no information.
+        'type',
+        // Scheduling knob (max wall time before kill). Implementation
+        // detail, not what the call *does*.
+        'timeout_ms',
+        // Where the command runs — mirrors what we strip for
+        // ``exec_command.workdir``.
+        'working_directory',
+        // Account / privilege swap. Rare in practice, and when set it's
+        // typically just a marker rather than an action — we accept that
+        // the rare ``user: "root"`` case is hidden behind the ``</>``
+        // toggle for now.
+        'user',
     ]),
 }
 
@@ -201,14 +238,29 @@ const OUTPUT_BODY_PREFIX_RE = /^Output:\n?/m
  *   - ``isTerminated``: ``true`` once any chunk reported a
  *     ``Process exited`` line.
  *   - ``exitCode``: parsed code on the closing chunk (or ``null``).
+ *
+ * The ``name`` argument selects the output dialect:
+ *   - ``local_shell_call``: the native shell tool's
+ *     ``function_call_output.output`` is a JSON-encoded **string**
+ *     ``{"output":"<body>","metadata":{"exit_code":N,"duration_seconds":N.N}}``
+ *     (see ``format_exec_output_for_model_structured`` in
+ *     ``codex-rs/core/src/tools/mod.rs``, then ``function_tool_response``
+ *     in ``codex-rs/core/src/tools/context.rs`` which collapses the
+ *     single ``InputText`` item to a ``Text`` body). We ``JSON.parse``
+ *     defensively and pull ``output`` / ``metadata.exit_code`` —
+ *     falling back to the raw string on parse failure so a future
+ *     format change doesn't black out the card.
+ *   - everything else in the exec_command family: Codex unified-exec
+ *     status trailer + ``Output:`` prefix, see the code below.
  */
-function aggregateExecCommandOutput(toolId, options) {
+function aggregateExecCommandOutput(name, toolId, options) {
     if (!toolId) return null
     const toolState = options?.getToolState?.(toolId)
     const lineNums = toolState?.toolResultLineNums
     if (!Array.isArray(lineNums) || lineNums.length === 0) return null
     const getSessionItem = options?.getSessionItem
     if (typeof getSessionItem !== 'function') return null
+    const isLocalShell = name === 'local_shell_call'
     const bodies = []
     let isTerminated = false
     let exitCode = null
@@ -223,6 +275,40 @@ function aggregateExecCommandOutput(toolId, options) {
         if (payload.type !== 'function_call_output' && payload.type !== 'custom_tool_call_output') continue
         const output = typeof payload.output === 'string' ? payload.output : ''
         if (!output) continue
+        if (isLocalShell) {
+            // ``output`` is a JSON-encoded string — decode it and pull
+            // the actual body + exit code out. See the function-level
+            // doc above for the wire shape and references.
+            let parsed = null
+            try {
+                parsed = JSON.parse(output)
+            } catch {
+                parsed = null
+            }
+            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                if (typeof parsed.output === 'string') bodies.push(parsed.output)
+                const meta = parsed.metadata
+                if (meta && typeof meta === 'object' && !Array.isArray(meta)) {
+                    const code = meta.exit_code
+                    if (Number.isInteger(code)) exitCode = code
+                }
+                // A successful parse means the result has fully landed
+                // (the backend's ``compute_link_extra`` already flagged
+                // this on ``ToolResultLink.extra`` for the spinner; we
+                // mirror that here so the aggregator's own
+                // ``isTerminated`` is consistent and the
+                // ``bodies.length === 0 && !isTerminated`` guard below
+                // doesn't drop a zero-output success).
+                isTerminated = true
+            } else {
+                // Unparseable — keep the raw string visible rather than
+                // losing the output entirely (a malformed payload or a
+                // future Codex format change shouldn't black out the
+                // shell card).
+                bodies.push(output)
+            }
+            continue
+        }
         // Status trailer (running/exited).
         const statusMatch = EXEC_COMMAND_STATUS_RE.exec(output)
         if (statusMatch?.groups?.exit !== undefined) {
@@ -449,9 +535,17 @@ export class CodexToolHelpers extends BaseToolHelpers {
             if (typeof name === 'string' && name.startsWith(MCP_TOOL_NAME_PREFIX)) return 2
             return 1
         }
-        // local_shell_call, web_search_call, image_generation_call: the
-        // ``*_end`` event is the only result (no separate ``*_call_output``
-        // payload). Single ToolResultLink, single result.
+        if (wrapperType === 'local_shell_call') {
+            // Native shell tool: a single ``function_call_output`` paired
+            // by ``call_id`` (no ``*_end`` event, no chained ``write_stdin``
+            // polls). The backend sets ``extra.is_terminated`` on arrival
+            // (see ``CodexSessionCompute.compute_link_extra``) so the
+            // spinner flips to done as soon as the result lands.
+            return 1
+        }
+        // web_search_call, image_generation_call: the ``*_end`` event is
+        // the only result (no separate ``*_call_output`` payload). Single
+        // ToolResultLink, single result.
         return 1
     }
 
@@ -490,8 +584,8 @@ export class CodexToolHelpers extends BaseToolHelpers {
         return FUNCTION_CALL_EXEC_TOOLS.has(name)
     }
 
-    getAggregatedExecOutput(toolId, options) {
-        return aggregateExecCommandOutput(toolId, options)
+    getAggregatedExecOutput(name, toolId, options) {
+        return aggregateExecCommandOutput(name, toolId, options)
     }
 
     getHeaderLabel(name, input, options) {
