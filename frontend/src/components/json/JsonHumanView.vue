@@ -267,7 +267,7 @@ function keyLooksLikeCodeContent(key) {
  * When a key is provided, uses it to auto-detect file paths and URLs.
  * @param {*} val
  * @param {string|null} [key]
- * @returns {'null'|'boolean'|'number'|'string'|'string-multiline'|'string-markdown'|'string-code'|'string-file'|'string-url'|'array'|'array-string-url'|'object'}
+ * @returns {'null'|'boolean'|'number'|'string'|'string-multiline'|'string-markdown'|'string-code'|'string-file'|'string-url'|'array'|'array-multiline'|'array-string-url'|'object'}
  */
 function valueType(val, key = null) {
     if (val === null || val === undefined) return 'null'
@@ -821,7 +821,29 @@ const readDiffEditorRefs = reactive({})
         </template>
 
         <!-- Array -->
-        <template v-else-if="effectiveType() === 'array'">
+        <!-- Scalar array, one item per line (opt-in via override
+             ``valueType: 'array-multiline'``). Read-only — falls back to
+             the regular ``array`` rendering when editable since the
+             comma-joined editor doesn't apply. Complex (non-scalar)
+             arrays also fall back to ``array`` to keep the recursive
+             rendering. -->
+        <template v-else-if="effectiveType() === 'array-multiline' && !editable && isScalarArray(value)">
+            <template v-if="value.length === 0">
+                <div class="jhv-entry">
+                    <span v-if="name != null" class="jhv-key">{{ formatLabel(name) }}</span>
+                    <span v-if="name != null" class="jhv-separator">: </span>
+                    <span class="jhv-null">&mdash;</span>
+                </div>
+            </template>
+            <template v-else>
+                <div v-if="name != null" class="jhv-key jhv-block-key">{{ formatLabel(name) }}:</div>
+                <div class="jhv-array-multiline">
+                    <span v-for="(item, idx) in value" :key="idx" class="jhv-string jhv-array-multiline-item">{{ formatScalar(item) }}</span>
+                </div>
+            </template>
+        </template>
+
+        <template v-else-if="effectiveType() === 'array' || effectiveType() === 'array-multiline'">
             <!-- Empty array -->
             <template v-if="value.length === 0">
                 <div class="jhv-entry">
@@ -1069,6 +1091,14 @@ const readDiffEditorRefs = reactive({})
 .jhv-null {
     color: var(--wa-color-text-quiet);
     opacity: 0.6;
+}
+
+/* Scalar array, one item per line — opt-in via the
+ * ``array-multiline`` value type. The block-key alignment above
+ * (``jhv-block-key + *``) already indents the container; we just need
+ * the items themselves to stack vertically. */
+.jhv-array-multiline-item {
+    display: block;
 }
 
 .jhv-boolean-icon {

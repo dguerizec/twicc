@@ -209,6 +209,14 @@ const INPUT_OVERRIDES = {
         // ``ToolUse.vue`` for ``custom_tool_call`` (``{ input: p.input }``).
         input: { valueType: 'string-code', language: 'javascript' },
     },
+    web_search_call: {
+        // Multiple queries ship as ``queries`` (after the
+        // ``getDisplayInputObject`` normalisation that collapses
+        // single-item ``queries`` to a plain ``query`` string). Render
+        // them one per line in the detail view so the user reads them
+        // as a list rather than a comma-blurb.
+        queries: { valueType: 'array-multiline' },
+    },
 }
 
 // Per-tool whitelist of input keys to drop from the JSON fallback
