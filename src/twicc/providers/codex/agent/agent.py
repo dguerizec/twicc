@@ -869,6 +869,10 @@ class CodexAgent(BaseAgent):
                 if payload.get("type") in self._CANCELLABLE_ITEM_TYPES:
                     self._denied_tool_ids[other_id] = "User cancelled this turn"
                     siblings_marked.append(other_id)
+                    logger.debug(
+                        "Codex cancel: marking sibling session=%s itemId=%r type=%r",
+                        self.session_id, other_id, payload.get("type"),
+                    )
             logger.debug(
                 "Codex decision recorded: session=%s itemId=%s "
                 "outcome=cancel reason=%r siblings_marked=%s",
