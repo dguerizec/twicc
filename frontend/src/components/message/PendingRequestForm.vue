@@ -11,6 +11,7 @@ import { useDataStore } from '../../stores/data'
 import JsonHumanView from '../json/JsonHumanView.vue'
 import AppTooltip from '../ui/AppTooltip.vue'
 import { getLanguageFromPath } from '../../utils/languages'
+import CodexPendingRequestBody from '../session/detail/items/codex/PendingRequestBody.vue'
 
 // Per-tool overrides for JsonHumanView display types.
 // Only keys that need an override (not auto-detected) are listed.
@@ -600,9 +601,19 @@ function handleSubmitQuestions() {
     <wa-divider></wa-divider>
     <div class="pending-request-form" :class="{ expanded: isExpanded }">
         <!-- ================================================================ -->
-        <!-- Tool Approval Variant -->
+        <!-- Codex branch: stub component, will be specialised in PR3. -->
         <!-- ================================================================ -->
-        <template v-if="requestType === 'tool_approval'">
+        <template v-if="provider === 'codex'">
+            <CodexPendingRequestBody
+                :session-id="sessionId"
+                :pending-request="pendingRequest"
+            />
+        </template>
+
+        <!-- ================================================================ -->
+        <!-- Claude branch: tool approval -->
+        <!-- ================================================================ -->
+        <template v-else-if="requestType === 'tool_approval'">
             <!-- Tool info header -->
             <div class="pending-request-header">
                 <wa-icon name="shield-halved" class="pending-request-icon"></wa-icon>
@@ -869,6 +880,7 @@ function handleSubmitQuestions() {
                 </wa-button>
             </div>
         </template>
+
     </div>
 </template>
 
