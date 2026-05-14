@@ -39,6 +39,7 @@ from twicc.agent import AgentState, BaseAgent, StateChangeCallback
 from twicc.core.enums import Provider
 from twicc.providers.helpers import AgentSettings
 
+from ..permission_modes import resolve_codex_turn_overrides
 from ..streaming_registry import get_streamed_item_registry
 from .approvals import (
     default_response_for,
@@ -276,10 +277,26 @@ class CodexAgent(BaseAgent):
         # via ``send_to_session`` (which refreshes the bundle just before
         # calling ``send``) take effect immediately on the next turn. ``None``
         # lets Codex CLI use the model's default (medium today).
+        # Read live agent_settings — the bundle was refreshed by
+        # ``send_to_session`` immediately before this turn was scheduled,
+        # so ``permission_mode`` here is whatever the frontend has set.
+        # ``thread.turn(approval_policy=..., sandbox_policy=...)`` accepts
+        # both as per-turn overrides — the SDK forwards them as
+        # ``TurnStartParams`` on top of the values that were bound at
+        # ``thread_start``. Mid-session mode changes therefore take effect
+        # at the start of the next turn (current turn unaffected).
         effort = self._sdk_effort(self.agent_settings.effort)
+        sandbox_policy, approval_policy = resolve_codex_turn_overrides(
+            self.agent_settings.permission_mode,
+        )
         turn_input = self._build_turn_input(text, images)
         try:
-            turn_handle = await self._thread.turn(turn_input, effort=effort)
+            turn_handle = await self._thread.turn(
+                turn_input,
+                effort=effort,
+                approval_policy=approval_policy,
+                sandbox_policy=sandbox_policy,
+            )
         except asyncio.CancelledError:
             raise
         except Exception as e:
