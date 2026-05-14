@@ -810,6 +810,14 @@ export class CodexToolHelpers extends BaseToolHelpers {
         // Resultless tools never wait for a result — they're "done" from
         // the moment they land in the store.
         if (RESULTLESS_TOOLS.has(name)) return false
+        // Any errored link → tool is dead, no more results coming.
+        // Catches Codex aborting before the full expected result set
+        // lands (Deny / Cancel turn on apply_patch only emits the
+        // ``custom_tool_call_output`` row; the ``patch_apply_end`` row
+        // never comes because Codex never applies the patch). The
+        // aggregated ``toolState.error`` is ``Max('error')`` across
+        // every link, so any non-null marks the tool as terminated.
+        if (options?.toolState?.error) return false
         // Shell tools: status comes from the chain's last chunk via the
         // ``is_terminated`` flag the backend set on
         // ``ToolResultLink.extra``. ``Max``-aggregated across links so
