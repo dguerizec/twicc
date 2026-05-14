@@ -139,12 +139,7 @@ function handleCancelTurn() {
         <!-- commandExecution rich body -->
         <template v-if="toolName === 'commandExecution'">
             <div class="codex-pending-section">
-                <!-- reason first, larger -->
-                <div v-if="reason" class="codex-pending-reason">
-                    <wa-icon name="comment" variant="classic"></wa-icon>
-                    <span>{{ reason }}</span>
-                </div>
-                <!-- redesigned action chips -->
+                <!-- action chips first, at-a-glance summary -->
                 <div v-if="commandActions.length" class="codex-action-chips">
                     <wa-badge v-if="groupedActions.read.length" variant="neutral">
                         Read
@@ -162,6 +157,11 @@ function handleCancelTurn() {
                         Shell
                         <span v-if="groupedActions.unknown.length > 1" class="codex-chip-count">{{ groupedActions.unknown.length }}</span>
                     </wa-badge>
+                </div>
+                <!-- reason below chips -->
+                <div v-if="reason" class="codex-pending-reason">
+                    <wa-icon name="comment" variant="classic"></wa-icon>
+                    <span>{{ reason }}</span>
                 </div>
                 <!-- detail sections: Read -->
                 <div v-if="groupedActions.read.length" class="codex-pending-section-block">
@@ -333,12 +333,12 @@ function handleCancelTurn() {
                         <wa-icon slot="icon" name="check" variant="classic"></wa-icon>
                         Once
                     </wa-dropdown-item>
-                    <AppTooltip :for="approveOnceId">Approve only this action.</AppTooltip>
+                    <AppTooltip placement="left" :for="approveOnceId">Approve only this action.</AppTooltip>
                     <wa-dropdown-item :id="approveForSessionId" @click="emitApprove('forSession')">
                         <wa-icon slot="icon" name="rotate" variant="classic"></wa-icon>
                         For this session
                     </wa-dropdown-item>
-                    <AppTooltip :for="approveForSessionId">Approve and allow similar actions for the rest of the session.</AppTooltip>
+                    <AppTooltip placement="left" :for="approveForSessionId">Approve and remember this decision for the rest of the session.</AppTooltip>
                     <wa-dropdown-item
                         v-if="toolName === 'commandExecution' && proposedExecpolicyAmendment"
                         :id="approveAddAllowRuleId"
@@ -347,7 +347,7 @@ function handleCancelTurn() {
                         <wa-icon slot="icon" name="plus" variant="classic"></wa-icon>
                         Add allow rule
                     </wa-dropdown-item>
-                    <AppTooltip v-if="toolName === 'commandExecution' && proposedExecpolicyAmendment" :for="approveAddAllowRuleId">Approve and add this command to the persistent allow list.</AppTooltip>
+                    <AppTooltip v-if="toolName === 'commandExecution' && proposedExecpolicyAmendment" placement="left" :for="approveAddAllowRuleId">Approve and add this command to the persistent allow list.</AppTooltip>
                     <wa-dropdown-item
                         v-if="toolName === 'commandExecution' && proposedNetworkPolicyAmendments"
                         :id="approveAllowNetworkId"
@@ -356,7 +356,7 @@ function handleCancelTurn() {
                         <wa-icon slot="icon" name="globe" variant="classic"></wa-icon>
                         Allow network access
                     </wa-dropdown-item>
-                    <AppTooltip v-if="toolName === 'commandExecution' && proposedNetworkPolicyAmendments" :for="approveAllowNetworkId">Approve and persist the network policy amendment.</AppTooltip>
+                    <AppTooltip v-if="toolName === 'commandExecution' && proposedNetworkPolicyAmendments" placement="left" :for="approveAllowNetworkId">Approve and persist the network policy amendment.</AppTooltip>
                 </template>
 
                 <!-- permissions menu -->
@@ -365,12 +365,12 @@ function handleCancelTurn() {
                         <wa-icon slot="icon" name="clock" variant="classic"></wa-icon>
                         For this turn
                     </wa-dropdown-item>
-                    <AppTooltip :for="approvePermsTurnId">Grant the requested permissions for the current turn only.</AppTooltip>
+                    <AppTooltip placement="left" :for="approvePermsTurnId">Grant the requested permissions for the current turn only.</AppTooltip>
                     <wa-dropdown-item :id="approvePermsSessionId" @click="emitApprove('session')">
                         <wa-icon slot="icon" name="rotate" variant="classic"></wa-icon>
                         For this session
                     </wa-dropdown-item>
-                    <AppTooltip :for="approvePermsSessionId">Grant the requested permissions for the full session.</AppTooltip>
+                    <AppTooltip placement="left" :for="approvePermsSessionId">Grant the requested permissions for the full session.</AppTooltip>
                 </template>
             </wa-dropdown>
         </div>
