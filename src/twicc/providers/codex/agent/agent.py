@@ -16,6 +16,7 @@ under that policy.
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import logging
 import time
 from typing import Any, ClassVar
@@ -680,11 +681,17 @@ class CodexAgent(BaseAgent):
         try:
             future = asyncio.run_coroutine_threadsafe(coro, self._loop)
             return future.result()
-        except asyncio.CancelledError:
+        except (asyncio.CancelledError, concurrent.futures.CancelledError):
             # Pending future was cancelled (kill, transport teardown). The
             # awaiter's ``finally`` already dropped the entry; we just have
             # to give the SDK something to send back to Codex so the JSON-RPC
             # response is well-formed and the read loop unblocks.
+            #
+            # We catch BOTH classes because the asyncio coroutine raises
+            # ``asyncio.CancelledError`` (a BaseException subclass since
+            # Python 3.8) but ``run_coroutine_threadsafe(...).result()``
+            # repackages it as ``concurrent.futures.CancelledError`` (an
+            # Exception subclass) on the worker-thread side.
             return default_response_for(method)
         except Exception as exc:
             # Any other failure of the bridge — log loudly and fall back to
