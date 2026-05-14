@@ -34,19 +34,6 @@ APPROVAL_METHODS: dict[str, str] = {
     "item/permissions/requestApproval":      "permissions",
 }
 
-# Wire response used by the sync handler when the future is cancelled
-# (typical: kill while waiting on a user click). Sending ``decline``
-# instead of ``cancel`` keeps the turn alive — the model can recover or
-# pick another approach instead of being aborted whole-cloth.
-_DEFAULT_KILL_RESPONSE_COMMAND_OR_FILE: dict = {"decision": "decline"}
-
-# Permissions has a different wire shape — see spec ``§1.1.c``.
-_DEFAULT_KILL_RESPONSE_PERMISSIONS: dict = {
-    "permissions": {},  # empty granted profile = nothing accorded
-    "scope": "turn",
-}
-
-
 def is_approval_method(method: str) -> bool:
     """Return True if ``method`` is one of the 3 approval RPCs we own."""
     return method in APPROVAL_METHODS
@@ -57,7 +44,7 @@ def derive_request_id(params: dict | None) -> str:
 
     Codex sometimes fans a single ``itemId`` (e.g. an ``ExecCommandBegin``)
     into several sub-exec approvals, each carrying its own ``approvalId``
-    (vérifié dans the schema description, ``ServerRequest.json:345-442``).
+    (verified in the schema description, ``ServerRequest.json:345-442``).
     Prefer ``approvalId`` when present, fall back to ``itemId``, and as a
     last-ditch produce a UUID so we never collide on empty payloads.
     """
@@ -74,7 +61,13 @@ def make_pending_request(method: str, params: dict | None) -> PendingRequest:
     attach side-band info — e.g. the streamed item payload for
     ``fileChange`` (which carries the diff). See
     :meth:`CodexAgent._enrich_params_with_item_payload`.
+
+    Raises:
+        ValueError: if ``method`` is not one of the Codex approval methods
+            (caller must gate with :func:`is_approval_method` first).
     """
+    if method not in APPROVAL_METHODS:
+        raise ValueError(f"Not a Codex approval method: {method!r}")
     tool_name = APPROVAL_METHODS[method]
     return PendingRequest(
         request_id=derive_request_id(params),
@@ -93,10 +86,23 @@ def default_response_for(method: str) -> dict:
     transport teardown — NOT by user-initiated ``Cancel turn`` (that goes
     through ``resolve_pending_request`` with the real wire decision).
 
-    Returns a shape that's valid for the requested ``method``:
+    Returns a freshly-built dict valid for the requested ``method``:
     - command / file: ``{"decision": "decline"}``
     - permissions:    ``{"permissions": {}, "scope": "turn"}``
+
+    Raises:
+        ValueError: if ``method`` is not one of the Codex approval methods
+            (caller must gate with :func:`is_approval_method` first).
     """
+    if method not in APPROVAL_METHODS:
+        raise ValueError(f"Not a Codex approval method: {method!r}")
     if method == "item/permissions/requestApproval":
-        return dict(_DEFAULT_KILL_RESPONSE_PERMISSIONS)
-    return dict(_DEFAULT_KILL_RESPONSE_COMMAND_OR_FILE)
+        # Wire shape per spec ``§1.1.c``: empty granted profile (``{}``)
+        # accords zero permissions; ``scope="turn"`` limits the (non-)
+        # grant to this turn only. Built inline on every call so callers
+        # can mutate freely without leaking state across invocations.
+        return {"permissions": {}, "scope": "turn"}
+    # Wire shape per spec ``§1.1.{a,b}``. We send ``decline`` rather than
+    # ``cancel`` so the turn stays alive — the model can recover or pick
+    # another approach instead of being aborted whole-cloth.
+    return {"decision": "decline"}
