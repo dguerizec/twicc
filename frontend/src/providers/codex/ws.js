@@ -19,6 +19,37 @@ export function sendCheckAuth() {
     return sendWsMessage({ type: 'codex:check_auth' })
 }
 
+/**
+ * Respond to a pending Codex tool-approval request raised by the SDK
+ * via the sync ↔ async bridge in CodexAgent. The ``responseData`` shape
+ * must already match the Codex wire format (see backend spec §9.3/§9.5):
+ *
+ *   commandExecution / fileChange:
+ *     { tool_name: 'commandExecution' | 'fileChange',
+ *       decision: 'accept' | 'acceptForSession' | 'decline' | 'cancel'
+ *                | { acceptWithExecpolicyAmendment: {...} }
+ *                | { applyNetworkPolicyAmendment: {...} } }
+ *
+ *   permissions:
+ *     { tool_name: 'permissions',
+ *       permissions: {...}, scope: 'turn' | 'session',
+ *       strictAutoReview?: boolean }
+ *
+ * The backend ``CodexWSHandler._build_codex_response`` validates this
+ * strictly and falls back to a safe default on any malformed payload, so
+ * the SDK is never left waiting.
+ *
+ * @returns {boolean} True if the message was sent.
+ */
+export function respondToPendingRequest(sessionId, requestId, responseData) {
+    return sendWsMessage({
+        type: 'codex:pending_request_response',
+        session_id: sessionId,
+        request_id: requestId,
+        ...responseData,
+    })
+}
+
 // ─── OpenAI statuspage helpers ───────────────────────────────────────────
 
 // Persists the last OpenAI statuspage value seen, so a page refresh during
