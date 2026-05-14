@@ -1,11 +1,15 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, useId } from 'vue'
+import AppTooltip from '../../../../ui/AppTooltip.vue'
 
 const props = defineProps({
     pendingRequest: { type: Object, required: true },
     isResponding: { type: Boolean, default: false },
 })
 const emit = defineEmits(['submit'])
+
+const denyButtonId = useId()
+const cancelTurnButtonId = useId()
 
 // Codex tool_name: 'commandExecution' | 'fileChange' | 'permissions'.
 const toolName = computed(() => props.pendingRequest.tool_name || 'unknown')
@@ -200,6 +204,7 @@ function handleCancelTurn() {
         <!-- Shared action row. Approve is a plain button for now; menus in Task 7. -->
         <div class="codex-pending-actions">
             <wa-button
+                :id="denyButtonId"
                 variant="danger"
                 appearance="outlined"
                 size="small"
@@ -209,8 +214,10 @@ function handleCancelTurn() {
                 <wa-icon slot="start" name="xmark" variant="classic"></wa-icon>
                 Deny
             </wa-button>
+            <AppTooltip :for="denyButtonId">Refuse this action. Codex may try another approach.</AppTooltip>
             <wa-button
                 v-if="supportsCancelTurn"
+                :id="cancelTurnButtonId"
                 variant="neutral"
                 appearance="outlined"
                 size="small"
@@ -220,6 +227,7 @@ function handleCancelTurn() {
                 <wa-icon slot="start" name="stop" variant="classic"></wa-icon>
                 Cancel turn
             </wa-button>
+            <AppTooltip v-if="supportsCancelTurn" :for="cancelTurnButtonId">End this turn. Codex returns control to you. Different from Stop (which kills the agent).</AppTooltip>
             <wa-dropdown placement="top-end">
                 <wa-button
                     slot="trigger"
