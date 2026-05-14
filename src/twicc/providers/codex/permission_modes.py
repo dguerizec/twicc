@@ -19,10 +19,10 @@ Wire / preset table (kept in sync with the spec ``§4 Étape 7``):
 +-------------+-------------------+--------------------+-----------+----------------+
 
 ``DEFAULT_MODE`` is the value used when ``Session.permission_mode`` is unset
-(``None``) or unknown. In PR2a we ship ``"yolo"`` to preserve the current
-behaviour: every Codex session that doesn't have an explicit mode keeps
-running with the bypass. PR2b flips this to ``"auto"`` once the frontend
-banner is wired.
+(``None``) or unknown. Since PR2b it is ``"auto"`` — ``workspace-write`` +
+``on-request``. Users can opt into a more permissive mode (``"autonomous"``
+to skip prompts, ``"yolo"`` for full unrestricted access) or a stricter one
+(``"read_only"``) via the session settings picker.
 """
 
 from __future__ import annotations
@@ -42,10 +42,12 @@ _PRESET_MAP: dict[str, tuple[SandboxMode, AskForApproval]] = {
     "yolo":       (SandboxMode.danger_full_access,  AskForApproval("never")),
 }
 
-# PR2a ships this as ``"yolo"`` so existing Codex sessions keep behaving like
-# the current bypass. PR2b flips it to ``"auto"`` (workspace-write +
-# on-request).
-DEFAULT_MODE = "yolo"
+# ``"auto"`` is the canonical default since PR2b: ``workspace-write`` sandbox
+# + ``on-request`` approval policy. Existing sessions with ``permission_mode``
+# already stored in the DB keep their stored value; sessions where the field
+# is NULL fall on this default. To recover the pre-PR2a unrestricted
+# behaviour, pick ``"yolo"`` in the session picker.
+DEFAULT_MODE = "auto"
 
 
 def resolve_codex_policy(mode: str | None) -> tuple[SandboxMode, AskForApproval]:
