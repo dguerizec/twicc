@@ -744,7 +744,11 @@ class ClaudeCodeSessionCompute(BaseSessionCompute):
         return paths
 
     def compute_link_extra(
-        self, parsed_json: dict, tool_name: str
+        self,
+        parsed_json: dict,
+        tool_name: str,
+        *,
+        session_id: str | None = None,  # noqa: ARG002 — kept for signature compat
     ) -> str | None:
         """Return the JSON ``ToolResultLink.extra`` payload for this result.
 
@@ -752,6 +756,11 @@ class ClaudeCodeSessionCompute(BaseSessionCompute):
         every other tool returns ``None`` and the inherited machinery
         stores ``ToolResultLink.extra = NULL`` for that link. Source
         of truth is the JSONL ``toolUseResult`` block.
+
+        ``session_id`` is part of the base signature for Codex's spinner
+        logic and ignored here — Claude Code's JSONL ``toolUseResult.is_error``
+        already covers the deny case, so the spinner has no equivalent
+        side-channel to consult.
 
         Output JSON shape (``orjson.dumps`` of the dict):
 

@@ -799,7 +799,7 @@ class BaseSessionCompute:
         raise NotImplementedError
 
     def compute_link_extra(
-        self, parsed_json: dict, tool_name: str
+        self, parsed_json: dict, tool_name: str, *, session_id: str | None = None,
     ) -> str | None:
         """
         Compute the ``ToolResultLink.extra`` JSON payload for this result.
@@ -810,6 +810,12 @@ class BaseSessionCompute:
         tools, completion flags for streamed tools, etc.) as a JSON string
         ready to store in :attr:`ToolResultLink.extra`, or ``None`` when no
         data applies.
+
+        ``session_id`` is forwarded so providers can cross-reference
+        per-session side-state (e.g. Codex's in-memory ``_denied_tool_ids``
+        map, which the spinner logic needs to flag a refused tool as
+        terminated when the JSONL trailer says nothing of the sort).
+        Providers that don't need it ignore the kwarg.
 
         Aggregation across multiple links of the same ``tool_use_id`` is
         handled downstream via ``Max`` — providers must therefore produce
@@ -1175,7 +1181,9 @@ class BaseSessionCompute:
             if tool_use_id in tool_use_entries:
                 tool_name = tool_use_entries[tool_use_id]
 
-                extra = self.compute_link_extra(parsed_json, tool_name)
+                extra = self.compute_link_extra(
+                    parsed_json, tool_name, session_id=session_id,
+                )
                 _, created = ToolResultLink.objects.get_or_create(
                     session_id=session_id,
                     tool_use_line_num=candidate.line_num,
@@ -1757,7 +1765,9 @@ class BaseSessionCompute:
                 tu_entry = tool_use_map[tool_result_ref]
                 tu_line_num = tu_entry.line_num
                 tu_name = tu_entry.tool_name
-                extra = self.compute_link_extra(parsed, tu_name)
+                extra = self.compute_link_extra(
+                    parsed, tu_name, session_id=session_id,
+                )
                 error = analysis.tool_result_error
                 new_key = (tool_result_ref, item.line_num)
                 all_tool_result_links[new_key] = serialize_tool_result_link(ToolResultLink(

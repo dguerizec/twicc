@@ -1546,7 +1546,11 @@ class CodexSessionCompute(BaseSessionCompute):
         return [p for p in changes if isinstance(p, str) and p.startswith("/")]
 
     def compute_link_extra(
-        self, parsed_json: dict, tool_name: str
+        self,
+        parsed_json: dict,
+        tool_name: str,
+        *,
+        session_id: str | None = None,
     ) -> str | None:
         """Return the JSON ``ToolResultLink.extra`` payload for this result.
 
@@ -1629,9 +1633,28 @@ class CodexSessionCompute(BaseSessionCompute):
                 if not isinstance(output, str):
                     return None
                 if not parse_exec_command_status(output).is_terminated:
-                    return None
-            # Atomic result row, or the closing chunk of a chained
-            # sequence — flag it so the card stops spinning.
+                    # Trailer says the process is still running, but the
+                    # user may have refused the approval (Deny / Cancel
+                    # turn) — in that case Codex never sends a closing
+                    # chunk and the spinner would spin forever. Consult
+                    # the agent-side map populated by
+                    # ``CodexAgent._record_decision_outcome`` (signal-based,
+                    # no text pattern-match) — if the call_id was refused,
+                    # the tool is over: fall through to flag is_terminated.
+                    call_id = payload.get("call_id")
+                    if (
+                        not isinstance(call_id, str)
+                        or session_id is None
+                        or _denied_tool_reason(session_id, call_id) is None
+                    ):
+                        return None
+                    logger.debug(
+                        "Codex compute: terminating refused exec_command "
+                        "via denied-tool signal: session=%s call_id=%s",
+                        session_id, call_id,
+                    )
+            # Atomic result row, the closing chunk of a chained sequence,
+            # or a refused chained call — flag it so the card stops spinning.
             return orjson.dumps({"is_terminated": True}).decode()
 
         if tool_name != "apply_patch":
