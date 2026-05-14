@@ -613,7 +613,7 @@ function handleSubmitQuestions() {
         <!-- ================================================================ -->
         <!-- Claude branch: tool approval -->
         <!-- ================================================================ -->
-        <template v-else-if="requestType === 'tool_approval'">
+        <template v-else-if="provider === 'claude_code' && requestType === 'tool_approval'">
             <!-- Tool info header -->
             <div class="pending-request-header">
                 <wa-icon name="shield-halved" class="pending-request-icon"></wa-icon>
@@ -787,7 +787,7 @@ function handleSubmitQuestions() {
         <!-- ================================================================ -->
         <!-- Ask User Question Variant -->
         <!-- ================================================================ -->
-        <template v-else-if="requestType === 'ask_user_question'">
+        <template v-else-if="provider === 'claude_code' && requestType === 'ask_user_question'">
             <!-- Header -->
             <div class="pending-request-header">
                 <wa-icon name="circle-question" class="pending-request-icon question-icon"></wa-icon>
