@@ -5,8 +5,10 @@ Minimal v1: no live settings (Codex doesn't expose a hot path for permission
 or model changes on a running thread the way Claude Code does) and no
 subagents. Images are forwarded to the Codex SDK as ``ImageInput`` data
 URLs; documents (PDF / TXT) have no Codex protocol equivalent and are
-silently dropped with a warning. Approvals are bypassed at the server
-level via ``sandbox=danger_full_access`` and ``approval_policy="never"``.
+silently dropped with a warning. Approvals are routed through ``CodexAgent``'s
+sync ↔ async bridge to the shared ``PendingRequest`` plumbing; the sandbox +
+approval policy come from the user's ``permission_mode`` preset via
+:func:`resolve_codex_policy` (see ``permission_modes.py``).
 """
 
 from __future__ import annotations
@@ -16,9 +18,7 @@ from typing import Any
 
 from codex_app_server import (
     AppServerConfig,
-    AskForApproval,
     AsyncCodex,
-    SandboxMode,
 )
 
 from twicc.agent import AgentState, BaseAgent, BaseAgentManager
@@ -26,6 +26,7 @@ from twicc.core.enums import Provider
 from twicc.providers.helpers import AgentSettings, get_provider_helpers
 
 from ..bin import resolve_bundled_binary
+from ..permission_modes import resolve_codex_policy
 from .agent import CodexAgent
 
 logger = logging.getLogger(__name__)
@@ -200,13 +201,13 @@ class CodexAgentManager(BaseAgentManager):
         frontend-side draft id — Codex doesn't accept it, so we let
         ``thread_start`` mint a fresh canonical id and use that.
 
-        Approvals are bypassed at the server level for v1:
-        ``sandbox=danger_full_access`` removes file/exec restrictions, and
-        ``approval_policy="never"`` tells the server not to ask. Combined,
-        the default sync approval_handler in ``AppServerClient`` (which
-        accepts cmd+file approvals automatically) should never be reached;
-        the residual risk is an exotic approval type that falls into
-        ``return {}`` — accepted for v1.
+        Sandbox + approval policy come from the user's preset (the
+        ``permission_mode`` field on the bundle), translated by
+        :func:`resolve_codex_policy`. In PR2a the default is still
+        ``"yolo"`` (= ``danger_full_access`` + ``never``) so sessions
+        without an explicit mode behave like the previous bypass. PR2b
+        flips that default to ``"auto"`` once the frontend can ack
+        approvals.
 
         The agent_settings bundle is stored on the agent for
         :attr:`BaseAgent.agent_settings` contract compliance but otherwise
@@ -224,8 +225,13 @@ class CodexAgentManager(BaseAgentManager):
         # raises, we close the transport so we don't leak the codex
         # subprocess.
         try:
-            approval_policy = AskForApproval.model_validate("never")
-            sandbox = SandboxMode.danger_full_access
+            # Translate the user's preset (Session.permission_mode) into the
+            # SDK couple. ``DEFAULT_MODE = "yolo"`` (= the previous bypass)
+            # applies when permission_mode is unset, so existing sessions
+            # without an explicit mode keep the same wire behaviour.
+            sandbox, approval_policy = resolve_codex_policy(
+                settings.permission_mode,
+            )
             # Per-thread config overrides. ``config`` on thread_start /
             # thread_resume reaches the server as a fresh ``ConfigToml`` patch
             # scoped to this thread, which is more reliable than ``-c`` CLI
