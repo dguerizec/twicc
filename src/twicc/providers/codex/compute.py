@@ -719,6 +719,31 @@ def _event_msg_text(parsed_json: dict, expected_subtype: str) -> str | None:
     return None
 
 
+def _denied_tool_reason(session_id: str, call_id: str) -> str | None:
+    """Lookup the live agent's ``_denied_tool_ids`` map for a refusal record.
+
+    ``Provider`` is already imported at module top (used elsewhere in
+    this file). Only ``get_agent_manager_registry`` is lazily imported
+    to avoid a static cycle between ``compute`` and the agent package.
+    Returns ``None`` cleanly if anything is missing (no live agent, no
+    entry, no manager registered).
+    """
+    try:
+        from twicc.agent.registry import get_agent_manager_registry
+    except ImportError:
+        return None
+    try:
+        manager = get_agent_manager_registry().get(Provider.CODEX)
+    except Exception:
+        # Registry not yet initialized (early startup, background compute
+        # before the live process boots, ...).
+        return None
+    if manager is None:
+        return None
+    # The accessor is defensive: returns None if no live agent for the session.
+    return manager.get_denied_tool_reason(session_id, call_id)
+
+
 class CodexSessionCompute(BaseSessionCompute):
     """Concrete :class:`BaseSessionCompute` for Codex sessions.
 
@@ -1398,7 +1423,7 @@ class CodexSessionCompute(BaseSessionCompute):
         self,
         parsed_json: dict,
         *,
-        session_id: str,  # noqa: ARG002 (kept for signature compatibility; future remap may use it)
+        session_id: str,
         tool_use_map: dict | None = None,  # noqa: ARG002
     ) -> ToolResultInfo | None:
         # Mirror of ``extract_tool_use_entries`` for the matching result
@@ -1452,6 +1477,19 @@ class CodexSessionCompute(BaseSessionCompute):
             return None
         if not isinstance(call_id, str) or not call_id:
             return None
+
+        # 4th error source: the live agent's _denied_tool_ids map.
+        # Codex's function_call_output line carries the rejection text in
+        # ``output`` ("exec_command failed for ... Rejected(...)" /
+        # "aborted by user after X.Xs") but no is_error flag. We don't
+        # pattern-match the text — we consult the agent-side map populated
+        # at WS-response time by ``CodexAgent._record_decision_outcome``.
+        # If the user refused, the recorded reason supersedes any
+        # exit-code text that ``_*_error`` helpers might have produced.
+        denied_reason = _denied_tool_reason(session_id, call_id)
+        if denied_reason is not None:
+            error_text = denied_reason
+
         return ToolResultInfo(
             tool_use_id=call_id,
             is_error=error_text is not None,

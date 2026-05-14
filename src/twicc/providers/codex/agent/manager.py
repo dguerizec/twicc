@@ -180,6 +180,28 @@ class CodexAgentManager(BaseAgentManager):
                 settings=settings, images=images,
             )
 
+    def get_denied_tool_reason(
+        self, session_id: str, item_id: str,
+    ) -> str | None:
+        """Return the recorded refusal reason for ``(session_id, item_id)``, or None.
+
+        Called by :class:`twicc.providers.codex.compute.CodexSessionCompute`
+        to surface user-initiated refusals (Deny / Cancel turn / empty
+        permissions) as ``ToolResultLink.error`` when the matching
+        ``function_call_output`` arrives in the JSONL.
+
+        Returns ``None`` if there is no live agent for the session (e.g.
+        the agent died and was GC'd, or this is a background re-compute
+        on a session from a previous backend run) or if the item_id was
+        never refused.
+        """
+        agent = self._agents.get(session_id)
+        if agent is None:
+            return None
+        # ``CodexAgent`` owns ``_denied_tool_ids`` — see the comment on the
+        # map in ``CodexAgent.__init__``.
+        return agent._denied_tool_ids.get(item_id)
+
     # ------------------------------------------------------------------
     # Factory hook
     # ------------------------------------------------------------------
