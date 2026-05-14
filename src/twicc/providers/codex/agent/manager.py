@@ -203,11 +203,11 @@ class CodexAgentManager(BaseAgentManager):
 
         Sandbox + approval policy come from the user's preset (the
         ``permission_mode`` field on the bundle), translated by
-        :func:`resolve_codex_policy`. In PR2a the default is still
-        ``"yolo"`` (= ``danger_full_access`` + ``never``) so sessions
-        without an explicit mode behave like the previous bypass. PR2b
-        flips that default to ``"auto"`` once the frontend can ack
-        approvals.
+        :func:`resolve_codex_policy`. The default preset is ``"auto"``
+        (``workspace-write`` + ``on-request``) so a session without an
+        explicit mode emits approvals on shell/network/filesystem
+        operations that step outside the workspace; users opt into
+        ``"yolo"`` to recover the pre-existing unrestricted bypass.
 
         The agent_settings bundle is stored on the agent for
         :attr:`BaseAgent.agent_settings` contract compliance but otherwise
@@ -225,10 +225,10 @@ class CodexAgentManager(BaseAgentManager):
         # raises, we close the transport so we don't leak the codex
         # subprocess.
         try:
-            # Translate the user's preset (Session.permission_mode) into the
-            # SDK couple. ``DEFAULT_MODE = "yolo"`` (= the previous bypass)
-            # applies when permission_mode is unset, so existing sessions
-            # without an explicit mode keep the same wire behaviour.
+            # Translate the user's preset (Session.permission_mode) into
+            # the SDK couple. Unset / unknown modes fall on
+            # ``permission_modes.DEFAULT_MODE`` (currently ``"auto"`` =
+            # ``workspace-write`` + ``on-request``).
             sandbox, approval_policy = resolve_codex_policy(
                 settings.permission_mode,
             )
@@ -303,12 +303,12 @@ class CodexAgentManager(BaseAgentManager):
 
         Skips agents waiting on a user response (``pending_requests``
         populated by the sync ↔ async approval bridge in
-        :class:`CodexAgent`). Under the PR2a default (``yolo``) Codex
-        doesn't emit approvals so the skip is dormant, but it becomes the
-        load-bearing path as soon as a session is created with a more
-        restrictive ``permission_mode``. No equivalent of Claude's
-        ``SessionCron`` check because :class:`SessionCron` is Claude
-        Code-specific.
+        :class:`CodexAgent`). The skip is dormant for sessions running in
+        ``yolo`` (the bridge stays quiet under
+        ``approval_policy="never"``) and load-bearing for any session in
+        ``auto`` / ``read_only`` / ``autonomous`` modes. No equivalent of
+        Claude's ``SessionCron`` check because :class:`SessionCron` is
+        Claude Code-specific.
 
         Per-state timeouts themselves live in
         :meth:`BaseAgentManager._state_based_timeout`.

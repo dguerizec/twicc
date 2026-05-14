@@ -7,10 +7,11 @@ through the regular session_item path, so the UI catches up at end-of-turn
 granularity. Approvals: the agent installs a sync ↔ async bridge on the SDK's private
 ``_client._sync._approval_handler`` slot and routes the 3 Codex approval
 methods (commandExecution, fileChange, permissions) through the shared
-``BaseAgent._await_pending_request`` plumbing. In PR2a the manager still
-defaults sessions to ``yolo`` (= ``danger_full_access`` + ``never``), so
-the bridge is installed-but-dormant — Codex won't actually emit approvals
-under that policy.
+``BaseAgent._await_pending_request`` plumbing. Whether approvals actually
+fire depends on the resolved ``permission_mode`` for the session — the
+default (``auto`` = ``workspace-write`` + ``on-request``) does emit them;
+the ``yolo`` opt-out (``danger_full_access`` + ``never``) keeps the bridge
+dormant.
 """
 
 from __future__ import annotations
