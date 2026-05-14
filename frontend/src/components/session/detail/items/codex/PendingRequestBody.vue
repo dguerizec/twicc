@@ -1,101 +1,195 @@
 <script setup>
-// PendingRequestBody.vue (Codex) — minimal stub.
-//
-// Renders the wire payload from the backend Codex approval bridge plus
-// 3 action buttons (Approve / Deny / Cancel turn). PR2b is intentionally
-// rough on the rendering side — PR3 will specialise the layout per
-// ``tool_name`` (commandExecution / fileChange / permissions) and add the
-// split-button Approve menu (Once / For session / + add allow rule).
-//
-// This component does NOT own:
-// - The card outer wrapper (<wa-divider>, container div)
-// - The shared header (icon + title + count badge + expand toggle)
-// - The dispatch via respondToPendingRequest
-//
-// Instead, each button handler emits ('submit', payload) and the parent shell
-// is responsible for dispatching the response.
-
 import { computed } from 'vue'
-import JsonHumanView from '../../../../json/JsonHumanView.vue'
 
 const props = defineProps({
-    sessionId: { type: String, required: true },
     pendingRequest: { type: Object, required: true },
     isResponding: { type: Boolean, default: false },
 })
-
 const emit = defineEmits(['submit'])
 
 // Codex tool_name: 'commandExecution' | 'fileChange' | 'permissions'.
-// Unknown tool_names fall through with a generic JSON view.
 const toolName = computed(() => props.pendingRequest.tool_name || 'unknown')
 
-// The wire params (as injected by the backend's make_pending_request).
+// Wire params (as injected by make_pending_request).
 const toolInput = computed(() => props.pendingRequest.tool_input || {})
 
-// Whether the request type supports a "Cancel turn" decision. Permissions
-// have no ``cancel`` wire variant per spec §1.1.c, so we hide the third
-// button for them.
+// commandExecution-specific fields
+const command = computed(() => toolInput.value.command)
+const cwd = computed(() => toolInput.value.cwd)
+const reason = computed(() => toolInput.value.reason)
+const commandActions = computed(() => toolInput.value.commandActions || [])
+const networkApprovalContext = computed(() => toolInput.value.networkApprovalContext)
+const proposedExecpolicyAmendment = computed(() => toolInput.value.proposedExecpolicyAmendment)
+const proposedNetworkPolicyAmendments = computed(() => toolInput.value.proposedNetworkPolicyAmendments)
+
+// fileChange-specific fields
+const fileChanges = computed(() => {
+    const payload = toolInput.value._item_payload
+    if (!payload) return []
+    const changes = payload.changes || []
+    if (Array.isArray(changes)) return changes
+    // ``changes`` may be a dict { path: change } depending on the SDK shape;
+    // normalise to an array of {path, kind, …}.
+    if (typeof changes === 'object') {
+        return Object.entries(changes).map(([path, change]) => ({
+            path,
+            ...(change || {}),
+        }))
+    }
+    return []
+})
+
+// permissions-specific fields
+const requestedPermissions = computed(() => toolInput.value.permissions || {})
+
+// Whether the "Cancel turn" button is available for this tool_name.
+// Permissions don't have a "cancel" wire variant per spec §1.1.c.
 const supportsCancelTurn = computed(
     () => toolName.value === 'commandExecution' || toolName.value === 'fileChange',
 )
 
-/**
- * Build and emit the response payload. For commandExecution / fileChange
- * the payload is ``{tool_name, decision: <string>}``. For permissions the
- * Approve payload is ``{tool_name, permissions: <granted>, scope: 'turn'}``,
- * Deny is ``{tool_name, permissions: {}, scope: 'turn'}``.
- *
- * @param {'accept' | 'decline' | 'cancel'} action - The user's choice.
- */
-function send(action) {
-    if (props.isResponding) return
-
-    const payload = { tool_name: toolName.value }
+function handleApprove() {
     if (toolName.value === 'permissions') {
-        // Approve = grant exactly what was requested. Deny / cancel = empty.
-        const granted = action === 'accept' ? (toolInput.value.permissions || {}) : {}
-        payload.permissions = granted
-        payload.scope = 'turn'
+        emit('submit', {
+            tool_name: 'permissions',
+            permissions: requestedPermissions.value,
+            scope: 'turn',
+        })
     } else {
-        // commandExecution / fileChange / unknown — use the wire string.
-        payload.decision = action
+        emit('submit', { tool_name: toolName.value, decision: 'accept' })
     }
-
-    emit('submit', payload)
 }
 
-function handleApprove() { send('accept') }
-function handleDeny() { send('decline') }
-function handleCancelTurn() { send('cancel') }
+function handleDeny() {
+    if (toolName.value === 'permissions') {
+        emit('submit', {
+            tool_name: 'permissions',
+            permissions: {},
+            scope: 'turn',
+        })
+    } else {
+        emit('submit', { tool_name: toolName.value, decision: 'decline' })
+    }
+}
+
+function handleCancelTurn() {
+    emit('submit', { tool_name: toolName.value, decision: 'cancel' })
+}
 </script>
 
 <template>
     <div class="codex-pending-body">
-        <div class="codex-pending-header">
-            <span class="codex-pending-tool-badge">{{ toolName }}</span>
-        </div>
+        <!-- commandExecution rich body -->
+        <template v-if="toolName === 'commandExecution'">
+            <div class="codex-pending-section">
+                <div class="codex-pending-summary">
+                    <span class="codex-summary-label">Command</span>
+                    <code class="codex-summary-code">{{ command }}</code>
+                </div>
+                <div v-if="cwd" class="codex-pending-summary">
+                    <span class="codex-summary-label">cwd</span>
+                    <code class="codex-summary-code">{{ cwd }}</code>
+                </div>
+                <div v-if="reason" class="codex-pending-reason">
+                    <wa-icon name="comment" variant="classic"></wa-icon>
+                    <span>{{ reason }}</span>
+                </div>
+                <div v-if="commandActions.length" class="codex-action-chips">
+                    <wa-badge
+                        v-for="(action, idx) in commandActions"
+                        :key="idx"
+                        variant="neutral"
+                    >{{ action.kind || 'action' }}{{ action.target ? `: ${action.target}` : '' }}</wa-badge>
+                </div>
+                <div v-if="networkApprovalContext" class="codex-pending-network">
+                    <wa-icon name="globe" variant="classic"></wa-icon>
+                    <span>
+                        Wants network access to
+                        <code>{{ networkApprovalContext.host }}</code>
+                        via {{ networkApprovalContext.protocol || 'unknown' }}
+                    </span>
+                </div>
+            </div>
+        </template>
 
-        <div class="codex-pending-payload">
-            <JsonHumanView :value="toolInput" />
-        </div>
+        <!-- fileChange rich body -->
+        <template v-else-if="toolName === 'fileChange'">
+            <div class="codex-pending-section">
+                <div class="codex-pending-summary">
+                    <span class="codex-summary-label">
+                        Wants to modify {{ fileChanges.length }} file{{ fileChanges.length === 1 ? '' : 's' }}
+                    </span>
+                </div>
+                <ul v-if="fileChanges.length" class="codex-file-list">
+                    <li v-for="(change, idx) in fileChanges" :key="idx" class="codex-file-row">
+                        <wa-badge
+                            :variant="change.kind === 'delete' ? 'danger'
+                                : change.kind === 'add' ? 'success' : 'neutral'"
+                        >{{ change.kind || 'update' }}</wa-badge>
+                        <code class="codex-file-path">{{ change.path }}</code>
+                    </li>
+                </ul>
+                <div v-if="reason" class="codex-pending-reason">
+                    <wa-icon name="comment" variant="classic"></wa-icon>
+                    <span>{{ reason }}</span>
+                </div>
+            </div>
+        </template>
 
+        <!-- permissions rich body -->
+        <template v-else-if="toolName === 'permissions'">
+            <div class="codex-pending-section">
+                <div class="codex-pending-summary">
+                    <span class="codex-summary-label">Requests additional permissions</span>
+                </div>
+                <ul class="codex-permission-list">
+                    <li v-for="(value, key) in requestedPermissions" :key="key" class="codex-permission-row">
+                        <code class="codex-permission-key">{{ key }}</code>
+                        <span class="codex-permission-value">{{ JSON.stringify(value) }}</span>
+                    </li>
+                </ul>
+                <div v-if="reason" class="codex-pending-reason">
+                    <wa-icon name="comment" variant="classic"></wa-icon>
+                    <span>{{ reason }}</span>
+                </div>
+            </div>
+        </template>
+
+        <!-- Unknown tool_name safety net -->
+        <template v-else>
+            <div class="codex-pending-section"><em>Unknown tool_name: {{ toolName }}</em></div>
+        </template>
+
+        <!-- Shared action row. Approve is a plain button for now; menus in Task 7. -->
         <div class="codex-pending-actions">
-            <wa-button variant="danger" :disabled="isResponding" @click="handleDeny">
-                <wa-icon slot="start" name="xmark"></wa-icon>
+            <wa-button
+                variant="danger"
+                appearance="outlined"
+                size="small"
+                :disabled="isResponding"
+                @click="handleDeny"
+            >
+                <wa-icon slot="start" name="xmark" variant="classic"></wa-icon>
                 Deny
             </wa-button>
             <wa-button
                 v-if="supportsCancelTurn"
                 variant="neutral"
+                appearance="outlined"
+                size="small"
                 :disabled="isResponding"
                 @click="handleCancelTurn"
             >
-                <wa-icon slot="start" name="stop"></wa-icon>
+                <wa-icon slot="start" name="stop" variant="classic"></wa-icon>
                 Cancel turn
             </wa-button>
-            <wa-button variant="success" :disabled="isResponding" @click="handleApprove">
-                <wa-icon slot="start" name="check"></wa-icon>
+            <wa-button
+                variant="brand"
+                size="small"
+                :disabled="isResponding"
+                @click="handleApprove"
+            >
+                <wa-icon slot="start" name="check" variant="classic"></wa-icon>
                 Approve
             </wa-button>
         </div>
@@ -106,38 +200,97 @@ function handleCancelTurn() { send('cancel') }
 .codex-pending-body {
     display: flex;
     flex-direction: column;
-    gap: 0.75rem;
+    gap: var(--wa-space-s);
 }
 
-.codex-pending-header {
+.codex-pending-section {
     display: flex;
-    align-items: center;
+    flex-direction: column;
+    gap: var(--wa-space-xs);
+    background: var(--wa-color-neutral-5);
+    border-radius: var(--wa-border-radius-m);
+    padding: var(--wa-space-s);
 }
 
-.codex-pending-tool-badge {
-    font-size: 0.75rem;
-    font-weight: 600;
+.codex-pending-summary {
+    display: flex;
+    align-items: baseline;
+    gap: var(--wa-space-s);
+    flex-wrap: wrap;
+}
+
+.codex-summary-label {
+    color: var(--wa-color-text-quiet);
+    font-size: var(--wa-font-size-xs);
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    padding: 0.25rem 0.5rem;
-    background: var(--wa-color-neutral-90);
-    border-radius: 4px;
-    color: var(--wa-color-neutral-30);
+    font-weight: 600;
 }
 
-.codex-pending-payload {
-    max-height: 400px;
-    overflow: auto;
-    border: 1px solid var(--wa-color-neutral-90);
-    border-radius: 6px;
-    padding: 0.5rem;
-    background: var(--wa-color-neutral-95);
+.codex-summary-code {
+    font-family: var(--wa-font-family-mono);
+    font-size: var(--wa-font-size-s);
+    background: var(--wa-color-neutral-fill-quiet);
+    padding: 2px var(--wa-space-2xs);
+    border-radius: var(--wa-border-radius-s);
+    word-break: break-all;
+}
+
+.codex-pending-reason {
+    display: flex;
+    align-items: center;
+    gap: var(--wa-space-xs);
+    color: var(--wa-color-text-quiet);
+    font-size: var(--wa-font-size-s);
+}
+
+.codex-pending-network {
+    display: flex;
+    align-items: center;
+    gap: var(--wa-space-xs);
+    color: var(--wa-color-text-quiet);
+    font-size: var(--wa-font-size-s);
+}
+
+.codex-action-chips {
+    display: flex;
+    gap: var(--wa-space-xs);
+    flex-wrap: wrap;
+}
+
+.codex-file-list,
+.codex-permission-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--wa-space-2xs);
+}
+
+.codex-file-row,
+.codex-permission-row {
+    display: flex;
+    align-items: center;
+    gap: var(--wa-space-s);
+}
+
+.codex-file-path,
+.codex-permission-key {
+    font-family: var(--wa-font-family-mono);
+    font-size: var(--wa-font-size-s);
+    word-break: break-all;
+}
+
+.codex-permission-value {
+    font-size: var(--wa-font-size-s);
+    color: var(--wa-color-text-quiet);
 }
 
 .codex-pending-actions {
     display: flex;
-    gap: 0.5rem;
-    justify-content: flex-end;
     flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: var(--wa-space-s);
 }
 </style>
