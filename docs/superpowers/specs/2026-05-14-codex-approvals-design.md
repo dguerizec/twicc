@@ -859,11 +859,18 @@ _PRESET_MAP: dict[str, tuple[SandboxMode, AskForApproval]] = {
     "autonomous": (SandboxMode.workspace_write,    AskForApproval("never")),
     "yolo":       (SandboxMode.danger_full_access, AskForApproval("never")),
 }
+# CANONICAL DEFAULT after full rollout. PR2a SHIPS with "yolo" so existing
+# Codex sessions keep behaving like the current bypass. PR2b flips this to "auto".
 DEFAULT_MODE = "auto"
 
 def resolve_codex_policy(mode: str | None) -> tuple[SandboxMode, AskForApproval]:
     return _PRESET_MAP.get(mode or DEFAULT_MODE, _PRESET_MAP[DEFAULT_MODE])
 ```
+
+> ⚠️ **PR-level value of `DEFAULT_MODE`** :
+> - **PR2a** ships with `DEFAULT_MODE = "yolo"` (equivalent to the current bypass — no user-visible change).
+> - **PR2b** flips it to `"auto"` (= `workspace-write` + `on-request`) as the new permanent default.
+> - **PR3** adds `"strict"` to the preset map (frontend constants.js + the entry above).
 
 À insérer dans `_create_agent` du manager (qui hardcode aujourd'hui `never`/`danger-full-access`).
 
@@ -1160,15 +1167,13 @@ Si invalide → `logger.error("invalid decision payload from frontend: %r", cont
 - Mise à jour CHANGELOG.md.
 - ✅ Mergeable seule.
 
-Ordre logique de PR / commits :
+### Acceptance criteria par PR
 
-1. **Refactor "factor BaseAgent pending requests"** — pas de feature, juste remonter le code claude_code → base. Tests verts.
-2. **Codex approvals backend** — `_sync_approval_handler` + WS handler + un fallback "auto-decline" minimal sans UI. Test : on lance Codex en mode `workspace-write` + `on-request` et on voit qu'il ne prompt plus auto-accept silencieusement.
-3. **Frontend factor PendingRequestForm** — dispatcher provider-agnostique + sous-composant Codex stub.
-4. **Frontend riche** — boutons par tool, parsing des params, allow-rule UI.
-5. **Settings Codex** — selon Q1.
-
-Tu veux suivre cet ordre ? Ou autre ?
+- **PR1** : Claude sessions continuent de marcher exactement comme avant (approval flow CC inchangé end-to-end). `BaseAgent` expose les dicts/property/helpers de pending requests, utilisables par n'importe quel provider. Aucune session Codex impactée (bypass toujours en place).
+- **PR2a** : Tout le code Codex approval est compilable et chargeable. Une session Codex démarrée sans `permission_mode` explicite tourne TOUJOURS en mode `yolo` (= `danger-full-access` + `never`) — comportement strictement identique à avant. Aucune approval UI ne se déclenche. Le `_PRESET_MAP` existe avec 4 entrées (`read_only`/`auto`/`autonomous`/`yolo`). Le monkey-patch handler est installé. WS handler + validation présents mais jamais sollicités.
+- **PR2b** : Une session Codex fraîche démarrée sans `permission_mode` explicite tombe sur `DEFAULT_MODE = "auto"` (= `workspace-write` + `on-request`). À la première commande shell qui sort des opérations triviales, le frontend affiche une PendingRequest avec 3 boutons (Approve / Deny / Cancel turn). L'user peut cliquer et la session reprend. Pareil pour `fileChange` et `permissions`. Sessions Claude inchangées.
+- **PR3** : Le bouton Approve devient un split-button avec menu déroulant. `commandExecution` Approve menu : Once / For session / +add allow rule (conditionnel). `fileChange` Approve menu : Once / For session. `permissions` Approve menu : For this turn / For this session. Le rendu spécifique par type est en place. Le 5ème mode `strict` apparaît dans le picker frontend et fonctionne côté backend.
+- **PR4** : Tests unitaires verts pour `_build_codex_response`, `make_pending_request`, `default_response_for`, `resolve_codex_policy`, `derive_request_id`. Mémoire `project_codex_approvals.md` existe. CHANGELOG.md mentionne la feature dans `[Unreleased]`.
 
 ---
 
