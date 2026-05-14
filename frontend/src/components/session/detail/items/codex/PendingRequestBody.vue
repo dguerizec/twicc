@@ -226,7 +226,7 @@ function handleCancelTurn() {
                     variant="brand"
                     size="small"
                     :disabled="isResponding"
-                    caret
+                    with-caret
                 >
                     <wa-icon slot="start" name="check" variant="classic"></wa-icon>
                     Approve
