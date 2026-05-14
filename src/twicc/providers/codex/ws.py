@@ -115,9 +115,11 @@ class CodexWSHandler:
         "accept", "acceptForSession", "decline", "cancel",
     }
     # Object-variant keys for command (network and execpolicy amendments).
-    _COMMAND_DICT_VARIANTS: set[str] = {
-        "acceptWithExecpolicyAmendment",
-        "applyNetworkPolicyAmendment",
+    # The mapped tuple is (expected inner-payload key, expected inner-value
+    # type) — see spec §1.1.a for the wire shape of each variant.
+    _COMMAND_DICT_VARIANTS: dict[str, tuple[str, type]] = {
+        "acceptWithExecpolicyAmendment": ("execpolicy_amendment", list),
+        "applyNetworkPolicyAmendment":   ("network_policy_amendment", dict),
     }
     _PERMISSIONS_SCOPES: set[str] = {"turn", "session"}
 
@@ -159,15 +161,34 @@ class CodexWSHandler:
             )
             return None
         if isinstance(decision, dict):
-            keys = set(decision.keys())
-            if len(keys) == 1 and keys.issubset(self._COMMAND_DICT_VARIANTS):
-                # Wrap verbatim — Codex expects {"decision": {<variant>: {...}}}.
-                return {"decision": decision}
-            logger.error(
-                "codex commandExecution: invalid dict decision=%r "
-                "(expected one of %r)", decision, self._COMMAND_DICT_VARIANTS,
-            )
-            return None
+            keys = list(decision.keys())
+            if len(keys) != 1 or keys[0] not in self._COMMAND_DICT_VARIANTS:
+                logger.error(
+                    "codex commandExecution: invalid dict decision=%r "
+                    "(expected exactly one key from %r)",
+                    decision, sorted(self._COMMAND_DICT_VARIANTS),
+                )
+                return None
+            variant = keys[0]
+            inner = decision[variant]
+            if not isinstance(inner, dict):
+                logger.error(
+                    "codex commandExecution: invalid inner payload for %r — "
+                    "expected dict, got %r",
+                    variant, type(inner).__name__,
+                )
+                return None
+            inner_key, inner_type = self._COMMAND_DICT_VARIANTS[variant]
+            inner_value = inner.get(inner_key)
+            if not isinstance(inner_value, inner_type):
+                logger.error(
+                    "codex commandExecution: invalid inner payload for %r — "
+                    "missing or wrong-type %r (expected %s, got %r)",
+                    variant, inner_key, inner_type.__name__, type(inner_value).__name__,
+                )
+                return None
+            # Wrap verbatim — Codex expects {"decision": {<variant>: {...}}}.
+            return {"decision": decision}
         logger.error("codex commandExecution: invalid decision type=%r", type(decision))
         return None
 
