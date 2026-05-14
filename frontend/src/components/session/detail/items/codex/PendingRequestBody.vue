@@ -6,18 +6,25 @@
 // rough on the rendering side — PR3 will specialise the layout per
 // ``tool_name`` (commandExecution / fileChange / permissions) and add the
 // split-button Approve menu (Once / For session / + add allow rule).
+//
+// This component does NOT own:
+// - The card outer wrapper (<wa-divider>, container div)
+// - The shared header (icon + title + count badge + expand toggle)
+// - The dispatch via respondToPendingRequest
+//
+// Instead, each button handler emits ('submit', payload) and the parent shell
+// is responsible for dispatching the response.
 
-import { ref, computed } from 'vue'
-import { respondToPendingRequest } from '../../../../../providers'
+import { computed } from 'vue'
 import JsonHumanView from '../../../../json/JsonHumanView.vue'
 
 const props = defineProps({
     sessionId: { type: String, required: true },
     pendingRequest: { type: Object, required: true },
+    isResponding: { type: Boolean, default: false },
 })
 
-// Whether a response has been sent and we're waiting for the store to clear it
-const isResponding = ref(false)
+const emit = defineEmits(['submit'])
 
 // Codex tool_name: 'commandExecution' | 'fileChange' | 'permissions'.
 // Unknown tool_names fall through with a generic JSON view.
@@ -34,7 +41,7 @@ const supportsCancelTurn = computed(
 )
 
 /**
- * Send a decision through the dispatcher. For commandExecution / fileChange
+ * Build and emit the response payload. For commandExecution / fileChange
  * the payload is ``{tool_name, decision: <string>}``. For permissions the
  * Approve payload is ``{tool_name, permissions: <granted>, scope: 'turn'}``,
  * Deny is ``{tool_name, permissions: {}, scope: 'turn'}``.
@@ -42,8 +49,7 @@ const supportsCancelTurn = computed(
  * @param {'accept' | 'decline' | 'cancel'} action - The user's choice.
  */
 function send(action) {
-    if (isResponding.value) return
-    isResponding.value = true
+    if (props.isResponding) return
 
     const payload = { tool_name: toolName.value }
     if (toolName.value === 'permissions') {
@@ -56,7 +62,7 @@ function send(action) {
         payload.decision = action
     }
 
-    respondToPendingRequest('codex', props.sessionId, props.pendingRequest.request_id, payload)
+    emit('submit', payload)
 }
 
 function handleApprove() { send('accept') }
