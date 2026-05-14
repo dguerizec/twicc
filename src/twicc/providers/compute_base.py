@@ -1844,9 +1844,20 @@ class BaseSessionCompute:
             original = original_tool_result_links.get(key)
             if original is None:
                 trl_to_create.append(serialized)
-            elif serialized != original:
-                serialized['id'] = original_tool_result_links_ids[key]
-                trl_to_update.append(serialized)
+            else:
+                # Preserve previously-recorded error / extra if the re-compute
+                # produced None — happens when the live path's _denied_tool_ids
+                # signal is no longer available after a backend restart (the agent
+                # is gone so _denied_tool_reason returns None). The live-path
+                # value is the authoritative one; a stale re-compute must not
+                # erase it.
+                if serialized['error'] is None and original['error'] is not None:
+                    serialized['error'] = original['error']
+                if serialized['extra'] is None and original['extra'] is not None:
+                    serialized['extra'] = original['extra']
+                if serialized != original:
+                    serialized['id'] = original_tool_result_links_ids[key]
+                    trl_to_update.append(serialized)
         trl_to_delete: list[int] = [
             pk for key, pk in original_tool_result_links_ids.items() if key not in all_tool_result_links
         ]
