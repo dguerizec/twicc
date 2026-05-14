@@ -734,9 +734,10 @@ def _denied_tool_reason(session_id: str, call_id: str) -> str | None:
         return None
     try:
         manager = get_agent_manager_registry().get(Provider.CODEX)
-    except Exception:
-        # Registry not yet initialized (early startup, background compute
-        # before the live process boots, ...).
+    except KeyError:
+        # Provider not yet registered (extremely early startup, before the
+        # registry has wired up every provider — should be impossible at
+        # actual compute time, but cheap to guard).
         return None
     if manager is None:
         return None
@@ -1486,6 +1487,13 @@ class CodexSessionCompute(BaseSessionCompute):
         # at WS-response time by ``CodexAgent._record_decision_outcome``.
         # If the user refused, the recorded reason supersedes any
         # exit-code text that ``_*_error`` helpers might have produced.
+        # Caveat: this map is in-memory only; a backend restart followed
+        # by a background re-compute on the same JSONL has no way to
+        # recover the reason (the helpers above will return ``None`` for
+        # an "aborted by user" trailer that has no exit code). The live
+        # path's already-persisted ``ToolResultLink.error`` is the
+        # authoritative source — verify in PR4 that background re-compute
+        # doesn't overwrite it.
         denied_reason = _denied_tool_reason(session_id, call_id)
         if denied_reason is not None:
             error_text = denied_reason
