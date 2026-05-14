@@ -382,6 +382,9 @@ function handleCancelTurn() {
     display: flex;
     flex-direction: column;
     gap: var(--wa-space-s);
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
 }
 
 .codex-pending-section {
