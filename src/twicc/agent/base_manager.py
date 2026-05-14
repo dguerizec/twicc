@@ -118,6 +118,28 @@ class BaseAgentManager:
         """
         return False
 
+    async def resolve_pending_request(
+        self,
+        session_id: str,
+        request_id: str,
+        response: Any,
+    ) -> bool:
+        """Resolve a specific pending request on an agent.
+
+        Routes the user's response to the correct agent (by ``session_id``)
+        and the correct in-flight Future on that agent (by ``request_id``).
+        ``response`` is provider-specific; the caller (typically the WS
+        handler) is responsible for shaping it correctly for the SDK that
+        will receive it.
+
+        Returns ``True`` if the request was resolved, ``False`` if no agent
+        or no matching pending request was found.
+        """
+        agent = self._agents.get(session_id)
+        if agent is None:
+            return False
+        return agent.resolve_pending_request(request_id, response)
+
     async def shutdown(self, timeout: float = 5.0) -> None:
         """Stop all agents and cancel monitors. Best-effort, time-bounded.
 
@@ -509,6 +531,12 @@ class BaseAgentManager:
           ``PROCESS_TIMEOUT_ASSISTANT_TURN_ABSOLUTE`` (default 6h) safety cap.
         """
         from django.conf import settings
+
+        # Never time out an agent waiting on a user click. The countdown
+        # resumes once the pending request resolves and last_activity is
+        # touched again.
+        if agent.pending_requests:
+            return None
 
         if agent.state == AgentState.STARTING:
             timeout = getattr(settings, "PROCESS_TIMEOUT_STARTING", 60)
