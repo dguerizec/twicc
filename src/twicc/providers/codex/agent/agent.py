@@ -273,18 +273,15 @@ class CodexAgent(BaseAgent):
         # use ``run`` because it consumes the turn stream and hides the
         # ``TurnHandle`` we need for clean ``interrupt`` later on.
         #
-        # ``effort`` is read off ``agent_settings`` per turn so live updates
-        # via ``send_to_session`` (which refreshes the bundle just before
-        # calling ``send``) take effect immediately on the next turn. ``None``
-        # lets Codex CLI use the model's default (medium today).
-        # Read live agent_settings — the bundle was refreshed by
-        # ``send_to_session`` immediately before this turn was scheduled,
-        # so ``permission_mode`` here is whatever the frontend has set.
-        # ``thread.turn(approval_policy=..., sandbox_policy=...)`` accepts
-        # both as per-turn overrides — the SDK forwards them as
-        # ``TurnStartParams`` on top of the values that were bound at
-        # ``thread_start``. Mid-session mode changes therefore take effect
-        # at the start of the next turn (current turn unaffected).
+        # ``effort`` and ``permission_mode`` are both read off
+        # ``agent_settings`` per turn so live updates via ``send_to_session``
+        # (which refreshes the bundle just before calling ``send``) take
+        # effect on the next turn. ``effort=None`` lets Codex CLI use the
+        # model's default (medium today). ``thread.turn(approval_policy=...,
+        # sandbox_policy=...)`` accepts both as per-turn overrides — the
+        # SDK forwards them as ``TurnStartParams`` on top of the values
+        # bound at ``thread_start``, so the current turn keeps its policy
+        # but the next one picks up the new picker value.
         effort = self._sdk_effort(self.agent_settings.effort)
         sandbox_policy, approval_policy = resolve_codex_turn_overrides(
             self.agent_settings.permission_mode,
