@@ -832,11 +832,11 @@ class CodexAgent(BaseAgent):
             granted = response.get("permissions")
             if not granted:
                 # Empty granted profile = user refused permissions.
-                self._denied_tool_ids[item_id] = "Permissions denied by user"
+                self._denied_tool_ids[item_id] = "User refused permissions"
                 logger.debug(
                     "Codex decision recorded: session=%s itemId=%s "
                     "outcome=permissions_denied reason=%r",
-                    self.session_id, item_id, "Permissions denied by user",
+                    self.session_id, item_id, "User refused permissions",
                 )
             else:
                 logger.debug(
@@ -849,15 +849,15 @@ class CodexAgent(BaseAgent):
         # command / file
         decision = response.get("decision")
         if decision == "decline":
-            self._denied_tool_ids[item_id] = "Denied by user"
+            self._denied_tool_ids[item_id] = "User denied this action"
             logger.debug(
                 "Codex decision recorded: session=%s itemId=%s "
                 "outcome=decline reason=%r",
-                self.session_id, item_id, "Denied by user",
+                self.session_id, item_id, "User denied this action",
             )
             return
         if decision == "cancel":
-            self._denied_tool_ids[item_id] = "Turn cancelled by user"
+            self._denied_tool_ids[item_id] = "User cancelled this turn"
             # Also mark every other in-flight function-call item. The user
             # asked for "tous les tools qui n'ont pas été terminés doivent
             # être marqués" — we iterate _items_by_id which holds every
@@ -867,13 +867,13 @@ class CodexAgent(BaseAgent):
                 if other_id == item_id:
                     continue
                 if payload.get("type") in self._CANCELLABLE_ITEM_TYPES:
-                    self._denied_tool_ids[other_id] = "Turn cancelled by user"
+                    self._denied_tool_ids[other_id] = "User cancelled this turn"
                     siblings_marked.append(other_id)
             logger.debug(
                 "Codex decision recorded: session=%s itemId=%s "
                 "outcome=cancel reason=%r siblings_marked=%s",
                 self.session_id, item_id,
-                "Turn cancelled by user", siblings_marked,
+                "User cancelled this turn", siblings_marked,
             )
             return
         # Anything else (notably "approve" on command/file) is a pass-through
