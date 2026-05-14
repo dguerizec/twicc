@@ -53,16 +53,48 @@ const supportsCancelTurn = computed(
     () => toolName.value === 'commandExecution' || toolName.value === 'fileChange',
 )
 
-function handleApprove() {
+function emitApprove(variant) {
+    // `variant` is one of:
+    // - 'once' | 'forSession'      (command / file)
+    // - 'addAllowRule'              (command only, requires proposedExecpolicyAmendment)
+    // - 'allowNetwork'              (command only, requires proposedNetworkPolicyAmendments)
+    // - 'turn' | 'session'          (permissions)
     if (toolName.value === 'permissions') {
         emit('submit', {
             tool_name: 'permissions',
             permissions: requestedPermissions.value,
-            scope: 'turn',
+            scope: variant === 'session' ? 'session' : 'turn',
         })
-    } else {
-        emit('submit', { tool_name: toolName.value, decision: 'accept' })
+        return
     }
+    if (variant === 'forSession') {
+        emit('submit', { tool_name: toolName.value, decision: 'acceptForSession' })
+        return
+    }
+    if (variant === 'addAllowRule') {
+        emit('submit', {
+            tool_name: toolName.value,
+            decision: {
+                acceptWithExecpolicyAmendment: {
+                    execpolicy_amendment: proposedExecpolicyAmendment.value,
+                },
+            },
+        })
+        return
+    }
+    if (variant === 'allowNetwork') {
+        emit('submit', {
+            tool_name: toolName.value,
+            decision: {
+                applyNetworkPolicyAmendment: {
+                    network_policy_amendment: proposedNetworkPolicyAmendments.value,
+                },
+            },
+        })
+        return
+    }
+    // 'once' (default)
+    emit('submit', { tool_name: toolName.value, decision: 'accept' })
 }
 
 function handleDeny() {
@@ -188,15 +220,56 @@ function handleCancelTurn() {
                 <wa-icon slot="start" name="stop" variant="classic"></wa-icon>
                 Cancel turn
             </wa-button>
-            <wa-button
-                variant="brand"
-                size="small"
-                :disabled="isResponding"
-                @click="handleApprove"
-            >
-                <wa-icon slot="start" name="check" variant="classic"></wa-icon>
-                Approve
-            </wa-button>
+            <wa-dropdown placement="top-end">
+                <wa-button
+                    slot="trigger"
+                    variant="brand"
+                    size="small"
+                    :disabled="isResponding"
+                    caret
+                >
+                    <wa-icon slot="start" name="check" variant="classic"></wa-icon>
+                    Approve
+                </wa-button>
+
+                <!-- command / file menu -->
+                <template v-if="toolName === 'commandExecution' || toolName === 'fileChange'">
+                    <wa-dropdown-item @click="emitApprove('once')">
+                        <wa-icon slot="icon" name="check" variant="classic"></wa-icon>
+                        Once
+                    </wa-dropdown-item>
+                    <wa-dropdown-item @click="emitApprove('forSession')">
+                        <wa-icon slot="icon" name="rotate" variant="classic"></wa-icon>
+                        For this session
+                    </wa-dropdown-item>
+                    <wa-dropdown-item
+                        v-if="toolName === 'commandExecution' && proposedExecpolicyAmendment"
+                        @click="emitApprove('addAllowRule')"
+                    >
+                        <wa-icon slot="icon" name="plus" variant="classic"></wa-icon>
+                        + Add allow rule
+                    </wa-dropdown-item>
+                    <wa-dropdown-item
+                        v-if="toolName === 'commandExecution' && proposedNetworkPolicyAmendments"
+                        @click="emitApprove('allowNetwork')"
+                    >
+                        <wa-icon slot="icon" name="globe" variant="classic"></wa-icon>
+                        + Allow network access
+                    </wa-dropdown-item>
+                </template>
+
+                <!-- permissions menu -->
+                <template v-else-if="toolName === 'permissions'">
+                    <wa-dropdown-item @click="emitApprove('turn')">
+                        <wa-icon slot="icon" name="clock" variant="classic"></wa-icon>
+                        For this turn
+                    </wa-dropdown-item>
+                    <wa-dropdown-item @click="emitApprove('session')">
+                        <wa-icon slot="icon" name="rotate" variant="classic"></wa-icon>
+                        For this session
+                    </wa-dropdown-item>
+                </template>
+            </wa-dropdown>
         </div>
     </div>
 </template>
