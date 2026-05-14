@@ -3,16 +3,13 @@ Map the user-facing ``Session.permission_mode`` preset (single string) to the
 ``(SandboxMode, AskForApproval)`` couple that the Codex SDK expects at
 ``thread_start`` / ``thread_resume``.
 
-The four modes here are intentionally the same set the frontend exposes today
-(``frontend/src/providers/codex/constants.js``). The 5th mode ``strict`` is
-added in a later PR.
-
 Wire / preset table (kept in sync with the spec ``§4 Étape 7``):
 
 +-------------+-------------------+--------------------+-----------+----------------+
 | Mode (wire) | sandbox_mode      | approval_policy    | Prompts?  | Can write?     |
 +=============+===================+====================+===========+================+
 | read_only   | read-only         | on-request         | yes       | no             |
+| strict      | read-only         | never              | no        | no             |
 | auto        | workspace-write   | on-request         | yes       | workspace only |
 | autonomous  | workspace-write   | never              | no        | workspace only |
 | yolo        | danger-full-access| never              | no        | anywhere       |
@@ -42,6 +39,7 @@ from codex_app_server.generated.v2_all import (
 # accepts a raw string and round-trips through validation.
 _PRESET_MAP: dict[str, tuple[SandboxMode, AskForApproval]] = {
     "read_only":  (SandboxMode.read_only,           AskForApproval("on-request")),
+    "strict":     (SandboxMode.read_only,           AskForApproval("never")),
     "auto":       (SandboxMode.workspace_write,     AskForApproval("on-request")),
     "autonomous": (SandboxMode.workspace_write,     AskForApproval("never")),
     "yolo":       (SandboxMode.danger_full_access,  AskForApproval("never")),
