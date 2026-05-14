@@ -200,7 +200,16 @@ class CodexAgentManager(BaseAgentManager):
             return None
         # ``CodexAgent`` owns ``_denied_tool_ids`` — see the comment on the
         # map in ``CodexAgent.__init__``.
-        return agent._denied_tool_ids.get(item_id)
+        reason = agent._denied_tool_ids.get(item_id)
+        if reason is not None:
+            # Hit-only logging: a miss is the common case (every
+            # function_call_output triggers a lookup, almost none are
+            # denied), so logging both branches would drown out the signal.
+            logger.debug(
+                "Codex denied-tool lookup hit: session=%s itemId=%s reason=%r",
+                session_id, item_id, reason,
+            )
+        return reason
 
     # ------------------------------------------------------------------
     # Factory hook

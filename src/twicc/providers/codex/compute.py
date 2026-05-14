@@ -119,6 +119,7 @@ title extraction) still runs cleanly.
 
 from __future__ import annotations
 
+import logging
 import re
 from datetime import datetime
 from typing import ClassVar, NamedTuple
@@ -141,6 +142,8 @@ from twicc.providers.compute_base import (
 )
 
 from .pricing import extract_model_info, to_token_usage
+
+logger = logging.getLogger(__name__)
 
 
 # Keys at the wrapper level. Every Codex JSONL line is
@@ -1496,6 +1499,11 @@ class CodexSessionCompute(BaseSessionCompute):
         # doesn't overwrite it.
         denied_reason = _denied_tool_reason(session_id, call_id)
         if denied_reason is not None:
+            logger.debug(
+                "Codex compute: marking tool result as denied: "
+                "session=%s call_id=%s reason=%r (overriding error_text=%r)",
+                session_id, call_id, denied_reason, error_text,
+            )
             error_text = denied_reason
 
         return ToolResultInfo(

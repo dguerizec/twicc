@@ -746,6 +746,11 @@ class CodexAgent(BaseAgent):
         a Codex-compliant dict (``CodexWSHandler._build_codex_response``)
         — at this point we just pass it through.
         """
+        item_id_for_log = params.get("itemId") if params else None
+        logger.debug(
+            "Codex approval request: session=%s method=%s itemId=%s",
+            self.session_id, method, item_id_for_log,
+        )
         enriched_params = self._enrich_params_with_item_payload(method, params)
         request = make_pending_request(method, enriched_params)
         response = await self._await_pending_request(request)
@@ -828,12 +833,28 @@ class CodexAgent(BaseAgent):
             if not granted:
                 # Empty granted profile = user refused permissions.
                 self._denied_tool_ids[item_id] = "Permissions denied by user"
+                logger.debug(
+                    "Codex decision recorded: session=%s itemId=%s "
+                    "outcome=permissions_denied reason=%r",
+                    self.session_id, item_id, "Permissions denied by user",
+                )
+            else:
+                logger.debug(
+                    "Codex decision recorded: session=%s itemId=%s "
+                    "outcome=permissions_granted (no marking)",
+                    self.session_id, item_id,
+                )
             return
 
         # command / file
         decision = response.get("decision")
         if decision == "decline":
             self._denied_tool_ids[item_id] = "Denied by user"
+            logger.debug(
+                "Codex decision recorded: session=%s itemId=%s "
+                "outcome=decline reason=%r",
+                self.session_id, item_id, "Denied by user",
+            )
             return
         if decision == "cancel":
             self._denied_tool_ids[item_id] = "Turn cancelled by user"
@@ -841,11 +862,28 @@ class CodexAgent(BaseAgent):
             # asked for "tous les tools qui n'ont pas été terminés doivent
             # être marqués" — we iterate _items_by_id which holds every
             # item that emitted item/started but not item/completed yet.
+            siblings_marked: list[str] = []
             for other_id, payload in self._items_by_id.items():
                 if other_id == item_id:
                     continue
                 if payload.get("type") in self._CANCELLABLE_ITEM_TYPES:
                     self._denied_tool_ids[other_id] = "Turn cancelled by user"
+                    siblings_marked.append(other_id)
+            logger.debug(
+                "Codex decision recorded: session=%s itemId=%s "
+                "outcome=cancel reason=%r siblings_marked=%s",
+                self.session_id, item_id,
+                "Turn cancelled by user", siblings_marked,
+            )
+            return
+        # Anything else (notably "approve" on command/file) is a pass-through
+        # with no map entry — trace it so the smoke-test grep shows the
+        # full approve/deny picture for each itemId.
+        logger.debug(
+            "Codex decision recorded: session=%s itemId=%s "
+            "outcome=%s (no marking)",
+            self.session_id, item_id, decision,
+        )
 
     async def _broadcast_stream_event(self, data: dict[str, Any]) -> None:
         """Broadcast a streaming event to all connected WebSocket clients.
