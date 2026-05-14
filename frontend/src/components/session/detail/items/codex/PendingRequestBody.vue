@@ -26,18 +26,23 @@ const proposedNetworkPolicyAmendments = computed(() => toolInput.value.proposedN
 const fileChanges = computed(() => {
     const payload = toolInput.value._item_payload
     if (!payload) return []
-    const changes = payload.changes || []
-    if (Array.isArray(changes)) return changes
-    // ``changes`` may be a dict { path: change } depending on the SDK shape;
-    // normalise to an array of {path, kind, …}.
-    if (typeof changes === 'object') {
-        return Object.entries(changes).map(([path, change]) => ({
-            path,
-            ...(change || {}),
-        }))
-    }
-    return []
+    const changes = payload.changes
+    return Array.isArray(changes) ? changes : []
 })
+
+function formatCommandAction(action) {
+    const type = action?.type
+    if (type === 'read') {
+        return action.path ? `Read: ${action.path}` : 'Read'
+    }
+    if (type === 'listFiles') {
+        return action.path ? `List: ${action.path}` : 'List'
+    }
+    if (type === 'search') {
+        return action.query ? `Search: ${action.query}` : 'Search'
+    }
+    return action?.command || 'Action'
+}
 
 // permissions-specific fields
 const requestedPermissions = computed(() => toolInput.value.permissions || {})
@@ -99,7 +104,7 @@ function handleCancelTurn() {
                         v-for="(action, idx) in commandActions"
                         :key="idx"
                         variant="neutral"
-                    >{{ action.kind || 'action' }}{{ action.target ? `: ${action.target}` : '' }}</wa-badge>
+                    >{{ formatCommandAction(action) }}</wa-badge>
                 </div>
                 <div v-if="networkApprovalContext" class="codex-pending-network">
                     <wa-icon name="globe" variant="classic"></wa-icon>
@@ -123,9 +128,9 @@ function handleCancelTurn() {
                 <ul v-if="fileChanges.length" class="codex-file-list">
                     <li v-for="(change, idx) in fileChanges" :key="idx" class="codex-file-row">
                         <wa-badge
-                            :variant="change.kind === 'delete' ? 'danger'
-                                : change.kind === 'add' ? 'success' : 'neutral'"
-                        >{{ change.kind || 'update' }}</wa-badge>
+                            :variant="change.kind?.type === 'delete' ? 'danger'
+                                : change.kind?.type === 'add' ? 'success' : 'neutral'"
+                        >{{ change.kind?.type || 'update' }}</wa-badge>
                         <code class="codex-file-path">{{ change.path }}</code>
                     </li>
                 </ul>
