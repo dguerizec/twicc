@@ -17,6 +17,7 @@ export const CONTEXT_MAX = {
  */
 export const PERMISSION_MODE = {
     READ_ONLY: 'read_only',
+    STRICT: 'strict',
     AUTO: 'auto',
     AUTONOMOUS: 'autonomous',
     YOLO: 'yolo',

@@ -70,6 +70,11 @@ const AGENT_SETTINGS_CHOICES = {
             description: 'Read-only. Any write requires confirmation.',
         },
         {
+            value: PERMISSION_MODE.STRICT,
+            label: 'Strict',
+            description: 'Read-only. Writes are refused silently (no prompt).',
+        },
+        {
             value: PERMISSION_MODE.AUTO,
             label: 'Auto',
             description: 'Writes freely in the workspace; asks to step outside.',
