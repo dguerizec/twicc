@@ -1,15 +1,26 @@
 <script setup>
 import { computed, useId } from 'vue'
 import AppTooltip from '../../../../ui/AppTooltip.vue'
+import { getProviderLabel } from '../../../../../providers'
+import { useDataStore } from '../../../../../stores/data'
+import { fileIconFor } from '../../../../../providers/utils/path'
 
 const props = defineProps({
     pendingRequest: { type: Object, required: true },
     isResponding: { type: Boolean, default: false },
+    sessionId: { type: String, required: true },
 })
 const emit = defineEmits(['submit'])
 
 const denyButtonId = useId()
 const cancelTurnButtonId = useId()
+const approveButtonId = useId()
+const approveOnceId = useId()
+const approveForSessionId = useId()
+const approveAddAllowRuleId = useId()
+const approveAllowNetworkId = useId()
+const approvePermsTurnId = useId()
+const approvePermsSessionId = useId()
 
 // Codex tool_name: 'commandExecution' | 'fileChange' | 'permissions'.
 const toolName = computed(() => props.pendingRequest.tool_name || 'unknown')
@@ -34,22 +45,27 @@ const fileChanges = computed(() => {
     return Array.isArray(changes) ? changes : []
 })
 
-function formatCommandAction(action) {
-    const type = action?.type
-    if (type === 'read') {
-        return action.path ? `Read: ${action.path}` : 'Read'
-    }
-    if (type === 'listFiles') {
-        return action.path ? `List: ${action.path}` : 'List'
-    }
-    if (type === 'search') {
-        return action.query ? `Search: ${action.query}` : 'Search'
-    }
-    return action?.command || 'Action'
-}
-
 // permissions-specific fields
 const requestedPermissions = computed(() => toolInput.value.permissions || {})
+
+// Provider label for the session
+const dataStore = useDataStore()
+const providerLabel = computed(() =>
+    getProviderLabel(dataStore.getSession(props.sessionId)?.provider),
+)
+
+// Group commandActions by type for the redesigned chips + detail sections
+const groupedActions = computed(() => {
+    const groups = { read: [], listFiles: [], search: [], unknown: [] }
+    for (const action of commandActions.value) {
+        const t = action?.type
+        if (t === 'read') groups.read.push(action)
+        else if (t === 'listFiles') groups.listFiles.push(action)
+        else if (t === 'search') groups.search.push(action)
+        else groups.unknown.push(action)
+    }
+    return groups
+})
 
 // Whether the "Cancel turn" button is available for this tool_name.
 // Permissions don't have a "cancel" wire variant per spec §1.1.c.
@@ -123,6 +139,78 @@ function handleCancelTurn() {
         <!-- commandExecution rich body -->
         <template v-if="toolName === 'commandExecution'">
             <div class="codex-pending-section">
+                <!-- reason first, larger -->
+                <div v-if="reason" class="codex-pending-reason">
+                    <wa-icon name="comment" variant="classic"></wa-icon>
+                    <span>{{ reason }}</span>
+                </div>
+                <!-- redesigned action chips -->
+                <div v-if="commandActions.length" class="codex-action-chips">
+                    <wa-badge v-if="groupedActions.read.length" variant="neutral">
+                        Read
+                        <span v-if="groupedActions.read.length > 1" class="codex-chip-count">{{ groupedActions.read.length }}</span>
+                    </wa-badge>
+                    <wa-badge v-if="groupedActions.listFiles.length" variant="neutral">
+                        List files
+                        <span v-if="groupedActions.listFiles.length > 1" class="codex-chip-count">{{ groupedActions.listFiles.length }}</span>
+                    </wa-badge>
+                    <wa-badge v-if="groupedActions.search.length" variant="neutral">
+                        Grep
+                        <span v-if="groupedActions.search.length > 1" class="codex-chip-count">{{ groupedActions.search.length }}</span>
+                    </wa-badge>
+                    <wa-badge v-if="groupedActions.unknown.length" variant="neutral">
+                        Shell
+                        <span v-if="groupedActions.unknown.length > 1" class="codex-chip-count">{{ groupedActions.unknown.length }}</span>
+                    </wa-badge>
+                </div>
+                <!-- detail sections: Read -->
+                <div v-if="groupedActions.read.length" class="codex-pending-section-block">
+                    <span class="codex-summary-label">Read</span>
+                    <ul class="codex-action-detail-list">
+                        <li v-for="(action, idx) in groupedActions.read" :key="idx">
+                            <img
+                                v-if="fileIconFor(action.path)"
+                                :src="fileIconFor(action.path)"
+                                alt=""
+                                class="codex-file-icon"
+                            >
+                            <code class="codex-file-path">{{ action.path }}</code>
+                        </li>
+                    </ul>
+                </div>
+                <!-- detail sections: List files -->
+                <div v-if="groupedActions.listFiles.length" class="codex-pending-section-block">
+                    <span class="codex-summary-label">List files</span>
+                    <ul class="codex-action-detail-list">
+                        <li v-for="(action, idx) in groupedActions.listFiles" :key="idx">
+                            <img
+                                v-if="fileIconFor(action.path)"
+                                :src="fileIconFor(action.path)"
+                                alt=""
+                                class="codex-file-icon"
+                            >
+                            <code class="codex-file-path">{{ action.path }}</code>
+                        </li>
+                    </ul>
+                </div>
+                <!-- detail sections: Grep -->
+                <div v-if="groupedActions.search.length" class="codex-pending-section-block">
+                    <span class="codex-summary-label">Grep</span>
+                    <ul class="codex-action-detail-list">
+                        <li v-for="(action, idx) in groupedActions.search" :key="idx">
+                            <code class="codex-search-query">{{ action.query || '(no query)' }}</code>
+                            <span v-if="action.path">in</span>
+                            <img
+                                v-if="action.path && fileIconFor(action.path)"
+                                :src="fileIconFor(action.path)"
+                                alt=""
+                                class="codex-file-icon"
+                            >
+                            <code v-if="action.path" class="codex-file-path">{{ action.path }}</code>
+                        </li>
+                    </ul>
+                </div>
+                <!-- command and cwd last -->
                 <div class="codex-pending-summary">
                     <span class="codex-summary-label">Command</span>
                     <code class="codex-summary-code">{{ command }}</code>
@@ -130,17 +218,6 @@ function handleCancelTurn() {
                 <div v-if="cwd" class="codex-pending-summary">
                     <span class="codex-summary-label">cwd</span>
                     <code class="codex-summary-code">{{ cwd }}</code>
-                </div>
-                <div v-if="reason" class="codex-pending-reason">
-                    <wa-icon name="comment" variant="classic"></wa-icon>
-                    <span>{{ reason }}</span>
-                </div>
-                <div v-if="commandActions.length" class="codex-action-chips">
-                    <wa-badge
-                        v-for="(action, idx) in commandActions"
-                        :key="idx"
-                        variant="neutral"
-                    >{{ formatCommandAction(action) }}</wa-badge>
                 </div>
                 <div v-if="networkApprovalContext" class="codex-pending-network">
                     <wa-icon name="globe" variant="classic"></wa-icon>
@@ -156,9 +233,14 @@ function handleCancelTurn() {
         <!-- fileChange rich body -->
         <template v-else-if="toolName === 'fileChange'">
             <div class="codex-pending-section">
+                <!-- reason first -->
+                <div v-if="reason" class="codex-pending-reason">
+                    <wa-icon name="comment" variant="classic"></wa-icon>
+                    <span>{{ reason }}</span>
+                </div>
                 <div class="codex-pending-summary">
                     <span class="codex-summary-label">
-                        Wants to modify {{ fileChanges.length }} file{{ fileChanges.length === 1 ? '' : 's' }}
+                        {{ providerLabel }} wants to modify {{ fileChanges.length }} file{{ fileChanges.length === 1 ? '' : 's' }}
                     </span>
                 </div>
                 <ul v-if="fileChanges.length" class="codex-file-list">
@@ -167,19 +249,26 @@ function handleCancelTurn() {
                             :variant="change.kind?.type === 'delete' ? 'danger'
                                 : change.kind?.type === 'add' ? 'success' : 'neutral'"
                         >{{ change.kind?.type || 'update' }}</wa-badge>
+                        <img
+                            v-if="fileIconFor(change.path)"
+                            :src="fileIconFor(change.path)"
+                            alt=""
+                            class="codex-file-icon"
+                        >
                         <code class="codex-file-path">{{ change.path }}</code>
                     </li>
                 </ul>
-                <div v-if="reason" class="codex-pending-reason">
-                    <wa-icon name="comment" variant="classic"></wa-icon>
-                    <span>{{ reason }}</span>
-                </div>
             </div>
         </template>
 
         <!-- permissions rich body -->
         <template v-else-if="toolName === 'permissions'">
             <div class="codex-pending-section">
+                <!-- reason first -->
+                <div v-if="reason" class="codex-pending-reason">
+                    <wa-icon name="comment" variant="classic"></wa-icon>
+                    <span>{{ reason }}</span>
+                </div>
                 <div class="codex-pending-summary">
                     <span class="codex-summary-label">Requests additional permissions</span>
                 </div>
@@ -189,10 +278,6 @@ function handleCancelTurn() {
                         <span class="codex-permission-value">{{ JSON.stringify(value) }}</span>
                     </li>
                 </ul>
-                <div v-if="reason" class="codex-pending-reason">
-                    <wa-icon name="comment" variant="classic"></wa-icon>
-                    <span>{{ reason }}</span>
-                </div>
             </div>
         </template>
 
@@ -201,7 +286,7 @@ function handleCancelTurn() {
             <div class="codex-pending-section"><em>Unknown tool_name: {{ toolName }}</em></div>
         </template>
 
-        <!-- Shared action row. Approve is a plain button for now; menus in Task 7. -->
+        <!-- Shared action row. -->
         <div class="codex-pending-actions">
             <wa-button
                 :id="denyButtonId"
@@ -230,52 +315,62 @@ function handleCancelTurn() {
             <AppTooltip v-if="supportsCancelTurn" :for="cancelTurnButtonId">End this turn. Codex returns control to you. Different from Stop (which kills the agent).</AppTooltip>
             <wa-dropdown placement="top-end">
                 <wa-button
+                    :id="approveButtonId"
                     slot="trigger"
                     variant="brand"
                     size="small"
                     :disabled="isResponding"
-                    with-caret
                 >
                     <wa-icon slot="start" name="check" variant="classic"></wa-icon>
                     Approve
+                    <wa-icon slot="end" name="chevron-up" variant="classic"></wa-icon>
                 </wa-button>
+                <AppTooltip :for="approveButtonId">Approve this action.</AppTooltip>
 
                 <!-- command / file menu -->
                 <template v-if="toolName === 'commandExecution' || toolName === 'fileChange'">
-                    <wa-dropdown-item @click="emitApprove('once')">
+                    <wa-dropdown-item :id="approveOnceId" @click="emitApprove('once')">
                         <wa-icon slot="icon" name="check" variant="classic"></wa-icon>
                         Once
                     </wa-dropdown-item>
-                    <wa-dropdown-item @click="emitApprove('forSession')">
+                    <AppTooltip :for="approveOnceId">Approve only this action.</AppTooltip>
+                    <wa-dropdown-item :id="approveForSessionId" @click="emitApprove('forSession')">
                         <wa-icon slot="icon" name="rotate" variant="classic"></wa-icon>
                         For this session
                     </wa-dropdown-item>
+                    <AppTooltip :for="approveForSessionId">Approve and allow similar actions for the rest of the session.</AppTooltip>
                     <wa-dropdown-item
                         v-if="toolName === 'commandExecution' && proposedExecpolicyAmendment"
+                        :id="approveAddAllowRuleId"
                         @click="emitApprove('addAllowRule')"
                     >
                         <wa-icon slot="icon" name="plus" variant="classic"></wa-icon>
-                        + Add allow rule
+                        Add allow rule
                     </wa-dropdown-item>
+                    <AppTooltip v-if="toolName === 'commandExecution' && proposedExecpolicyAmendment" :for="approveAddAllowRuleId">Approve and add this command to the persistent allow list.</AppTooltip>
                     <wa-dropdown-item
                         v-if="toolName === 'commandExecution' && proposedNetworkPolicyAmendments"
+                        :id="approveAllowNetworkId"
                         @click="emitApprove('allowNetwork')"
                     >
                         <wa-icon slot="icon" name="globe" variant="classic"></wa-icon>
-                        + Allow network access
+                        Allow network access
                     </wa-dropdown-item>
+                    <AppTooltip v-if="toolName === 'commandExecution' && proposedNetworkPolicyAmendments" :for="approveAllowNetworkId">Approve and persist the network policy amendment.</AppTooltip>
                 </template>
 
                 <!-- permissions menu -->
                 <template v-else-if="toolName === 'permissions'">
-                    <wa-dropdown-item @click="emitApprove('turn')">
+                    <wa-dropdown-item :id="approvePermsTurnId" @click="emitApprove('turn')">
                         <wa-icon slot="icon" name="clock" variant="classic"></wa-icon>
                         For this turn
                     </wa-dropdown-item>
-                    <wa-dropdown-item @click="emitApprove('session')">
+                    <AppTooltip :for="approvePermsTurnId">Grant the requested permissions for the current turn only.</AppTooltip>
+                    <wa-dropdown-item :id="approvePermsSessionId" @click="emitApprove('session')">
                         <wa-icon slot="icon" name="rotate" variant="classic"></wa-icon>
                         For this session
                     </wa-dropdown-item>
+                    <AppTooltip :for="approvePermsSessionId">Grant the requested permissions for the full session.</AppTooltip>
                 </template>
             </wa-dropdown>
         </div>
@@ -326,8 +421,8 @@ function handleCancelTurn() {
     display: flex;
     align-items: center;
     gap: var(--wa-space-xs);
-    color: var(--wa-color-text-quiet);
-    font-size: var(--wa-font-size-s);
+    color: var(--wa-color-text);
+    font-size: var(--wa-font-size-m);
 }
 
 .codex-pending-network {
@@ -342,6 +437,43 @@ function handleCancelTurn() {
     display: flex;
     gap: var(--wa-space-xs);
     flex-wrap: wrap;
+}
+
+.codex-chip-count {
+    display: inline-block;
+    margin-left: var(--wa-space-2xs);
+    padding: 0 var(--wa-space-2xs);
+    background: var(--wa-color-neutral-fill-loud);
+    color: var(--wa-color-neutral-on-loud);
+    border-radius: var(--wa-border-radius-pill);
+    font-size: 0.85em;
+    line-height: 1.4;
+}
+
+.codex-pending-section-block {
+    display: flex;
+    flex-direction: column;
+    gap: var(--wa-space-2xs);
+}
+
+.codex-action-detail-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--wa-space-2xs);
+}
+
+.codex-action-detail-list li {
+    display: flex;
+    align-items: center;
+    gap: var(--wa-space-xs);
+}
+
+.codex-search-query {
+    font-family: var(--wa-font-family-mono);
+    font-size: var(--wa-font-size-s);
 }
 
 .codex-file-list,
@@ -359,6 +491,12 @@ function handleCancelTurn() {
     display: flex;
     align-items: center;
     gap: var(--wa-space-s);
+}
+
+.codex-file-icon {
+    width: 1em;
+    height: 1em;
+    flex-shrink: 0;
 }
 
 .codex-file-path,

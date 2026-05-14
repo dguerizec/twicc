@@ -77,7 +77,7 @@ const AGENT_SETTINGS_CHOICES = {
         {
             value: PERMISSION_MODE.AUTO,
             label: 'Auto',
-            description: 'Writes freely in the workspace; asks to step outside.',
+            description: 'Writes freely in the project; asks to step outside.',
         },
         {
             value: PERMISSION_MODE.AUTONOMOUS,
