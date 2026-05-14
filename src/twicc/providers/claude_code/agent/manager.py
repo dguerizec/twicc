@@ -316,32 +316,6 @@ class ClaudeCodeAgentManager(BaseAgentManager):
             )
             return False
 
-    async def resolve_pending_request(
-        self,
-        session_id: str,
-        request_id: str,
-        response: PermissionResultAllow | PermissionResultDeny,
-    ) -> bool:
-        """Resolve a specific pending request on an agent.
-
-        Routes the user's response to the correct agent based on session_id and
-        the specific in-flight request based on request_id. Multiple permission
-        asks can be concurrent within one session (parallel concurrency-safe tools),
-        so request_id is required to disambiguate.
-
-        Args:
-            session_id: The session to resolve
-            request_id: UUID of the pending request to resolve
-            response: The permission result to send to the SDK
-
-        Returns:
-            True if resolved, False if no matching agent or no matching request
-        """
-        agent = self._agents.get(session_id)
-        if agent is None:
-            return False
-        return agent.resolve_pending_request(request_id, response)
-
     # ------------------------------------------------------------------
     # Factory hook (Claude Code agent construction)
     # ------------------------------------------------------------------
@@ -416,15 +390,11 @@ class ClaudeCodeAgentManager(BaseAgentManager):
     ) -> tuple[str, float, int] | None:
         """Apply Claude Code-specific skips, then the shared per-state policy.
 
-        Skips agents that are waiting on a user response (pending_requests)
-        or that have active crons (the CLI has scheduled work that would be
-        lost if we kill the agent). Per-state timeouts themselves live in
-        :meth:`BaseAgentManager._state_based_timeout`.
+        Skips agents that have active crons (the CLI has scheduled work that
+        would be lost if we kill the agent). The ``pending_requests`` skip
+        lives in :meth:`BaseAgentManager._state_based_timeout` and is shared
+        with every provider that calls into it.
         """
-        # Don't timeout agents waiting for user input.
-        if agent.pending_requests:
-            return None
-
         # Don't timeout agents with active cron jobs.
         try:
             from twicc.core.models import SessionCron
