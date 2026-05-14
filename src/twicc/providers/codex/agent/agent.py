@@ -120,6 +120,18 @@ class CodexAgent(BaseAgent):
         # Populated on ``item/started``, popped on ``item/completed``,
         # cleared on ``interrupt_or_kill``.
         self._items_by_id: dict[str, dict] = {}
+        # Map of itemId → human-readable reason for tools that the user
+        # refused (Deny, Cancel turn, empty permissions grant). Codex's
+        # ``function_call_output`` JSONL line has no ``is_error`` flag —
+        # only an output string like "exec_command failed for ...
+        # Rejected(...)" — so the Codex compute path
+        # (``CodexSessionCompute.extract_tool_result_info``) consults this
+        # side-table to know whether to mark the resulting
+        # ``ToolResultLink`` as errored. See spec §1.1 + PR2c plan.
+        # Lifetime: agent lifetime. Cleared by ``interrupt_or_kill`` (with
+        # the rest of the side-tables) or by re-creating the agent on a
+        # fresh session.
+        self._denied_tool_ids: dict[str, str] = {}
 
         # Captured lazily in ``start()`` — that's the first place we're
         # guaranteed to be inside a running asyncio loop. The SDK's worker
@@ -411,6 +423,7 @@ class CodexAgent(BaseAgent):
         get_streamed_item_registry().clear_session(self.session_id)
         # Drop the side-table — no more turns will read it on this agent.
         self._items_by_id.clear()
+        self._denied_tool_ids.clear()
 
         if self.state != AgentState.DEAD:
             self._set_state(AgentState.DEAD)
@@ -736,6 +749,10 @@ class CodexAgent(BaseAgent):
         enriched_params = self._enrich_params_with_item_payload(method, params)
         request = make_pending_request(method, enriched_params)
         response = await self._await_pending_request(request)
+        # Record refusals in _denied_tool_ids so the Codex compute can
+        # surface them as ToolResultLink.error when the matching
+        # function_call_output lands in the JSONL.
+        self._record_decision_outcome(method, params, response)
         return response
 
     def _enrich_params_with_item_payload(
@@ -761,6 +778,74 @@ class CodexAgent(BaseAgent):
         if payload is None:
             return params
         return {**params, "_item_payload": payload}
+
+    # Item types from ``_items_by_id`` that produce a ``function_call_output``
+    # in the JSONL (and therefore can be matched by ``_denied_tool_ids``).
+    # We keep this set tight to avoid marking dead entries on cancel turn —
+    # the lookup is harmless if we over-include, but the explicit list
+    # documents which kinds we expect to surface as ``ToolResultLink``.
+    # The SDK item-types stream as camelCase per ``model_dump(by_alias=True)``;
+    # values here match what ``_items_by_id`` will hold.
+    _CANCELLABLE_ITEM_TYPES: ClassVar[frozenset[str]] = frozenset({
+        "commandExecution",
+        "fileChange",
+    })
+
+    def _record_decision_outcome(
+        self,
+        method: str,
+        params: dict | None,
+        response: dict,
+    ) -> None:
+        """If the user refused the request, mark the matching itemId(s).
+
+        Called from ``_async_approval_handler`` immediately after
+        ``_await_pending_request`` returns. Three refusal shapes:
+
+        - ``commandExecution`` / ``fileChange`` with ``decision == "decline"``:
+          mark just the current itemId.
+        - ``commandExecution`` / ``fileChange`` with ``decision == "cancel"``:
+          mark the current itemId AND every in-flight item in
+          ``_items_by_id`` whose type is in :attr:`_CANCELLABLE_ITEM_TYPES`
+          (Codex will abort the whole turn — each in-flight tool gets
+          an "aborted by user" output line).
+        - ``permissions`` with empty granted profile:
+          mark just the current itemId.
+
+        ``response`` is the dict the frontend sent through
+        ``resolve_pending_request``; ``params`` are the original Codex
+        request params that contain ``itemId``. No-op if either is missing
+        an itemId we can route from.
+        """
+        if not params:
+            return
+        item_id = params.get("itemId")
+        if not isinstance(item_id, str) or not item_id:
+            return
+
+        if method == "item/permissions/requestApproval":
+            granted = response.get("permissions")
+            if not granted:
+                # Empty granted profile = user refused permissions.
+                self._denied_tool_ids[item_id] = "Permissions denied by user"
+            return
+
+        # command / file
+        decision = response.get("decision")
+        if decision == "decline":
+            self._denied_tool_ids[item_id] = "Denied by user"
+            return
+        if decision == "cancel":
+            self._denied_tool_ids[item_id] = "Turn cancelled by user"
+            # Also mark every other in-flight function-call item. The user
+            # asked for "tous les tools qui n'ont pas été terminés doivent
+            # être marqués" — we iterate _items_by_id which holds every
+            # item that emitted item/started but not item/completed yet.
+            for other_id, payload in self._items_by_id.items():
+                if other_id == item_id:
+                    continue
+                if payload.get("type") in self._CANCELLABLE_ITEM_TYPES:
+                    self._denied_tool_ids[other_id] = "Turn cancelled by user"
 
     async def _broadcast_stream_event(self, data: dict[str, Any]) -> None:
         """Broadcast a streaming event to all connected WebSocket clients.
