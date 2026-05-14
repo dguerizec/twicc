@@ -6,9 +6,8 @@
 // - ask_user_question: Shows questions with selectable options and an "Other" free-text input
 
 import { ref, computed, reactive, watch, nextTick, useId } from 'vue'
-import { respondToPendingRequest as respondToClaudeCodePendingRequest } from '../../providers/claude_code/ws'
+import { getProviderLabel, respondToPendingRequest } from '../../providers'
 import { useDataStore } from '../../stores/data'
-import { getProviderLabel } from '../../providers'
 import JsonHumanView from '../json/JsonHumanView.vue'
 import AppTooltip from '../ui/AppTooltip.vue'
 import { getLanguageFromPath } from '../../utils/languages'
@@ -100,6 +99,10 @@ const extraPendingCount = computed(() => Math.max(0, props.pendingCount - 1))
 // Human-readable provider label for the current session, used in the form header.
 const dataStore = useDataStore()
 const providerLabel = computed(() => getProviderLabel(dataStore.getSession(props.sessionId)?.provider))
+
+// Wire-key provider for the current session, used to route responses
+// through the provider-agnostic dispatcher.
+const provider = computed(() => dataStore.getSession(props.sessionId)?.provider)
 
 // Whether a response has been sent and we're waiting for the store to clear the pending request
 const isResponding = ref(false)
@@ -328,7 +331,7 @@ const canSubmitQuestions = computed(() => {
 /**
  * Build the base approval response payload, including checked permission suggestions.
  * @param {Object} toolInputValue - The tool input to include (original or edited)
- * @returns {Object} The response payload for respondToClaudeCodePendingRequest
+ * @returns {Object} The response payload for respondToPendingRequest
  */
 function buildApprovalResponse(toolInputValue) {
     const response = {
@@ -351,7 +354,8 @@ function handleApprove() {
     if (isResponding.value) return
     isResponding.value = true
 
-    respondToClaudeCodePendingRequest(
+    respondToPendingRequest(
+        provider.value,
         props.sessionId,
         props.pendingRequest.request_id,
         buildApprovalResponse(toolInput.value),
@@ -377,7 +381,7 @@ function handleDeny() {
     isResponding.value = true
 
     const message = denyReason.value.trim() || 'User denied this action'
-    respondToClaudeCodePendingRequest(props.sessionId, props.pendingRequest.request_id, {
+    respondToPendingRequest(provider.value, props.sessionId, props.pendingRequest.request_id, {
         request_type: 'tool_approval',
         decision: 'deny',
         message,
@@ -436,7 +440,8 @@ function handleApproveWithChanges() {
     if (isResponding.value) return
     isResponding.value = true
 
-    respondToClaudeCodePendingRequest(
+    respondToPendingRequest(
+        provider.value,
         props.sessionId,
         props.pendingRequest.request_id,
         buildApprovalResponse(editedToolInput.value),
@@ -584,7 +589,7 @@ function handleSubmitQuestions() {
         answers[question.question] = getQuestionAnswer(i)
     }
 
-    respondToClaudeCodePendingRequest(props.sessionId, props.pendingRequest.request_id, {
+    respondToPendingRequest(provider.value, props.sessionId, props.pendingRequest.request_id, {
         request_type: 'ask_user_question',
         answers,
     })
