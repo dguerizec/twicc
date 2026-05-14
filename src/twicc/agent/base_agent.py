@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 
 from twicc.core.enums import Provider
 
-from .states import AgentInfo, AgentState, get_process_memory
+from .states import AgentInfo, AgentState, PendingRequest, get_process_memory
 
 if TYPE_CHECKING:
     from twicc.providers.helpers import AgentSettings
@@ -79,6 +79,17 @@ class BaseAgent:
         self._dead_event = asyncio.Event()
         self._state_change_callback: StateChangeCallback | None = None
 
+        # Pending requests waiting on a user click (tool approval, ask user
+        # question, …). Keyed by request_id (UUID). Provider subclasses populate
+        # these via ``_await_pending_request``; the WS layer consumes them via
+        # ``resolve_pending_request`` and the manager-level
+        # ``BaseAgentManager.resolve_pending_request``.
+        # ``_pending_futures`` is typed ``Any`` because each provider's SDK
+        # returns its own decision type (Claude: PermissionResult{Allow,Deny};
+        # Codex: raw dict). The caller is responsible for the cast.
+        self._pending_requests: dict[str, PendingRequest] = {}
+        self._pending_futures: dict[str, asyncio.Future[Any]] = {}
+
         # ProcessRun model row, populated by the manager once the agent is registered.
         self.process_run: Any = None
 
@@ -123,6 +134,80 @@ class BaseAgent:
             return False
 
     # ------------------------------------------------------------------
+    # Pending requests (shared by every provider)
+    # ------------------------------------------------------------------
+
+    @property
+    def pending_requests(self) -> tuple[PendingRequest, ...]:
+        """Active pending requests waiting for user response, oldest first."""
+        return tuple(
+            sorted(self._pending_requests.values(), key=lambda r: r.created_at)
+        )
+
+    async def _await_pending_request(self, request: PendingRequest) -> Any:
+        """Register a pending request, broadcast, wait for resolution, return raw response.
+
+        Provider subclasses construct the ``PendingRequest`` (which knows the
+        provider-specific ``tool_name`` / ``tool_input`` / suggestions) and
+        delegate the bookkeeping here. The Future's ``set_result`` is invoked
+        by ``resolve_pending_request`` when the WS layer routes a user decision
+        back, or via ``_cancel_all_pending_futures`` on kill.
+
+        The return type is ``Any`` because each provider's wire decision is its
+        own type — the caller in the subclass casts.
+        """
+        self._pending_requests[request.request_id] = request
+        future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
+        self._pending_futures[request.request_id] = future
+
+        # Tell the frontend a new pending request is in flight.
+        await self._notify_state_change()
+
+        try:
+            return await future
+        finally:
+            # Drop the entry whether we resolved or were cancelled.
+            self._pending_requests.pop(request.request_id, None)
+            self._pending_futures.pop(request.request_id, None)
+            # Broadcast the cleared state to refresh the frontend.
+            await self._notify_state_change()
+
+    def _cancel_all_pending_futures(self) -> None:
+        """Cancel every in-flight pending Future.
+
+        Used by provider ``interrupt_or_kill`` paths to unwind awaiters cleanly.
+        The awaiter's ``finally`` clause does the dict cleanup; we just signal
+        the cancellation here. Safe to call multiple times.
+        """
+        for future in self._pending_futures.values():
+            if not future.done():
+                future.cancel()
+
+    def resolve_pending_request(self, request_id: str, response: Any) -> bool:
+        """Resolve a specific pending request with the user's response.
+
+        Called by the manager when a WebSocket response arrives from the
+        frontend. ``request_id`` disambiguates between concurrent pending
+        requests on the same session (e.g. Claude's parallel Read + Glob).
+
+        Returns ``True`` if the request was resolved, ``False`` if there was no
+        matching in-flight Future (typically meaning the request was already
+        resolved or the agent died in the meantime).
+        """
+        future = self._pending_futures.get(request_id)
+        if future is None or future.done():
+            logger.warning(
+                "[session %s] resolve_pending_request: no in-flight Future "
+                "for request_id=%s (known=%s)",
+                self.session_id,
+                request_id,
+                list(self._pending_requests.keys()),
+            )
+            return False
+        future.set_result(response)
+        return True
+
+    # ------------------------------------------------------------------
     # Process introspection
     # ------------------------------------------------------------------
 
@@ -152,9 +237,9 @@ class BaseAgent:
     def get_info(self) -> AgentInfo:
         """Build an immutable snapshot of the current agent state.
 
-        Subclasses can override this to populate ``pending_requests``,
-        ``active_tools`` and ``last_started_tool_id`` by calling ``super()``
-        and ``_replace``-ing the result.
+        Subclasses can override this to populate ``active_tools`` and
+        ``last_started_tool_id`` by calling ``super()`` and ``_replace``-ing
+        the result. ``pending_requests`` is always populated here.
         """
         # The subprocess no longer exists past DEAD — skip the memory lookup.
         memory_rss = None if self.state == AgentState.DEAD else self.get_memory_rss()
@@ -170,6 +255,7 @@ class BaseAgent:
             error=self.error,
             memory_rss=memory_rss,
             kill_reason=self.kill_reason,
+            pending_requests=self.pending_requests,
         )
 
     # ------------------------------------------------------------------
