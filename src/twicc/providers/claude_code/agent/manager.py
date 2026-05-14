@@ -10,8 +10,6 @@ from typing import TYPE_CHECKING, Any
 
 from django.conf import settings
 
-from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
-
 from twicc.agent import AgentInfo, AgentState, BaseAgent, BaseAgentManager
 from twicc.core.enums import Provider
 
