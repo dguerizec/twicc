@@ -517,10 +517,11 @@ class BaseAgentManager:
         Returns ``(reason, elapsed_seconds, timeout_seconds)`` if ``agent``
         has exceeded the timeout for its current state, ``None`` otherwise.
         Providers call this from their own ``_check_agent_timeout`` after
-        applying provider-specific skips (e.g. Claude Code's
-        ``pending_requests`` / active cron checks). Reason strings are part
-        of the wire contract with the frontend — see
-        ``useWebSocket.js`` ``kill_reason`` toasts.
+        applying provider-specific skips (e.g. Claude Code's active cron
+        checks). The ``pending_requests`` skip is built in here so every
+        provider gets it for free. Reason strings are part of the wire
+        contract with the frontend — see ``useWebSocket.js``
+        ``kill_reason`` toasts.
 
         Per-state policy:
 
