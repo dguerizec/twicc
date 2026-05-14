@@ -114,13 +114,27 @@ class CodexAgentManager(BaseAgentManager):
 
                 elif agent.state == AgentState.USER_TURN:
                     if not text and not images:
-                        # Settings-only update: Codex has no live settings to
-                        # apply on a running thread (v1), so this is a no-op.
+                        # Settings-only update with no text/images to send: nothing
+                        # triggers a new turn, so the agent_settings bundle on the
+                        # ``CodexAgent`` won't be re-read by ``_run_turn`` until the
+                        # user actually sends something. We could mirror the new
+                        # settings onto the agent here, but a stale bundle is harmless
+                        # as long as the next ``send_to_session`` refreshes it
+                        # (which it does).
                         return
-                    # Refresh the bundle on the live agent so the upcoming turn
-                    # picks up any field changed since creation (currently the
-                    # only user-facing one is ``effort``, which the agent reads
-                    # off ``agent_settings`` for every ``thread.turn`` call).
+                    # Refresh the bundle on the live agent so the upcoming turn picks
+                    # up any field changed since creation. ``CodexAgent._run_turn``
+                    # reads both ``effort`` and ``permission_mode`` off
+                    # ``agent_settings`` on every ``thread.turn`` call, so changing
+                    # the picker mid-session takes effect on the NEXT turn (this one).
+                    old_settings = agent.agent_settings
+                    logger.debug(
+                        "Codex live settings update: session=%s "
+                        "permission_mode=%r->%r effort=%r->%r",
+                        session_id,
+                        old_settings.permission_mode, settings.permission_mode,
+                        old_settings.effort, settings.effort,
+                    )
                     agent.agent_settings = settings
                     await agent.send(text, images=images)
                     return
