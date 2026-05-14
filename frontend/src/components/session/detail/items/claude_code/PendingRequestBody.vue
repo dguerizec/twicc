@@ -15,8 +15,9 @@
 // Instead, each button handler emits ('submit', payload) and the parent shell
 // is responsible for dispatching the response.
 
-import { ref, computed, reactive, watch, nextTick } from 'vue'
+import { ref, computed, reactive, watch, nextTick, useId } from 'vue'
 import JsonHumanView from '../../../../json/JsonHumanView.vue'
+import AppTooltip from '../../../../ui/AppTooltip.vue'
 import { getLanguageFromPath } from '../../../../../utils/languages'
 
 // Per-tool overrides for JsonHumanView display types.
@@ -91,6 +92,14 @@ const props = defineProps({
 })
 
 const emit = defineEmits(['submit'])
+
+// ============================================================================
+// Button IDs (for tooltip anchoring)
+// ============================================================================
+
+const denyButtonId = useId()
+const approveWithChangesButtonId = useId()
+const approveButtonId = useId()
 
 // ============================================================================
 // Tool approval state
@@ -604,6 +613,7 @@ function handleSubmitQuestions() {
             <!-- Default state: Deny / Approve with changes / Approve -->
             <template v-if="!showDenyReason && !isEditing">
                 <wa-button
+                    :id="denyButtonId"
                     variant="danger"
                     appearance="outlined"
                     size="small"
@@ -614,8 +624,10 @@ function handleSubmitQuestions() {
                     <wa-icon v-else name="xmark" variant="classic" slot="start"></wa-icon>
                     Deny
                 </wa-button>
+                <AppTooltip :for="denyButtonId">Refuse this action. Claude will receive your message.</AppTooltip>
                 <wa-button
                     v-if="hasEditableContent"
+                    :id="approveWithChangesButtonId"
                     variant="neutral"
                     appearance="outlined"
                     size="small"
@@ -625,7 +637,9 @@ function handleSubmitQuestions() {
                     <wa-icon name="pen" variant="classic" slot="start"></wa-icon>
                     Approve with changes
                 </wa-button>
+                <AppTooltip v-if="hasEditableContent" :for="approveWithChangesButtonId">Approve using the edited tool input.</AppTooltip>
                 <wa-button
+                    :id="approveButtonId"
                     variant="brand"
                     size="small"
                     :disabled="isResponding"
@@ -635,6 +649,7 @@ function handleSubmitQuestions() {
                     <wa-icon v-else name="check" variant="classic" slot="start"></wa-icon>
                     Approve
                 </wa-button>
+                <AppTooltip :for="approveButtonId">Approve as-is.</AppTooltip>
             </template>
             <!-- Deny state: textarea + Cancel / Deny -->
             <template v-else-if="showDenyReason">
