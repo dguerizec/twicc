@@ -4,9 +4,13 @@ Codex agent: wraps a single AsyncCodex thread for one TwiCC session.
 Minimal v1 implementation. Streaming partial output to the frontend is left
 out: the watcher picks up the JSONL file the Codex CLI writes and pushes it
 through the regular session_item path, so the UI catches up at end-of-turn
-granularity. Approvals are bypassed at the server level by the manager via
-``sandbox=danger_full_access`` + ``approval_policy="never"``, so the agent
-itself never has to mediate one.
+granularity. Approvals: the agent installs a sync ↔ async bridge on the SDK's private
+``_client._sync._approval_handler`` slot and routes the 3 Codex approval
+methods (commandExecution, fileChange, permissions) through the shared
+``BaseAgent._await_pending_request`` plumbing. In PR2a the manager still
+defaults sessions to ``yolo`` (= ``danger_full_access`` + ``never``), so
+the bridge is installed-but-dormant — Codex won't actually emit approvals
+under that policy.
 """
 
 from __future__ import annotations
@@ -34,6 +38,11 @@ from twicc.core.enums import Provider
 from twicc.providers.helpers import AgentSettings
 
 from ..streaming_registry import get_streamed_item_registry
+from .approvals import (
+    default_response_for,
+    is_approval_method,
+    make_pending_request,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +118,28 @@ class CodexAgent(BaseAgent):
         # cleared on ``interrupt_or_kill``.
         self._items_by_id: dict[str, dict] = {}
 
+        # Captured lazily in ``start()`` — that's the first place we're
+        # guaranteed to be inside a running asyncio loop. The SDK's worker
+        # threads dispatch approval callbacks back to this loop via
+        # ``asyncio.run_coroutine_threadsafe``.
+        self._loop: asyncio.AbstractEventLoop | None = None
+
+        # Capture the SDK's *default* sync approval handler BEFORE we
+        # monkey-patch our own in. The default auto-accepts the 2 methods
+        # it recognises and returns ``{}`` for others (see vendored
+        # ``codex_app_server/client.py:480-485``). We delegate to it for
+        # server requests we don't own (item/tool/call,
+        # account/chatgptAuthTokens/refresh, …) — see spec §1.6, §7-Q9.
+        # PRIVATE SDK API — see memory ``reference_codex_sdk_update_procedure.md``
+        # for the upgrade checklist (this attribute path must hold).
+        self._sdk_default_approval_handler = (
+            self._codex._client._sync._approval_handler
+        )
+        # Replace the SDK's stub with our bridge. Must happen here, BEFORE
+        # any ``thread_start`` / ``thread_resume`` runs (Codex could ship
+        # the first approval immediately).
+        self._codex._client._sync._approval_handler = self._sync_approval_handler
+
     @staticmethod
     def _sdk_effort(effort: str | None) -> ReasoningEffort | None:
         """Map our wire effort string to the SDK enum, ``None`` for unset/unknown.
@@ -146,6 +177,11 @@ class CodexAgent(BaseAgent):
         with a warning.
         """
         self._state_change_callback = on_state_change
+
+        # First place we're guaranteed to be inside a running loop. Captured
+        # so the SDK's worker threads can resume our coroutines back here
+        # via ``asyncio.run_coroutine_threadsafe`` (see ``_sync_approval_handler``).
+        self._loop = asyncio.get_running_loop()
 
         # Flip to ASSISTANT_TURN immediately so the UI gates the input as
         # "working" — the actual turn runs in the background task below.
@@ -296,6 +332,20 @@ class CodexAgent(BaseAgent):
             return
 
         self.kill_reason = reason
+
+        # Cancel any in-flight approval BEFORE closing the transport.
+        # Cascade per pending approval:
+        #   future.cancel() → ``_await_pending_request`` raises CancelledError
+        #                  → its ``finally`` clears the dict + broadcasts
+        #                  → ``run_coroutine_threadsafe`` re-raises in the
+        #                    SDK worker thread
+        #                  → our ``_sync_approval_handler`` catches it and
+        #                    returns ``default_response_for(method)``
+        #                  → worker writes the wire response, releases
+        #                    ``_transport_lock``
+        # Now ``codex.close()`` can acquire the lock and tear down cleanly.
+        # See spec §2.4 + §5.1.
+        self._cancel_all_pending_futures()  # inherited from BaseAgent (PR1)
 
         # Clean turn cancellation when a turn is in flight. We don't gate this
         # on AgentState.ASSISTANT_TURN: depending on race timing, the turn
@@ -586,6 +636,109 @@ class CodexAgent(BaseAgent):
                 # push regardless of how many summary parts streamed.
                 get_streamed_item_registry().push(self.session_id, item_id)
                 return
+
+    # ------------------------------------------------------------------
+    # Approval handlers (sync ↔ async bridge)
+    # ------------------------------------------------------------------
+
+    def _sync_approval_handler(self, method: str, params: dict | None) -> dict:
+        """Called by the SDK from a worker thread (via ``asyncio.to_thread``).
+
+        Bridges the SDK's blocking expectation (``Callable -> dict``) to our
+        async ``_await_pending_request``. Approvals we don't own (MCP, OAuth
+        refresh, ...) delegate to the captured SDK default. Cancellation —
+        typically from ``_cancel_all_pending_futures()`` on kill — is
+        converted into a safe wire default so the SDK's read loop doesn't
+        hang.
+
+        See spec §2.4 + §5.1 for the full call chain.
+        """
+        if not is_approval_method(method):
+            # Defensive fallback: log + delegate. The SDK default returns
+            # ``{}`` for unknown methods which might break Codex; for the 2
+            # approval methods it knows it returns ``{"decision": "accept"}``,
+            # which is safer than crashing the read loop. PR2a does not
+            # naturally exercise this path — the warning is here to flag
+            # an unsupported server request the day it shows up.
+            logger.warning(
+                "Unhandled Codex server request method=%r (delegating to SDK default)",
+                method,
+            )
+            return self._sdk_default_approval_handler(method, params)
+
+        if self._loop is None or self._loop.is_closed():
+            # Approval before ``start()`` ran, or after the loop was torn
+            # down. Either way we can't bridge to async; return a safe
+            # wire default so the SDK doesn't hang.
+            logger.error(
+                "Codex approval received before loop init or after close: method=%r",
+                method,
+            )
+            return default_response_for(method)
+
+        coro = self._async_approval_handler(method, params)
+        try:
+            future = asyncio.run_coroutine_threadsafe(coro, self._loop)
+            return future.result()
+        except asyncio.CancelledError:
+            # Pending future was cancelled (kill, transport teardown). The
+            # awaiter's ``finally`` already dropped the entry; we just have
+            # to give the SDK something to send back to Codex so the JSON-RPC
+            # response is well-formed and the read loop unblocks.
+            return default_response_for(method)
+        except Exception as exc:
+            # Any other failure of the bridge — log loudly and fall back to
+            # a safe default. Re-raising would leak the exception into the
+            # SDK's worker thread which would then crash the entire read
+            # loop.
+            logger.error(
+                "Codex approval bridge failed for method=%r: %s",
+                method, exc, exc_info=True,
+            )
+            return default_response_for(method)
+
+    async def _async_approval_handler(
+        self, method: str, params: dict | None,
+    ) -> dict:
+        """Main-loop side of the bridge.
+
+        Build a ``PendingRequest`` (enriched with the streamed item payload
+        for ``fileChange``), broadcast it via ``_await_pending_request``,
+        and return the dict the frontend sent back through
+        ``manager.resolve_pending_request``.
+
+        The WS layer is responsible for shape-validating the response into
+        a Codex-compliant dict (``CodexWSHandler._build_codex_response``)
+        — at this point we just pass it through.
+        """
+        enriched_params = self._enrich_params_with_item_payload(method, params)
+        request = make_pending_request(method, enriched_params)
+        response = await self._await_pending_request(request)
+        return response
+
+    def _enrich_params_with_item_payload(
+        self, method: str, params: dict | None,
+    ) -> dict | None:
+        """For ``fileChange``, attach the streamed item payload (the diff).
+
+        Other methods pass through unchanged. We do this BEFORE constructing
+        the PendingRequest so ``tool_input`` carries the join data (under
+        ``_item_payload``) and the frontend doesn't have to do a side fetch.
+
+        The underscore prefix on ``_item_payload`` signals it's a synthetic
+        side-band field, not from the Codex schema.
+        """
+        if method != "item/fileChange/requestApproval":
+            return params
+        if not params:
+            return params
+        item_id = params.get("itemId")
+        if not item_id:
+            return params
+        payload = self._items_by_id.get(item_id)
+        if payload is None:
+            return params
+        return {**params, "_item_payload": payload}
 
     async def _broadcast_stream_event(self, data: dict[str, Any]) -> None:
         """Broadcast a streaming event to all connected WebSocket clients.
