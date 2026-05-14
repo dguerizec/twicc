@@ -414,17 +414,12 @@ class ClaudeCodeAgentManager(BaseAgentManager):
     async def _check_agent_timeout(
         self, agent: BaseAgent, current_time: float,
     ) -> tuple[str, float, int] | None:
-        """State-aware timeout policy with cron- and pending-request- skipping.
+        """Apply Claude Code-specific skips, then the shared per-state policy.
 
-        Skips agents that are waiting on a user response (pending_requests) or
-        that have active crons (the CLI has scheduled work that would be lost
-        if we kill the agent). Otherwise applies per-state timeouts:
-
-        - STARTING: ``PROCESS_TIMEOUT_STARTING`` (default 60s) — stuck startup.
-        - USER_TURN: ``PROCESS_TIMEOUT_USER_TURN`` (default 15min) — idle.
-        - ASSISTANT_TURN: ``PROCESS_TIMEOUT_ASSISTANT_TURN`` (default 2h) for
-          inactivity, plus an absolute ``PROCESS_TIMEOUT_ASSISTANT_TURN_ABSOLUTE``
-          (default 6h) safety cap.
+        Skips agents that are waiting on a user response (pending_requests)
+        or that have active crons (the CLI has scheduled work that would be
+        lost if we kill the agent). Per-state timeouts themselves live in
+        :meth:`BaseAgentManager._state_based_timeout`.
         """
         # Don't timeout agents waiting for user input.
         if agent.pending_requests:
@@ -444,39 +439,7 @@ class ClaudeCodeAgentManager(BaseAgentManager):
                 agent.session_id, e,
             )
 
-        if agent.state == AgentState.STARTING:
-            timeout = getattr(settings, "PROCESS_TIMEOUT_STARTING", 60)
-            elapsed = current_time - agent.state_changed_at
-            if elapsed > timeout:
-                return ("timeout_starting", elapsed, timeout)
-            return None
-
-        if agent.state == AgentState.USER_TURN:
-            timeout = getattr(settings, "PROCESS_TIMEOUT_USER_TURN", 15 * 60)
-            elapsed = current_time - agent.last_activity
-            if elapsed > timeout:
-                return ("timeout_user_turn", elapsed, timeout)
-            return None
-
-        if agent.state == AgentState.ASSISTANT_TURN:
-            inactivity_timeout = getattr(
-                settings, "PROCESS_TIMEOUT_ASSISTANT_TURN", 2 * 60 * 60
-            )
-            absolute_timeout = getattr(
-                settings, "PROCESS_TIMEOUT_ASSISTANT_TURN_ABSOLUTE", 6 * 60 * 60
-            )
-
-            inactivity_elapsed = current_time - agent.last_activity
-            absolute_elapsed = current_time - agent.state_changed_at
-
-            # Absolute takes precedence for the reason.
-            if absolute_elapsed > absolute_timeout:
-                return ("timeout_assistant_turn_absolute", absolute_elapsed, absolute_timeout)
-            if inactivity_elapsed > inactivity_timeout:
-                return ("timeout_assistant_turn", inactivity_elapsed, inactivity_timeout)
-            return None
-
-        return None
+        return self._state_based_timeout(agent, current_time)
 
     async def _on_state_change(self, agent: BaseAgent) -> None:
         """Handle state changes: titles, settings hot-reload, cron lifecycle.

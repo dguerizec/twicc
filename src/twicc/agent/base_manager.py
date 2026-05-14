@@ -487,6 +487,63 @@ class BaseAgentManager:
 
         return killed
 
+    def _state_based_timeout(
+        self, agent: BaseAgent, current_time: float,
+    ) -> tuple[str, float, int] | None:
+        """Shared per-state timeout policy reused by every provider.
+
+        Returns ``(reason, elapsed_seconds, timeout_seconds)`` if ``agent``
+        has exceeded the timeout for its current state, ``None`` otherwise.
+        Providers call this from their own ``_check_agent_timeout`` after
+        applying provider-specific skips (e.g. Claude Code's
+        ``pending_requests`` / active cron checks). Reason strings are part
+        of the wire contract with the frontend — see
+        ``useWebSocket.js`` ``kill_reason`` toasts.
+
+        Per-state policy:
+
+        - ``STARTING``: ``PROCESS_TIMEOUT_STARTING`` (default 60s) — stuck startup.
+        - ``USER_TURN``: ``PROCESS_TIMEOUT_USER_TURN`` (default 15min) — idle.
+        - ``ASSISTANT_TURN``: ``PROCESS_TIMEOUT_ASSISTANT_TURN`` (default 2h)
+          for inactivity, plus an absolute
+          ``PROCESS_TIMEOUT_ASSISTANT_TURN_ABSOLUTE`` (default 6h) safety cap.
+        """
+        from django.conf import settings
+
+        if agent.state == AgentState.STARTING:
+            timeout = getattr(settings, "PROCESS_TIMEOUT_STARTING", 60)
+            elapsed = current_time - agent.state_changed_at
+            if elapsed > timeout:
+                return ("timeout_starting", elapsed, timeout)
+            return None
+
+        if agent.state == AgentState.USER_TURN:
+            timeout = getattr(settings, "PROCESS_TIMEOUT_USER_TURN", 15 * 60)
+            elapsed = current_time - agent.last_activity
+            if elapsed > timeout:
+                return ("timeout_user_turn", elapsed, timeout)
+            return None
+
+        if agent.state == AgentState.ASSISTANT_TURN:
+            inactivity_timeout = getattr(
+                settings, "PROCESS_TIMEOUT_ASSISTANT_TURN", 2 * 60 * 60,
+            )
+            absolute_timeout = getattr(
+                settings, "PROCESS_TIMEOUT_ASSISTANT_TURN_ABSOLUTE", 6 * 60 * 60,
+            )
+
+            inactivity_elapsed = current_time - agent.last_activity
+            absolute_elapsed = current_time - agent.state_changed_at
+
+            # Absolute takes precedence for the reason.
+            if absolute_elapsed > absolute_timeout:
+                return ("timeout_assistant_turn_absolute", absolute_elapsed, absolute_timeout)
+            if inactivity_elapsed > inactivity_timeout:
+                return ("timeout_assistant_turn", inactivity_elapsed, inactivity_timeout)
+            return None
+
+        return None
+
     # ------------------------------------------------------------------
     # Hooks — override in subclasses
     # ------------------------------------------------------------------
@@ -522,7 +579,9 @@ class BaseAgentManager:
 
         Returns ``(reason, elapsed_seconds, timeout_seconds)`` if the agent
         should be killed, ``None`` otherwise. The default returns ``None`` —
-        no timeouts are enforced unless the subclass opts in.
+        no timeouts are enforced unless the subclass opts in. Most providers
+        will apply their own skips first and then delegate to
+        ``_state_based_timeout`` for the shared per-state policy.
         """
         return None
 

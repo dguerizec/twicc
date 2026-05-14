@@ -21,7 +21,7 @@ from codex_app_server import (
     SandboxMode,
 )
 
-from twicc.agent import AgentState, BaseAgentManager
+from twicc.agent import AgentState, BaseAgent, BaseAgentManager
 from twicc.core.enums import Provider
 from twicc.providers.helpers import AgentSettings, get_provider_helpers
 
@@ -285,6 +285,32 @@ class CodexAgentManager(BaseAgentManager):
             codex=codex,
             thread=thread,
         )
+
+    # ------------------------------------------------------------------
+    # Timeout policy
+    # ------------------------------------------------------------------
+
+    async def _check_agent_timeout(
+        self, agent: BaseAgent, current_time: float,
+    ) -> tuple[str, float, int] | None:
+        """Apply Codex-specific skips, then the shared per-state policy.
+
+        Skips agents that are waiting on a user response (pending_requests).
+        Today the Codex agent never publishes any — approvals are bypassed
+        at the server level via ``sandbox=danger_full_access`` +
+        ``approval_policy="never"`` — so this is a no-op guard kept in place
+        for when Codex approvals start surfacing through the same mechanism
+        as Claude Code's. No equivalent of Claude's ``SessionCron`` check
+        because :class:`SessionCron` is Claude Code-specific.
+
+        Per-state timeouts themselves live in
+        :meth:`BaseAgentManager._state_based_timeout`.
+        """
+        # Don't timeout agents waiting for user input.
+        if agent.pending_requests:
+            return None
+
+        return self._state_based_timeout(agent, current_time)
 
 
 def get_codex_agent_manager() -> CodexAgentManager:

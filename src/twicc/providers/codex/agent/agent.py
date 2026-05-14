@@ -409,6 +409,12 @@ class CodexAgent(BaseAgent):
               persists the whole reasoning as a single line, so a single
               pop on the watcher side will pair them).
         """
+        # Refresh last_activity on every stream event so the
+        # ASSISTANT_TURN inactivity timeout only fires on a truly silent
+        # SDK (mirrors ClaudeCodeAgent._run_message_loop, where each
+        # message coming out of the SDK touches last_activity).
+        self.last_activity = time.time()
+
         method = event.method
         payload = event.payload
 
