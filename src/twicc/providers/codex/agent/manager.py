@@ -124,16 +124,18 @@ class CodexAgentManager(BaseAgentManager):
                         return
                     # Refresh the bundle on the live agent so the upcoming turn picks
                     # up any field changed since creation. ``CodexAgent._run_turn``
-                    # reads both ``effort`` and ``permission_mode`` off
+                    # reads ``effort``, ``permission_mode`` and ``selected_model`` off
                     # ``agent_settings`` on every ``thread.turn`` call, so changing
                     # the picker mid-session takes effect on the NEXT turn (this one).
                     old_settings = agent.agent_settings
                     logger.debug(
                         "Codex live settings update: session=%s "
-                        "permission_mode=%r->%r effort=%r->%r",
+                        "permission_mode=%r->%r effort=%r->%r "
+                        "selected_model=%r->%r",
                         session_id,
                         old_settings.permission_mode, settings.permission_mode,
                         old_settings.effort, settings.effort,
+                        old_settings.selected_model, settings.selected_model,
                     )
                     agent.agent_settings = settings
                     await agent.send(text, images=images)

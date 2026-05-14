@@ -37,7 +37,7 @@ from codex_app_server import (
 
 from twicc.agent import AgentState, BaseAgent, StateChangeCallback
 from twicc.core.enums import Provider
-from twicc.providers.helpers import AgentSettings
+from twicc.providers.helpers import AgentSettings, get_provider_helpers
 
 from ..permission_modes import resolve_codex_turn_overrides
 from ..streaming_registry import get_streamed_item_registry
@@ -285,23 +285,28 @@ class CodexAgent(BaseAgent):
         # use ``run`` because it consumes the turn stream and hides the
         # ``TurnHandle`` we need for clean ``interrupt`` later on.
         #
-        # ``effort`` and ``permission_mode`` are both read off
-        # ``agent_settings`` per turn so live updates via ``send_to_session``
-        # (which refreshes the bundle just before calling ``send``) take
-        # effect on the next turn. ``effort=None`` lets Codex CLI use the
-        # model's default (medium today). ``thread.turn(approval_policy=...,
-        # sandbox_policy=...)`` accepts both as per-turn overrides — the
-        # SDK forwards them as ``TurnStartParams`` on top of the values
-        # bound at ``thread_start``, so the current turn keeps its policy
-        # but the next one picks up the new picker value.
+        # ``effort``, ``permission_mode`` and ``selected_model`` are all
+        # read off ``agent_settings`` per turn so live updates via
+        # ``send_to_session`` (which refreshes the bundle just before
+        # calling ``send``) take effect on the next turn. ``effort=None``
+        # / ``model=None`` lets Codex CLI use its own default. The SDK
+        # accepts ``approval_policy``, ``sandbox_policy``, ``effort`` and
+        # ``model`` as per-turn overrides on ``thread.turn`` — they're
+        # forwarded as ``TurnStartParams`` on top of the values bound at
+        # ``thread_start``, so the current turn keeps its policy but the
+        # next one picks up the new picker value.
         effort = self._sdk_effort(self.agent_settings.effort)
         sandbox_policy, approval_policy = resolve_codex_turn_overrides(
             self.agent_settings.permission_mode,
+        )
+        sdk_model = get_provider_helpers(Provider.CODEX).resolve_sdk_model(
+            self.agent_settings.selected_model,
         )
         turn_input = self._build_turn_input(text, images)
         try:
             turn_handle = await self._thread.turn(
                 turn_input,
+                model=sdk_model,
                 effort=effort,
                 approval_policy=approval_policy,
                 sandbox_policy=sandbox_policy,
