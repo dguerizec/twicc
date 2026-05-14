@@ -102,6 +102,12 @@ class CodexAgent(BaseAgent):
         # streaming and emit a matching ``stream_block_stop`` + ``end`` for
         # each at completion time. Keyed by Codex ``item_id``.
         self._reasoning_summary_indices: dict[str, set[int]] = {}
+        # Side-table for ``item/started`` payloads, indexed by ``itemId``.
+        # Used to inject the diff into ``fileChange`` PendingRequests (the
+        # approval payload itself doesn't carry it — see spec §1.1.b).
+        # Populated on ``item/started``, popped on ``item/completed``,
+        # cleared on ``interrupt_or_kill``.
+        self._items_by_id: dict[str, dict] = {}
 
     @staticmethod
     def _sdk_effort(effort: str | None) -> ReasoningEffort | None:
@@ -337,6 +343,8 @@ class CodexAgent(BaseAgent):
         # completed in the SDK after we tore the transport down). Keeping
         # them would corrupt the FIFO for the next agent on the same id.
         get_streamed_item_registry().clear_session(self.session_id)
+        # Drop the side-table — no more turns will read it on this agent.
+        self._items_by_id.clear()
 
         if self.state != AgentState.DEAD:
             self._set_state(AgentState.DEAD)
@@ -419,6 +427,21 @@ class CodexAgent(BaseAgent):
         payload = event.payload
 
         if method == "item/started":
+            # Capture the raw inner payload first so any ``itemId`` is indexed,
+            # regardless of item kind. ``fileChange`` approvals later in the
+            # turn read this side-table to grab the diff.
+            item = getattr(payload, "item", None)
+            if item is not None:
+                inner = getattr(item, "root", item)
+                item_id = getattr(inner, "id", None)
+                if item_id:
+                    self._items_by_id[item_id] = inner.model_dump(
+                        mode="json", by_alias=True,
+                    )
+
+            # Existing agent-message streaming logic — only this kind paints
+            # a live ``stream_block_start`` event today; other kinds flow
+            # through the JSONL → watcher path.
             agent_msg = _agent_message_item(payload)
             if agent_msg is None:
                 return
@@ -502,6 +525,12 @@ class CodexAgent(BaseAgent):
                 return
             inner = getattr(item, "root", item)
             item_type = getattr(inner, "type", None)
+            # The side-table entry is no longer needed once the item is
+            # finalized (see ``_items_by_id`` in __init__). Pop is
+            # idempotent — items we never saw started don't show up here.
+            item_id_for_cleanup = getattr(inner, "id", None)
+            if item_id_for_cleanup:
+                self._items_by_id.pop(item_id_for_cleanup, None)
 
             if item_type == "agentMessage":
                 item_id = inner.id
