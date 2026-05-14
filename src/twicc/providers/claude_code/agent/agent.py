@@ -119,11 +119,6 @@ class ClaudeCodeAgent(BaseAgent):
         self._client: ClaudeSDKClient | None = None
         self._interrupting = False  # Set when interrupt() is called, suppresses error toast
         self._message_loop_task: asyncio.Task[None] | None = None
-        # Concurrent pending requests: the CLI can run multiple concurrency-safe tools
-        # in parallel within the same assistant turn (e.g., Read + Glob), each with its
-        # own can_use_tool callback. Both dicts are keyed by request_id (UUID).
-        self._pending_requests: dict[str, PendingRequest] = {}
-        self._pending_futures: dict[str, asyncio.Future[PermissionResultAllow | PermissionResultDeny]] = {}
         self._active_tools: dict[str, dict[str, Any]] = {}
         self._last_started_tool_id: str | None = None
         self._get_session_slug = get_session_slug
@@ -176,13 +171,6 @@ class ClaudeCodeAgent(BaseAgent):
             return getattr(process, "pid", None)
         except Exception:
             return None
-
-    @property
-    def pending_requests(self) -> tuple[PendingRequest, ...]:
-        """Active pending requests waiting for user response, oldest first."""
-        return tuple(
-            sorted(self._pending_requests.values(), key=lambda r: r.created_at)
-        )
 
     def get_expired_recurring_crons(self) -> list:
         """Return recurring SessionCron instances whose CLI auto-delete has occurred.
@@ -304,11 +292,11 @@ class ClaudeCodeAgent(BaseAgent):
     def get_info(self) -> AgentInfo:
         """Get an immutable snapshot of the agent state.
 
-        Extends the base snapshot with Claude-specific fields (pending requests,
-        active tools and the most recently started tool id).
+        Extends the base snapshot with Claude-specific fields (active tools
+        and the most recently started tool id). ``pending_requests`` is
+        populated by the base implementation.
         """
         return super().get_info()._replace(
-            pending_requests=self.pending_requests,
             active_tools=tuple(self._serialize_active_tools()),
             last_started_tool_id=self._last_started_tool_id,
         )
@@ -558,13 +546,6 @@ class ClaudeCodeAgent(BaseAgent):
         Returns:
             PermissionResultAllow or PermissionResultDeny from the user's response
         """
-        # logger.debug(
-        #     "can_use_tool called: tool_name=%s, input_data=%s, permission_suggestions=%s",
-        #     tool_name,
-        #     orjson.dumps(input_data, option=orjson.OPT_INDENT_2).decode(),
-        #     getattr(context, "suggestions", None),
-        # )
-
         request_id = str(uuid.uuid4())
 
         if tool_name == "AskUserQuestion":
@@ -582,40 +563,20 @@ class ClaudeCodeAgent(BaseAgent):
             created_at=time.time(),
             permission_suggestions=permission_suggestions,
         )
-        future: asyncio.Future[PermissionResultAllow | PermissionResultDeny] = (
-            asyncio.get_event_loop().create_future()
-        )
-
-        self._pending_requests[request_id] = request
-        self._pending_futures[request_id] = future
-
-        # logger.debug(
-        #     "[session %s] [permission %s] new request: tool=%r, type=%s (in-flight: %d)",
-        #     self.session_id, request_id, tool_name, request_type, len(self._pending_requests),
-        # )
-
-        # Notify frontend via state change callback (broadcasts WebSocket message)
-        await self._notify_state_change()
 
         try:
-            response = await future
+            response = await self._await_pending_request(request)
         except asyncio.CancelledError:
             logger.warning(
                 "[session %s] [permission %s] Future cancelled while awaiting (tool=%r)",
                 self.session_id, request_id, tool_name,
             )
-            self._pending_requests.pop(request_id, None)
-            self._pending_futures.pop(request_id, None)
             raise
 
-        # logger.debug(
-        #     "[session %s] [permission %s] resolved: tool=%r, response=%s",
-        #     self.session_id, request_id, tool_name, type(response).__name__,
-        # )
-
-        # For ExitPlanMode: Detect if the user modified the plan content
-        # Because of a "bug" in claude agent sdk / claude code, the plan passed via the response is not taken into
-        #  account, so we'll update it ourselves in the plan file (via the `_update_plan` method)
+        # For ExitPlanMode: detect if the user modified the plan content.
+        # Because of a "bug" in claude-agent-sdk / claude-code, the plan passed
+        # via the response is not taken into account, so we update it ourselves
+        # in the plan file (via ``_update_plan``).
         if (
             tool_name == "ExitPlanMode"
             and isinstance(response, PermissionResultAllow)
@@ -624,66 +585,7 @@ class ClaudeCodeAgent(BaseAgent):
         ):
             await self._update_plan(response.updated_input["plan"])
 
-        # Clear this request from the in-flight maps
-        self._pending_requests.pop(request_id, None)
-        self._pending_futures.pop(request_id, None)
-
-        # Notify that this pending request is resolved (others may still be pending)
-        await self._notify_state_change()
-
         return response
-
-    def resolve_pending_request(
-        self,
-        request_id: str,
-        response: PermissionResultAllow | PermissionResultDeny,
-    ) -> bool:
-        """Resolve a specific pending request with the user's response.
-
-        Called by ClaudeCodeAgentManager when a WebSocket response arrives from the frontend.
-        The request_id identifies which pending request the response is for, so that
-        concurrent permission asks (e.g., parallel Read + Glob) are routed correctly.
-
-        Args:
-            request_id: UUID of the request to resolve
-            response: The permission result to send back to the SDK
-
-        Returns:
-            True if resolved, False if no matching pending request or already resolved.
-        """
-        # request = self._pending_requests.get(request_id)
-        future = self._pending_futures.get(request_id)
-        if future is None or future.done():
-            logger.warning(
-                "[session %s] resolve_pending_request: no in-flight Future for request_id=%s "
-                "(known=%s, response=%s)",
-                self.session_id,
-                request_id,
-                list(self._pending_requests.keys()),
-                type(response).__name__,
-            )
-            return False
-        # logger.debug(
-        #     "[session %s] [permission %s] frontend response received: tool=%r, response=%s",
-        #     self.session_id,
-        #     request_id,
-        #     request.tool_name if request else "?",
-        #     type(response).__name__,
-        # )
-        future.set_result(response)
-        return True
-
-    def _cancel_pending_request_future(self) -> None:
-        """Cancel any active pending request Futures to avoid asyncio warnings.
-
-        Called during process death (error or kill) to ensure Futures are not
-        left unawaited. Cancels every in-flight request, not just one.
-        """
-        for future in self._pending_futures.values():
-            if not future.done():
-                future.cancel()
-        self._pending_requests.clear()
-        self._pending_futures.clear()
 
     def _build_query_prompt(
         self,
@@ -1161,7 +1063,7 @@ class ClaudeCodeAgent(BaseAgent):
         self.kill_reason = reason
 
         # Cancel any pending request Future to avoid asyncio warnings
-        self._cancel_pending_request_future()
+        self._cancel_all_pending_futures()
 
         # Get PID BEFORE dropping the client reference
         pid = self.get_pid()
@@ -1380,7 +1282,7 @@ class ClaudeCodeAgent(BaseAgent):
                         "Authentication failed for session %s — Claude Code CLI is not logged in",
                         self.session_id,
                     )
-                    self._cancel_pending_request_future()
+                    self._cancel_all_pending_futures()
                     pid = self.get_pid()
                     self._set_state(AgentState.DEAD)
                     self.kill_reason = "auth_required"
@@ -1409,7 +1311,7 @@ class ClaudeCodeAgent(BaseAgent):
                                 self.session_id,
                                 msg.subtype,
                             )
-                            self._cancel_pending_request_future()
+                            self._cancel_all_pending_futures()
                             self._set_state(AgentState.DEAD)
                             self.last_activity = time.time()
                             self._first_turn_done_event.set()
@@ -1490,7 +1392,7 @@ class ClaudeCodeAgent(BaseAgent):
         )
 
         # Cancel any pending request Future to avoid asyncio warnings
-        self._cancel_pending_request_future()
+        self._cancel_all_pending_futures()
 
         # Get PID BEFORE dropping the client reference
         pid = self.get_pid()
