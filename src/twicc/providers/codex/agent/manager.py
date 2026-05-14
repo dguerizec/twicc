@@ -301,13 +301,14 @@ class CodexAgentManager(BaseAgentManager):
     ) -> tuple[str, float, int] | None:
         """Apply Codex-specific skips, then the shared per-state policy.
 
-        Skips agents that are waiting on a user response (pending_requests).
-        Today the Codex agent never publishes any — approvals are bypassed
-        at the server level via ``sandbox=danger_full_access`` +
-        ``approval_policy="never"`` — so this is a no-op guard kept in place
-        for when Codex approvals start surfacing through the same mechanism
-        as Claude Code's. No equivalent of Claude's ``SessionCron`` check
-        because :class:`SessionCron` is Claude Code-specific.
+        Skips agents waiting on a user response (``pending_requests``
+        populated by the sync ↔ async approval bridge in
+        :class:`CodexAgent`). Under the PR2a default (``yolo``) Codex
+        doesn't emit approvals so the skip is dormant, but it becomes the
+        load-bearing path as soon as a session is created with a more
+        restrictive ``permission_mode``. No equivalent of Claude's
+        ``SessionCron`` check because :class:`SessionCron` is Claude
+        Code-specific.
 
         Per-state timeouts themselves live in
         :meth:`BaseAgentManager._state_based_timeout`.
