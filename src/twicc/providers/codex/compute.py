@@ -1623,36 +1623,45 @@ class CodexSessionCompute(BaseSessionCompute):
             if payload is None or payload.get("type") not in _TOOL_RESULT_PAYLOAD_TYPES:
                 return None
             if tool_name in _EXEC_COMMAND_TOOLS:
-                # Chained: a closing chunk is recognised by the
-                # ``Process exited with code N`` line in the Codex
-                # unified-exec status trailer. While the process is
-                # still running we explicitly emit nothing so the
-                # ``Max``-aggregated extra stays at its starting value
-                # and the frontend keeps the spinner alive.
-                output = payload.get("output", "")
-                if not isinstance(output, str):
-                    return None
-                if not parse_exec_command_status(output).is_terminated:
-                    # Trailer says the process is still running, but the
-                    # user may have refused the approval (Deny / Cancel
-                    # turn) — in that case Codex never sends a closing
-                    # chunk and the spinner would spin forever. Consult
-                    # the agent-side map populated by
-                    # ``CodexAgent._record_decision_outcome`` (signal-based,
-                    # no text pattern-match) — if the call_id was refused,
-                    # the tool is over: fall through to flag is_terminated.
-                    call_id = payload.get("call_id")
-                    if (
-                        not isinstance(call_id, str)
-                        or session_id is None
-                        or _denied_tool_reason(session_id, call_id) is None
-                    ):
-                        return None
+                # Chained exec tools (``exec_command`` / ``write_stdin``)
+                # emit one ``function_call_output`` per write_stdin poll
+                # — only the closing chunk reports a ``Process exited``
+                # status trailer, and the spinner relies on that closing
+                # chunk to flip ``extra.is_terminated``. Two termination
+                # signals, checked in priority order:
+                #
+                #   1. User refusal (Deny / Cancel turn). Recorded by
+                #      ``CodexAgent._record_decision_outcome`` at WS-
+                #      resolve time; signal-based, no text pattern-match.
+                #      If we see the call_id in the map, the tool is over
+                #      — Codex never sends a closing chunk in this case
+                #      so without this check the spinner would spin
+                #      forever.
+                #   2. Natural completion. The unified-exec status
+                #      trailer reports ``Process exited with code N``
+                #      on the closing chunk.
+                #
+                # Anything else is a still-running poll → return ``None``
+                # so the ``Max``-aggregated extra stays unset and the
+                # spinner keeps spinning.
+                call_id = payload.get("call_id")
+                refused = (
+                    isinstance(call_id, str)
+                    and session_id is not None
+                    and _denied_tool_reason(session_id, call_id) is not None
+                )
+                if refused:
                     logger.debug(
                         "Codex compute: terminating refused exec_command "
                         "via denied-tool signal: session=%s call_id=%s",
                         session_id, call_id,
                     )
+                else:
+                    output = payload.get("output", "")
+                    if not isinstance(output, str):
+                        return None
+                    if not parse_exec_command_status(output).is_terminated:
+                        return None
             # Atomic result row, the closing chunk of a chained sequence,
             # or a refused chained call — flag it so the card stops spinning.
             return orjson.dumps({"is_terminated": True}).decode()
