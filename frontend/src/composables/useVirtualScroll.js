@@ -19,14 +19,6 @@ const DEFAULT_BUFFER = 500
  */
 const DEFAULT_UNLOAD_BUFFER = 1000
 
-/**
- * Threshold in pixels for the "at bottom" check used by the composable's internal
- * scroll corrections (e.g., after item height changes or container resizes).
- * This is intentionally small — it answers "are we at the logical bottom?"
- * Not to be confused with AUTO_SCROLL_THRESHOLD in SessionItemsList (150px),
- * which answers "are we close enough to follow new content?"
- */
-const AT_BOTTOM_THRESHOLD = 150
 
 /**
  * Composable for virtual scrolling with variable-height items.
@@ -57,6 +49,20 @@ export function useVirtualScroll(options) {
         unloadBuffer = DEFAULT_UNLOAD_BUFFER,
         containerRef,
     } = options
+
+    /**
+     * Reactive "near bottom" state, maintained by VirtualScroller via an
+     * IntersectionObserver on the bottom sentinel (with a 150px rootMargin).
+     * Single source of truth for the question "is the user close enough to
+     * the bottom to follow new content?". Drives the .at-bottom CSS class
+     * (which re-enables native scroll anchoring for passive pin-to-bottom)
+     * and is consumed by the auto-scroll watchers in SessionItemsList.
+     *
+     * Defaults to true: before the IntersectionObserver has had a chance to
+     * report, sessions usually open at the bottom and we want auto-follow
+     * behavior to be active by default.
+     */
+    const isAtBottomRef = ref(true)
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Internal State
@@ -717,28 +723,23 @@ export function useVirtualScroll(options) {
     }
 
     /**
-     * Check if the scroller is currently at or near the bottom.
+     * Whether the scroller is currently at or near the bottom (within ~150 px).
+     * Reads the reactive flag maintained by VirtualScroller's IntersectionObserver
+     * on the bottom sentinel. This is the single source of truth for "near bottom".
      *
-     * @param {number} [threshold=5] - Pixel threshold for "at bottom" detection
      * @returns {boolean}
      */
-    function isAtBottom(threshold = AT_BOTTOM_THRESHOLD) {
-        const container = containerRef.value
-        if (!container) return true
-        // When the container is hidden (display:none), all dimensions are 0.
-        // Return false to avoid false positives that would trigger scroll-to-bottom.
-        if (container.clientHeight === 0) return false
-        const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight
-        return distanceFromBottom <= threshold
+    function isAtBottom() {
+        return isAtBottomRef.value
     }
 
     /**
      * Check if the scroller is currently at or near the top.
      *
-     * @param {number} [threshold=5] - Pixel threshold for "at top" detection
+     * @param {number} [threshold=150] - Pixel threshold for "at top" detection
      * @returns {boolean}
      */
-    function isAtTop(threshold = AT_BOTTOM_THRESHOLD) {
+    function isAtTop(threshold = 150) {
         return scrollTop.value <= threshold
     }
 
@@ -1160,6 +1161,9 @@ export function useVirtualScroll(options) {
         getScrollState,
         isAtBottom,
         isAtTop,
+        // Reactive "near bottom" flag — written by VirtualScroller's
+        // IntersectionObserver, read by isAtBottom() and consumers.
+        isAtBottomRef,
 
         // Prevent implicit "stay at bottom" on resize
         preventAutoScrollToBottom,

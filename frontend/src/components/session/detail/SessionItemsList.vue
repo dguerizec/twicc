@@ -96,9 +96,6 @@ let scrollToBottomPromise = null
 // Delay in ms to wait for no more resize events before considering stable
 const STABILITY_DEBOUNCE_MS = 100
 
-// Threshold in pixels for "near bottom" detection for auto-scroll
-const AUTO_SCROLL_THRESHOLD = 150
-
 // Buffer: load N items before/after visible range
 const LOAD_BUFFER = 50
 
@@ -235,7 +232,7 @@ onDeactivated(() => {
     // Capture state for reactivation: track item count and scroll position
     itemCountAtDeactivation = visualItems.value?.length ?? null
     const scroller = scrollerRef.value
-    wasNearBottomAtDeactivation = scroller ? scroller.isAtBottom(AUTO_SCROLL_THRESHOLD) : false
+    wasNearBottomAtDeactivation = scroller ? scroller.isAtBottom() : false
 
     // Save scroll anchor as safety net for restoration after reactivation
     savedScrollAnchor = scroller ? scroller.getScrollAnchor() : null
@@ -564,7 +561,7 @@ watch(
         // Check if we should auto-scroll:
         // 1. We're currently in the middle of an auto-scroll operation, OR
         // 2. User was near the bottom before the new items arrived
-        const shouldAutoScroll = isAutoScrollingToBottom.value || scroller.isAtBottom(AUTO_SCROLL_THRESHOLD)
+        const shouldAutoScroll = isAutoScrollingToBottom.value || scroller.isAtBottom()
 
         if (shouldAutoScroll) {
             // Wait for Vue to render the new items
@@ -1020,7 +1017,7 @@ provide('requestScrollToBottomIfNeeded', () => {
     if (props.parentSessionId) return // Subagent sessions don't auto-scroll
     const scroller = scrollerRef.value
     if (!scroller) return
-    if (isAutoScrollingToBottom.value || scroller.isAtBottom(AUTO_SCROLL_THRESHOLD)) {
+    if (isAutoScrollingToBottom.value || scroller.isAtBottom()) {
         scrollToBottomUntilStable()
     }
 })

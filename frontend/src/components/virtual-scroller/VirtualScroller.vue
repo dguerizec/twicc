@@ -134,6 +134,18 @@ const emit = defineEmits([
 const containerRef = ref(null)
 
 /**
+ * Reference to the bottom sentinel element. Watched by an IntersectionObserver
+ * (root = containerRef, rootMargin: '0px 0px 150px 0px') to maintain
+ * isAtBottomRef and toggle the .at-bottom class on the container.
+ *
+ * That class re-enables native scroll anchoring only when the user is within
+ * 150 px of the bottom — restricting the browser's pin-to-bottom behavior to
+ * the sentinel as sole anchor candidate during streaming, and shutting it off
+ * the rest of the time (so JS owns scroll exclusively when the user scrolls up).
+ */
+const sentinelRef = ref(null)
+
+/**
  * Flag to track whether the initial @update event has been emitted.
  * Used to defer the first emission until after mount.
  */
@@ -273,6 +285,7 @@ const {
     syncScrollPosition,
     isAtBottom,
     isAtTop,
+    isAtBottomRef,
     invalidateZeroHeights,
     preventAutoScrollToBottom: composablePreventAutoScrollToBottom,
     suspended: composableSuspended,
@@ -355,6 +368,13 @@ watch(
  */
 let containerObserver = null
 
+/**
+ * IntersectionObserver watching the bottom sentinel. Maintains isAtBottomRef
+ * (and therefore the .at-bottom class) so native scroll anchoring is only
+ * active while the user is near the bottom.
+ */
+let sentinelObserver = null
+
 onMounted(() => {
     if (containerRef.value) {
         // Initial sync of scroll position and viewport height
@@ -394,6 +414,30 @@ onMounted(() => {
             containerObserver.observe(containerRef.value)
         }
 
+        // Setup IntersectionObserver on the bottom sentinel to maintain
+        // isAtBottomRef. rootMargin extends the detection zone 150 px below the
+        // visible area, so "near bottom" (within 150 px) still counts as
+        // intersecting — matching the previous AUTO_SCROLL_THRESHOLD behavior.
+        if (typeof IntersectionObserver !== 'undefined' && sentinelRef.value) {
+            sentinelObserver = new IntersectionObserver(
+                ([entry]) => {
+                    // Ignore events while the scroller is suspended (KeepAlive
+                    // deactivated, or auto-suspended for hidden tab panels).
+                    // The container's clientHeight is 0 in those cases, which
+                    // can spuriously toggle the sentinel out of intersection.
+                    if (composableSuspended.value) return
+                    if (containerRef.value?.clientHeight === 0) return
+                    isAtBottomRef.value = entry?.isIntersecting ?? false
+                },
+                {
+                    root: containerRef.value,
+                    rootMargin: '0px 0px 150px 0px',
+                    threshold: 0,
+                }
+            )
+            sentinelObserver.observe(sentinelRef.value)
+        }
+
         // Mark as mounted and emit initial @update event on next tick
         // This ensures viewportHeight has been measured correctly
         nextTick(() => {
@@ -413,6 +457,11 @@ onUnmounted(() => {
     if (containerObserver) {
         containerObserver.disconnect()
         containerObserver = null
+    }
+
+    if (sentinelObserver) {
+        sentinelObserver.disconnect()
+        sentinelObserver = null
     }
 
     // Cleanup shared item observer
@@ -576,6 +625,7 @@ defineExpose({
     <div
         ref="containerRef"
         class="virtual-scroller"
+        :class="{ 'at-bottom': isAtBottomRef }"
         @scroll.passive="onScroll"
     >
         <!-- Spacer before rendered items -->
@@ -602,8 +652,13 @@ defineExpose({
         <!-- Scroll anchor sentinel: enables native pin-to-bottom via overflow-anchor.
              When visible (user at bottom), the browser keeps it in viewport as content
              grows above it, achieving pin-to-bottom without any JS scroll writes.
-             When out of view (user scrolled up), anchoring naturally stops. -->
-        <div class="virtual-scroller-anchor" aria-hidden="true" />
+             When out of view (user scrolled up), anchoring naturally stops.
+             Watched by IntersectionObserver to maintain the .at-bottom class. -->
+        <div
+            ref="sentinelRef"
+            class="virtual-scroller-anchor"
+            aria-hidden="true"
+        />
     </div>
 </template>
 
@@ -612,6 +667,12 @@ defineExpose({
     overflow-y: auto;
     /* Prevent scroll chaining to parent (e.g., pull-to-refresh on mobile) */
     overscroll-behavior: contain;
+    /* Native scroll anchoring is disabled by default on the scroll container so
+       Chrome can't interfere with our JS-based anchor correction. The .at-bottom
+       class (toggled by the sentinel's IntersectionObserver) re-enables it, which
+       lets the sentinel below act as the sole anchor candidate and drive
+       passive pin-to-bottom while the user is near the bottom. */
+    overflow-anchor: none;
 
     /* IMPORTANT: Parent must provide explicit height for scrolling to work.
        This fallback only works when the parent has a defined height. */
@@ -628,6 +689,14 @@ defineExpose({
     /* Use flex column layout for proper spacer behavior */
     display: flex;
     flex-direction: column;
+}
+
+/* When the user is near the bottom (sentinel intersecting), re-enable native
+   scroll anchoring on the container. Combined with the descendant disqualification
+   rules below, only the sentinel remains as a valid anchor candidate, giving
+   passive pin-to-bottom behavior with no JS scroll writes during streaming. */
+.virtual-scroller.at-bottom {
+    overflow-anchor: auto;
 }
 
 .virtual-scroller-spacer {
