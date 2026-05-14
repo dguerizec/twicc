@@ -1,10 +1,10 @@
 import { ClaudeCodeHelpers, claudeCodeHelpers } from './claude_code/helpers'
 import { ClaudeCodeToolHelpers, claudeCodeToolHelpers } from './claude_code/toolHelpers'
-import { claudeCodeWsHandler } from './claude_code/ws'
+import { claudeCodeWsHandler, respondToPendingRequest as respondToClaudeCodePendingRequest } from './claude_code/ws'
 import { useClaudeCodeStore } from './claude_code/store'
 import { CodexHelpers, codexHelpers } from './codex/helpers'
 import { CodexToolHelpers, codexToolHelpers } from './codex/toolHelpers'
-import { codexWsHandler } from './codex/ws'
+import { codexWsHandler, respondToPendingRequest as respondToCodexPendingRequest } from './codex/ws'
 import { useCodexStore } from './codex/store'
 
 const PROVIDER_HELPERS = {
@@ -71,4 +71,32 @@ export function getProviderOptions() {
         value,
         label: helpers.constructor.label ?? value,
     }))
+}
+
+const PENDING_REQUEST_SENDERS = {
+    [ClaudeCodeHelpers.provider]: respondToClaudeCodePendingRequest,
+    [CodexHelpers.provider]: respondToCodexPendingRequest,
+}
+
+/**
+ * Provider-agnostic dispatcher for resolving a pending tool-approval /
+ * ask-user-question request. Routes to the matching provider's outbound
+ * sender. Throws if ``provider`` is unknown — callers should always
+ * provide a registered provider (typically from ``session.provider``).
+ *
+ * ``responseData`` is provider-specific:
+ * - claude_code: { request_type: 'tool_approval' | 'ask_user_question',
+ *                  decision?: 'allow' | 'deny', updated_input?, updated_permissions?,
+ *                  message?, answers? }
+ * - codex:       { tool_name: 'commandExecution' | 'fileChange' | 'permissions',
+ *                  decision?: <string|dict>, permissions?, scope?, strictAutoReview? }
+ *
+ * @returns {boolean} True if the message was sent.
+ */
+export function respondToPendingRequest(provider, sessionId, requestId, responseData) {
+    const sender = PENDING_REQUEST_SENDERS[provider]
+    if (!sender) {
+        throw new Error(`respondToPendingRequest: unknown provider ${provider}`)
+    }
+    return sender(sessionId, requestId, responseData)
 }
