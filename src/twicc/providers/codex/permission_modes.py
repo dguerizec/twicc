@@ -27,7 +27,12 @@ to skip prompts, ``"yolo"`` for full unrestricted access) or a stricter one
 
 from __future__ import annotations
 
-from codex_app_server import AskForApproval, SandboxMode
+from codex_app_server import AskForApproval, SandboxMode, SandboxPolicy
+from codex_app_server.generated.v2_all import (
+    DangerFullAccessSandboxPolicy,
+    ReadOnlySandboxPolicy,
+    WorkspaceWriteSandboxPolicy,
+)
 
 # Preset wire value → (SandboxMode enum, AskForApproval enum)
 #
@@ -59,3 +64,37 @@ def resolve_codex_policy(mode: str | None) -> tuple[SandboxMode, AskForApproval]
     policy for telemetry.
     """
     return _PRESET_MAP.get(mode or DEFAULT_MODE, _PRESET_MAP[DEFAULT_MODE])
+
+
+def _to_sandbox_policy(sandbox_mode: SandboxMode) -> SandboxPolicy:
+    """Convert a ``SandboxMode`` enum (used by ``thread_start(sandbox=...)``)
+    to a ``SandboxPolicy`` ``RootModel`` (used by ``thread.turn(sandbox_policy=...)``).
+
+    The SDK has two parallel types: ``SandboxMode`` for thread bootstrap,
+    ``SandboxPolicy`` for per-turn override. The mapping is mechanical
+    because both encode the same 3 modes we use; the ``RootModel`` form
+    just carries extra config fields (network_access, writable_roots, …)
+    that we leave on their defaults.
+    """
+    if sandbox_mode is SandboxMode.read_only:
+        return SandboxPolicy(root=ReadOnlySandboxPolicy(type="readOnly"))
+    if sandbox_mode is SandboxMode.workspace_write:
+        return SandboxPolicy(root=WorkspaceWriteSandboxPolicy(type="workspaceWrite"))
+    if sandbox_mode is SandboxMode.danger_full_access:
+        return SandboxPolicy(root=DangerFullAccessSandboxPolicy(type="dangerFullAccess"))
+    # SandboxMode is an enum with exactly the 3 values above; unreachable.
+    raise ValueError(f"Unsupported SandboxMode: {sandbox_mode!r}")
+
+
+def resolve_codex_turn_overrides(
+    mode: str | None,
+) -> tuple[SandboxPolicy, AskForApproval]:
+    """Return the ``(SandboxPolicy, AskForApproval)`` pair for a per-turn override.
+
+    Wraps :func:`resolve_codex_policy` and converts the sandbox to the
+    ``RootModel`` shape ``thread.turn`` requires. Use this in
+    ``CodexAgent._run_turn`` to translate the live ``agent_settings.permission_mode``
+    into the SDK kwargs.
+    """
+    sandbox_mode, approval_policy = resolve_codex_policy(mode)
+    return _to_sandbox_policy(sandbox_mode), approval_policy
