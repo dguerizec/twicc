@@ -97,6 +97,13 @@ watch(() => props.pendingRequest?.request_id, () => {
 </script>
 
 <template>
+    <!--
+        Shell-only component. Per-provider rendering lives in the
+        ``bodyComponent`` resolved by ``session.provider`` (Claude vs
+        Codex). The dynamic ``:is="bodyComponent"`` avoids the SFC
+        compiler limitation that bit PR2b when we tried to nest
+        ``<template v-else-if>`` branches.
+    -->
     <wa-divider></wa-divider>
     <div class="pending-request-form" :class="{ expanded: isExpanded }">
         <!-- Shared header. Title + icon vary on requestType. -->
