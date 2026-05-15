@@ -11,7 +11,7 @@ import { useCommandRegistry } from '../composables/useCommandRegistry'
 import { useSettingsStore } from '../stores/settings'
 import { useDataStore, ALL_PROJECTS_ID } from '../stores/data'
 import { useWorkspacesStore } from '../stores/workspaces'
-import { getRegisteredProviders, getProviderHelpers } from '../providers'
+import { getRegisteredProviders, getProviderHelpers, getProviderOptions } from '../providers'
 import { useRoute } from 'vue-router'
 import { clearTabRouteParams } from '../utils/granularRoutes'
 import { computeSidebarSessionBlocks } from '../utils/sidebarSessions'
@@ -756,6 +756,19 @@ export function initStaticCommands(router) {
 
         // ── UI ────────────────────────────────────────────────────────
 
+        {
+            id: 'ui.default-provider',
+            label: 'Change Default Provider…',
+            icon: 'plug',
+            category: 'ui',
+            when: () => getRegisteredProviders().length > 1,
+            items: () => getProviderOptions().map(({ value, label }) => ({
+                id: value,
+                label,
+                action: () => settings.setDefaultProvider(value),
+                active: settings.defaultProvider === value,
+            })),
+        },
         {
             id: 'ui.manage-workspaces',
             label: 'Manage Workspaces',
