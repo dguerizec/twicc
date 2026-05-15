@@ -210,7 +210,10 @@ const canStopAgent = computed(() => {
     const parentId = session.value?.parent_session_id
     if (!parentId) return false
     const link = store.getAgentLinkByAgentId(parentId, props.sessionId)
-    return !!link?.isBackground
+    if (!link?.isBackground) return false
+    // Provider opt-out for backends that don't (or can't) stop a
+    // running subagent — see ``BaseProviderHelpers.canStopSubagent``.
+    return !!getProviderHelpers(session.value?.provider)?.canStopSubagent()
 })
 
 // Track when a stop request has been sent and we're waiting for the process to die.

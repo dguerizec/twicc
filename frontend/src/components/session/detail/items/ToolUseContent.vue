@@ -10,7 +10,7 @@ import { PROCESS_STATE, PROCESS_STATE_COLORS } from '../../../../constants'
 import { stopSubagent } from '../../../../composables/useWebSocket'
 import { getSessionCutoffMs } from '../../../../utils/sessions'
 import { getParsedContent, hasContent } from '../../../../utils/parsedContent'
-import { getToolHelpers } from '../../../../providers'
+import { getToolHelpers, getProviderHelpers } from '../../../../providers'
 import JsonHumanView from '../../../json/JsonHumanView.vue'
 import MarkdownContent from '../../../ui/MarkdownContent.vue'
 import AppTooltip from '../../../ui/AppTooltip.vue'
@@ -27,6 +27,12 @@ const codeCommentsStore = useCodeCommentsStore()
 const toolHelpers = computed(() => {
     const session = dataStore.getSession(props.sessionId)
     return getToolHelpers(session?.provider)
+})
+// Provider-level helpers — used for capabilities that are decided per
+// provider rather than per tool (e.g. ``canStopSubagent``).
+const providerHelpers = computed(() => {
+    const session = dataStore.getSession(props.sessionId)
+    return getProviderHelpers(session?.provider)
 })
 
 // Cross-tab file reveal (provided by SessionView)
@@ -521,7 +527,7 @@ const isTask = computed(() => !!toolHelpers.value?.isAgentTool(props.name))
 // providers whose backend ``stop_subagent`` hook isn't wired yet (Codex
 // today) can hide it instead of dispatching a request that drops on
 // the floor. Default in BaseToolHelpers is true.
-const canStopAgent = computed(() => !!toolHelpers.value?.canStopAgent(props.name))
+const canStopAgent = computed(() => !!providerHelpers.value?.canStopSubagent())
 const toolState = computed(() => dataStore.getToolState(props.sessionId, props.toolId))
 
 // Tool error: non-null error string means the tool_result reported an error

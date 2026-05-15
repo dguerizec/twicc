@@ -21,6 +21,21 @@ export class BaseProviderHelpers {
     }
 
     /**
+     * Whether the host can ask the backend to stop a running background
+     * subagent of this provider — gates the Stop button next to ``View
+     * Agent`` on the spawning tool card AND the Stop button in the
+     * subagent's session header. A provider opts out (returning
+     * ``false``) when it has not (or cannot) wired the matching
+     * ``BaseAgentManager.stop_subagent`` hook yet, so the UI doesn't
+     * dispatch a ``stop_subagent`` request that the backend would
+     * silently drop. Default: ``true`` (Claude Code's ``Task`` ships
+     * with a working stop path).
+     */
+    canStopSubagent() {
+        return true
+    }
+
+    /**
      * Activation prefixes this provider supports, in the order the snippets
      * bar should render their buttons. Each char drives one ``open-command``
      * button and one ``/api/projects/<id>/commands/?activation_char=<char>``
@@ -996,17 +1011,6 @@ export class BaseToolHelpers {
      */
     isAgentTool(/* name */) {
         return false
-    }
-
-    /**
-     * Whether the shell can ask the backend to stop a running background
-     * subagent spawned by this tool (the Stop button next to View Agent).
-     * Decoupled from ``isAgentTool`` so a provider can opt in to the agent
-     * UI (spinner + View Agent) before its backend grows the matching
-     * stop hook. Default: true (Claude Code's ``Task`` ships with it).
-     */
-    canStopAgent(/* name */) {
-        return true
     }
 
     /**

@@ -109,6 +109,17 @@ export class CodexHelpers extends BaseProviderHelpers {
         return true
     }
 
+    canStopSubagent() {
+        // Codex exposes a ``close_agent`` LLM tool the parent model can
+        // call autonomously, but no host-callable RPC to terminate a
+        // spawned subagent (``turn/interrupt`` only stops a single
+        // turn, doesn't shut the agent down, and needs a turn id we
+        // don't track). Until that backend ``stop_subagent`` plumbing
+        // exists, hide the Stop buttons (tool card + subagent header)
+        // so the UI doesn't dispatch requests the backend would drop.
+        return false
+    }
+
     getCommandActivationChars() {
         // Codex exposes its skill catalogue under the ``$`` prefix; the
         // matching backend rows land in the ``Command`` table via the

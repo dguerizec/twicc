@@ -1392,20 +1392,11 @@ export class CodexToolHelpers extends BaseToolHelpers {
         // Activates the shared agent-spawn UI on the tool card: a
         // spinner before the spawn ack lands, then a ``View Agent``
         // button (with a pulsing robot while the subagent is still
-        // running). The Stop button on the same card is gated
-        // separately by ``canStopAgent`` — see below.
+        // running). The Stop button on the same card is gated by the
+        // provider-level ``CodexHelpers.canStopSubagent`` (defined in
+        // ``../helpers.js``) since the stop plumbing belongs to the
+        // provider, not to a specific tool name.
         return name === SPAWN_AGENT_TOOL_NAME
-    }
-
-    canStopAgent(name) {
-        // Codex exposes a ``close_agent`` SDK tool but the backend
-        // ``stop_subagent`` plumbing is not wired to it yet. Hide the
-        // Stop button rather than letting it dispatch a request that
-        // will be silently dropped. To enable it, override the
-        // matching ``BaseAgentManager.stop_subagent`` for Codex and
-        // flip this back to the default.
-        if (name === SPAWN_AGENT_TOOL_NAME) return false
-        return super.canStopAgent(name)
     }
 
     getDisplayName(name, input) {
