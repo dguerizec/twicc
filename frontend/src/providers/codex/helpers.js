@@ -146,6 +146,12 @@ export class CodexHelpers extends BaseProviderHelpers {
         }
     }
 
+    extractUserMessageText(parsed) {
+        if (parsed?.payload?.type !== 'user_message') return null
+        if (typeof parsed.payload.message !== 'string') return null
+        return parsed.payload.message.trim() || null
+    }
+
     // ─── Authentication ─────────────────────────────────────────────────
 
     getAuthState() {

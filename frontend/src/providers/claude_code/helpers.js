@@ -180,6 +180,21 @@ export class ClaudeCodeHelpers extends BaseProviderHelpers {
         }
     }
 
+    extractUserMessageText(parsed) {
+        const content = parsed?.message?.content
+        if (typeof content === 'string') {
+            return content.trim() || null
+        }
+        if (!Array.isArray(content)) return null
+
+        const text = content
+            .filter(block => block?.type === 'text' && typeof block.text === 'string')
+            .map(block => block.text)
+            .join('\n')
+            .trim()
+        return text || null
+    }
+
     getAuthState() {
         return () => useClaudeCodeStore().authenticated
     }

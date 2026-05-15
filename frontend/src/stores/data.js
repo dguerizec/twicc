@@ -58,6 +58,25 @@ function clearBlockInactivityTimer(block) {
     }
 }
 
+function userMessageMatchesOptimistic(providerHelpers, optimistic, item) {
+    if (!providerHelpers || !optimistic || item?.kind !== 'user_message') return false
+
+    const optimisticText = providerHelpers.extractUserMessageText(getParsedContent(optimistic))
+    if (!optimisticText) return false
+
+    const parsed = getParsedContent(item)
+    const createdAtMs = optimistic._optimisticCreatedAtMs
+    const itemTimestampMs = typeof parsed?.timestamp === 'string'
+        ? Date.parse(parsed.timestamp)
+        : Number.NaN
+    if (createdAtMs && Number.isFinite(itemTimestampMs) && itemTimestampMs < createdAtMs - 1000) {
+        return false
+    }
+
+    const itemText = providerHelpers.extractUserMessageText(parsed)
+    return itemText === optimisticText
+}
+
 // Special project ID for "All Projects" mode
 export const ALL_PROJECTS_ID = '__all__'
 
@@ -1502,6 +1521,7 @@ export const useDataStore = defineStore('data', {
                 }
                 const items = await res.json()
                 this.sessionItems[sessionId] = items
+                this.clearOptimisticMessageIfMatched(sessionId, items)
                 this.localState.sessions[sessionId].itemsFetched = true
                 this.localState.sessions[sessionId].itemsLoadingError = false
             } catch (error) {
@@ -1944,6 +1964,7 @@ export const useDataStore = defineStore('data', {
                 content: null,
                 kind: 'user_message',
                 syntheticKind,
+                _optimisticCreatedAtMs: Date.now(),
                 display_level: DISPLAY_LEVEL.ALWAYS,
                 group_head: null,
                 group_tail: null
@@ -1971,6 +1992,26 @@ export const useDataStore = defineStore('data', {
             if (this.localState.optimisticMessages[sessionId]) {
                 delete this.localState.optimisticMessages[sessionId]
                 this.recomputeVisualItems(sessionId)
+            }
+        },
+
+        /**
+         * Clear the optimistic message when an API-loaded user_message matches it.
+         *
+         * Live WebSocket additions can clear on any new user_message because
+         * they are causally tied to fresh backend lines. API loads can include
+         * older user_messages, so they use content matching to avoid dropping
+         * a just-sent placeholder before its real line has been persisted.
+         * @param {string} sessionId
+         * @param {Array<Object>} items
+         */
+        clearOptimisticMessageIfMatched(sessionId, items) {
+            const optimistic = this.localState.optimisticMessages[sessionId]
+            if (!optimistic || !items?.length) return
+
+            const providerHelpers = getProviderHelpers(this.getSession(sessionId)?.provider)
+            if (items.some(item => userMessageMatchesOptimistic(providerHelpers, optimistic, item))) {
+                delete this.localState.optimisticMessages[sessionId]
             }
         },
 
@@ -2168,6 +2209,7 @@ export const useDataStore = defineStore('data', {
             const sessionItemsArray = this.sessionItems[sessionId]
             if (!sessionItemsArray) return
 
+            const updatedItems = []
             for (const item of items) {
                 const index = item.line_num - 1  // line_num is 1-based
                 if (sessionItemsArray[index]) {
@@ -2187,8 +2229,11 @@ export const useDataStore = defineStore('data', {
                     if (item.kind !== undefined) {
                         sessionItemsArray[index].kind = item.kind
                     }
+                    updatedItems.push(sessionItemsArray[index])
                 }
             }
+
+            this.clearOptimisticMessageIfMatched(sessionId, updatedItems)
 
             // Recompute visual items in case metadata changed
             this.recomputeVisualItems(sessionId)

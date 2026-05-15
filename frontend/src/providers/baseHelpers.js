@@ -69,6 +69,23 @@ export class BaseProviderHelpers {
         )
     }
 
+    /**
+     * Extract the user-facing text from a parsed user_message item, using
+     * this provider's native JSONL shape. Used by generic frontend surfaces
+     * that need to compare or preview user messages without knowing the
+     * provider protocol.
+     *
+     * Providers that render user_message items or support optimistic messages
+     * should override this. Return ``null`` when the parsed item is not a
+     * user message or contains no text.
+     *
+     * @param {Object} parsed - Parsed session item content.
+     * @returns {string|null}
+     */
+    extractUserMessageText(/* parsed */) {
+        return null
+    }
+
     // ─── Authentication ──────────────────────────────────────────────────
     //
     // Some providers gate sending on an external authentication step (e.g.

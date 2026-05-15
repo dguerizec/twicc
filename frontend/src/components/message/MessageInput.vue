@@ -159,16 +159,10 @@ let histLastCloseTime = 0              // timestamp of last close (to prevent re
 const optimisticMessageText = computed(() => {
     const optimistic = store.localState.optimisticMessages[props.sessionId]
     if (!optimistic) return null
+    const helpers = getProviderHelpers(session.value?.provider)
+    if (!helpers) return null
     const parsed = getParsedContent(optimistic)
-    if (!parsed?.message?.content) return null
-    const content = parsed.message.content
-    // Content is either a string or an array of content blocks
-    if (typeof content === 'string') return content.trim() || null
-    if (Array.isArray(content)) {
-        const textBlock = content.findLast(block => block.type === 'text')
-        return textBlock?.text?.trim() || null
-    }
-    return null
+    return helpers.extractUserMessageText(parsed)
 })
 
 // Attachments for this session
