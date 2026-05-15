@@ -38,22 +38,37 @@ def is_session_file(path: Path) -> bool:
 
 
 class SessionMeta(NamedTuple):
-    """First-line metadata extracted from a Codex JSONL file."""
+    """First-line metadata extracted from a Codex JSONL file.
+
+    ``parent_session_id`` is set when the file is a subagent rollout
+    (Codex marks the spawn through ``payload.source.subagent.thread_spawn``);
+    ``None`` for top-level sessions.
+    """
     session_id: str
     cwd: str
+    parent_session_id: str | None = None
 
 
 def extract_session_meta(file_path: Path) -> SessionMeta | None:
     """
-    Read the first line of a Codex JSONL file and pull session_id + cwd.
+    Read the first line of a Codex JSONL file and pull session_id + cwd
+    (and a parent session id when the file represents a subagent rollout).
 
     Codex writes a ``session_meta`` event as the first line of every
     rollout file, with the session UUID at ``payload.id`` and the working
     directory at ``payload.cwd``. The session UUID is the canonical
     session id (the filename also contains it but we trust the payload).
 
+    For subagent rollouts the ``payload.source`` field carries
+    ``{"subagent": {"thread_spawn": {"parent_thread_id": "...", ...}}}``
+    — we surface ``parent_thread_id`` so :func:`sync_project` can wire
+    the subagent to its parent ``Session`` row. Codex supports nested
+    subagents (a subagent can itself spawn subagents) but
+    ``parent_thread_id`` always points to the *direct* parent, so a
+    single field is enough to reconstruct the chain.
+
     Returns ``None`` if the file is empty, unreadable, or missing either
-    field — such files are skipped by the sync.
+    ``id`` or ``cwd`` — such files are skipped by the sync.
     """
     if not file_path.exists():
         return None
@@ -83,7 +98,22 @@ def extract_session_meta(file_path: Path) -> SessionMeta | None:
     if not isinstance(cwd, str) or not cwd:
         return None
 
-    return SessionMeta(session_id=session_id, cwd=cwd)
+    parent_session_id: str | None = None
+    source = payload.get("source")
+    if isinstance(source, dict):
+        subagent = source.get("subagent")
+        if isinstance(subagent, dict):
+            thread_spawn = subagent.get("thread_spawn")
+            if isinstance(thread_spawn, dict):
+                candidate = thread_spawn.get("parent_thread_id")
+                if isinstance(candidate, str) and candidate:
+                    parent_session_id = candidate
+
+    return SessionMeta(
+        session_id=session_id,
+        cwd=cwd,
+        parent_session_id=parent_session_id,
+    )
 
 
 def scan_session_files() -> list[Path]:
@@ -105,10 +135,16 @@ def scan_session_files() -> list[Path]:
 
 
 class _NewEntry(NamedTuple):
-    """A disk file with no matching DB row yet (first line was parsed)."""
+    """A disk file with no matching DB row yet (first line was parsed).
+
+    ``parent_session_id`` is non-``None`` for subagent rollouts; the
+    sync resolves it to the parent ``Session`` row before creating the
+    subagent (multi-pass topological order — see :func:`sync_project`).
+    """
     file_path: Path
     session_id: str
     cwd: str
+    parent_session_id: str | None = None
 
 
 class _ExistingEntry(NamedTuple):
@@ -176,7 +212,53 @@ def sync_project(
         if on_session_progress:
             on_session_progress(entry.session.id, idx, total_sessions)
 
-    for entry in new_entries:
+    # Split new entries by topology: regular sessions have no parent
+    # dependency and can be created in any order; subagents must wait
+    # for their parent ``Session`` row to exist (the parent may itself
+    # be a subagent — Codex supports nested spawns). We process the
+    # regular ones first, then run a multi-pass loop over the subagents
+    # so that each iteration creates every subagent whose parent is now
+    # in DB. The pass count is bounded by the depth of the spawn tree
+    # (each pass resolves at least one level), and any leftover after
+    # convergence is logged and skipped (the watcher will retry on the
+    # next file change).
+    regular_new = [e for e in new_entries if e.parent_session_id is None]
+    subagent_new = [e for e in new_entries if e.parent_session_id is not None]
+
+    def _create_session_row(
+        entry: _NewEntry, parent_session: Session | None
+    ) -> Session:
+        nonlocal project
+        if project is None:
+            project = Project.objects.create(
+                id=project_id,
+                directory=entry.cwd,
+                stale=not os.path.isdir(entry.cwd),
+            )
+            stats["project_created"] = 1
+        relative_path = entry.file_path.relative_to(CodexHelpers.SESSIONS_DIR)
+        if parent_session is not None:
+            session = Session(
+                id=entry.session_id,
+                project=project,
+                provider=Provider.CODEX,
+                file_path=str(relative_path),
+                type=SessionType.SUBAGENT,
+                parent_session=parent_session,
+                agent_id=entry.session_id,
+            )
+        else:
+            session = Session(
+                id=entry.session_id,
+                project=project,
+                provider=Provider.CODEX,
+                file_path=str(relative_path),
+                type=SessionType.SESSION,
+            )
+        session.save()
+        return session
+
+    for entry in regular_new:
         idx += 1
         if stop_event is not None and stop_event.is_set():
             logger.info(
@@ -193,23 +275,7 @@ def sync_project(
                 on_session_progress(entry.session_id, idx, total_sessions)
             continue
 
-        if project is None:
-            project = Project.objects.create(
-                id=project_id,
-                directory=entry.cwd,
-                stale=not os.path.isdir(entry.cwd),
-            )
-            stats["project_created"] = 1
-
-        relative_path = entry.file_path.relative_to(CodexHelpers.SESSIONS_DIR)
-        session = Session(
-            id=entry.session_id,
-            project=project,
-            provider=Provider.CODEX,
-            file_path=str(relative_path),
-            type=SessionType.SESSION,
-        )
-        session.save()
+        session = _create_session_row(entry, parent_session=None)
         stats["sessions_created"] += 1
 
         new_line_nums = sync_session_items(session, entry.file_path)
@@ -217,6 +283,56 @@ def sync_project(
 
         if on_session_progress:
             on_session_progress(entry.session_id, idx, total_sessions)
+
+    # Subagent topology pass — repeat until no new subagent gets
+    # resolved in a full sweep. Worst case: O(depth × N), with depth
+    # bounded by the spawn-tree height (a handful in practice).
+    remaining = list(subagent_new)
+    while remaining:
+        progressed = False
+        next_remaining: list[_NewEntry] = []
+        for entry in remaining:
+            idx += 1
+            if stop_event is not None and stop_event.is_set():
+                logger.info(
+                    "  Sync interrupted for project %s (after %d/%d sessions)",
+                    project_id, idx - 1, total_sessions,
+                )
+                return stats
+
+            if not check_file_has_content(entry.file_path):
+                if on_session_progress:
+                    on_session_progress(entry.session_id, idx, total_sessions)
+                continue
+
+            try:
+                parent_session = Session.objects.get(id=entry.parent_session_id)
+            except Session.DoesNotExist:
+                # Parent isn't in DB yet — try again on the next pass
+                # (it might be a subagent later in this batch).
+                idx -= 1  # don't double-count progress for this entry
+                next_remaining.append(entry)
+                continue
+
+            session = _create_session_row(entry, parent_session=parent_session)
+            stats["sessions_created"] += 1
+
+            new_line_nums = sync_session_items(session, entry.file_path)
+            stats["items_added"] += len(new_line_nums)
+
+            if on_session_progress:
+                on_session_progress(entry.session_id, idx, total_sessions)
+            progressed = True
+
+        if not progressed:
+            for entry in next_remaining:
+                logger.warning(
+                    "  Skipping orphan Codex subagent %s: parent %s not found "
+                    "(file %s)",
+                    entry.session_id, entry.parent_session_id, entry.file_path,
+                )
+            break
+        remaining = next_remaining
 
     if project is None:
         elapsed = time.monotonic() - project_start
@@ -292,10 +408,15 @@ def sync_all(
     # Match disk files to existing DB rows by ``file_path`` (unique in DB),
     # so we don't have to read the first JSON line for sessions we already
     # know about. Only brand-new files require ``extract_session_meta``.
+    # Include both top-level sessions and subagents — the latter share the
+    # same ``rollout-*.jsonl`` layout under ``YYYY/MM/DD/`` and their
+    # ``Session`` rows must be re-matched on subsequent syncs the same
+    # way regular sessions are.
     db_sessions_by_path = {
         s.file_path: s
         for s in Session.objects.filter(
-            provider=Provider.CODEX, type=SessionType.SESSION
+            provider=Provider.CODEX,
+            type__in=(SessionType.SESSION, SessionType.SUBAGENT),
         )
     }
 
@@ -318,6 +439,7 @@ def sync_all(
                     file_path=file_path,
                     session_id=meta.session_id,
                     cwd=meta.cwd,
+                    parent_session_id=meta.parent_session_id,
                 )
             )
 

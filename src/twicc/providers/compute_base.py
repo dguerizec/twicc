@@ -798,6 +798,30 @@ class BaseSessionCompute:
         """
         raise NotImplementedError
 
+    def compute_link_error_override(
+        self,
+        parsed_json: dict,
+        tool_name: str,
+        *,
+        session_id: str | None = None,
+    ) -> str | None:
+        """
+        Per-tool error refinement once ``tool_name`` is known.
+
+        :meth:`extract_tool_result_info` runs before the parent ``tool_use``
+        is resolved, so it cannot apply error rules that depend on the
+        tool name (e.g. Codex's ``spawn_agent`` whose ``function_call_output``
+        carries a JSON ``{"agent_id": ...}`` on success and a freeform
+        rejection string on failure). After the live and batch paths have
+        looked up the parent's ``tool_name`` they invoke this hook; a
+        non-``None`` return value replaces the existing error for the
+        ``ToolResultLink``. Returning ``None`` keeps whatever
+        :meth:`extract_tool_result_info` produced.
+
+        Default: no override.
+        """
+        return None
+
     def compute_link_extra(
         self, parsed_json: dict, tool_name: str, *, session_id: str | None = None,
     ) -> str | None:
@@ -1184,6 +1208,15 @@ class BaseSessionCompute:
                 extra = self.compute_link_extra(
                     parsed_json, tool_name, session_id=session_id,
                 )
+                # Per-tool error refinement (e.g. Codex's spawn_agent whose
+                # output is a JSON ``{"agent_id": ...}`` on success and a
+                # freeform rejection string on failure). The hook needs
+                # ``tool_name``, which only becomes known here.
+                error_override = self.compute_link_error_override(
+                    parsed_json, tool_name, session_id=session_id,
+                )
+                if error_override is not None:
+                    error = error_override
                 _, created = ToolResultLink.objects.get_or_create(
                     session_id=session_id,
                     tool_use_line_num=candidate.line_num,
@@ -1769,6 +1802,13 @@ class BaseSessionCompute:
                     parsed, tu_name, session_id=session_id,
                 )
                 error = analysis.tool_result_error
+                # Same per-tool error refinement as the live path
+                # (see ``compute_link_error_override`` docstring).
+                error_override = self.compute_link_error_override(
+                    parsed, tu_name, session_id=session_id,
+                )
+                if error_override is not None:
+                    error = error_override
                 new_key = (tool_result_ref, item.line_num)
                 all_tool_result_links[new_key] = serialize_tool_result_link(ToolResultLink(
                     session_id=session_id,

@@ -13,7 +13,10 @@ reads the first JSONL line (the ``session_meta`` event) to recover the
 session UUID and the working directory, then maps that ``cwd`` to the
 canonical TwiCC project id via :func:`twicc.paths.path_to_project_id` —
 matching exactly what :func:`twicc.providers.codex.initial_sync.sync_all`
-does for brand-new files.
+does for brand-new files. The same first-line read also surfaces a
+parent session id when ``payload.source.subagent.thread_spawn`` is set,
+so we can mark the file as a :class:`SessionType.SUBAGENT` and let the
+base watcher wire it under its parent.
 """
 from __future__ import annotations
 
@@ -41,8 +44,11 @@ class CodexSessionsWatcher(BaseSessionsWatcher):
     """File watcher for Codex's ``~/.codex/sessions/`` layout.
 
     Recognized layout: ``YYYY/MM/DD/rollout-<uuid>.jsonl`` →
-    :class:`SessionType.SESSION`. Codex has no subagent concept today;
-    every recognized file is a top-level session.
+    :class:`SessionType.SESSION` or :class:`SessionType.SUBAGENT` when the
+    first-line ``session_meta`` carries a
+    ``payload.source.subagent.thread_spawn.parent_thread_id``. Subagents
+    use the exact same on-disk layout as top-level sessions; they're
+    discriminated solely by that field.
     """
 
     projects_dir: ClassVar[Path] = CodexHelpers.SESSIONS_DIR
@@ -61,9 +67,10 @@ class CodexSessionsWatcher(BaseSessionsWatcher):
         if len(relative.parts) < 2:
             return None
 
-        # Extract session_id + cwd from the first JSONL line. This is
-        # blocking I/O (open + readline + orjson parse), so we offload
-        # it to a worker thread to keep the watcher event loop snappy.
+        # Extract session_id + cwd (+ optional parent_session_id) from
+        # the first JSONL line. This is blocking I/O (open + readline +
+        # orjson parse), so we offload it to a worker thread to keep
+        # the watcher event loop snappy.
         meta = await asyncio.to_thread(extract_session_meta, path)
         if meta is None:
             # Empty file, unreadable, or missing session_meta — silently
@@ -71,11 +78,15 @@ class CodexSessionsWatcher(BaseSessionsWatcher):
             return None
 
         project_id = path_to_project_id(meta.cwd)
+        session_type = (
+            SessionType.SUBAGENT if meta.parent_session_id else SessionType.SESSION
+        )
         return ParsedSessionFile(
             project_id,
             meta.session_id,
-            SessionType.SESSION,
+            session_type,
             file_path=str(relative),
+            parent_session_id=meta.parent_session_id,
         )
 
     def get_compute(self) -> BaseSessionCompute:

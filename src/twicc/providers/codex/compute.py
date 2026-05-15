@@ -288,6 +288,22 @@ _SHELL_FAMILY_TOOLS = frozenset({
 # exec_command — without an entry in the map, there's nothing to remap.
 _NON_TOOL_FUNCTION_NAMES = frozenset({"write_stdin"})
 
+# ``function_call.name`` for the SDK tool that spawns a subagent thread.
+# The matching ``function_call_output`` carries a JSON string
+# ``{"agent_id": "...", "nickname": "..."}`` on success; on failure the
+# SDK returns a freeform rejection string (e.g. fork-context constraint
+# violations like ``"Full-history forked agents inherit the parent
+# agent type, model, and reasoning effort; ..."``). Both shapes go
+# through the same ``output`` field — the success/failure split is done
+# by attempting an :func:`orjson.loads` and looking for ``agent_id``.
+#
+# Used by :meth:`CodexSessionCompute.extract_task_tool_uses`,
+# :meth:`extract_task_tool_use_prompts`,
+# :meth:`extract_agent_info_from_tool_result`,
+# :meth:`compute_link_error_override`, and :meth:`analyze_content` (batch
+# path) to keep the success / failure detection in a single place.
+_SPAWN_AGENT_FUNCTION_NAME = "spawn_agent"
+
 # Tool-result payload sub-types from ``response_item`` lines (the
 # LLM-facing string returned to the model). Paired with the calls above
 # by ``call_id`` and routed to DEBUG_ONLY via :meth:`is_tool_result_item`.
@@ -1165,15 +1181,25 @@ class CodexSessionCompute(BaseSessionCompute):
     # when the matching Codex feature lands (tools, costs, runtime env, ...).
 
     def extract_runtime_fields(self, parsed_json: dict) -> dict:
-        # ``slug`` is out of scope (Codex doesn't expose one). Three line
-        # shapes contribute to runtime fields:
+        # ``slug`` is only set for subagent rollouts: Codex tags them
+        # with an ``agent_nickname`` (e.g. ``"Chandrasekhar"``) inside
+        # ``session_meta.payload.source.subagent.thread_spawn`` — top-level
+        # sessions have no equivalent, so ``slug`` stays ``None`` for them.
+        # Three line shapes contribute to runtime fields:
         #
         # - ``session_meta`` (opening line, one per session) carries the
         #   initial ``payload.cwd`` and ``payload.git.branch``. The latter
         #   is captured as a stable historical fallback for
         #   ``cwd_git_branch`` — filesystem-based resolution can drift
         #   (worktree gone, branch renamed since) (cf. the matching
-        #   ``Session.cwd_git_branch`` comment).
+        #   ``Session.cwd_git_branch`` comment). Subagent rollouts also
+        #   contain a SECOND ``session_meta`` line right after the first
+        #   one (a clone of the parent's metadata, used by the SDK to
+        #   replay context); that clone has no ``source.subagent`` field
+        #   so it returns ``slug=None`` here and the "last non-null
+        #   wins" rule preserves the nickname captured from the first
+        #   line. Same applies to ``cwd`` / ``cwd_git_branch``: parent
+        #   and subagent share them.
         # - ``turn_context`` (emitted on every turn) carries
         #   ``payload.cwd`` and ``payload.model``. The base orchestrator's
         #   "last non-null wins" rule means a mid-session ``cd`` updates
@@ -1197,6 +1223,7 @@ class CodexSessionCompute(BaseSessionCompute):
         cwd: str | None = None
         cwd_git_branch: str | None = None
         model: str | None = None
+        slug: str | None = None
         context_max: int | None = None
         wrapper_type = parsed_json.get("type")
         payload = _payload(parsed_json)
@@ -1210,6 +1237,15 @@ class CodexSessionCompute(BaseSessionCompute):
                     branch = git_info.get("branch")
                     if isinstance(branch, str) and branch:
                         cwd_git_branch = branch
+                source = payload.get("source")
+                if isinstance(source, dict):
+                    subagent = source.get("subagent")
+                    if isinstance(subagent, dict):
+                        thread_spawn = subagent.get("thread_spawn")
+                        if isinstance(thread_spawn, dict):
+                            candidate = thread_spawn.get("agent_nickname")
+                            if isinstance(candidate, str) and candidate:
+                                slug = candidate
             elif wrapper_type == _TYPE_TURN_CONTEXT:
                 value = payload.get("cwd")
                 if isinstance(value, str) and value:
@@ -1234,7 +1270,7 @@ class CodexSessionCompute(BaseSessionCompute):
             "cwd": cwd,
             "cwd_git_branch": cwd_git_branch,
             "model": model,
-            "slug": None,
+            "slug": slug,
             "context_max": context_max,
         }
 
@@ -1515,15 +1551,132 @@ class CodexSessionCompute(BaseSessionCompute):
     def extract_agent_info_from_tool_result(
         self, parsed_json: dict
     ) -> tuple[str, str] | None:
-        return None
+        """Return ``(call_id, agent_id)`` for a successful ``spawn_agent`` output.
+
+        The ``function_call_output`` of a ``spawn_agent`` carries a JSON
+        string ``{"agent_id": "...", "nickname": "..."}`` on success.
+        Returns ``None`` for any other shape (different tool, freeform
+        rejection text, missing fields, malformed JSON…).
+        """
+        if parsed_json.get("type") != _TYPE_RESPONSE_ITEM:
+            return None
+        payload = _payload(parsed_json)
+        if payload is None or payload.get("type") != "function_call_output":
+            return None
+        call_id = payload.get("call_id")
+        if not isinstance(call_id, str) or not call_id:
+            return None
+        output = payload.get("output")
+        if not isinstance(output, str) or not output:
+            return None
+        try:
+            decoded = orjson.loads(output)
+        except orjson.JSONDecodeError:
+            return None
+        if not isinstance(decoded, dict):
+            return None
+        agent_id = decoded.get("agent_id")
+        if not isinstance(agent_id, str) or not agent_id:
+            return None
+        return call_id, agent_id
 
     def extract_task_tool_uses(self, parsed_json: dict) -> list[tuple[str, bool]]:
-        return _EMPTY_TASK_TOOL_USES
+        """Return ``[(call_id, is_background)]`` for ``spawn_agent`` calls.
+
+        Codex's ``spawn_agent`` always runs the subagent asynchronously:
+        the parent receives an immediate ``{"agent_id": ...}`` ack and
+        later gets a ``<subagent_notification>`` user message when the
+        subagent finishes — so we always model it as
+        ``is_background=True``.
+        """
+        if parsed_json.get("type") != _TYPE_RESPONSE_ITEM:
+            return _EMPTY_TASK_TOOL_USES
+        payload = _payload(parsed_json)
+        if payload is None or payload.get("type") != "function_call":
+            return _EMPTY_TASK_TOOL_USES
+        if payload.get("name") != _SPAWN_AGENT_FUNCTION_NAME:
+            return _EMPTY_TASK_TOOL_USES
+        call_id = payload.get("call_id")
+        if not isinstance(call_id, str) or not call_id:
+            return _EMPTY_TASK_TOOL_USES
+        return [(call_id, True)]
 
     def extract_task_tool_use_prompts(
         self, parsed_json: dict
     ) -> list[tuple[str, str, bool]]:
-        return []
+        """Return ``[(call_id, prompt, is_background)]`` for ``spawn_agent`` calls.
+
+        The prompt is the ``message`` field inside ``arguments`` (itself a
+        JSON string). Codex doesn't actually need the prompt-matching
+        path — the call_id ↔ agent_id link is direct via the
+        ``function_call_output`` — but the hook is wired generically by
+        the base ``create_agent_link_from_subagent`` /
+        ``create_agent_link_from_tool_use`` flows.
+        """
+        if parsed_json.get("type") != _TYPE_RESPONSE_ITEM:
+            return []
+        payload = _payload(parsed_json)
+        if payload is None or payload.get("type") != "function_call":
+            return []
+        if payload.get("name") != _SPAWN_AGENT_FUNCTION_NAME:
+            return []
+        call_id = payload.get("call_id")
+        if not isinstance(call_id, str) or not call_id:
+            return []
+        arguments = payload.get("arguments")
+        if not isinstance(arguments, str) or not arguments:
+            return []
+        try:
+            decoded = orjson.loads(arguments)
+        except orjson.JSONDecodeError:
+            return []
+        if not isinstance(decoded, dict):
+            return []
+        message = decoded.get("message")
+        if not isinstance(message, str) or not message:
+            return []
+        return [(call_id, message, True)]
+
+    def compute_link_error_override(
+        self,
+        parsed_json: dict,
+        tool_name: str,
+        *,
+        session_id: str | None = None,  # noqa: ARG002
+    ) -> str | None:
+        """For ``spawn_agent``: surface the SDK's rejection text as the link error.
+
+        On success the ``output`` parses as ``{"agent_id": ..., ...}`` and
+        we return ``None`` (no override — the spawn worked). On failure
+        the SDK returns a freeform string (e.g. fork-context constraint
+        violations); we expose it verbatim as the error so the
+        ``ToolResultLink`` flips to error state with a meaningful message.
+        """
+        if tool_name != _SPAWN_AGENT_FUNCTION_NAME:
+            return None
+        if parsed_json.get("type") != _TYPE_RESPONSE_ITEM:
+            return None
+        payload = _payload(parsed_json)
+        if payload is None or payload.get("type") != "function_call_output":
+            return None
+        output = payload.get("output")
+        if not isinstance(output, str) or not output:
+            return None
+        try:
+            decoded = orjson.loads(output)
+        except orjson.JSONDecodeError:
+            return output
+        if isinstance(decoded, dict) and isinstance(decoded.get("agent_id"), str):
+            return None
+        return output
+
+    def agent_tool_candidates_query(self, parent_session_id: str):
+        # Pre-filter on the textual marker of a ``spawn_agent`` function_call to
+        # avoid scanning every item of the parent session.
+        return SessionItem.objects.filter(
+            session_id=parent_session_id,
+            content__contains='"name":"spawn_agent"',
+        ).order_by('-line_num')
 
     def extract_paths_from_tool_uses(self, parsed_json: dict) -> list[str]:
         # Codex only exposes absolute file paths through
@@ -1883,6 +2036,12 @@ class CodexSessionCompute(BaseSessionCompute):
                 else:
                     name = _qualified_function_call_name(payload)
                 tool_use_entries = {call_id: name}
+                # ``spawn_agent`` is the only agent-spawning tool today.
+                # Always background — see :meth:`extract_task_tool_uses`.
+                if sub_type == "function_call" and name == _SPAWN_AGENT_FUNCTION_NAME:
+                    task_tool_uses = [(call_id, True)]
+                else:
+                    task_tool_uses = _EMPTY_TASK_TOOL_USES
                 return ContentAnalysis(
                     has_visible_content=True,
                     text_content=None,
@@ -1891,7 +2050,7 @@ class CodexSessionCompute(BaseSessionCompute):
                     tool_result_id=None,
                     tool_result_error=None,
                     tool_use_entries=tool_use_entries,
-                    task_tool_uses=_EMPTY_TASK_TOOL_USES,
+                    task_tool_uses=task_tool_uses,
                     file_paths=_EMPTY_FILE_PATHS,
                     has_prefix=False,
                     has_suffix=False,
@@ -1907,6 +2066,19 @@ class CodexSessionCompute(BaseSessionCompute):
                 tool_result_error = self._maintain_exec_command_map(
                     session_id, call_id, payload, tool_use_map
                 )
+                # ``spawn_agent`` ack: the JSON ``{"agent_id": ...}`` lets
+                # the batch path link parent ↔ subagent without waiting
+                # for the prompt-matching fallback. The matching parent
+                # ``function_call`` is in ``tool_use_map`` by now (same
+                # session, lower line_num) — but we don't filter by tool
+                # name here because :meth:`extract_agent_info_from_tool_result`
+                # parses the output once and the base
+                # ``compute_session_metadata`` only honours
+                # ``tool_result_agent_info`` when the matching tool_use
+                # is in ``task_tool_use_map``, which itself is populated
+                # exclusively from ``analyze_content``'s ``task_tool_uses``
+                # for ``spawn_agent``. So the gating is implicit.
+                tool_result_agent_info = self.extract_agent_info_from_tool_result(parsed_json)
                 return ContentAnalysis(
                     has_visible_content=False,
                     text_content=None,
@@ -1919,7 +2091,7 @@ class CodexSessionCompute(BaseSessionCompute):
                     file_paths=_EMPTY_FILE_PATHS,
                     has_prefix=False,
                     has_suffix=False,
-                    tool_result_agent_info=None,
+                    tool_result_agent_info=tool_result_agent_info,
                 )
 
         return _EMPTY_ANALYSIS
