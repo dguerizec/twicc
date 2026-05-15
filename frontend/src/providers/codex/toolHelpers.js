@@ -1224,6 +1224,28 @@ export class CodexToolHelpers extends BaseToolHelpers {
         return FUNCTION_CALL_EXEC_TOOLS.has(name)
     }
 
+    /**
+     * Pull the rich body out of an MCP `function_call`'s result rows.
+     *
+     * Codex emits two ToolResultLinks per MCP call: the LLM-facing
+     * `function_call_output` (text trailer) and the structured
+     * `event_msg.mcp_tool_call_end` carrying the actual server payload.
+     * The latter is strictly richer, so we surface it instead of the
+     * raw two-row dump JsonHumanView would otherwise produce.
+     *
+     * `result` is a Rust `Result<CallToolResult, String>` (cf.
+     * `codex-rs/protocol/src/protocol.rs:McpToolCallEndEvent`),
+     * serialised as either `{"Ok": ...}` or `{"Err": "..."}` — never
+     * anything else. We unwrap each branch:
+     *  - `Ok.structuredContent` is the parsed JSON body when the
+     *    server provides a structured schema (most modern MCPs);
+     *  - `Ok` as-is otherwise — at minimum it carries
+     *    `content: [{type:"text", text:"..."}]` + `isError`;
+     *  - `Err` is the raw error string (JsonHumanView renders it as
+     *    a quoted string).
+     * Falls back to the whole row on any unexpected shape so we never
+     * drop content silently.
+     */
     transformDisplayResult(name, resultData, _options) {
         // ``spawn_agent`` collects up to two ToolResultLinks:
         //   1. the immediate ``function_call_output`` ack
@@ -1263,27 +1285,19 @@ export class CodexToolHelpers extends BaseToolHelpers {
                 agentId: ack?.agentId ?? notif.agentPath,
             }
         }
-        // MCP tools accumulate two ToolResultLinks per call: the
-        // LLM-facing ``function_call_output`` (text with a
-        // ``Wall time: / Output: { ... }`` trailer) and the richer
-        // ``event_msg.mcp_tool_call_end`` (parsed ``invocation``,
-        // ``structuredContent``, ``isError``). The latter is strictly
-        // more useful for rendering, so we pick it out of the array
-        // and hand its parsed body to ``JsonHumanView``.
         if (typeof name !== 'string' || !name.startsWith(MCP_TOOL_NAME_PREFIX)) {
             return undefined
         }
         if (!Array.isArray(resultData)) return undefined
-        const mcpEnd = resultData.find((row) =>
-            row?.type === 'event_msg' && row?.payload?.type === 'mcp_tool_call_end'
-        )
+        // ``get_tool_results`` (Codex helpers) returns the JSONL
+        // ``payload`` directly, so the wrapper key is ``mcp_tool_call_end``,
+        // not ``event_msg``. The earlier `row?.type === 'event_msg'`
+        // check could never match — the function silently returned
+        // ``undefined`` and JsonHumanView ended up dumping the raw two
+        // rows side by side.
+        const mcpEnd = resultData.find((row) => row?.type === 'mcp_tool_call_end')
         if (!mcpEnd) return undefined
-        // Prefer the already-parsed ``structuredContent`` when the
-        // server provided one; fall back to the full ``Ok`` body
-        // otherwise (still strictly richer than the function_call_output
-        // text). On the ``Err`` branch we hand the error string back
-        // verbatim — JsonHumanView will render it as a single string.
-        const result = mcpEnd.payload?.result
+        const result = mcpEnd.result
         if (result && typeof result === 'object') {
             if ('Ok' in result && result.Ok && typeof result.Ok === 'object') {
                 return result.Ok.structuredContent ?? result.Ok
@@ -1292,7 +1306,7 @@ export class CodexToolHelpers extends BaseToolHelpers {
                 return result.Err
             }
         }
-        return mcpEnd.payload
+        return mcpEnd
     }
 
     getInputOverrides(name) {
