@@ -723,6 +723,26 @@ const isAgentRunning = computed(() => {
     return resultCount < requiredCount
 })
 
+// Whether the pre-ack "agent starting" spinner should be visible.
+// True iff the spawn tool is still waiting for an AgentLink AND the
+// helper considers the call to be still running. Mirrors the
+// terminated-on-error pattern that ``CodexToolHelpers.isToolRunning``
+// already applies to the shell family — a failed spawn ack writes
+// ``toolState.error`` (and the backend flags ``extra.is_terminated``
+// too), both of which the helper turns into ``isToolRunning=false``,
+// so the spinner stops instead of spinning forever waiting for an
+// ack that will never come. Without this guard, a rejected
+// ``spawn_agent`` (e.g. Codex's "Full-history forked agents inherit
+// the parent agent type, ..." text body sent in lieu of the
+// ``{agent_id, nickname}`` JSON ack) leaves the card stuck on the
+// spinner.
+const isAgentSpawnPending = computed(() => {
+    if (!isTask.value) return false
+    if (agentId.value) return false
+    if (isStaleToolUse.value) return false
+    return !!toolHelpers.value?.isToolRunning(props.name, props.input, helperOptions.value)
+})
+
 /**
  * Fallback header label for tools that have neither a static
  * ``headerLabel`` nor a Task ``displayName``. Splits on ``__`` (the
@@ -807,10 +827,17 @@ function handleStopAgent() {
             </span>
             <!-- View Agent indicator for Task tool_use (only in regular sessions) -->
             <template v-if="isTask && !parentSessionId">
-                <!-- Agent not yet started: spinner -->
-                <wa-spinner v-if="!agentId" class="agent-starting-spinner"></wa-spinner>
-                <!-- Agent started: View Agent button (with pulsing robot if still running) -->
-                <template v-else>
+                <!-- Agent not yet started: spinner. Hidden when the spawn
+                     itself failed (toolState.error) or was otherwise
+                     flagged terminated by the backend — see
+                     isAgentSpawnPending. -->
+                <wa-spinner v-if="isAgentSpawnPending" class="agent-starting-spinner"></wa-spinner>
+                <!-- Agent started: View Agent button (with pulsing robot
+                     if still running). Skipped when the spawn ack failed
+                     and no AgentLink was ever created — the error
+                     callout below already tells the user what happened,
+                     and a View Agent click would just be a no-op. -->
+                <template v-else-if="agentId">
                     <AppTooltip v-if="isAgentRunning && toolStartedAt" :for="viewAgentButtonId">
                         Agent running for <ProcessDuration :state-changed-at="toolStartedAt" />
                     </AppTooltip>
