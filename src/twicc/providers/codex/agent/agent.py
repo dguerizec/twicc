@@ -83,6 +83,9 @@ class CodexAgent(BaseAgent):
       under the manager's lock, and a turn can run for minutes.
     - ``ASSISTANT_TURN`` → ``USER_TURN``: the turn task finishes its run.
     - ``USER_TURN`` → ``ASSISTANT_TURN``: ``send(text)`` schedules a new turn.
+    - ``ASSISTANT_TURN`` → ``ASSISTANT_TURN``: ``send(text)`` steers the
+      active turn — the input is injected via ``turn/steer`` and consumed
+      by Codex at the next turn cycle. No state transition.
     - any → ``DEAD``: ``interrupt_or_kill`` first attempts a clean
       ``turn/interrupt`` via :class:`AsyncTurnHandle` (when a turn is in
       flight), then closes the transport. The in-flight turn task lands in
@@ -106,6 +109,12 @@ class CodexAgent(BaseAgent):
         # Tracked so ``interrupt_or_kill`` can fire ``turn/interrupt`` on the
         # active turn instead of yanking the whole transport.
         self._current_turn: AsyncTurnHandle | None = None
+        # Set in ``_run_turn`` once the ``thread.turn`` RPC roundtrip has
+        # returned and ``_current_turn`` is published; cleared when the turn
+        # unwinds. ``send()`` awaits this when steering so a fast second
+        # message doesn't race the turn handshake and find ``_current_turn``
+        # still ``None`` despite ``state == ASSISTANT_TURN``.
+        self._current_turn_ready: asyncio.Event = asyncio.Event()
         self._turn_task: asyncio.Task[None] | None = None
         # ``reasoning`` items can fan out into several summary parts (each
         # with its own ``summaryIndex``). The SDK fires one
@@ -213,13 +222,63 @@ class CodexAgent(BaseAgent):
         images: list[dict] | None = None,
         **kwargs: Any,
     ) -> None:
-        """Schedule a new turn on the live thread."""
+        """Schedule a new turn, or steer the active one.
+
+        - ``USER_TURN``: schedule a fresh turn (the normal flow).
+        - ``ASSISTANT_TURN``: steer — push the input into the active
+          ``TurnHandle`` so Codex picks it up at the next turn cycle, without
+          interrupting tool execution or reasoning. The SDK's ``turn_steer``
+          serializes behind the async ``_transport_lock`` held by the
+          concurrent ``stream()`` loop, so the steer lands at the next
+          notification boundary (sub-second during streaming, seconds during
+          a silent tool execution).
+        - ``DEAD``: refuse.
+
+        ``turn/steer`` carries only the input — model / effort / sandbox /
+        approval overrides are NOT applied to the active turn. Settings
+        changed during ``ASSISTANT_TURN`` are refreshed on the agent by the
+        manager and pick up on the NEXT ``_run_turn``.
+        """
         if self.state == AgentState.DEAD:
             raise RuntimeError("Cannot send message: agent is dead")
+
         if self.state == AgentState.ASSISTANT_TURN:
-            raise RuntimeError(
-                "Cannot send message: agent is busy (assistant turn in progress)",
-            )
+            # ``_run_turn`` publishes ``_current_turn`` only after the
+            # ``thread.turn`` RPC returns. A fast steer could race that
+            # window; bound the wait so a broken handshake doesn't hang
+            # the WS request.
+            try:
+                await asyncio.wait_for(
+                    self._current_turn_ready.wait(),
+                    timeout=5.0,
+                )
+            except asyncio.TimeoutError as e:
+                raise RuntimeError(
+                    "Cannot steer: turn handshake did not complete in time",
+                ) from e
+
+            turn_handle = self._current_turn
+            if turn_handle is None:
+                # Ready was set then cleared between wait and read — turn
+                # ended. Caller can retry on the next state-change event.
+                raise RuntimeError(
+                    "Cannot steer: turn ended before steer could be issued",
+                )
+
+            turn_input = self._build_turn_input(text, images)
+            try:
+                await turn_handle.steer(turn_input)
+            except TransportClosedError:
+                raise
+            except Exception as e:
+                logger.warning(
+                    "Codex steer failed for session %s: %s",
+                    self.session_id, e,
+                )
+                raise RuntimeError(f"Steer failed: {e}") from e
+
+            self.last_activity = time.time()
+            return
 
         self._set_state(AgentState.ASSISTANT_TURN)
         self.last_activity = time.time()
@@ -318,6 +377,7 @@ class CodexAgent(BaseAgent):
             return
 
         self._current_turn = turn_handle
+        self._current_turn_ready.set()
 
         # Consume the turn's notification stream ourselves (instead of the
         # blackbox ``turn_handle.run()``) so we can:
@@ -350,6 +410,7 @@ class CodexAgent(BaseAgent):
             return
         finally:
             self._current_turn = None
+            self._current_turn_ready.clear()
 
         # Turn completed normally → ready for the next user input.
         self._set_state(AgentState.USER_TURN)

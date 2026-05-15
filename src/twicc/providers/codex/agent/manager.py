@@ -90,9 +90,10 @@ class CodexAgentManager(BaseAgentManager):
 
         - No agent (or DEAD agent): resume the canonical thread.
         - ``USER_TURN``: schedule a new turn via ``agent.send``.
-        - ``ASSISTANT_TURN``: refuse with ``RuntimeError`` — Codex doesn't
-          accept mid-turn input in this v1.
-        - ``STARTING``: same — safety net only; in practice the state has
+        - ``ASSISTANT_TURN``: steer the active turn — refresh the agent
+          settings bundle for the next ``_run_turn`` and forward to
+          ``agent.send``, which routes to ``turn_handle.steer``.
+        - ``STARTING``: refuse — safety net only; in practice the state has
           flipped to ``ASSISTANT_TURN`` by the time ``_start_agent`` returns.
 
         ``images`` are forwarded to the SDK as ``ImageInput`` data URLs;
@@ -142,10 +143,31 @@ class CodexAgentManager(BaseAgentManager):
                     return
 
                 elif agent.state == AgentState.ASSISTANT_TURN:
-                    raise RuntimeError(
-                        "Cannot send message: agent is busy "
-                        "(assistant turn in progress)",
+                    if not text and not images:
+                        # Settings-only update during an active turn. Refresh
+                        # the bundle so the NEXT turn picks up the new picker
+                        # values; nothing to steer.
+                        agent.agent_settings = settings
+                        return
+                    # Steer: refresh the bundle (the active turn keeps the
+                    # policy it was started with — ``turn/steer`` has no
+                    # override knobs, the new values land on the next
+                    # ``_run_turn``), then forward to ``agent.send`` which
+                    # detects ``ASSISTANT_TURN`` and routes to
+                    # ``turn_handle.steer`` instead of scheduling a new turn.
+                    old_settings = agent.agent_settings
+                    logger.debug(
+                        "Codex live settings update during active turn (steer): "
+                        "session=%s permission_mode=%r->%r effort=%r->%r "
+                        "selected_model=%r->%r",
+                        session_id,
+                        old_settings.permission_mode, settings.permission_mode,
+                        old_settings.effort, settings.effort,
+                        old_settings.selected_model, settings.selected_model,
                     )
+                    agent.agent_settings = settings
+                    await agent.send(text, images=images)
+                    return
 
                 else:
                     raise RuntimeError(
