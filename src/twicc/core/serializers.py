@@ -67,6 +67,10 @@ def serialize_session(session):
         "last_viewed_at": session.last_viewed_at.isoformat() if session.last_viewed_at else None,
         "stale": session.stale,
         "title": title,  # Session title (from pending, first user message, or custom-title)
+        # Provider-supplied short identifier — Codex stores the agent_nickname
+        # of a subagent here (e.g. "Bohr"), the frontend uses it for the
+        # subagent tab labels and the SessionHeader name.
+        "slug": session.slug,
         "user_message_count": session.user_message_count,  # Number of user messages (message turns)
         # Boolean indicating if session metadata is up-to-date for the owning provider
         "compute_version_up_to_date": session.compute_version == provider_helpers.current_compute_version,

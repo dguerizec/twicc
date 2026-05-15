@@ -504,6 +504,12 @@ const resultRendering = computed(() => {
 // --- Tool running state (unified for all tracked tools) ---
 
 const isTask = computed(() => !!toolHelpers.value?.isAgentTool(props.name))
+// Provider-level opt-out for the Stop button next to View Agent — the
+// shell offers it whenever an agent tool runs in background mode, but
+// providers whose backend ``stop_subagent`` hook isn't wired yet (Codex
+// today) can hide it instead of dispatching a request that drops on
+// the floor. Default in BaseToolHelpers is true.
+const canStopAgent = computed(() => !!toolHelpers.value?.canStopAgent(props.name))
 const toolState = computed(() => dataStore.getToolState(props.sessionId, props.toolId))
 
 // Tool error: non-null error string means the tool_result reported an error
@@ -820,7 +826,7 @@ function handleStopAgent() {
                         <CodeCommentsIndicator slot="end" :count="agentCommentsCount" :show-tooltip="false" class="agent-comments-indicator" />
                     </wa-button>
                     <wa-button
-                        v-if="isAgentRunning && agentLink?.isBackground"
+                        v-if="isAgentRunning && agentLink?.isBackground && canStopAgent"
                         :id="`stop-agent-${props.toolId}`"
                         size="small"
                         variant="danger"
@@ -832,7 +838,7 @@ function handleStopAgent() {
                     >
                         <wa-icon name="ban" label="Stop Agent"></wa-icon>
                     </wa-button>
-                    <AppTooltip :for="`stop-agent-${props.toolId}`">Stop this agent</AppTooltip>
+                    <AppTooltip v-if="isAgentRunning && agentLink?.isBackground && canStopAgent" :for="`stop-agent-${props.toolId}`">Stop this agent</AppTooltip>
                 </template>
             </template>
             <!-- Tool running spinner (Bash, WebFetch, MCP, etc.) -->

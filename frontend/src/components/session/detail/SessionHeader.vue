@@ -5,6 +5,7 @@ import { useSettingsStore } from '../../../stores/settings'
 import { formatDate } from '../../../utils/date'
 import { PROCESS_STATE, PROCESS_STATE_COLORS, PROCESS_STATE_NAMES, PROVIDER_ICON } from '../../../constants'
 import { getProviderHelpers, getProviderLabel } from '../../../providers'
+import { getAgentDisplayLabel } from '../../../utils/agentLabel'
 import { stopSubagent } from '../../../composables/useWebSocket'
 import { stopSessionProcess } from '../../../composables/useStopSessionProcess'
 import ProjectBadge from '../../project/ProjectBadge.vue'
@@ -56,10 +57,11 @@ const providerIcon = computed(() => PROVIDER_ICON[session.value?.provider] ?? nu
 
 // Get display name for header
 // - Session mode: title if available, "New session" for drafts without title, otherwise session ID
-// - Subagent mode: "Agent {agent_id}"
+// - Subagent mode: ``Agent <slug>`` when the provider exposes a slug
+//   (Codex's agent_nickname); ``Agent <shortId>`` otherwise
 const displayName = computed(() => {
     if (props.mode === 'subagent') {
-        return `Agent ${props.sessionId}`
+        return `Agent ${getAgentDisplayLabel(props.sessionId, store)}`
     }
     // For draft sessions without a title, show "New session"
     if (session.value?.draft && !session.value?.title) {

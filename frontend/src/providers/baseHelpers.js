@@ -999,6 +999,17 @@ export class BaseToolHelpers {
     }
 
     /**
+     * Whether the shell can ask the backend to stop a running background
+     * subagent spawned by this tool (the Stop button next to View Agent).
+     * Decoupled from ``isAgentTool`` so a provider can opt in to the agent
+     * UI (spinner + View Agent) before its backend grows the matching
+     * stop hook. Default: true (Claude Code's ``Task`` ships with it).
+     */
+    canStopAgent(/* name */) {
+        return true
+    }
+
+    /**
      * Whether the shell should auto-open the details for this tool when the
      * item arrives live via WebSocket and the user has ``settings.showDiffs``
      * enabled. Default: false.

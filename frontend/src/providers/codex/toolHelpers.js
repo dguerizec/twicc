@@ -22,6 +22,7 @@
 
 import { PROVIDER } from '../../constants'
 import { BaseToolHelpers } from '../baseHelpers'
+import { capitalize } from '../utils/format'
 import { formatRelativePath, fileIconFor, resolveAbsolutePath } from '../utils/path'
 import { parseCommand } from './parseCommand'
 import { parseApplyPatchEnvelope } from './parsePatch'
@@ -853,6 +854,17 @@ export class CodexToolHelpers extends BaseToolHelpers {
             // — the backend's ``compute_link_extra`` flags the
             // matching result row as terminated on arrival either way.
             if (FUNCTION_CALL_EXEC_TOOLS.has(name)) return 1
+            // ``spawn_agent`` collects two paired rows: the immediate
+            // ack ``function_call_output`` carrying ``{agent_id,
+            // nickname}`` and the synthetic second link rebound from
+            // the ``<subagent_notification>`` user message Codex
+            // injects when the subagent finalises (see the
+            // ``SPAWN_AGENT_TOOL_NAME`` block at the top of this
+            // module for the full shape). Counted here so the shell's
+            // ``isToolRunning`` flips to done only once the
+            // notification arrives, matching the agent-running
+            // semantics the View-Agent UI relies on.
+            if (name === SPAWN_AGENT_TOOL_NAME) return 2
             return FUNCTION_CALL_TOOLS_WITH_END_EVENT.has(name) ? 2 : 1
         }
         if (wrapperType === 'custom_tool_call') {
@@ -1358,6 +1370,55 @@ export class CodexToolHelpers extends BaseToolHelpers {
 
     isFileChangeTool(name) {
         return name === 'apply_patch'
+    }
+
+    isAgentTool(name) {
+        // Activates the shared agent-spawn UI on the tool card: a
+        // spinner before the spawn ack lands, then a ``View Agent``
+        // button (with a pulsing robot while the subagent is still
+        // running). The Stop button on the same card is gated
+        // separately by ``canStopAgent`` — see below.
+        return name === SPAWN_AGENT_TOOL_NAME
+    }
+
+    canStopAgent(name) {
+        // Codex exposes a ``close_agent`` SDK tool but the backend
+        // ``stop_subagent`` plumbing is not wired to it yet. Hide the
+        // Stop button rather than letting it dispatch a request that
+        // will be silently dropped. To enable it, override the
+        // matching ``BaseAgentManager.stop_subagent`` for Codex and
+        // flip this back to the default.
+        if (name === SPAWN_AGENT_TOOL_NAME) return false
+        return super.canStopAgent(name)
+    }
+
+    getDisplayName(name, input) {
+        // Header label for the spawn_agent tool card. The user-facing
+        // pattern, agreed with the user:
+        //   - missing or ``"default"`` agent_type → ``Agent`` (a
+        //     bare ``"Default"`` would be confusing — the role name
+        //     leaks an implementation detail with no semantic value)
+        //   - any other value (built-in ``explorer`` / ``worker`` or
+        //     a user-defined role from ``[agents]`` / ``agents/*.toml``)
+        //     → the value itself, capitalised.
+        if (name !== SPAWN_AGENT_TOOL_NAME) return null
+        const rawType = typeof input?.agent_type === 'string' ? input.agent_type.trim() : ''
+        if (!rawType || rawType === 'default') {
+            return { name: 'Agent', namespace: null }
+        }
+        return { name: capitalize(rawType), namespace: null }
+    }
+
+    computeToolSummary(name, input, _baseDir) {
+        // The shell renders ``displayName.name`` in the card header
+        // when ``isTask && displayName`` (see ToolUseContent.vue) —
+        // which is exactly the path activated for spawn_agent via
+        // ``isAgentTool``. Other Codex tools fall back to the inline
+        // ``headerLabel`` / ``getSummaryRendering`` machinery and have
+        // no use for a structured ``displayName``, so we keep the
+        // base stub for everything else.
+        const displayName = this.getDisplayName(name, input || {})
+        return { displayName, inline: null }
     }
 
     getFilePath(name, input) {

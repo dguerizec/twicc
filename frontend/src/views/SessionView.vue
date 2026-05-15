@@ -31,6 +31,7 @@ import {
     parseRouteString,
     parseRouteTermIndex,
 } from '../utils/granularRoutes'
+import { getAgentDisplayLabel } from '../utils/agentLabel'
 
 const route = useRoute()
 const router = useRouter()
@@ -265,7 +266,7 @@ const compactTabs = computed(() => {
     for (const tab of openSubagentTabs.value) {
         tabs.push({
             id: tab.id,
-            label: `Agent "${getAgentShortId(tab.agentId)}"`,
+            label: `Agent "${getAgentTabLabel(tab.agentId)}"`,
             processState: store.getProcessState(tab.agentId) || null,
             commentsCount: agentCommentsCount(tab.agentId)
         })
@@ -704,10 +705,14 @@ function openSubagentTab(agentId) {
 }
 
 /**
- * Get short display ID for a subagent.
+ * Label rendered in the subagent tab buttons (compact dropdown, tab
+ * bar, wa-tabs nav). Prefers ``Session.slug`` when the provider exposes
+ * one (Codex stores the agent_nickname there); falls back to the first
+ * 8 characters of the agent id otherwise (Claude Code, where slug
+ * is currently unset).
  */
-function getAgentShortId(agentId) {
-    return agentId.substring(0, 8)
+function getAgentTabLabel(agentId) {
+    return getAgentDisplayLabel(agentId, store)
 }
 
 // Watch subagentId to open tab when navigating to a subagent URL.
@@ -1066,7 +1071,7 @@ onBeforeUnmount(() => {
                             @click="switchToTabAndCollapse(tab.id)"
                         >
                             <span class="subagent-tab-content">
-                                <span>Agent "{{ getAgentShortId(tab.agentId) }}"</span>
+                                <span>Agent "{{ getAgentTabLabel(tab.agentId) }}"</span>
                                 <ProcessIndicator
                                     v-if="store.getProcessState(tab.agentId)"
                                     :state="store.getProcessState(tab.agentId).state"
@@ -1165,7 +1170,7 @@ onBeforeUnmount(() => {
                         size="small"
                     >
                         <span class="subagent-tab-content">
-                            <span>Agent "{{ getAgentShortId(tab.agentId) }}"</span>
+                            <span>Agent "{{ getAgentTabLabel(tab.agentId) }}"</span>
                             <ProcessIndicator
                                 v-if="store.getProcessState(tab.agentId)"
                                 :state="store.getProcessState(tab.agentId).state"

@@ -15,6 +15,7 @@
 import { PROVIDER, AGENT_TOOL_NAMES } from '../../constants'
 import { getTodoDescription, isValidTodos } from '../../utils/todoList'
 import { BaseToolHelpers } from '../baseHelpers'
+import { capitalize } from '../utils/format'
 import { formatRelativePath, fileIconFor } from '../utils/path'
 
 import EditContent from '../../components/session/detail/items/claude_code/EditContent.vue'
@@ -49,10 +50,6 @@ const INPUT_OVERRIDES = {
 const CAT_N_LINE_RE = /^(\s*\d+)[→\t](.*)$/
 
 // ─── Helpers private to this module ─────────────────────────────────────
-
-function capitalize(str) {
-    return str.replace(/-/g, ' ').replace(/^\w/, c => c.toUpperCase())
-}
 
 function getDisplayName(name, input) {
     if (AGENT_TOOL_NAMES.has(name)) {
