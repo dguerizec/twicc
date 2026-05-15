@@ -538,18 +538,34 @@ class BaseSessionsWatcher:
                     "project": serialize_project(project),
                 })
 
-                # Broadcast agent link state changes (subagent linked)
-                for update in agent_link_updates:
-                    await broadcast_message(channel_layer, {
-                        "type": "agent_link_created",
-                        "parent_session_id": update.parent_session_id,
-                        "agent_session_id": update.agent_id,
-                        "tool_use_id": update.tool_use_id,
-                        "tool_use_line_num": update.tool_use_line_num,
-                        "is_background": update.is_background,
-                        "started_at": update.started_at.isoformat() if update.started_at else None,
-                        "project_id": parsed.project_id,
-                    })
+                # Broadcast agent link state changes (subagent linked).
+                # ``agent_slug`` carries the spawned subagent's nickname
+                # (Codex's ``agent_nickname`` persisted as
+                # ``Session.slug``) so the frontend can label the tool
+                # card / agent tab without separately hydrating the
+                # subagent Session row. Stays ``None`` when the subagent
+                # file hasn't been parsed yet (the AgentLink and the
+                # subagent Session are created by independent watcher
+                # passes — race expected); the next ``subagents_state``
+                # fetch re-resolves it.
+                if agent_link_updates:
+                    slugs_by_id = await sync_to_async(
+                        lambda ids: dict(
+                            Session.objects.filter(id__in=ids).values_list("id", "slug")
+                        )
+                    )([update.agent_id for update in agent_link_updates])
+                    for update in agent_link_updates:
+                        await broadcast_message(channel_layer, {
+                            "type": "agent_link_created",
+                            "parent_session_id": update.parent_session_id,
+                            "agent_session_id": update.agent_id,
+                            "agent_slug": slugs_by_id.get(update.agent_id),
+                            "tool_use_id": update.tool_use_id,
+                            "tool_use_line_num": update.tool_use_line_num,
+                            "is_background": update.is_background,
+                            "started_at": update.started_at.isoformat() if update.started_at else None,
+                            "project_id": parsed.project_id,
+                        })
 
                 # Broadcast tool result state changes
                 for update in tool_result_updates:

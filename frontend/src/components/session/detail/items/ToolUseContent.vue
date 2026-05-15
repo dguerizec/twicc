@@ -379,14 +379,26 @@ const summary = computed(() => {
 // — it just hands over the lookups, and individual helpers decide
 // which ones they need (Codex iterates ``toolState.toolResultLineNums``
 // to find the ``event_msg.*_end`` row by ``call_id``).
-const helperOptions = computed(() => ({
-    ...(props.extra || {}),
-    toolId: props.toolId,
-    sessionId: props.sessionId,
-    toolState: dataStore.getToolState(props.sessionId, props.toolId),
-    getSessionItem: (lineNum) => dataStore.getSessionItem(props.sessionId, lineNum),
-    getToolState: (toolUseId) => dataStore.getToolState(props.sessionId, toolUseId),
-}))
+const helperOptions = computed(() => {
+    // Surface the spawned subagent's nickname (joined into the
+    // AgentLink payload at the API / WS boundary, see ``setAgentLink``
+    // in ``stores/data.js``) so per-provider helpers can label the
+    // tool card without separately hydrating the subagent Session row.
+    // Reactive: when the ack arrives and ``setAgentLink`` runs, this
+    // ref re-emits and any helper using ``agentSlug`` (e.g. Codex's
+    // ``getSummaryRendering`` for ``spawn_agent`` showing ``(Bohr)``
+    // next to the header) re-renders automatically.
+    const agentLink = dataStore.getAgentLink(props.sessionId, props.toolId)
+    return {
+        ...(props.extra || {}),
+        toolId: props.toolId,
+        sessionId: props.sessionId,
+        toolState: dataStore.getToolState(props.sessionId, props.toolId),
+        agentSlug: agentLink?.slug || null,
+        getSessionItem: (lineNum) => dataStore.getSessionItem(props.sessionId, lineNum),
+        getToolState: (toolUseId) => dataStore.getToolState(props.sessionId, toolUseId),
+    }
+})
 
 // Aggregated payload for chained-result tools (Codex's exec_command
 // family). Computed lazily — the helper short-circuits to ``null`` for

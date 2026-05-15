@@ -969,6 +969,22 @@ export class CodexToolHelpers extends BaseToolHelpers {
     }
 
     getSummaryRendering(name, input, baseDir, options) {
+        if (name === SPAWN_AGENT_TOOL_NAME) {
+            // Surface the subagent's nickname (Codex's
+            // ``agent_nickname``, persisted as ``Session.slug`` and
+            // pulled from the AgentLink lookup wired into
+            // ``helperOptions.agentSlug`` by the shell) at the same
+            // spot Claude Code shows the Task ``description``: after
+            // the em-dash, between parens. The slug is only known
+            // once the spawn ack has been processed — before that
+            // there's nothing to show.
+            const slug = options?.agentSlug
+            if (!slug) return null
+            return {
+                component: DescriptionSummary,
+                props: { description: `(${slug})`, fileIconSrc: null },
+            }
+        }
         if (name === 'update_plan' && isValidPlan(input?.plan)) {
             return {
                 component: TodoSummary,

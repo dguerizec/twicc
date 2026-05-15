@@ -740,10 +740,20 @@ def subagents_state(request, project_id, session_id):
     if session.parent_session_id is not None:
         raise Http404("Session not found")
 
-    links = AgentLink.objects.filter(session=session).order_by("id")
+    links = list(AgentLink.objects.filter(session=session).order_by("id"))
+    # Resolve every spawned subagent's slug (Codex's ``agent_nickname``)
+    # in a single query so the frontend can label tool cards / tabs
+    # without separately hydrating subagent Session rows. ``None`` when
+    # the subagent file hasn't been parsed yet (race) or when the
+    # provider doesn't carry a slug.
+    slugs_by_id = dict(
+        Session.objects.filter(id__in=[link.agent_id for link in links])
+        .values_list("id", "slug")
+    )
     result = [
         {
             "agent_id": link.agent_id,
+            "agent_slug": slugs_by_id.get(link.agent_id),
             "tool_use_id": link.tool_use_id,
             "tool_use_line_num": link.tool_use_line_num,
             "is_background": link.is_background,
