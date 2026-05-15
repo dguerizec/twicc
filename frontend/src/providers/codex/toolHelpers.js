@@ -37,6 +37,7 @@ import WebSearchSummary from '../../components/session/detail/items/summary/WebS
 import ExecResultContent from '../../components/session/detail/items/codex/ExecResultContent.vue'
 import ReadResultContent from '../../components/session/detail/items/codex/ReadResultContent.vue'
 import ApplyPatchContent from '../../components/session/detail/items/codex/ApplyPatchContent.vue'
+import SpawnAgentResult from '../../components/session/detail/items/codex/SpawnAgentResult.vue'
 import TodoContent from '../../components/session/detail/items/TodoContent.vue'
 
 // Tool names that produce / consume a shell process and share the
@@ -156,6 +157,23 @@ const PERSISTED_END_EVENT_TYPES = new Set([
 // the Codex source). We branch on the prefix because the actual name
 // is dynamic (``mcp__<server>__<tool>``).
 const MCP_TOOL_NAME_PREFIX = 'mcp__'
+
+// `spawn_agent` collects two ToolResultLinks per call: the immediate
+// `function_call_output` ack carrying `{agent_id, nickname}` (rendered
+// useless on its own), and a synthetic second link rebound from the
+// `<subagent_notification>` user message Codex injects when the
+// subagent finalises. The second one carries the actual subagent
+// output via the AgentStatus enum (snake_case-tagged JSON):
+//   - `{"completed": "msg" | null}` -> render `msg` as the result body
+//   - `{"errored": "msg"}` -> same body; `ToolResultLink.error` already
+//     drives the standard error callout
+//   - `"shutdown"` / `"not_found"` -> short label, no body
+// `transformDisplayResult` looks up that second link in `resultData`
+// and produces a synthetic `{__spawnAgentResult: true, ...}` envelope
+// consumed by `getResultRendering` to dispatch on `SpawnAgentResult.vue`.
+const SPAWN_AGENT_TOOL_NAME = 'spawn_agent'
+const SUBAGENT_NOTIFICATION_START = '<subagent_notification>'
+const SUBAGENT_NOTIFICATION_END = '</subagent_notification>'
 
 // Per-tool ``JsonHumanView`` overrides used when the Result/Input
 // fallback rendering kicks in. Mirrors Claude Code's pattern: a tiny
@@ -744,6 +762,67 @@ function planToTodos(plan) {
     return plan.map(p => ({ content: p.step, status: p.status }))
 }
 
+/**
+ * Read the body of a `<subagent_notification>` user message ToolResultLink
+ * row. Returns `{agentPath, status}` (where `status` is the raw enum
+ * variant — dict for `Completed`/`Errored`, string for `Shutdown`/`NotFound`)
+ * or `null` if the row is anything else.
+ *
+ * The `row` is the JSONL `payload` (not the `{type, payload}` wrapper) —
+ * the backend's `get_tool_results` strips the wrapper before serialising.
+ * For a subagent_notification this means `row.type === 'message'` and
+ * `row.role === 'user'`.
+ */
+function extractSubagentNotificationBody(row) {
+    if (!row || row.type !== 'message' || row.role !== 'user') return null
+    const content = Array.isArray(row.content) ? row.content : null
+    if (!content || content.length === 0) return null
+    const first = content[0]
+    if (!first || first.type !== 'input_text' || typeof first.text !== 'string') return null
+    const text = first.text
+    const start = text.indexOf(SUBAGENT_NOTIFICATION_START)
+    if (start < 0) return null
+    const end = text.indexOf(SUBAGENT_NOTIFICATION_END, start + SUBAGENT_NOTIFICATION_START.length)
+    if (end < 0) return null
+    const body = text.slice(start + SUBAGENT_NOTIFICATION_START.length, end).trim()
+    if (!body) return null
+    let parsed
+    try {
+        parsed = JSON.parse(body)
+    } catch {
+        return null
+    }
+    if (!parsed || typeof parsed !== 'object') return null
+    const agentPath = typeof parsed.agent_path === 'string' ? parsed.agent_path : null
+    if (!agentPath) return null
+    return { agentPath, status: parsed.status }
+}
+
+/**
+ * Read `{agent_id, nickname}` out of the `function_call_output` ack of a
+ * successful `spawn_agent`. Returns `null` for any other shape (different
+ * tool, freeform rejection text, malformed JSON…).
+ *
+ * Same wrapper convention as `extractSubagentNotificationBody`: `row` is
+ * the payload, so `row.type === 'function_call_output'`.
+ */
+function extractSpawnAckBody(row) {
+    if (!row || row.type !== 'function_call_output') return null
+    const output = row.output
+    if (typeof output !== 'string' || !output) return null
+    let parsed
+    try {
+        parsed = JSON.parse(output)
+    } catch {
+        return null
+    }
+    if (!parsed || typeof parsed !== 'object') return null
+    const agentId = typeof parsed.agent_id === 'string' ? parsed.agent_id : null
+    if (!agentId) return null
+    const nickname = typeof parsed.nickname === 'string' ? parsed.nickname : null
+    return { agentId, nickname }
+}
+
 export class CodexToolHelpers extends BaseToolHelpers {
     static provider = PROVIDER.CODEX
 
@@ -1060,7 +1139,35 @@ export class CodexToolHelpers extends BaseToolHelpers {
         return null
     }
 
-    getResultRendering(name, _result, input, options) {
+    getResultRendering(name, result, input, options) {
+        // ``spawn_agent`` is rendered from the synthetic envelope
+        // produced by :meth:`transformDisplayResult` above. We dispatch
+        // on the AgentStatus variant to surface the best body we have:
+        //   - ``Completed(msg)`` / ``Errored(msg)`` -> the message body
+        //     (markdown via ``SpawnAgentResult``);
+        //   - status-only variants (``shutdown`` / ``not_found``) ->
+        //     a short label, no body.
+        if (name === SPAWN_AGENT_TOOL_NAME && result?.__spawnAgentResult) {
+            const status = result.status
+            let message = null
+            let statusLabel = null
+            if (status && typeof status === 'object') {
+                if (typeof status.completed === 'string') {
+                    message = status.completed
+                } else if (typeof status.errored === 'string') {
+                    message = status.errored
+                }
+            } else if (status === 'shutdown') {
+                statusLabel = 'Subagent was shut down before producing a final message.'
+            } else if (status === 'not_found') {
+                statusLabel = 'Subagent reference was not found.'
+            }
+            if (!message && !statusLabel) return null
+            return {
+                component: SpawnAgentResult,
+                props: { message, statusLabel, nickname: result.nickname },
+            }
+        }
         if (!FUNCTION_CALL_EXEC_TOOLS.has(name)) return null
         // The shell precomputed the chain aggregate when
         // :meth:`shouldAggregateExecOutput` returned ``true``; reach
@@ -1118,6 +1225,44 @@ export class CodexToolHelpers extends BaseToolHelpers {
     }
 
     transformDisplayResult(name, resultData, _options) {
+        // ``spawn_agent`` collects up to two ToolResultLinks:
+        //   1. the immediate ``function_call_output`` ack
+        //      ``{agent_id, nickname}`` (always present on a successful
+        //      spawn, replaced by a freeform rejection string on a
+        //      failed spawn);
+        //   2. a synthetic link rebound from the
+        //      ``<subagent_notification>`` user message Codex injects
+        //      when the subagent finalises (only present on success,
+        //      and only after the subagent has actually finished).
+        // We render the second when available — that's where the
+        // subagent's actual output lives. The ack is only useful to
+        // pick up the nickname for the meta line. When no notification
+        // is in yet (still running) or on a failed spawn (only the
+        // rejection text), we return ``undefined`` so the default
+        // ``JsonHumanView`` renders the raw row — the standard error
+        // callout already surfaces the failure message.
+        if (name === SPAWN_AGENT_TOOL_NAME) {
+            if (!Array.isArray(resultData)) return undefined
+            let notif = null
+            let ack = null
+            for (const row of resultData) {
+                if (notif === null) {
+                    const candidate = extractSubagentNotificationBody(row)
+                    if (candidate) notif = candidate
+                }
+                if (ack === null) {
+                    const candidate = extractSpawnAckBody(row)
+                    if (candidate) ack = candidate
+                }
+            }
+            if (!notif) return undefined
+            return {
+                __spawnAgentResult: true,
+                status: notif.status,
+                nickname: ack?.nickname ?? null,
+                agentId: ack?.agentId ?? notif.agentPath,
+            }
+        }
         // MCP tools accumulate two ToolResultLinks per call: the
         // LLM-facing ``function_call_output`` (text with a
         // ``Wall time: / Output: { ... }`` trailer) and the richer

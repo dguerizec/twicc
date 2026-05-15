@@ -404,20 +404,28 @@ class CodexHelpers(BaseProviderHelpers):
     ) -> list[dict]:
         """Return the tool-result payloads matching ``tool_use_id``.
 
-        Two line shapes can carry a tool_result paired by ``call_id``:
-        ``response_item.{function_call_output, custom_tool_call_output}``
-        (the LLM-facing string — for long-running shells, multiple of
-        these chain together via :meth:`CodexSessionCompute.remap_tool_result_id`)
-        and ``event_msg`` lines whose sub-type is in
-        :data:`_PERSISTED_END_EVENT_TYPES` (the structured End events
-        we still consume). Each is kept as its own
-        :class:`ToolResultLink` row, so ``items`` typically contains
-        every chunk plus the structured end event when applicable.
+        Three line shapes can carry a tool_result paired by ``call_id``
+        (or rebound to one):
+
+        - ``response_item.{function_call_output, custom_tool_call_output}``
+          (the LLM-facing string — for long-running shells, multiple of
+          these chain together via :meth:`CodexSessionCompute.remap_tool_result_id`).
+        - ``event_msg`` lines whose sub-type is in
+          :data:`_PERSISTED_END_EVENT_TYPES` (the structured End events
+          we still consume).
+        - ``response_item.message role=user`` whose text body opens with
+          ``<subagent_notification>``: synthetic tool_result for the
+          originating ``spawn_agent``, rebound by
+          :meth:`CodexSessionCompute.remap_tool_result_id` /
+          :meth:`remap_tool_result_id_live`. Its payload doesn't carry
+          a ``call_id`` (the rebind is purely DB-side), so we skip the
+          ``call_id`` check for this shape — the caller already filtered
+          ``items`` to the matching ``ToolResultLink`` rows.
 
         Callers already filtered ``items`` to the lines linked via
         :class:`ToolResultLink` for this ``tool_use_id``; we parse each
-        one and return the payload as-is. The frontend's
-        ``JsonHumanView`` fallback renders it without further hints.
+        one and return the payload as-is so the frontend can dispatch
+        on the payload's own ``type`` (the wrapper ``type`` is dropped).
         """
         results: list[dict] = []
         for item in items:
@@ -432,7 +440,15 @@ class CodexHelpers(BaseProviderHelpers):
             if not isinstance(payload, dict):
                 continue
             if wrapper_type == _TYPE_RESPONSE_ITEM:
-                if payload.get("type") not in _RESPONSE_TOOL_RESULT_PAYLOAD_TYPES:
+                payload_type = payload.get("type")
+                if payload_type in _RESPONSE_TOOL_RESULT_PAYLOAD_TYPES:
+                    if payload.get("call_id") != tool_use_id:
+                        continue
+                elif payload_type == "message" and payload.get("role") == "user":
+                    # Subagent notification — already pre-filtered via
+                    # ToolResultLink; no call_id on this shape.
+                    pass
+                else:
                     continue
             elif wrapper_type == _TYPE_EVENT_MSG:
                 # Only structured End events from the whitelist count —
@@ -442,9 +458,9 @@ class CodexHelpers(BaseProviderHelpers):
                 event_call_id = payload.get("call_id")
                 if not isinstance(event_call_id, str) or not event_call_id:
                     continue
+                if payload.get("call_id") != tool_use_id:
+                    continue
             else:
-                continue
-            if payload.get("call_id") != tool_use_id:
                 continue
             results.append(payload)
         return results
