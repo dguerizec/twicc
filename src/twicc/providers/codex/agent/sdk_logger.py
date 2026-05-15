@@ -1,0 +1,143 @@
+"""
+Raw Codex SDK event logger.
+
+Captures everything the Codex SDK pushes into our Python code:
+
+- Stream notifications received from ``turn_handle.stream()`` (the live
+  ``item/started`` / ``item/agentMessage/delta`` /
+  ``item/reasoning/summaryPartAdded`` / ``item/reasoning/summaryTextDelta``
+  / ``item/completed`` / … flow). These are strictly more granular than
+  what lands in the rollout JSONL — deltas in particular are streaming-only.
+- Approval requests the SDK calls back to ``CodexAgent._sync_approval_handler``
+  via its worker thread, AND the response we hand back to the SDK.
+
+Unlike Claude Code, Codex doesn't need a monkey-patch: the SDK is shaped
+around explicit Python entry points (the agent iterates ``stream()`` itself,
+and the bridge owns the ``_approval_handler`` slot), so the agent calls
+into this module from those sites directly.
+
+Each session gets its own log file:
+``<data_dir>/logs/sdk/codex/{session_id}.jsonl``
+
+Format mirrors the Claude Code logger so both providers can be grepped
+with the same tooling::
+
+    {"direction": "sent"|"received", "timestamp": ISO 8601, "data": {...}}
+
+Active only when ``TWICC_DEBUG`` is set (set by devctl, never in production).
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+import orjson
+
+from twicc.core.enums import Provider
+from twicc.paths import get_sdk_logs_dir
+
+logger = logging.getLogger(__name__)
+
+# Resolve once at import time. Mirrors the Claude Code logger's gating:
+# devctl injects TWICC_DEBUG=1 into the backend process; nothing else does.
+SDK_LOGGING_ENABLED = os.environ.get("TWICC_DEBUG", "").strip().lower() in ("1", "true", "yes")
+
+LOGS_DIR = get_sdk_logs_dir(Provider.CODEX.value)
+
+
+def _get_log_path(session_id: str) -> Path:
+    """Return the log file path for a given session."""
+    return LOGS_DIR / f"{session_id}.jsonl"
+
+
+def _write_log_line(session_id: str, direction: str, data: Any) -> None:
+    """Append a single JSON line to the session's log file.
+
+    Synchronous on purpose: per-line I/O is short and the call sites are
+    already on the asyncio loop's hot path or in a worker thread (for
+    approvals) — adding aiofile machinery would buy nothing.
+    """
+    if not SDK_LOGGING_ENABLED:
+        return
+    log_path = _get_log_path(session_id)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    line = {
+        "direction": direction,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "data": data,
+    }
+    try:
+        with open(log_path, "ab") as f:
+            f.write(orjson.dumps(line, default=str) + b"\n")
+    except Exception:
+        logger.exception("Failed to write Codex SDK log line to %s", log_path)
+
+
+def _dump_payload(payload: Any) -> Any:
+    """Convert a Pydantic model (or anything else) to a JSON-safe value.
+
+    Codex SDK notifications and item payloads are Pydantic models.
+    ``model_dump(mode="json", by_alias=True)`` preserves the wire camelCase
+    so the log mirrors the on-the-wire shape rather than the Python
+    snake_case projection.
+    """
+    if hasattr(payload, "model_dump"):
+        return payload.model_dump(mode="json", by_alias=True)
+    return payload
+
+
+def log_stream_event(session_id: str, event: Any) -> None:
+    """Log one notification received from ``turn_handle.stream()``.
+
+    ``event`` is a Codex SDK envelope with ``method`` (str) and ``payload``
+    (Pydantic model). Both are dumped, preserving the wire shape via
+    ``by_alias=True``.
+    """
+    if not SDK_LOGGING_ENABLED:
+        return
+    _write_log_line(
+        session_id,
+        "received",
+        {
+            "method": getattr(event, "method", None),
+            "payload": _dump_payload(getattr(event, "payload", None)),
+        },
+    )
+
+
+def log_approval_request(session_id: str, method: str, params: dict | None) -> None:
+    """Log an approval request the SDK pushed to ``_sync_approval_handler``.
+
+    Called from the SDK's worker thread (``asyncio.to_thread`` from inside
+    the SDK), not the asyncio loop. ``_write_log_line`` is sync so this is
+    safe — no event loop interaction.
+    """
+    if not SDK_LOGGING_ENABLED:
+        return
+    _write_log_line(
+        session_id,
+        "received",
+        {"method": method, "params": params},
+    )
+
+
+def log_approval_response(session_id: str, method: str, response: dict) -> None:
+    """Log the response we hand back to the SDK for a given approval.
+
+    Logged regardless of whether the response came from our own
+    ``_async_approval_handler`` (a real user decision) or from a
+    ``default_response_for(method)`` fallback (cancellation, bridge crash,
+    early-loop call). The fallback path is exactly the kind of behaviour
+    debug logs need to surface.
+    """
+    if not SDK_LOGGING_ENABLED:
+        return
+    _write_log_line(
+        session_id,
+        "sent",
+        {"method": method, "response": response},
+    )

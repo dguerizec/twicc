@@ -15,7 +15,10 @@ Structure:
     │   ├── backend.log              # Backend application logs
     │   ├── frontend.log             # Frontend (Vite) process output
     │   └── sdk/
-    │       └── {session_id}.jsonl   # Raw SDK message logs
+    │       ├── claude_code/
+    │       │   └── {session_id}.jsonl   # Raw Claude Code SDK wire messages
+    │       └── codex/
+    │           └── {session_id}.jsonl   # Raw Codex SDK stream events + approvals
     └── search-index/
         └── (tantivy index files)
 
@@ -62,9 +65,23 @@ def get_logs_dir() -> Path:
     return get_data_dir() / "logs"
 
 
-def get_sdk_logs_dir() -> Path:
-    """Return the SDK logs directory (<data_dir>/logs/sdk/)."""
-    return get_logs_dir() / "sdk"
+def get_sdk_logs_dir(provider: str | None = None) -> Path:
+    """Return the SDK logs directory.
+
+    Without ``provider``, returns the parent ``<data_dir>/logs/sdk/``
+    (used by ``ensure_data_dirs`` and any cross-provider tooling).
+    With a provider value (e.g. ``Provider.CLAUDE_CODE.value`` /
+    ``Provider.CODEX.value``), returns the per-provider subdirectory
+    where each provider's logger writes ``{session_id}.jsonl``.
+
+    A string is taken (rather than the ``Provider`` enum) to keep
+    ``paths.py`` free of any ``twicc.core`` import — this module is
+    intentionally low-level and gets imported from many places.
+    """
+    base = get_logs_dir() / "sdk"
+    if provider is None:
+        return base
+    return base / provider
 
 
 def get_backend_log_path() -> Path:

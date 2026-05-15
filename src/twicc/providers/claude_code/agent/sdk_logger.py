@@ -2,9 +2,11 @@
 Raw SDK message logger.
 
 Intercepts all messages sent to and received from the Claude CLI subprocess
-and writes them as raw JSON lines to a log file in <data_dir>/logs/sdk/.
+and writes them as raw JSON lines to a log file in
+<data_dir>/logs/sdk/claude_code/.
 
-Each session gets its own log file: <data_dir>/logs/sdk/{session_id}.jsonl
+Each session gets its own log file:
+``<data_dir>/logs/sdk/claude_code/{session_id}.jsonl``
 Each line is a JSON object with:
   - "direction": "sent" or "received"
   - "timestamp": ISO 8601 timestamp
@@ -23,12 +25,14 @@ from claude_agent_sdk import ClaudeSDKClient
 from claude_agent_sdk._internal.message_parser import parse_message
 from claude_agent_sdk.types import Message
 
+from twicc.core.enums import Provider
 from twicc.paths import get_sdk_logs_dir
 
 logger = logging.getLogger(__name__)
 
-# Resolve once at import time — SDK logs go in <data_dir>/logs/sdk/
-LOGS_DIR = get_sdk_logs_dir()
+# Resolve once at import time. The per-provider subdir keeps Claude Code
+# and Codex SDK logs side by side under <data_dir>/logs/sdk/.
+LOGS_DIR = get_sdk_logs_dir(Provider.CLAUDE_CODE.value)
 
 # SDK message logging is only active in debug mode (TWICC_DEBUG set by devctl)
 SDK_LOGGING_ENABLED = os.environ.get("TWICC_DEBUG", "").strip().lower() in ("1", "true", "yes")

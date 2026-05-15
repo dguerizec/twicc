@@ -46,6 +46,7 @@ from .approvals import (
     is_approval_method,
     make_pending_request,
 )
+from .sdk_logger import log_approval_request, log_approval_response, log_stream_event
 
 logger = logging.getLogger(__name__)
 
@@ -562,6 +563,10 @@ class CodexAgent(BaseAgent):
               persists the whole reasoning as a single line, so a single
               pop on the watcher side will pair them).
         """
+        # Mirror the raw SDK notification into the per-session debug log
+        # before any local processing. No-op when TWICC_DEBUG is unset.
+        log_stream_event(self.session_id, event)
+
         # Refresh last_activity on every stream event so the
         # ASSISTANT_TURN inactivity timeout only fires on a truly silent
         # SDK (mirrors ClaudeCodeAgent._run_message_loop, where each
@@ -764,6 +769,25 @@ class CodexAgent(BaseAgent):
     # ------------------------------------------------------------------
 
     def _sync_approval_handler(self, method: str, params: dict | None) -> dict:
+        """Logging wrapper around the actual approval bridge.
+
+        Records the inbound SDK request + the response we hand back, then
+        delegates to :meth:`_sync_approval_handler_impl` for the real
+        bridge logic. Both ``log_*`` calls are no-ops when TWICC_DEBUG is
+        unset, so production keeps the original code path overhead.
+
+        Wrapping at this layer (rather than instrumenting each return
+        inside the impl) guarantees we capture every response — including
+        the safe defaults returned on cancellation, missing event loop,
+        bridge crash, etc. Those failure-mode responses are exactly what
+        debug logs need to surface.
+        """
+        log_approval_request(self.session_id, method, params)
+        response = self._sync_approval_handler_impl(method, params)
+        log_approval_response(self.session_id, method, response)
+        return response
+
+    def _sync_approval_handler_impl(self, method: str, params: dict | None) -> dict:
         """Called by the SDK from a worker thread (via ``asyncio.to_thread``).
 
         Bridges the SDK's blocking expectation (``Callable -> dict``) to our
