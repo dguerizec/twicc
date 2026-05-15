@@ -33,6 +33,19 @@ export class BaseProviderHelpers {
     }
 
     /**
+     * Provider-specific note appended to the placeholder shown during
+     * ``assistant_turn`` (after the generic "you can send a message now…"
+     * sentence). Returns null when no note is needed. Example: Claude Code
+     * appends a warning that the message won't appear in the conversation
+     * history (the SDK queues it as in-band signal rather than persisting
+     * it); providers that persist mid-turn messages (Codex via
+     * ``turn/steer``) leave this null.
+     */
+    getPlaceholderAssistantTurnNote() {
+        return null
+    }
+
+    /**
      * Built-in commands hardcoded by the provider's runtime/CLI for a given
      * activation prefix. Merged with the user-defined commands fetched from
      * the backend by the picker. The ``activationChar`` argument lets a

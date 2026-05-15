@@ -160,6 +160,10 @@ export class ClaudeCodeHelpers extends BaseProviderHelpers {
         return ['/']
     }
 
+    getPlaceholderAssistantTurnNote() {
+        return 'Note: it will not appear in the conversation history.'
+    }
+
     getBuiltInCommands(activationChar) {
         return activationChar === '/' ? BUILTIN_COMMANDS : []
     }

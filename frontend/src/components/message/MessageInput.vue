@@ -217,21 +217,49 @@ const buttonIcon = computed(() => {
     return 'paper-plane'
 })
 
-// Placeholder text based on process state
+// Join activation chars with "or" (oxford-style without comma before "or"):
+//   1 char  → "/"
+//   2 chars → "/ or $"
+//   3+      → "/, $ or @"
+function formatCharList(items) {
+    if (items.length <= 1) return items.join('')
+    const last = items[items.length - 1]
+    const rest = items.slice(0, -1)
+    return `${rest.join(', ')} or ${last}`
+}
+
+// Placeholder text based on process state. Provider-specific parts come
+// from the helpers: ``getCommandActivationChars()`` drives the "At start:"
+// hint; ``getPlaceholderAssistantTurnNote()`` controls the optional warning
+// shown during ``assistant_turn``.
 const placeholderText = computed(() => {
+    const helpers = getProviderHelpers(session.value?.provider)
     const state = processState.value?.state
+
     if (state === 'starting') {
         return `Starting ${providerLabel.value} process...`
     }
+
     if (state === 'assistant_turn') {
-        return `You can send a message now. ${providerLabel.value} will receive it as soon as possible (while working or after). Note: it will not appear in the conversation history.`
+        const base = `You can send a message now. ${providerLabel.value} will receive it as soon as possible (while working or after).`
+        const note = helpers?.getPlaceholderAssistantTurnNote()
+        return note ? `${base} ${note}` : base
     }
-    const historyHint = isDraft.value
-        ? ''
-        : settingsStore.isTouchDevice
-            ? ', ! = message history'
-            : ', ! and PageUp = message history'
-    let text = `Shortcuts: At start: / = commands${historyHint}; Anywhere: @ = file paths`
+
+    const chars = helpers?.getCommandActivationChars() ?? []
+    const historyHint = !isDraft.value
+        ? (settingsStore.isTouchDevice ? '! = message history' : '! and Up/PageUp = message history')
+        : null
+
+    const atStartItems = []
+    if (chars.length > 0) atStartItems.push(`${formatCharList(chars)} = commands`)
+    if (historyHint) atStartItems.push(historyHint)
+
+    const segments = []
+    if (atStartItems.length > 0) segments.push(`At start: ${atStartItems.join(', ')}`)
+    segments.push('Anywhere: @ = file paths')
+
+    let text = `Shortcuts: ${segments.join('; ')}`
     if (!settingsStore.isTouchDevice) {
         const keys = settingsStore.isMac ? '⌘↵ or Ctrl↵' : 'Ctrl↵ or Meta↵'
         text += `, ${keys} to send`
