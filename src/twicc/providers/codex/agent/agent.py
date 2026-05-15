@@ -571,6 +571,33 @@ class CodexAgent(BaseAgent):
         method = event.method
         payload = event.payload
 
+        # Subagent traffic filter: Codex routes every notification from
+        # a spawned subagent through the parent's SDK transport (single
+        # Rust process, single notification stream). Each notification
+        # carries its origin ``thread_id`` — for subagent items it
+        # differs from ``self.session_id``. We must drop those events
+        # here for two reasons:
+        #
+        #   1. ``stream_block_*`` broadcasts go out tagged with
+        #      ``self.session_id``, so painting the subagent's text
+        #      into the parent conversation would surface content the
+        #      user already sees through the spawn_agent tool card +
+        #      the dedicated subagent tab.
+        #   2. The :class:`StreamedItemRegistry` FIFO is keyed by
+        #      ``self.session_id``. A subagent push would consume the
+        #      slot meant for the parent's next ``agent_message``,
+        #      leaving the streaming placeholder stuck — the
+        #      ``stream_uuid`` stamped on the parent's SessionItem ends
+        #      up being a subagent item id the frontend never painted a
+        #      placeholder for, so retirement-by-uuid never matches.
+        #
+        # Notifications without a ``thread_id`` (none today, but keep
+        # the guard defensive against future SDK additions) flow
+        # through unchanged.
+        payload_thread_id = getattr(payload, "thread_id", None)
+        if payload_thread_id is not None and payload_thread_id != self.session_id:
+            return
+
         if method == "item/started":
             # Capture the raw inner payload first so any ``itemId`` is indexed,
             # regardless of item kind. ``fileChange`` approvals later in the
