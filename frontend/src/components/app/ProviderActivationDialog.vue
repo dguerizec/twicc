@@ -43,13 +43,22 @@ function save() {
     // store then flips disabledProvidersPresent to true, closing the dialog.
     settings.disabledProviders = disabled
 }
+
+// Conditional close: prevent user-initiated close (Esc) when `open` is still
+// true; allow programmatic close (`:open` flipping to false after Save) so
+// the dialog actually disappears. preventDefault on `wa-hide` blocks ALL
+// close paths, including the one triggered by `open` becoming false — hence
+// the `open.value` check.
+function handleHide(event) {
+    if (open.value) event.preventDefault()
+}
 </script>
 
 <template>
     <wa-dialog
         :open="open"
         without-header
-        @wa-hide.prevent
+        @wa-hide="handleHide"
     >
         <h2 class="dialog-title">Choose your providers</h2>
         <p>
