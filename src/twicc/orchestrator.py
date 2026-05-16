@@ -318,10 +318,19 @@ class OrchestratorRegistry:
     async def shutdown_all(self) -> None:
         """Stop every enabled provider's tasks in parallel.
 
-        Only shuts down orchestrators whose provider was actually started
-        (i.e. enabled ones). Calling ``shutdown()`` on an orchestrator whose
-        ``start()`` was never invoked can raise ``AttributeError`` on
-        attributes that are only created during startup (e.g. a watcher task).
+        Filters on the **currently enabled** providers (i.e. the present
+        value of :func:`get_enabled_providers`). Under normal operation this
+        is the right set: a provider's ``start()`` was either invoked by
+        ``start_all`` at boot, or by ``start_one`` on a later hot-toggle.
+        Calling ``shutdown()`` on an orchestrator whose ``start()`` was
+        never invoked can raise ``AttributeError`` on attributes that are
+        only created during startup (e.g. a watcher task).
+
+        Edge case worth noting: if ``start_all`` raised for a specific
+        provider (caught by ``return_exceptions=True``), that provider may
+        still be in the "enabled" set without having been successfully
+        started. In that situation, ``shutdown()`` may raise. The error is
+        logged and does not affect the other providers' teardown.
 
         Each orchestrator owns its own task graph and teardown order, so
         parallel shutdown is safe — and faster when a provider has slow
