@@ -139,9 +139,16 @@ async def check_and_broadcast(*, force: bool = False) -> bool:
 async def mark_unauthenticated_and_broadcast() -> None:
     """Force the auth state to ``False`` and broadcast.
 
-    Currently unused (no SDK integration yet), but kept for symmetry with
-    Claude Code's surface so the auth_task and WS handler can stay
-    structurally identical between providers.
+    Mirrors :func:`providers.claude_code.auth.mark_unauthenticated_and_broadcast`,
+    which is called from the Claude message loop on ``AssistantMessage.error
+    == "authentication_failed"``. The Codex equivalent — calling this on
+    ``ErrorNotification`` events carrying ``CodexErrorInfoValue.unauthorized``
+    (or the ``401/403`` HTTP variants of ``HttpConnectionFailedCodexErrorInfo``
+    / ``ResponseStreamConnectionFailedCodexErrorInfo``) from
+    :meth:`CodexAgent._handle_stream_event` — is not wired yet, so this
+    function has no caller today. Without the wiring, an expired token mid-turn
+    surfaces only through the next ``codex login status`` poll (up to 30s
+    later), instead of immediately like on Claude.
     """
     global _last_known_authenticated
 
