@@ -244,7 +244,7 @@ export class ClaudeCodeHelpers extends BaseProviderHelpers {
         return {
             ...entry,
             url: 'https://status.claude.com/',
-            tooltip: "Claude code status on Anthropic's side",
+            tooltip: "Claude Code status on Anthropic's side",
         }
     }
 

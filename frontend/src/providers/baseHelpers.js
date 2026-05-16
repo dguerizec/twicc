@@ -238,7 +238,7 @@ export class BaseProviderHelpers {
      * - ``modifier``: one of ``ok`` / ``warning`` / ``error`` / ``info``,
      *   used by the footer to colour the dot
      * - ``url``: external link to the public status page
-     * - ``tooltip``: hover text (e.g. "Claude code status on Anthropic's side")
+     * - ``tooltip``: hover text (e.g. "Claude Code status on Anthropic's side")
      *
      * The provider identifier itself is shown via the ``PROVIDER_ICON`` map
      * in ``constants.js`` (rendered as ``<wa-icon>``), so the descriptor
