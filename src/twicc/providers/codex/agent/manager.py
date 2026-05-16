@@ -85,11 +85,15 @@ class CodexAgentManager(BaseAgentManager):
                     # Push to Codex state DB. Use the standalone helper rather
                     # than agent._thread so we don't reach into private state.
                     await rename_thread_via_sdk(agent.session_id, pending)
-                    pop_pending_title(agent.session_id)
-                    # Mirror into Session.title immediately.
+                    # Mirror into Session.title (the watcher would catch it
+                    # eventually but no need to wait).
                     await sync_to_async(
                         Session.objects.filter(id=agent.session_id).update
                     )(title=pending)
+                    # Pop only after both writes succeed, so the next
+                    # ASSISTANT_TURN retries the whole flush (idempotent) if
+                    # the DB update raised.
+                    pop_pending_title(agent.session_id)
                 except Exception as e:
                     logger.error(
                         "Codex pending title flush failed for %s: %s",
