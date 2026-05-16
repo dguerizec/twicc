@@ -89,6 +89,13 @@ class CodexSessionsWatcher(BaseSessionsWatcher):
             parent_session_id=meta.parent_session_id,
         )
 
+    async def _fetch_initial_title(self, parsed: ParsedSessionFile) -> str | None:
+        # Top-level sessions only — subagents don't carry a user-facing name.
+        if parsed.type != SessionType.SESSION:
+            return None
+        from .titles import read_title_from_codex
+        return await read_title_from_codex(parsed.session_id)
+
     def get_compute(self) -> BaseSessionCompute:
         return _get_compute()
 

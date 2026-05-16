@@ -64,8 +64,12 @@ class ParsedSessionFile:
     inspect both the path and (optionally) the file content. Codex for
     instance reads the first JSONL line to recover ``project_id`` from
     the session's ``cwd``, since the file path itself does not encode it.
+
+    ``title`` is an optional initial title supplied by the provider's
+    parse step (e.g. read from Codex's state DB) — used only when the
+    session is created for the first time, ignored on later events.
     """
-    __slots__ = ('project_id', 'session_id', 'type', 'parent_session_id', 'file_path')
+    __slots__ = ('project_id', 'session_id', 'type', 'parent_session_id', 'file_path', 'title')
 
     def __init__(
         self,
@@ -74,6 +78,7 @@ class ParsedSessionFile:
         type: SessionType,
         file_path: str,
         parent_session_id: str | None = None,
+        title: str | None = None,
     ):
         self.project_id = project_id
         self.session_id = session_id
@@ -81,6 +86,7 @@ class ParsedSessionFile:
         self.parent_session_id = parent_session_id
         # Provider-relative path (relative to the watcher's ``projects_dir``).
         self.file_path = file_path
+        self.title = title
 
 
 # ---- @sync_to_async helpers (stateless, no provider coupling) ----
@@ -229,6 +235,16 @@ class BaseSessionsWatcher:
         """
         raise NotImplementedError
 
+    async def _fetch_initial_title(self, parsed: ParsedSessionFile) -> str | None:
+        """Optional hook : fetch an initial title for a newly-discovered session.
+
+        Called by :meth:`sync_and_broadcast` exactly once per new session
+        (never on subsequent JSONL modify events). Subclasses that have
+        an out-of-band title source (e.g. the Codex state DB) override
+        this. Default returns ``None`` — no out-of-band title.
+        """
+        return None
+
     async def _after_tool_result_broadcast(self, update: ToolResultUpdate) -> None:
         """Hook fired right after a ``tool_state`` broadcast.
 
@@ -336,6 +352,8 @@ class BaseSessionsWatcher:
             file_path=parsed.file_path,
             compute_version=compute.compute_version,
         )
+        if parsed.title:
+            kwargs["title"] = parsed.title
         if agent_settings is not None:
             for field, value in agent_settings._asdict().items():
                 if value is not None:
@@ -467,6 +485,11 @@ class BaseSessionsWatcher:
             if not has_content:
                 # Empty file (0 lines) - ignore completely
                 return
+
+            # Provider-specific initial title (e.g. read from Codex state DB).
+            # Mutate parsed in place — it's local to this call.
+            if parsed.title is None:
+                parsed.title = await self._fetch_initial_title(parsed)
 
             # Create session (regular or subagent)
             # Pop any pending settings set by the WS handler for new sessions
