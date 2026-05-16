@@ -55,11 +55,12 @@ const session = computed(() => store.getSession(props.sessionId))
 const providerLabel = computed(() => getProviderLabel(session.value?.provider))
 const providerIcon = computed(() => PROVIDER_ICON[session.value?.provider] ?? null)
 
-// Whether the session's provider is currently enabled
-const enabledProviders = computed(() => new Set(settingsStore.enabledProviders))
+// Whether the session's provider is currently usable for runtime calls.
+// Stricter than just intent-enabled: a provider in `starting` / `stopping`
+// returns false too, matching the back gate.
 const isProviderEnabled = computed(() => {
     const p = session.value?.provider
-    return p ? enabledProviders.value.has(p) : true
+    return p ? store.isProviderAvailable(p) : true
 })
 
 // Get display name for header

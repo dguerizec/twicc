@@ -120,12 +120,12 @@ const providerLabel = computed(() => getProviderLabel(session.value?.provider))
 // Whether the session is stale (JSONL files deleted, history preserved as read-only)
 const isStale = computed(() => session.value?.stale === true)
 
-// Whether the session's provider is currently enabled
-const settingsStore = useSettingsStore()
-const enabledProviders = computed(() => new Set(settingsStore.enabledProviders))
+// Whether the session's provider is currently usable (intent-enabled AND
+// runtime-running). Refusal during transient `starting` / `stopping`
+// matches the back gate (`ensure_provider_running`).
 const isProviderEnabled = computed(() => {
     const p = session.value?.provider
-    return p ? enabledProviders.value.has(p) : true
+    return p ? store.isProviderAvailable(p) : true
 })
 
 // Session items (raw, with metadata + content)

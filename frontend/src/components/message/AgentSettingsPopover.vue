@@ -69,10 +69,13 @@ const nonImageAttachments = computed(() => {
 // intercepts the switch, surfaces a callout, and lets the user resolve
 // the conflict before retrying.
 const providerSwitcherOptions = computed(() => {
+    // Only show providers that are usable right now (intent-enabled AND
+    // in running state). The current provider stays in the list even if
+    // it is in a transient state — switching away from it is a valid
+    // user intent that the runtime gate will handle on the new turn.
     const current = props.session?.provider
-    const enabled = new Set(settings.enabledProviders)
     return getProviderOptions()
-        .filter(opt => enabled.has(opt.value))
+        .filter(opt => opt.value === current || dataStore.isProviderAvailable(opt.value))
         .map(opt => ({
             value: opt.value,
             label: opt.label,
