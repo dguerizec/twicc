@@ -346,7 +346,7 @@ Vue :
   que la source `_statusAwareProviders` filtre sur enabled.
 
 Note : les détails exacts de hooks / watchers à ajouter dans les composants
-existants sont laissés à l'implémentation (cf. §8).
+existants sont laissés au plan ou à l'implémentation (cf. §8).
 
 ---
 
@@ -355,7 +355,7 @@ existants sont laissés à l'implémentation (cf. §8).
 ### 6.1 API
 
 Nouveau module léger (un seul fichier, p. ex.
-`src/twicc/providers/enabled.py` — nom définitif à fixer à l'implémentation) :
+`src/twicc/providers/enabled.py` — nom définitif à fixer au plan ou à l'implémentation) :
 
 ```python
 class ProviderDisabledError(Exception):
@@ -407,7 +407,7 @@ données restent consultables côté front.
 - `OrchestratorRegistry` et `AgentManagerRegistry` : on peut s'autoriser à
   retourner `None` (ou une instance « stopped ») pour les providers
   désactivés, pour faciliter les call-sites qui voudraient lazy-check. À
-  trancher à l'implémentation. Le contrat externe reste : pas d'appel
+  trancher au plan ou à l'implémentation. Le contrat externe reste : pas d'appel
   runtime sans `ensure_provider_enabled`.
 
 ---
@@ -439,13 +439,12 @@ inline pour les sessions stale) :
 
 | Action | Comportement |
 |--------|-------------|
-| Resume / retry / branch / send message | **Désactivées** (par le callout qui remplace le MessageInput + désactivation des entrées de menu correspondantes). |
-| Rename | Reste disponible. |
-| Archive / unarchive | Reste disponible. |
-| Pin / unpin | Reste disponible. |
-| Delete | Reste disponible. |
-| Export | Reste disponible. |
-| Tout ce qui touche au runtime du provider | Désactivé. |
+| Envoi d'un nouveau message (reprise d'une session) | **Désactivé** : le callout remplace le MessageInput. |
+| Rename | **Désactivé** : l'opération appelle le SDK du provider (`rename_session` côté Claude Code, `thread/name/set` côté Codex via `rename_thread_via_sdk`). L'endpoint `views.py:rename` doit refuser avec `ProviderDisabledError` quand le provider est off ; côté UI, l'action est masquée / grisée. |
+| Archive / unarchive | Reste disponible (purement applicatif, DB TwiCC uniquement). |
+| Pin / unpin | Reste disponible (purement applicatif, DB TwiCC uniquement). |
+
+Note : les autres actions évoquées dans les discussions (retry, branch, delete, export) n'existent pas dans TwiCC à ce jour. Rien à gérer pour elles ; si elles sont ajoutées plus tard, ce design devra être complété pour préciser leur comportement.
 
 ### 7.4 MessageInput / draft / agent settings popup
 
@@ -503,10 +502,10 @@ rotation côté front.
 
 ---
 
-## 8. Détails fixés à l'implémentation
+## 8. Détails fixés plus tard (plan ou implémentation)
 
-Liste explicite des points laissés ouverts, pour éviter qu'ils ne soient
-oubliés au moment du plan :
+Liste explicite des points laissés ouverts à ce stade, à trancher soit pendant
+l'écriture du plan d'implémentation, soit au moment du code, selon le cas :
 
 1. **Définition opérationnelle exacte de « session active »** côté back (et
    alignement avec le store front qui fournit l'info au switch). Probablement
