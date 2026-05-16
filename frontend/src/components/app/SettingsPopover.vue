@@ -5,9 +5,9 @@ import { useRouter } from 'vue-router'
 import { useSettingsStore, SETTINGS_SCHEMA } from '../../stores/settings'
 import { useDataStore } from '../../stores/data'
 import { useAuthStore } from '../../stores/auth'
-import { getProviderHelpers, getProviderLabel, getProviderOptions, getRegisteredProviders } from '../../providers'
+import { getProviderHelpers, getProviderLabel, getProviderOptions, getRegisteredProviders, getProviderIcon } from '../../providers'
 import { getActivationCharMetadata } from '../../utils/commandActivation'
-import { DISPLAY_MODE, COLOR_SCHEME, SESSION_TIME_FORMAT, DEFAULT_MAX_CACHED_SESSIONS, WA_THEME, WA_THEME_LABELS, WA_BRAND, WA_BRAND_LABELS, PROVIDER_ICON } from '../../constants'
+import { DISPLAY_MODE, COLOR_SCHEME, SESSION_TIME_FORMAT, DEFAULT_MAX_CACHED_SESSIONS, WA_THEME, WA_THEME_LABELS, WA_BRAND, WA_BRAND_LABELS } from '../../constants'
 import NotificationSettings from './NotificationSettings.vue'
 import AppTooltip from '../ui/AppTooltip.vue'
 import ChangelogDialog from './ChangelogDialog.vue'
@@ -44,7 +44,7 @@ const providerSections = computed(() =>
             provider,
             label: `${label} settings`,
             navLabel: label,
-            icon: PROVIDER_ICON[provider] ?? null,
+            icon: getProviderIcon(provider),
             synced: true,
             enabled: enabledProviders.value.has(provider),
         }
@@ -243,7 +243,7 @@ const enabledProviderOptions = computed(() =>
     providerOptions.filter(opt => enabledProviders.value.has(opt.value))
 )
 function providerIconFor(provider) {
-    return PROVIDER_ICON[provider] ?? null
+    return getProviderIcon(provider)
 }
 
 // ─── Provider activation helpers ─────────────────────────────────────
@@ -421,7 +421,7 @@ const currentStatusDisplay = computed(() => {
 
 const currentStatusIcon = computed(() => {
     const entry = currentStatusProvider.value
-    return entry ? PROVIDER_ICON[entry.provider] ?? null : null
+    return entry ? getProviderIcon(entry.provider) : null
 })
 
 const hasMultipleStatusProviders = computed(() => _statusAwareProviders.value.length > 1)
@@ -902,10 +902,10 @@ function onChangelogClose() {
                                         @change="(e) => onToggleProvider(p, e)"
                                     >
                                         <wa-icon
-                                            v-if="PROVIDER_ICON[p]"
+                                            v-if="providerIconFor(p)"
                                             auto-width
                                             family="brands"
-                                            :name="PROVIDER_ICON[p]"
+                                            :name="providerIconFor(p)"
                                             class="provider-switch-icon"
                                         ></wa-icon>
                                         {{ providerLabelFor(p) }}

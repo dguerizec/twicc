@@ -80,6 +80,17 @@ export function getProviderLabel(provider) {
 }
 
 /**
+ * Web Awesome icon name (``<wa-icon name="...">``) for the given provider.
+ * Resolved from each helpers class's ``static icon`` field, so adding a new
+ * provider only requires declaring it on the new helpers — no constants.js
+ * edit needed. Returns ``null`` when the provider is unknown or doesn't
+ * declare an icon.
+ */
+export function getProviderIcon(provider) {
+    return PROVIDER_HELPERS[provider]?.constructor.icon ?? null
+}
+
+/**
  * ``[{ value, label }]`` pairs for every registered provider, intended to feed
  * a ``<wa-select>`` (e.g. the global default-provider setting). The label
  * comes from the helpers' static ``label`` field, falling back to the wire

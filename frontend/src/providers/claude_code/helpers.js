@@ -151,6 +151,7 @@ const AGENT_SETTINGS_CHOICES = {
 export class ClaudeCodeHelpers extends BaseProviderHelpers {
     static provider = PROVIDER.CLAUDE_CODE
     static label = 'Claude'
+    static icon = 'claude'
 
     canSendMessage() {
         return useClaudeCodeStore().authenticated !== false

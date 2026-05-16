@@ -3,8 +3,8 @@ import { ref, computed, watch, inject } from 'vue'
 import { useDataStore } from '../../../stores/data'
 import { useSettingsStore } from '../../../stores/settings'
 import { formatDate } from '../../../utils/date'
-import { PROCESS_STATE, PROCESS_STATE_COLORS, PROCESS_STATE_NAMES, PROVIDER_ICON } from '../../../constants'
-import { getProviderHelpers, getProviderLabel } from '../../../providers'
+import { PROCESS_STATE, PROCESS_STATE_COLORS, PROCESS_STATE_NAMES } from '../../../constants'
+import { getProviderHelpers, getProviderLabel, getProviderIcon } from '../../../providers'
 import { getAgentDisplayLabel } from '../../../utils/agentLabel'
 import { stopSubagent } from '../../../composables/useWebSocket'
 import { stopSessionProcess } from '../../../composables/useStopSessionProcess'
@@ -53,7 +53,7 @@ const showCosts = computed(() => settingsStore.areCostsShown)
 // Session data from store
 const session = computed(() => store.getSession(props.sessionId))
 const providerLabel = computed(() => getProviderLabel(session.value?.provider))
-const providerIcon = computed(() => PROVIDER_ICON[session.value?.provider] ?? null)
+const providerIcon = computed(() => getProviderIcon(session.value?.provider))
 
 // Whether the session's provider is currently usable for runtime calls.
 // Stricter than just intent-enabled: a provider in `starting` / `stopping`

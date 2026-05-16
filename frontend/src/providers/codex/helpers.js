@@ -104,6 +104,7 @@ const AGENT_SETTINGS_CHOICES = {
 export class CodexHelpers extends BaseProviderHelpers {
     static provider = PROVIDER.CODEX
     static label = 'Codex'
+    static icon = 'openai'
 
     canSendMessage() {
         return true

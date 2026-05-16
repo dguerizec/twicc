@@ -13,8 +13,7 @@
  * "follow default" sentinel is needed.
  */
 import { computed, ref } from 'vue'
-import { getProviderHelpers } from '../../providers'
-import { PROVIDER_ICON } from '../../constants'
+import { getProviderHelpers, getProviderIcon } from '../../providers'
 import AgentSettingsPresetsDialog from './AgentSettingsPresetsDialog.vue'
 
 const props = defineProps({
@@ -25,7 +24,7 @@ const props = defineProps({
 })
 
 const helpers = computed(() => getProviderHelpers(props.provider))
-const providerIcon = computed(() => PROVIDER_ICON[props.provider] ?? null)
+const providerIcon = computed(() => getProviderIcon(props.provider))
 
 // Field order matches the session popover for consistency. Fields a
 // provider doesn't support (per ``supportsAgentSetting``) are skipped.

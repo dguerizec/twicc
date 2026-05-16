@@ -9,8 +9,7 @@ import { ref, computed, watch, nextTick, useId, toRef } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useDataStore } from '../../stores/data'
 import { useSettingsStore } from '../../stores/settings'
-import { getProviderHelpers, getProviderLabel } from '../../providers'
-import { PROVIDER_ICON } from '../../constants'
+import { getProviderHelpers, getProviderLabel, getProviderIcon } from '../../providers'
 import { sendWsMessage, notifyUserDraftUpdated } from '../../composables/useWebSocket'
 import { useSessionAgentSettings } from '../../composables/useSessionAgentSettings'
 import { vPopoverFocusFix } from '../../directives/vPopoverFocusFix'
@@ -82,7 +81,7 @@ const emit = defineEmits(['needs-title'])
 const session = computed(() => store.getSession(props.sessionId))
 const isDraft = computed(() => session.value?.draft === true)
 const providerLabel = computed(() => getProviderLabel(session.value?.provider))
-const providerIcon = computed(() => PROVIDER_ICON[session.value?.provider] ?? null)
+const providerIcon = computed(() => getProviderIcon(session.value?.provider))
 
 // Provider's attachment capabilities (file types, max bytes, resize policy).
 // Drives the file picker's accept attribute, the paste handler's MIME

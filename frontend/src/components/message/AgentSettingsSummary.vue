@@ -7,7 +7,7 @@
 // ``summaryState`` via ``getSummaryParts`` (a hook on
 // ``BaseProviderHelpers``); this component just renders them.
 import { computed } from 'vue'
-import { PROVIDER_ICON } from '../../constants'
+import { getProviderIcon } from '../../providers'
 
 const props = defineProps({
     session: { type: Object, default: null },
@@ -18,10 +18,7 @@ const helpers = computed(() => props.settings.providerHelpers.value)
 
 const providerLabel = computed(() => helpers.value?.constructor.label ?? null)
 
-const providerIcon = computed(() => {
-    const provider = helpers.value?.constructor.provider
-    return provider ? (PROVIDER_ICON[provider] ?? null) : null
-})
+const providerIcon = computed(() => getProviderIcon(helpers.value?.constructor.provider))
 
 const parts = computed(() => {
     if (!helpers.value) return []

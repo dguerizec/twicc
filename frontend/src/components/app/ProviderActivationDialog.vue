@@ -1,8 +1,7 @@
 <script setup>
 import { ref, computed, watch } from 'vue'
 import { useSettingsStore } from '../../stores/settings'
-import { getRegisteredProviders, getProviderLabel } from '../../providers'
-import { PROVIDER_ICON } from '../../constants'
+import { getRegisteredProviders, getProviderLabel, getProviderIcon } from '../../providers'
 
 const settings = useSettingsStore()
 
@@ -76,10 +75,10 @@ function handleHide(event) {
                 @change="(e) => choices[p] = e.target.checked"
             >
                 <wa-icon
-                    v-if="PROVIDER_ICON[p]"
+                    v-if="getProviderIcon(p)"
                     auto-width
                     family="brands"
-                    :name="PROVIDER_ICON[p]"
+                    :name="getProviderIcon(p)"
                     class="provider-icon"
                 ></wa-icon>
                 {{ providerLabel(p) }}

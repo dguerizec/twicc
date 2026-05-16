@@ -5,11 +5,11 @@ import { useRoute, useRouter } from 'vue-router'
 import { useDataStore, ALL_PROJECTS_ID } from '../stores/data'
 import { useSettingsStore } from '../stores/settings'
 import { useWorkspacesStore } from '../stores/workspaces'
-import { COLOR_SCHEME, PROVIDER_ICON } from '../constants'
+import { COLOR_SCHEME } from '../constants'
 import { useCommandRegistry } from '../composables/useCommandRegistry'
 import { useStartupPolling } from '../composables/useStartupPolling'
 import { useTerminalCommandStore } from '../stores/terminalCommand'
-import { getRegisteredProviders, getProviderHelpers, getProviderStore, getProviderLabel } from '../providers'
+import { getRegisteredProviders, getProviderHelpers, getProviderStore, getProviderLabel, getProviderIcon } from '../providers'
 import { toWorkspaceProjectId } from '../utils/workspaceIds'
 import { splitProjectsByPriority } from '../utils/projectSort'
 import SessionList from '../components/session/list/SessionList.vue'
@@ -125,7 +125,7 @@ const currentUsageProvider = computed(() => {
 
 const currentUsageHelpers = computed(() => currentUsageProvider.value ? getProviderHelpers(currentUsageProvider.value) : null)
 const currentUsageStore = computed(() => currentUsageProvider.value ? getProviderStore(currentUsageProvider.value) : null)
-const currentUsageProviderIcon = computed(() => currentUsageProvider.value ? PROVIDER_ICON[currentUsageProvider.value] : null)
+const currentUsageProviderIcon = computed(() => currentUsageProvider.value ? getProviderIcon(currentUsageProvider.value) : null)
 const currentUsageProviderLabel = computed(() => currentUsageProvider.value ? getProviderLabel(currentUsageProvider.value) : null)
 const hasMultipleUsageProviders = computed(() => usageProviders.value.length > 1)
 const usageExternalLink = computed(() => currentUsageHelpers.value?.getUsageExternalLink() ?? null)

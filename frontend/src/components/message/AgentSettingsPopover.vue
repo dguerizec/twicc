@@ -10,8 +10,7 @@ import { computed, ref } from 'vue'
 import { vPopoverFocusFix } from '../../directives/vPopoverFocusFix'
 import { formatPresetSummary } from '../../utils/presetFormat'
 import { DEFAULT_SENTINEL } from '../../composables/useSessionAgentSettings'
-import { getProviderOptions, getProviderHelpers } from '../../providers'
-import { PROVIDER_ICON } from '../../constants'
+import { getProviderOptions, getProviderHelpers, getProviderIcon } from '../../providers'
 import { useDataStore } from '../../stores/data'
 import { useSettingsStore } from '../../stores/settings'
 import AgentSettingsPresetsDialog from '../app/AgentSettingsPresetsDialog.vue'
@@ -79,15 +78,12 @@ const providerSwitcherOptions = computed(() => {
         .map(opt => ({
             value: opt.value,
             label: opt.label,
-            icon: PROVIDER_ICON[opt.value] ?? null,
+            icon: getProviderIcon(opt.value),
             active: opt.value === current,
         }))
 })
 
-const currentProviderIcon = computed(() => {
-    const provider = props.session?.provider
-    return provider ? (PROVIDER_ICON[provider] ?? null) : null
-})
+const currentProviderIcon = computed(() => getProviderIcon(props.session?.provider))
 
 const currentProviderLabel = computed(() => providerHelpers.value?.constructor.label ?? null)
 

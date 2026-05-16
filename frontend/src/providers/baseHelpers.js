@@ -10,6 +10,7 @@
 export class BaseProviderHelpers {
     static provider = null
     static label = null
+    static icon = null
 
     /**
      * Whether the current frontend state allows sending a message to a
@@ -240,8 +241,8 @@ export class BaseProviderHelpers {
      * - ``url``: external link to the public status page
      * - ``tooltip``: hover text (e.g. "Claude Code status on Anthropic's side")
      *
-     * The provider identifier itself is shown via the ``PROVIDER_ICON`` map
-     * in ``constants.js`` (rendered as ``<wa-icon>``), so the descriptor
+     * The provider identifier itself is shown via ``getProviderIcon`` in
+     * ``providers/index.js`` (rendered as ``<wa-icon>``), so the descriptor
      * does not carry a per-provider label here.
      *
      * Default: ``null``.

@@ -13,7 +13,7 @@ import { useCodeCommentsStore } from '../../../stores/codeComments'
 import { useDataStore } from '../../../stores/data'
 import { useSettingsStore } from '../../../stores/settings'
 import { formatDate } from '../../../utils/date'
-import { PROCESS_STATE, PROCESS_STATE_COLORS, PROCESS_STATE_NAMES, PROVIDER_ICON, SESSION_TIME_FORMAT } from '../../../constants'
+import { PROCESS_STATE, PROCESS_STATE_COLORS, PROCESS_STATE_NAMES, SESSION_TIME_FORMAT } from '../../../constants'
 import { markSessionReadState, cancelSessionViewedThrottle } from '../../../composables/useWebSocket'
 import { stopSessionProcess } from '../../../composables/useStopSessionProcess'
 import { useDragHover } from '../../../composables/useDragHover'
@@ -22,7 +22,7 @@ import ProcessIndicator from '../../ui/ProcessIndicator.vue'
 import ProcessDuration from '../../ui/ProcessDuration.vue'
 import CostDisplay from '../../ui/CostDisplay.vue'
 import AppTooltip from '../../ui/AppTooltip.vue'
-import { getProviderLabel } from '../../../providers'
+import { getProviderLabel, getProviderIcon } from '../../../providers'
 
 const props = defineProps({
     session: {
@@ -98,7 +98,7 @@ const processState = computed(() => store.getProcessState(props.session.id))
 const providerLabel = computed(() => getProviderLabel(props.session.provider))
 
 /** Web Awesome icon name for the session's provider. */
-const providerIcon = computed(() => PROVIDER_ICON[props.session.provider] ?? null)
+const providerIcon = computed(() => getProviderIcon(props.session.provider))
 
 /** Whether this session has any pending request waiting for user response. */
 const pendingRequest = computed(() => store.getPendingRequests(props.session.id).length > 0)
