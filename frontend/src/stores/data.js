@@ -270,6 +270,15 @@ export const useDataStore = defineStore('data', {
         // { sessionId: { state: 'starting'|'assistant_turn'|'user_turn'|'dead', error?: string } }
         processStates: {},
 
+        // Lifecycle state of each provider's orchestrator (mirrors backend
+        // `twicc.providers.state.ProviderState`). Updated from the bootstrap
+        // payload and live `provider_state_changed` WS messages. Used by
+        // `isProviderAvailable` (provider must be both intent-enabled AND
+        // in 'running' state) to gate runtime UI (callouts, pickers, ...).
+        // Default fallback when a provider is missing from the map: 'stopped'.
+        // { 'claude_code': 'running', 'codex': 'stopped' }
+        providerStates: {},
+
         // Weekly activity data (from /api/home/ endpoint)
         // { _global: [...], projectId: [...] } — each value is Array of { date, user_message_count }
         weeklyActivity: {},
@@ -580,6 +589,31 @@ export const useDataStore = defineStore('data', {
         },
 
         /**
+         * Return the lifecycle state of the given provider, falling back to
+         * ``'stopped'`` if absent from the map (a provider missing from the
+         * snapshot is treated as not yet started, never as undefined).
+         */
+        getProviderState: (state) => (provider) => state.providerStates[provider] || 'stopped',
+
+        /**
+         * Whether the given provider is usable for runtime calls right now.
+         * Combines the intent layer (settings store: enabledProviders) with
+         * the runtime layer (this store: providerStates === 'running').
+         * Used by every UI surface that pilots a provider's SDK/agent:
+         * the in-session callout, the agent-settings picker, the rename
+         * action, etc. Choices-of-intent UI (default-provider select,
+         * settings sections) keep using settings.enabledProviders directly.
+         */
+        isProviderAvailable() {
+            return (provider) => {
+                if (!provider) return false
+                const settings = useSettingsStore()
+                return settings.enabledProviders.includes(provider)
+                    && this.getProviderState(provider) === 'running'
+            }
+        },
+
+        /**
          * Count sessions with unread content across all projects.
          * Same logic as getProjectUnreadCount but without project filter.
          * @returns {number} The number of unread sessions
@@ -797,6 +831,17 @@ export const useDataStore = defineStore('data', {
     },
 
     actions: {
+        // Provider lifecycle state — written from bootstrap (snapshot) and
+        // from `provider_state_changed` WS pushes (live transitions).
+        applyProviderStates(providerStates) {
+            if (!providerStates || typeof providerStates !== 'object') return
+            this.providerStates = { ...providerStates }
+        },
+        setProviderState(provider, state) {
+            if (!provider || !state) return
+            this.providerStates = { ...this.providerStates, [provider]: state }
+        },
+
         // Server info
         setCurrentVersion(version) {
             this.currentVersion = version

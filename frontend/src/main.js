@@ -113,8 +113,13 @@ if (!authStore.needsLogin) {
         const resp = await fetch('/api/bootstrap/')
         if (resp.ok) {
             bootstrapData = await resp.json()
-            const { settings, settings_version, default_settings, dev_mode, uvx_mode, twicc_launch_prefix, providers, disabledProvidersPresent, disabledProviders } = bootstrapData
+            const { settings, settings_version, default_settings, dev_mode, uvx_mode, twicc_launch_prefix, providers, disabledProvidersPresent, disabledProviders, providerStates } = bootstrapData
             applyDefaultSettings(default_settings, settings, dev_mode, uvx_mode, twicc_launch_prefix, settings_version, disabledProvidersPresent, disabledProviders)
+            // Seed the data store's provider lifecycle map. Lazy import keeps
+            // the bootstrap path light; the data store is unconditionally
+            // needed once the app is up anyway.
+            const { useDataStore } = await import('./stores/data')
+            useDataStore().applyProviderStates(providerStates ?? {})
             // Seed each provider's bootstrap-driven state (agent-setting categories
             // for ``classifyAgentSettingsChanges``, model registry for capability
             // and retired-model lookups, agent-setting presets). Optional chaining:

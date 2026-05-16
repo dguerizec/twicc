@@ -860,6 +860,14 @@ export function useWebSocket() {
                     useSettingsStore().applySyncedSettings(msg.settings, msg.version)
                 })
                 break
+            case 'provider_state_changed':
+                // Live transition of a provider's lifecycle state (stopped /
+                // starting / running / stopping). Used by isProviderAvailable
+                // to gate runtime UI and by the Settings switch UX.
+                if (msg.provider && msg.state) {
+                    useDataStore().setProviderState(msg.provider, msg.state)
+                }
+                break
             case 'workspaces_updated':
                 // Apply workspaces from backend (on connect or when another client updates)
                 // Lazy import to avoid circular dependency (useWebSocket.js → workspaces.js)
