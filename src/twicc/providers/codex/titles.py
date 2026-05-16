@@ -43,3 +43,59 @@ async def rename_thread_via_sdk(thread_id: str, title: str) -> None:
     except Exception as e:
         logger.warning("Codex thread/name/set failed for %s: %s", thread_id, e)
         raise
+
+
+async def read_title_from_codex(thread_id: str) -> str | None:
+    """Read the Codex thread's current display name from the state DB.
+
+    Returns ``None`` if the thread has no name set, or on any error
+    (logged at WARNING). Used by the watcher on first session
+    materialisation to import a title that was set via the Codex CLI.
+    """
+    bundled_bin = resolve_bundled_binary()
+    config = AppServerConfig(codex_bin=str(bundled_bin))
+    try:
+        async with AsyncCodex(config=config) as codex:
+            # ``AsyncCodex`` exposes no top-level ``thread_read``; like
+            # ``rename_thread_via_sdk`` we go through ``thread_resume``
+            # to get an ``AsyncThread`` handle and call ``.read()`` on
+            # it (defined at ``codex_app_server/api.py:649-653``).
+            thread = await codex.thread_resume(thread_id)
+            response = await thread.read(include_turns=False)
+            name = response.thread.name
+            return name if name else None
+    except Exception as e:
+        logger.warning("Codex thread/read failed for %s: %s", thread_id, e)
+        return None
+
+
+async def bulk_sync_titles_from_codex() -> dict[str, str]:
+    """Read every Codex thread's display name via state-DB-only list.
+
+    Returns a ``{thread_id: name}`` mapping (only entries with a non-empty
+    name are included). Returns an empty dict on error (logged at WARNING).
+    Pagination is exhaustive — there is no upper bound on the number of
+    threads, but the call is cheap because ``use_state_db_only=True``
+    skips JSONL rollout scanning.
+    """
+    bundled_bin = resolve_bundled_binary()
+    config = AppServerConfig(codex_bin=str(bundled_bin))
+    titles: dict[str, str] = {}
+    try:
+        async with AsyncCodex(config=config) as codex:
+            cursor: str | None = None
+            while True:
+                page = await codex.thread_list(
+                    use_state_db_only=True,
+                    cursor=cursor,
+                    limit=100,
+                )
+                for thread in page.data:
+                    if thread.name:
+                        titles[thread.id] = thread.name
+                if page.next_cursor is None:
+                    break
+                cursor = page.next_cursor
+    except Exception as e:
+        logger.warning("Codex bulk thread/list failed: %s", e)
+    return titles
