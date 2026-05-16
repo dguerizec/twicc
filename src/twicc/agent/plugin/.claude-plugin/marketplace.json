@@ -1,0 +1,20 @@
+{
+  "name": "twicc",
+  "interface": {
+    "displayName": "TwiCC Plugin"
+  },
+  "plugins": [
+    {
+      "name": "twicc",
+      "source": {
+        "source": "local",
+        "path": "./twicc"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

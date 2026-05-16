@@ -43,12 +43,16 @@ def _resolve_twicc_launch_prefix() -> str:
     except OSError:
         argv0_path = None
 
-    # uv run <script> in dev mode: reproduce the user's launch verbatim.
+    # uv run <script> in dev mode: re-invoke the same script through uv,
+    # forcing the project dir via ``--directory`` so the prefix stays a
+    # single shell command (no ``&&``). The script is named bare (no ``./``)
+    # so uv resolves it against the ``--directory`` target, not the caller's
+    # cwd at invocation time.
     is_uv_run = "UV_RUN_RECURSION_DEPTH" in os.environ
     if is_uv_run and DEV_MODE and argv0_path and argv0_path.is_file():
         return (
-            f"cd {shlex.quote(str(argv0_path.parent))} "
-            f"&& uv run ./{argv0_path.name}"
+            f"uv run --directory {shlex.quote(str(argv0_path.parent))} "
+            f"{argv0_path.name}"
         )
 
     # Installed ``twicc`` script.
@@ -62,6 +66,13 @@ def _resolve_twicc_launch_prefix() -> str:
 # Shell prefix exposed via the bootstrap API so the frontend can render
 # accurate "run <X> ..." instructions and inject them into the terminal.
 TWICC_LAUNCH_PREFIX = _resolve_twicc_launch_prefix()
+
+# Surface the same prefix as TWICC_BIN so subprocesses (Claude/Codex
+# agents, and the shell commands they spawn from skills) can re-invoke
+# THIS TwiCC instance reliably — independent of whatever ``twicc`` may
+# happen to be first in PATH on the user's system. The plugin's
+# SKILL.md files all read TWICC_BIN with a ``command -v twicc`` fallback.
+os.environ.setdefault("TWICC_BIN", TWICC_LAUNCH_PREFIX)
 
 # Load .env from the data directory (~/.twicc/.env or $TWICC_DATA_DIR/.env)
 # Idempotent: no-op if already loaded by run.py

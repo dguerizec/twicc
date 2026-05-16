@@ -1,5 +1,5 @@
 ---
-name: project
+name: twicc-project
 description: Show details of a single Claude Code project by ID. Use when the user wants to inspect a specific project's metadata, cost, or directory.
 argument-hint: <project_id>
 ---
@@ -13,12 +13,23 @@ Show the details of a single project by its ID.
 - The user wants details about a specific project
 - The user has a project ID (from `twicc projects` or `twicc sessions` output) and wants to see its metadata
 
+## How to invoke
+
+TwiCC's executable varies by launch mode (uvx, dev, installed tool). Resolve it once at the start of each Bash invocation:
+
+```bash
+TWICC=${TWICC_BIN:-$(command -v twicc 2>/dev/null)}
+[ -n "$TWICC" ] || { echo "TwiCC executable not found in this context" >&2; exit 1; }
+```
+
+Then run any subcommand via `$TWICC <args>` — **do NOT quote `$TWICC`** (use `$TWICC args`, never `"$TWICC" args`). The variable may expand to a multi-word command (e.g. `uv run --directory ... run.py`); Bash relies on word-splitting to parse it, and quoting it would treat the entire expansion as a single program name and fail with "No such file or directory". All bash examples below use the unquoted form.
+
 ## How to inspect a project
 
 Run the `twicc project` CLI command via the Bash tool:
 
 ```bash
-twicc project <PROJECT_ID>
+$TWICC project <PROJECT_ID>
 ```
 
 **Note:** Project IDs start with a dash (e.g. `-home-twidi-dev-myproject`). The leading dash is automatically prepended if omitted, so **do not include it** when passing the ID on the command line.
@@ -26,7 +37,7 @@ twicc project <PROJECT_ID>
 ### Examples
 
 ```bash
-twicc project "home-twidi-dev-myproject-abc123"
+$TWICC project 'home-twidi-dev-myproject-abc123'
 ```
 
 ## Output format

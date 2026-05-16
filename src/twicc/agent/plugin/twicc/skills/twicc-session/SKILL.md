@@ -1,5 +1,5 @@
 ---
-name: session
+name: twicc-session
 description: Inspect a single Claude Code session — view details, read item content by line number, or list subagents. Use when the user wants to examine a specific session, read conversation content, or explore subagent activity.
 argument-hint: <session_id> [content|agents]
 ---
@@ -14,12 +14,23 @@ Inspect a single session: view its metadata, read conversation content by line n
 - The user wants to read the actual conversation content (messages, tool calls, etc.)
 - The user wants to see which subagents were spawned by a session
 
+## How to invoke
+
+TwiCC's executable varies by launch mode (uvx, dev, installed tool). Resolve it once at the start of each Bash invocation:
+
+```bash
+TWICC=${TWICC_BIN:-$(command -v twicc 2>/dev/null)}
+[ -n "$TWICC" ] || { echo "TwiCC executable not found in this context" >&2; exit 1; }
+```
+
+Then run any subcommand via `$TWICC <args>` — **do NOT quote `$TWICC`** (use `$TWICC args`, never `"$TWICC" args`). The variable may expand to a multi-word command (e.g. `uv run --directory ... run.py`); Bash relies on word-splitting to parse it, and quoting it would treat the entire expansion as a single program name and fail with "No such file or directory". All bash examples below use the unquoted form.
+
 ## Commands
 
 ### Show session details
 
 ```bash
-twicc session <SESSION_ID>
+$TWICC session <SESSION_ID>
 ```
 
 Returns the full session metadata as JSON. Works for both regular sessions and subagents. Only returns sessions that have a creation date and at least one user message.
@@ -66,15 +77,15 @@ The `last_line` field tells you the total number of items in the session, which 
 ### Read session content
 
 ```bash
-twicc session <SESSION_ID> content <LINE_OR_RANGE>
+$TWICC session <SESSION_ID> content <LINE_OR_RANGE>
 ```
 
 Fetch one or more session items by line number. Each item is a raw JSONL entry (user message, assistant message, tool call, tool result, etc.) parsed into a proper JSON object.
 
 #### Arguments
 
-- **Single line:** `twicc session <ID> content 5` — fetch item at line 5
-- **Range:** `twicc session <ID> content 10-20` — fetch items from line 10 to 20 (inclusive)
+- **Single line:** `$TWICC session <ID> content 5` — fetch item at line 5
+- **Range:** `$TWICC session <ID> content 10-20` — fetch items from line 10 to 20 (inclusive)
 
 #### Output format
 
@@ -105,7 +116,7 @@ The structure of each object depends on its type (human message, assistant messa
 ### List subagents
 
 ```bash
-twicc session <SESSION_ID> agents
+$TWICC session <SESSION_ID> agents
 ```
 
 List all subagents spawned by a session, ordered by most recently active.
@@ -118,8 +129,8 @@ List all subagents spawned by a session, ordered by most recently active.
 #### Examples
 
 ```bash
-twicc session abc123 agents                # List subagents
-twicc session abc123 agents --limit 50     # List up to 50 subagents
+$TWICC session abc123 agents               # List subagents
+$TWICC session abc123 agents --limit 50    # List up to 50 subagents
 ```
 
 Use `twicc session <subagent_id>` to inspect a specific subagent.

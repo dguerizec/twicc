@@ -1,5 +1,5 @@
 ---
-name: sessions
+name: twicc-sessions
 description: List Claude Code sessions tracked by TwiCC. Use when the user wants to browse sessions, find a session ID, filter by project, or see session activity and costs.
 ---
 
@@ -14,12 +14,23 @@ List sessions tracked by TwiCC, ordered by most recently active. Only returns va
 - The user wants to see sessions for a specific project
 - The user wants to see archived sessions
 
+## How to invoke
+
+TwiCC's executable varies by launch mode (uvx, dev, installed tool). Resolve it once at the start of each Bash invocation:
+
+```bash
+TWICC=${TWICC_BIN:-$(command -v twicc 2>/dev/null)}
+[ -n "$TWICC" ] || { echo "TwiCC executable not found in this context" >&2; exit 1; }
+```
+
+Then run any subcommand via `$TWICC <args>` — **do NOT quote `$TWICC`** (use `$TWICC args`, never `"$TWICC" args`). The variable may expand to a multi-word command (e.g. `uv run --directory ... run.py`); Bash relies on word-splitting to parse it, and quoting it would treat the entire expansion as a single program name and fail with "No such file or directory". All bash examples below use the unquoted form.
+
 ## How to list sessions
 
 Run the `twicc sessions` CLI command via the Bash tool:
 
 ```bash
-twicc sessions
+$TWICC sessions
 ```
 
 ### Options
@@ -32,10 +43,10 @@ twicc sessions
 ### Examples
 
 ```bash
-twicc sessions                                    # List the 20 most recent sessions
-twicc sessions --project "home-twidi-dev-myproj"   # Sessions for a specific project
-twicc sessions --include-archived                  # Include archived sessions
-twicc sessions --limit 50 --offset 20             # Paginate
+$TWICC sessions                                    # List the 20 most recent sessions
+$TWICC sessions --project 'home-twidi-dev-myproj'  # Sessions for a specific project
+$TWICC sessions --include-archived                 # Include archived sessions
+$TWICC sessions --limit 50 --offset 20             # Paginate
 ```
 
 ## Output format

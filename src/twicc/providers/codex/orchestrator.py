@@ -30,6 +30,7 @@ from twicc.providers.codex.agent import get_codex_agent_manager
 from twicc.providers.codex.auth_task import start_auth_task, stop_auth_task
 from twicc.providers.codex.commands_task import start_commands_task, stop_commands_task
 from twicc.providers.codex.initial_sync import scan_session_files, sync_all
+from twicc.providers.codex.plugin_install import ensure_twicc_plugin_installed
 from twicc.providers.codex.sessions_watcher import get_watcher
 from twicc.providers.codex.statuspage_task import start_statuspage_task, stop_statuspage_task
 from twicc.providers.codex.usage_task import start_usage_sync_task, stop_usage_sync_task
@@ -120,6 +121,11 @@ class CodexOrchestrator(BaseOrchestrator):
         items into the global Tantivy index as they arrive.
         """
         self.search_index_ready = search_index_ready
+
+        # Register the TwiCC marketplace and (re)install the plugin before
+        # the commands sync task starts polling for skills. The call is
+        # idempotent and best-effort — failures are logged inside.
+        await ensure_twicc_plugin_installed()
 
         self._sync_task = self._create_task(self._initial_sync_task())
         self._orch_task = self._create_task(self._dependency_orchestrator())

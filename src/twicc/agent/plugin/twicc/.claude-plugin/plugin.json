@@ -1,0 +1,8 @@
+{
+  "name": "twicc",
+  "description": "TwiCC plugin - provides skills for interacting with TwiCC session data (from Claude code and Codex providers)",
+  "version": "0.5.0",
+  "homepage": "https://github.com/twidi/twicc",
+  "repository": "https://github.com/twidi/twicc",
+  "skills": "./skills"
+}

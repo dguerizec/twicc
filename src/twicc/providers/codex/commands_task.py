@@ -191,7 +191,10 @@ async def _sync_to_database() -> dict[str, int]:
     # ``cwd`` here is the app-server's own working directory, not a
     # skill scan path — those are passed via ``cwds``. ``Path.home()``
     # is a safe neutral choice that exists on every platform.
-    config = AppServerConfig(codex_bin=str(bundled_bin), cwd=str(Path.home()))
+    config = AppServerConfig(
+        codex_bin=str(bundled_bin),
+        cwd=str(Path.home()),
+    )
 
     async with AsyncAppServerClient(config=config) as client:
         await client.initialize()

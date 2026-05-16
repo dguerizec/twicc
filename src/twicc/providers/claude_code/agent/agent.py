@@ -29,7 +29,7 @@ import json_repair
 
 from twicc.agent import AgentInfo, AgentState, BaseAgent, PendingRequest, StateChangeCallback
 from twicc.core.enums import Provider
-from twicc.providers.claude_code.agent.plugin import get_plugin_dir
+from twicc.agent.plugin import get_plugin_dir
 from twicc.providers.helpers import AgentSettings
 
 from .sdk_logger import patch_client as patch_client_for_logging

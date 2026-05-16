@@ -1,5 +1,5 @@
 ---
-name: projects
+name: twicc-projects
 description: List all Claude Code projects tracked by TwiCC. Use when the user wants to see their projects, find a project ID, or get an overview of project activity and costs.
 ---
 
@@ -13,12 +13,23 @@ List all projects tracked by TwiCC, ordered by most recently active.
 - The user needs to find a project ID for use with other commands
 - The user wants an overview of project activity or costs
 
+## How to invoke
+
+TwiCC's executable varies by launch mode (uvx, dev, installed tool). Resolve it once at the start of each Bash invocation:
+
+```bash
+TWICC=${TWICC_BIN:-$(command -v twicc 2>/dev/null)}
+[ -n "$TWICC" ] || { echo "TwiCC executable not found in this context" >&2; exit 1; }
+```
+
+Then run any subcommand via `$TWICC <args>` — **do NOT quote `$TWICC`** (use `$TWICC args`, never `"$TWICC" args`). The variable may expand to a multi-word command (e.g. `uv run --directory ... run.py`); Bash relies on word-splitting to parse it, and quoting it would treat the entire expansion as a single program name and fail with "No such file or directory". All bash examples below use the unquoted form.
+
 ## How to list projects
 
 Run the `twicc projects` CLI command via the Bash tool:
 
 ```bash
-twicc projects
+$TWICC projects
 ```
 
 ### Options
@@ -30,10 +41,10 @@ twicc projects
 ### Examples
 
 ```bash
-twicc projects                    # List the 20 most recent projects
-twicc projects --limit 50         # List up to 50 projects
-twicc projects --offset 20        # Skip the first 20, show next 20
-twicc projects --include-archived  # Include archived projects
+$TWICC projects                    # List the 20 most recent projects
+$TWICC projects --limit 50         # List up to 50 projects
+$TWICC projects --offset 20        # Skip the first 20, show next 20
+$TWICC projects --include-archived # Include archived projects
 ```
 
 ## Output format

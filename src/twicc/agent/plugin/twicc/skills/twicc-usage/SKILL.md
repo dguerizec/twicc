@@ -1,5 +1,5 @@
 ---
-name: usage
+name: twicc-usage
 description: Show current API usage quotas and cost estimates for every backend provider that tracks usage. Use when the user asks about their usage, quota utilization, rate limits, or spending.
 ---
 
@@ -15,12 +15,23 @@ provider that tracks usage (e.g. Claude Code via the Anthropic OAuth API).
 - The user asks about spending or cost estimates
 - The user wants to check if they're close to hitting a quota limit
 
+## How to invoke
+
+TwiCC's executable varies by launch mode (uvx, dev, installed tool). Resolve it once at the start of each Bash invocation:
+
+```bash
+TWICC=${TWICC_BIN:-$(command -v twicc 2>/dev/null)}
+[ -n "$TWICC" ] || { echo "TwiCC executable not found in this context" >&2; exit 1; }
+```
+
+Then run any subcommand via `$TWICC <args>` — **do NOT quote `$TWICC`** (use `$TWICC args`, never `"$TWICC" args`). The variable may expand to a multi-word command (e.g. `uv run --directory ... run.py`); Bash relies on word-splitting to parse it, and quoting it would treat the entire expansion as a single program name and fail with "No such file or directory". All bash examples below use the unquoted form.
+
 ## How to check usage
 
 Run the `twicc usage` CLI command via the Bash tool:
 
 ```bash
-twicc usage
+$TWICC usage
 ```
 
 No options — always returns the latest snapshot for every provider that

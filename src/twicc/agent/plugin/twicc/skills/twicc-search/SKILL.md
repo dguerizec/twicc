@@ -1,5 +1,5 @@
 ---
-name: search
+name: twicc-search
 description: Search through Claude Code session history using TwiCC's full-text search index. Use when the user wants to find past conversations, look up what was discussed, or locate specific content across sessions.
 argument-hint: <query>
 ---
@@ -14,12 +14,23 @@ Search across all Claude Code session history using TwiCC's Tantivy-based full-t
 - The user wants to know if a topic was discussed before
 - The user needs to locate specific code, decisions, or discussions across sessions
 
+## How to invoke
+
+TwiCC's executable varies by launch mode (uvx, dev, installed tool). Resolve it once at the start of each Bash invocation:
+
+```bash
+TWICC=${TWICC_BIN:-$(command -v twicc 2>/dev/null)}
+[ -n "$TWICC" ] || { echo "TwiCC executable not found in this context" >&2; exit 1; }
+```
+
+Then run any subcommand via `$TWICC <args>` — **do NOT quote `$TWICC`** (use `$TWICC args`, never `"$TWICC" args`). The variable may expand to a multi-word command (e.g. `uv run --directory ... run.py`); Bash relies on word-splitting to parse it, and quoting it would treat the entire expansion as a single program name and fail with "No such file or directory". All bash examples below use the unquoted form.
+
 ## How to search
 
 Run the `twicc search` CLI command via the Bash tool:
 
 ```bash
-twicc search "<query>"
+$TWICC search '<query>'
 ```
 
 ### Options
@@ -31,10 +42,10 @@ twicc search "<query>"
 
 The search uses Tantivy query syntax with `body` as the default field:
 
-- **Simple keyword:** `twicc search "websocket"`
-- **Multiple terms (OR):** `twicc search "websocket channels"`
-- **Phrase search:** `twicc search '"virtual scroll"'`
-- **Field-specific:** `twicc search "body:websocket AND from_role:user"` (only user messages)
+- **Simple keyword:** `$TWICC search 'websocket'`
+- **Multiple terms (OR):** `$TWICC search 'websocket channels'`
+- **Phrase search:** `$TWICC search '\"virtual scroll\"'`
+- **Field-specific:** `$TWICC search 'body:websocket AND from_role:user'` (only user messages)
 - **Boolean operators:** `AND`, `OR`, `NOT` (must be uppercase)
 
 ### Available fields
