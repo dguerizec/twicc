@@ -567,6 +567,19 @@ export const useDataStore = defineStore('data', {
         },
 
         /**
+         * Whether at least one session of the given provider has a live (non-dead) process.
+         * Dead processes are removed from processStates entirely, so any entry means alive.
+         * Used by the Settings panel to prevent disabling a provider that is still in use.
+         * @returns {function(string): boolean}
+         */
+        hasActiveSessionForProvider: (state) => (provider) => {
+            for (const ps of Object.values(state.processStates)) {
+                if (ps?.provider === provider) return true
+            }
+            return false
+        },
+
+        /**
          * Count sessions with unread content across all projects.
          * Same logic as getProjectUnreadCount but without project filter.
          * @returns {number} The number of unread sessions
