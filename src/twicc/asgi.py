@@ -1022,10 +1022,14 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
                             provider = Provider(value)
                         except ValueError:
                             continue
-                        manager = registry.get(provider)
-                        if manager and manager.get_active_agents():
+                        try:
+                            manager = registry.get(provider)
+                        except KeyError:
+                            continue
+                        if manager.get_active_agents():
                             refused.add(value)
                     if refused:
+                        # new_disabled is the post-correction value (refused entries removed).
                         new_disabled -= refused
                         existing_settings["disabledProviders"] = sorted(new_disabled)
                         corrections["disabledProviders"] = sorted(new_disabled)
