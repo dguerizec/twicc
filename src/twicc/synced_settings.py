@@ -58,7 +58,7 @@ _GENERIC_SYNCED_SETTINGS_DEFAULTS: dict = {
 
 # Note: `disabledProviders` (list[str]) is intentionally NOT listed here.
 # Its absence in the settings file is the sentinel that triggers the initial
-# provider activation dialog (see `twicc.providers.enabled` and spec §2).
+# provider activation dialog (see `twicc.providers.state` and spec §2).
 
 
 def _merge_provider_dicts(attr: str) -> dict:

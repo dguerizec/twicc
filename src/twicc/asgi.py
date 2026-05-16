@@ -27,7 +27,7 @@ from twicc.agent_settings_presets import read_agent_settings_presets, write_agen
 from twicc.core.enums import Provider
 from twicc.providers.claude_code.ws import ClaudeCodeWSHandler
 from twicc.providers.codex.ws import CodexWSHandler
-from twicc.providers.enabled import ProviderDisabledError, ensure_provider_enabled
+from twicc.providers.state import ProviderDisabledError, ensure_provider_running
 from twicc.providers.helpers import AgentSettings, get_provider_helpers, get_provider_helpers_registry
 from twicc.synced_settings import _settings_lock, prepare_settings_for_client, read_synced_settings, write_synced_settings
 from twicc.workspaces import read_workspaces, write_workspaces
@@ -672,7 +672,7 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
                 return
 
         try:
-            ensure_provider_enabled(provider)
+            ensure_provider_running(provider)
         except ProviderDisabledError as e:
             await self.send_json({
                 "type": "error",
@@ -851,7 +851,7 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
         if provider_value is not None:
             try:
                 provider = Provider(provider_value)
-                ensure_provider_enabled(provider)
+                ensure_provider_running(provider)
             except ProviderDisabledError as e:
                 await self.send_json({
                     "type": "error",
@@ -904,7 +904,7 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
         if provider_value is not None:
             try:
                 provider = Provider(provider_value)
-                ensure_provider_enabled(provider)
+                ensure_provider_running(provider)
             except ProviderDisabledError as e:
                 await self.send_json({
                     "type": "error",

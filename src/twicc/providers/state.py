@@ -1,30 +1,40 @@
-"""Runtime state machine for each provider's orchestrator.
+"""Single source of truth for every provider's state.
 
-While ``twicc.providers.enabled`` answers the *intent* question — does the
-user want this provider on or off — this module answers the *runtime*
-question: where is the provider actually in its lifecycle right now?
+Two layered concerns live here:
 
-Four states cover the full cycle:
+1. **Intent** (persisted) — does the user *want* this provider on?
+   Derived from the `disabledProviders` key in the synced settings file:
 
-- ``stopped``  — orchestrator has never started, or its ``shutdown()`` is done.
-- ``starting`` — ``orchestrator.start()`` is in progress (initial sync, plugin
-                 install, watcher boot, ...). Runtime calls are refused.
-- ``running``  — ``start()`` returned successfully; the provider is operational.
-- ``stopping`` — ``shutdown()`` is in progress. Runtime calls are refused.
+   - Key absent → no choice made yet (initial install / upgrade from
+     pre-feature version). ``get_enabled_providers()`` returns an empty
+     set, the orchestrator starts nothing, and the frontend opens the
+     activation dialog.
+   - Key present → a provider is *enabled* if it is registered (compiled
+     in) AND not in the list.
 
-Why a separate state machine on top of the enabled list:
+2. **Runtime** (in-memory) — where is the provider in its lifecycle right now?
+   Four states cover the full cycle:
 
-- ``start()`` and ``shutdown()`` can take seconds; the user can click the
-  Settings switch off and back on faster. Without a transient state, the
-  back can end up in inconsistent intermediate configurations.
-- ``ensure_provider_running`` is the strict gate used by every runtime
-  endpoint (send message, rename, pending request response, ...). A
-  provider that is enabled but still in ``starting`` is NOT yet ready;
-  refusing the call is the correct behaviour.
+   - ``stopped``   — orchestrator never started, or its ``shutdown()`` is done.
+   - ``starting``  — ``orchestrator.start()`` is in progress.
+   - ``running``   — ``start()`` returned successfully; operational.
+   - ``stopping``  — ``shutdown()`` is in progress.
 
-Every transition broadcasts a ``provider_state_changed`` WS message so
-all connected clients can sync their UI (e.g. grey out the Settings
-switch with a spinner during transitions).
+The two layers are connected by hot toggles: enabling a provider transitions
+its runtime state ``stopped → starting → running``; disabling it transitions
+``running → stopping → stopped``.
+
+Why both live in the same module:
+
+- They answer the same broad question: "what is the state of this provider?"
+- Most callers need both — endpoints that pilot a provider's SDK / agent
+  must check that it is *enabled* AND *running* before acting. That's what
+  :func:`ensure_provider_running` does in one call.
+- The error type is shared (:class:`ProviderDisabledError`), and so is the
+  exception code propagated to the frontend (``provider_disabled``).
+
+Read-only paths (DB queries, parsing of historical session content) do NOT
+need to gate on this module — see spec §6.3.
 """
 
 from __future__ import annotations
@@ -36,9 +46,84 @@ from asgiref.sync import sync_to_async
 from channels.layers import get_channel_layer
 
 from twicc.core.enums import Provider
-from twicc.providers.enabled import ProviderDisabledError
+from twicc.providers.helpers import get_provider_helpers_registry
+from twicc.synced_settings import read_synced_settings
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Error type (shared by intent and runtime gates)
+# ---------------------------------------------------------------------------
+
+
+class ProviderDisabledError(Exception):
+    """Raised when an operation targets a provider that is not usable.
+
+    "Not usable" covers both intent layers:
+
+    - Provider is in ``disabledProviders`` (user disabled it).
+    - Provider is in ``starting`` / ``stopping`` (lifecycle in transition).
+
+    Both surface the same way to the frontend (toast: "Cannot send to X:
+    it is disabled. Enable it from Settings → Providers.") which is
+    correct in both cases — the user simply retries once the situation
+    stabilises (the dialog closes, the spinner finishes).
+    """
+
+    def __init__(self, provider: Provider) -> None:
+        self.provider = provider
+        super().__init__(f"Provider {provider.value} is disabled")
+
+
+# ---------------------------------------------------------------------------
+# Intent layer (persisted in synced_settings.json)
+# ---------------------------------------------------------------------------
+
+
+def _has_disabled_providers_key() -> bool:
+    """Return True if the ``disabledProviders`` key is physically present
+    in the synced settings file. The mere absence of the key is the
+    sentinel that triggers the initial activation dialog (cf. spec §2.1).
+    """
+    return "disabledProviders" in read_synced_settings()
+
+
+def get_disabled_providers() -> set[Provider]:
+    """Return the set of providers the user has explicitly disabled.
+
+    Returns an empty set if the key is absent or malformed. Unknown
+    provider names are silently dropped (forward-compat with futures
+    that ship a renamed provider — never raises on stale strings).
+    """
+    raw = read_synced_settings().get("disabledProviders") or []
+    if not isinstance(raw, list):
+        return set()
+    valid = {p.value for p in Provider}
+    return {Provider(v) for v in raw if v in valid}
+
+
+def get_enabled_providers() -> set[Provider]:
+    """Return the set of registered providers not currently disabled.
+
+    Returns an empty set when the ``disabledProviders`` key is absent
+    (= no initial choice yet — the back stays idle until the user
+    validates the dialog).
+    """
+    if not _has_disabled_providers_key():
+        return set()
+    registered = {p for p, _ in get_provider_helpers_registry().items()}
+    disabled = get_disabled_providers()
+    return registered - disabled
+
+
+def is_provider_enabled(provider: Provider) -> bool:
+    return provider in get_enabled_providers()
+
+
+# ---------------------------------------------------------------------------
+# Runtime layer (in-memory)
+# ---------------------------------------------------------------------------
 
 
 class ProviderState(StrEnum):
@@ -48,9 +133,9 @@ class ProviderState(StrEnum):
     STOPPING = "stopping"
 
 
-# Module-level dict. Every Provider enum value is implicitly STOPPED until
-# the orchestrator transitions it (kept sparse on purpose — the snapshot
-# helper materialises the default).
+# Sparse dict — every Provider enum value is implicitly STOPPED until the
+# orchestrator transitions it. ``get_all_provider_states`` materialises the
+# default for callers that want the full picture.
 _states: dict[Provider, ProviderState] = {}
 
 
@@ -75,17 +160,13 @@ def is_provider_running(provider: Provider) -> bool:
 def ensure_provider_running(provider: Provider) -> None:
     """Raise ``ProviderDisabledError`` if ``provider`` is not currently running.
 
-    Stricter than :func:`twicc.providers.enabled.ensure_provider_enabled`:
-    a provider in ``starting`` or ``stopping`` is refused too, because
-    its task graph is not in a steady state and a runtime call could race
-    against the lifecycle transition. The frontend already greys out the
-    relevant UI during transitions, so this raises in practice only on
-    races.
-
-    Reusing ``ProviderDisabledError`` keeps the frontend's existing toast
-    handler (``code: "provider_disabled"``) working without changes —
-    from the user's perspective, "not yet running" and "disabled" surface
-    the same way (try again in a second / re-enable in Settings).
+    This is the runtime gate used by every endpoint that pilots a
+    provider's SDK or agent. It is strictly stronger than checking the
+    intent layer alone: a provider that is enabled but still in
+    ``starting`` / ``stopping`` is refused too, which closes
+    race-condition windows during hot toggles. The frontend already greys
+    out the relevant UI during transitions; this gate is the defence in
+    depth for races between a toggle and an in-flight runtime call.
     """
     if not is_provider_running(provider):
         raise ProviderDisabledError(provider)
@@ -130,13 +211,10 @@ async def force_disable_after_failed_start(provider: Provider) -> None:
     Settings switch flips back to off.
 
     Idempotent — if the provider is already in ``disabledProviders`` no
-    work is done (this happens on startup if the user had previously
-    explicitly disabled it; the state machine still records the failed
-    start, but the persisted config doesn't need to change).
+    work is done.
     """
     from twicc.synced_settings import (
         _settings_lock,
-        read_synced_settings,
         write_synced_settings,
     )
 

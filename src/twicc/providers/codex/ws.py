@@ -15,7 +15,7 @@ from collections.abc import AsyncIterator
 
 from twicc.core.enums import Provider
 from twicc.providers.codex.statuspage_task import get_statuspage_message_for_connection
-from twicc.providers.enabled import ProviderDisabledError, ensure_provider_enabled
+from twicc.providers.state import ProviderDisabledError, ensure_provider_running
 from twicc.usage_task import get_usage_message_for_connection
 
 from .auth import check_and_broadcast, get_auth_message_for_connection
@@ -79,7 +79,7 @@ class CodexWSHandler:
         through the WS layer (that would tear down the consumer).
         """
         try:
-            ensure_provider_enabled(Provider.CODEX)
+            ensure_provider_running(Provider.CODEX)
         except ProviderDisabledError as e:
             await self.consumer.send_json({
                 "type": "error",

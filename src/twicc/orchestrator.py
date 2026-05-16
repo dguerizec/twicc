@@ -22,7 +22,12 @@ from typing import Any, ClassVar, TypeVar
 
 from twicc.core.enums import Provider
 from twicc.logging_context import current_provider
-from twicc.providers.enabled import get_enabled_providers
+from twicc.providers.state import (
+    ProviderState,
+    force_disable_after_failed_start,
+    get_enabled_providers,
+    set_provider_state,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -215,7 +220,7 @@ class OrchestratorRegistry:
         ones that own a watcher (which writes to the global Tantivy
         index) can ``await`` it before starting that watcher.
 
-        Only providers listed by :func:`twicc.providers.enabled.get_enabled_providers`
+        Only providers listed by :func:`twicc.providers.state.get_enabled_providers`
         are started. If no provider is enabled (no choice made yet, or everything
         disabled), nothing is started and the app keeps serving the initial
         provider-selection dialog.
@@ -234,7 +239,7 @@ class OrchestratorRegistry:
         enabled_items = [(provider, orch) for provider, orch in self._orchestrators.items() if provider in enabled]
         tasks = [
             asyncio.create_task(
-                orch.start(shutdown_event, search_index_ready),
+                self._start_with_state(provider, orch),
                 context=self._provider_context(provider),
             )
             for provider, orch in enabled_items
@@ -282,6 +287,48 @@ class OrchestratorRegistry:
             if provider in enabled
         ))
 
+    async def _start_with_state(self, provider: Provider, orch: BaseOrchestrator) -> None:
+        """Wrap ``orch.start()`` with state transitions and failure handling.
+
+        Flow:
+
+        - ``stopped → starting`` (broadcast)
+        - ``await orch.start(...)``
+        - On success: ``starting → running`` (broadcast)
+        - On failure: roll back to ``stopped``, persist the provider into
+          ``disabledProviders`` so the UI switch flips off, and re-raise
+          so the caller's error handling (e.g. ``gather`` with
+          ``return_exceptions=True``) sees the exception.
+
+        ``self._shutdown_event`` and ``self._search_index_ready`` must have
+        been set by ``start_all`` already (both start paths go through it).
+        """
+        assert self._shutdown_event is not None
+        assert self._search_index_ready is not None
+        await set_provider_state(provider, ProviderState.STARTING)
+        try:
+            await orch.start(self._shutdown_event, self._search_index_ready)
+        except BaseException:
+            logger.exception("Failed to start orchestrator for %s — forcing disable", provider.value)
+            await set_provider_state(provider, ProviderState.STOPPED)
+            await force_disable_after_failed_start(provider)
+            raise
+        await set_provider_state(provider, ProviderState.RUNNING)
+
+    async def _shutdown_with_state(self, provider: Provider, orch: BaseOrchestrator) -> None:
+        """Wrap ``orch.shutdown()`` with state transitions.
+
+        ``running → stopping`` (broadcast), run the shutdown, then end in
+        ``stopped`` unconditionally — even if shutdown raised. The task
+        graph is gone either way; staying in ``stopping`` would leave the
+        UI permanently busy.
+        """
+        await set_provider_state(provider, ProviderState.STOPPING)
+        try:
+            await orch.shutdown()
+        finally:
+            await set_provider_state(provider, ProviderState.STOPPED)
+
     @staticmethod
     def _provider_context(provider: Provider) -> contextvars.Context:
         """Return a fresh Context with ``current_provider`` tagged for ``provider``.
@@ -318,7 +365,7 @@ class OrchestratorRegistry:
         if orch is None:
             return
         await asyncio.create_task(
-            orch.start(self._shutdown_event, self._search_index_ready),
+            self._start_with_state(provider, orch),
             context=self._provider_context(provider),
         )
 
@@ -328,7 +375,7 @@ class OrchestratorRegistry:
         if orch is None:
             return
         await asyncio.create_task(
-            orch.shutdown(),
+            self._shutdown_with_state(provider, orch),
             context=self._provider_context(provider),
         )
 
@@ -376,7 +423,7 @@ class OrchestratorRegistry:
         enabled_items = [(p, o) for p, o in self._orchestrators.items() if p in enabled]
         tasks = [
             asyncio.create_task(
-                orch.shutdown(),
+                self._shutdown_with_state(provider, orch),
                 context=self._provider_context(provider),
             )
             for provider, orch in enabled_items

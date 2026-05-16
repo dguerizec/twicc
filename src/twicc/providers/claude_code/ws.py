@@ -31,7 +31,7 @@ from twicc.providers.claude_code.auth import (
     get_auth_message_for_connection,
 )
 from twicc.providers.claude_code.statuspage_task import get_statuspage_message_for_connection
-from twicc.providers.enabled import ProviderDisabledError, ensure_provider_enabled
+from twicc.providers.state import ProviderDisabledError, ensure_provider_running
 from twicc.usage_task import get_usage_message_for_connection
 
 logger = logging.getLogger(__name__)
@@ -187,7 +187,7 @@ class ClaudeCodeWSHandler:
         }
         """
         try:
-            ensure_provider_enabled(Provider.CLAUDE_CODE)
+            ensure_provider_running(Provider.CLAUDE_CODE)
         except ProviderDisabledError as e:
             await self.consumer.send_json({
                 "type": "error",
