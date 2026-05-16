@@ -47,6 +47,7 @@ import { createNotivue } from 'notivue'
 import { router } from './router'
 import App from './App.vue'
 import { applyDefaultSettings, initSettings } from './stores/settings'
+import { setTwiccLaunchPrefix } from './utils/twiccLaunch'
 import { useAuthStore } from './stores/auth'
 import { useDataStore } from './stores/data'
 import { useCodeCommentsStore } from './stores/codeComments'
@@ -114,7 +115,12 @@ if (!authStore.needsLogin) {
         if (resp.ok) {
             bootstrapData = await resp.json()
             const { settings, settings_version, default_settings, dev_mode, uvx_mode, twicc_launch_prefix, providers, disabledProvidersPresent, disabledProviders, providerStates } = bootstrapData
-            applyDefaultSettings(default_settings, settings, dev_mode, uvx_mode, twicc_launch_prefix, settings_version, disabledProvidersPresent, disabledProviders)
+            // Seed the launch prefix into its neutral module *before* any
+            // store / provider helper is instantiated — providers read it
+            // synchronously via ``getTwiccLaunchPrefix()`` (see
+            // ``frontend/src/utils/twiccLaunch.js``).
+            setTwiccLaunchPrefix(twicc_launch_prefix)
+            applyDefaultSettings(default_settings, settings, dev_mode, uvx_mode, settings_version, disabledProvidersPresent, disabledProviders)
             // Seed the data store's provider lifecycle map. Lazy import keeps
             // the bootstrap path light; the data store is unconditionally
             // needed once the app is up anyway.

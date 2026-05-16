@@ -60,7 +60,6 @@ export const SETTINGS_SCHEMA = {
     _disabledProvidersPresent: false,
     _devMode: false,
     _uvxMode: false,
-    _twiccLaunchPrefix: '',
     _effectiveColorScheme: null,
     _isTouchDevice: false,
     _isMac: false,
@@ -282,12 +281,6 @@ export const useSettingsStore = defineStore('settings', {
          * Whether the app was launched via `uvx twicc` (ephemeral) vs installed package.
          */
         isUvxMode: (state) => state._uvxMode,
-        /**
-         * Shell prefix that re-invokes the same TwiCC distribution
-         * (e.g. ``uvx twicc`` or ``<sys.executable> -m twicc``). Append a
-         * subcommand to build a full command for the user to run.
-         */
-        twiccLaunchPrefix: (state) => state._twiccLaunchPrefix,
         /**
          * Effective color scheme: always returns 'light' or 'dark', never 'system'.
          */
@@ -704,12 +697,11 @@ export const useSettingsStore = defineStore('settings', {
  * @param {Object} currentSettings - Current synced settings from the backend
  * @param {boolean} devMode - Whether the backend is running in dev mode
  * @param {boolean} uvxMode - Whether the app was launched via uvx
- * @param {string} twiccLaunchPrefix - Shell prefix that re-invokes this TwiCC distribution
  * @param {number} version - Settings version from the backend
  * @param {boolean} disabledProvidersPresent - Whether disabledProviders key exists in settings.json
  * @param {string[]} disabledProviders - List of provider keys that are disabled
  */
-export function applyDefaultSettings(defaultSettings, currentSettings, devMode, uvxMode, twiccLaunchPrefix, version, disabledProvidersPresent, disabledProviders) {
+export function applyDefaultSettings(defaultSettings, currentSettings, devMode, uvxMode, version, disabledProvidersPresent, disabledProviders) {
     if (defaultSettings && typeof defaultSettings === 'object') {
         // Only merge defaults for keys declared in the generic schema; provider-owned
         // keys are silently ignored here (their bootstrap-current values flow through
@@ -720,7 +712,6 @@ export function applyDefaultSettings(defaultSettings, currentSettings, devMode, 
     }
     SETTINGS_SCHEMA._devMode = !!devMode
     SETTINGS_SCHEMA._uvxMode = !!uvxMode
-    SETTINGS_SCHEMA._twiccLaunchPrefix = twiccLaunchPrefix || ''
     // Store current settings for applySyncedSettings() to use after store init
     _pendingSyncedSettings = currentSettings
     _pendingSettingsVersion = version

@@ -1,6 +1,6 @@
 import { BaseProviderHelpers } from '../baseHelpers'
 import { PROVIDER, SYNTHETIC_ITEM } from '../../constants'
-import { useSettingsStore } from '../../stores/settings'
+import { getTwiccLaunchPrefix } from '../../utils/twiccLaunch'
 import { SUPPORTED_IMAGE_TYPES } from '../../utils/fileUtils'
 import { CONTEXT_MAX, EFFORT, PERMISSION_MODE } from './constants'
 import { useCodexStore } from './store'
@@ -171,7 +171,7 @@ export class CodexHelpers extends BaseProviderHelpers {
     }
 
     getAuthLoginCommand() {
-        return `${useSettingsStore().twiccLaunchPrefix} codex login`
+        return `${getTwiccLaunchPrefix()} codex login`
     }
 
     async requestAuthRecheck() {

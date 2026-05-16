@@ -2,7 +2,7 @@ import { BaseProviderHelpers } from '../baseHelpers'
 import { PROVIDER, SYNTHETIC_ITEM } from '../../constants'
 import { CONTEXT_MAX, EFFORT, PERMISSION_MODE } from './constants'
 import { useClaudeCodeStore } from './store'
-import { useSettingsStore } from '../../stores/settings'
+import { getTwiccLaunchPrefix } from '../../utils/twiccLaunch'
 import {
     SUPPORTED_DOCUMENT_TYPES,
     SUPPORTED_IMAGE_TYPES,
@@ -205,7 +205,7 @@ export class ClaudeCodeHelpers extends BaseProviderHelpers {
     }
 
     getAuthLoginCommand() {
-        return `${useSettingsStore().twiccLaunchPrefix} claude auth login`
+        return `${getTwiccLaunchPrefix()} claude auth login`
     }
 
     async requestAuthRecheck() {
