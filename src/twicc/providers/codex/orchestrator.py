@@ -16,6 +16,7 @@ import logging
 import threading
 
 from asgiref.sync import sync_to_async
+from channels.layers import get_channel_layer
 from django.conf import settings
 
 from twicc.core.enums import Provider
@@ -251,9 +252,63 @@ class CodexOrchestrator(BaseOrchestrator):
 
         self.initial_sync_done.set()
 
+    async def _sync_titles_at_boot(self) -> None:
+        """Import Codex Thread.name into Session.title for every known thread.
+
+        Runs once between the initial JSONL sync and the background compute.
+        For each Codex Session whose title differs from Thread.name (and
+        Thread.name is non-empty), we update the row and broadcast a
+        session_updated event so clients connected during the boot window
+        see the new title without a full reload.
+        """
+        from twicc.providers.codex.titles import bulk_sync_titles_from_codex
+        from twicc.providers.sessions_watcher import broadcast_message
+        from twicc.core.serializers import serialize_session
+
+        titles = await bulk_sync_titles_from_codex()
+        if not titles:
+            logger.info("Codex title sync at boot: no titles to import")
+            return
+
+        # Pull only Codex sessions whose id is in the fetched map and whose
+        # current title differs. bulk_update keeps it one SQL round-trip.
+        def _apply() -> list[Session]:
+            sessions = list(
+                Session.objects.filter(
+                    provider=Provider.CODEX,
+                    id__in=list(titles.keys()),
+                )
+            )
+            changed: list[Session] = []
+            for s in sessions:
+                new_title = titles.get(s.id)
+                if new_title and s.title != new_title:
+                    s.title = new_title
+                    changed.append(s)
+            if changed:
+                Session.objects.bulk_update(changed, ["title"])
+            return changed
+
+        changed = await sync_to_async(_apply)()
+        logger.info(
+            "Codex title sync at boot: %d/%d titles imported",
+            len(changed), len(titles),
+        )
+
+        if changed:
+            channel_layer = get_channel_layer()
+            for s in changed:
+                # refresh_from_db is cheap (single row, already in mem buffer),
+                # but we already have the up-to-date title on the instance.
+                await broadcast_message(channel_layer, {
+                    "type": "session_updated",
+                    "session": serialize_session(s),
+                })
+
     async def _dependency_orchestrator(self) -> None:
         """Wait for the initial sync, then start the background compute and
-        the JSONL watcher.
+        the JSONL watcher. Also imports Codex Thread names into Session titles
+        before compute begins, so clients see accurate titles from the first load.
 
         Background compute reads existing Codex sessions whose stored
         ``compute_version`` differs from
@@ -270,6 +325,14 @@ class CodexOrchestrator(BaseOrchestrator):
         sync is done.
         """
         await self.initial_sync_done.wait()
+
+        # Pull thread names from the Codex state DB *before* the compute
+        # task runs so newly-imported titles appear at the same time as
+        # the rest of the initial UI state.
+        try:
+            await self._sync_titles_at_boot()
+        except Exception as e:
+            logger.warning("Codex title sync at boot failed: %s", e)
 
         self._compute_ctx = ComputeContext(
             provider=self.provider,
