@@ -176,6 +176,11 @@ class OrchestratorRegistry:
             key: cls() for key, cls in self.PROVIDER_ORCHESTRATORS.items()
         }
 
+        # Stashed by start_all() so start_one() / shutdown_one() can reuse them
+        # on hot-toggle without the caller having to thread them through.
+        self._shutdown_event: asyncio.Event | None = None
+        self._search_index_ready: asyncio.Event | None = None
+
     def get(self, provider: Provider) -> BaseOrchestrator:
         """Return the orchestrator for ``provider``."""
         return self._orchestrators[provider]
@@ -197,7 +202,7 @@ class OrchestratorRegistry:
         shutdown_event: asyncio.Event,
         search_index_ready: asyncio.Event,
     ) -> None:
-        """Start every provider's orchestrator in parallel.
+        """Start every enabled provider's orchestrator in parallel.
 
         Each :meth:`BaseOrchestrator.start` is non-blocking (it schedules
         tasks and returns), so ``gather`` mostly serves to overlap
@@ -208,12 +213,31 @@ class OrchestratorRegistry:
         ``search_index_ready`` is forwarded to every orchestrator so the
         ones that own a watcher (which writes to the global Tantivy
         index) can ``await`` it before starting that watcher.
+
+        Only providers listed by :func:`twicc.providers.enabled.get_enabled_providers`
+        are started. If no provider is enabled (no choice made yet, or everything
+        disabled), nothing is started and the app keeps serving the initial
+        provider-selection dialog.
+
+        The two events are stashed on the registry so :meth:`start_one` /
+        :meth:`shutdown_one` can reuse them later for hot-toggle.
         """
+        from twicc.providers.enabled import get_enabled_providers
+
+        # Stash so start_one() / shutdown_one() can reuse on hot-toggle.
+        self._shutdown_event = shutdown_event
+        self._search_index_ready = search_index_ready
+
+        enabled = get_enabled_providers()
+        if not enabled:
+            return
+
+        enabled_items = [(provider, orch) for provider, orch in self._orchestrators.items() if provider in enabled]
         results = await asyncio.gather(
-            *(orch.start(shutdown_event, search_index_ready) for orch in self._orchestrators.values()),
+            *(orch.start(shutdown_event, search_index_ready) for _, orch in enabled_items),
             return_exceptions=True,
         )
-        for (provider, _), result in zip(self.items(), results):
+        for (provider, _), result in zip(enabled_items, results):
             if isinstance(result, BaseException):
                 logger.error(
                     "Orchestrator for %s failed to start: %s",
@@ -221,20 +245,65 @@ class OrchestratorRegistry:
                 )
 
     async def wait_initial_sync_done(self) -> None:
-        """Block until every provider's initial sync has reported completion.
+        """Block until every enabled provider's initial sync has reported completion.
 
         Providers without an initial sync inherit a pre-set event from
         :class:`BaseOrchestrator` so this returns instantly for them.
+
+        Only waits on providers that were actually started (i.e. enabled ones).
+        Waiting on an un-started provider's event would hang forever because
+        ``start()`` is what triggers ``.set()`` on it.
         """
-        await asyncio.gather(*(orch.initial_sync_done.wait() for orch in self._orchestrators.values()))
+        from twicc.providers.enabled import get_enabled_providers
+
+        enabled = get_enabled_providers()
+        if not enabled:
+            return
+        await asyncio.gather(*(
+            orch.initial_sync_done.wait()
+            for provider, orch in self._orchestrators.items()
+            if provider in enabled
+        ))
 
     async def wait_compute_done(self) -> None:
-        """Block until every provider's background compute has reported completion.
+        """Block until every enabled provider's background compute has reported completion.
 
         Same pre-set default as :meth:`wait_initial_sync_done` for
-        providers without a compute phase.
+        providers without a compute phase. Only waits on enabled providers
+        (same reasoning as :meth:`wait_initial_sync_done`).
         """
-        await asyncio.gather(*(orch.compute_done.wait() for orch in self._orchestrators.values()))
+        from twicc.providers.enabled import get_enabled_providers
+
+        enabled = get_enabled_providers()
+        if not enabled:
+            return
+        await asyncio.gather(*(
+            orch.compute_done.wait()
+            for provider, orch in self._orchestrators.items()
+            if provider in enabled
+        ))
+
+    async def start_one(self, provider: Provider) -> None:
+        """Start a single provider's orchestrator (used by hot-toggle on activation).
+
+        Requires :meth:`start_all` to have been called first so the shutdown
+        and search-index events are available. Raises :exc:`RuntimeError`
+        immediately if called before :meth:`start_all` — silent misbehaviour
+        would be worse than a loud failure.
+        """
+        if self._shutdown_event is None or self._search_index_ready is None:
+            raise RuntimeError("OrchestratorRegistry.start_one called before start_all")
+        orch = self._orchestrators.get(provider)
+        if orch is None:
+            return
+        await orch.start(self._shutdown_event, self._search_index_ready)
+
+    async def shutdown_one(self, provider: Provider) -> None:
+        """Shutdown a single provider's orchestrator (used by hot-toggle on deactivation)."""
+        orch = self._orchestrators.get(provider)
+        if orch is None:
+            return
+        await orch.shutdown()
 
     def request_thread_stop_all(self) -> None:
         """Signal every provider's blocking sync threads to stop.
