@@ -253,17 +253,38 @@ function providerIconFor(provider) {
 function providerLabelFor(p) {
     return getProviderLabel(p)
 }
+function providerStateFor(p) {
+    return dataStore.getProviderState(p)
+}
+function isInTransition(p) {
+    const state = providerStateFor(p)
+    return state === 'starting' || state === 'stopping'
+}
 function isLastEnabled(p) {
     return enabledProviders.value.size === 1 && enabledProviders.value.has(p)
 }
 function isSwitchDisabled(p) {
+    // Always disabled during a lifecycle transition (the back wouldn't
+    // honour the toggle anyway, and the user must wait until the state
+    // settles before they can flip again).
+    if (isInTransition(p)) return true
     if (!enabledProviders.value.has(p)) return false
     return isLastEnabled(p) || dataStore.hasActiveSessionForProvider(p)
 }
 function reasonFor(p) {
+    // Transient states are shown as informational labels (with a spinner
+    // inline) rather than danger hints — they describe progress, not an
+    // error.
+    if (isInTransition(p)) return null
     if (!enabledProviders.value.has(p)) return null
     if (isLastEnabled(p)) return 'Cannot disable: at least one provider must remain active.'
     if (dataStore.hasActiveSessionForProvider(p)) return 'Cannot disable: active sessions in progress.'
+    return null
+}
+function transitionLabelFor(p) {
+    const state = providerStateFor(p)
+    if (state === 'starting') return 'Starting'
+    if (state === 'stopping') return 'Stopping'
     return null
 }
 function onToggleProvider(p, event) {
@@ -875,21 +896,27 @@ function onChangelogClose() {
                         </p>
                         <div class="provider-switches">
                             <div v-for="p in getRegisteredProviders()" :key="p" class="provider-switch-row">
-                                <wa-switch
-                                    class="provider-switch"
-                                    :checked="enabledProviders.has(p)"
-                                    :disabled="isSwitchDisabled(p)"
-                                    @change="(e) => onToggleProvider(p, e)"
-                                >
-                                    <wa-icon
-                                        v-if="PROVIDER_ICON[p]"
-                                        auto-width
-                                        family="brands"
-                                        :name="PROVIDER_ICON[p]"
-                                        class="provider-switch-icon"
-                                    ></wa-icon>
-                                    {{ providerLabelFor(p) }}
-                                </wa-switch>
+                                <div class="provider-switch-line">
+                                    <wa-switch
+                                        class="provider-switch"
+                                        :checked="enabledProviders.has(p)"
+                                        :disabled="isSwitchDisabled(p)"
+                                        @change="(e) => onToggleProvider(p, e)"
+                                    >
+                                        <wa-icon
+                                            v-if="PROVIDER_ICON[p]"
+                                            auto-width
+                                            family="brands"
+                                            :name="PROVIDER_ICON[p]"
+                                            class="provider-switch-icon"
+                                        ></wa-icon>
+                                        {{ providerLabelFor(p) }}
+                                    </wa-switch>
+                                    <template v-if="transitionLabelFor(p)">
+                                        <span class="transition-label">{{ transitionLabelFor(p) }}</span>
+                                        <wa-spinner class="transition-spinner"></wa-spinner>
+                                    </template>
+                                </div>
                                 <span v-if="reasonFor(p)" class="hint danger">{{ reasonFor(p) }}</span>
                             </div>
                         </div>
@@ -1811,6 +1838,22 @@ wa-popover > wa-divider {
 
 .provider-switch-icon {
     font-size: 1.2em;
+}
+
+.provider-switch-line {
+    display: flex;
+    align-items: center;
+    gap: var(--wa-space-s);
+}
+
+.transition-label {
+    font-size: var(--wa-font-size-s);
+    color: var(--wa-color-neutral-fill-loud);
+    font-style: italic;
+}
+
+.transition-spinner {
+    font-size: 0.9em;
 }
 
 .hint {
