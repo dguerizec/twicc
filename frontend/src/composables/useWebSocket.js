@@ -956,7 +956,7 @@ export function useWebSocket() {
             case 'error': {
                 if (msg.code === 'provider_disabled') {
                     const providerLabel = getProviderLabel(msg.provider) || msg.provider
-                    toast.error(`Cannot reach ${providerLabel}: provider is disabled.`)
+                    toast.error(`Cannot send to ${providerLabel}: it is disabled. Enable it from Settings → Providers.`)
                 } else {
                     console.warn('[ws] Server error message:', msg)
                 }
