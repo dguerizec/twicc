@@ -22,9 +22,12 @@ const activeTab = ref('five-hour')
 // driven by the in-dialog wa-select so the user can switch providers
 // without losing the period tab, range slider, Y cap, etc.
 const selectedProvider = ref(props.provider)
-const providerOptions = computed(
-    () => getProviderOptions().filter(o => getProviderHelpers(o.value)?.tracksUsage()),
-)
+const providerOptions = computed(() => {
+    const enabled = new Set(settingsStore.enabledProviders)
+    return getProviderOptions().filter(
+        o => enabled.has(o.value) && getProviderHelpers(o.value)?.tracksUsage(),
+    )
+})
 const showProviderSelect = computed(() => providerOptions.value.length > 1)
 
 function onProviderChange(event) {

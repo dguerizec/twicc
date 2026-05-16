@@ -323,7 +323,9 @@ const editorWordWrap = computed(() => store.isEditorWordWrap)
 // ``getProviderHelpers(provider).getUsageFileSetting(field)``.
 
 const usageProviders = computed(() =>
-    getRegisteredProviders().filter(p => getProviderHelpers(p)?.tracksUsage())
+    getRegisteredProviders().filter(
+        p => enabledProviders.value.has(p) && getProviderHelpers(p)?.tracksUsage()
+    )
 )
 
 // Reactive maps keyed by provider wire key.
