@@ -13,6 +13,7 @@ import { DEFAULT_SENTINEL } from '../../composables/useSessionAgentSettings'
 import { getProviderOptions, getProviderHelpers } from '../../providers'
 import { PROVIDER_ICON } from '../../constants'
 import { useDataStore } from '../../stores/data'
+import { useSettingsStore } from '../../stores/settings'
 import AgentSettingsPresetsDialog from '../app/AgentSettingsPresetsDialog.vue'
 
 const props = defineProps({
@@ -51,6 +52,7 @@ const {
 } = props.settings
 
 const dataStore = useDataStore()
+const settings = useSettingsStore()
 
 // Non-image attachments currently held by the draft. Computed off the
 // store's reactive Map so the labelled wa-callout below reacts to add /
@@ -68,12 +70,15 @@ const nonImageAttachments = computed(() => {
 // the conflict before retrying.
 const providerSwitcherOptions = computed(() => {
     const current = props.session?.provider
-    return getProviderOptions().map(opt => ({
-        value: opt.value,
-        label: opt.label,
-        icon: PROVIDER_ICON[opt.value] ?? null,
-        active: opt.value === current,
-    }))
+    const enabled = new Set(settings.enabledProviders)
+    return getProviderOptions()
+        .filter(opt => enabled.has(opt.value))
+        .map(opt => ({
+            value: opt.value,
+            label: opt.label,
+            icon: PROVIDER_ICON[opt.value] ?? null,
+            active: opt.value === current,
+        }))
 })
 
 const currentProviderIcon = computed(() => {
@@ -277,7 +282,7 @@ function resetField(field) {
             <!-- Provider switcher: drafts only. Switching resets every per-
                  session override so the bundle follows the new provider's
                  defaults. -->
-            <wa-dropdown v-if="isDraft" @wa-select="handleProviderSelect">
+            <wa-dropdown v-if="isDraft && providerSwitcherOptions.length > 1" @wa-select="handleProviderSelect">
                 <wa-button slot="trigger" size="small" appearance="outlined">
                     <wa-icon
                         v-if="currentProviderIcon"
