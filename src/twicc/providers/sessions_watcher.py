@@ -661,8 +661,8 @@ class BaseSessionsWatcher:
 
         The interval is normally :data:`PROJECTS_DIR_POLL_INTERVAL` seconds,
         but drops to :data:`PROJECTS_DIR_POLL_INTERVAL_FAST` while a
-        fast-poll request is active (typically right after a Claude Code
-        session start signal).
+        fast-poll request is active (typically right after a session start
+        signal from the owning provider).
 
         Returns True if the directory appeared, False if shutdown was signaled.
         """

@@ -3,7 +3,7 @@ ASGI application configuration with WebSocket routing.
 
 Provides HTTP and WebSocket protocol routing, with the UpdatesConsumer
 handling real-time updates on the /ws/ endpoint. Also handles agent-related
-messages for sending messages to Claude sessions.
+messages for sending messages to agent sessions (any provider).
 """
 
 import asyncio
@@ -288,7 +288,7 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
 
     Handles incoming messages:
     - ping: heartbeat, responds with pong
-    - send_message: send a message to a Claude session
+    - send_message: send a message to an agent session
 
     Provider-specific inbound messages use a ``"<provider_key>:<action>"``
     type prefix (e.g. ``claude_code:pending_request_response``) and are
@@ -461,8 +461,8 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
 
         Supported message types:
         - ping: heartbeat, responds with pong
-        - send_message: send a message to a Claude session (creates new or resumes existing)
-        - kill_process: kill a running Claude process
+        - send_message: send a message to an agent session (creates new or resumes existing)
+        - kill_process: kill a running agent process
         - stop_subagent: gracefully stop a running subagent (Task)
         - suggest_title: request a title suggestion for a session
         - update_synced_settings: update synced settings and broadcast to all clients
@@ -579,7 +579,7 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
         Expected content format:
         {
             "type": "send_message",
-            "session_id": "claude-conv-xxx",
+            "session_id": "sess-xxx",
             "project_id": "proj-xyz",
             "text": "The message text",       // May be empty for settings-only updates
             "title": "Optional session title",  // Only for new sessions
@@ -829,7 +829,7 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
         Expected content format:
         {
             "type": "kill_process",
-            "session_id": "claude-conv-xxx"
+            "session_id": "sess-xxx"
         }
 
         Only processes in STARTING or ASSISTANT_TURN state can be killed.
@@ -879,7 +879,7 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
         Expected content format:
         {
             "type": "stop_subagent",
-            "session_id": "claude-conv-xxx",
+            "session_id": "sess-xxx",
             "subagent_id": "a6c7d21"
         }
 
@@ -938,7 +938,7 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
         Expected content format:
         {
             "type": "user_draft_updated",
-            "session_id": "claude-conv-xxx"
+            "session_id": "sess-xxx"
         }
 
         This is sent (debounced) when the user is actively preparing a message
@@ -1393,7 +1393,7 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
         Expected content format:
         {
             "type": "session_viewed",
-            "session_id": "claude-conv-xxx",
+            "session_id": "sess-xxx",
             "viewed_at": "2026-04-13T20:53:05.123Z",  // client timestamp
             "reason": "deactivated"                     // why this was sent
         }
@@ -1437,7 +1437,7 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
         Expected content format:
         {
             "type": "mark_session_read_state",
-            "session_id": "claude-conv-xxx",
+            "session_id": "sess-xxx",
             "unread": true/false
         }
 

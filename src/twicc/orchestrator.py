@@ -48,8 +48,9 @@ class BaseOrchestrator:
       be best-effort and time-bounded).
 
     :meth:`request_thread_stop` has a no-op default — only providers that
-    run blocking sync threads (e.g. Claude Code's initial JSONL sync)
-    need to override it to signal those threads cooperatively.
+    run blocking sync threads (e.g. the initial JSONL sync that scans a
+    provider's on-disk store) need to override it to signal those threads
+    cooperatively.
     """
 
     provider: ClassVar[Provider]

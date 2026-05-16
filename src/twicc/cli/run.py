@@ -233,9 +233,10 @@ def main():
     call_command("migrate", verbosity=0)
     logger.info("Migrations applied")
 
-    # The auth_task handles Claude CLI authentication detection: it logs
+    # Each provider's auth_task handles CLI authentication detection: it logs
     # the current state and broadcasts it to connected clients. Sending
-    # messages is disabled in the UI when not authenticated.
+    # messages is disabled in the UI when the owning provider is not
+    # authenticated.
 
     # Parse port
     port = os.environ.get("TWICC_PORT", "3500")
