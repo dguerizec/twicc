@@ -991,6 +991,18 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
         except ValueError:
             logger.warning("suggest_title: unknown provider %r", provider_key)
             return
+
+        try:
+            ensure_provider_running(provider)
+        except ProviderDisabledError as e:
+            await self.send_json({
+                "type": "error",
+                "code": "provider_disabled",
+                "provider": e.provider.value,
+                "message": str(e),
+            })
+            return
+
         helpers = get_provider_helpers(provider)
 
         if not prompt:
