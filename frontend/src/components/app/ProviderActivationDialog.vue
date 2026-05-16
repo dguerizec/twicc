@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed, watch } from 'vue'
 import { useSettingsStore } from '../../stores/settings'
-import { getRegisteredProviders, getProviderHelpers } from '../../providers'
+import { getRegisteredProviders, getProviderLabel } from '../../providers'
 
 const settings = useSettingsStore()
 
@@ -31,8 +31,7 @@ const atLeastOneChecked = computed(() =>
 )
 
 function providerLabel(p) {
-    const helpers = getProviderHelpers(p)
-    return helpers.getProviderLabel?.() ?? p
+    return getProviderLabel(p) ?? p
 }
 
 function save() {
