@@ -232,10 +232,14 @@ class OrchestratorRegistry:
             return
 
         enabled_items = [(provider, orch) for provider, orch in self._orchestrators.items() if provider in enabled]
-        results = await asyncio.gather(
-            *(orch.start(shutdown_event, search_index_ready) for _, orch in enabled_items),
-            return_exceptions=True,
-        )
+        tasks = [
+            asyncio.create_task(
+                orch.start(shutdown_event, search_index_ready),
+                context=self._provider_context(provider),
+            )
+            for provider, orch in enabled_items
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
         for (provider, _), result in zip(enabled_items, results):
             if isinstance(result, BaseException):
                 logger.error(
@@ -278,6 +282,28 @@ class OrchestratorRegistry:
             if provider in enabled
         ))
 
+    @staticmethod
+    def _provider_context(provider: Provider) -> contextvars.Context:
+        """Return a fresh Context with ``current_provider`` tagged for ``provider``.
+
+        Mirrors :meth:`BaseOrchestrator._create_task` but for one-shot
+        awaitables. ``start()`` and ``shutdown()`` themselves log synchronous
+        lines (and ``start()`` even awaits sync work like
+        ``ensure_twicc_plugin_installed``) before spawning the long-running
+        tasks. Those synchronous log lines must carry the provider tag too,
+        otherwise they fall back to ``"global"`` because the caller has no
+        provider context (the WS handler for hot-toggle, the CLI startup
+        task for ``start_all``).
+
+        Returning a fresh ``Context`` lets us schedule the call via
+        ``asyncio.create_task(..., context=...)``, which isolates the
+        tag to the new task without touching the caller's context — safe
+        with ``gather`` because each scheduled task gets its own context.
+        """
+        ctx = contextvars.copy_context()
+        ctx.run(current_provider.set, provider.value)
+        return ctx
+
     async def start_one(self, provider: Provider) -> None:
         """Start a single provider's orchestrator (used by hot-toggle on activation).
 
@@ -285,37 +311,26 @@ class OrchestratorRegistry:
         and search-index events are available. Raises :exc:`RuntimeError`
         immediately if called before :meth:`start_all` — silent misbehaviour
         would be worse than a loud failure.
-
-        Tags the :data:`current_provider` ContextVar for the duration of the
-        call so every log line emitted synchronously inside ``start()`` is
-        stamped with the right provider tag (otherwise they would fall back
-        to ``"global"`` because the hot-toggle caller has no provider tag).
         """
         if self._shutdown_event is None or self._search_index_ready is None:
             raise RuntimeError("OrchestratorRegistry.start_one called before start_all")
         orch = self._orchestrators.get(provider)
         if orch is None:
             return
-        token = current_provider.set(provider.value)
-        try:
-            await orch.start(self._shutdown_event, self._search_index_ready)
-        finally:
-            current_provider.reset(token)
+        await asyncio.create_task(
+            orch.start(self._shutdown_event, self._search_index_ready),
+            context=self._provider_context(provider),
+        )
 
     async def shutdown_one(self, provider: Provider) -> None:
-        """Shutdown a single provider's orchestrator (used by hot-toggle on deactivation).
-
-        See :meth:`start_one` for the rationale on tagging
-        :data:`current_provider` around the call.
-        """
+        """Shutdown a single provider's orchestrator (used by hot-toggle on deactivation)."""
         orch = self._orchestrators.get(provider)
         if orch is None:
             return
-        token = current_provider.set(provider.value)
-        try:
-            await orch.shutdown()
-        finally:
-            current_provider.reset(token)
+        await asyncio.create_task(
+            orch.shutdown(),
+            context=self._provider_context(provider),
+        )
 
     def request_thread_stop_all(self) -> None:
         """Signal every provider's blocking sync threads to stop.
@@ -359,10 +374,14 @@ class OrchestratorRegistry:
         if not enabled:
             return
         enabled_items = [(p, o) for p, o in self._orchestrators.items() if p in enabled]
-        results = await asyncio.gather(
-            *(orch.shutdown() for _, orch in enabled_items),
-            return_exceptions=True,
-        )
+        tasks = [
+            asyncio.create_task(
+                orch.shutdown(),
+                context=self._provider_context(provider),
+            )
+            for provider, orch in enabled_items
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
         for (provider, _), result in zip(enabled_items, results):
             if isinstance(result, BaseException):
                 logger.error(
