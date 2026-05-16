@@ -276,7 +276,7 @@ class CodexOrchestrator(BaseOrchestrator):
             sessions = list(
                 Session.objects.filter(
                     provider=Provider.CODEX,
-                    id__in=list(titles.keys()),
+                    id__in=titles.keys(),
                 )
             )
             changed: list[Session] = []
@@ -298,12 +298,12 @@ class CodexOrchestrator(BaseOrchestrator):
         if changed:
             channel_layer = get_channel_layer()
             for s in changed:
-                # refresh_from_db is cheap (single row, already in mem buffer),
-                # but we already have the up-to-date title on the instance.
+                # No refresh_from_db needed — title was just set on the instance.
                 await broadcast_message(channel_layer, {
                     "type": "session_updated",
                     "session": serialize_session(s),
                 })
+                await asyncio.sleep(0)
 
     async def _dependency_orchestrator(self) -> None:
         """Wait for the initial sync, then start the background compute and
