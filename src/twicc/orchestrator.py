@@ -352,13 +352,24 @@ class OrchestratorRegistry:
         ctx.run(current_provider.set, provider.value)
         return ctx
 
-    async def start_one(self, provider: Provider) -> None:
+    async def start_one(self, provider: Provider, *, trigger_search_reindex: bool = True) -> None:
         """Start a single provider's orchestrator (used by hot-toggle on activation).
 
         Requires :meth:`start_all` to have been called first so the shutdown
         and search-index events are available. Raises :exc:`RuntimeError`
         immediately if called before :meth:`start_all` — silent misbehaviour
         would be worse than a loud failure.
+
+        ``trigger_search_reindex`` (default True) schedules a background
+        re-trigger of the cross-provider search indexing task after the
+        provider's ``compute_done`` event fires. This catches the historic
+        sessions that the initial sync bulk-inserts with
+        ``search_version=NULL`` (the live JSONL watcher only indexes
+        brand-new file writes, so without this rerun those rows would
+        remain invisible to ``twicc search`` until the next process
+        restart). The DB filter inside the indexing task naturally scopes
+        the work to sessions that need it, and the task's internal lock
+        keeps a concurrent boot pass from racing against this re-trigger.
         """
         if self._shutdown_event is None or self._search_index_ready is None:
             raise RuntimeError("OrchestratorRegistry.start_one called before start_all")
@@ -368,6 +379,39 @@ class OrchestratorRegistry:
         await asyncio.create_task(
             self._start_with_state(provider, orch),
             context=self._provider_context(provider),
+        )
+        if trigger_search_reindex:
+            asyncio.create_task(
+                self._kick_search_after_compute(provider),
+                context=self._provider_context(provider),
+            )
+
+    async def _kick_search_after_compute(self, provider: Provider) -> None:
+        """Wait for ``provider``'s compute to finish, then re-trigger search indexing.
+
+        Only scheduled after a *successful* :meth:`_start_with_state` call,
+        so we don't have to worry about waiting on a ``compute_done`` that
+        will never fire normally — the event will be set by either the
+        provider's compute-task done-callback (happy path) or by
+        :meth:`BaseOrchestrator.shutdown` (which sets it idempotently
+        during a later teardown). If the orchestrator is somehow gone
+        from the registry by the time we run (shouldn't happen, but
+        defensive), we silently no-op.
+        """
+        orch = self._orchestrators.get(provider)
+        if orch is None:
+            return
+        await orch.compute_done.wait()
+        # Lazy import to avoid pulling search_indexing_task at module
+        # import time (it would in turn import Django models). The
+        # orchestrator registry is imported very early in the CLI boot
+        # and we want Django to be fully configured first.
+        from twicc.search_indexing_task import kick_off_search_indexing
+
+        await kick_off_search_indexing()
+        logger.info(
+            "Background search indexing re-triggered (after %s compute)",
+            provider.value,
         )
 
     async def shutdown_one(self, provider: Provider) -> None:

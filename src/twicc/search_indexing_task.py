@@ -16,6 +16,20 @@ Lifecycle:
 - Uses ``asyncio.to_thread`` for Tantivy calls (CPU/IO bound).
 - Uses ``sync_to_async`` for Django ORM reads.
 - Processes one session at a time, committing after each.
+
+Hot-toggle re-trigger:
+- When a provider is enabled at runtime via Settings, its historical
+  sessions land in DB with ``search_version=NULL`` and would otherwise
+  stay invisible to ``twicc search`` until the next process restart
+  (the live JSONL watcher only indexes brand-new file writes, not the
+  rows the initial sync just bulk-inserted).
+- :func:`kick_off_search_indexing` is the entry point used by the
+  orchestrator registry after a successful hot ``start_one`` +
+  ``compute_done`` to schedule another pass. Runs are serialized through
+  :data:`_indexing_run_lock` so two overlapping triggers can't race on
+  the same session; every active task is exposed via
+  :func:`get_active_indexing_tasks` so the CLI shutdown path can cancel
+  whatever happens to be running (or queued).
 """
 
 from __future__ import annotations
@@ -41,10 +55,64 @@ logger = logging.getLogger(__name__)
 
 _stop_event: asyncio.Event | None = None
 
+# Serializes overlapping runs of the indexing task (boot + hot-toggle, or
+# two back-to-back hot-toggles): a second call waits for the first to
+# finish then starts another sweep. Lazily created on first use so the
+# event loop is always the one currently running.
+_indexing_run_lock: asyncio.Lock | None = None
+
+# Every indexing task spawned via ``kick_off_search_indexing`` (and the
+# boot pass) lands here. Done tasks are pruned lazily on each new kick.
+# The CLI shutdown path iterates the survivors so it can cancel both an
+# active run (boot pass still mid-sweep when a hot-toggle arrives) and
+# every pending re-trigger queued behind it on the lock.
+_indexing_tasks: list[asyncio.Task] = []
+
 
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
+
+def get_active_indexing_tasks() -> list[asyncio.Task]:
+    """Return every indexing task currently scheduled or running.
+
+    Used by the CLI shutdown path so it can cancel both an active sweep
+    and any hot-toggle re-trigger queued behind it on the run lock.
+    Filters out already-finished tasks: callers don't need to know
+    about them, and the bookkeeping list is pruned lazily on each new
+    kick anyway.
+    """
+    return [t for t in _indexing_tasks if not t.done()]
+
+
+async def kick_off_search_indexing() -> None:
+    """Schedule a (re)run of the indexing task, serialized via a lock.
+
+    Safe to call repeatedly: if a previous run is still in progress, the
+    new task waits on :data:`_indexing_run_lock` before starting another
+    sweep. The DB filter ``exclude(search_version=CURRENT_SEARCH_VERSION)``
+    naturally scopes the sweep to sessions that actually need it, so a
+    re-trigger that finds nothing left to do is cheap.
+
+    The new task handle is appended to :data:`_indexing_tasks` so the
+    CLI shutdown path can cancel every active run (boot pass + queued
+    hot-toggle re-triggers). Already-done tasks are pruned here to
+    keep the list bounded across long-lived processes.
+    """
+    global _indexing_run_lock
+    if _indexing_run_lock is None:
+        _indexing_run_lock = asyncio.Lock()
+
+    async def _runner() -> None:
+        assert _indexing_run_lock is not None
+        async with _indexing_run_lock:
+            await start_search_index_task()
+
+    # Prune done tasks before appending so the list doesn't grow without
+    # bound (each restart of the indexing task adds an entry).
+    _indexing_tasks[:] = [t for t in _indexing_tasks if not t.done()]
+    _indexing_tasks.append(asyncio.create_task(_runner()))
 
 
 async def start_search_index_task():

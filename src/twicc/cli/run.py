@@ -68,7 +68,11 @@ from django.core.management import call_command  # noqa: E402
 from twicc.orchestrator import get_orchestrator_registry  # noqa: E402
 from twicc.pricing_task import start_price_sync_task, sync_all_providers  # noqa: E402
 from twicc.search import init_search_index, shutdown_search_index  # noqa: E402
-from twicc.search_indexing_task import start_search_index_task, stop_search_index_task  # noqa: E402
+from twicc.search_indexing_task import (  # noqa: E402
+    get_active_indexing_tasks,
+    kick_off_search_indexing,
+    stop_search_index_task,
+)
 from twicc.version_check_task import start_version_check_task, stop_version_check_task  # noqa: E402
 
 
@@ -86,7 +90,6 @@ async def _orchestrate_global_search(
     orchestrators,
     shutdown_event: asyncio.Event,
     search_index_ready: asyncio.Event,
-    state: dict,
 ) -> None:
     """Coordinate the cross-provider parts of the search lifecycle.
 
@@ -94,13 +97,18 @@ async def _orchestrate_global_search(
     sync has reported completion, then signals ``search_index_ready``
     so provider watchers can start writing to it. After every
     provider's background compute has reported completion, fires the
-    global search-indexing task.
+    global search-indexing task via :func:`kick_off_search_indexing`,
+    which also registers the task handle into the module-level list
+    consulted by the shutdown path.
 
-    The ``state`` dict is the bridge back to ``run_server``: when this
-    coroutine creates the search-indexing task, it stores the handle
-    under ``state["search_indexing_task"]`` so ``run_server`` can stop
-    it cleanly during shutdown. ``shutdown_event`` short-circuits both
-    gates so a server stopping mid-startup doesn't leave dangling work.
+    Hot-toggle re-triggers happen separately from this coroutine: the
+    orchestrator registry schedules its own ``kick_off_search_indexing``
+    after each ``start_one`` once the provider's ``compute_done`` fires,
+    and the run lock inside the indexing module serializes those runs
+    against this boot pass.
+
+    ``shutdown_event`` short-circuits both gates so a server stopping
+    mid-startup doesn't leave dangling work.
     """
     await orchestrators.wait_initial_sync_done()
     if shutdown_event.is_set():
@@ -114,7 +122,7 @@ async def _orchestrate_global_search(
     if shutdown_event.is_set():
         return
 
-    state["search_indexing_task"] = asyncio.create_task(start_search_index_task())
+    await kick_off_search_indexing()
     logger.info("Background search indexing started (after every provider's compute)")
 
 
@@ -148,12 +156,11 @@ async def run_server(port: int):
 
     # Cross-provider search-lifecycle coordinator. Runs in parallel to
     # the server so ``init_search_index`` doesn't gate uvicorn startup.
-    # Stores its background ``search_indexing_task`` handle into the
-    # ``search_state`` dict once compute finishes, so we can stop it
-    # cleanly below.
-    search_state: dict = {"search_indexing_task": None}
+    # The background search-indexing task it spawns (and any hot-toggle
+    # re-trigger) is tracked via ``get_active_indexing_tasks`` so we
+    # can stop every live run cleanly below.
     search_orchestrator_task = asyncio.create_task(
-        _orchestrate_global_search(orchestrators, shutdown_event, search_index_ready, search_state)
+        _orchestrate_global_search(orchestrators, shutdown_event, search_index_ready)
     )
 
     # Cross-provider periodic tasks
@@ -198,16 +205,22 @@ async def run_server(port: int):
         stop_version_check_task()
         await _cancel_task(version_check_task, "Version check task")
 
-        # Stop the global search-indexing task (if it ever started) and
-        # the coordinator that gated it. Order matters: cancel the
+        # Stop the global search-indexing task(s) (if any ever started)
+        # and the coordinator that gated them. Order matters: cancel the
         # coordinator first so it doesn't spawn a new search task after
-        # we've already stopped the running one.
+        # we've already stopped the running ones. The active list covers
+        # both the boot pass and any hot-toggle re-trigger queued behind
+        # it on the run lock.
         await _cancel_task(search_orchestrator_task, "Search lifecycle coordinator")
-        search_indexing_task = search_state["search_indexing_task"]
-        if search_indexing_task is not None:
-            logger.info("Stopping search index task...")
+        active_indexing_tasks = get_active_indexing_tasks()
+        if active_indexing_tasks:
+            logger.info(
+                "Stopping search index task(s) (%d active)...",
+                len(active_indexing_tasks),
+            )
             stop_search_index_task()
-            await _cancel_task(search_indexing_task, "Search index task")
+            for idx, task in enumerate(active_indexing_tasks, start=1):
+                await _cancel_task(task, f"Search index task #{idx}")
         else:
             logger.info("Search index task was not started, skipping")
 
