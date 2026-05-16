@@ -339,9 +339,16 @@ class CodexAgentManager(BaseAgentManager):
 
         # ``thread_start`` / ``thread_resume`` lazy-init the transport via
         # ``_ensure_initialized`` on first call — no need to start it
-        # explicitly. If anything between here and a successful thread call
+        # explicitly. If anything between here and a successful return
         # raises, we close the transport so we don't leak the codex
-        # subprocess.
+        # subprocess. This includes the ``CodexAgent`` constructor below:
+        # it monkey-patches the private SDK path
+        # ``_codex._client._sync._approval_handler`` (see
+        # ``CodexAgent.__init__``), so a future SDK rename would surface as
+        # ``AttributeError`` here and must NOT leak the already-spawned
+        # subprocess. Once the agent is returned, ownership transfers to
+        # the caller (``BaseAgentManager._start_agent`` covers the rest of
+        # the startup sequence via its own cleanup wrapper).
         try:
             # Translate the user's preset (Session.permission_mode) into
             # the SDK couple. Unset / unknown modes fall on
@@ -388,6 +395,19 @@ class CodexAgentManager(BaseAgentManager):
                     approval_policy=approval_policy,
                     config=thread_config,
                 )
+
+            # On resume ``thread.id == session_id``; on new sessions Codex
+            # picked its own canonical id and ``_start_agent`` will broadcast
+            # the ``session_bound`` mapping (draft → canonical) for the
+            # frontend.
+            return CodexAgent(
+                session_id=thread.id,
+                project_id=project_id,
+                cwd=cwd,
+                settings=settings,
+                codex=codex,
+                thread=thread,
+            )
         except Exception:
             try:
                 await codex.close()
@@ -397,18 +417,6 @@ class CodexAgentManager(BaseAgentManager):
                     exc_info=True,
                 )
             raise
-
-        # On resume ``thread.id == session_id``; on new sessions Codex picked
-        # its own canonical id and ``_start_agent`` will broadcast the
-        # ``session_bound`` mapping (draft → canonical) for the frontend.
-        return CodexAgent(
-            session_id=thread.id,
-            project_id=project_id,
-            cwd=cwd,
-            settings=settings,
-            codex=codex,
-            thread=thread,
-        )
 
     # ------------------------------------------------------------------
     # Timeout policy

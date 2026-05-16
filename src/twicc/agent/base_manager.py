@@ -232,47 +232,67 @@ class BaseAgentManager:
             session_id, project_id, cwd, resume=resume, settings=settings,
         )
 
-        # Brand-new sessions: tell the frontend which canonical id is bound
-        # to its local draft, so it can reconcile (redirect or discard).
-        # On resume the frontend already knows the canonical id — skip it.
-        if not resume:
-            # When the provider mints its own canonical id (Codex), the WS
-            # handler stored the pending agent settings under the draft id we
-            # received. Re-key them under the canonical id so the watcher
-            # pops them when it creates the Session row from the JSONL —
-            # otherwise selected_model / effort / ... stay NULL until the
-            # next user-initiated settings update. No-op when ids match
-            # (Claude Code): the existing pending entry is already under the
-            # canonical key.
-            if session_id != agent.session_id:
-                from twicc.pending_agent_settings import (
-                    pop_pending_agent_settings,
-                    set_pending_agent_settings,
+        # Once ``_create_agent`` returns, the agent owns external resources
+        # (SDK client / subprocess). If any of the post-creation steps below
+        # raise — pending re-keying, WS broadcast, DB writes in
+        # ``_register_and_start``, ``agent.start`` itself — nothing else will
+        # release them: the agent is at most in ``_agents`` but its state is
+        # still ``STARTING``, so the DEAD-driven ``_cleanup_dead`` path never
+        # fires. Tear it down explicitly via the provider's own
+        # ``interrupt_or_kill`` (which is required to be safe on a not-yet-
+        # started agent — see the docstring of ``_create_agent``).
+        try:
+            # Brand-new sessions: tell the frontend which canonical id is bound
+            # to its local draft, so it can reconcile (redirect or discard).
+            # On resume the frontend already knows the canonical id — skip it.
+            if not resume:
+                # When the provider mints its own canonical id (Codex), the WS
+                # handler stored the pending agent settings under the draft id we
+                # received. Re-key them under the canonical id so the watcher
+                # pops them when it creates the Session row from the JSONL —
+                # otherwise selected_model / effort / ... stay NULL until the
+                # next user-initiated settings update. No-op when ids match
+                # (Claude Code): the existing pending entry is already under the
+                # canonical key.
+                if session_id != agent.session_id:
+                    from twicc.pending_agent_settings import (
+                        pop_pending_agent_settings,
+                        set_pending_agent_settings,
+                    )
+
+                    pending = pop_pending_agent_settings(session_id)
+                    if pending is not None:
+                        set_pending_agent_settings(agent.session_id, pending)
+
+                    # Same rationale for pending_titles: the WS handler stored it under
+                    # the draft id we received; re-key under the canonical id so the
+                    # Codex manager's ASSISTANT_TURN flush actually finds it. No-op for
+                    # Claude Code where draft id == canonical id.
+                    from twicc.pending_titles import (
+                        pop_pending_title,
+                        set_pending_title,
+                    )
+
+                    pending_title = pop_pending_title(session_id)
+                    if pending_title is not None:
+                        set_pending_title(agent.session_id, pending_title)
+
+                await self.notify_session_bound(
+                    draft_session_id=session_id,
+                    session_id=agent.session_id,
                 )
 
-                pending = pop_pending_agent_settings(session_id)
-                if pending is not None:
-                    set_pending_agent_settings(agent.session_id, pending)
-
-                # Same rationale for pending_titles: the WS handler stored it under
-                # the draft id we received; re-key under the canonical id so the
-                # Codex manager's ASSISTANT_TURN flush actually finds it. No-op for
-                # Claude Code where draft id == canonical id.
-                from twicc.pending_titles import (
-                    pop_pending_title,
-                    set_pending_title,
+            await self._register_and_start(agent, text, resume=resume, **start_kwargs)
+        except Exception:
+            try:
+                await agent.interrupt_or_kill(reason="startup-failed")
+            except Exception:
+                logger.exception(
+                    "Cleanup interrupt_or_kill failed for session %s after start-up error",
+                    agent.session_id,
                 )
-
-                pending_title = pop_pending_title(session_id)
-                if pending_title is not None:
-                    set_pending_title(agent.session_id, pending_title)
-
-            await self.notify_session_bound(
-                draft_session_id=session_id,
-                session_id=agent.session_id,
-            )
-
-        await self._register_and_start(agent, text, resume=resume, **start_kwargs)
+            self._agents.pop(agent.session_id, None)
+            raise
 
     async def _register_and_start(
         self,
@@ -611,6 +631,17 @@ class BaseAgentManager:
         already known to the frontend in every case.
 
         The returned agent must carry the canonical id in ``agent.session_id``.
+
+        Cleanup invariant: the returned agent must accept
+        ``interrupt_or_kill`` immediately, even before ``start`` has been
+        called. ``_start_agent`` calls it as the cleanup mechanism when the
+        post-creation startup sequence (re-keying, broadcast, DB writes,
+        ``agent.start``) raises — the agent owns external resources by then
+        and nothing else will release them. Implementations that allocate
+        resources inside ``__init__`` (or between ``__init__`` and the
+        return statement) must also clean them up locally if the
+        construction itself raises, since ``_start_agent`` only sees the
+        agent once it has been returned.
         """
         raise NotImplementedError
 
