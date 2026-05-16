@@ -48,11 +48,11 @@ function save() {
 
 <template>
     <wa-dialog
-        label="Choose your providers"
         :open="open"
+        without-header
         @wa-hide.prevent
-        no-header-actions
     >
+        <h2 class="dialog-title">Choose your providers</h2>
         <p>
             TwiCC supports multiple AI coding providers. Pick the ones you want
             to enable. You can change this anytime from
@@ -79,6 +79,10 @@ function save() {
 </template>
 
 <style scoped>
+.dialog-title {
+    margin: 0 0 var(--wa-space-s);
+    font-size: var(--wa-font-size-l);
+}
 .provider-choices {
     display: flex;
     flex-direction: column;
