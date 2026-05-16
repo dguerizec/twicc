@@ -417,24 +417,16 @@ class CodexAgentManager(BaseAgentManager):
     async def _check_agent_timeout(
         self, agent: BaseAgent, current_time: float,
     ) -> tuple[str, float, int] | None:
-        """Apply Codex-specific skips, then the shared per-state policy.
+        """Delegate to the shared per-state policy — no Codex-specific skips.
 
-        Skips agents waiting on a user response (``pending_requests``
-        populated by the sync ↔ async approval bridge in
-        :class:`CodexAgent`). The skip is dormant for sessions running in
-        ``yolo`` (the bridge stays quiet under
-        ``approval_policy="never"``) and load-bearing for any session in
-        ``auto`` / ``read_only`` / ``autonomous`` modes. No equivalent of
-        Claude's ``SessionCron`` check because :class:`SessionCron` is
-        Claude Code-specific.
-
-        Per-state timeouts themselves live in
-        :meth:`BaseAgentManager._state_based_timeout`.
+        The ``pending_requests`` skip (load-bearing for any session in
+        ``auto`` / ``read_only`` / ``autonomous`` modes — the sync ↔ async
+        approval bridge in :class:`CodexAgent` populates the map) lives in
+        :meth:`BaseAgentManager._state_based_timeout` and is shared with
+        every provider that calls into it. No equivalent of Claude's
+        ``SessionCron`` check because :class:`SessionCron` is Claude
+        Code-specific.
         """
-        # Don't timeout agents waiting for user input.
-        if agent.pending_requests:
-            return None
-
         return self._state_based_timeout(agent, current_time)
 
 
