@@ -1,11 +1,11 @@
 """
 Codex title management.
 
-Thin async wrapper around the Codex SDK's ``thread/name/set`` RPC for
-renaming Codex threads. Unlike Claude Code, Codex stores thread
-metadata in its own state DB (single source of truth), so there is no
-anti-stale-write protection (no ``protect_title`` machinery) — the
-matching JSONL rollout file never carries the title in the first place.
+Async helpers for reading and setting Codex thread names via the Codex SDK.
+Unlike Claude Code, Codex stores thread metadata in its own state DB
+(single source of truth), so there is no anti-stale-write protection
+(no ``protect_title`` machinery) — the matching JSONL rollout file never
+carries the title in the first place.
 """
 
 from __future__ import annotations
