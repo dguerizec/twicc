@@ -2,7 +2,7 @@
 import { computed } from 'vue'
 import { useDataStore } from '../../../../../stores/data'
 import { getParsedContent } from '../../../../../utils/parsedContent'
-import { reconstructFromHunks } from '../../../../../utils/patchUtils'
+import { applyStructuredPatch, reconstructFromHunks } from '../../../../../utils/patchUtils'
 import { parseApplyPatchEnvelope } from '../../../../../providers/codex/parsePatch'
 import { parseUnifiedDiff } from '../../../../../providers/codex/parseUnifiedDiff'
 import { formatRelativePath, fileIconFor } from '../../../../../providers/utils/path'
@@ -22,7 +22,12 @@ import ApplyPatchFileEntry from './ApplyPatchFileEntry.vue'
  *        gutter line numbers).
  *      * post-result: use ``changes[path]`` from the event payload —
  *        absolute paths, ``unified_diff`` with real line numbers for
- *        updates, full ``content`` for adds/deletes.
+ *        updates, full ``content`` for adds/deletes. When the backend
+ *        managed to capture the pre-patch file contents (via the
+ *        CodexAgent ``item/started`` hook on ``FileChangeThreadItem``),
+ *        ``payload.original_files[path]`` carries the full original
+ *        string and we render a smartCollapseUnchanged diff rather
+ *        than a hunk-window reconstruction.
  *
  *    The transition is transparent (Vue reactivity through
  *    ``dataStore.sessionItems``).
@@ -125,12 +130,15 @@ const backendFileStatsByPath = computed(() => {
  * ``ApplyPatchFileEntry`` consumes.
  *
  * ``diffMode`` is one of:
- *   - 'fragment-update': pre-result update, free-form old/new strings
- *   - 'hunks-update':    post-result update, structured patch with
- *                        real line numbers
- *   - 'add':             new file body, full content
- *   - 'delete':          file body that was removed
- *   - 'pending-delete':  pre-result delete (no body to show yet)
+ *   - 'fragment-update':  pre-result update, free-form old/new strings
+ *   - 'full-file-update': post-result update with the original file
+ *                         content available in the backend payload
+ *                         (preferred — collapseUnchanged-friendly diff)
+ *   - 'hunks-update':     post-result update without an original file
+ *                         (fallback — patch-window reconstruction)
+ *   - 'add':              new file body, full content
+ *   - 'delete':           file body that was removed
+ *   - 'pending-delete':   pre-result delete (no body to show yet)
  */
 const fileEntries = computed(() => {
     const baseDir = sessionBaseDir.value
@@ -143,6 +151,17 @@ const fileEntries = computed(() => {
 
     const payload = patchEndPayload.value
     if (payload && payload.changes && typeof payload.changes === 'object') {
+        // ``original_files`` is the side-band map injected by the backend
+        // when ``CodexAgent`` managed to capture pre-patch contents (see
+        // ``CodexSessionCompute.transform_tool_result_with_cache``). May be
+        // missing entirely (re-compute of an old session, file too large,
+        // ``add`` only), or missing a specific ``path`` — the per-file
+        // logic below falls back to ``hunks-update`` in that case.
+        const originalFiles = (
+            payload.original_files && typeof payload.original_files === 'object'
+                ? payload.original_files
+                : null
+        )
         const entries = []
         for (const [path, change] of Object.entries(payload.changes)) {
             if (!change || typeof change !== 'object') continue
@@ -160,6 +179,29 @@ const fileEntries = computed(() => {
             }
             if (change.type === 'update') {
                 const hunks = parseUnifiedDiff(change.unified_diff || '')
+                const originalContent = (
+                    originalFiles && typeof originalFiles[path] === 'string'
+                        ? originalFiles[path]
+                        : null
+                )
+                // Full-file mode: re-apply the patch on the captured
+                // original. Matches ``EditContent.vue`` ergonomics —
+                // smartCollapseUnchanged kicks in and the diff card
+                // shows the surrounding file context.
+                if (originalContent != null && hunks.length) {
+                    const modified = applyStructuredPatch(originalContent, hunks)
+                    if (modified != null) {
+                        entries.push({
+                            ...base,
+                            movePath: change.move_path || null,
+                            diffMode: 'full-file-update',
+                            original: originalContent,
+                            modified,
+                            firstModifiedLine: hunks[0].newStart ?? null,
+                        })
+                        continue
+                    }
+                }
                 const reconstructed = hunks.length ? reconstructFromHunks(hunks) : null
                 if (reconstructed) {
                     entries.push({

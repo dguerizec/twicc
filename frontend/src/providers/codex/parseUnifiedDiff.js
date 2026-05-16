@@ -29,6 +29,13 @@ const HUNK_HEADER_RE = /^@@\s*-(\d+)(?:,(\d+))?\s+\+(\d+)(?:,(\d+))?\s*@@/
 export function parseUnifiedDiff(unifiedDiff) {
     if (typeof unifiedDiff !== 'string' || !unifiedDiff) return []
     const lines = unifiedDiff.split('\n')
+    // Drop the trailing empty string produced by a final '\n' in the input
+    // (the standard shape Codex emits). Without this, the empty string lands
+    // in ``current.lines`` and ``jsdiff.applyPatch`` rejects the hunk as
+    // corrupted — silently breaking the full-file diff path in
+    // ApplyPatchContent. A truly empty context line is encoded as ' '
+    // (space + nothing) in unified diffs, never as a bare ''.
+    if (lines.length && lines[lines.length - 1] === '') lines.pop()
     const hunks = []
     let current = null
 

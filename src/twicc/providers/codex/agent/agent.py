@@ -20,6 +20,7 @@ import asyncio
 import concurrent.futures
 import logging
 import time
+from pathlib import Path
 from typing import Any, ClassVar
 
 from channels.layers import get_channel_layer
@@ -46,9 +47,60 @@ from .approvals import (
     is_approval_method,
     make_pending_request,
 )
+from .original_files_cache import (
+    MAX_FILE_SIZE as _ORIGINAL_FILE_MAX_SIZE,
+    cache_original_files,
+    clear_session as clear_original_files_for_session,
+)
 from .sdk_logger import log_approval_request, log_approval_response, log_stream_event
 
 logger = logging.getLogger(__name__)
+
+
+def _capture_original_files_for_apply_patch(inner: Any, session_id: str) -> None:
+    """Read each file targeted by an ``apply_patch`` and store the contents.
+
+    Called from ``CodexAgent._handle_stream_event`` when a
+    ``FileChangeThreadItem`` is announced via ``item/started`` — that
+    notification fires before the Codex CLI subprocess applies the patch,
+    so the on-disk content here is the pre-patch original. Sync read (no
+    ``await``) is intentional: in ``yolo`` mode (``approval_policy="never"``)
+    the patch is applied a few ms later, and yielding to the event loop
+    risks losing that window. See ``original_files_cache.py`` for the
+    full rationale.
+
+    Files that don't exist on disk (``add`` kind) are silently skipped —
+    nothing to capture. Files larger than ``MAX_FILE_SIZE`` are skipped
+    too, matching Claude's per-file limit.
+    """
+    item_id = getattr(inner, "id", None)
+    if not isinstance(item_id, str) or not item_id:
+        return
+
+    changes = getattr(inner, "changes", None) or ()
+    captured: dict[str, str] = {}
+    for change in changes:
+        path_str = getattr(change, "path", None)
+        if not isinstance(path_str, str) or not path_str:
+            continue
+        try:
+            path = Path(path_str)
+            if not path.is_file():
+                # New file (add), rename destination, or any other case
+                # where there's no pre-patch content on disk.
+                continue
+            if path.stat().st_size > _ORIGINAL_FILE_MAX_SIZE:
+                continue
+            content = path.read_text(encoding="utf-8")
+        except Exception:
+            logger.debug(
+                "Failed to capture original file %s for call %s",
+                path_str, item_id, exc_info=True,
+            )
+            continue
+        captured[path_str] = content
+
+    cache_original_files(session_id, item_id, captured)
 
 
 def _agent_message_item(payload: Any) -> Any | None:
@@ -491,6 +543,11 @@ class CodexAgent(BaseAgent):
         # Drop the side-table — no more turns will read it on this agent.
         self._items_by_id.clear()
         self._denied_tool_ids.clear()
+        # Drop any captured pre-patch contents that won't be consumed
+        # (the matching ``patch_apply_end`` won't be emitted on a torn-down
+        # transport). The TTL would clean them up eventually; this just
+        # makes the boundary explicit.
+        clear_original_files_for_session(self.session_id)
 
         if self.state != AgentState.DEAD:
             self._set_state(AgentState.DEAD)
@@ -615,6 +672,14 @@ class CodexAgent(BaseAgent):
                     self._items_by_id[item_id] = inner.model_dump(
                         mode="json", by_alias=True,
                     )
+                # ``fileChange`` items announce an upcoming ``apply_patch``.
+                # Read the pre-patch contents synchronously so the watcher
+                # can splice them into the persisted ``patch_apply_end``
+                # for full-file diffs on the frontend. See
+                # :func:`_capture_original_files_for_apply_patch` for the
+                # timing rationale.
+                if getattr(inner, "type", None) == "fileChange":
+                    _capture_original_files_for_apply_patch(inner, self.session_id)
 
             # Existing agent-message streaming logic — only this kind paints
             # a live ``stream_block_start`` event today; other kinds flow

@@ -112,9 +112,13 @@ mid-session ``cd`` / model swap / window change is reflected on
 ``Session.cwd`` / ``Session.model`` / ``Session.context_max``).
 ``slug`` is unused (Codex doesn't expose one). File-change stats are
 wired for ``apply_patch`` (aggregated ``+`` / ``-`` from the
-``patch_apply_end.changes`` map). Other hooks return empty / no-op
-values so the inherited base machinery (group state, batch compute,
-title extraction) still runs cleanly.
+``patch_apply_end.changes`` map). ``event_msg.patch_apply_end`` lines
+are also enriched in-place with an ``original_files`` map
+(``{abs_path: pre_patch_content}``) when the matching capture is in
+cache — see :meth:`transform_tool_result_with_cache` and the
+``agent/original_files_cache.py`` module. Other hooks return empty /
+no-op values so the inherited base machinery (group state, batch
+compute, title extraction) still runs cleanly.
 """
 
 from __future__ import annotations
@@ -141,6 +145,7 @@ from twicc.providers.compute_base import (
     parse_timestamp_to_datetime,
 )
 
+from .agent.original_files_cache import pop_original_files as _pop_cached_original_files
 from .pricing import extract_model_info, to_token_usage
 
 logger = logging.getLogger(__name__)
@@ -2143,6 +2148,42 @@ class CodexSessionCompute(BaseSessionCompute):
 
     def extract_custom_title(self, parsed_json: dict) -> tuple[str, str] | None:
         return None
+
+    def transform_tool_result_with_cache(
+        self, parsed_json: dict, session_id: str, line_num: int
+    ) -> str | None:
+        # CodexAgent captures pre-patch file contents when it sees a
+        # ``FileChangeThreadItem`` arrive on ``item/started`` (the SDK's
+        # equivalent of Claude's PreToolUse hook). When the matching
+        # ``event_msg.patch_apply_end`` line lands here, we pop the
+        # captured contents and splice them into the payload under
+        # ``original_files`` so the frontend can render a full-file diff
+        # (``EditContent.vue``-style) instead of only the ``unified_diff``
+        # hunks Codex persists.
+        call_id = _event_msg_call_id(parsed_json)
+        if call_id is None:
+            return None
+        payload = _payload(parsed_json)
+        if payload is None or payload.get("type") != "patch_apply_end":
+            return None
+
+        # Always pop from the cache (consume the entry whether we use it or not).
+        cached = _pop_cached_original_files(session_id, call_id)
+        if not cached:
+            return None
+
+        # Already enriched (defensive: re-compute pass on a JSONL line that
+        # already carries the splice). Leave the persisted shape intact.
+        if payload.get("original_files") is not None:
+            return None
+
+        payload["original_files"] = cached
+        logger.debug(
+            "Injected cached original_files into patch_apply_end "
+            "(session=%s, line=%d, call_id=%s, files=%d)",
+            session_id, line_num, call_id, len(cached),
+        )
+        return orjson.dumps(parsed_json).decode("utf-8")
 
     # ------------------------------------------------------------------
     # Batch compute

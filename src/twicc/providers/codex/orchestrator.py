@@ -28,6 +28,10 @@ from twicc.providers.background_task import (
     stop_background_task,
 )
 from twicc.providers.codex.agent import get_codex_agent_manager
+from twicc.providers.codex.agent.original_files_cache import (
+    start_cleanup_task as start_original_files_cache_cleanup,
+    stop_cleanup_task as stop_original_files_cache_cleanup,
+)
 from twicc.providers.codex.auth_task import start_auth_task, stop_auth_task
 from twicc.providers.codex.commands_task import start_commands_task, stop_commands_task
 from twicc.providers.codex.initial_sync import scan_session_files, sync_all
@@ -91,6 +95,7 @@ class CodexOrchestrator(BaseOrchestrator):
         self._usage_sync_task: asyncio.Task | None = None
         self._statuspage_task: asyncio.Task | None = None
         self._commands_task: asyncio.Task | None = None
+        self._original_files_cache_task: asyncio.Task | None = None
 
         # Started by the dependency orchestrator coroutine after the
         # initial sync completes (compute) or after the search index is
@@ -143,6 +148,9 @@ class CodexOrchestrator(BaseOrchestrator):
         self._usage_sync_task = self._create_task(start_usage_sync_task())
         self._statuspage_task = self._create_task(start_statuspage_task())
         self._commands_task = self._create_task(start_commands_task())
+        self._original_files_cache_task = self._create_task(
+            start_original_files_cache_cleanup()
+        )
 
     async def shutdown(self) -> None:
         """Stop the Codex tasks (sync + compute first, then the periodic ones)."""
@@ -195,6 +203,14 @@ class CodexOrchestrator(BaseOrchestrator):
             logger.info("Stopping Codex commands task...")
             stop_commands_task()
             await _cancel_task(self._commands_task, "Codex commands task")
+
+        # Original files cache cleanup
+        if self._original_files_cache_task is not None:
+            stop_original_files_cache_cleanup()
+            await _cancel_task(
+                self._original_files_cache_task,
+                "Codex original files cache cleanup",
+            )
 
         # Stop every live Codex agent. The manager itself is owned by the
         # AgentManagerRegistry singleton, so we just ask it to drain — its

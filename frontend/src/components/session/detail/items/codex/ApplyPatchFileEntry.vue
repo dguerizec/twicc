@@ -9,7 +9,7 @@ import AppTooltip from '../../../../ui/AppTooltip.vue'
  * plus a CodeMirror ``ToolDiffViewer`` showing the change.
  *
  * Rendering modes (driven by ``diffMode``):
- *  - 'hunks-update' / 'fragment-update' → diff viewer with old/new
+ *  - 'full-file-update' / 'hunks-update' / 'fragment-update' → diff viewer with old/new
  *  - 'add'          → full file body, read-only code editor
  *  - 'delete'       → diff viewer with empty modified side
  *  - 'pending-delete' → placeholder until the result loads the body
@@ -27,7 +27,8 @@ const props = defineProps({
         type: String,
         required: true,
         validator: (v) => [
-            'fragment-update', 'hunks-update', 'add', 'delete', 'pending-delete',
+            'fragment-update', 'hunks-update', 'full-file-update',
+            'add', 'delete', 'pending-delete',
         ].includes(v),
     },
     original: { type: String, default: '' },
