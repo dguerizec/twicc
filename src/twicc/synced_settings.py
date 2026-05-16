@@ -56,6 +56,10 @@ _GENERIC_SYNCED_SETTINGS_DEFAULTS: dict = {
     "waBrand": "cyan",
 }
 
+# Note: `disabledProviders` (list[str]) is intentionally NOT listed here.
+# Its absence in the settings file is the sentinel that triggers the initial
+# provider activation dialog (see `twicc.providers.enabled` and spec §2).
+
 
 def _merge_provider_dicts(attr: str) -> dict:
     """Merge a ``BaseProviderHelpers`` ClassVar dict from every registered provider."""

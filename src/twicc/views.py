@@ -2133,7 +2133,10 @@ def bootstrap(request):
     from twicc.terminal_config import read_terminal_config
     from twicc.workspaces import read_workspaces
 
-    clean_settings, version = prepare_settings_for_client(read_synced_settings())
+    raw_settings = read_synced_settings()
+    clean_settings, version = prepare_settings_for_client(raw_settings)
+    disabled_providers_present = "disabledProviders" in raw_settings
+    disabled_providers = (raw_settings.get("disabledProviders") or []) if disabled_providers_present else []
     workspaces_data = read_workspaces()
     return JsonResponse({
         "settings": clean_settings,
@@ -2149,6 +2152,8 @@ def bootstrap(request):
             provider.value: helpers.get_bootstrap_data()
             for provider, helpers in get_provider_helpers_registry().items()
         },
+        "disabledProvidersPresent": disabled_providers_present,
+        "disabledProviders": disabled_providers,
     })
 
 
