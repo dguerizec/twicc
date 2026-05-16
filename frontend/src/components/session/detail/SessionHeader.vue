@@ -55,6 +55,13 @@ const session = computed(() => store.getSession(props.sessionId))
 const providerLabel = computed(() => getProviderLabel(session.value?.provider))
 const providerIcon = computed(() => PROVIDER_ICON[session.value?.provider] ?? null)
 
+// Whether the session's provider is currently enabled
+const enabledProviders = computed(() => new Set(settingsStore.enabledProviders))
+const isProviderEnabled = computed(() => {
+    const p = session.value?.provider
+    return p ? enabledProviders.value.has(p) : true
+})
+
 // Get display name for header
 // - Session mode: title if available, "New session" for drafts without title, otherwise session ID
 // - Subagent mode: ``Agent <slug>`` when the provider exposes a slug
@@ -400,11 +407,12 @@ defineExpose({
                     appearance="plain"
                     size="small"
                     class="rename-button reduced-height"
+                    :disabled="!isProviderEnabled"
                     @click="openRenameDialog"
                 >
                     <wa-icon name="pencil" label="Rename"></wa-icon>
                 </wa-button>
-                <AppTooltip :for="`session-header-${sessionId}-rename-button`">Rename session</AppTooltip>
+                <AppTooltip :for="`session-header-${sessionId}-rename-button`">{{ isProviderEnabled ? 'Rename session' : 'Cannot rename: provider is disabled.' }}</AppTooltip>
 
                 <!-- Pending request indicator (shown when waiting for user response) -->
                 <wa-icon

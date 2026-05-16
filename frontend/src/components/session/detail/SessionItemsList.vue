@@ -120,6 +120,14 @@ const providerLabel = computed(() => getProviderLabel(session.value?.provider))
 // Whether the session is stale (JSONL files deleted, history preserved as read-only)
 const isStale = computed(() => session.value?.stale === true)
 
+// Whether the session's provider is currently enabled
+const settingsStore = useSettingsStore()
+const enabledProviders = computed(() => new Set(settingsStore.enabledProviders))
+const isProviderEnabled = computed(() => {
+    const p = session.value?.provider
+    return p ? enabledProviders.value.has(p) : true
+})
+
 // Session items (raw, with metadata + content)
 const items = computed(() => store.getSessionItems(props.sessionId))
 
@@ -1557,6 +1565,19 @@ defineExpose({
                     </div>
                 </wa-callout>
             </div>
+            <!-- Provider disabled banner (replaces message input when the session's provider is disabled) -->
+            <div v-else-if="!isProviderEnabled && !parentSessionId" class="provider-disabled-banner">
+                <wa-callout variant="warning" appearance="outlined">
+                    <wa-icon slot="icon" name="circle-pause"></wa-icon>
+                    <div class="provider-disabled-content">
+                        <strong>{{ providerLabel }} is disabled</strong>
+                        <span>
+                            Re-enable {{ providerLabel }} from
+                            <strong>Settings → Providers</strong> to resume this session.
+                        </span>
+                    </div>
+                </wa-callout>
+            </div>
             <!-- Pending request form (replaces MessageInput when the agent requests approval
                  or asks a question). When multiple parallel requests are pending, the oldest
                  is shown and a counter is displayed for the others. -->
@@ -1685,6 +1706,16 @@ defineExpose({
 }
 
 .stale-banner-content {
+    display: flex;
+    flex-direction: column;
+    gap: var(--wa-space-2xs);
+}
+
+.provider-disabled-banner {
+    padding: var(--wa-space-s);
+}
+
+.provider-disabled-content {
     display: flex;
     flex-direction: column;
     gap: var(--wa-space-2xs);
