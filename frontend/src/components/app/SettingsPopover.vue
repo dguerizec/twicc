@@ -871,7 +871,7 @@ function onChangelogClose() {
                         <p class="hint">
                             Disabling a provider stops all of its background tasks, prevents
                             creating new sessions or renaming existing ones, and hides its
-                            settings section below. Existing sessions remain readable.
+                            settings section. Existing sessions remain readable.
                         </p>
                         <div class="provider-switches">
                             <div v-for="p in getRegisteredProviders()" :key="p" class="provider-switch-row">
@@ -880,6 +880,13 @@ function onChangelogClose() {
                                     :disabled="isSwitchDisabled(p)"
                                     @change="(e) => onToggleProvider(p, e)"
                                 ></wa-switch>
+                                <wa-icon
+                                    v-if="PROVIDER_ICON[p]"
+                                    auto-width
+                                    family="brands"
+                                    :name="PROVIDER_ICON[p]"
+                                    class="provider-switch-icon"
+                                ></wa-icon>
                                 <span>{{ providerLabelFor(p) }}</span>
                                 <span v-if="reasonFor(p)" class="hint danger">{{ reasonFor(p) }}</span>
                             </div>
@@ -1791,6 +1798,10 @@ wa-popover > wa-divider {
     display: flex;
     align-items: center;
     gap: var(--wa-space-s);
+}
+
+.provider-switch-icon {
+    font-size: 1.2em;
 }
 
 .hint {

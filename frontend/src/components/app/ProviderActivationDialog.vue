@@ -2,6 +2,7 @@
 import { ref, computed, watch } from 'vue'
 import { useSettingsStore } from '../../stores/settings'
 import { getRegisteredProviders, getProviderLabel } from '../../providers'
+import { PROVIDER_ICON } from '../../constants'
 
 const settings = useSettingsStore()
 
@@ -72,6 +73,13 @@ function handleHide(event) {
                     :checked="choices[p] === true"
                     @change="(e) => choices[p] = e.target.checked"
                 ></wa-switch>
+                <wa-icon
+                    v-if="PROVIDER_ICON[p]"
+                    auto-width
+                    family="brands"
+                    :name="PROVIDER_ICON[p]"
+                    class="provider-icon"
+                ></wa-icon>
                 <span>{{ providerLabel(p) }}</span>
             </label>
         </div>
@@ -102,5 +110,8 @@ function handleHide(event) {
     align-items: center;
     gap: var(--wa-space-s);
     cursor: pointer;
+}
+.provider-icon {
+    font-size: 1.2em;
 }
 </style>
