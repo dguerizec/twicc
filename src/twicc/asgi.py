@@ -27,6 +27,7 @@ from twicc.agent_settings_presets import read_agent_settings_presets, write_agen
 from twicc.core.enums import Provider
 from twicc.providers.claude_code.ws import ClaudeCodeWSHandler
 from twicc.providers.codex.ws import CodexWSHandler
+from twicc.providers.enabled import ProviderDisabledError, ensure_provider_enabled
 from twicc.providers.helpers import AgentSettings, get_provider_helpers, get_provider_helpers_registry
 from twicc.synced_settings import _settings_lock, prepare_settings_for_client, read_synced_settings, write_synced_settings
 from twicc.workspaces import read_workspaces, write_workspaces
@@ -670,6 +671,17 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
                 )
                 return
 
+        try:
+            ensure_provider_enabled(provider)
+        except ProviderDisabledError as e:
+            await self.send_json({
+                "type": "error",
+                "code": "provider_disabled",
+                "provider": e.provider.value,
+                "message": str(e),
+            })
+            return
+
         helpers = get_provider_helpers(provider)
 
         # Validate title if provided
@@ -835,6 +847,22 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
             )
             return
 
+        provider_value = await get_session_provider(session_id)
+        if provider_value is not None:
+            try:
+                provider = Provider(provider_value)
+                ensure_provider_enabled(provider)
+            except ProviderDisabledError as e:
+                await self.send_json({
+                    "type": "error",
+                    "code": "provider_disabled",
+                    "provider": e.provider.value,
+                    "message": str(e),
+                })
+                return
+            except ValueError:
+                pass  # Unknown provider value — let the registry handle it
+
         registry = get_agent_manager_registry()
         killed = await registry.kill_agent(session_id, reason="manual")
 
@@ -871,6 +899,22 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
                 }
             )
             return
+
+        provider_value = await get_session_provider(session_id)
+        if provider_value is not None:
+            try:
+                provider = Provider(provider_value)
+                ensure_provider_enabled(provider)
+            except ProviderDisabledError as e:
+                await self.send_json({
+                    "type": "error",
+                    "code": "provider_disabled",
+                    "provider": e.provider.value,
+                    "message": str(e),
+                })
+                return
+            except ValueError:
+                pass  # Unknown provider value — let the registry handle it
 
         manager = get_agent_manager_registry().find_manager_for_session(session_id)
         if manager is None:

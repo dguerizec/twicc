@@ -22,6 +22,7 @@ from twicc.core.serializers import (
     serialize_session_item_metadata,
 )
 from twicc.paths import path_to_project_id
+from twicc.providers.enabled import ProviderDisabledError, ensure_provider_enabled
 from twicc.providers.helpers import get_provider_helpers, get_provider_helpers_registry
 
 logger = logging.getLogger(__name__)
@@ -485,6 +486,13 @@ def session_detail(request, project_id, session_id, parent_session_id=None):
 
         # Handle title update
         if "title" in data:
+            try:
+                ensure_provider_enabled(session.provider)
+            except ProviderDisabledError as e:
+                return JsonResponse(
+                    {"error": "provider_disabled", "provider": e.provider.value, "message": str(e)},
+                    status=409,
+                )
             provider_helpers = get_provider_helpers(session.provider)
             validation = provider_helpers.validate_title(data["title"])
             if validation.error:

@@ -15,6 +15,7 @@ from collections.abc import AsyncIterator
 
 from twicc.core.enums import Provider
 from twicc.providers.codex.statuspage_task import get_statuspage_message_for_connection
+from twicc.providers.enabled import ProviderDisabledError, ensure_provider_enabled
 from twicc.usage_task import get_usage_message_for_connection
 
 from .auth import check_and_broadcast, get_auth_message_for_connection
@@ -77,6 +78,17 @@ class CodexWSHandler:
         Invalid / unroutable messages are logged and dropped; we never raise
         through the WS layer (that would tear down the consumer).
         """
+        try:
+            ensure_provider_enabled(Provider.CODEX)
+        except ProviderDisabledError as e:
+            await self.consumer.send_json({
+                "type": "error",
+                "code": "provider_disabled",
+                "provider": e.provider.value,
+                "message": str(e),
+            })
+            return
+
         session_id = content.get("session_id")
         request_id = content.get("request_id")
         tool_name = content.get("tool_name")

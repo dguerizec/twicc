@@ -953,6 +953,15 @@ export function useWebSocket() {
                 )
                 break
             }
+            case 'error': {
+                if (msg.code === 'provider_disabled') {
+                    const providerLabel = getProviderLabel(msg.provider) || msg.provider
+                    toast.error(`Cannot reach ${providerLabel}: provider is disabled.`)
+                } else {
+                    console.warn('[ws] Server error message:', msg)
+                }
+                break
+            }
             default: {
                 // Provider-prefixed message? ``<provider>:<action>`` is delegated
                 // to the provider's WS handler. Generic dispatcher is unaware of
