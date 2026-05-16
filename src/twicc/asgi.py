@@ -968,6 +968,19 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
 
         Uses optimistic concurrency: if the client's baseVersion is behind
         the current version, the write is rejected and the client is resynced.
+
+        When ``disabledProviders`` changes, the function applies two safety
+        rules in the sync closure (under the settings lock):
+
+        - Self-healing: a provider with live agents cannot be disabled; the
+          offending entries are silently dropped and recorded in ``corrections``.
+        - Default-provider rebind: if the current ``defaultProvider`` is no
+          longer in the enabled set after the merge, it is rebound to the
+          first enabled provider in ``Provider`` enum order.
+
+        After the closure returns, the orchestrator is signalled outside the
+        lock (async boundary): ``shutdown_one`` for newly-disabled providers,
+        ``start_one`` (as a background task) for newly-enabled ones.
         """
         synced_settings = content.get("settings")
         if not isinstance(synced_settings, dict):
@@ -982,9 +995,11 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
                 # Reject stale writes (accept if baseVersion is None — safety for rolling upgrades)
                 if base_version is not None and base_version < current_version:
                     clean, ver = prepare_settings_for_client(existing_settings)
-                    return None, clean, ver  # rejected
+                    return {"status": "rejected", "clean": clean, "version": ver}
 
-                # Accepted — merge, increment version, write
+                old_disabled = set(existing_settings.get("disabledProviders") or [])
+
+                # Accepted — merge, then enforce per-provider consistency rules.
                 existing_settings.update(synced_settings)
 
                 # Let every provider enforce its own rules on the merged dict.
@@ -994,32 +1009,96 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
                     existing_settings, synced_settings,
                 )
 
+                # Self-healing: refuse to disable a provider that still has live agents.
+                new_disabled_raw = existing_settings.get("disabledProviders")
+                corrections: dict = {}
+                if isinstance(new_disabled_raw, list):
+                    new_disabled = set(new_disabled_raw)
+                    just_disabled = new_disabled - old_disabled
+                    registry = get_agent_manager_registry()
+                    refused: set[str] = set()
+                    for value in just_disabled:
+                        try:
+                            provider = Provider(value)
+                        except ValueError:
+                            continue
+                        manager = registry.get(provider)
+                        if manager and manager.get_active_agents():
+                            refused.add(value)
+                    if refused:
+                        new_disabled -= refused
+                        existing_settings["disabledProviders"] = sorted(new_disabled)
+                        corrections["disabledProviders"] = sorted(new_disabled)
+
+                # Default-provider rebind: if the current default is no longer enabled,
+                # pick the first enabled provider in Provider enum order.
+                registered = {p for p, _ in get_provider_helpers_registry().items()}
+                final_disabled_set = set(existing_settings.get("disabledProviders") or [])
+                enabled_after = {p.value for p in registered if p.value not in final_disabled_set}
+                current_default = existing_settings.get("defaultProvider")
+                if enabled_after and current_default not in enabled_after:
+                    new_default = next(p.value for p in Provider if p.value in enabled_after)
+                    existing_settings["defaultProvider"] = new_default
+                    corrections["defaultProvider"] = new_default
+
                 existing_settings["_version"] = current_version + 1
                 write_synced_settings(existing_settings)
-                return current_version + 1, None, None  # accepted
 
-        new_version, reject_settings, reject_version = await sync_to_async(_merge_and_write)()
+                return {
+                    "status": "accepted",
+                    "version": current_version + 1,
+                    "old_disabled": old_disabled,
+                    "new_disabled": final_disabled_set,
+                    "corrections": corrections,
+                }
 
-        if new_version is not None:
-            # Accepted — broadcast to all clients
-            await self.channel_layer.group_send(
-                "updates",
-                {
-                    "type": "broadcast",
-                    "data": {
-                        "type": "synced_settings_updated",
-                        "settings": synced_settings,
-                        "version": new_version,
-                    },
-                },
-            )
-        else:
+        result = await sync_to_async(_merge_and_write)()
+
+        if result["status"] == "rejected":
             # Rejected — resync only this client
             await self.send_json({
                 "type": "synced_settings_updated",
-                "settings": reject_settings,
-                "version": reject_version,
+                "settings": result["clean"],
+                "version": result["version"],
             })
+            return
+
+        # Accepted — apply orchestrator transitions based on disabledProviders delta.
+        from twicc.orchestrator import get_orchestrator_registry
+
+        old_disabled = result["old_disabled"]
+        new_disabled = result["new_disabled"]
+        to_disable = new_disabled - old_disabled
+        to_enable = old_disabled - new_disabled
+        orchestrators = get_orchestrator_registry()
+        for value in to_disable:
+            try:
+                provider = Provider(value)
+            except ValueError:
+                continue
+            await orchestrators.shutdown_one(provider)
+        for value in to_enable:
+            try:
+                provider = Provider(value)
+            except ValueError:
+                continue
+            asyncio.create_task(orchestrators.start_one(provider))
+
+        # Broadcast to all clients, overlaying any server-side corrections
+        # so every client converges to the authoritative state.
+        broadcast_settings = dict(synced_settings)
+        broadcast_settings.update(result["corrections"])
+        await self.channel_layer.group_send(
+            "updates",
+            {
+                "type": "broadcast",
+                "data": {
+                    "type": "synced_settings_updated",
+                    "settings": broadcast_settings,
+                    "version": result["version"],
+                },
+            },
+        )
 
     async def _handle_validate_usage_dump_path(self, content: dict) -> None:
         """Validate a usage dump file path and return the result to the client.
