@@ -7,7 +7,6 @@ import { useDataStore } from '../../stores/data'
 import { useAuthStore } from '../../stores/auth'
 import { getProviderHelpers, getProviderLabel, getProviderOptions, getRegisteredProviders } from '../../providers'
 import { getActivationCharMetadata } from '../../utils/commandActivation'
-import { useClaudeCodeStore } from '../../providers/claude_code/store'
 import { DISPLAY_MODE, COLOR_SCHEME, SESSION_TIME_FORMAT, DEFAULT_MAX_CACHED_SESSIONS, WA_THEME, WA_THEME_LABELS, WA_BRAND, WA_BRAND_LABELS, PROVIDER_ICON } from '../../constants'
 import NotificationSettings from './NotificationSettings.vue'
 import AppTooltip from '../ui/AppTooltip.vue'
@@ -19,7 +18,6 @@ import { vPopoverFocusFix } from '../../directives/vPopoverFocusFix'
 const router = useRouter()
 const store = useSettingsStore()
 const dataStore = useDataStore()
-const claudeCodeStore = useClaudeCodeStore()
 const authStore = useAuthStore()
 
 // Reactive set of currently enabled providers (derived from the settings store).
