@@ -1085,6 +1085,40 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
                         existing_settings["disabledProviders"] = sorted(new_disabled)
                         corrections["disabledProviders"] = sorted(new_disabled)
 
+                # Transition guard: refuse toggles for providers currently in
+                # transient states (STARTING / STOPPING). The frontend greys
+                # the switch during these windows but a race (e.g. double
+                # click before the WS broadcast lands) must not be allowed
+                # to corrupt the orchestrator's state machine. We only
+                # honour the intent when the state is settled:
+                # - disable allowed only from RUNNING (-> stopping -> stopped)
+                # - enable allowed only from STOPPED (-> starting -> running)
+                from twicc.providers.state import ProviderState, get_provider_state
+                final_disabled_set = set(existing_settings.get("disabledProviders") or [])
+                just_disabled_now = final_disabled_set - old_disabled
+                just_enabled_now = old_disabled - final_disabled_set
+                transition_changed = False
+                for value in just_disabled_now:
+                    try:
+                        provider = Provider(value)
+                    except ValueError:
+                        continue
+                    if get_provider_state(provider) != ProviderState.RUNNING:
+                        final_disabled_set.discard(value)  # revert: keep enabled
+                        transition_changed = True
+                for value in just_enabled_now:
+                    try:
+                        provider = Provider(value)
+                    except ValueError:
+                        continue
+                    if get_provider_state(provider) != ProviderState.STOPPED:
+                        final_disabled_set.add(value)  # revert: keep disabled
+                        transition_changed = True
+                if transition_changed:
+                    new_list = sorted(final_disabled_set)
+                    existing_settings["disabledProviders"] = new_list
+                    corrections["disabledProviders"] = new_list
+
                 # Default-provider rebind: if the current default is no longer enabled,
                 # pick the first enabled provider in Provider enum order.
                 registered = {p for p, _ in get_provider_helpers_registry().items()}

@@ -2145,6 +2145,8 @@ def bootstrap(request):
     clean_settings, version = prepare_settings_for_client(raw_settings)
     disabled_providers_present = "disabledProviders" in raw_settings
     disabled_providers = (raw_settings.get("disabledProviders") or []) if disabled_providers_present else []
+    from twicc.providers.state import get_all_provider_states
+    provider_states = get_all_provider_states()
     workspaces_data = read_workspaces()
     return JsonResponse({
         "settings": clean_settings,
@@ -2162,6 +2164,7 @@ def bootstrap(request):
         },
         "disabledProvidersPresent": disabled_providers_present,
         "disabledProviders": disabled_providers,
+        "providerStates": provider_states,
     })
 
 
