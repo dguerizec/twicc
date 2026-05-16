@@ -47,6 +47,7 @@ export const SETTINGS_SCHEMA = {
     notifPendingRequestBrowser: false,
     // --- Synced settings (defaults from backend, null as placeholder) ---
     defaultProvider: null,
+    disabledProviders: [],
     titleGenerationEnabled: null,
     titleAutoApply: null,
     titleSystemPrompt: null,
@@ -56,6 +57,7 @@ export const SETTINGS_SCHEMA = {
     waTheme: null,
     waBrand: null,
     // --- Not persisted - runtime state ---
+    _disabledProvidersPresent: false,
     _devMode: false,
     _uvxMode: false,
     _twiccLaunchPrefix: '',
@@ -72,6 +74,8 @@ export const SETTINGS_SCHEMA = {
  */
 const SETTINGS_VALIDATORS = {
     defaultProvider: (v) => typeof v === 'string' && getRegisteredProviders().includes(v),
+    disabledProviders: (v) =>
+        Array.isArray(v) && v.every(item => typeof item === 'string' && getRegisteredProviders().includes(item)),
     displayMode: (v) => [DISPLAY_MODE.CONVERSATION, DISPLAY_MODE.SIMPLIFIED, DISPLAY_MODE.NORMAL, DISPLAY_MODE.DEBUG].includes(v),
     fontSize: (v) => typeof v === 'number' && v >= 12 && v <= 32,
     colorScheme: (v) => [COLOR_SCHEME.SYSTEM, COLOR_SCHEME.LIGHT, COLOR_SCHEME.DARK].includes(v),
@@ -257,6 +261,19 @@ export const useSettingsStore = defineStore('settings', {
         isNotifPendingRequestBrowser: (state) => state.notifPendingRequestBrowser,
         getWaTheme: (state) => state.waTheme,
         getWaBrand: (state) => state.waBrand,
+        /**
+         * Whether the ``disabledProviders`` key is physically present in settings.json.
+         * False until the backend writes it (e.g. after the initial provider-activation dialog).
+         */
+        disabledProvidersPresent: (state) => state._disabledProvidersPresent,
+        /**
+         * Registered providers that are not in the disabled list.
+         * Used by provider-agnostic code that needs to iterate over active providers.
+         */
+        enabledProviders: (state) => {
+            const disabled = new Set(state.disabledProviders || [])
+            return getRegisteredProviders().filter(p => !disabled.has(p))
+        },
         /**
          * Whether the backend is running in dev mode (source layout) vs installed package.
          */
@@ -641,6 +658,12 @@ export const useSettingsStore = defineStore('settings', {
             // is already valid; the mutation does not propagate back to
             // the backend because ``_isApplyingRemoteSettings`` is set.
             this.defaultProvider = resolveDefaultProvider(this.defaultProvider)
+            // Track disabledProviders key presence: the backend only writes it
+            // to settings.json after the initial provider-activation dialog,
+            // so receiving it in a WS push means it is now physically present.
+            if ('disabledProviders' in remoteSettings) {
+                this._disabledProvidersPresent = true
+            }
             // Provider-owned synced keys are dispatched through each helper.
             for (const provider of getRegisteredProviders()) {
                 getProviderHelpers(provider).applySyncedSettings(remoteSettings)
@@ -682,8 +705,11 @@ export const useSettingsStore = defineStore('settings', {
  * @param {boolean} devMode - Whether the backend is running in dev mode
  * @param {boolean} uvxMode - Whether the app was launched via uvx
  * @param {string} twiccLaunchPrefix - Shell prefix that re-invokes this TwiCC distribution
+ * @param {number} version - Settings version from the backend
+ * @param {boolean} disabledProvidersPresent - Whether disabledProviders key exists in settings.json
+ * @param {string[]} disabledProviders - List of provider keys that are disabled
  */
-export function applyDefaultSettings(defaultSettings, currentSettings, devMode, uvxMode, twiccLaunchPrefix, version) {
+export function applyDefaultSettings(defaultSettings, currentSettings, devMode, uvxMode, twiccLaunchPrefix, version, disabledProvidersPresent, disabledProviders) {
     if (defaultSettings && typeof defaultSettings === 'object') {
         // Only merge defaults for keys declared in the generic schema; provider-owned
         // keys are silently ignored here (their bootstrap-current values flow through
@@ -698,6 +724,9 @@ export function applyDefaultSettings(defaultSettings, currentSettings, devMode, 
     // Store current settings for applySyncedSettings() to use after store init
     _pendingSyncedSettings = currentSettings
     _pendingSettingsVersion = version
+    // Stash disabled providers for initSettings() to apply once the store is ready
+    _pendingDisabledProvidersPresent = disabledProvidersPresent === true
+    _pendingDisabledProviders = Array.isArray(disabledProviders) ? disabledProviders : null
 }
 
 // Pending synced settings to apply once the store is initialized
@@ -709,6 +738,11 @@ let _pendingLocalStorageSettings = null
 // Module-level (not in store state) to avoid unnecessary reactivity.
 let _settingsVersion = 0
 let _pendingSettingsVersion = undefined
+
+// Bootstrap-provided disabled providers info — stashed before store init,
+// applied in initSettings() when the store is ready.
+let _pendingDisabledProviders = null
+let _pendingDisabledProvidersPresent = false
 
 /**
  * Initialize settings store: apply initial values and set up watchers.
@@ -741,6 +775,14 @@ export function initSettings() {
         _pendingSyncedSettings = null
         _pendingSettingsVersion = undefined
     }
+
+    // Apply bootstrap-provided disabled providers info.
+    store._disabledProvidersPresent = _pendingDisabledProvidersPresent
+    if (_pendingDisabledProviders !== null) {
+        store.disabledProviders = _pendingDisabledProviders
+    }
+    _pendingDisabledProviders = null
+    _pendingDisabledProvidersPresent = false
 
     // Apply initial font size (theme is already applied in main.js)
     document.documentElement.style.fontSize = `${store.fontSize}px`

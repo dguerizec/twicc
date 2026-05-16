@@ -113,8 +113,8 @@ if (!authStore.needsLogin) {
         const resp = await fetch('/api/bootstrap/')
         if (resp.ok) {
             bootstrapData = await resp.json()
-            const { settings, settings_version, default_settings, dev_mode, uvx_mode, twicc_launch_prefix, providers } = bootstrapData
-            applyDefaultSettings(default_settings, settings, dev_mode, uvx_mode, twicc_launch_prefix, settings_version)
+            const { settings, settings_version, default_settings, dev_mode, uvx_mode, twicc_launch_prefix, providers, disabled_providers_present, disabled_providers } = bootstrapData
+            applyDefaultSettings(default_settings, settings, dev_mode, uvx_mode, twicc_launch_prefix, settings_version, disabled_providers_present, disabled_providers)
             // Seed each provider's bootstrap-driven state (agent-setting categories
             // for ``classifyAgentSettingsChanges``, model registry for capability
             // and retired-model lookups, agent-setting presets). Optional chaining:

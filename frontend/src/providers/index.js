@@ -52,6 +52,25 @@ export function getRegisteredProviders() {
 }
 
 /**
+ * Returns the subset of registered providers that are currently enabled
+ * (i.e. not listed in the settings store's ``disabledProviders``).
+ *
+ * Cycle note: ``stores/settings.js`` statically imports ``getRegisteredProviders``
+ * from this file. A static ``useSettingsStore`` import here would create a
+ * mutual dependency that breaks Vite HMR. The getter is therefore defined on
+ * the settings store itself (``enabledProviders``) and accessed here via a
+ * lazy dynamic import — the import resolves synchronously from the module
+ * cache after the first call, so there is no real async overhead.
+ *
+ * Callers MUST be in a Pinia-active scope (computed property, store action,
+ * component render function, or any code that runs after ``createPinia()``).
+ */
+export async function getEnabledProviders() {
+    const { useSettingsStore } = await import('../stores/settings')
+    return useSettingsStore().enabledProviders
+}
+
+/**
  * Human-readable label for the given provider, suitable for inlining in
  * user-facing strings (toasts, tooltips, placeholders). Falls back to
  * ``'Agent'`` when the provider is unknown so callers don't have to guard.
