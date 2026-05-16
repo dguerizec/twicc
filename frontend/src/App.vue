@@ -16,6 +16,7 @@ import CustomNotification from './components/app/CustomNotification.vue'
 import CommandPalette from './components/app/CommandPalette.vue'
 import SearchOverlay from './components/app/SearchOverlay.vue'
 import StopProcessConfirmDialog from './components/app/StopProcessConfirmDialog.vue'
+import ProviderActivationDialog from './components/app/ProviderActivationDialog.vue'
 import { initStaticCommands } from './commands/staticCommands'
 import {
     pendingConfirmation,
@@ -278,6 +279,9 @@ const toastTheme = computed(() => {
 </script>
 
 <template>
+    <!-- Provider activation: non-dismissible first-run / recovery dialog -->
+    <ProviderActivationDialog />
+
     <!-- Version mismatch: non-dismissible reload dialog -->
     <wa-dialog :open="versionMismatchDetected || undefined" without-header @wa-hide.prevent>
         <div class="version-reload-content">
