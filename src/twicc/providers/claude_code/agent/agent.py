@@ -1065,10 +1065,8 @@ class ClaudeCodeAgent(BaseAgent):
         # Cancel any pending request Future to avoid asyncio warnings
         self._cancel_all_pending_futures()
 
-        # Get PID BEFORE dropping the client reference
-        pid = self.get_pid()
-
-        # Cancel message loop first
+        # Cancel the message loop first so it doesn't interpret the imminent
+        # transport close as a real error.
         if self._message_loop_task is not None:
             self._message_loop_task.cancel()
             try:
@@ -1077,13 +1075,7 @@ class ClaudeCodeAgent(BaseAgent):
                 pass
             self._message_loop_task = None
 
-        # Don't call disconnect() - the SDK's anyio cancel scopes leak
-        # cancellation to other asyncio tasks. Just drop the reference.
-        self._client = None
-
-        # Kill the system process directly (isolated from anyio context)
-        if pid is not None:
-            await self._kill_system_process(pid)
+        await self._shutdown_sdk_client()
 
         # Update state
         self._set_state(AgentState.DEAD)
@@ -1283,7 +1275,6 @@ class ClaudeCodeAgent(BaseAgent):
                         self.session_id,
                     )
                     self._cancel_all_pending_futures()
-                    pid = self.get_pid()
                     self._set_state(AgentState.DEAD)
                     self.kill_reason = "auth_required"
                     self.last_activity = time.time()
@@ -1294,9 +1285,7 @@ class ClaudeCodeAgent(BaseAgent):
                     # token is no longer accepted — that's the authoritative signal.
                     from twicc.providers.claude_code.auth import mark_unauthenticated_and_broadcast
                     await mark_unauthenticated_and_broadcast()
-                    self._client = None
-                    if pid is not None:
-                        await self._kill_system_process(pid)
+                    await self._shutdown_sdk_client()
                     return
 
                 if isinstance(msg, ResultMessage):
@@ -1316,7 +1305,7 @@ class ClaudeCodeAgent(BaseAgent):
                             self.last_activity = time.time()
                             self._first_turn_done_event.set()
                             await self._notify_state_change()
-                            self._client = None
+                            await self._shutdown_sdk_client()
                             return
 
                         # Log full ResultMessage details for debugging
@@ -1394,9 +1383,6 @@ class ClaudeCodeAgent(BaseAgent):
         # Cancel any pending request Future to avoid asyncio warnings
         self._cancel_all_pending_futures()
 
-        # Get PID BEFORE dropping the client reference
-        pid = self.get_pid()
-
         self._set_state(AgentState.DEAD)
         self.error = error_message
         self.kill_reason = "error"
@@ -1405,11 +1391,56 @@ class ClaudeCodeAgent(BaseAgent):
 
         await self._notify_state_change()
 
-        # Don't call disconnect() - the SDK's anyio cancel scopes leak
-        # cancellation to other asyncio tasks. Just drop the reference.
-        self._client = None
+        await self._shutdown_sdk_client()
 
-        # Kill the system process directly (isolated from anyio context)
+    async def _shutdown_sdk_client(self) -> None:
+        """Release the SDK client and its CLI subprocess.
+
+        Calls ``ClaudeSDKClient.disconnect()`` — the SDK's intended cleanup
+        path — so it can cancel its detached read / control-handler tasks,
+        close the message stream, and shut the transport (which kills the
+        Claude CLI subprocess). The call is bounded by a 5 s timeout and
+        shielded against caller cancellation so a hanging or misbehaving
+        disconnect can't propagate cancellation up to our task.
+
+        Earlier SDK versions held those detached tasks inside an anyio
+        ``TaskGroup`` whose ``CancelScope`` had task affinity — closing the
+        transport from a task other than the one that opened it raised
+        ``RuntimeError: Attempted to exit cancel scope in a different task
+        than it was entered in``. The SDK now spawns them via plain
+        ``loop.create_task`` (see ``claude_agent_sdk/_internal/_task_compat``),
+        so ``disconnect()`` is safe to call from any task in the version
+        range we pin.
+
+        If disconnect fails or times out, falls back to killing the
+        subprocess directly via psutil so we never leave the CLI running.
+        We deliberately skip the psutil kill on the success path to avoid a
+        narrow PID-reuse window: between transport close and our kill, the
+        OS may have already recycled the pid for an unrelated process.
+
+        Safe to call when ``_client`` is already ``None`` — no-op.
+        """
+        client = self._client
+        if client is None:
+            return
+        pid = self.get_pid()
+        self._client = None
+        try:
+            await asyncio.wait_for(
+                asyncio.shield(client.disconnect()),
+                timeout=5.0,
+            )
+            return
+        except asyncio.TimeoutError:
+            logger.warning(
+                "SDK disconnect() timed out for session %s — falling back to psutil kill",
+                self.session_id,
+            )
+        except Exception:
+            logger.exception(
+                "SDK disconnect() failed for session %s — falling back to psutil kill",
+                self.session_id,
+            )
         if pid is not None:
             await self._kill_system_process(pid)
 
