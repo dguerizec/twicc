@@ -68,11 +68,13 @@ function handleHide(event) {
             <strong>Settings &rarr; Providers</strong>.
         </p>
         <div class="provider-choices">
-            <label v-for="p in getRegisteredProviders()" :key="p" class="provider-row">
-                <wa-switch
-                    :checked="choices[p] === true"
-                    @change="(e) => choices[p] = e.target.checked"
-                ></wa-switch>
+            <wa-switch
+                v-for="p in getRegisteredProviders()"
+                :key="p"
+                class="provider-row"
+                :checked="choices[p] === true"
+                @change="(e) => choices[p] = e.target.checked"
+            >
                 <wa-icon
                     v-if="PROVIDER_ICON[p]"
                     auto-width
@@ -80,8 +82,8 @@ function handleHide(event) {
                     :name="PROVIDER_ICON[p]"
                     class="provider-icon"
                 ></wa-icon>
-                <span>{{ providerLabel(p) }}</span>
-            </label>
+                {{ providerLabel(p) }}
+            </wa-switch>
         </div>
         <wa-button
             slot="footer"
@@ -105,11 +107,10 @@ function handleHide(event) {
     gap: var(--wa-space-m);
     margin: var(--wa-space-m) 0;
 }
-.provider-row {
-    display: flex;
+.provider-row::part(label) {
+    display: inline-flex;
     align-items: center;
-    gap: var(--wa-space-s);
-    cursor: pointer;
+    gap: var(--wa-space-xs);
 }
 .provider-icon {
     font-size: 1.2em;

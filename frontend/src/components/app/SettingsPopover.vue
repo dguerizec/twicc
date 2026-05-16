@@ -876,18 +876,20 @@ function onChangelogClose() {
                         <div class="provider-switches">
                             <div v-for="p in getRegisteredProviders()" :key="p" class="provider-switch-row">
                                 <wa-switch
+                                    class="provider-switch"
                                     :checked="enabledProviders.has(p)"
                                     :disabled="isSwitchDisabled(p)"
                                     @change="(e) => onToggleProvider(p, e)"
-                                ></wa-switch>
-                                <wa-icon
-                                    v-if="PROVIDER_ICON[p]"
-                                    auto-width
-                                    family="brands"
-                                    :name="PROVIDER_ICON[p]"
-                                    class="provider-switch-icon"
-                                ></wa-icon>
-                                <span>{{ providerLabelFor(p) }}</span>
+                                >
+                                    <wa-icon
+                                        v-if="PROVIDER_ICON[p]"
+                                        auto-width
+                                        family="brands"
+                                        :name="PROVIDER_ICON[p]"
+                                        class="provider-switch-icon"
+                                    ></wa-icon>
+                                    {{ providerLabelFor(p) }}
+                                </wa-switch>
                                 <span v-if="reasonFor(p)" class="hint danger">{{ reasonFor(p) }}</span>
                             </div>
                         </div>
@@ -1798,6 +1800,12 @@ wa-popover > wa-divider {
     display: flex;
     align-items: center;
     gap: var(--wa-space-s);
+}
+
+.provider-switch::part(label) {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--wa-space-xs);
 }
 
 .provider-switch-icon {
