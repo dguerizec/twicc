@@ -254,6 +254,19 @@ class BaseAgentManager:
                 if pending is not None:
                     set_pending_agent_settings(agent.session_id, pending)
 
+                # Same rationale for pending_titles: the WS handler stored it under
+                # the draft id we received; re-key under the canonical id so the
+                # Codex manager's ASSISTANT_TURN flush actually finds it. No-op for
+                # Claude Code where draft id == canonical id.
+                from twicc.pending_titles import (
+                    pop_pending_title,
+                    set_pending_title,
+                )
+
+                pending_title = pop_pending_title(session_id)
+                if pending_title is not None:
+                    set_pending_title(agent.session_id, pending_title)
+
             await self.notify_session_bound(
                 draft_session_id=session_id,
                 session_id=agent.session_id,
