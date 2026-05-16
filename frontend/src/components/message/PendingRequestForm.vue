@@ -11,6 +11,7 @@
 import { ref, computed, watch, useId } from 'vue'
 import { getProviderLabel, respondToPendingRequest } from '../../providers'
 import { useDataStore } from '../../stores/data'
+import { PROVIDER } from '../../constants'
 import AppTooltip from '../ui/AppTooltip.vue'
 import ClaudePendingRequestBody from '../session/detail/items/claude_code/PendingRequestBody.vue'
 import CodexPendingRequestBody from '../session/detail/items/codex/PendingRequestBody.vue'
@@ -68,8 +69,8 @@ const requestType = computed(() => props.pendingRequest.request_type)
 
 // Route to the appropriate body component based on provider
 const bodyComponent = computed(() => {
-    if (provider.value === 'codex') return CodexPendingRequestBody
-    if (provider.value === 'claude_code') return ClaudePendingRequestBody
+    if (provider.value === PROVIDER.CODEX) return CodexPendingRequestBody
+    if (provider.value === PROVIDER.CLAUDE_CODE) return ClaudePendingRequestBody
     return null
 })
 
