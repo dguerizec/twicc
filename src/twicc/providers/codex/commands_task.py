@@ -224,6 +224,8 @@ async def start_commands_task() -> None:
     - Handles graceful shutdown via the stop event
     """
     stop_event = get_stop_event()
+    # Reset for hot-restart support — see auth_task.start_auth_task().
+    stop_event.clear()
 
     logger.info("Codex commands sync task started")
 

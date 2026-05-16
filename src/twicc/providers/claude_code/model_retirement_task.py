@@ -35,6 +35,8 @@ def stop_model_retirement_task() -> None:
 async def start_model_retirement_task() -> None:
     """Run the retirement check loop: once at startup, then every 24 hours."""
     stop_event = get_retirement_stop_event()
+    # Reset for hot-restart support — see auth_task.start_auth_task().
+    stop_event.clear()
 
     _log_upcoming_retirements()
 

@@ -122,6 +122,8 @@ async def start_statuspage_task() -> None:
     global _last_known_status, _last_known_updated_at
 
     stop_event = get_statuspage_stop_event()
+    # Reset for hot-restart support — see auth_task.start_auth_task().
+    stop_event.clear()
 
     logger.info("Statuspage task started")
 

@@ -49,6 +49,8 @@ async def start_usage_sync_task() -> None:
     """
     interval = ClaudeCodeHelpers.USAGE_SYNC_INTERVAL
     stop_event = get_usage_sync_stop_event()
+    # Reset for hot-restart support — see auth_task.start_auth_task().
+    stop_event.clear()
 
     logger.info("Usage sync task started")
 

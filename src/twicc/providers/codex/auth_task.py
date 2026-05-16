@@ -59,6 +59,10 @@ async def _wait_either(events: list[asyncio.Event], *, timeout: float | None) ->
 async def start_auth_task() -> None:
     """Background task that monitors Codex CLI authentication state."""
     stop_event = get_auth_stop_event()
+    # Reset the module-level stop event so a hot-restart (provider toggled
+    # off then back on) doesn't see the leftover ``set()`` from the previous
+    # shutdown and exit on the first ``is_set()`` check.
+    stop_event.clear()
     wake_event = get_auth_wake_event()
 
     logger.info("Codex auth check task started")

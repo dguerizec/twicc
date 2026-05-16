@@ -73,6 +73,9 @@ async def start_auth_task() -> None:
       or the stop event is set, then re-runs a check.
     """
     stop_event = get_auth_stop_event()
+    # Reset for hot-restart support: a previous shutdown leaves stop_event
+    # set, which would make the new task exit on its first ``is_set()``.
+    stop_event.clear()
     wake_event = get_auth_wake_event()
 
     logger.info("Auth check task started")

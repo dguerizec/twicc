@@ -122,6 +122,15 @@ class CodexOrchestrator(BaseOrchestrator):
         """
         self.search_index_ready = search_index_ready
 
+        # Reset stateful events in case this is a hot-restart (provider was
+        # toggled off via Settings, then back on). ``shutdown()`` set them
+        # all so the previous run's awaiters could finish; without this
+        # reset, the new tasks would observe the leftover ``set()`` and
+        # exit on the first ``is_set()`` check.
+        self._sync_stop_event.clear()
+        self.initial_sync_done.clear()
+        self.compute_done.clear()
+
         # Register the TwiCC marketplace and (re)install the plugin before
         # the commands sync task starts polling for skills. The call is
         # idempotent and best-effort — failures are logged inside.

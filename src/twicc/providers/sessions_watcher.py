@@ -684,6 +684,10 @@ class BaseSessionsWatcher:
         channel_layer = get_channel_layer()
         projects_dir = self.projects_dir
         stop_event = self.get_stop_event()
+        # Reset the stop event so a hot-restart (provider toggled off then
+        # back on) doesn't see the leftover ``set()`` from the previous
+        # ``stop_watcher()`` call and exit on the first ``is_set()`` check.
+        stop_event.clear()
 
         if not projects_dir.exists():
             logger.info(

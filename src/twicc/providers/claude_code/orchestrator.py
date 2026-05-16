@@ -164,6 +164,15 @@ class ClaudeCodeOrchestrator(BaseOrchestrator):
         self._shutdown_event = shutdown_event
         self.search_index_ready = search_index_ready
 
+        # Reset stateful events in case this is a hot-restart (provider was
+        # toggled off via Settings, then back on). ``shutdown()`` set them
+        # all so the previous run's awaiters could finish; without this
+        # reset, the new tasks would observe the leftover ``set()`` and
+        # exit on the first ``is_set()`` check.
+        self._sync_stop_event.clear()
+        self.initial_sync_done.clear()
+        self.compute_done.clear()
+
         self._sync_task = self._create_task(self._initial_sync_task())
         self._orch_task = self._create_task(self._dependency_orchestrator())
         self._usage_sync_task = self._create_task(start_usage_sync_task())
