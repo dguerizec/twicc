@@ -1,12 +1,12 @@
 ---
 name: twicc-search
-description: Search through Claude Code session history using TwiCC's full-text search index. Use when the user wants to find past conversations, look up what was discussed, or locate specific content across sessions.
+description: Search through TwiCC's session history using its full-text search index. Spans every backend provider (Claude Code, Codex, ...). Use when the user wants to find past conversations, look up what was discussed, or locate specific content across sessions.
 argument-hint: <query>
 ---
 
 # TwiCC Search
 
-Search across all Claude Code session history using TwiCC's Tantivy-based full-text search index.
+Search across all session history (every backend provider TwiCC tracks) using its Tantivy-based full-text search index.
 
 ## When to use
 

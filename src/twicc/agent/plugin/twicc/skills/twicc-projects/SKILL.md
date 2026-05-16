@@ -1,11 +1,11 @@
 ---
 name: twicc-projects
-description: List all Claude Code projects tracked by TwiCC. Use when the user wants to see their projects, find a project ID, or get an overview of project activity and costs.
+description: List all projects tracked by TwiCC. Use when the user wants to see their projects, find a project ID, or get an overview of project activity and costs.
 ---
 
 # TwiCC Projects
 
-List all projects tracked by TwiCC, ordered by most recently active.
+List all projects tracked by TwiCC, ordered by most recently active. A project corresponds to a working directory and is shared by every provider (Claude Code, Codex, ...) that has run sessions inside it.
 
 ## When to use
 
@@ -70,7 +70,7 @@ The command outputs a JSON array of project objects:
 
 ### Fields
 
-- **`id`** — project identifier (derived from the `~/.claude/projects/` folder name, starts with a dash). When passing this ID to other commands (`twicc project`, `twicc sessions --project`), **omit the leading dash** — it is added automatically
+- **`id`** — project identifier (derived from the project's working directory path, with every non-alphanumeric character replaced by a dash; therefore starts with a dash for absolute paths). When passing this ID to other commands (`twicc project`, `twicc sessions --project`), **omit the leading dash** — it is added automatically
 - **`directory`** — filesystem path of the project
 - **`git_root`** — resolved git root directory
 - **`sessions_count`** — total number of sessions in this project

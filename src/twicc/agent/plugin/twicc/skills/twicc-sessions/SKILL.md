@@ -1,6 +1,6 @@
 ---
 name: twicc-sessions
-description: List Claude Code sessions tracked by TwiCC. Use when the user wants to browse sessions, find a session ID, filter by project, or see session activity and costs.
+description: List sessions tracked by TwiCC across every backend provider (Claude Code, Codex, ...). Use when the user wants to browse sessions, find a session ID, filter by project, or see session activity and costs.
 ---
 
 # TwiCC Sessions
@@ -58,6 +58,7 @@ The command outputs a JSON array of session objects:
   {
     "id": "abc123-def456",
     "project_id": "-home-twidi-dev-myproject",
+    "provider": "claude_code",
     "parent_session_id": null,
     "last_line": 150,
     "mtime": 1741654800.0,
@@ -65,8 +66,11 @@ The command outputs a JSON array of session objects:
     "last_started_at": "2025-03-10T14:30:00+00:00",
     "last_updated_at": "2025-03-10T15:45:00+00:00",
     "last_stopped_at": "2025-03-10T15:50:00+00:00",
+    "last_new_content_at": "2025-03-10T15:45:00+00:00",
+    "last_viewed_at": "2025-03-10T16:00:00+00:00",
     "stale": false,
     "title": "Implement user authentication",
+    "slug": null,
     "user_message_count": 12,
     "compute_version_up_to_date": true,
     "context_usage": 85000,
@@ -83,7 +87,9 @@ The command outputs a JSON array of session objects:
     "selected_model": null,
     "effort": null,
     "thinking_enabled": null,
-    "claude_in_chrome": false
+    "claude_in_chrome": false,
+    "context_max": 200000,
+    "compacted": false
   }
 ]
 ```
@@ -92,12 +98,18 @@ The command outputs a JSON array of session objects:
 
 - **`id`** — session UUID
 - **`project_id`** — parent project identifier
+- **`provider`** — backend that owns the session: `"claude_code"` or `"codex"`. Determines the JSONL schema for items, supported settings, etc.
 - **`title`** — session title (from first user message or custom title)
+- **`slug`** — provider-supplied short identifier (e.g. Codex subagent nickname like `"Bohr"`), or `null`
 - **`user_message_count`** — number of user message turns
 - **`total_cost`** — total cost in USD (own + subagents)
 - **`model`** — model info with `raw`, `family`, and `version`
 - **`git_branch`** — git branch at time of session
 - **`parent_session_id`** — `null` for regular sessions, set for subagents
+- **`context_max`** — maximum context window in tokens (`200000` or `1000000`)
+- **`compacted`** — whether the session has been compacted at least once
+- **`last_new_content_at`** — most recent timestamp of new session content (item appended)
+- **`last_viewed_at`** — when the user last opened the session in the TwiCC UI
 
 ## Related commands
 

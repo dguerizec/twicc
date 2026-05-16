@@ -1,6 +1,6 @@
 ---
 name: twicc-project
-description: Show details of a single Claude Code project by ID. Use when the user wants to inspect a specific project's metadata, cost, or directory.
+description: Show details of a single project by ID. Use when the user wants to inspect a specific project's metadata, cost, or directory.
 argument-hint: <project_id>
 ---
 
@@ -61,7 +61,7 @@ The command outputs a single JSON project object:
 
 ### Fields
 
-- **`id`** — project identifier (derived from the `~/.claude/projects/` folder name)
+- **`id`** — project identifier (derived from the project's working directory path, with every non-alphanumeric character replaced by a dash)
 - **`directory`** — filesystem path of the project
 - **`git_root`** — resolved git root directory
 - **`sessions_count`** — total number of sessions in this project

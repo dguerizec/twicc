@@ -1,6 +1,6 @@
 ---
 name: twicc-session
-description: Inspect a single Claude Code session — view details, read item content by line number, or list subagents. Use when the user wants to examine a specific session, read conversation content, or explore subagent activity.
+description: Inspect a single session — view details, read item content by line number, or list subagents. Works for any provider TwiCC tracks (Claude Code, Codex, ...). Use when the user wants to examine a specific session, read conversation content, or explore subagent activity.
 argument-hint: <session_id> [content|agents]
 ---
 
@@ -41,6 +41,7 @@ Returns the full session metadata as JSON. Works for both regular sessions and s
 {
   "id": "abc123-def456",
   "project_id": "-home-twidi-dev-myproject",
+  "provider": "claude_code",
   "parent_session_id": null,
   "last_line": 150,
   "mtime": 1741654800.0,
@@ -48,8 +49,11 @@ Returns the full session metadata as JSON. Works for both regular sessions and s
   "last_started_at": "2025-03-10T14:30:00+00:00",
   "last_updated_at": "2025-03-10T15:45:00+00:00",
   "last_stopped_at": "2025-03-10T15:50:00+00:00",
+  "last_new_content_at": "2025-03-10T15:45:00+00:00",
+  "last_viewed_at": "2025-03-10T16:00:00+00:00",
   "stale": false,
   "title": "Implement user authentication",
+  "slug": null,
   "user_message_count": 12,
   "compute_version_up_to_date": true,
   "context_usage": 85000,
@@ -66,11 +70,13 @@ Returns the full session metadata as JSON. Works for both regular sessions and s
   "selected_model": null,
   "effort": null,
   "thinking_enabled": null,
-  "claude_in_chrome": false
+  "claude_in_chrome": false,
+  "context_max": 200000,
+  "compacted": false
 }
 ```
 
-The `last_line` field tells you the total number of items in the session, which is useful to know the valid range for the `content` subcommand.
+The `last_line` field tells you the total number of items in the session, which is useful to know the valid range for the `content` subcommand. The `provider` field (`"claude_code"` or `"codex"`) tells you which backend wrote the session — this matters for the `content` subcommand since each provider has its own JSONL item schema.
 
 ---
 
@@ -104,7 +110,11 @@ Returns a JSON array of the raw JSONL objects, parsed into proper JSON:
 ]
 ```
 
-The structure of each object depends on its type (human message, assistant message, tool use, tool result, etc.). These are the raw Claude API message objects.
+The structure of each object depends on the session's `provider` (use `twicc session <ID>` first to find out) and on the item's type within that provider's JSONL stream:
+- **`claude_code`** sessions use raw Claude API message objects (human/assistant messages, tool_use, tool_result, …).
+- **`codex`** sessions use Codex's own JSONL schema (user/assistant messages, function_call, function_call_output, …).
+
+In both cases the object is the JSONL line written by the provider's CLI, parsed into JSON. Field names and shapes differ between providers.
 
 #### Tips
 
