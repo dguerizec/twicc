@@ -108,7 +108,12 @@ function launchProviderAuthInTerminal(loginCommand) {
 
 const USAGE_ROTATION_INTERVAL_MS = 15000
 
-const usageProviders = computed(() => getRegisteredProviders().filter(provider => getProviderHelpers(provider).tracksUsage()))
+const usageProviders = computed(() => {
+    const enabled = new Set(settingsStore.enabledProviders)
+    return getRegisteredProviders().filter(
+        provider => enabled.has(provider) && getProviderHelpers(provider).tracksUsage()
+    )
+})
 
 const currentUsageProviderIndex = ref(0)
 
