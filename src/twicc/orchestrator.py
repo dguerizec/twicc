@@ -22,6 +22,7 @@ from typing import Any, ClassVar, TypeVar
 
 from twicc.core.enums import Provider
 from twicc.logging_context import current_provider
+from twicc.providers.enabled import get_enabled_providers
 
 logger = logging.getLogger(__name__)
 
@@ -222,8 +223,6 @@ class OrchestratorRegistry:
         The two events are stashed on the registry so :meth:`start_one` /
         :meth:`shutdown_one` can reuse them later for hot-toggle.
         """
-        from twicc.providers.enabled import get_enabled_providers
-
         # Stash so start_one() / shutdown_one() can reuse on hot-toggle.
         self._shutdown_event = shutdown_event
         self._search_index_ready = search_index_ready
@@ -254,8 +253,6 @@ class OrchestratorRegistry:
         Waiting on an un-started provider's event would hang forever because
         ``start()`` is what triggers ``.set()`` on it.
         """
-        from twicc.providers.enabled import get_enabled_providers
-
         enabled = get_enabled_providers()
         if not enabled:
             return
@@ -272,8 +269,6 @@ class OrchestratorRegistry:
         providers without a compute phase. Only waits on enabled providers
         (same reasoning as :meth:`wait_initial_sync_done`).
         """
-        from twicc.providers.enabled import get_enabled_providers
-
         enabled = get_enabled_providers()
         if not enabled:
             return
@@ -321,7 +316,12 @@ class OrchestratorRegistry:
                 )
 
     async def shutdown_all(self) -> None:
-        """Stop every provider's tasks in parallel.
+        """Stop every enabled provider's tasks in parallel.
+
+        Only shuts down orchestrators whose provider was actually started
+        (i.e. enabled ones). Calling ``shutdown()`` on an orchestrator whose
+        ``start()`` was never invoked can raise ``AttributeError`` on
+        attributes that are only created during startup (e.g. a watcher task).
 
         Each orchestrator owns its own task graph and teardown order, so
         parallel shutdown is safe — and faster when a provider has slow
@@ -329,11 +329,15 @@ class OrchestratorRegistry:
         processes, ...). ``return_exceptions=True`` ensures a single
         failing provider doesn't leave the others' tasks dangling.
         """
+        enabled = get_enabled_providers()
+        if not enabled:
+            return
+        enabled_items = [(p, o) for p, o in self._orchestrators.items() if p in enabled]
         results = await asyncio.gather(
-            *(orch.shutdown() for orch in self._orchestrators.values()),
+            *(orch.shutdown() for _, orch in enabled_items),
             return_exceptions=True,
         )
-        for (provider, _), result in zip(self.items(), results):
+        for (provider, _), result in zip(enabled_items, results):
             if isinstance(result, BaseException):
                 logger.error(
                     "Orchestrator for %s failed to shut down cleanly: %s",
