@@ -37,6 +37,7 @@ $TWICC projects
 - `--limit N` — max number of projects to return (default: 20)
 - `--offset N` — skip first N projects for pagination (default: 0)
 - `--include-archived` — include archived projects in the results (default: false, archived projects are excluded)
+- `--workspace ID` — only return projects belonging to the given workspace (use `twicc workspaces` to find the ID). Fails if the workspace does not exist.
 
 ### Examples
 
@@ -45,6 +46,7 @@ $TWICC projects                    # List the 20 most recent projects
 $TWICC projects --limit 50         # List up to 50 projects
 $TWICC projects --offset 20        # Skip the first 20, show next 20
 $TWICC projects --include-archived # Include archived projects
+$TWICC projects --workspace backend # Only projects in the "backend" workspace
 ```
 
 ## Output format
@@ -63,7 +65,8 @@ The command outputs a JSON array of project objects:
     "name": "My Project",
     "color": "#4a90d9",
     "archived": false,
-    "total_cost": 12.345678
+    "total_cost": 12.345678,
+    "workspaces": ["backend", "home-side-projects"]
   }
 ]
 ```
@@ -80,12 +83,15 @@ The command outputs a JSON array of project objects:
 - **`color`** — CSS color value (may be `null`)
 - **`archived`** — whether the project is archived
 - **`total_cost`** — total cost across all sessions in USD (may be `null`)
+- **`workspaces`** — list of workspace IDs this project belongs to (empty when the project is not in any workspace). Pass any entry to `twicc workspace <id>` for details.
 
 ## Related commands
 
 - **Inspect a project:** `twicc project <project_id>` — get full details for one project (omit the leading dash from the project ID)
 - **List sessions for a project:** `twicc sessions --project <project_id>` — use the `id` field from the output (omit the leading dash from the project ID)
 - **Inspect a specific session:** `twicc session <session_id>` — get full details for one session
+- **Inspect a workspace:** `twicc workspace <workspace_id>` — use any value from the `workspaces` field to see the workspace's name, color, and full project list
+- **List all workspaces:** `twicc workspaces` — find workspace IDs
 - **Search across sessions:** `twicc search "<query>"` — full-text search, can filter by project with `project_id:<id>` in the query
 
 ## How to present results

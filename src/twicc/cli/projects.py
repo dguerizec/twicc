@@ -5,7 +5,13 @@ import sys
 import orjson
 
 
-def main(*, limit: int = 20, offset: int = 0, archived: bool = False) -> None:
+def main(
+    *,
+    limit: int = 20,
+    offset: int = 0,
+    archived: bool = False,
+    workspace: str | None = None,
+) -> None:
     """List all projects as JSON to stdout."""
     import django
 
@@ -13,14 +19,37 @@ def main(*, limit: int = 20, offset: int = 0, archived: bool = False) -> None:
 
     from twicc.core.models import Project
     from twicc.core.serializers import serialize_project
+    from twicc.workspaces import read_workspaces
+
+    # Read workspaces once: used both for the optional --workspace filter
+    # and for the per-project ``workspaces`` membership field below.
+    all_workspaces = read_workspaces().get("workspaces", [])
 
     qs = Project.objects.order_by("-mtime")
 
     if not archived:
         qs = qs.filter(archived=False)
 
+    if workspace is not None:
+        ws = next((w for w in all_workspaces if w.get("id") == workspace), None)
+        if ws is None:
+            print(f"Error: workspace '{workspace}' not found.", file=sys.stderr)
+            sys.exit(1)
+        qs = qs.filter(id__in=ws.get("projectIds", []))
+
     projects = qs[offset : offset + limit]
-    data = [serialize_project(p) for p in projects]
+
+    # Build project_id -> [workspace_id] index for the listing.
+    workspaces_by_project: dict[str, list[str]] = {}
+    for ws in all_workspaces:
+        for pid in ws.get("projectIds", []):
+            workspaces_by_project.setdefault(pid, []).append(ws["id"])
+
+    data = []
+    for p in projects:
+        serialized = serialize_project(p)
+        serialized["workspaces"] = workspaces_by_project.get(p.id, [])
+        data.append(serialized)
 
     sys.stdout.buffer.write(orjson.dumps(data, option=orjson.OPT_INDENT_2))
     sys.stdout.buffer.write(b"\n")

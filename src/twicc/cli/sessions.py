@@ -5,7 +5,14 @@ import sys
 import orjson
 
 
-def main(*, project: str | None = None, limit: int = 20, offset: int = 0, archived: bool = False) -> None:
+def main(
+    *,
+    project: str | None = None,
+    workspace: str | None = None,
+    limit: int = 20,
+    offset: int = 0,
+    archived: bool = False,
+) -> None:
     """List sessions as JSON to stdout."""
     import django
 
@@ -22,6 +29,18 @@ def main(*, project: str | None = None, limit: int = 20, offset: int = 0, archiv
 
     if not archived:
         qs = qs.filter(archived=False)
+
+    if workspace is not None:
+        from twicc.workspaces import read_workspaces
+
+        ws = next(
+            (w for w in read_workspaces().get("workspaces", []) if w.get("id") == workspace),
+            None,
+        )
+        if ws is None:
+            print(f"Error: workspace '{workspace}' not found.", file=sys.stderr)
+            sys.exit(1)
+        qs = qs.filter(project_id__in=ws.get("projectIds", []))
 
     if project is not None:
         qs = qs.filter(project_id=project)

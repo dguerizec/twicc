@@ -55,7 +55,8 @@ The command outputs a single JSON project object:
   "name": "My Project",
   "color": "#4a90d9",
   "archived": false,
-  "total_cost": 12.345678
+  "total_cost": 12.345678,
+  "workspaces": ["backend", "home-side-projects"]
 }
 ```
 
@@ -71,12 +72,15 @@ The command outputs a single JSON project object:
 - **`color`** — CSS color value (may be `null`)
 - **`archived`** — whether the project is archived
 - **`total_cost`** — total cost across all sessions in USD (may be `null`)
+- **`workspaces`** — list of workspace IDs this project belongs to (empty when the project is not in any workspace). Pass any entry to `twicc workspace <id>` for details.
 
 ## Related commands
 
 - **Find project IDs:** `twicc projects` — list all projects
 - **List sessions for this project:** `twicc sessions --project <project_id>` — browse sessions in this project (omit the leading dash from the project ID)
 - **Inspect a session:** `twicc session <session_id>` — get full details for one session
+- **Inspect a workspace:** `twicc workspace <workspace_id>` — use any value from the `workspaces` field to see the workspace's name, color, and full project list
+- **List all workspaces:** `twicc workspaces` — find workspace IDs
 - **Search within this project:** `twicc search "project_id:<project_id> AND <query>"` — full-text search filtered to this project
 
 ## How to present results

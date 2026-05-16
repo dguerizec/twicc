@@ -66,11 +66,12 @@ def projects(
     limit: int = typer.Option(20, help="Max number of projects to return."),
     offset: int = typer.Option(0, help="Skip first N projects."),
     include_archived: bool = typer.Option(False, "--include-archived", help="Include archived projects."),
+    workspace: str = typer.Option(None, "--workspace", help="Filter by workspace ID (only projects belonging to that workspace)."),
 ) -> None:
     """List all projects as JSON (ordered by most recently active)."""
     from twicc.cli.projects import main as projects_main
 
-    projects_main(limit=limit, offset=offset, archived=include_archived)
+    projects_main(limit=limit, offset=offset, archived=include_archived, workspace=workspace)
 
 
 @app.command()
@@ -84,8 +85,31 @@ def project(
 
 
 @app.command()
+def workspaces(
+    limit: int = typer.Option(20, help="Max number of workspaces to return."),
+    offset: int = typer.Option(0, help="Skip first N workspaces."),
+    include_archived: bool = typer.Option(False, "--include-archived", help="Include archived workspaces."),
+) -> None:
+    """List all workspaces as JSON (in their stored order)."""
+    from twicc.cli.workspaces import main as workspaces_main
+
+    workspaces_main(limit=limit, offset=offset, archived=include_archived)
+
+
+@app.command()
+def workspace(
+    workspace_id: str = typer.Argument(help="The workspace ID."),
+) -> None:
+    """Show a single workspace as JSON."""
+    from twicc.cli.workspace import main as workspace_main
+
+    workspace_main(workspace_id)
+
+
+@app.command()
 def sessions(
     project: str = typer.Option(None, help="Filter by project ID (leading dash is optional)."),
+    workspace: str = typer.Option(None, "--workspace", help="Filter by workspace ID (only sessions of projects in that workspace). Can be combined with --project."),
     limit: int = typer.Option(20, help="Max number of sessions to return."),
     offset: int = typer.Option(0, help="Skip first N sessions."),
     include_archived: bool = typer.Option(False, "--include-archived", help="Include archived sessions."),
@@ -95,6 +119,7 @@ def sessions(
 
     sessions_main(
         project=_normalize_project_id(project) if project is not None else None,
+        workspace=workspace,
         limit=limit,
         offset=offset,
         archived=include_archived,

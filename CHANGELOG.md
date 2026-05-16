@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## Unreleased
 
+### Added
+
+- Workspaces in the CLI and the TwiCC plugin skills: new `twicc workspaces` / `twicc workspace <id>` commands (and matching skills), `--workspace <id>` filter on `twicc projects` and `twicc sessions`, and a `workspaces` field on each project entry listing the workspace IDs it belongs to.
+
 ### Changed
 
 - Bump `claude-agent-sdk` from 0.1.69 to 0.1.71 (bundled Claude Code CLI: 2.1.121 → 2.1.123)

@@ -13,6 +13,7 @@ def main(project_id: str) -> None:
 
     from twicc.core.models import Project
     from twicc.core.serializers import serialize_project
+    from twicc.workspaces import read_workspaces
 
     try:
         project = Project.objects.get(id=project_id)
@@ -21,6 +22,11 @@ def main(project_id: str) -> None:
         sys.exit(1)
 
     data = serialize_project(project)
+    data["workspaces"] = [
+        ws["id"]
+        for ws in read_workspaces().get("workspaces", [])
+        if project_id in ws.get("projectIds", [])
+    ]
 
     sys.stdout.buffer.write(orjson.dumps(data, option=orjson.OPT_INDENT_2))
     sys.stdout.buffer.write(b"\n")

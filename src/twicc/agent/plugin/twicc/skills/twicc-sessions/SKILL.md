@@ -36,6 +36,7 @@ $TWICC sessions
 ### Options
 
 - `--project ID` — filter by project ID, omit the leading dash (default: all projects)
+- `--workspace ID` — filter to sessions of projects belonging to the given workspace. Fails if the workspace does not exist. Can be combined with `--project` (intersection: the project must be inside the workspace, otherwise the result is empty).
 - `--limit N` — max number of sessions to return (default: 20)
 - `--offset N` — skip first N sessions for pagination (default: 0)
 - `--include-archived` — include archived sessions in the results (default: false, archived sessions are excluded)
@@ -45,6 +46,7 @@ $TWICC sessions
 ```bash
 $TWICC sessions                                    # List the 20 most recent sessions
 $TWICC sessions --project 'home-twidi-dev-myproj'  # Sessions for a specific project
+$TWICC sessions --workspace backend                # Sessions across every project in the "backend" workspace
 $TWICC sessions --include-archived                 # Include archived sessions
 $TWICC sessions --limit 50 --offset 20             # Paginate
 ```
