@@ -4,8 +4,7 @@ Synchronization logic for JSONL files from Codex sessions.
 Walks :attr:`CodexHelpers.SESSIONS_DIR` (~/.codex/sessions/YYYY/MM/DD/),
 groups files by project (resolved from the first JSONL line's
 ``payload.cwd``), and inserts new lines as raw :class:`SessionItem`
-rows. Codex has no subagent concept, no compute task, and no watcher
-yet — this module only owns the initial sync.
+rows.
 """
 
 from __future__ import annotations

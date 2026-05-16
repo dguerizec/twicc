@@ -1,11 +1,8 @@
 """
 Codex implementation of :class:`BaseProviderHelpers`.
 
-Minimal first cut: Codex is registered so it can be selected as the default
-provider and have its agent settings (model, effort, permission_mode,
-context_max) edited from the popover and presets dialog. There is no
-agent runtime yet — the front gates ``canSendMessage`` to ``False`` for
-this provider, so no Codex session can actually be created.
+Centralizes the per-provider surface that the core consumes through the
+provider helpers registry.
 """
 
 from __future__ import annotations
