@@ -3456,11 +3456,6 @@ export const useDataStore = defineStore('data', {
          * @throws {Error} If validation fails or file cannot be processed
          */
         async addAttachment(sessionId, file) {
-            // Resolve provider capabilities lazily — the import lives in
-            // ``providers/index.js`` which depends on the data store, so a
-            // static import would re-introduce the circular import that
-            // breaks Vite HMR (see CLAUDE.md "Avoiding Circular Imports").
-            const { getProviderHelpers } = await import('../providers')
             const session = this.getSession(sessionId)
             const helpers = getProviderHelpers(session?.provider)
             const capabilities = helpers?.getAttachmentSupport() ?? {
