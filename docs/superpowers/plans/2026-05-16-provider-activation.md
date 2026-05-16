@@ -305,119 +305,172 @@ git commit -m "feat(orchestrator): only start enabled providers + add start_one/
 ### Task 4: Backend — Hot toggle on `disabledProviders` change (with self-healing + default rebind)
 
 **Files:**
-- Modify: `src/twicc/asgi.py` (`_handle_update_synced_settings`)
+- Modify: `src/twicc/asgi.py` (`_handle_update_synced_settings` around lines 966-1022)
 
 This task wires the runtime side of the toggle: when the user changes `disabledProviders` from the front, the backend starts/stops the right orchestrators, refuses to disable providers with live agents (self-healing), and rebinds `defaultProvider` if the user disabled the current default.
 
+**Important — async/sync boundary:**
+`_handle_update_synced_settings` runs in async context but its merge+write happens inside a sync closure (`_merge_and_write`) dispatched via `sync_to_async(...)` so the write happens under `_settings_lock`. The two consequences:
+
+1. **All file writes (self-healing rewrite, default rebind, version bump) must happen inside the sync closure**, while the lock is held. Doing them outside would race other clients writing to the same file.
+2. **`shutdown_one` / `start_one` calls are async — they MUST happen in the outer scope, AFTER `sync_to_async(_merge_and_write)()` returns.**
+
+So the closure returns the data the outer scope needs (old + new disabled sets, the final dict to broadcast), and the outer scope only applies the orchestrator transitions and the broadcast.
+
 - [ ] **Step 1: Read `_handle_update_synced_settings`**
 
-Open `src/twicc/asgi.py` around lines 966-1022. Familiarise with the merge/version/broadcast flow.
+Open `src/twicc/asgi.py` around lines 966-1022. Note the structure: outer async function → inner sync `_merge_and_write()` closure under `with _settings_lock:` → call via `await sync_to_async(_merge_and_write)()` → broadcast or reject.
 
-- [ ] **Step 2: Add the hot-toggle dispatcher**
+The closure currently returns `(new_version, reject_settings, reject_version)`. We're going to extend that tuple.
 
-Inside `_handle_update_synced_settings`, **after** the merge has been committed and the new version is computed, **before** the broadcast, insert the logic:
+- [ ] **Step 2: Extend `_merge_and_write` to handle `disabledProviders` corrections inside the lock**
+
+Rewrite the closure body. Pseudo-code (adapt names to what's already there — keep `existing_settings` as the local name):
 
 ```python
-# Detect a change in disabledProviders to drive hot start/shutdown
-old_disabled = set(existing.get("disabledProviders") or [])
-new_payload_disabled_raw = synced_settings.get("disabledProviders")
-disabled_provider_set_changed = (
-    new_payload_disabled_raw is not None
-    and set(new_payload_disabled_raw) != old_disabled
+def _merge_and_write():
+    from twicc.agent.registry import get_agent_manager_registry
+    from twicc.core.enums import Provider
+
+    with _settings_lock:
+        existing_settings = read_synced_settings()
+        current_version = existing_settings.get("_version", 0)
+
+        # Stale write — reject as today
+        if base_version is not None and base_version < current_version:
+            clean, ver = prepare_settings_for_client(existing_settings)
+            return {"status": "rejected", "clean": clean, "version": ver}
+
+        # Snapshot the pre-merge disabled set BEFORE we touch existing_settings
+        old_disabled = set(existing_settings.get("disabledProviders") or [])
+
+        # Apply the client's merge
+        existing_settings.update(synced_settings)
+
+        # Run the existing provider consistency hook
+        get_provider_helpers_registry().enforce_synced_settings_consistency(
+            existing_settings, synced_settings,
+        )
+
+        # === Self-healing: refuse to disable a provider with live agents ===
+        new_disabled_raw = existing_settings.get("disabledProviders")
+        corrections: dict = {}  # keys we want to surface in the broadcast
+        if isinstance(new_disabled_raw, list):
+            new_disabled = set(new_disabled_raw)
+            just_disabled = new_disabled - old_disabled
+            registry = get_agent_manager_registry()
+            refused: set[str] = set()
+            for value in just_disabled:
+                try:
+                    provider = Provider(value)
+                except ValueError:
+                    continue
+                manager = registry.get(provider)
+                if manager and manager.get_active_agents():
+                    refused.add(value)
+            if refused:
+                new_disabled -= refused
+                existing_settings["disabledProviders"] = sorted(new_disabled)
+                corrections["disabledProviders"] = sorted(new_disabled)
+
+        # === Default-provider rebind ===
+        # Recompute enabled set from the (possibly corrected) existing_settings
+        registered = {p.value for p in get_provider_helpers_registry().keys()}
+        final_disabled_set = set(existing_settings.get("disabledProviders") or [])
+        enabled_after = registered - final_disabled_set
+        current_default = existing_settings.get("defaultProvider")
+        if enabled_after and current_default not in enabled_after:
+            new_default = next(p.value for p in Provider if p.value in enabled_after)
+            existing_settings["defaultProvider"] = new_default
+            corrections["defaultProvider"] = new_default
+
+        # === Version bump + single write ===
+        existing_settings["_version"] = current_version + 1
+        write_synced_settings(existing_settings)
+
+        return {
+            "status": "accepted",
+            "version": current_version + 1,
+            "old_disabled": old_disabled,
+            "new_disabled": final_disabled_set,
+            "corrections": corrections,
+        }
+```
+
+Notes:
+- One `write_synced_settings(existing_settings)` call at the end — keeps the file write atomic and the version increment consistent.
+- `corrections` carries the keys the back rewrote on top of what the client sent. These get merged into the broadcast payload below.
+- `get_provider_helpers_registry().keys()` returns the registered providers — adapt if the accessor is named differently in this version of the code.
+
+- [ ] **Step 3: Drive the orchestrator hot toggle in the outer async scope**
+
+Replace the existing `new_version, reject_settings, reject_version = await sync_to_async(_merge_and_write)()` + broadcast section with:
+
+```python
+result = await sync_to_async(_merge_and_write)()
+
+if result["status"] == "rejected":
+    await self.send_json({
+        "type": "synced_settings_updated",
+        "settings": result["clean"],
+        "version": result["version"],
+    })
+    return
+
+# Accepted — apply orchestrator transitions if the disabled set actually moved
+from twicc.orchestrator import get_orchestrator_registry
+old_disabled = result["old_disabled"]
+new_disabled = result["new_disabled"]
+to_disable = new_disabled - old_disabled
+to_enable = old_disabled - new_disabled
+orchestrators = get_orchestrator_registry()
+for value in to_disable:
+    try:
+        provider = Provider(value)
+    except ValueError:
+        continue
+    await orchestrators.shutdown_one(provider)
+for value in to_enable:
+    try:
+        provider = Provider(value)
+    except ValueError:
+        continue
+    # don't await — the front is ultra-optimistic and won't wait (cf. spec §4.1)
+    asyncio.create_task(orchestrators.start_one(provider))
+```
+
+- [ ] **Step 4: Broadcast the corrected payload to all clients**
+
+Right after the orchestrator transitions, build a broadcast payload that includes the client's submitted keys PLUS the back-side corrections (so other tabs / devices see the rebind and the self-healing):
+
+```python
+broadcast_settings = dict(synced_settings)
+broadcast_settings.update(result["corrections"])
+await self.channel_layer.group_send(
+    "updates",
+    {
+        "type": "broadcast",
+        "data": {
+            "type": "synced_settings_updated",
+            "settings": broadcast_settings,
+            "version": result["version"],
+        },
+    },
 )
 ```
 
-(Note: `existing` here is the pre-merge dict — adapt to the local variable names you find in the code.)
+This is the only point that diverges from the previous logic — instead of broadcasting `synced_settings` verbatim, we overlay back corrections. The client that originally sent the change sees the corrected values too, so its local optimistic state reconciles with the server.
 
-- [ ] **Step 3: Self-healing — refuse to disable a provider with live agents**
-
-After computing the new `disabledProviders` set, check live agents using the registry. If the change tries to add a provider that has at least one live agent, drop it from the disabled list:
-
-```python
-from twicc.agent.registry import get_agent_manager_registry
-
-if disabled_provider_set_changed:
-    new_disabled = set(new_payload_disabled_raw)
-    just_disabled = new_disabled - old_disabled
-    registry = get_agent_manager_registry()
-    refused: set[str] = set()
-    for value in just_disabled:
-        try:
-            provider = Provider(value)
-        except ValueError:
-            continue
-        manager = registry.get(provider)
-        if manager and manager.get_active_agents():
-            refused.add(value)
-    if refused:
-        new_disabled -= refused
-        # rewrite the persisted settings so the corrected value is the
-        # source of truth from now on (the broadcast below will carry it)
-        existing["disabledProviders"] = sorted(new_disabled)
-        write_synced_settings(existing)
-```
-
-(Adapt to the exact variable names of the local file. The point is: write the corrected list back to disk BEFORE broadcasting.)
-
-- [ ] **Step 4: Auto-rebind `defaultProvider`**
-
-After the disabled list is final, recompute the enabled set and rebind `defaultProvider` if needed:
-
-```python
-from twicc.providers.enabled import get_enabled_providers
-
-current_default = existing.get("defaultProvider")
-enabled_after = {p.value for p in get_enabled_providers()}
-if current_default not in enabled_after and enabled_after:
-    # pick the first enabled provider (stable iteration: Provider enum order)
-    new_default = next(p.value for p in Provider if p.value in enabled_after)
-    existing["defaultProvider"] = new_default
-    write_synced_settings(existing)
-```
-
-- [ ] **Step 5: Start / shutdown the orchestrators that changed**
-
-After the self-healing pass, the actual transitions to apply are:
-
-```python
-from twicc.orchestrator import get_orchestrator_registry
-
-if disabled_provider_set_changed:
-    final_disabled = set(existing.get("disabledProviders") or [])
-    to_disable = final_disabled - old_disabled
-    to_enable = old_disabled - final_disabled
-    orchestrators = get_orchestrator_registry()
-    for value in to_disable:
-        try:
-            provider = Provider(value)
-        except ValueError:
-            continue
-        await orchestrators.shutdown_one(provider)
-    for value in to_enable:
-        try:
-            provider = Provider(value)
-        except ValueError:
-            continue
-        # don't await — let the start happen in background, the front is
-        # ultra-optimistic and doesn't wait (cf. spec §4.1)
-        asyncio.create_task(orchestrators.start_one(provider))
-```
-
-- [ ] **Step 6: Verify the broadcast picks up the final value**
-
-Re-read the existing broadcast code at the end of `_handle_update_synced_settings`. It should already broadcast `existing` (after our `write_synced_settings(existing)` calls). If it broadcasts a stale snapshot, fix it by re-reading `existing = read_synced_settings()` right before the broadcast.
-
-- [ ] **Step 7: Smoke test hot toggle (manual)**
-
-Once the user has restarted the backend:
+- [ ] **Step 5: Smoke test hot toggle (manual, after backend restart)**
 
 1. Open two browser tabs on TwiCC.
-2. In one tab, Settings → toggle Codex OFF. The WS frame `synced_settings_updated` should arrive with `disabledProviders: ["codex"]`.
+2. In one tab, Settings → toggle Codex OFF. The WS frame `synced_settings_updated` should arrive with `disabledProviders: ["codex"]` in both tabs.
 3. Check `devctl logs back` — should show the Codex orchestrator shutdown messages.
 4. Toggle Codex ON. Should show the Codex orchestrator startup (initial sync, watcher, plugin install).
-5. Tab 2 should reflect the same state.
+5. **Self-healing test:** start a Codex session, send a long message, then while the agent is generating, try to disable Codex from another tab. The WS broadcast should come back with `disabledProviders: []` (correction applied) — the switch snaps back to ON in both tabs.
+6. **Default rebind test:** with both providers enabled and `defaultProvider = "codex"`, disable Codex. The broadcast should include `defaultProvider: "claude_code"`.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 cd /home/twidi/dev/twicc-poc/.worktrees/feature-multi-provider
@@ -503,19 +556,45 @@ if "title" in data:
 
 The other PATCH branches (`archived`, `pinned`) are purely TwiCC DB updates — leave them ungated.
 
-- [ ] **Step 6: Smoke test (manual)**
+- [ ] **Step 6: Front-side handler for `provider_disabled` errors**
+
+Check that `frontend/src/composables/useWebSocket.js` already has a generic handler for `{type: "error", ...}` messages — most TwiCC error responses go through one. Grep for `case 'error'` in that file.
+
+If a generic handler exists (toasts, notivue notification, etc.), make sure `code: "provider_disabled"` payloads surface meaningfully — e.g. *"Cannot send to {provider}: it is disabled. Enable it from Settings → Providers."*.
+
+If there is no generic error handler, add one branch:
+
+```js
+case 'error':
+    if (msg.code === 'provider_disabled') {
+        notivue.push({
+            message: `Cannot reach ${msg.provider}: provider is disabled.`,
+            type: 'error',
+        })
+        return
+    }
+    // fall through to existing handling (if any) or log
+    console.warn('WS error:', msg)
+    break
+```
+
+(Adapt to whatever the existing notification system is — `notivue` is mentioned in `App.vue`.)
+
+This is defence in depth: the UI should already prevent these calls (callouts, hidden buttons), but a race condition between a toggle and an in-flight send must surface to the user instead of silently failing.
+
+- [ ] **Step 7: Smoke test (manual)**
 
 Once the user has restarted the backend, with Codex disabled in your settings:
 
-1. Try to rename a Codex session from the UI. Backend should respond `409` with `provider_disabled`.
-2. Try to send a message to a Codex session. WS should send back `error/provider_disabled`.
+1. Try to rename a Codex session from the UI. Backend should respond `409` with `provider_disabled` and the front shows a notification.
+2. Try to send a message to a Codex session. WS should send back `error/provider_disabled` and the front shows a notification.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 cd /home/twidi/dev/twicc-poc/.worktrees/feature-multi-provider
-git add src/twicc/asgi.py src/twicc/views.py src/twicc/providers/claude_code/ws.py src/twicc/providers/codex/ws.py
-git commit -m "feat(api): gate runtime endpoints with ensure_provider_enabled"
+git add src/twicc/asgi.py src/twicc/views.py src/twicc/providers/claude_code/ws.py src/twicc/providers/codex/ws.py frontend/src/composables/useWebSocket.js
+git commit -m "feat(api): gate runtime endpoints with ensure_provider_enabled + front handler"
 ```
 
 ---
@@ -597,6 +676,8 @@ export function getEnabledProviders() {
 ```
 
 You'll need a static import of `useSettingsStore` at the top OR a lazy import inside the function depending on existing patterns. Check sibling helpers (`getProviderHelpers`, `getProviderOptions`) for the established convention.
+
+**Pinia-active scope:** `useSettingsStore()` must be invoked inside a Pinia-active context — i.e. during render of a setup component, inside a `computed`, or inside an action of another store. Calling `getEnabledProviders()` at module load time (e.g. as a top-level constant in a helper file) will throw because the active Pinia instance isn't installed yet. All callers in this plan invoke it from inside `computed(...)` or render functions, so it's fine — but keep this constraint in mind if a new caller is introduced.
 
 (If the static import creates a cycle that breaks HMR per CLAUDE.md "Avoiding Circular Imports", switch to lazy import via dynamic `await import('../stores/settings')` and rework callers to use the async form, or expose `disabledProviders` on a smaller dedicated module imported here.)
 
@@ -736,7 +817,10 @@ async function save() {
         </p>
         <div class="provider-choices">
             <label v-for="p in getRegisteredProviders()" :key="p" class="provider-row">
-                <wa-switch v-model="choices[p]" />
+                <wa-switch
+                    :checked="choices[p] === true"
+                    @change="(e) => choices[p] = e.target.checked"
+                ></wa-switch>
                 <span>{{ providerLabel(p) }}</span>
             </label>
         </div>
@@ -930,17 +1014,56 @@ Use `enabledProviderOptions` in the template.
 
 - [ ] **Step 6: Make `_statusAwareProviders` reactive (footer indicators)**
 
-Around lines 344-398 of the same file. Currently `_statusAwareProviders` is a constant computed once at setup. Convert to `computed`:
+Around lines 344-398 of the same file. Currently `_statusAwareProviders` is a plain constant computed once at setup; the rotation `setInterval` (called by `_scheduleStatusRotation()`) captures `_statusAwareProviders.length` at that point and never re-reads it. Converting to a naive `computed` is not enough: the scheduled callback would still use a stale length, leaving the rotation pointing at indices that no longer exist after a provider is disabled.
+
+Convert in two steps:
+
+1. Replace the constant with a `computed`:
 
 ```js
-const _statusAwareProviders = computed(() => {
-    return getEnabledProviders()
+import { computed, watch } from 'vue'
+import { getEnabledProviders } from '../../providers'
+
+const _statusAwareProviders = computed(() =>
+    getEnabledProviders()
         .map(provider => ({ provider, helpers: getProviderHelpers(provider), getter: getProviderHelpers(provider).getServiceStatus() }))
         .filter(({ getter }) => getter !== null)
+)
+```
+
+2. Adjust all callers to read `.value`. Notably `currentStatusProvider` becomes:
+
+```js
+const currentStatusProvider = computed(() => {
+    const list = _statusAwareProviders.value
+    if (list.length === 0) return null
+    return list[currentStatusIdx.value % list.length]
 })
 ```
 
-Adjust callers that read it as a value (they were treating it as a plain array — they now have to read `.value` or be inside a template/computed). The rotation logic via `setInterval` and `currentStatusProvider` should work with `_statusAwareProviders.value`.
+3. Watch the length and reschedule the rotation when it changes. Add **after** the existing `_scheduleStatusRotation()` setup:
+
+```js
+watch(
+    () => _statusAwareProviders.value.length,
+    (newLen, oldLen) => {
+        // Reset the index if the old position is now out of bounds.
+        if (currentStatusIdx.value >= newLen) {
+            currentStatusIdx.value = 0
+        }
+        // Re-schedule: cancel the previous interval and create a new one
+        // — the new interval will close over the fresh `.value.length`.
+        _cancelStatusRotation()
+        if (newLen > 1) {
+            _scheduleStatusRotation()
+        }
+    }
+)
+```
+
+(Names `_cancelStatusRotation` / `_scheduleStatusRotation` reflect what's already in the file — adapt to the actual identifiers. If the rotation closes its `setInterval` over a captured `_statusAwareProviders` reference, the cancel+reschedule is mandatory; if it reads `_statusAwareProviders.value.length` inside the callback, the watch is optional but the index reset is still needed.)
+
+When `newLen === 0` (no provider with a status getter is enabled), the rotation stays cancelled and the footer indicator hides itself naturally (template already guards on the array being non-empty via `currentStatusProvider`).
 
 - [ ] **Step 7: Smoke test (browser)**
 
