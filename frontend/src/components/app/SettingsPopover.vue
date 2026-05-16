@@ -22,6 +22,9 @@ const dataStore = useDataStore()
 const claudeCodeStore = useClaudeCodeStore()
 const authStore = useAuthStore()
 
+// Reactive set of currently enabled providers (derived from the settings store).
+const enabledProviders = computed(() => new Set(store.enabledProviders))
+
 // Show logout button only when password-based auth is active
 const showLogout = computed(() => authStore.passwordRequired && authStore.authenticated)
 const logoutButtonId = useId()
@@ -45,6 +48,7 @@ const providerSections = computed(() =>
             navLabel: label,
             icon: PROVIDER_ICON[provider] ?? null,
             synced: true,
+            enabled: enabledProviders.value.has(provider),
         }
     })
 )
@@ -52,7 +56,7 @@ const providerSections = computed(() =>
 const sections = computed(() => [
     { id: 'global',                    label: 'Global' },
     { id: 'providers',                 label: 'Providers', synced: true },
-    ...providerSections.value,
+    ...providerSections.value.filter(s => s.enabled),
     { id: 'notifications',             label: 'Notifications' },
     { id: 'sessions',      label: 'Sessions' },
     { id: 'title',         label: 'Title suggestion', navLabel: 'Titles', synced: true },
@@ -237,8 +241,37 @@ const forcedChangelogOpen = ref(false)
 // Settings from store
 const defaultProvider = computed(() => store.getDefaultProvider)
 const providerOptions = getProviderOptions()
+const enabledProviderOptions = computed(() =>
+    providerOptions.filter(opt => enabledProviders.value.has(opt.value))
+)
 function providerIconFor(provider) {
     return PROVIDER_ICON[provider] ?? null
+}
+
+// ─── Provider activation helpers ─────────────────────────────────────
+
+function providerLabelFor(p) {
+    return getProviderLabel(p)
+}
+function isLastEnabled(p) {
+    return enabledProviders.value.size === 1 && enabledProviders.value.has(p)
+}
+function isSwitchDisabled(p) {
+    if (!enabledProviders.value.has(p)) return false
+    return isLastEnabled(p) || dataStore.hasActiveSessionForProvider(p)
+}
+function reasonFor(p) {
+    if (!enabledProviders.value.has(p)) return null
+    if (isLastEnabled(p)) return 'Cannot disable: at least one provider must remain active.'
+    if (dataStore.hasActiveSessionForProvider(p)) return 'Cannot disable: active sessions in progress.'
+    return null
+}
+function onToggleProvider(p, event) {
+    const checked = event.target.checked
+    const current = new Set(store.disabledProviders || [])
+    if (checked) current.delete(p)
+    else current.add(p)
+    store.disabledProviders = [...current]
 }
 const displayMode = computed(() => store.getDisplayMode)
 const fontSize = computed(() => store.getFontSize)
@@ -341,15 +374,22 @@ const latestVersion = computed(() => dataStore.latestVersion)
 
 const STATUS_ROTATION_INTERVAL_MS = 15000
 
-const _statusAwareProviders = getRegisteredProviders()
-    .map(provider => ({ provider, helpers: getProviderHelpers(provider), getter: getProviderHelpers(provider).getServiceStatus() }))
-    .filter(({ getter }) => getter !== null)
+const _statusAwareProviders = computed(() =>
+    getRegisteredProviders()
+        .filter(p => enabledProviders.value.has(p))
+        .map(provider => ({
+            provider,
+            helpers: getProviderHelpers(provider),
+            getter: getProviderHelpers(provider).getServiceStatus(),
+        }))
+        .filter(({ getter }) => getter !== null)
+)
 
 const currentStatusProviderIndex = ref(0)
 
 const currentStatusProvider = computed(() => {
-    if (_statusAwareProviders.length === 0) return null
-    return _statusAwareProviders[currentStatusProviderIndex.value % _statusAwareProviders.length]
+    if (_statusAwareProviders.value.length === 0) return null
+    return _statusAwareProviders.value[currentStatusProviderIndex.value % _statusAwareProviders.value.length]
 })
 
 const currentStatusDisplay = computed(() => {
@@ -365,7 +405,7 @@ const currentStatusIcon = computed(() => {
     return entry ? PROVIDER_ICON[entry.provider] ?? null : null
 })
 
-const hasMultipleStatusProviders = computed(() => _statusAwareProviders.length > 1)
+const hasMultipleStatusProviders = computed(() => _statusAwareProviders.value.length > 1)
 
 const statusFooterId = useId()
 const statusFooterRef = ref(null)
@@ -374,11 +414,11 @@ const statusNextButtonId = useId()
 let _statusRotationTimer = null
 function _scheduleStatusRotation() {
     if (_statusRotationTimer) clearInterval(_statusRotationTimer)
-    if (_statusAwareProviders.length <= 1) return
+    if (_statusAwareProviders.value.length <= 1) return
     _statusRotationTimer = setInterval(() => {
         if (statusFooterRef.value && statusFooterRef.value.matches(':hover')) return
         currentStatusProviderIndex.value =
-            (currentStatusProviderIndex.value + 1) % _statusAwareProviders.length
+            (currentStatusProviderIndex.value + 1) % _statusAwareProviders.value.length
     }, STATUS_ROTATION_INTERVAL_MS)
 }
 function _stopStatusRotation() {
@@ -388,7 +428,7 @@ function _stopStatusRotation() {
     }
 }
 function cycleStatusProvider() {
-    const total = _statusAwareProviders.length
+    const total = _statusAwareProviders.value.length
     if (total <= 1) return
     currentStatusProviderIndex.value = (currentStatusProviderIndex.value + 1) % total
     // Restart the timer so the freshly selected provider gets the full
@@ -397,6 +437,20 @@ function cycleStatusProvider() {
 }
 _scheduleStatusRotation()
 onBeforeUnmount(_stopStatusRotation)
+
+// Re-schedule the rotation whenever the set of status-aware enabled providers changes.
+watch(
+    () => _statusAwareProviders.value.length,
+    (newLen) => {
+        if (currentStatusProviderIndex.value >= newLen) {
+            currentStatusProviderIndex.value = 0
+        }
+        _stopStatusRotation()
+        if (newLen > 1) {
+            _scheduleStatusRotation()
+        }
+    }
+)
 
 // Display mode options for the select
 const displayModeOptions = [
@@ -812,6 +866,25 @@ function onChangelogClose() {
                 <!-- Providers section -->
                 <section v-if="activeSection === 'providers'" class="settings-section">
                     <h3 class="settings-section-title">Providers <wa-icon name="cloud" class="synced-icon"></wa-icon></h3>
+                    <div class="activated-providers-block">
+                        <h4>Activated providers</h4>
+                        <p class="hint">
+                            Disabling a provider stops all of its background tasks, prevents
+                            creating new sessions or renaming existing ones, and hides its
+                            settings section below. Existing sessions remain readable.
+                        </p>
+                        <div class="provider-switches">
+                            <div v-for="p in getRegisteredProviders()" :key="p" class="provider-switch-row">
+                                <wa-switch
+                                    :checked="enabledProviders.has(p)"
+                                    :disabled="isSwitchDisabled(p)"
+                                    @change="(e) => onToggleProvider(p, e)"
+                                ></wa-switch>
+                                <span>{{ providerLabelFor(p) }}</span>
+                                <span v-if="reasonFor(p)" class="hint danger">{{ reasonFor(p) }}</span>
+                            </div>
+                        </div>
+                    </div>
                     <div class="setting-group">
                         <label class="setting-group-label">Default provider for new sessions</label>
                         <wa-select
@@ -827,7 +900,7 @@ function onChangelogClose() {
                                 :name="providerIconFor(defaultProvider)"
                             ></wa-icon>
                             <wa-option
-                                v-for="option in providerOptions"
+                                v-for="option in enabledProviderOptions"
                                 :key="option.value"
                                 :value="option.value"
                                 :label="option.label"
@@ -1696,6 +1769,37 @@ wa-popover > wa-divider {
 
 .settings-footer-status--info .status-dot {
     background-color: var(--wa-color-primary);
+}
+
+/* -- Activated providers block -- */
+
+.activated-providers-block {
+    margin-bottom: var(--wa-space-l);
+}
+
+.activated-providers-block h4 {
+    margin: 0 0 var(--wa-space-2xs);
+}
+
+.provider-switches {
+    display: flex;
+    flex-direction: column;
+    gap: var(--wa-space-s);
+}
+
+.provider-switch-row {
+    display: flex;
+    align-items: center;
+    gap: var(--wa-space-s);
+}
+
+.hint {
+    font-size: var(--wa-font-size-s);
+    color: var(--wa-color-neutral-fill-loud);
+}
+
+.hint.danger {
+    color: var(--wa-color-danger-fill-loud);
 }
 
 </style>
