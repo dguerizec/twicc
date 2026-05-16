@@ -1798,8 +1798,9 @@ wa-popover > wa-divider {
 
 .provider-switch-row {
     display: flex;
-    align-items: center;
-    gap: var(--wa-space-s);
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--wa-space-2xs);
 }
 
 .provider-switch::part(label) {
