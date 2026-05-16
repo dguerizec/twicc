@@ -192,6 +192,7 @@ class CodexOrchestrator(BaseOrchestrator):
         # fresh state, mirroring the shutdown happening on the Claude side.
         logger.info("Stopping Codex agent manager...")
         await get_codex_agent_manager().shutdown(timeout=5.0)
+        logger.info("Codex agent manager stopped")
 
     # ------------------------------------------------------------------
     # Internal task coroutines

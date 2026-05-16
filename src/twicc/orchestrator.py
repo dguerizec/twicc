@@ -285,20 +285,37 @@ class OrchestratorRegistry:
         and search-index events are available. Raises :exc:`RuntimeError`
         immediately if called before :meth:`start_all` — silent misbehaviour
         would be worse than a loud failure.
+
+        Tags the :data:`current_provider` ContextVar for the duration of the
+        call so every log line emitted synchronously inside ``start()`` is
+        stamped with the right provider tag (otherwise they would fall back
+        to ``"global"`` because the hot-toggle caller has no provider tag).
         """
         if self._shutdown_event is None or self._search_index_ready is None:
             raise RuntimeError("OrchestratorRegistry.start_one called before start_all")
         orch = self._orchestrators.get(provider)
         if orch is None:
             return
-        await orch.start(self._shutdown_event, self._search_index_ready)
+        token = current_provider.set(provider.value)
+        try:
+            await orch.start(self._shutdown_event, self._search_index_ready)
+        finally:
+            current_provider.reset(token)
 
     async def shutdown_one(self, provider: Provider) -> None:
-        """Shutdown a single provider's orchestrator (used by hot-toggle on deactivation)."""
+        """Shutdown a single provider's orchestrator (used by hot-toggle on deactivation).
+
+        See :meth:`start_one` for the rationale on tagging
+        :data:`current_provider` around the call.
+        """
         orch = self._orchestrators.get(provider)
         if orch is None:
             return
-        await orch.shutdown()
+        token = current_provider.set(provider.value)
+        try:
+            await orch.shutdown()
+        finally:
+            current_provider.reset(token)
 
     def request_thread_stop_all(self) -> None:
         """Signal every provider's blocking sync threads to stop.
