@@ -6,7 +6,7 @@
  * Priority cascade (highest → lowest):
  * 1. Pending request: hand icon (waiting for user response)
  * 2. Unread sessions: eye icon
- * 3. Assistant turn: robot icon (Claude is actively working)
+ * 3. Assistant turn: robot icon (the agent is actively working)
  * 4. Active crons: clock icon
  * 5. Active processes (none of the above): green check
  * 6. Nothing active: no indicator

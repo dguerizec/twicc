@@ -1,6 +1,6 @@
 <script setup>
 /**
- * ProcessIndicator - Unified visual indicator for Claude's process state.
+ * ProcessIndicator - Unified visual indicator for an agent's process state.
  *
  * Displays different indicators based on process state:
  * - starting: spinner (yellow)
