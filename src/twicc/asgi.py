@@ -1041,6 +1041,13 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
                     clean, ver = prepare_settings_for_client(existing_settings)
                     return {"status": "rejected", "clean": clean, "version": ver}
 
+                # Capture both the previous disabled set AND whether the key
+                # was physically present in the file. The latter distinguishes
+                # "running everything" from "running nothing because no
+                # initial choice has been made yet" — they are semantically
+                # different and must produce different orchestrator deltas
+                # (see the return block below).
+                old_key_present = "disabledProviders" in existing_settings
                 old_disabled = set(existing_settings.get("disabledProviders") or [])
 
                 # Accepted — merge, then enforce per-provider consistency rules.
@@ -1092,11 +1099,21 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
                 existing_settings["_version"] = current_version + 1
                 write_synced_settings(existing_settings)
 
+                # Compute the orchestrator transitions on "what was running"
+                # vs "what should run" — NOT on the diff of `disabledProviders`.
+                # When the key was previously absent, `start_all` had run with
+                # `get_enabled_providers() == set()`, so nothing was started;
+                # naïvely diffing the disabled sets would then yield an empty
+                # `to_start` (set() - set()) and leave everything stopped after
+                # the first dialog validation.
+                registered_values = {p.value for p, _ in get_provider_helpers_registry().items()}
+                old_running = (registered_values - old_disabled) if old_key_present else set()
+                new_running = registered_values - final_disabled_set
                 return {
                     "status": "accepted",
                     "version": current_version + 1,
-                    "old_disabled": old_disabled,
-                    "new_disabled": final_disabled_set,
+                    "to_start": new_running - old_running,
+                    "to_stop": old_running - new_running,
                     "corrections": corrections,
                 }
 
@@ -1111,21 +1128,20 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
             })
             return
 
-        # Accepted — apply orchestrator transitions based on disabledProviders delta.
+        # Accepted — apply the orchestrator transitions computed under the
+        # lock. `to_start` / `to_stop` were derived from the "running" sets
+        # (not the raw disabled sets) so a first-time activation correctly
+        # starts everything the user just enabled.
         from twicc.orchestrator import get_orchestrator_registry
 
-        old_disabled = result["old_disabled"]
-        new_disabled = result["new_disabled"]
-        to_disable = new_disabled - old_disabled
-        to_enable = old_disabled - new_disabled
         orchestrators = get_orchestrator_registry()
-        for value in to_disable:
+        for value in result["to_stop"]:
             try:
                 provider = Provider(value)
             except ValueError:
                 continue
             await orchestrators.shutdown_one(provider)
-        for value in to_enable:
+        for value in result["to_start"]:
             try:
                 provider = Provider(value)
             except ValueError:
