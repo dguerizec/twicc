@@ -170,10 +170,24 @@ A single JSON object, one of:
 | 5 | Timeout waiting for the server's final status |
 | 64 | Bad CLI usage (handled by Typer) |
 
+## Following up
+
+Creation returns immediately; the agent keeps working in the background. **Only if the user asks** for the reply, fetch it with:
+
+```bash
+$TWICC session <SESSION_ID> messages --tail 1
+```
+
+- `role: "assistant"` → that's the reply.
+- `role: "user"` → no text reply yet (still working, or only tool calls so far) — wait and retry.
+
+Use `--tail N` for more turns when needed.
+
 ## Related commands
 
 - **Inspect the created session:** `twicc session <session_id>` — full metadata for the new session
-- **Read session content:** `twicc session <session_id> content <line_or_range>` — see what the agent did
+- **Read the agent's reply (uniform shape):** `twicc session <session_id> messages --tail 1` — the latest user/assistant message (see "Following up" above)
+- **Read raw session content:** `twicc session <session_id> content <line_or_range>` — see every item (tool calls, reasoning, system) in the provider's native JSONL shape
 - **List sessions:** `twicc sessions --project <project_id>` — to see other recent sessions in the same project
 - **Find a project id:** `twicc projects` — useful to resolve `--project` if you'd rather pass the canonical id
 

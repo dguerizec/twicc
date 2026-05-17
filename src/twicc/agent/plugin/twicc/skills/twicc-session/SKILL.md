@@ -1,7 +1,7 @@
 ---
 name: twicc-session
-description: Inspect a single session — view details, read item content by line number, or list subagents. Works for any provider TwiCC tracks (Claude Code, Codex, ...). Use when the user wants to examine a specific session, read conversation content, or explore subagent activity.
-argument-hint: <session_id> [content|agents]
+description: Inspect a single session — view details, read item content by line number, list all user/assistant messages, or list subagents. Works for any provider TwiCC tracks (Claude Code, Codex, ...). Use when the user wants to examine a specific session, read conversation content, or explore subagent activity.
+argument-hint: <session_id> [content|messages|agents]
 ---
 
 # TwiCC Session
@@ -12,6 +12,7 @@ Inspect a single session: view its metadata, read conversation content by line n
 
 - The user wants details about a specific session
 - The user wants to read the actual conversation content (messages, tool calls, etc.)
+- The user wants to read just the user/assistant messages (no tool calls, no system noise)
 - The user wants to see which subagents were spawned by a session
 
 ## How to invoke
@@ -123,6 +124,53 @@ In both cases the object is the JSONL line written by the provider's CLI, parsed
 
 ---
 
+### Read session messages
+
+```bash
+$TWICC session <SESSION_ID> messages [--range N|N-M] [--role user|assistant] [--limit N] [--offset N] [--tail N]
+```
+
+Fetch only the chat messages (user + assistant) of a session, with a **uniform shape across providers** (unlike `content`, which exposes the raw JSONL of the originating provider). Useful when you want the plain conversation transcript without tool calls, reasoning, system noise, etc.
+
+Internally this uses the same extraction the full-text search indexer uses, so the text you get back is exactly what would be matched by `twicc search`.
+
+#### Options
+
+- `--range N` or `--range N-M` — restrict to a single line or a line range (same syntax as `content`)
+- `--role user|assistant` — keep only one side of the conversation
+- `--limit N` — cap the number of returned messages (default: no cap)
+- `--offset N` — skip the first N messages (default: 0)
+- `--tail N` — return the **last** N messages instead of the first N (mutually exclusive with `--limit`/`--offset`)
+
+#### Output format
+
+Returns a JSON array, one entry per message:
+
+```json
+[
+  {
+    "line_num": 3,
+    "text": "Hello, can you help me?",
+    "role": "user",
+    "timestamp": "2025-03-10T14:30:00+00:00"
+  },
+  {
+    "line_num": 4,
+    "text": "Sure — what do you need?",
+    "role": "assistant",
+    "timestamp": "2025-03-10T14:30:02+00:00"
+  }
+]
+```
+
+#### Tips
+
+- Pair with `twicc search "<query>" --session <id>` first to know roughly where matches live, then `messages --range A-B` to pull a focused transcript window.
+- Use `--role user` to get just the prompts (e.g. to summarize what the user asked across a long session).
+- Use `--tail N` when you only care about the most recent exchanges — e.g. `--tail 1` to get the very last message, `--tail 10` for the last few turns. Combine with `--role` to scope to one side (e.g. `--role assistant --tail 1` for the latest agent reply).
+
+---
+
 ### List subagents
 
 ```bash
@@ -164,6 +212,7 @@ Returns a JSON array of session objects (same format as `twicc sessions` output)
 
 1. For session details: summarize key info (title, date, model, branch)
 2. For content: present messages in a readable format, distinguishing user vs assistant messages
-3. For agents: show the list with titles, offer to provide more details on any agent if the user wants
-4. You are in TwiCC, so you can link to a session using a relative Markdown link so the user can click it: `[link text](/project/{project_id}/session/{session_id})` or to a project : `[link text](/project/{project_id})`
-5. Only include cost information if the user explicitly asks for it
+3. For messages: render the transcript in chronological order, prefixing each entry with its role (and optionally line number when the user might want to drill into a specific item via `content`)
+4. For agents: show the list with titles, offer to provide more details on any agent if the user wants
+5. You are in TwiCC, so you can link to a session using a relative Markdown link so the user can click it: `[link text](/project/{project_id}/session/{session_id})` or to a project : `[link text](/project/{project_id})`
+6. Only include cost information if the user explicitly asks for it

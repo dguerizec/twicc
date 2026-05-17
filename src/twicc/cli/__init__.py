@@ -161,6 +161,21 @@ def content(
 
 
 @session_app.command()
+def messages(
+    ctx: typer.Context,
+    range: str = typer.Option(None, "--range", help="Restrict to a line number or range (e.g. '5' or '10-20')."),
+    role: str = typer.Option(None, "--role", help="Filter by author: 'user' or 'assistant'."),
+    limit: int = typer.Option(None, "--limit", help="Max number of messages to return (default: no limit)."),
+    offset: int = typer.Option(0, "--offset", help="Skip first N messages."),
+    tail: int = typer.Option(None, "--tail", help="Return the last N messages (mutually exclusive with --limit/--offset)."),
+) -> None:
+    """Show all user/assistant messages of a session as JSON (cross-provider)."""
+    from twicc.cli.session import messages as session_messages
+
+    session_messages(ctx.obj, range_str=range, role=role, limit=limit, offset=offset, tail=tail)
+
+
+@session_app.command()
 def agents(
     ctx: typer.Context,
     limit: int = typer.Option(20, help="Max number of subagents to return."),
