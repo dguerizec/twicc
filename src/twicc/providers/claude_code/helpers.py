@@ -29,7 +29,7 @@ from twicc.providers.helpers import (
     UserMessage,
 )
 
-from .compute import get_message_content, get_message_content_list
+from .compute import extract_command, get_message_content, get_message_content_list, strip_markdown
 from .pricing import CLAUDE_FAMILIES, extract_model_info
 from .titles import protect_title, rename_session_in_jsonl
 
@@ -482,7 +482,16 @@ class ClaudeCodeHelpers(BaseProviderHelpers):
             parsed = orjson.loads(item.content)
         except (orjson.JSONDecodeError, TypeError):
             return ""
-        return _extract_text_from_message_content(get_message_content(parsed))
+        text = _extract_text_from_message_content(get_message_content(parsed))
+        if not text:
+            return ""
+        # Slash commands ship as <command-*> XML — unwrap to "name [args]"
+        # so FTS hits the real words and the history picker reads naturally.
+        if command := extract_command(text):
+            if command.args:
+                return f"{command.name} {strip_markdown(command.args)}"
+            return command.name
+        return text
 
     def get_user_messages(
         self,
