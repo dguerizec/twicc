@@ -354,6 +354,11 @@ class ClaudeCodeAgent(BaseAgent):
         for suggestion in serialized:
             suggestion_type = suggestion.get("type")
 
+            # Drop any setMode suggestion from the SDK — we inject our own at the end
+            # so the user always sees the full set of mode options regardless of context.
+            if suggestion_type == "setMode":
+                continue
+
             # Strip the project directory from directory suggestions (always implicitly allowed).
             if suggestion_type in ("addDirectories", "removeDirectories"):
                 directories = suggestion.get("directories")
@@ -514,6 +519,21 @@ class ClaudeCodeAgent(BaseAgent):
                     extra.append({**s, "rules": [{"toolName": wildcard}]})
 
         result.extend(extra)
+
+        # Inject a setMode suggestion so the user can switch the session's permission
+        # mode directly from the approval screen. Skipped for ExitPlanMode, where the
+        # CLI handles the plan→default transition automatically on approval.
+        if tool_name != "ExitPlanMode":
+            current_mode = self.agent_settings.permission_mode
+            mode_options = [m for m in ("default", "acceptEdits", "bypassPermissions") if m != current_mode]
+            if mode_options:
+                result.append({
+                    'type': 'setMode',
+                    'mode': None,
+                    'destination': 'session',
+                    '_modeOptions': mode_options,
+                    '_currentMode': current_mode,
+                })
 
         # Normalize field order to match PermissionUpdate dataclass definition.
         # Private fields (prefixed with _) are preserved at the end for frontend use.

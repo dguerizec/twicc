@@ -80,6 +80,19 @@ const TOOL_PATH_KEYS = {
     NotebookEdit: 'notebook_path',
 }
 
+// Human-readable labels for the permission_mode wire values.
+const MODE_LABELS = {
+    default: 'Default',
+    acceptEdits: 'Accept all edits',
+    bypassPermissions: 'Bypass permissions',
+    plan: 'Plan',
+    dontAsk: "Don't ask",
+}
+
+function formatModeLabel(mode) {
+    return MODE_LABELS[mode] || mode
+}
+
 const props = defineProps({
     pendingRequest: {
         type: Object,
@@ -126,6 +139,9 @@ const checkedSuggestions = reactive(new Set())
 // Edited copies of permission suggestions (only entries modified by the user)
 const editedSuggestions = reactive(new Map())
 
+// Mode picked from the setMode suggestion's select (null = keep current mode)
+const selectedMode = ref(null)
+
 // ============================================================================
 // Ask user question state
 // ============================================================================
@@ -160,6 +176,7 @@ watch(() => props.pendingRequest?.request_id, () => {
     editedToolInput.value = null
     checkedSuggestions.clear()
     editedSuggestions.clear()
+    selectedMode.value = null
     // Ask user question state
     Object.keys(questionSelections).forEach(k => delete questionSelections[k])
     Object.keys(otherTexts).forEach(k => delete otherTexts[k])
@@ -207,8 +224,25 @@ const toolOverrides = computed(() => {
     return enriched
 })
 
-// Permission suggestions from the SDK (list of PermissionUpdate dicts, or empty)
-const permissionSuggestions = computed(() => props.pendingRequest.permission_suggestions || [])
+// All permission suggestions from the backend.
+const allPermissionSuggestions = computed(() => props.pendingRequest.permission_suggestions || [])
+
+// Permission suggestions rendered in the collapsible details (everything except the setMode picker,
+// which is rendered separately in its own visible row).
+const permissionSuggestions = computed(() =>
+    allPermissionSuggestions.value.filter(s => s.type !== 'setMode')
+)
+
+// The setMode suggestion (if any) — rendered as a standalone select above the action buttons.
+const setModeSuggestion = computed(() =>
+    allPermissionSuggestions.value.find(s => s.type === 'setMode') || null
+)
+
+// Label for the "don't change mode" option in the picker.
+const noChangeLabel = computed(() => {
+    const current = setModeSuggestion.value?._currentMode
+    return current ? `Don't change (current: ${formatModeLabel(current)})` : "Don't change"
+})
 
 // Whether there are any permission suggestions to display
 const hasPermissionSuggestions = computed(() => permissionSuggestions.value.length > 0)
@@ -266,10 +300,10 @@ function togglePermissionSuggestion(index) {
 /**
  * Get the list of checked permission suggestion dicts (to send back as updated_permissions).
  * Returns edited versions when the user has modified a suggestion (e.g., changed destination).
- * @returns {Array<Object>|null} The checked permission suggestion objects, or null if none checked
+ * Includes the setMode picker as a separate entry when the user has selected a target mode.
+ * @returns {Array<Object>|null} The checked permission suggestion objects, or null if none
  */
 function getCheckedPermissionSuggestions() {
-    if (checkedSuggestions.size === 0) return null
     const result = []
     for (const index of checkedSuggestions) {
         const suggestion = { ...editedSuggestion(index) }
@@ -285,7 +319,23 @@ function getCheckedPermissionSuggestions() {
         }
         result.push(suggestion)
     }
-    return result
+    if (selectedMode.value && setModeSuggestion.value) {
+        result.push({
+            type: 'setMode',
+            mode: selectedMode.value,
+            destination: setModeSuggestion.value.destination || 'session',
+        })
+    }
+    return result.length > 0 ? result : null
+}
+
+/**
+ * Handle a change in the permission mode select.
+ * Stores null when the user picks "don't change" (empty value), otherwise the selected mode.
+ */
+function onModeChange(event) {
+    const value = event.target.value
+    selectedMode.value = value || null
 }
 
 // ============================================================================
@@ -608,6 +658,29 @@ function handleSubmitQuestions() {
             />
         </div>
 
+        <!-- Permission mode picker — lets the user switch the session's mode while answering this approval.
+             Hidden in deny mode because the wire doesn't carry updated_permissions on deny. -->
+        <div v-if="setModeSuggestion && !showDenyReason" class="mode-selector-row">
+            <label class="mode-selector-label">
+                <wa-icon name="key" variant="classic"></wa-icon>
+                Permission mode
+            </label>
+            <wa-select
+                size="small"
+                :value.prop="selectedMode || ''"
+                @change="onModeChange"
+                class="mode-selector-input"
+                :disabled="isResponding"
+            >
+                <wa-option value="">{{ noChangeLabel }}</wa-option>
+                <wa-option
+                    v-for="mode in setModeSuggestion._modeOptions"
+                    :key="mode"
+                    :value="mode"
+                >Switch to {{ formatModeLabel(mode) }}</wa-option>
+            </wa-select>
+        </div>
+
         <!-- Action buttons: three states — default / deny reason / editing -->
         <div class="pending-request-actions">
             <!-- Default state: Deny / Approve with changes / Approve -->
@@ -860,6 +933,30 @@ function handleSubmitQuestions() {
     margin-top: var(--wa-space-xs);
     padding-top: var(--wa-space-xs);
     border-top: 1px solid var(--wa-color-neutral-15);
+}
+
+.mode-selector-row {
+    display: flex;
+    align-items: center;
+    gap: var(--wa-space-s);
+    padding: var(--wa-space-xs) var(--wa-space-s);
+    background: var(--wa-color-neutral-5);
+    border-radius: var(--wa-border-radius-m);
+}
+
+.mode-selector-label {
+    display: flex;
+    align-items: center;
+    gap: var(--wa-space-2xs);
+    font-size: var(--wa-font-size-s);
+    color: var(--wa-color-text-quiet);
+    font-weight: 600;
+    flex-shrink: 0;
+}
+
+.mode-selector-input {
+    flex: 1;
+    max-width: 24rem;
 }
 
 .pending-request-actions {
