@@ -1051,8 +1051,22 @@ function handleToggleSessionSearch(e) {
         closeSessionSearch()
         // Don't set handled — let the browser open its native Find bar
     } else {
+        // Capture selection before opening the bar (focus would clear it).
+        // Only prefill when the selection lives inside the session items area.
+        const selection = window.getSelection()
+        let prefill = ''
+        if (selection && isSelectionInSessionContent(selection)) {
+            prefill = selection.toString().replace(/\s+/g, ' ').trim()
+        }
+
         showSessionSearch.value = true
-        nextTick(() => sessionSearchRef.value?.open())
+        nextTick(() => {
+            if (prefill) {
+                sessionSearchRef.value?.openWithQuery(prefill)
+            } else {
+                sessionSearchRef.value?.open()
+            }
+        })
         e.detail.handled = true
     }
 }
