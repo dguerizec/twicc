@@ -78,15 +78,19 @@ export function useSessionAgentSettings(sessionIdSource) {
     // help text, etc.).
     const effectiveModel = computed(() => selectedModel.value ?? providerStore.value?.defaultModel)
 
-    // Whether the auto-promote rule on this session is currently active —
-    // i.e. the persisted/selected ``context_max`` differs from the one the
-    // provider's ``getEffectiveContextMax`` resolves to. The rule itself is
-    // provider-specific; this flag stays generic by simply observing the
-    // divergence.
+    // Whether the provider's auto-promote rule would kick in for the user's
+    // current selection in the popover. The rule itself is provider-specific
+    // (Claude Code: 200K + model supports 1M + usage > 85% of 200K → 1M);
+    // we delegate to the provider helper, evaluated against the SELECTED
+    // value (or the global default if none selected) — NOT against the
+    // persisted ``session.context_max``, which can diverge from the user's
+    // current pick and would otherwise trigger false positives on drafts.
     const isContextMaxForced = computed(() => {
+        if (!session.value || !providerHelpers.value) return false
         const baseValue = selectedContextMax.value ?? providerStore.value?.defaultContextMax
-        const effective = store.getEffectiveContextMax(sessionId.value, effectiveModel.value)
-        return effective !== baseValue
+        return providerHelpers.value.isContextMaxAutoPromoted(
+            session.value, baseValue, effectiveModel.value,
+        )
     })
 
     // ─── Aggregate state ─────────────────────────────────────────────────────

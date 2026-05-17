@@ -391,19 +391,31 @@ export class ClaudeCodeHelpers extends BaseProviderHelpers {
     }
 
     /**
-     * Promote the effective window from DEFAULT to EXTENDED when the session
-     * has burned past 85% of the 200K window AND the (possibly overridden)
-     * model supports 1M. Single source of truth for the settings selector,
-     * the header progress ring, and the value sent to the backend.
+     * The auto-promote rule itself: at 200K, with a model that supports 1M,
+     * once the session has burned past 85% of the 200K window, promote to 1M.
+     * Stateless and parameterised — callers pass the ``contextMax`` they want
+     * to evaluate the rule against (the persisted value, or the user's live
+     * selection in the popover).
+     */
+    isContextMaxAutoPromoted(session, contextMax, model) {
+        return (
+            contextMax === CONTEXT_MAX.DEFAULT
+            && this.modelSupports1m(model)
+            && (session?.context_usage ?? 0) > CONTEXT_MAX.DEFAULT * 0.85
+        )
+    }
+
+    /**
+     * Resolve a session's effective ``context_max``: the persisted value (or
+     * the provider default when null), bumped to 1M by the auto-promote rule
+     * when applicable. Single source of truth for the header progress ring
+     * and the value the popover sends to the backend.
      */
     getEffectiveContextMax(session, overrideModel = undefined) {
         const store = useClaudeCodeStore()
         const baseValue = session?.context_max ?? store.defaultContextMax
-        if (baseValue !== CONTEXT_MAX.DEFAULT) return baseValue
         const model = overrideModel !== undefined ? overrideModel : (session?.selected_model ?? store.defaultModel)
-        if (!this.modelSupports1m(model)) return baseValue
-        if ((session?.context_usage ?? 0) > CONTEXT_MAX.DEFAULT * 0.85) return CONTEXT_MAX.EXTENDED
-        return baseValue
+        return this.isContextMaxAutoPromoted(session, baseValue, model) ? CONTEXT_MAX.EXTENDED : baseValue
     }
 
     /**

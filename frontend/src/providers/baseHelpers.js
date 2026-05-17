@@ -462,6 +462,16 @@ export class BaseProviderHelpers {
         return session?.context_max ?? null
     }
 
+    // Whether the provider's auto-promote rule would kick in for the given
+    // (session, contextMax, model) triple. Distinct from
+    // ``getEffectiveContextMax`` because callers (notably the popover) need to
+    // evaluate the rule against the user's current SELECTION, not against the
+    // persisted ``session.context_max``. Default: no auto-promote.
+
+    isContextMaxAutoPromoted(/* session */ _session, /* contextMax */ _contextMax, /* model */ _model) {
+        return false
+    }
+
     // ─── Agent settings popover/summary rendering hooks ──────────────────
     //
     // The popover (per-session selects) and the summary strip share a single
