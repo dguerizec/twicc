@@ -496,6 +496,10 @@ const inputRendering = computed(() => {
     const helpers = toolHelpers.value
     if (!helpers) return null
     return helpers.getInputRendering(props.name, props.input, {
+        // Provider-specific extras (e.g. Claude Code's ``twiccTasksData``
+        // for ``TaskList``) are spread first so the well-known keys below
+        // always win on collision.
+        ...(props.extra || {}),
         isSubagent: !!props.parentSessionId,
         backendPatch: fileChangeBackendPatch.value,
         backendPatchLoading: fileChangeBackendPatchLoading.value,
@@ -548,6 +552,12 @@ const showResultDetails = computed(() => {
     // matched output anywhere — opening the section would only trigger
     // an HTTP fetch that returns 404. Hide the section entirely.
     if (helpers?.getExpectedResultCount(props.name, props.input, helperOptions.value) === 0) {
+        return false
+    }
+    // Tools that explicitly suppress the Result section (e.g. Claude Code's
+    // TaskCreate / TaskUpdate / TaskGet: the tool_result body adds nothing
+    // the input + summary haven't already shown).
+    if (helpers?.hidesResult(props.name)) {
         return false
     }
     // A specialized input renderer (Edit/Write/TodoWrite) typically owns the

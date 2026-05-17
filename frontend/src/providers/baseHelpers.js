@@ -1058,6 +1058,18 @@ export class BaseToolHelpers {
         return false
     }
 
+    /**
+     * Whether the shell should fully suppress the Result section for this
+     * tool, even though no specialized input renderer is claiming it.
+     * Used for tools whose tool_result carries no extra signal beyond what
+     * the input + summary already convey (e.g. Claude Code's ``TaskCreate``
+     * / ``TaskUpdate`` / ``TaskGet`` — the canonical task payload is
+     * already spliced into the tool_use by the backend). Default: false.
+     */
+    hidesResult(/* name */) {
+        return false
+    }
+
     // ─── File-change stats (header ``+N -N``) ────────────────────────────
     //
     // The shell does the layout (``+N -N``); the helper provides the values.

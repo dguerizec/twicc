@@ -71,6 +71,29 @@ const props = defineProps({
 
 const emit = defineEmits(['toggle-suffix'])
 
+/**
+ * Build the ``extra`` prop forwarded to ``ToolUseContent`` for tool_use
+ * blocks. Surfaces the backend-spliced task payload so the Claude Code
+ * tool helpers can render the Task* summary / detail without an extra
+ * round-trip:
+ *   - ``twiccTaskData`` / ``twiccTasksTotal`` — single task lookup for
+ *     ``TaskCreate`` / ``TaskUpdate`` / ``TaskGet``;
+ *   - ``twiccTasksData`` — full task list snapshot for ``TaskList``.
+ * Returns ``null`` when nothing is attached, keeping the prop shape clean
+ * for tools that don't need it.
+ */
+function getToolExtra(item) {
+    const taskData = item?.twiccTaskData
+    const tasksTotal = item?.twiccTasksTotal
+    const tasksData = item?.twiccTasksData
+    if (taskData == null && tasksTotal == null && tasksData == null) return null
+    return {
+        twiccTaskData: taskData ?? null,
+        twiccTasksTotal: tasksTotal ?? null,
+        twiccTasksData: tasksData ?? null,
+    }
+}
+
 // Get expanded internal groups from store
 const expandedInternalGroups = computed(() => {
     const groups = store.getInternalExpandedGroups(props.sessionId, props.lineNum)
@@ -274,6 +297,7 @@ const parentRangeCommentsCount = computed(() => {
                 :parent-session-id="parentSessionId"
                 :line-num="lineNum"
                 :timestamp="timestamp"
+                :extra="getToolExtra(entry.item)"
             />
             <ThinkingContent
                 v-else-if="entry.item.type === 'thinking'"

@@ -34,10 +34,17 @@ from twicc.providers.compute_base import (
 )
 from .agent.original_file_cache import pop_original_file as _pop_cached_original_file
 from .pricing import extract_model_info, to_token_usage
+from .tasks import TasksReader
 
 
 # Tool names that spawn subagent sessions (Task is the legacy name, Agent is the new one)
 AGENT_TOOL_NAMES = frozenset({'Task', 'Agent'})
+
+# Built-in task-tracking tools whose tool_use items get enriched with the
+# canonical task payload from ``~/.claude/tasks/<session_id>/<id>.json``
+# (see :mod:`.tasks` and the ``twiccTaskData`` block in
+# :meth:`ClaudeCodeCompute.transform_inline`).
+_TASK_LOOKUP_BY_ID_TOOLS = frozenset({'TaskUpdate', 'TaskGet'})
 
 # Content types considered user-visible (for display_level and kind computation)
 VISIBLE_CONTENT_TYPES = ('text', 'document', 'image')
@@ -279,6 +286,68 @@ def _has_visible_content(content: str | list | None) -> bool:
     return False
 
 
+def _enrich_task_tool_uses(content: list, session_id: str) -> bool:
+    """
+    Embed the canonical task payload into the four task-tracking tool_use
+    blocks within an assistant message content list.
+
+    Per-tool enrichment shape (mutates ``content`` in place):
+      - ``TaskCreate`` / ``TaskUpdate`` / ``TaskGet`` → ``twiccTaskData``
+        (single task dict). The by-id tools (Update / Get) also get
+        ``twiccTasksTotal`` so the summary can render "<id>/<total>".
+      - ``TaskList`` → ``twiccTasksData`` (list of every task in the
+        session, sorted by id) — feeds both the count in the summary
+        header and the TodoContent-style list in the body.
+
+    Idempotent: skips blocks that already carry the enrichment.
+    Returns ``True`` if any block was mutated.
+    """
+    mutated = False
+    for block in content:
+        if not isinstance(block, dict) or block.get('type') != 'tool_use':
+            continue
+        name = block.get('name')
+
+        if name == 'TaskList':
+            if 'twiccTasksData' in block:
+                continue
+            block['twiccTasksData'] = TasksReader.read_all_tasks(session_id)
+            mutated = True
+            continue
+
+        if 'twiccTaskData' in block:
+            continue
+        if name not in ('TaskCreate',) and name not in _TASK_LOOKUP_BY_ID_TOOLS:
+            continue
+        tool_input = block.get('input')
+        if not isinstance(tool_input, dict):
+            continue
+
+        task_data: dict | None = None
+        if name == 'TaskCreate':
+            subject = tool_input.get('subject')
+            active_form = tool_input.get('activeForm')
+            if isinstance(subject, str) and subject:
+                task_data = TasksReader.find_task_by_create_input(
+                    session_id,
+                    subject,
+                    active_form if isinstance(active_form, str) else None,
+                )
+        else:  # TaskUpdate / TaskGet
+            task_id = tool_input.get('taskId')
+            if isinstance(task_id, str) and task_id:
+                task_data = TasksReader.read_task_file(session_id, task_id)
+
+        if task_data is None:
+            continue
+
+        block['twiccTaskData'] = task_data
+        if name in _TASK_LOOKUP_BY_ID_TOOLS:
+            block['twiccTasksTotal'] = TasksReader.count_session_tasks(session_id)
+        mutated = True
+    return mutated
+
+
 # =============================================================================
 # Live Sync — watcher entry point
 # =============================================================================
@@ -309,13 +378,28 @@ class ClaudeCodeSessionCompute(BaseSessionCompute):
     # ------------------------------------------------------------------
 
     def transform_inline(self, parsed_json: dict) -> str | None:
-        # Two Claude-Code-specific rewrites: background agent result deliveries
-        # carried as XML <task-notification> user messages, and CLI local
-        # command outputs wrapped in <local-command-stdout/stderr> tags. Both
-        # are normalised in place into the regular tool_result / assistant
-        # message formats so the rest of the pipeline doesn't need to care.
+        # Three Claude-Code-specific rewrites:
+        #   1. enrich TaskCreate / TaskUpdate / TaskGet tool_use items with
+        #      the canonical task payload from ``~/.claude/tasks/`` so the
+        #      frontend can render a meaningful summary without an extra
+        #      round-trip (label, status icon, id / total count);
+        #   2. background agent result deliveries carried as XML
+        #      ``<task-notification>`` user messages;
+        #   3. CLI local command outputs wrapped in
+        #      ``<local-command-stdout/stderr>`` tags.
+        # The last two are normalised in place into the regular tool_result /
+        # assistant message formats so the rest of the pipeline doesn't need
+        # to care.
 
         entry_type = parsed_json.get('type')
+
+        # --- TaskCreate / TaskUpdate / TaskGet tool_use enrichment ---
+        if entry_type == 'assistant':
+            session_id = parsed_json.get('sessionId')
+            if isinstance(session_id, str) and session_id:
+                content = get_message_content_list(parsed_json, 'assistant')
+                if content is not None and _enrich_task_tool_uses(content, session_id):
+                    return orjson.dumps(parsed_json).decode('utf-8')
 
         # --- task-notification XML (background agent results) ---
         if entry_type == 'user':
