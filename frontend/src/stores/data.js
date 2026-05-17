@@ -3000,6 +3000,66 @@ export const useDataStore = defineStore('data', {
             }
         },
 
+        /**
+         * Drop streaming blocks that already ended (``uuid`` set) but were
+         * never retired by a matching ``session_items_added`` broadcast.
+         *
+         * The drop happens when the user is on a different session while
+         * the canonical session's live items arrive: the WS handler skips
+         * ``addSessionItems`` because ``itemsFetched`` is still false on
+         * the canonical id, so ``_retireStreamingBlocks`` never runs. On
+         * Codex specifically the retirement key is the wire-only
+         * ``stream_uuid`` (not persisted), so by the time the user lands
+         * on the session and items are fetched from the REST API, no
+         * match is possible anymore and the synthetic ``streaming-block``
+         * item would survive forever alongside the real ``agent_message``.
+         *
+         * Called from ``loadSessionData`` (SessionItemsList.vue) before
+         * fetching items. Only ended blocks (``uuid !== null``) are
+         * dropped, so active streaming visible when the user lands on a
+         * session mid-turn keeps painting live deltas.
+         */
+        clearEndedStreamingBlocks(sessionId) {
+            const streaming = this.localState.streamingBlocks[sessionId]
+            if (!streaming) return
+
+            const { baseLineNum } = SYNTHETIC_ITEM.STREAMING_BLOCK
+            const expanded = this.localState.sessionExpandedGroups[sessionId]
+            const remaining = []
+            let anyCleared = false
+            for (const block of streaming.blocks) {
+                if (block.uuid !== null) {
+                    clearBlockInactivityTimer(block)
+                    flushBuffer(sessionId, block.blockIndex)
+                    // For thinking blocks: close the streaming detail key
+                    // (otherwise a stale ``true`` for the synthetic lineNum
+                    // would auto-open the next block landing at that slot)
+                    // and drop the matching expandedGroups entry (no real
+                    // item to migrate the expansion to — we never matched).
+                    if (block.blockType === 'thinking') {
+                        const streamingLineNum = baseLineNum - block.blockIndex
+                        this.setDetailOpen(sessionId, `line:${streamingLineNum}:0`, false)
+                        if (expanded && expanded.length > 0) {
+                            const idx = expanded.indexOf(streamingLineNum)
+                            if (idx !== -1) expanded.splice(idx, 1)
+                        }
+                    }
+                    anyCleared = true
+                } else {
+                    remaining.push(block)
+                }
+            }
+            if (!anyCleared) return
+
+            if (remaining.length === 0) {
+                destroySessionBuffers(sessionId)
+                delete this.localState.streamingBlocks[sessionId]
+            } else {
+                streaming.blocks = remaining
+            }
+            this.recomputeVisualItems(sessionId)
+        },
+
         // Session rename action
 
         /**
