@@ -18,6 +18,7 @@ import MessageInput from '../../message/MessageInput.vue'
 import PendingRequestForm from '../../message/PendingRequestForm.vue'
 import ProcessIndicator from '../../ui/ProcessIndicator.vue'
 import TextSelectionComment from './TextSelectionComment.vue'
+import { useTextSelectionComment } from '../../../composables/useTextSelectionComment'
 import { getProviderLabel } from '../../../providers'
 
 // All states should animate for the bottom process indicator
@@ -1284,152 +1285,22 @@ async function handleForwardedDrop({ files, text }) {
 // Text selection comment (ephemeral annotation on selected session text)
 // =============================================================================
 
-const textSelectionCommentRef = ref(null)
-const textSelectionText = ref('')
-const textSelectionPosition = ref(null) // { top, left, above } viewport coords, or null
-
-/**
- * Detect whether the user is selecting text backward (bottom-to-top / right-to-left).
- */
-function isSelectionBackward(selection) {
-    if (!selection.anchorNode || !selection.focusNode) return false
-    if (selection.anchorNode === selection.focusNode) {
-        return selection.focusOffset < selection.anchorOffset
-    }
-    const position = selection.anchorNode.compareDocumentPosition(selection.focusNode)
-    return !!(position & Node.DOCUMENT_POSITION_PRECEDING)
-}
-
-/**
- * Compute the floating widget position from the current browser selection.
- * Returns { top, left, above } (viewport coords) or null if the selection is gone.
- * When the selection is backward and spans multiple lines, the widget is positioned
- * above the selection (above=true); otherwise it appears below (above=false).
- */
-function getSelectionPosition() {
-    try {
-        const selection = window.getSelection()
-        if (!selection?.rangeCount) return null
-        const range = selection.getRangeAt(0)
-        const rect = range.getBoundingClientRect()
-        // Rect can be zero-size if the selected nodes were unmounted (virtual scroller recycling)
-        if (!rect.width && !rect.height) return null
-        // Show above only for backward selections spanning multiple lines
-        const above = isSelectionBackward(selection) && rect.height > 30
-        return { top: above ? rect.top : rect.bottom, left: rect.left + rect.width / 2, above }
-    } catch {
-        return null
-    }
-}
-
-/**
- * Check whether the current selection is valid for a text selection comment:
- * inside the virtual scroller and NOT inside a CodeMirror editor (which has
- * its own code comments system).
- */
-function isSelectionInSessionContent(selection) {
-    const anchor = selection?.anchorNode
-    if (!anchor) return false
-    const scrollerEl = scrollerRef.value?.$el
-    if (!scrollerEl?.contains(anchor)) return false
-    // Exclude selections inside CodeMirror editors (they have their own comments)
-    if (anchor.closest?.('.cm-editor') || anchor.parentElement?.closest('.cm-editor')) return false
-    return true
-}
-
-/**
- * On mouseup inside the session scroller, check for a text selection.
- * If non-empty, show the floating comment button at the selection position.
- */
-function handleTextSelectionMouseup() {
-    // Don't interfere if the comment panel is already expanded
-    if (textSelectionCommentRef.value?.isExpanded) return
-
-    const selection = window.getSelection()
-    const text = selection?.toString()?.trim()
-    if (!text) {
-        textSelectionPosition.value = null
-        return
-    }
-
-    if (!isSelectionInSessionContent(selection)) {
-        textSelectionPosition.value = null
-        return
-    }
-
-    textSelectionText.value = text
-    textSelectionPosition.value = getSelectionPosition()
-}
-
-/**
- * On scroller scroll, reposition the floating button to follow the selection.
- * When the panel is expanded (user is typing), leave it fixed in the viewport.
- */
-function handleTextSelectionScroll() {
-    // Don't move the panel while the user is interacting with it
-    if (textSelectionCommentRef.value?.isExpanded) return
-
-    const pos = getSelectionPosition()
-    if (pos) {
-        textSelectionPosition.value = pos
-    } else {
-        // Selection lost (nodes unmounted by virtual scroller, or cleared)
-        closeTextSelectionComment()
-    }
-}
-
-/**
- * On selectionchange, detect or update the text selection comment.
- * Always active (via onMounted) so that mobile long-press selections are
- * detected — mobile browsers don't reliably fire mouseup for text selection.
- */
-function handleSelectionChange() {
-    if (textSelectionCommentRef.value?.isExpanded) return
-
-    const selection = window.getSelection()
-    const text = selection?.toString()?.trim()
-
-    if (!text) {
-        if (textSelectionPosition.value) closeTextSelectionComment()
-        return
-    }
-
-    if (!isSelectionInSessionContent(selection)) {
-        if (textSelectionPosition.value) closeTextSelectionComment()
-        return
-    }
-
-    textSelectionText.value = text
-    const pos = getSelectionPosition()
-    if (pos) {
-        textSelectionPosition.value = pos
-    } else if (textSelectionPosition.value) {
-        closeTextSelectionComment()
-    }
-}
-
-// selectionchange is always active (needed for mobile initial detection).
-// The scroll listener is only active when the widget is visible.
-onMounted(() => {
-    document.addEventListener('selectionchange', handleSelectionChange)
+const {
+    textSelectionCommentRef,
+    textSelectionText,
+    textSelectionPosition,
+    closeTextSelectionComment,
+} = useTextSelectionComment({
+    containerRef: scrollerRef,
+    isInScope: (selection) => {
+        // Exclude selections inside CodeMirror editors (they have their own comments)
+        const anchor = selection?.anchorNode
+        if (!anchor) return false
+        if (anchor.closest?.('.cm-editor') || anchor.parentElement?.closest('.cm-editor')) return false
+        return true
+    },
+    enabled: ref(true),
 })
-onBeforeUnmount(() => {
-    document.removeEventListener('selectionchange', handleSelectionChange)
-})
-
-watch(textSelectionPosition, (pos, oldPos) => {
-    const el = scrollerRef.value?.$el
-    if (pos && !oldPos) {
-        el?.addEventListener('scroll', handleTextSelectionScroll, { passive: true })
-    } else if (!pos && oldPos) {
-        el?.removeEventListener('scroll', handleTextSelectionScroll)
-    }
-})
-
-function closeTextSelectionComment() {
-    textSelectionPosition.value = null
-    textSelectionText.value = ''
-}
 
 defineExpose({
     getScrollerElement,
@@ -1449,7 +1320,6 @@ defineExpose({
         @dragleave="onDragLeave"
         @dragover="onDragOver"
         @drop="onDrop"
-        @mouseup="handleTextSelectionMouseup"
     >
         <!-- In-session search bar (Ctrl+F) -->
         <SessionSearchBar

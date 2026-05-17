@@ -7,6 +7,8 @@ import MarkdownContent from '../ui/MarkdownContent.vue'
 import AppTooltip from '../ui/AppTooltip.vue'
 import CodeEditor from '../editor/CodeEditor.vue'
 import DiffEditor from '../editor/DiffEditor.vue'
+import TextSelectionComment from '../session/detail/TextSelectionComment.vue'
+import { useTextSelectionComment } from '../../composables/useTextSelectionComment'
 
 const props = defineProps({
     projectId: String,
@@ -66,6 +68,11 @@ const searchButtonId = useId()
 // Injected from SessionView: function to switch to Files tab and reveal a file.
 // null when FilePane is not inside a SessionView (or no Files tab available).
 const viewFileInFilesTab = inject('viewFileInFilesTab', null)
+
+// Injected from SessionView: appends text to the session's message input.
+// null when FilePane is not inside an active session — in that case the text
+// selection comment widget stays disabled.
+const insertTextAtCursor = inject('insertTextAtCursor', null)
 
 // API prefix: use explicit prop when provided, otherwise project-level for drafts, session-level otherwise
 const resolvedApiPrefix = computed(() => {
@@ -132,6 +139,19 @@ const isMarkdownFile = computed(() => {
     return /\.(?:md|markdown|mdown|mkd|mkdn)$/i.test(props.filePath)
 })
 const showMarkdownPreview = ref(false)
+
+// Text selection comment widget: active only while previewing a markdown file
+// inside an active session (so we can actually append to the message input).
+const markdownPreviewRef = ref(null)
+const {
+    textSelectionCommentRef,
+    textSelectionText,
+    textSelectionPosition,
+    closeTextSelectionComment,
+} = useTextSelectionComment({
+    containerRef: markdownPreviewRef,
+    enabled: computed(() => !!insertTextAtCursor && showMarkdownPreview.value && isMarkdownFile.value),
+})
 
 // --- SVG preview state ---
 const isSvgFile = computed(() => {
@@ -689,7 +709,7 @@ function goToNextDiff() {
         <!-- Content area: editor is always mounted once, overlays sit on top -->
         <div ref="editorAreaRef" class="editor-area">
             <!-- Markdown preview (when toggled on for .md files) -->
-            <div v-if="showMarkdownPreview && isMarkdownFile" class="markdown-preview-container">
+            <div v-if="showMarkdownPreview && isMarkdownFile" ref="markdownPreviewRef" class="markdown-preview-container">
                 <MarkdownContent
                     :source="diffMode ? (modifiedContent ?? '') : currentContent"
                     :show-toolbar="false"
@@ -762,6 +782,17 @@ function goToNextDiff() {
                 {{ saveError }}
             </wa-callout>
         </div>
+
+        <!-- Ephemeral text selection comment widget (teleported to body to avoid overflow clipping) -->
+        <Teleport to="body">
+            <TextSelectionComment
+                v-if="textSelectionPosition"
+                ref="textSelectionCommentRef"
+                :selected-text="textSelectionText"
+                :position="textSelectionPosition"
+                @close="closeTextSelectionComment"
+            />
+        </Teleport>
     </div>
 </template>
 
