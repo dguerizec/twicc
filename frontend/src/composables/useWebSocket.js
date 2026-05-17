@@ -10,7 +10,7 @@ import { toast } from './useToast'
 import { computeUsageData } from '../utils/usage'
 import { useSettingsStore } from '../stores/settings'
 import { getProviderHelpers, getProviderLabel, getProviderWsHandler, getProviderStore } from '../providers'
-import { playNotificationSound, sendBrowserNotification } from '../utils/notificationSounds'
+import { playNotificationSound, sendBrowserNotification, isPageActive } from '../utils/notificationSounds'
 import { truncateTitle } from '../utils/truncate'
 
 // WebSocket close code sent by backend when authentication fails
@@ -49,6 +49,47 @@ if (!('cancelledViewedThrottles' in __hmrState)) __hmrState.cancelledViewedThrot
 
 // Active user_turn toast tracking — prevents duplicates, allows cleanup from SessionToastContent
 if (!('activeUserTurnToasts' in __hmrState)) __hmrState.activeUserTurnToasts = new Set() // sessionId
+
+// Route's current session id, kept in sync by useWebSocket()'s watcher.
+// Used by the visibility listener to know which session to flush/mark on
+// tab focus/blur transitions, independent of any Vue component lifecycle.
+if (!('currentRouteSessionId' in __hmrState)) __hmrState.currentRouteSessionId = null
+
+// Previous active-state of the page, for detecting transitions in the
+// visibility listener. Initialised to the current state on first module load.
+if (!('lastVisibilityActive' in __hmrState)) __hmrState.lastVisibilityActive = isPageActive()
+
+// Install the visibility/focus listener once at module load. HMR-safe: the
+// flag survives reloads via __hmrState, so we never attach duplicates.
+//
+// Semantics: a session is "viewed" only while the tab is actually visible AND
+// the OS window has focus. On every transition we update last_viewed_at for
+// the session currently on the SPA route:
+// - becoming inactive → flush with NOW (capture "I was watching up to here"
+//   before going dark, so a pending throttle trailing that fires later doesn't
+//   matter — and the listener's call uses _sendSessionViewed directly to
+//   bypass the gates installed in notifySessionViewed / forceNotifySessionViewed)
+// - becoming active → mark with NOW (the user is back, anything new in the
+//   meantime that survived the gates can be cleared from the unread state)
+if (!__hmrState.visibilityListenerInstalled) {
+    const handleVisibilityChange = () => {
+        const nowActive = isPageActive()
+        const wasActive = __hmrState.lastVisibilityActive
+        __hmrState.lastVisibilityActive = nowActive
+        if (nowActive === wasActive) return
+        const sessionId = __hmrState.currentRouteSessionId
+        if (!sessionId) return
+        if (wasActive && !nowActive) {
+            _sendSessionViewed(sessionId, 'tab-hide-flush')
+        } else {
+            _sendSessionViewed(sessionId, 'tab-reactivated')
+        }
+    }
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    window.addEventListener('focus', handleVisibilityChange)
+    window.addEventListener('blur', handleVisibilityChange)
+    __hmrState.visibilityListenerInstalled = true
+}
 
 /**
  * Reactive flag: true when a backend version change was detected.
@@ -180,6 +221,10 @@ function _sendSessionViewed(sessionId, reason) {
  */
 export function notifySessionViewed(sessionId, reason) {
     if (!sessionId) return
+    // Skip when the page is not actively watched (tab hidden or window unfocused).
+    // The visibility listener installed at module load handles flushing on hide
+    // and re-marking on return, so there's nothing more to do here.
+    if (!isPageActive()) return
 
     // Clear any cancellation from a previous mark-unread action
     __hmrState.cancelledViewedThrottles.delete(sessionId)
@@ -193,6 +238,10 @@ export function notifySessionViewed(sessionId, reason) {
         const throttledFn = useThrottleFn(() => {
             // Skip if cancelled by mark-unread (trailing call after cancellation)
             if (__hmrState.cancelledViewedThrottles.has(sessionId)) return
+            // Skip a trailing call that fires after the user has left the page —
+            // the timestamp would otherwise mask new content that arrived while
+            // the tab was hidden, leaving the session falsely marked as read.
+            if (!isPageActive()) return
             _sendSessionViewed(sessionId, __hmrState.lastViewedReason?.[sessionId] || 'throttle-trailing')
         }, 30000, true) // 30s throttle, trailing=true (leading=true by default)
         __hmrState.throttledViewedNotifications.set(sessionId, throttledFn)
@@ -210,6 +259,10 @@ export function notifySessionViewed(sessionId, reason) {
  */
 export function forceNotifySessionViewed(sessionId, reason) {
     if (!sessionId) return
+    // Skip when the page is not actively watched. The visibility listener
+    // already handles flushing/marking on tab transitions, so all the public
+    // entry points stay gated symmetrically — only the listener bypasses.
+    if (!isPageActive()) return
     // Skip if cancelled by mark-unread (e.g. onDeactivated fires after mark-unread navigates away)
     if (__hmrState.cancelledViewedThrottles.has(sessionId)) return
     // Cancel any pending trailing throttle call to prevent a stale session_viewed
@@ -543,6 +596,15 @@ export function useWebSocket() {
     const store = useDataStore()
     const route = useRoute()
     const { onReconnected } = useReconciliation()
+
+    // Mirror the current route's session id into module-level state so the
+    // visibility listener (installed at module load, outside any composable)
+    // can flush/mark the right session on tab focus/blur transitions.
+    watch(
+        () => route.params.sessionId,
+        (id) => { __hmrState.currentRouteSessionId = id || null },
+        { immediate: true },
+    )
 
     // Track if we've ever been connected (to distinguish first connect from reconnect)
     let wasConnected = false
