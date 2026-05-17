@@ -80,6 +80,15 @@ onActivated(() => {
 
     // Mark session as viewed when re-activated (KeepAlive navigation back)
     notifySessionViewed(sessionId.value, 'activated')
+
+    // Re-resolve if the session disappeared from the store while this cached
+    // instance was inactive — typically a draft we created was rebound to a
+    // canonical id and deleted while the user was on another session. Without
+    // this re-check, the back navigation lands on the loading spinner forever
+    // because the setup-time resolve only ran once with the draft still alive.
+    if (!session.value) {
+        ensureSessionResolved()
+    }
 })
 
 onDeactivated(() => {
@@ -182,24 +191,52 @@ const terminalRouteTermIndex = computed(() => parseRouteTermIndex(route.params.t
 // Session data
 const session = computed(() => store.getSession(sessionId.value))
 
-// If the session was not pre-loaded via the sidebar's sessions list, fetch it
-// by ID so the view can render. Happens on cross-filter deep links (the URL's
-// projectId is the sidebar filter, not the session's real project) and on
-// direct bookmarks into a project whose sessions haven't been loaded yet.
-// The store action is idempotent: it returns immediately if the session is
-// already present, so this call is safe even when redundant.
 // `sessionLoadError` drives the "not found" / "error" fallback in the template:
-// - `null`: still loading or loaded successfully
+// - `null`: still loading, loaded successfully, or redirecting via draft alias
 // - `'not-found'`: backend returned 404 — the session ID does not exist
 // - `'error'`: network or server error — the user can try again by reloading
 const sessionLoadError = ref(null)
-if (!session.value) {
-    store.loadSessionById(sessionId.value).then(result => {
+
+// Resolve the session when it is missing from the store. Two paths:
+// - Draft rebound to a canonical id (Codex flow when the bind happened while
+//   the user was on another session — ``bindDraftSession`` skipped its inline
+//   ``router.replace`` because ``onDraft`` was false, but still populated
+//   ``draftAliases`` and deleted the draft). Redirect transparently via
+//   ``router.replace`` so the user lands on the real session instead of a
+//   "not found" screen. Preserves the forward history (replaceState only
+//   touches the current history entry).
+// - Otherwise fetch by id. Covers cross-filter deep links (the URL's
+//   projectId is the sidebar filter, not the session's real project) and
+//   direct bookmarks into a project whose sessions haven't been loaded yet.
+//   ``loadSessionById`` is idempotent.
+//
+// Called from setup (initial render) and from ``onActivated`` (cached KeepAlive
+// instance whose session disappeared while it was inactive).
+async function ensureSessionResolved() {
+    if (session.value) {
+        sessionLoadError.value = null
+        return
+    }
+
+    const canonicalId = store.localState.draftAliases[sessionId.value]
+    if (canonicalId) {
+        router.replace({
+            name: route.name,
+            params: { ...route.params, sessionId: canonicalId },
+            query: route.query,
+        })
+        return
+    }
+
+    try {
+        const result = await store.loadSessionById(sessionId.value)
         if (!result) sessionLoadError.value = 'not-found'
-    }).catch(() => {
+    } catch {
         sessionLoadError.value = 'error'
-    })
+    }
 }
+
+ensureSessionResolved()
 
 // Session's project (data-driven). Stable per KeepAlive instance because
 // sessionId is frozen and session.project_id is immutable for a given session.
