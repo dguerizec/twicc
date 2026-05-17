@@ -140,15 +140,22 @@ async def mark_unauthenticated_and_broadcast() -> None:
     """Force the auth state to ``False`` and broadcast.
 
     Mirrors :func:`providers.claude_code.auth.mark_unauthenticated_and_broadcast`,
-    which is called from the Claude message loop on ``AssistantMessage.error
-    == "authentication_failed"``. The Codex equivalent — calling this on
-    ``ErrorNotification`` events carrying ``CodexErrorInfoValue.unauthorized``
-    (or the ``401/403`` HTTP variants of ``HttpConnectionFailedCodexErrorInfo``
-    / ``ResponseStreamConnectionFailedCodexErrorInfo``) from
-    :meth:`CodexAgent._handle_stream_event` — is not wired yet, so this
-    function has no caller today. Without the wiring, an expired token mid-turn
-    surfaces only through the next ``codex login status`` poll (up to 30s
-    later), instead of immediately like on Claude.
+    which is called from the Claude message loop on
+    ``AssistantMessage.error == "authentication_failed"``. The Codex
+    equivalent is called from :meth:`CodexAgent._handle_stream_event`
+    when :meth:`CodexAgent._is_unauthorized_error` matches an incoming
+    ``ErrorNotification``. The matching covers three paths because Codex
+    upstream surfaces auth failures inconsistently:
+
+    1. ``CodexErrorInfoValue.unauthorized`` (``RefreshTokenFailed``).
+    2. ``HttpConnectionFailed`` / ``ResponseStreamConnectionFailed``
+       variants with ``http_status_code in {401, 403}``.
+    3. ``"status 40[13]"`` substring in the message (covers
+       ``CodexErr::UnexpectedStatus(401)`` which falls through to
+       ``Other`` — the typical session-resume-on-expired-token case).
+
+    Without this fast path, an expired token would only surface through
+    the next ``codex login status`` poll (up to 30s later).
     """
     global _last_known_authenticated
 

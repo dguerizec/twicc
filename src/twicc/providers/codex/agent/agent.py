@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import logging
+import re
 import time
 from pathlib import Path
 from typing import Any, ClassVar
@@ -34,6 +35,12 @@ from codex_app_server import (
     ReasoningEffort,
     TextInput,
     TransportClosedError,
+)
+from codex_app_server.generated.v2_all import (
+    CodexErrorInfoValue,
+    ErrorNotification,
+    HttpConnectionFailedCodexErrorInfo,
+    ResponseStreamConnectionFailedCodexErrorInfo,
 )
 
 from twicc.agent import AgentState, BaseAgent, StateChangeCallback
@@ -55,6 +62,13 @@ from .original_files_cache import (
 from .sdk_logger import log_approval_request, log_approval_response, log_stream_event
 
 logger = logging.getLogger(__name__)
+
+# Pattern for HTTP 401/403 in a Codex terminal error message. Codex upstream
+# does not map ``CodexErr::UnexpectedStatus(401)`` to ``CodexErrorInfo::Unauthorized``
+# — it falls through to ``Other`` and the only auth signal left is the
+# formatted message (``"unexpected status 401 Unauthorized: ..."``). Used by
+# ``CodexAgent._is_unauthorized_error`` as the third detection path.
+_AUTH_STATUS_IN_MESSAGE = re.compile(r"\bstatus\s+40[13]\b", re.IGNORECASE)
 
 
 def _capture_original_files_for_apply_patch(inner: Any, session_id: str) -> None:
@@ -465,6 +479,14 @@ class CodexAgent(BaseAgent):
             self._current_turn = None
             self._current_turn_ready.clear()
 
+        # Skip the USER_TURN transition if an in-stream branch already
+        # moved us to DEAD (e.g. terminal ``error`` notification). The
+        # stream loop above can exit cleanly after that — via a final
+        # ``turn/completed`` arriving before ``self._codex.close()``
+        # propagates — and we don't want to overwrite the terminal state.
+        if self.state == AgentState.DEAD:
+            return
+
         # Turn completed normally → ready for the next user input.
         self._set_state(AgentState.USER_TURN)
         self.last_activity = time.time()
@@ -582,6 +604,47 @@ class CodexAgent(BaseAgent):
     # Stream event handling
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _is_unauthorized_error(payload: ErrorNotification) -> bool:
+        """Return ``True`` when this terminal error looks like an auth failure.
+
+        Three paths can surface an auth failure depending on where Codex
+        catches the 401/403:
+
+        1. ``CodexErrorInfoValue.unauthorized`` — Codex mapped
+           ``CodexErr::RefreshTokenFailed`` (token refresh attempted and
+           failed permanently). Only reachable when TwiCC handles the
+           ``account/chatgptAuthTokens/refresh`` server request — not
+           wired today, so this path doesn't fire in practice.
+        2. ``HttpConnectionFailedCodexErrorInfo`` /
+           ``ResponseStreamConnectionFailedCodexErrorInfo`` with
+           ``http_status_code in {401, 403}`` — Codex classified the
+           network error and exposes the status directly.
+        3. ``"status 40[13]"`` in the message — covers the common
+           ``CodexErr::UnexpectedStatus(401)`` case (e.g. session resume
+           on an expired token). Codex upstream has no dedicated mapping
+           for ``UnexpectedStatus`` in ``to_codex_protocol_error``, so it
+           falls through to ``Other`` and the HTTP status is only visible
+           in the formatted message (``"unexpected status {status}: ..."``).
+
+        A false positive flips the topbar red briefly — the next
+        ``codex login status`` poll (≤30s) rectifies it. A false negative
+        means the user keeps seeing a green topbar while every request
+        fails, which is worse, so we prefer being a touch aggressive.
+        """
+        info = payload.error.codex_error_info
+        if info is not None:
+            root = info.root
+            if root is CodexErrorInfoValue.unauthorized:
+                return True
+            if isinstance(root, HttpConnectionFailedCodexErrorInfo):
+                if root.http_connection_failed.http_status_code in (401, 403):
+                    return True
+            elif isinstance(root, ResponseStreamConnectionFailedCodexErrorInfo):
+                if root.response_stream_connection_failed.http_status_code in (401, 403):
+                    return True
+        return bool(_AUTH_STATUS_IN_MESSAGE.search(payload.error.message))
+
     async def _handle_stream_event(self, event: Any) -> None:
         """Translate one Codex SDK stream notification into TwiCC's WS protocol.
 
@@ -658,6 +721,66 @@ class CodexAgent(BaseAgent):
         # through unchanged.
         payload_thread_id = getattr(payload, "thread_id", None)
         if payload_thread_id is not None and payload_thread_id != self.session_id:
+            return
+
+        if method == "error" and isinstance(payload, ErrorNotification):
+            # ``EventMsg::Error`` upstream → ``will_retry: false`` and a
+            # ``turn/completed`` with ``status: failed`` follows on the same
+            # stream. ``EventMsg::StreamError`` → ``will_retry: true`` and is
+            # a transient SSE retry the SDK handles on its own — don't kill
+            # the agent or flip auth state on those.
+            if payload.will_retry:
+                return
+
+            is_auth_error = self._is_unauthorized_error(payload)
+            if is_auth_error:
+                logger.error(
+                    "Codex auth error for session %s: %s",
+                    self.session_id, payload.error.message,
+                )
+            else:
+                logger.error(
+                    "Codex terminal error for session %s: %s (codex_error_info=%r)",
+                    self.session_id,
+                    payload.error.message,
+                    payload.error.codex_error_info,
+                )
+
+            # Mirror Claude's order of ops on ``authentication_failed``:
+            # cancel pending futures → set DEAD → notify → (auth only:
+            # flip global auth state) → close transport. The flip happens
+            # after the DEAD broadcast so the frontend's topbar reflects
+            # the new auth state without waiting for the next
+            # ``codex login status`` poll (up to 30s away).
+            self._cancel_all_pending_futures()
+            self.error = payload.error.message
+            self.kill_reason = "auth_required" if is_auth_error else "error"
+            self._set_state(AgentState.DEAD)
+            self.last_activity = time.time()
+            await self._notify_state_change()
+
+            if is_auth_error:
+                from twicc.providers.codex.auth import mark_unauthenticated_and_broadcast
+                await mark_unauthenticated_and_broadcast()
+
+            # Drop side-tables tied to this session so a future agent on
+            # the same id starts clean (same cleanup as ``interrupt_or_kill``).
+            get_streamed_item_registry().clear_session(self.session_id)
+            self._items_by_id.clear()
+            self._denied_tool_ids.clear()
+            clear_original_files_for_session(self.session_id)
+
+            # Tear the transport down. The stream loop in ``_run_turn``
+            # will observe ``TransportClosedError`` next and exit; the
+            # DEAD guard there (and at the post-loop tail) prevents the
+            # state from being overwritten by USER_TURN.
+            try:
+                await self._codex.close()
+            except Exception:
+                logger.debug(
+                    "codex.close() after error notification failed for session %s",
+                    self.session_id, exc_info=True,
+                )
             return
 
         if method == "item/started":
