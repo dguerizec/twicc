@@ -7,6 +7,7 @@
 import { ref, inject, nextTick, computed, onMounted, onBeforeUnmount } from 'vue'
 import { formatComment } from '../../../stores/codeComments'
 import { useSettingsStore } from '../../../stores/settings'
+import { toast } from '../../../composables/useToast'
 
 const props = defineProps({
     /** The text the user selected in the session view. */
@@ -160,6 +161,13 @@ function addToMessage() {
     close()
 }
 
+function copy() {
+    navigator.clipboard.writeText(props.selectedText)
+    toast.success('Copied to clipboard', { duration: 2000 })
+    window.getSelection()?.removeAllRanges()
+    close()
+}
+
 function handleKeydown(e) {
     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
         e.preventDefault()
@@ -200,18 +208,29 @@ defineExpose({ isExpanded: expanded })
         :class="{ expanded }"
         :style="rootStyle"
     >
-        <!-- Collapsed: just the comment button -->
-        <wa-button
-            v-if="!expanded"
-            class="tsc-trigger"
-            variant="brand"
-            appearance="filled-outlined"
-            size="small"
-            @mousedown.prevent
-            @click.stop="expand"
-        >
-            <wa-icon name="comment" variant="regular"></wa-icon>
-        </wa-button>
+        <!-- Collapsed: comment + copy buttons -->
+        <div v-if="!expanded" class="tsc-collapsed">
+            <wa-button
+                class="tsc-trigger"
+                variant="brand"
+                appearance="filled-outlined"
+                size="small"
+                @mousedown.prevent
+                @click.stop="expand"
+            >
+                <wa-icon name="comment" variant="regular"></wa-icon>
+            </wa-button>
+            <wa-button
+                class="tsc-trigger"
+                variant="neutral"
+                appearance="filled"
+                size="small"
+                @mousedown.prevent
+                @click.stop="copy"
+            >
+                <wa-icon name="copy" variant="regular"></wa-icon>
+            </wa-button>
+        </div>
 
         <!-- Expanded: comment panel (background is the drag handle) -->
         <div
@@ -260,6 +279,13 @@ defineExpose({ isExpanded: expanded })
     position: fixed;
     z-index: 10000;
     /* transform is set dynamically in rootStyle based on selection direction */
+}
+
+/* ── Collapsed: side-by-side comment + copy buttons ──────────────── */
+
+.tsc-collapsed {
+    display: flex;
+    gap: var(--wa-space-xs);
 }
 
 /* ── Panel ───────────────────────────────────────────────────────── */

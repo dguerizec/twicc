@@ -830,20 +830,6 @@ defineExpose({ activeIndex })
                         >Select</wa-switch>
                     </div>
 
-                    <!-- Copy button (all devices) -->
-                    <wa-button
-                        v-if="tb.hasSelection"
-                        id="terminal-copy-button"
-                        variant="neutral"
-                        appearance="filled"
-                        size="small"
-                        class="copy-button reduced-height"
-                        @click="handleCopy"
-                    >
-                        <wa-icon name="copy" variant="regular"></wa-icon>
-                    </wa-button>
-                    <AppTooltip v-if="tb.hasSelection" for="terminal-copy-button">Copy selection</AppTooltip>
-
                     <!-- Comment button (only when a message input is available) -->
                     <wa-button
                         v-if="tb.hasSelection && insertTextAtCursor"
@@ -858,6 +844,20 @@ defineExpose({ activeIndex })
                         <wa-icon name="comment" variant="regular"></wa-icon>
                     </wa-button>
                     <AppTooltip v-if="tb.hasSelection && insertTextAtCursor" for="terminal-comment-button">Comment on selection</AppTooltip>
+
+                    <!-- Copy button (all devices) -->
+                    <wa-button
+                        v-if="tb.hasSelection"
+                        id="terminal-copy-button"
+                        variant="neutral"
+                        appearance="filled"
+                        size="small"
+                        class="copy-button reduced-height"
+                        @click="handleCopy"
+                    >
+                        <wa-icon name="copy" variant="regular"></wa-icon>
+                    </wa-button>
+                    <AppTooltip v-if="tb.hasSelection" for="terminal-copy-button">Copy selection</AppTooltip>
 
                     <!-- Paste button -->
                     <wa-button
