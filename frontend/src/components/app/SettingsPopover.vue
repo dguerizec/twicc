@@ -103,6 +103,9 @@ function selectSection(id) {
         tmuxConfigPathInput.value = terminalTmuxConfigPath.value || ''
         tmuxConfigValidation.value = null
     }
+    if (id === 'title') {
+        titleSystemPromptInput.value = titleSystemPrompt.value
+    }
 }
 
 function goBackToNav() {
@@ -303,6 +306,7 @@ const autoUnpinOnArchive = computed(() => store.isAutoUnpinOnArchive)
 const titleGenerationEnabled = computed(() => store.isTitleGenerationEnabled)
 const titleAutoApply = computed(() => store.isTitleAutoApply)
 const titleSystemPrompt = computed(() => store.getTitleSystemPrompt)
+const titleSystemPromptInput = ref('')
 const terminalUseTmux = computed(() => store.isTerminalUseTmux)
 const terminalTmuxConfigPath = computed(() => store.getTerminalTmuxConfigPath)
 const compactSessionList = computed(() => store.isCompactSessionList)
@@ -380,6 +384,8 @@ const tmuxConfigApplyIcon = computed(() => {
 
 // Check if the current prompt is the default
 const isDefaultPrompt = computed(() => titleSystemPrompt.value === SETTINGS_SCHEMA.titleSystemPrompt)
+const isTitleSystemPromptModified = computed(() => titleSystemPromptInput.value !== titleSystemPrompt.value)
+const titleSystemPromptApplyIcon = computed(() => (isTitleSystemPromptModified.value ? 'triangle-exclamation' : 'check'))
 
 // Server info for footer
 const currentVersion = computed(() => dataStore.currentVersion)
@@ -634,10 +640,15 @@ function onTitleAutoApplyChange(event) {
 }
 
 /**
- * Handle title system prompt change.
+ * Handle title system prompt change: update only the local buffer.
+ * The store (and backend sync) is only touched when Apply is clicked.
  */
 function onTitleSystemPromptChange(event) {
-    store.setTitleSystemPrompt(event.target.value)
+    titleSystemPromptInput.value = event.target.value
+}
+
+function onTitleSystemPromptApply() {
+    store.setTitleSystemPrompt(titleSystemPromptInput.value)
 }
 
 /**
@@ -716,10 +727,13 @@ function onEditorWordWrapChange(event) {
 }
 
 /**
- * Reset title system prompt to default.
+ * Reset title system prompt to default. Updates the store immediately
+ * (per user choice) and resyncs the local buffer so Apply icon goes back
+ * to the "synced" state.
  */
 function resetTitleSystemPrompt() {
     store.resetTitleSystemPrompt()
+    titleSystemPromptInput.value = titleSystemPrompt.value
 }
 
 /**
@@ -1064,7 +1078,7 @@ function onChangelogClose() {
                         <div v-if="titleGenerationEnabled" class="title-prompt-section">
                             <label class="setting-group-label">System prompt</label>
                             <wa-textarea
-                                :value.prop="titleSystemPrompt"
+                                :value.prop="titleSystemPromptInput"
                                 @input="onTitleSystemPromptChange"
                                 size="small"
                                 rows="7"
@@ -1072,14 +1086,24 @@ function onChangelogClose() {
                                 class="title-prompt-textarea"
                             ></wa-textarea>
                             <div class="title-prompt-hint">
-                                <span>Use <code>{text}</code> as placeholder.</span>
-                                <wa-button
-                                    v-if="!isDefaultPrompt"
-                                    variant="neutral"
-                                    appearance="outlined"
-                                    size="small"
-                                    @click.stop="resetTitleSystemPrompt"
-                                >Reset to default</wa-button>
+                                <span>Use <code>{text}</code> as placeholder. Press Apply to save.</span>
+                                <div class="title-prompt-actions">
+                                    <wa-button
+                                        v-if="!isDefaultPrompt"
+                                        variant="neutral"
+                                        appearance="outlined"
+                                        size="small"
+                                        @click.stop="resetTitleSystemPrompt"
+                                    >Reset to default</wa-button>
+                                    <wa-button
+                                        size="small"
+                                        variant="neutral"
+                                        @click.stop="onTitleSystemPromptApply"
+                                    >
+                                        <wa-icon :name="titleSystemPromptApplyIcon" slot="start"></wa-icon>
+                                        Apply
+                                    </wa-button>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -1625,6 +1649,14 @@ function onChangelogClose() {
     gap: var(--wa-space-xs);
     font-size: var(--wa-font-size-xs);
     color: var(--wa-color-text-quiet);
+
+    .title-prompt-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: var(--wa-space-xs);
+        align-items: center;
+        justify-content: flex-end;
+    }
 
     code {
         background: var(--wa-color-surface);
