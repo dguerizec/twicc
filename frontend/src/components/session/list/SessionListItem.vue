@@ -309,7 +309,10 @@ function handleMenuSelect(event) {
     } else if (action === 'unarchive') {
         store.setSessionArchived(session.project_id, session.id, false)
     } else if (action === 'pin-none' || action === 'pin-project' || action === 'pin-workspace' || action === 'pin-all') {
-        const mode = action === 'pin-none' ? null : action.slice(4)
+        const requested = action === 'pin-none' ? null : action.slice(4)
+        // Re-selecting the currently active mode toggles it off.
+        const current = session.pinned || null
+        const mode = requested !== null && requested === current ? null : requested
         store.setSessionPinMode(session.project_id, session.id, mode)
     } else if (action === 'mark-unread') {
         // Cancel any pending session_viewed trailing throttle to prevent it

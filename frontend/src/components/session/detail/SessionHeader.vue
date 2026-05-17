@@ -331,7 +331,10 @@ const pinTooltip = computed(() => {
 function handlePinSelect(event) {
     if (!session.value || session.value.draft) return
     const value = event.detail.item.value
-    const mode = value === 'none' ? null : value
+    const requested = value === 'none' ? null : value
+    // Re-selecting the currently active mode toggles it off.
+    const current = session.value.pinned || null
+    const mode = requested !== null && requested === current ? null : requested
     store.setSessionPinMode(session.value.project_id, props.sessionId, mode)
 }
 
