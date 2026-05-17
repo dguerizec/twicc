@@ -185,6 +185,7 @@ const shortcutGroups = computed(() => {
             label: 'Message input',
             shortcuts: [
                 { keys: [mod, '↵'], description: 'Send message' },
+                { keys: ['Alt', 'Shift', 'M'], description: 'Focus message input (from any session tab)' },
                 { keys: ['Alt', 'Shift', 'O'], description: 'Open / close Agent Settings popover' },
                 { keys: ['@'], description: 'Insert file path (after a space or at start)' },
                 ...commandShortcuts,

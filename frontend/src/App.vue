@@ -138,6 +138,23 @@ const TERMINAL_ROUTES = new Set([
     'project-terminal', 'projects-terminal',
 ])
 
+// Focus the message input's wa-textarea. Retries because the caller may
+// invoke this right after a router.push() — even when the textarea is
+// already in the DOM (keep-alive), the route transition can re-blur it as
+// Vue re-renders. We keep trying until focus actually sticks, or the
+// retry budget runs out (~1.5s).
+function focusMessageTextarea(retries = 30) {
+    const textarea = document.querySelector('.message-input wa-textarea')
+    if (!textarea) {
+        if (retries > 0) setTimeout(() => focusMessageTextarea(retries - 1), 50)
+        return
+    }
+    textarea.focus()
+    if (document.activeElement !== textarea && retries > 0) {
+        setTimeout(() => focusMessageTextarea(retries - 1), 50)
+    }
+}
+
 function handleGlobalKeydown(e) {
     const modKey = settingsStore.isMac ? e.metaKey : e.ctrlKey
     if (modKey && e.key === 'k') {
@@ -221,6 +238,53 @@ function handleGlobalKeydown(e) {
             e.preventDefault()
             e.stopPropagation()
             window.dispatchEvent(new CustomEvent('twicc:toggle-agent-settings'))
+        }
+    }
+    // Alt+Shift+M: focus the message input. Active on any session sub-route
+    // (chat, files, git, terminal, subagent); navigates to the chat tab
+    // first if needed. Ignored when a blocking overlay (dialog, popover,
+    // dropdown, text-selection comment) is open, or when focus is in an
+    // editable element other than the xterm helper textarea (terminals
+    // aren't "edit fields" from the user's perspective).
+    //
+    // Exception: the Agent Settings popover (identified by
+    // .settings-panel-presets, since it shares the .settings-popover class
+    // with the global app SettingsPopover) is NOT a blocker — instead
+    // Alt+Shift+M closes it and refocuses the textarea, same as Alt+Shift+O
+    // from inside the popover.
+    if (e.altKey && e.shiftKey && !e.ctrlKey && !e.metaKey && e.code === 'KeyM' && SESSION_ROUTES.has(route.name)) {
+        const openPopovers = [...document.querySelectorAll('wa-popover[open]')]
+        const agentPopoverOpen = openPopovers.some(p => p.querySelector('.settings-panel-presets') !== null)
+        const otherPopoverOpen = openPopovers.some(p => p.querySelector('.settings-panel-presets') === null)
+        const otherOverlayOpen = document.querySelector('wa-dialog[open], wa-dropdown[open], .text-selection-comment') !== null
+        const overlayBlocked = otherPopoverOpen || otherOverlayOpen
+
+        if (agentPopoverOpen && !overlayBlocked) {
+            // Reuse the toggle event — its handler closes the popover and
+            // focuses the textarea when the popover was open.
+            e.preventDefault()
+            e.stopPropagation()
+            window.dispatchEvent(new CustomEvent('twicc:toggle-agent-settings'))
+        } else if (!overlayBlocked) {
+            const active = document.activeElement
+            const inEditable = active != null && active.closest('.xterm') === null && (
+                active.tagName === 'INPUT' ||
+                active.tagName === 'TEXTAREA' ||
+                active.tagName === 'WA-INPUT' ||
+                active.tagName === 'WA-TEXTAREA' ||
+                active.tagName === 'WA-SELECT' ||
+                active.isContentEditable
+            )
+            if (!inEditable) {
+                e.preventDefault()
+                e.stopPropagation()
+                if (SESSION_CHAT_ROUTES.has(route.name)) {
+                    focusMessageTextarea()
+                } else {
+                    const chatRouteName = route.name.startsWith('projects-session') ? 'projects-session' : 'session'
+                    router.push({ name: chatRouteName, params: route.params }).then(() => focusMessageTextarea())
+                }
+            }
         }
     }
     // Triple-Escape: emergency stop of the current chat session's process.
