@@ -522,6 +522,7 @@ class ClaudeCodeSessionCompute(BaseSessionCompute):
         if entry_type in (
             'queue-operation', 'progress', 'summary', 'file-history-snapshot',
             'last-prompt', 'attachment', 'permission-mode', 'custom-title',
+            'pr-link',
         ):
             return ItemKind.SYSTEM
 
