@@ -8,15 +8,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- TwiCC can now be used with Codex from OpenAI in addition to Claude Code from Anthropic.
 - Workspaces in the CLI and the TwiCC plugin skills: new `twicc workspaces` / `twicc workspace <id>` commands (and matching skills), `--workspace <id>` filter on `twicc projects` and `twicc sessions`, and a `workspaces` field on each project entry listing the workspace IDs it belongs to.
 
 ### Changed
 
-- Bump `claude-agent-sdk` from 0.1.69 to 0.1.71 (bundled Claude Code CLI: 2.1.121 → 2.1.123)
+- Image attachments now support the higher resolutions accepted by Opus 4.7 (2576 px for max dimension, still at 1568 for other Claude models, 2048 for Codex)
+- Bump `claude-agent-sdk` from 0.1.69 to 0.2.82 (bundled Claude Code CLI: 2.1.121 → 2.1.142)
 
 ### Fixed
 
-- Better handling of Write tool calls in "Claude is..."
+- Scrolling in long chat sessions on Chrome no longer jump uncontrollably (reported by @LeoPartt)
+- Claude Code SDK instances are now properly killed when you stop the agent during an assistant turn (based on PR #13 by @LeoPartt)
+- Better handling of tool calls in "Claude is..."
 
 
 ## [1.5.5] - 2026-04-28
