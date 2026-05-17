@@ -134,12 +134,12 @@ async function open() {
     focusSearchInput()
 }
 
-function close() {
+function close(payload = {}) {
     isOpen.value = false
     allMessages.value = []
     error.value = null
     searchQuery.value = ''
-    emit('close')
+    emit('close', payload)
 }
 
 // ─── Focus management ─────────────────────────────────────────────────────
@@ -217,8 +217,17 @@ function handleSearchKeydown(event) {
         return
     }
     if (event.key === 'Enter') {
+        // Cmd/Ctrl+Enter is a no-op inside the popover (does not close, does not send).
+        if (event.metaKey || event.ctrlKey) return
         event.preventDefault()
-        selectActive()
+        if (filteredMessages.value.length > 0) {
+            selectActive()
+        } else {
+            // No match: close and ask the parent to preserve the typed text.
+            // In bang mode the text is already mirrored in the textarea;
+            // in pageup mode the parent will insert it at the right position.
+            close({ preserveText: searchQuery.value })
+        }
         return
     }
 }
@@ -287,8 +296,13 @@ function handleListKeydown(event) {
         }
 
         case 'Enter': {
+            if (event.metaKey || event.ctrlKey) break
             event.preventDefault()
-            selectActive()
+            if (filteredMessages.value.length > 0) {
+                selectActive()
+            } else {
+                close({ preserveText: searchQuery.value })
+            }
             break
         }
 

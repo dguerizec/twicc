@@ -582,10 +582,19 @@ async function onFilePickerSelect(relativePath) {
 
 /**
  * Handle file picker popup close (without selection).
+ *
  * Returns focus to the textarea and positions the cursor after the
  * trigger character + any filter text that was mirrored.
+ *
+ * When the popup closes with ``payload.preserveText`` (Enter pressed in the
+ * search input), the user's typed filter must end up in the textarea:
+ * - char-trigger mode: the filter is already mirrored after ``@`` — nothing
+ *   to insert, just restore the cursor after it.
+ * - button mode: nothing was mirrored, so insert ``@<filterText>`` at the
+ *   memorized cursor position (with a leading space when the previous
+ *   character is non-whitespace, matching the select-flow behavior).
  */
-function onFilePickerClose() {
+function onFilePickerClose(payload) {
     atLastCloseTime = Date.now()
     const isButtonMode = atButtonMode.value
     const pos = atCursorPosition.value
@@ -598,14 +607,32 @@ function onFilePickerClose() {
 
     textareaRef.value?.focus()
     const inner = textareaRef.value?.shadowRoot?.querySelector('textarea')
-    if (inner) {
-        if (isButtonMode && buttonPos != null) {
-            // Button mode: restore cursor to the memorized position, textarea untouched
-            inner.setSelectionRange(buttonPos, buttonPos)
-        } else if (pos != null) {
-            const cursorTarget = pos + mirrorLen
-            inner.setSelectionRange(cursorTarget, cursorTarget)
-        }
+    if (!inner) return
+
+    if (payload?.preserveText !== undefined && isButtonMode && buttonPos != null) {
+        const filter = payload.preserveText
+        const prevChar = buttonPos > 0 ? messageText.value[buttonPos - 1] : ''
+        const needsLeadingSpace = buttonPos > 0 && !/\s/.test(prevChar)
+        const leading = needsLeadingSpace ? ' ' : ''
+        const insertion = leading + '@' + filter
+        const before = messageText.value.slice(0, buttonPos)
+        const after = messageText.value.slice(buttonPos)
+        const newText = before + insertion + after
+        messageText.value = newText
+        if (textareaRef.value) textareaRef.value.value = newText
+        inner.value = newText
+        const newPos = buttonPos + insertion.length
+        inner.setSelectionRange(newPos, newPos)
+        adjustTextareaHeight()
+        return
+    }
+
+    if (isButtonMode && buttonPos != null) {
+        // Button mode: restore cursor to the memorized position, textarea untouched
+        inner.setSelectionRange(buttonPos, buttonPos)
+    } else if (pos != null) {
+        const cursorTarget = pos + mirrorLen
+        inner.setSelectionRange(cursorTarget, cursorTarget)
     }
 }
 
@@ -640,18 +667,44 @@ async function onCommandSelect(commandText) {
 
 /**
  * Handle command picker popup close (without selection).
+ *
  * Returns focus to the textarea and positions the cursor after the
  * activation char + any filter text that was mirrored.
+ *
+ * When the popup closes with ``payload.preserveText`` (Enter pressed in the
+ * search input with no command match), the user's typed filter must end up
+ * in the textarea:
+ * - char-trigger mode: ``<char><filter>`` is already mirrored — nothing to
+ *   insert, just restore the cursor after it.
+ * - button mode: insert ``<char><filterText>`` at position 0 (the button is
+ *   only enabled when the textarea is empty, so position 0 is correct).
  */
-function onCommandPickerClose() {
+function onCommandPickerClose(payload) {
     commandLastCloseTime = Date.now()
     const isButtonMode = commandButtonMode.value
     const pos = commandCursorPosition.value
     const mirrorLen = commandMirroredLength.value
+    const activeChar = activeCommandChar.value
     commandCursorPosition.value = null
     commandMirroredLength.value = 0
     commandButtonMode.value = false
     activeCommandChar.value = null
+
+    if (payload?.preserveText !== undefined && isButtonMode && activeChar) {
+        const insertion = activeChar + payload.preserveText
+        messageText.value = insertion
+        if (textareaRef.value) {
+            textareaRef.value.value = insertion
+            const inner = textareaRef.value.shadowRoot?.querySelector('textarea')
+            if (inner) {
+                inner.value = insertion
+                inner.setSelectionRange(insertion.length, insertion.length)
+            }
+            textareaRef.value.focus()
+        }
+        adjustTextareaHeight()
+        return
+    }
 
     // Button mode: nothing to restore — textarea was never modified
     if (isButtonMode) {
@@ -739,12 +792,21 @@ async function onHistoryMessageSelect(selectedText) {
 
 /**
  * Handle message history picker popup close (without selection).
+ *
  * Returns focus to the textarea and restores the cursor position.
  *
  * Bang mode: positions cursor after '!' + any mirrored filter text.
  * PageUp mode: restores cursor to original position.
+ *
+ * When the popup closes with ``payload.preserveText`` (Enter pressed in the
+ * search input with no message match), the user's typed filter must end up
+ * in the textarea:
+ * - bang mode: ``!<filter>`` is already mirrored — nothing to insert.
+ * - pageup mode: insert ``<filter>`` (no ``!``) at the memorized cursor
+ *   position; the ``!`` is meaningless when the user opened the picker via
+ *   PageUp or the snippets-bar button.
  */
-function onHistoryPickerClose() {
+function onHistoryPickerClose(payload) {
     histLastCloseTime = Date.now()
     const mode = histTriggerMode.value
     const pos = histCursorPosition.value
@@ -759,13 +821,31 @@ function onHistoryPickerClose() {
 
     textareaRef.value?.focus()
     const inner = textareaRef.value?.shadowRoot?.querySelector('textarea')
-    if (inner) {
-        if (mode === 'bang' && pos != null) {
-            const cursorTarget = pos + mirrorLen
-            inner.setSelectionRange(cursorTarget, cursorTarget)
-        } else if (mode === 'pageup' && insertPos != null) {
+    if (!inner) return
+
+    if (payload?.preserveText !== undefined && mode === 'pageup' && insertPos != null) {
+        const filter = payload.preserveText
+        if (filter.length > 0) {
+            const before = messageText.value.slice(0, insertPos)
+            const after = messageText.value.slice(insertPos)
+            const newText = before + filter + after
+            messageText.value = newText
+            if (textareaRef.value) textareaRef.value.value = newText
+            inner.value = newText
+            const newPos = insertPos + filter.length
+            inner.setSelectionRange(newPos, newPos)
+            adjustTextareaHeight()
+        } else {
             inner.setSelectionRange(insertPos, insertPos)
         }
+        return
+    }
+
+    if (mode === 'bang' && pos != null) {
+        const cursorTarget = pos + mirrorLen
+        inner.setSelectionRange(cursorTarget, cursorTarget)
+    } else if (mode === 'pageup' && insertPos != null) {
+        inner.setSelectionRange(insertPos, insertPos)
     }
 }
 

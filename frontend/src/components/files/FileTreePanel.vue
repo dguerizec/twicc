@@ -595,6 +595,8 @@ function handleTreeKeydown(event) {
         }
 
         case 'Enter': {
+            // Cmd/Ctrl+Enter is a no-op (does not activate the focused item).
+            if (event.metaKey || event.ctrlKey) break
             event.preventDefault()
             if (index >= 0) {
                 activateFocused(items, index)

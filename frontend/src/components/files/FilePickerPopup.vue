@@ -231,11 +231,11 @@ async function open() {
     fileTreePanelRef.value?.focusSearchInput()
 }
 
-function close() {
+function close(payload = {}) {
     isOpen.value = false
     tree.value = null
     error.value = null
-    emit('close')
+    emit('close', payload)
 }
 
 // ─── File selection ───────────────────────────────────────────────────────
@@ -331,14 +331,36 @@ watch(isOpen, (open) => {
 })
 
 /**
- * Handle Escape key to close the popup.
- * Intercepts the event before FileTreePanel's own Escape handler.
+ * Handle Escape and Enter keys at the popup level.
+ *
+ * Escape: close the popup (intercepts before FileTreePanel's own handler).
+ *
+ * Plain Enter in the search input (focus NOT in the tree): close the popup
+ * and ask the parent to preserve what was typed — never auto-select a tree
+ * match from the search field. The user must explicitly navigate into the
+ * tree with ArrowDown to select a file via Enter.
+ *
+ * Plain Enter inside the tree container: let FileTreePanel handle it
+ * (activates the focused item).
+ *
+ * Cmd/Ctrl+Enter: no-op (does not close, does not send).
  */
 function onPickerKeydown(event) {
     if (event.key === 'Escape') {
         event.preventDefault()
         event.stopPropagation()
         close()
+        return
+    }
+    if (event.key === 'Enter' && !event.metaKey && !event.ctrlKey) {
+        // Only intercept Enter from the search input itself. The tree's own
+        // Enter handler keeps activating the focused item; the options
+        // dropdown trigger and its items keep their native click behavior.
+        if (!event.target.closest?.('.files-search-input')) return
+        event.preventDefault()
+        event.stopPropagation()
+        const filterText = fileTreePanelRef.value?.searchQuery ?? ''
+        close({ preserveText: filterText })
     }
 }
 
