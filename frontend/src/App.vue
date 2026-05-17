@@ -205,6 +205,24 @@ function handleGlobalKeydown(e) {
             window.dispatchEvent(new CustomEvent('twicc:tab-shortcut', { detail: tabAction }))
         }
     }
+    // Alt+Shift+O: toggle the Agent Settings popover. Only active when focus
+    // is in the message input's wa-textarea (open intent) or already inside
+    // the open agent-settings popover (close intent). Uses e.code (physical
+    // key) because Alt+Shift+O produces a composed character on macOS (Ø)
+    // which makes e.key unreliable across layouts.
+    if (e.altKey && e.shiftKey && !e.ctrlKey && !e.metaKey && e.code === 'KeyO' && SESSION_CHAT_ROUTES.has(route.name)) {
+        const active = document.activeElement
+        const inTextarea = active?.tagName === 'WA-TEXTAREA' && active.closest('.message-input') !== null
+        // The agent-settings popover is identified by .settings-panel-presets,
+        // which the global app SettingsPopover (sharing the .settings-popover
+        // class) doesn't render.
+        const inAgentPopover = active?.closest('wa-popover')?.querySelector('.settings-panel-presets') != null
+        if (inTextarea || inAgentPopover) {
+            e.preventDefault()
+            e.stopPropagation()
+            window.dispatchEvent(new CustomEvent('twicc:toggle-agent-settings'))
+        }
+    }
     // Triple-Escape: emergency stop of the current chat session's process.
     // Only active on chat routes (session, projects-session), only when a
     // stoppable process exists. Does NOT preventDefault/stopPropagation —

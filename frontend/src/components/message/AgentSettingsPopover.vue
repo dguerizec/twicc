@@ -6,7 +6,7 @@
 // resolved through hooks on the session's provider helpers — see the
 // "Agent settings popover/summary rendering hooks" section in
 // ``BaseProviderHelpers``.
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { vPopoverFocusFix } from '../../directives/vPopoverFocusFix'
 import { formatPresetSummary } from '../../utils/presetFormat'
 import { DEFAULT_SENTINEL } from '../../composables/useSessionAgentSettings'
@@ -249,11 +249,73 @@ function resetField(field) {
     const ref_ = SELECTED_REFS[field]
     if (ref_) ref_.value = null
 }
+
+const popoverRef = ref(null)
+
+function focusFirstElement() {
+    const pop = popoverRef.value
+    if (!pop) return
+    // wa-button[slot="trigger"] targets the inner wa-dropdown triggers
+    // (provider switcher, Reset/Presets); wa-select covers the model row
+    // and simple-field rows. First DOM match wins, which mirrors the
+    // top-to-bottom order of the popover.
+    const first = pop.querySelector('wa-button[slot="trigger"]:not([disabled]), wa-select:not([disabled])')
+    first?.focus()
+}
+
+function handleAfterShow(e) {
+    // Ignore wa-after-show events that bubble up from inner wa-select /
+    // wa-dropdown menus — only the popover's own open event should trigger
+    // first-element focus.
+    if (e.target !== popoverRef.value) return
+    focusFirstElement()
+}
+
+function closeAndFocusTextarea() {
+    // Pre-focus the textarea so vPopoverFocusFix lands focus there after
+    // close — without this the focus would fall on a now-hidden element
+    // inside the popover.
+    document.querySelector('.message-input wa-textarea')?.focus()
+    popoverRef.value?.hide()
+}
+
+function handleToggleShortcut() {
+    const pop = popoverRef.value
+    if (!pop) return
+    if (pop.open) {
+        closeAndFocusTextarea()
+    } else {
+        pop.show()
+    }
+}
+
+function handlePopoverKeydown(e) {
+    // Escape inside the popover: close it and return focus to the textarea.
+    // Replaces the native dialog Escape close (which would put focus on the
+    // trigger button instead) and prevents the Escape from reaching App.vue's
+    // triple-Escape counter.
+    if (e.key === 'Escape' && popoverRef.value?.open) {
+        e.preventDefault()
+        e.stopPropagation()
+        closeAndFocusTextarea()
+    }
+}
+
+onMounted(() => {
+    window.addEventListener('twicc:toggle-agent-settings', handleToggleShortcut)
+})
+
+onBeforeUnmount(() => {
+    window.removeEventListener('twicc:toggle-agent-settings', handleToggleShortcut)
+})
 </script>
 
 <template>
     <wa-popover
+        ref="popoverRef"
         v-popover-focus-fix
+        @wa-after-show="handleAfterShow"
+        @keydown="handlePopoverKeydown"
         :for="props.for"
         placement="top"
         class="settings-popover"
