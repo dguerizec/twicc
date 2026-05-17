@@ -130,7 +130,8 @@ const filtersExpanded = ref(false)
 const filters = reactive({
     projectId: '',
     from: '',
-    datePreset: '',
+    newerThan: '',
+    olderThan: '',
     includeArchived: false,
 })
 
@@ -139,33 +140,39 @@ const activeFilterCount = computed(() => {
     let count = 0
     if (filters.projectId) count++
     if (filters.from) count++
-    if (filters.datePreset) count++
+    if (filters.newerThan) count++
+    if (filters.olderThan) count++
     if (filters.includeArchived) count++
     return count
 })
 
-// Compute date range from preset
-const dateRange = computed(() => {
-    const now = new Date()
-    switch (filters.datePreset) {
-        case '7d': {
-            const d = new Date(now)
-            d.setDate(d.getDate() - 7)
-            return { after: d.toISOString() }
-        }
-        case '30d': {
-            const d = new Date(now)
-            d.setDate(d.getDate() - 30)
-            return { after: d.toISOString() }
-        }
-        case '3m': {
-            const d = new Date(now)
-            d.setMonth(d.getMonth() - 3)
-            return { after: d.toISOString() }
-        }
-        default:
-            return {}
+// Convert a duration preset (e.g. '7d', '3m') to an ISO timestamp in the past.
+function presetToDate(preset) {
+    const d = new Date()
+    switch (preset) {
+        case '3d': d.setDate(d.getDate() - 3); break
+        case '7d': d.setDate(d.getDate() - 7); break
+        case '10d': d.setDate(d.getDate() - 10); break
+        case '20d': d.setDate(d.getDate() - 20); break
+        case '30d': d.setDate(d.getDate() - 30); break
+        case '2m': d.setMonth(d.getMonth() - 2); break
+        case '3m': d.setMonth(d.getMonth() - 3); break
+        case '6m': d.setMonth(d.getMonth() - 6); break
+        default: return null
     }
+    return d.toISOString()
+}
+
+// Compute date range from the two preset bounds.
+// `newerThan` -> backend `after`  (keep items younger than X)
+// `olderThan` -> backend `before` (keep items older than Y)
+const dateRange = computed(() => {
+    const range = {}
+    const after = presetToDate(filters.newerThan)
+    const before = presetToDate(filters.olderThan)
+    if (after) range.after = after
+    if (before) range.before = before
+    return range
 })
 
 // ─── Search index readiness ────────────────────────────────────────────────
@@ -259,6 +266,7 @@ async function performSearch(resetOffset = true) {
         if (filters.from) params.set('from', filters.from)
         if (filters.includeArchived) params.set('include_archived', 'true')
         if (dateRange.value.after) params.set('after', dateRange.value.after)
+        if (dateRange.value.before) params.set('before', dateRange.value.before)
 
         const res = await apiFetch(`/api/search/?${params}`)
 
@@ -561,15 +569,37 @@ defineExpose({ open })
                     </wa-select>
 
                     <wa-select
-                        v-model="filters.datePreset"
-                        placeholder="Any date"
+                        v-model="filters.newerThan"
+                        placeholder="Any recent"
                         size="small"
                         with-clear
                         class="filter-select"
                     >
-                        <wa-option value="7d">Last 7 days</wa-option>
-                        <wa-option value="30d">Last 30 days</wa-option>
-                        <wa-option value="3m">Last 3 months</wa-option>
+                        <wa-option value="3d">Newer than 3 days</wa-option>
+                        <wa-option value="7d">Newer than 7 days</wa-option>
+                        <wa-option value="10d">Newer than 10 days</wa-option>
+                        <wa-option value="20d">Newer than 20 days</wa-option>
+                        <wa-option value="30d">Newer than 30 days</wa-option>
+                        <wa-option value="2m">Newer than 2 months</wa-option>
+                        <wa-option value="3m">Newer than 3 months</wa-option>
+                        <wa-option value="6m">Newer than 6 months</wa-option>
+                    </wa-select>
+
+                    <wa-select
+                        v-model="filters.olderThan"
+                        placeholder="Any old"
+                        size="small"
+                        with-clear
+                        class="filter-select"
+                    >
+                        <wa-option value="3d">Older than 3 days</wa-option>
+                        <wa-option value="7d">Older than 7 days</wa-option>
+                        <wa-option value="10d">Older than 10 days</wa-option>
+                        <wa-option value="20d">Older than 20 days</wa-option>
+                        <wa-option value="30d">Older than 30 days</wa-option>
+                        <wa-option value="2m">Older than 2 months</wa-option>
+                        <wa-option value="3m">Older than 3 months</wa-option>
+                        <wa-option value="6m">Older than 6 months</wa-option>
                     </wa-select>
 
                     <label class="filter-checkbox">
