@@ -34,8 +34,9 @@ dependencies = [
     "json-repair~=0.59.5",
     "keyring~=25.7.0; sys_platform == 'darwin'",
     "orjson~=3.11.8",
+    "pillow>=12.2.0",
     "psutil~=7.2.2",
-    "pydantic>=2.12",  # required by the vendored codex_app_server SDK
+    "pydantic>=2.12", # required by the vendored codex_app_server SDK
     "python-dotenv~=1.2.2",
     "tantivy~=0.25.1",
     "typer~=0.24.1",

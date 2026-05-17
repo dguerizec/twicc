@@ -243,7 +243,7 @@ class CodexAgentManager(BaseAgentManager):
         *,
         images: list[dict] | None = None,
         documents: list[dict] | None = None,
-    ) -> None:
+    ) -> str:
         """Create a brand-new Codex thread for the draft ``session_id``.
 
         Codex mints its own canonical thread id, so ``session_id`` here is
@@ -251,6 +251,9 @@ class CodexAgentManager(BaseAgentManager):
         canonical id returned by ``thread_start``, and the base
         ``_start_agent`` broadcasts a ``session_bound`` event so the
         frontend can reconcile its local draft state.
+
+        Returns the canonical session id minted by ``thread_start`` — this
+        differs from the draft ``session_id`` parameter.
 
         Same image / document policy as ``send_to_session``: images go
         through; documents are warned-and-dropped.
@@ -262,7 +265,7 @@ class CodexAgentManager(BaseAgentManager):
             # is fresh per attempt; even if the frontend reuses one, Codex
             # mints a new canonical id and the (now-orphan) draft-keyed entry
             # is harmless — it will be GCed by its own DEAD transition.
-            await self._start_agent(
+            return await self._start_agent(
                 session_id, project_id, cwd, text, resume=False,
                 settings=settings, images=images,
             )

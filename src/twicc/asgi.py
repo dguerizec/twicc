@@ -25,6 +25,7 @@ from twicc.agent import AgentInfo, serialize_agent_info
 from twicc.agent.registry import get_agent_manager_registry
 from twicc.agent_settings_presets import read_agent_settings_presets, write_agent_settings_presets
 from twicc.core.enums import Provider
+from twicc.core.services.session_creation import create_session_from_payload
 from twicc.providers.claude_code.ws import ClaudeCodeWSHandler
 from twicc.providers.codex.ws import CodexWSHandler
 from twicc.providers.state import ProviderDisabledError, ensure_provider_running
@@ -770,40 +771,33 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
                     images=images, documents=documents,
                 )
             else:
-                # New session requires text (settings-only update makes no sense here)
-                if not text:
-                    await self.send_json(
-                        {
-                            "type": "error",
-                            "message": "Text is required to create a new session",
-                        }
-                    )
+                # New session: delegate to the shared service so the WS path
+                # and the CLI watcher path stay byte-for-byte aligned.
+                payload = {
+                    "session_id": session_id,
+                    "project_id": project_id,
+                    "provider": content.get("provider"),
+                    "text": content.get("text") or "",
+                    "title": content.get("title"),
+                    "images": content.get("images") or [],
+                    "documents": content.get("documents") or [],
+                    **{field: content.get(field) for field in AgentSettings._fields},
+                }
+
+                result = await create_session_from_payload(payload)
+                if not result.success:
+                    # Translate the first error to the WS-specific error frame shape.
+                    # The frontend already understands the error codes the service emits
+                    # (provider_disabled, project_not_found, etc.).
+                    first = result.errors[0]
+                    await self.send_json({
+                        "type": "error",
+                        "code": first.code,
+                        "message": first.message,
+                    })
                     return
-
-                # Session doesn't exist: create new with client-provided ID
-                # Store title as pending if provided (will be written when process is safe)
-                if title:
-                    from twicc.pending_titles import set_pending_title
-
-                    set_pending_title(session_id, title)
-
-                # Store session settings as pending (will be applied when watcher creates the session row)
-                from twicc.pending_agent_settings import set_pending_agent_settings
-
-                set_pending_agent_settings(session_id, agent_settings)
-
-                # Resolve effective values for process creation
-                effective_agent_settings = helpers.resolve_agent_settings(agent_settings)
-
-                # Auto-upgrade retired models + enforce provider capability rules
-                # (single safety net — front should have corrected, but just in case)
-                effective_agent_settings = helpers.enforce_agent_settings_consistency(effective_agent_settings)
-
-                await manager.create_session(
-                    session_id, project_id, cwd, text,
-                    settings=effective_agent_settings,
-                    images=images, documents=documents,
-                )
+                # Success: nothing to send back. The agent manager + watcher will emit
+                # the usual broadcasts and the front-end picks them up.
         except RuntimeError as e:
             # Process busy or other expected errors
             logger.warning("send_message failed: %s", e)

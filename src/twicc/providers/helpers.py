@@ -27,6 +27,13 @@ from twicc.core.enums import Provider
 from twicc.pricing import FamilyPrices, TokenUsage
 
 
+# Shared long-edge cap (in pixels) for outgoing images. Matches
+# ``MAX_IMAGE_DIMENSION`` in ``frontend/src/utils/fileUtils.js`` — Opus 4.7's
+# native resolution and the default cap for every provider that doesn't
+# override :meth:`BaseProviderHelpers.get_effective_image_dimension`.
+MAX_IMAGE_DIMENSION = 2576
+
+
 class AgentSettingCategory(StrEnum):
     """When a per-agent setting can be applied to a running process.
 
@@ -358,6 +365,47 @@ class BaseProviderHelpers:
                     result[category].append(field)
         return result
 
+    def get_agent_settings_choices(self) -> dict[str, list]:
+        """Return the valid choices per agent-settings field for this provider.
+
+        Keys are field names (subset of `AgentSettings._fields`, never including
+        `selected_model` which is covered by `model_registry`). Values are lists
+        of valid raw values (strings, bools, or ints depending on the field).
+
+        Used by both the CLI (for pre-flight validation) and the front-end
+        bootstrap (to populate select widgets).
+        """
+        raise NotImplementedError
+
+    def get_attachment_support(self) -> dict:
+        """Return the attachment capabilities of this provider.
+
+        Returned dict shape:
+            {
+                "images": bool,
+                "documents": bool,
+                "accepted_mime_types": list[str],
+                "max_bytes_per_file": int,
+                "max_files_per_message": int,
+                "max_total_bytes": int,
+            }
+        """
+        raise NotImplementedError
+
+    def get_effective_image_dimension(
+        self, model: str | None, num_images: int
+    ) -> int:
+        """Return the long-edge dimension cap (in px) for outgoing images.
+
+        The CLI applies a single resize per image to this cap before
+        base64-encoding. The default implementation caps at the shared
+        :data:`MAX_IMAGE_DIMENSION` so every provider gets a sane "no
+        bigger than X" rule. Providers with model-specific caps (e.g.
+        Claude Code: 1568 for older models, 2000 with >20 images)
+        override this method.
+        """
+        return MAX_IMAGE_DIMENSION
+
     def get_user_messages(
         self,
         items: Iterable[SessionItem],
@@ -562,6 +610,8 @@ class BaseProviderHelpers:
                 category.value: keys
                 for category, keys in self.AGENT_SETTINGS_CATEGORIES.items()
             },
+            "agent_settings_choices": self.get_agent_settings_choices(),
+            "attachment_support": self.get_attachment_support(),
             "model_registry": self.serialize_model_registry(),
         }
 

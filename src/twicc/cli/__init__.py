@@ -212,6 +212,13 @@ def search(
     search_main(query, limit=limit, offset=offset)
 
 
+# ``create-session`` is registered directly from its module: the function
+# already declares all its Typer options and performs lazy Django setup
+# inside its body, so importing it here is cheap (no Django bootstrap).
+from twicc.cli.create_session.command import create_session_cmd  # noqa: E402
+app.command(name="create-session")(create_session_cmd)
+
+
 def main() -> None:
     """Entry point for ``pyproject.toml`` scripts and ``__main__.py``."""
     app()

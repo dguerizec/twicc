@@ -167,6 +167,13 @@ async def run_server(port: int):
     price_sync_task = asyncio.create_task(start_price_sync_task(shutdown_event))
     version_check_task = asyncio.create_task(start_version_check_task())
 
+    # CLI session-create plumbing (cf. docs/superpowers/specs/2026-05-17-cli-session-create-design.md)
+    from twicc.heartbeat import heartbeat_loop
+    from twicc.pending_sessions_watcher import get_pending_sessions_watcher
+
+    heartbeat_task = asyncio.create_task(heartbeat_loop())
+    pending_watcher_task = asyncio.create_task(get_pending_sessions_watcher().start())
+
     # Configure uvicorn
     # log_config=None prevents Uvicorn from installing its own StreamHandlers;
     # uvicorn loggers are handled by Django's LOGGING config instead.
@@ -204,6 +211,12 @@ async def run_server(port: int):
         logger.info("Stopping version check task...")
         stop_version_check_task()
         await _cancel_task(version_check_task, "Version check task")
+
+        logger.info("Stopping heartbeat task...")
+        await _cancel_task(heartbeat_task, "Heartbeat task")
+
+        logger.info("Stopping pending-sessions watcher task...")
+        await _cancel_task(pending_watcher_task, "Pending-sessions watcher task")
 
         # Stop the global search-indexing task(s) (if any ever started)
         # and the coordinator that gated them. Order matters: cancel the

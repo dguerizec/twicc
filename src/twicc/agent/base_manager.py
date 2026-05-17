@@ -200,7 +200,7 @@ class BaseAgentManager:
         *,
         settings: AgentSettings,
         **start_kwargs: Any,
-    ) -> None:
+    ) -> str:
         """Build a provider agent, bind it to its canonical id, register and start.
 
         Common entry point for both new sessions (``resume=False``, the
@@ -283,6 +283,7 @@ class BaseAgentManager:
                 )
 
             await self._register_and_start(agent, text, resume=resume, **start_kwargs)
+            return agent.session_id
         except Exception:
             try:
                 await agent.interrupt_or_kill(reason="startup-failed")

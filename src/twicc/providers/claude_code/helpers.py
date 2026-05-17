@@ -21,6 +21,7 @@ from django.conf import settings
 from twicc.core.enums import ItemKind, Provider
 from twicc.pricing import FamilyPrices
 from twicc.providers.helpers import (
+    MAX_IMAGE_DIMENSION,
     AgentSettingCategory,
     AgentSettings,
     BaseProviderHelpers,
@@ -30,20 +31,27 @@ from twicc.providers.helpers import (
 )
 
 from .compute import extract_command, get_message_content, get_message_content_list, strip_markdown
+from .constants import (
+    AGENT_SETTINGS_CATEGORIES as _AGENT_SETTINGS_CATEGORIES,
+    AGENT_SETTINGS_FIELDS_MAPPING as _AGENT_SETTINGS_FIELDS_MAPPING,
+    MODEL_VERSIONS as _MODEL_VERSIONS,
+    OBSOLETE_SYNCED_SETTINGS_KEYS as _OBSOLETE_SYNCED_SETTINGS_KEYS,
+    RENAMED_SYNCED_SETTINGS_KEYS as _RENAMED_SYNCED_SETTINGS_KEYS,
+    SYNCED_SETTINGS_DEFAULTS as _SYNCED_SETTINGS_DEFAULTS,
+    ClaudeCodeModelExtra,
+)
 from .pricing import CLAUDE_FAMILIES, extract_model_info
 from .titles import protect_title, rename_session_in_jsonl
+
+# Re-export for callers that historically imported these from
+# ``providers.claude_code.helpers``. The canonical home is now
+# ``providers.claude_code.constants``.
+__all__ = ["ClaudeCodeHelpers", "ClaudeCodeModelExtra"]
 
 if TYPE_CHECKING:
     from twicc.core.models import SessionItem
 
 logger = logging.getLogger(__name__)
-
-
-class ClaudeCodeModelExtra(NamedTuple):
-    """Capability flags carried in :attr:`ModelVersion.provider_extra` for Claude Code."""
-    supports_1m: bool
-    supports_effort_xhigh: bool
-    supports_effort_max: bool
 
 
 def _extract_text_from_message_content(content: str | list | None) -> str:
@@ -74,6 +82,28 @@ def _extract_text_from_message_content(content: str | list | None) -> str:
     return ""
 
 
+AGENT_SETTINGS_CHOICES: dict[str, list] = {
+    "effort": ["low", "medium", "high", "xhigh", "max"],
+    "permission_mode": ["default", "acceptEdits", "plan", "dontAsk", "bypassPermissions"],
+    "thinking_enabled": [True, False],
+    "context_max": [200_000, 1_000_000],
+    "claude_in_chrome": [True, False],
+}
+
+
+ATTACHMENT_SUPPORT: dict = {
+    "images": True,
+    "documents": True,
+    "accepted_mime_types": [
+        "image/png", "image/jpeg", "image/gif", "image/webp",
+        "application/pdf", "text/plain",
+    ],
+    "max_bytes_per_file": 5 * 1024 * 1024,
+    "max_files_per_message": 100,
+    "max_total_bytes": 32 * 1024 * 1024,
+}
+
+
 @lru_cache(maxsize=32)
 def serialize_model(model: str | None) -> dict | None:
     """Serialize a Claude model identifier as ``{raw, family, version}``.
@@ -100,55 +130,15 @@ class ClaudeCodeHelpers(BaseProviderHelpers):
 
     provider: ClassVar[Provider] = Provider.CLAUDE_CODE
 
-    SYNCED_SETTINGS_DEFAULTS: ClassVar[dict] = {
-        "claudeCodeDefaultPermissionMode": "default",
-        "claudeCodeDefaultModel": "opus",
-        "claudeCodeDefaultEffort": "medium",
-        "claudeCodeDefaultThinking": True,
-        "claudeCodeDefaultClaudeInChrome": True,
-        "claudeCodeDefaultContextMax": 200_000,
-        "claudeCodeUsageReadFileEnabled": False,
-        "claudeCodeUsageReadFilePath": "",
-        "claudeCodeUsageDumpFileEnabled": False,
-        "claudeCodeUsageDumpFilePath": "",
-    }
-
-    RENAMED_SYNCED_SETTINGS_KEYS: ClassVar[dict[str, str]] = {
-        "defaultPermissionMode": "claudeCodeDefaultPermissionMode",
-        "defaultModel": "claudeCodeDefaultModel",
-        "defaultEffort": "claudeCodeDefaultEffort",
-        "defaultThinking": "claudeCodeDefaultThinking",
-        "defaultClaudeInChrome": "claudeCodeDefaultClaudeInChrome",
-        "defaultContextMax": "claudeCodeDefaultContextMax",
-        "usageJsonFileEnabled": "claudeCodeUsageReadFileEnabled",
-        "usageJsonFilePath": "claudeCodeUsageReadFilePath",
-        "usageDumpFileEnabled": "claudeCodeUsageDumpFileEnabled",
-        "usageDumpFilePath": "claudeCodeUsageDumpFilePath",
-    }
-
-    OBSOLETE_SYNCED_SETTINGS_KEYS: ClassVar[tuple[str, ...]] = (
-        "alwaysApplyDefaultPermissionMode",
-        "alwaysApplyDefaultModel",
-        "alwaysApplyDefaultEffort",
-        "alwaysApplyDefaultThinking",
-        "alwaysApplyDefaultClaudeInChrome",
-        "alwaysApplyDefaultContextMax",
-    )
-
-    AGENT_SETTINGS_CATEGORIES: ClassVar[dict[AgentSettingCategory, list[str]]] = {
-        AgentSettingCategory.LIVE: ["permission_mode"],
-        AgentSettingCategory.IDLE: ["selected_model", "context_max"],
-        AgentSettingCategory.STARTUP: ["effort", "thinking_enabled", "claude_in_chrome"],
-    }
-
-    AGENT_SETTINGS_FIELDS_MAPPING: ClassVar[dict[str, str]] = {
-        "permission_mode": "claudeCodeDefaultPermissionMode",
-        "selected_model": "claudeCodeDefaultModel",
-        "effort": "claudeCodeDefaultEffort",
-        "thinking_enabled": "claudeCodeDefaultThinking",
-        "claude_in_chrome": "claudeCodeDefaultClaudeInChrome",
-        "context_max": "claudeCodeDefaultContextMax",
-    }
+    # Constants are defined in ``.constants`` (Django-free module) so the
+    # CLI's ``--help`` enrichment can read them without ``django.setup()``.
+    # Re-exposed as ClassVars to preserve the existing ``self.XXX`` access
+    # patterns used throughout the codebase.
+    SYNCED_SETTINGS_DEFAULTS: ClassVar[dict] = _SYNCED_SETTINGS_DEFAULTS
+    RENAMED_SYNCED_SETTINGS_KEYS: ClassVar[dict[str, str]] = _RENAMED_SYNCED_SETTINGS_KEYS
+    OBSOLETE_SYNCED_SETTINGS_KEYS: ClassVar[tuple[str, ...]] = _OBSOLETE_SYNCED_SETTINGS_KEYS
+    AGENT_SETTINGS_CATEGORIES: ClassVar[dict[AgentSettingCategory, list[str]]] = _AGENT_SETTINGS_CATEGORIES
+    AGENT_SETTINGS_FIELDS_MAPPING: ClassVar[dict[str, str]] = _AGENT_SETTINGS_FIELDS_MAPPING
 
     USAGE_SYNC_INTERVAL: ClassVar[int | None] = 5 * 60
 
@@ -257,68 +247,7 @@ class ClaudeCodeHelpers(BaseProviderHelpers):
         """Anthropic bills the 1-hour cache write at ``prompt_price * 2``."""
         return prompt_price * 2
 
-    # ------------------------------------------------------------------
-    # Model registry — supported model versions
-    #
-    # The ``selected_model`` value stored in settings and session DB
-    # fields uses:
-    # - bare alias for latest: ``"opus"``, ``"sonnet"``
-    # - versioned alias for non-latest: ``"opus-4.5"``, ``"sonnet-4.5"``
-    #
-    # When communicating with the SDK, latest aliases are passed as-is
-    # (the CLI resolves them), while versioned aliases are resolved to
-    # their ``full_name``.
-    #
-    # Deprecations: https://platform.claude.com/docs/en/about-claude/model-deprecations
-    # ------------------------------------------------------------------
-
-    MODEL_VERSIONS: ClassVar[list[ModelVersion]] = [
-        ModelVersion(
-            provider=Provider.CLAUDE_CODE,
-            model="opus", version="4.7", full_name="claude-opus-4-7",
-            retirement_date=None,  # to set when sonnet 4.8 is released (retire 2027-04-16)
-            latest=True,
-            provider_extra=ClaudeCodeModelExtra(
-                supports_1m=True, supports_effort_xhigh=True, supports_effort_max=True,
-            ),
-        ),
-        ModelVersion(
-            provider=Provider.CLAUDE_CODE,
-            model="opus", version="4.6", full_name="claude-opus-4-6",
-            retirement_date=date(2027, 2, 5),
-            latest=False,
-            provider_extra=ClaudeCodeModelExtra(
-                supports_1m=True, supports_effort_xhigh=False, supports_effort_max=True,
-            ),
-        ),
-        ModelVersion(
-            provider=Provider.CLAUDE_CODE,
-            model="opus", version="4.5", full_name="claude-opus-4-5-20251101",
-            retirement_date=date(2026, 11, 24),
-            latest=False,
-            provider_extra=ClaudeCodeModelExtra(
-                supports_1m=False, supports_effort_xhigh=False, supports_effort_max=False,
-            ),
-        ),
-        ModelVersion(
-            provider=Provider.CLAUDE_CODE,
-            model="sonnet", version="4.6", full_name="claude-sonnet-4-6",
-            retirement_date=None,  # to set when sonnet 4.7 is released (retire 2027-02-17)
-            latest=True,
-            provider_extra=ClaudeCodeModelExtra(
-                supports_1m=True, supports_effort_xhigh=False, supports_effort_max=True,
-            ),
-        ),
-        ModelVersion(
-            provider=Provider.CLAUDE_CODE,
-            model="sonnet", version="4.5", full_name="claude-sonnet-4-5-20250929",
-            retirement_date=date(2026, 9, 29),
-            latest=False,
-            provider_extra=ClaudeCodeModelExtra(
-                supports_1m=False, supports_effort_xhigh=False, supports_effort_max=False,
-            ),
-        ),
-    ]
+    MODEL_VERSIONS: ClassVar[list[ModelVersion]] = _MODEL_VERSIONS
 
     def find_model(self, identifier: str) -> ModelVersion | None:
         """Look up a Claude Code model by its ``selected_model`` alias.
@@ -472,6 +401,97 @@ class ClaudeCodeHelpers(BaseProviderHelpers):
         if context_max == settings.context_max and effort == settings.effort:
             return settings
         return settings._replace(context_max=context_max, effort=effort)
+
+    def get_agent_settings_choices(self) -> dict[str, list]:
+        return AGENT_SETTINGS_CHOICES
+
+    def get_attachment_support(self) -> dict:
+        return ATTACHMENT_SUPPORT
+
+    def get_effective_image_dimension(
+        self, model: str | None, num_images: int
+    ) -> int:
+        """Return the long-edge cap (in px) for outgoing images.
+
+        Mirrors ``ClaudeCodeHelpers.getEffectiveImageDimension`` in
+        ``frontend/src/providers/claude_code/helpers.js``.
+
+        Anthropic vision rules in play:
+
+        - Opus 4.7+ accepts native ``MAX_IMAGE_DIMENSION`` (2576 px); we
+          ship at full resolution.
+        - Older Claude models downscale server-side to 1568 px; we cap
+          there ahead of time to save bandwidth and keep token usage
+          predictable.
+        - Any request carrying more than 20 images is further capped by
+          Anthropic to 2000 px regardless of model; apply the tighter
+          of {model cap, 2000} in that case.
+
+        A retired ``model`` is upgraded to its successor first (matching
+        what ``enforce_agent_settings_consistency`` would do) so the
+        capability check uses the post-upgrade alias.
+        """
+        upgraded = self._upgrade_retired_model(model) or model
+        is_opus_47_plus = self._is_opus_47_plus(upgraded)
+        cap = MAX_IMAGE_DIMENSION if is_opus_47_plus else 1568
+        if num_images > 20:
+            cap = min(cap, 2000)
+        return cap
+
+    def _upgrade_retired_model(self, model: str | None) -> str | None:
+        """Return the successor of ``model`` if it is past retirement.
+
+        Mirrors ``getRetiredModelUpgrade`` in
+        ``frontend/src/providers/claude_code/helpers.js``. Returns ``None``
+        when the input is missing, current, or already the latest in its
+        family.
+        """
+        if not model:
+            return None
+        from datetime import date as _date
+        today = _date.today()
+        entry = next(
+            (mv for mv in self.MODEL_VERSIONS
+             if self.selected_model_value(mv) == model),
+            None,
+        )
+        if entry is None or entry.latest:
+            return None
+        if entry.retirement_date is None or entry.retirement_date >= today:
+            return None
+        family = sorted(
+            (mv for mv in self.MODEL_VERSIONS if mv.model == entry.model),
+            key=lambda mv: tuple(int(p) for p in mv.version.split(".")),
+        )
+        current_parts = tuple(int(p) for p in entry.version.split("."))
+        for candidate in family:
+            candidate_parts = tuple(int(p) for p in candidate.version.split("."))
+            if candidate_parts > current_parts:
+                return self.selected_model_value(candidate)
+        return None
+
+    @staticmethod
+    def _is_opus_47_plus(model: str | None) -> bool:
+        """Whether ``model`` is Opus 4.7 or any later major/minor revision.
+
+        Mirrors ``_isOpus47Plus`` in
+        ``frontend/src/providers/claude_code/helpers.js``. Returns ``False``
+        on unparseable inputs (conservative fallback to the 1568 cap).
+        """
+        if not isinstance(model, str) or not model.startswith("opus-"):
+            return False
+        version = model[len("opus-"):]
+        parts = version.split(".", 1)
+        try:
+            major = int(parts[0])
+            minor = int(parts[1]) if len(parts) > 1 else 0
+        except ValueError:
+            return False
+        if major > 4:
+            return True
+        if major < 4:
+            return False
+        return minor >= 7
 
     def serialize_model_extra(self, mv: ModelVersion) -> dict:
         """Expose Claude Code's :class:`ClaudeCodeModelExtra` flags on the wire."""

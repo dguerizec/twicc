@@ -228,12 +228,16 @@ class ClaudeCodeAgentManager(BaseAgentManager):
         *,
         images: list[dict] | None = None,
         documents: list[dict] | None = None,
-    ) -> None:
+    ) -> str:
         """Create a new session with a client-provided session ID.
 
         Unlike send_to_session which handles existing sessions, this creates
         a brand new session. The session_id is passed to the Claude CLI via
         the --session-id flag.
+
+        Returns the canonical session id. For Claude Code this is equal to
+        the input ``session_id`` (the CLI accepts the client-supplied UUID
+        via ``--session-id``).
 
         Raises:
             RuntimeError: If an agent already exists for this session_id
@@ -253,7 +257,7 @@ class ClaudeCodeAgentManager(BaseAgentManager):
                 del self._agents[session_id]
 
             # Create and start new agent without resume
-            await self._start_agent(
+            return await self._start_agent(
                 session_id, project_id, cwd, text, resume=False,
                 settings=settings,
                 images=images, documents=documents,

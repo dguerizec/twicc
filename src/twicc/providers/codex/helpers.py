@@ -25,6 +25,12 @@ from twicc.providers.helpers import (
     UserMessage,
 )
 
+from .constants import (
+    AGENT_SETTINGS_CATEGORIES as _AGENT_SETTINGS_CATEGORIES,
+    AGENT_SETTINGS_FIELDS_MAPPING as _AGENT_SETTINGS_FIELDS_MAPPING,
+    MODEL_VERSIONS as _MODEL_VERSIONS,
+    SYNCED_SETTINGS_DEFAULTS as _SYNCED_SETTINGS_DEFAULTS,
+)
 from .pricing import extract_model_info
 from .streaming_registry import get_streamed_item_registry
 
@@ -59,39 +65,37 @@ if TYPE_CHECKING:
     from twicc.core.models import SessionItem
 
 
+AGENT_SETTINGS_CHOICES: dict[str, list] = {
+    "effort": ["low", "medium", "high", "xhigh"],
+    "permission_mode": ["read_only", "strict", "auto", "autonomous", "yolo"],
+    "context_max": [272_000],
+}
+
+
+ATTACHMENT_SUPPORT: dict = {
+    "images": True,
+    "documents": False,
+    "accepted_mime_types": [
+        "image/png", "image/jpeg", "image/gif", "image/webp",
+    ],
+    "max_bytes_per_file": 5 * 1024 * 1024,
+    "max_files_per_message": 100,
+    "max_total_bytes": 32 * 1024 * 1024,
+}
+
+
 class CodexHelpers(BaseProviderHelpers):
     """Helpers for sessions produced by the Codex CLI."""
 
     provider: ClassVar[Provider] = Provider.CODEX
 
-    SYNCED_SETTINGS_DEFAULTS: ClassVar[dict] = {
-        "codexDefaultModel": "gpt",
-        "codexDefaultEffort": "medium",
-        "codexDefaultPermissionMode": "read_only",
-        "codexDefaultContextMax": 272_000,
-        "codexUsageReadFileEnabled": False,
-        "codexUsageReadFilePath": "",
-        "codexUsageDumpFileEnabled": False,
-        "codexUsageDumpFilePath": "",
-    }
-
-    AGENT_SETTINGS_CATEGORIES: ClassVar[dict[AgentSettingCategory, list[str]]] = {
-        AgentSettingCategory.LIVE: [],
-        AgentSettingCategory.IDLE: [
-            "selected_model",
-            "effort",
-            "permission_mode",
-            "context_max",
-        ],
-        AgentSettingCategory.STARTUP: [],
-    }
-
-    AGENT_SETTINGS_FIELDS_MAPPING: ClassVar[dict[str, str]] = {
-        "selected_model": "codexDefaultModel",
-        "effort": "codexDefaultEffort",
-        "permission_mode": "codexDefaultPermissionMode",
-        "context_max": "codexDefaultContextMax",
-    }
+    # Constants are defined in ``.constants`` (Django-free module) so the
+    # CLI's ``--help`` enrichment can read them without ``django.setup()``.
+    # Re-exposed as ClassVars to preserve the existing ``self.XXX`` access
+    # patterns used throughout the codebase.
+    SYNCED_SETTINGS_DEFAULTS: ClassVar[dict] = _SYNCED_SETTINGS_DEFAULTS
+    AGENT_SETTINGS_CATEGORIES: ClassVar[dict[AgentSettingCategory, list[str]]] = _AGENT_SETTINGS_CATEGORIES
+    AGENT_SETTINGS_FIELDS_MAPPING: ClassVar[dict[str, str]] = _AGENT_SETTINGS_FIELDS_MAPPING
 
     # Polled every 5 minutes by ``codex.usage_task`` against ChatGPT's
     # ``/backend-api/wham/usage`` endpoint (the same one the Codex CLI's
@@ -140,40 +144,7 @@ class CodexHelpers(BaseProviderHelpers):
         ),
     }
 
-    # Codex CLI models the bundled binary accepts (verified at startup time
-    # via ``codex.models()``). ``selected_model_value`` returns the bare
-    # alias for ``latest=True`` entries (``"gpt"``, ``"gpt-mini"``) and the
-    # versioned alias for the rest (``"gpt-5.4"``), matching the Claude
-    # Code convention of bare-alias-for-latest / versioned-alias.
-    MODEL_VERSIONS: ClassVar[list[ModelVersion]] = [
-        ModelVersion(
-            provider=Provider.CODEX,
-            model="gpt",
-            version="5.5",
-            full_name="gpt-5.5",
-            retirement_date=None,
-            latest=True,
-            provider_extra=None,
-        ),
-        ModelVersion(
-            provider=Provider.CODEX,
-            model="gpt",
-            version="5.4",
-            full_name="gpt-5.4",
-            retirement_date=None,
-            latest=False,
-            provider_extra=None,
-        ),
-        ModelVersion(
-            provider=Provider.CODEX,
-            model="gpt-mini",
-            version="5.4",
-            full_name="gpt-5.4-mini",
-            retirement_date=None,
-            latest=True,
-            provider_extra=None,
-        ),
-    ]
+    MODEL_VERSIONS: ClassVar[list[ModelVersion]] = _MODEL_VERSIONS
 
     @property
     def current_compute_version(self) -> int | None:
@@ -195,6 +166,12 @@ class CodexHelpers(BaseProviderHelpers):
         sessions are recomputed.
         """
         return settings.CODEX_COMPUTE_VERSION
+
+    def get_agent_settings_choices(self) -> dict[str, list]:
+        return AGENT_SETTINGS_CHOICES
+
+    def get_attachment_support(self) -> dict:
+        return ATTACHMENT_SUPPORT
 
     def validate_usage_file_payload(self, payload: dict) -> tuple[bool, str]:
         """Accept a payload that has the shape of a Codex ``wham/usage`` response.
