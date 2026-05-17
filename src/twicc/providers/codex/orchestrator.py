@@ -117,10 +117,17 @@ class CodexOrchestrator(BaseOrchestrator):
         """Launch the initial sync, dependency orchestrator, watcher, auth
         check, usage sync, and statuspage tasks.
 
-        ``shutdown_event`` is currently unused (Codex has no cron-style
-        loops that need to watch it directly — the watcher uses its own
-        per-instance stop event, set in :meth:`shutdown`). The parameter
-        stays in the signature to match :meth:`BaseOrchestrator.start`.
+        ``shutdown_event`` is the CLI-level SIGTERM signal, used by loops
+        that do non-cancellable long-duration work and need to bail out
+        gracefully before the eventual ``task.cancel()`` arrives — the
+        canonical use is Claude's :func:`restart_all_session_crons`,
+        which retries with exponential backoff. Codex has no such loop:
+        its periodic tasks (auth, usage, statuspage, commands,
+        original-files cache) and its watcher all suspend on
+        ``wait_for(local_stop_event.wait(), timeout=...)``, and the
+        ``task.cancel()`` issued by :meth:`shutdown` unblocks every
+        ``wait_for`` instantly via ``CancelledError``. The parameter
+        stays in the signature to honour :meth:`BaseOrchestrator.start`.
 
         ``search_index_ready`` is awaited by :meth:`_dependency_orchestrator`
         before launching the JSONL watcher, since the watcher writes new
