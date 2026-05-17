@@ -240,10 +240,10 @@ class OrchestratorRegistry:
         enabled_items = [(provider, orch) for provider, orch in self._orchestrators.items() if provider in enabled]
         tasks = [
             asyncio.create_task(
-                self._start_with_state(provider, orch),
+                self._start_with_state(provider),
                 context=self._provider_context(provider),
             )
-            for provider, orch in enabled_items
+            for provider, _ in enabled_items
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         for (provider, _), result in zip(enabled_items, results):
@@ -288,12 +288,41 @@ class OrchestratorRegistry:
             if provider in enabled
         ))
 
-    async def _start_with_state(self, provider: Provider, orch: BaseOrchestrator) -> None:
-        """Wrap ``orch.start()`` with state transitions and failure handling.
+    async def begin_start(self, provider: Provider) -> None:
+        """Synchronously broadcast the ``stopped → starting`` transition.
 
-        Flow:
+        Fast: the only work is a single ``set_provider_state`` (sync state
+        update + ``group_send``). Must be followed by :meth:`finish_start`
+        — either awaited directly (boot path) or scheduled as a background
+        task (hot-toggle path) so the WS handler is not blocked on the slow
+        ``orch.start()`` body.
 
-        - ``stopped → starting`` (broadcast)
+        Splitting the start in two halves is what guarantees that
+        ``provider_state_changed:starting`` reaches the client before any
+        ``synced_settings_updated`` broadcast that the caller emits right
+        after — the slow body used to race that broadcast back when the
+        caller fire-and-forgot the whole start.
+
+        Wrapped in ``asyncio.create_task(..., context=...)`` so the
+        transition log line (``Provider state: stopped -> starting``) is
+        stamped with the provider tag even when called from a context that
+        has no tag (e.g. the WS handler).
+        """
+        if self._shutdown_event is None or self._search_index_ready is None:
+            raise RuntimeError("OrchestratorRegistry.begin_start called before start_all")
+        if provider not in self._orchestrators:
+            return
+        await asyncio.create_task(
+            set_provider_state(provider, ProviderState.STARTING),
+            context=self._provider_context(provider),
+        )
+
+    async def finish_start(self, provider: Provider) -> None:
+        """Run the slow ``orch.start()`` body and finalise the transition.
+
+        Must be invoked **after** :meth:`begin_start` (which broadcasts the
+        ``starting`` state). Flow:
+
         - ``await orch.start(...)``
         - On success: ``starting → running`` (broadcast)
         - On failure: roll back to ``stopped``, persist the provider into
@@ -301,12 +330,15 @@ class OrchestratorRegistry:
           so the caller's error handling (e.g. ``gather`` with
           ``return_exceptions=True``) sees the exception.
 
-        ``self._shutdown_event`` and ``self._search_index_ready`` must have
-        been set by ``start_all`` already (both start paths go through it).
+        Designed to be scheduled via :meth:`schedule_finish_start` for the
+        hot-toggle path (fire-and-forget so the WS handler does not block
+        on plugin install, app-server boot, …).
         """
         assert self._shutdown_event is not None
         assert self._search_index_ready is not None
-        await set_provider_state(provider, ProviderState.STARTING)
+        orch = self._orchestrators.get(provider)
+        if orch is None:
+            return
         try:
             await orch.start(self._shutdown_event, self._search_index_ready)
         except BaseException:
@@ -316,19 +348,156 @@ class OrchestratorRegistry:
             raise
         await set_provider_state(provider, ProviderState.RUNNING)
 
-    async def _shutdown_with_state(self, provider: Provider, orch: BaseOrchestrator) -> None:
-        """Wrap ``orch.shutdown()`` with state transitions.
+    def schedule_finish_start(
+        self,
+        provider: Provider,
+        *,
+        trigger_search_reindex: bool = True,
+    ) -> asyncio.Task[None]:
+        """Schedule :meth:`finish_start` as a tagged background task.
 
-        ``running → stopping`` (broadcast), run the shutdown, then end in
+        Used by the WS hot-toggle handler so the caller does not need to
+        know about :meth:`_provider_context`. Returns the ``finish_start``
+        task so callers that want to await the full transition (e.g.
+        :meth:`start_one`) can do so.
+
+        When ``trigger_search_reindex`` is True (the default for hot-toggle),
+        a follow-up :meth:`_kick_search_after_compute` task is scheduled
+        only if ``finish_start`` completes successfully — a failed start
+        rolls back to ``stopped`` and persists the provider into
+        ``disabledProviders``, so kicking the search re-index would be
+        meaningless (and would dangle on a ``compute_done`` that may
+        never fire). See :meth:`_kick_search_after_compute` for why the
+        re-index matters for historic sessions bulk-inserted by initial
+        sync.
+        """
+        task = asyncio.create_task(
+            self.finish_start(provider),
+            context=self._provider_context(provider),
+        )
+        task.add_done_callback(self._log_failure_done_callback(provider, "start"))
+        if trigger_search_reindex:
+            def _kick_on_success(t: asyncio.Task[None]) -> None:
+                # Cancelled or raised → skip the re-index. ``t.exception()``
+                # is idempotent here: the failure-logging callback added
+                # above already retrieved it (so no asyncio warning will
+                # fire), and a second call just returns the cached value.
+                if t.cancelled() or t.exception() is not None:
+                    return
+                asyncio.create_task(
+                    self._kick_search_after_compute(provider),
+                    context=self._provider_context(provider),
+                )
+            task.add_done_callback(_kick_on_success)
+        return task
+
+    async def _start_with_state(self, provider: Provider) -> None:
+        """Run the full ``stopped → starting → running`` cycle in a single task.
+
+        Used by :meth:`start_all` where every provider is started in
+        parallel via ``asyncio.gather`` and the caller wants to await the
+        whole cycle (boot has no race with a subsequent
+        ``synced_settings_updated`` broadcast — the client is not even
+        connected yet).
+
+        Equivalent to ``begin_start`` + ``finish_start`` chained.
+        ``self._shutdown_event`` and ``self._search_index_ready`` must have
+        been set by :meth:`start_all` already (the only caller).
+        """
+        await self.begin_start(provider)
+        await self.finish_start(provider)
+
+    async def begin_shutdown(self, provider: Provider) -> None:
+        """Synchronously broadcast the ``running → stopping`` transition.
+
+        Symmetric to :meth:`begin_start`: fast (single
+        ``set_provider_state``), must be followed by
+        :meth:`finish_shutdown` — either awaited directly (boot path,
+        :meth:`shutdown_one`) or scheduled in the background (hot-toggle
+        path) so the WS handler is not blocked on the slow
+        ``orch.shutdown()`` body.
+        """
+        if provider not in self._orchestrators:
+            return
+        await asyncio.create_task(
+            set_provider_state(provider, ProviderState.STOPPING),
+            context=self._provider_context(provider),
+        )
+
+    async def finish_shutdown(self, provider: Provider) -> None:
+        """Run the slow ``orch.shutdown()`` body and finalise the transition.
+
+        Must be invoked **after** :meth:`begin_shutdown`. Ends in
         ``stopped`` unconditionally — even if shutdown raised. The task
         graph is gone either way; staying in ``stopping`` would leave the
         UI permanently busy.
         """
-        await set_provider_state(provider, ProviderState.STOPPING)
+        orch = self._orchestrators.get(provider)
+        if orch is None:
+            return
         try:
             await orch.shutdown()
         finally:
             await set_provider_state(provider, ProviderState.STOPPED)
+
+    def schedule_finish_shutdown(self, provider: Provider) -> asyncio.Task[None]:
+        """Schedule :meth:`finish_shutdown` as a tagged background task.
+
+        Mirror of :meth:`schedule_finish_start` — used by the WS hot-toggle
+        handler so the handler does not block on the slow shutdown body.
+        Attaches a failure-logging done-callback so an unhandled
+        ``orch.shutdown()`` exception lands in ``backend.log`` with the
+        provider name, matching the per-provider log emitted by
+        :meth:`shutdown_all` at teardown.
+        """
+        task = asyncio.create_task(
+            self.finish_shutdown(provider),
+            context=self._provider_context(provider),
+        )
+        task.add_done_callback(self._log_failure_done_callback(provider, "shut down cleanly"))
+        return task
+
+    async def _shutdown_with_state(self, provider: Provider) -> None:
+        """Run the full ``running → stopping → stopped`` cycle in a single task.
+
+        Used by :meth:`shutdown_all` where every provider is shut down in
+        parallel via ``asyncio.gather`` and the caller wants to await the
+        whole cycle. Equivalent to ``begin_shutdown`` + ``finish_shutdown``
+        chained.
+        """
+        await self.begin_shutdown(provider)
+        await self.finish_shutdown(provider)
+
+    @staticmethod
+    def _log_failure_done_callback(provider: Provider, action: str):
+        """Build an ``add_done_callback`` that logs per-provider failures.
+
+        Used on the fire-and-forget tasks returned by
+        :meth:`schedule_finish_start` / :meth:`schedule_finish_shutdown`
+        so a failed hot-toggle leaves the same kind of trace in
+        ``backend.log`` as the boot path's ``start_all`` / ``shutdown_all``
+        already do via their ``gather(return_exceptions=True) + zip``
+        loop. Without it, an unhandled task exception only surfaces as
+        asyncio's generic "Task exception was never retrieved" warning,
+        which loses the provider name and the per-provider intent.
+
+        ``action`` is interpolated into the log line ("failed to {action}"),
+        so callers should pass a short verb phrase that reads naturally
+        — typically ``"start"`` for :meth:`schedule_finish_start` and
+        ``"shut down cleanly"`` for :meth:`schedule_finish_shutdown` (the
+        same phrasing as the matching log in :meth:`shutdown_all`).
+        """
+        def _cb(t: asyncio.Task[None]) -> None:
+            if t.cancelled():
+                return
+            exc = t.exception()
+            if exc is None:
+                return
+            logger.error(
+                "Orchestrator for %s failed to %s: %s",
+                provider.value, action, exc, exc_info=exc,
+            )
+        return _cb
 
     @staticmethod
     def _provider_context(provider: Provider) -> contextvars.Context:
@@ -353,12 +522,18 @@ class OrchestratorRegistry:
         return ctx
 
     async def start_one(self, provider: Provider, *, trigger_search_reindex: bool = True) -> None:
-        """Start a single provider's orchestrator (used by hot-toggle on activation).
+        """Start a single provider end-to-end (synchronous wrt the caller).
 
-        Requires :meth:`start_all` to have been called first so the shutdown
-        and search-index events are available. Raises :exc:`RuntimeError`
-        immediately if called before :meth:`start_all` — silent misbehaviour
-        would be worse than a loud failure.
+        Convenience for callers that want to await the full
+        ``stopped → starting → running`` cycle (CLI scripts, tests, …).
+        The WS hot-toggle path does NOT use this — it splits the work so
+        the handler can broadcast ``synced_settings_updated`` between
+        ``begin_start`` and ``finish_start``, guaranteeing the
+        ``provider_state_changed:starting`` arrives at the client first.
+
+        Requires :meth:`start_all` to have been called first so the
+        shutdown and search-index events are available; :meth:`begin_start`
+        raises :exc:`RuntimeError` if that contract is violated.
 
         ``trigger_search_reindex`` (default True) schedules a background
         re-trigger of the cross-provider search indexing task after the
@@ -371,28 +546,19 @@ class OrchestratorRegistry:
         the work to sessions that need it, and the task's internal lock
         keeps a concurrent boot pass from racing against this re-trigger.
         """
-        if self._shutdown_event is None or self._search_index_ready is None:
-            raise RuntimeError("OrchestratorRegistry.start_one called before start_all")
-        orch = self._orchestrators.get(provider)
-        if orch is None:
-            return
-        await asyncio.create_task(
-            self._start_with_state(provider, orch),
-            context=self._provider_context(provider),
+        await self.begin_start(provider)
+        await self.schedule_finish_start(
+            provider, trigger_search_reindex=trigger_search_reindex,
         )
-        if trigger_search_reindex:
-            asyncio.create_task(
-                self._kick_search_after_compute(provider),
-                context=self._provider_context(provider),
-            )
 
     async def _kick_search_after_compute(self, provider: Provider) -> None:
         """Wait for ``provider``'s compute to finish, then re-trigger search indexing.
 
-        Only scheduled after a *successful* :meth:`_start_with_state` call,
-        so we don't have to worry about waiting on a ``compute_done`` that
-        will never fire normally — the event will be set by either the
-        provider's compute-task done-callback (happy path) or by
+        Only scheduled after a *successful* :meth:`finish_start` (see the
+        done-callback in :meth:`schedule_finish_start`), so we don't have
+        to worry about waiting on a ``compute_done`` that will never fire
+        normally — the event will be set by either the provider's
+        compute-task done-callback (happy path) or by
         :meth:`BaseOrchestrator.shutdown` (which sets it idempotently
         during a later teardown). If the orchestrator is somehow gone
         from the registry by the time we run (shouldn't happen, but
@@ -415,14 +581,17 @@ class OrchestratorRegistry:
         )
 
     async def shutdown_one(self, provider: Provider) -> None:
-        """Shutdown a single provider's orchestrator (used by hot-toggle on deactivation)."""
-        orch = self._orchestrators.get(provider)
-        if orch is None:
-            return
-        await asyncio.create_task(
-            self._shutdown_with_state(provider, orch),
-            context=self._provider_context(provider),
-        )
+        """Shutdown a single provider end-to-end (synchronous wrt the caller).
+
+        Convenience for callers that want to await the full
+        ``running → stopping → stopped`` cycle. The WS hot-toggle path
+        does NOT use this — it splits the work via ``begin_shutdown`` +
+        ``schedule_finish_shutdown`` so the handler is not blocked on
+        ``orch.shutdown()`` (which can take several seconds when there
+        are agents to drain).
+        """
+        await self.begin_shutdown(provider)
+        await self.schedule_finish_shutdown(provider)
 
     def request_thread_stop_all(self) -> None:
         """Signal every provider's blocking sync threads to stop.
@@ -468,10 +637,10 @@ class OrchestratorRegistry:
         enabled_items = [(p, o) for p, o in self._orchestrators.items() if p in enabled]
         tasks = [
             asyncio.create_task(
-                self._shutdown_with_state(provider, orch),
+                self._shutdown_with_state(provider),
                 context=self._provider_context(provider),
             )
-            for provider, orch in enabled_items
+            for provider, _ in enabled_items
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         for (provider, _), result in zip(enabled_items, results):

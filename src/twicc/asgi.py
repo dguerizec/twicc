@@ -1034,9 +1034,18 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
           longer in the enabled set after the merge, it is rebound to the
           first enabled provider in ``Provider`` enum order.
 
-        After the closure returns, the orchestrator is signalled outside the
-        lock (async boundary): ``shutdown_one`` for newly-disabled providers,
-        ``start_one`` (as a background task) for newly-enabled ones.
+        After the closure returns, the orchestrator transitions are split
+        in two halves outside the lock so the WS handler stays
+        non-blocking AND the transition broadcasts reach the client
+        before the ``synced_settings_updated`` broadcast at the bottom
+        (otherwise the UI toggles would flip to their new state for a
+        frame before showing the in-transition spinner):
+
+        - ``begin_start`` / ``begin_shutdown`` are awaited in parallel
+          via ``asyncio.gather`` — fast, just the transition broadcasts.
+        - ``schedule_finish_start`` / ``schedule_finish_shutdown`` queue
+          the slow bodies (``orch.start()`` / ``orch.shutdown()``) as
+          fire-and-forget background tasks.
         """
         synced_settings = content.get("settings")
         if not isinstance(synced_settings, dict):
@@ -1178,21 +1187,51 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
         # lock. `to_start` / `to_stop` were derived from the "running" sets
         # (not the raw disabled sets) so a first-time activation correctly
         # starts everything the user just enabled.
+        #
+        # The transition broadcasts (``provider_state_changed:starting`` /
+        # ``:stopping``) must reach the client BEFORE the
+        # ``synced_settings_updated`` broadcast emitted below — otherwise
+        # the UI flips the toggle to its new ON/OFF state for a frame
+        # before showing the spinner/disabled-during-transition state.
+        # We split each transition in two: the fast half (``begin_*``,
+        # which only sends the transition broadcast) is awaited up front
+        # in a single ``gather``, then the slow half (``orch.start()`` /
+        # ``orch.shutdown()``) is scheduled as a background task so the
+        # handler never blocks on it.
         from twicc.orchestrator import get_orchestrator_registry
 
         orchestrators = get_orchestrator_registry()
+        to_stop_providers: list[Provider] = []
         for value in result["to_stop"]:
             try:
-                provider = Provider(value)
+                to_stop_providers.append(Provider(value))
             except ValueError:
                 continue
-            await orchestrators.shutdown_one(provider)
+        to_start_providers: list[Provider] = []
         for value in result["to_start"]:
             try:
-                provider = Provider(value)
+                to_start_providers.append(Provider(value))
             except ValueError:
                 continue
-            asyncio.create_task(orchestrators.start_one(provider))
+
+        # Broadcast every transition in parallel — these are fast
+        # (one ``group_send`` each, no slow body). All broadcasts land in
+        # the Channels queues before the ``synced_settings_updated``
+        # broadcast emitted at the bottom of this handler.
+        await asyncio.gather(
+            *(orchestrators.begin_shutdown(p) for p in to_stop_providers),
+            *(orchestrators.begin_start(p) for p in to_start_providers),
+        )
+
+        # Schedule the slow bodies as fire-and-forget background tasks.
+        # They run in parallel across providers (each orchestrator owns
+        # its own isolated task graph). The state machine settles to
+        # ``stopped`` / ``running`` from inside each task once the body
+        # finishes, broadcasting the final transition then.
+        for p in to_stop_providers:
+            orchestrators.schedule_finish_shutdown(p)
+        for p in to_start_providers:
+            orchestrators.schedule_finish_start(p)
 
         # Broadcast to all clients, overlaying any server-side corrections
         # so every client converges to the authoritative state.
