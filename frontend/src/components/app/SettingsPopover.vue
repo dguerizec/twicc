@@ -162,7 +162,25 @@ const shortcutGroups = computed(() => {
         {
             label: 'Session chat',
             shortcuts: [
+                { keys: ['Alt', 'Shift', 'M'], description: 'Focus message input — or the active pending request when one is open (from any session tab)' },
                 { keys: ['Quick triple Esc'], description: 'Emergency stop of the running process' },
+            ]
+        },
+        {
+            label: 'Message input',
+            shortcuts: [
+                { keys: [mod, '↵'], description: 'Send message' },
+                { keys: ['Alt', 'Shift', 'O'], description: 'Open / close Agent Settings popover' },
+                { keys: ['@'], description: 'Insert file path (after a space or at start)' },
+                ...commandShortcuts,
+                { keys: ['!'], description: 'Message history (at start of input)' },
+                { keys: ['PageUp'], description: 'Message history (cursor on first line)' },
+            ]
+        },
+        {
+            label: 'Pending request (approval / question)',
+            shortcuts: [
+                { keys: [mod, '↵'], description: 'Submit the form — Approve (or "Approve with changes" in edit mode, Submit for a question). Sends Deny / Cancel turn when that button is focused.' },
             ]
         },
         {
@@ -179,18 +197,6 @@ const shortcutGroups = computed(() => {
                 { keys: ['Alt', 'Ctrl', 'Shift', '1–9'], description: 'Jump to terminal tab N' },
                 { keys: ['Alt', 'Ctrl', 'Shift', '←/→'], description: 'Previous / next terminal tab' },
                 { keys: ['Alt', 'Ctrl', 'Shift', '↑/↓'], description: 'Last visited terminal tab' },
-            ]
-        },
-        {
-            label: 'Message input',
-            shortcuts: [
-                { keys: [mod, '↵'], description: 'Send message' },
-                { keys: ['Alt', 'Shift', 'M'], description: 'Focus message input (from any session tab)' },
-                { keys: ['Alt', 'Shift', 'O'], description: 'Open / close Agent Settings popover' },
-                { keys: ['@'], description: 'Insert file path (after a space or at start)' },
-                ...commandShortcuts,
-                { keys: ['!'], description: 'Message history (at start of input)' },
-                { keys: ['PageUp'], description: 'Message history (cursor on first line)' },
             ]
         },
         {

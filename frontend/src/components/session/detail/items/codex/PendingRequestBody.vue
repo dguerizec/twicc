@@ -1,5 +1,5 @@
 <script setup>
-import { computed, nextTick, onMounted, ref, useId, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
 import AppTooltip from '../../../../ui/AppTooltip.vue'
 import { getProviderLabel } from '../../../../../providers'
 import { useDataStore } from '../../../../../stores/data'
@@ -152,6 +152,50 @@ function handleDeny() {
 function handleCancelTurn() {
     emit('submit', { tool_name: toolName.value, decision: 'cancel' })
 }
+
+// Cmd/Ctrl+Enter: submit the form. Mirrors the MessageInput shortcut, dispatched
+// here from a document-level listener because the body has a fragment root and
+// can't carry a single @keydown attribute. We only act if the focus is inside
+// the .pending-request-form, and if not already responding.
+//
+// Action depends on which control has focus:
+//   - Deny button        → handleDeny
+//   - Cancel turn button → handleCancelTurn (when the button is rendered)
+//   - anything else      → emitApprove('once'), which maps to the first
+//                          item of the Approve dropdown (Approve once for
+//                          command/file, "For this turn" for permissions).
+function onSubmitShortcut(e) {
+    if (e.key !== 'Enter') return
+    if (!(e.metaKey || e.ctrlKey)) return
+    const form = document.querySelector('.pending-request-form')
+    if (!form || !form.contains(document.activeElement)) return
+    if (props.isResponding) return
+
+    const activeId = document.activeElement?.id
+    if (activeId === denyButtonId) {
+        e.preventDefault()
+        e.stopPropagation()
+        handleDeny()
+        return
+    }
+    if (activeId === cancelTurnButtonId) {
+        e.preventDefault()
+        e.stopPropagation()
+        handleCancelTurn()
+        return
+    }
+
+    e.preventDefault()
+    e.stopPropagation()
+    emitApprove('once')
+}
+
+onMounted(() => {
+    document.addEventListener('keydown', onSubmitShortcut)
+})
+onBeforeUnmount(() => {
+    document.removeEventListener('keydown', onSubmitShortcut)
+})
 </script>
 
 <template>

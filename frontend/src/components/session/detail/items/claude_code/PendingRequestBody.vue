@@ -15,7 +15,7 @@
 // Instead, each button handler emits ('submit', payload) and the parent shell
 // is responsible for dispatching the response.
 
-import { ref, computed, reactive, watch, nextTick, onMounted, useId } from 'vue'
+import { ref, computed, reactive, watch, nextTick, onMounted, onBeforeUnmount, useId } from 'vue'
 import JsonHumanView from '../../../../json/JsonHumanView.vue'
 import AppTooltip from '../../../../ui/AppTooltip.vue'
 import { getLanguageFromPath } from '../../../../../utils/languages'
@@ -215,7 +215,129 @@ function focusPrimaryTarget() {
     })
 }
 
+// Focus the current "primary" element of the form unconditionally (no canStealFocus
+// gating). Used to follow user-initiated mode transitions (cancelling deny / edit)
+// so the next Cmd+Enter still lands on the right action. Relies on the
+// `auto-focused` marker class which is mutually exclusive across the modes (only
+// one element carries it at any given time).
+function focusFormPrimary() {
+    nextTick(() => {
+        document.querySelector('.pending-request-form .auto-focused')?.focus()
+    })
+}
+
+// Focus the first editable widget of the JSON editor when entering "Approve with
+// changes" mode — the user just opted into editing, so they want to be in the
+// fields, not on the submit button. Prefer a CodeMirror surface when present
+// (multi-line strings such as Bash command or Edit old/new_string are the
+// payload the user typically wants to tweak); fall back to the first scalar
+// widget (wa-input / wa-textarea / wa-select) otherwise, and finally to the
+// brand button if nothing editable is found.
+//
+// CodeMirror mounts in its own onMounted (one tick after Vue commits the
+// template), so we briefly retry to give it a chance to appear before falling
+// back. Tools known to use code editors gate the retry; other tools (e.g. Read)
+// skip it and focus the first scalar widget immediately.
+const TOOLS_WITH_CODE_EDITOR = new Set(['Bash', 'Write', 'Edit', 'NotebookEdit'])
+function focusEditedContent(retries = 10) {
+    nextTick(() => {
+        const details = document.querySelector('.pending-request-form .pending-request-details')
+        if (!details) {
+            focusFormPrimary()
+            return
+        }
+        const expectCodeMirror = TOOLS_WITH_CODE_EDITOR.has(toolName.value)
+        if (expectCodeMirror) {
+            const cm = details.querySelector('.cm-content')
+            if (cm) {
+                cm.focus()
+                return
+            }
+            if (retries > 0) {
+                setTimeout(() => focusEditedContent(retries - 1), 30)
+                return
+            }
+            // Code editor never showed up: fall through to scalar widgets.
+        }
+        const fallback = details.querySelector('wa-input, wa-textarea, wa-select, [contenteditable="true"]')
+        if (fallback) {
+            fallback.focus()
+        } else {
+            focusFormPrimary()
+        }
+    })
+}
+
 onMounted(focusPrimaryTarget)
+
+// Cmd/Ctrl+Enter: submit the form. Mirrors the MessageInput shortcut, dispatched
+// here from a document-level listener because the body has a fragment root and
+// can't carry a single @keydown attribute. We only act if the focus is inside
+// the .pending-request-form (so the shortcut doesn't fire from unrelated inputs)
+// and if the primary action isn't disabled.
+//
+// Action depends on the current state:
+//   - ask_user_question        → Submit (requires every question answered)
+//   - tool_approval, deny mode → Deny (sends the typed reason, if any)
+//   - tool_approval, edit mode → "Approve with changes"
+//   - tool_approval, initial   → Deny if focus is on the Deny button (sent
+//                                directly without going through the reason
+//                                input), otherwise Approve.
+function onSubmitShortcut(e) {
+    if (e.key !== 'Enter') return
+    if (!(e.metaKey || e.ctrlKey)) return
+    const form = document.querySelector('.pending-request-form')
+    if (!form || !form.contains(document.activeElement)) return
+    if (props.isResponding) return
+
+    if (requestType.value === 'ask_user_question') {
+        if (!canSubmitQuestions.value) return
+        e.preventDefault()
+        e.stopPropagation()
+        handleSubmitQuestions()
+        return
+    }
+
+    if (requestType.value !== 'tool_approval') return
+
+    if (showDenyReason.value) {
+        e.preventDefault()
+        e.stopPropagation()
+        handleDeny()
+        return
+    }
+
+    if (isEditing.value) {
+        e.preventDefault()
+        e.stopPropagation()
+        handleApproveWithChanges()
+        return
+    }
+
+    // Initial mode: Deny on focused Deny button (sent directly, no reason);
+    // Approve otherwise.
+    if (document.activeElement?.id === denyButtonId) {
+        e.preventDefault()
+        e.stopPropagation()
+        emit('submit', {
+            request_type: 'tool_approval',
+            decision: 'deny',
+            message: 'User denied this action',
+        })
+        return
+    }
+
+    e.preventDefault()
+    e.stopPropagation()
+    handleApprove()
+}
+
+onMounted(() => {
+    document.addEventListener('keydown', onSubmitShortcut)
+})
+onBeforeUnmount(() => {
+    document.removeEventListener('keydown', onSubmitShortcut)
+})
 
 // ============================================================================
 // Tool approval computed
@@ -448,17 +570,15 @@ function handleDeny() {
 function cancelDeny() {
     showDenyReason.value = false
     denyReason.value = ''
+    focusFormPrimary()
 }
 
 /**
  * Handle keyboard shortcut in deny reason textarea.
- * Cmd/Ctrl+Enter submits the deny. Escape cancels.
+ * Escape cancels the deny. (Cmd/Ctrl+Enter is handled globally by
+ * onSubmitShortcut, which submits regardless of which child has focus.)
  */
 function onDenyReasonKeydown(event) {
-    if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
-        event.preventDefault()
-        handleDeny()
-    }
     if (event.key === 'Escape') {
         event.preventDefault()
         cancelDeny()
@@ -475,6 +595,9 @@ function handleStartEdit() {
     // Also close the deny reason if it was open
     showDenyReason.value = false
     denyReason.value = ''
+    // The user just opened the editor — land focus inside the first editable
+    // field, not on the submit button.
+    focusEditedContent()
 }
 
 /**
@@ -484,6 +607,7 @@ function handleStartEdit() {
 function cancelEdit() {
     isEditing.value = false
     editedToolInput.value = null
+    focusFormPrimary()
 }
 
 /**
