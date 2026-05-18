@@ -1274,7 +1274,7 @@ class CodexSessionCompute(BaseSessionCompute):
     # Extraction — content classification
     # ------------------------------------------------------------------
 
-    def transform_inline(self, parsed_json: dict) -> str | None:
+    def transform_inline(self, parsed_json: dict, *, line_num: int) -> str | None:
         # No inline rewrites for Codex: the JSONL format is already in
         # its canonical shape (no legacy XML to normalise).
         return None

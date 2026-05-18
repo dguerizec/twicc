@@ -21,6 +21,7 @@ import { formatRelativePath, fileIconFor } from '../utils/path'
 import EditContent from '../../components/session/detail/items/claude_code/EditContent.vue'
 import WriteContent from '../../components/session/detail/items/claude_code/WriteContent.vue'
 import TodoContent from '../../components/session/detail/items/TodoContent.vue'
+import TaskByIdContent from '../../components/session/detail/items/claude_code/TaskByIdContent.vue'
 import ReadResultContent from '../../components/session/detail/items/claude_code/ReadResultContent.vue'
 import BashResultContent from '../../components/session/detail/items/claude_code/BashResultContent.vue'
 import WebContentResult from '../../components/session/detail/items/claude_code/WebContentResult.vue'
@@ -145,13 +146,13 @@ function tasksDataToTodos(tasksData) {
  * by-id task tools (TaskCreate / TaskUpdate / TaskGet).
  *
  *   - TaskCreate → ``[{text: '<id>'}, {text: subject, status: 'pending'}]``
- *     (the id slot is dropped when the backend couldn't resolve it — e.g.
- *     the task file isn't on disk yet during a live race).
+ *     (the id slot is dropped when the backend couldn't allocate one — e.g.
+ *     the TaskCreate input was missing a subject).
  *   - TaskUpdate → ``[{text: '<id>/<total>'}, {text: activeForm || subject,
  *     status: input.status}]`` (status is the explicit target the call sets).
  *   - TaskGet    → ``[{text: '<id>/<total>'}, {text: subject, status:
- *     taskData.status}]`` (no status in the input — use the file's current
- *     state as captured at transform_inline time).
+ *     taskData.status}]`` (no status in the input — use the in-memory task
+ *     state at the moment the tool_use was processed).
  *
  * ``twiccTaskData`` / ``twiccTasksTotal`` are spliced into the tool_use
  * block by the backend; we receive them via the helper's ``options``
@@ -350,6 +351,39 @@ export class ClaudeCodeToolHelpers extends BaseToolHelpers {
         }
         if (name === 'TodoWrite' && isValidTodos(safeInput.todos)) {
             return { component: TodoContent, props: { todos: safeInput.todos } }
+        }
+        if (name === 'TaskCreate' || name === 'TaskUpdate' || name === 'TaskGet') {
+            // For TaskUpdate / TaskGet, show the full task data captured at
+            // the moment of the call (twiccTaskData) — it carries every
+            // field of the task, not just the bare tool input (which is
+            // taskId + the fields being updated for Update, or just taskId
+            // for Get). Fall back to the tool input when the snapshot is
+            // missing (e.g. legacy block, malformed input, unknown taskId).
+            let input
+            let inputOverrides = this.getInputOverrides(name)
+            if (name === 'TaskUpdate' || name === 'TaskGet') {
+                const taskData = ctx?.twiccTaskData
+                if (taskData && typeof taskData === 'object') {
+                    input = taskData
+                    // The task id is already shown in the summary header
+                    // (TodoSummary "<id>/<total>"), so hide it from the
+                    // JSON Human View to avoid redundant noise.
+                    inputOverrides = { ...inputOverrides, id: { hidden: true } }
+                } else {
+                    input = this.getDisplayInputObject(name, safeInput) ?? {}
+                }
+            } else {
+                input = this.getDisplayInputObject(name, safeInput) ?? {}
+            }
+            const todos = tasksDataToTodos(ctx?.twiccTasksData)
+            return {
+                component: TaskByIdContent,
+                props: {
+                    input,
+                    inputOverrides,
+                    todos,
+                },
+            }
         }
         if (name === 'TaskList') {
             const todos = tasksDataToTodos(ctx?.twiccTasksData)

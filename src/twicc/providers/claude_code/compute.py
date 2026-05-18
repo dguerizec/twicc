@@ -34,7 +34,6 @@ from twicc.providers.compute_base import (
 )
 from .agent.original_file_cache import pop_original_file as _pop_cached_original_file
 from .pricing import extract_model_info, to_token_usage
-from .tasks import TasksReader
 
 
 # Tool names that spawn subagent sessions (Task is the legacy name, Agent is the new one)
@@ -42,10 +41,12 @@ AGENT_TOOL_NAMES = frozenset({'Task', 'Agent'})
 
 MONITOR_TOOL_NAME = 'Monitor'
 
-# Built-in task-tracking tools whose tool_use items get enriched with the
-# canonical task payload from ``~/.claude/tasks/<session_id>/<id>.json``
-# (see :mod:`.tasks` and the ``twiccTaskData`` block in
-# :meth:`ClaudeCodeCompute.transform_inline`).
+# Built-in task-tracking tools whose tool_use blocks get the
+# ``twiccTasksTotal`` field written alongside ``twiccTaskData`` and
+# ``twiccTasksData`` in :meth:`ClaudeCodeSessionCompute._enrich_task_tool_uses`.
+# ``twiccTasksTotal`` exists so the summary header can render
+# "<id>/<total>". TaskCreate and TaskList don't need it (their summary
+# headers don't render the ratio).
 _TASK_LOOKUP_BY_ID_TOOLS = frozenset({'TaskUpdate', 'TaskGet'})
 
 # Content types considered user-visible (for display_level and kind computation)
@@ -288,66 +289,43 @@ def _has_visible_content(content: str | list | None) -> bool:
     return False
 
 
-def _enrich_task_tool_uses(content: list, session_id: str) -> bool:
-    """
-    Embed the canonical task payload into the four task-tracking tool_use
-    blocks within an assistant message content list.
+_TASK_TOOL_NAMES = frozenset({'TaskCreate', 'TaskUpdate', 'TaskGet', 'TaskList'})
 
-    Per-tool enrichment shape (mutates ``content`` in place):
-      - ``TaskCreate`` / ``TaskUpdate`` / ``TaskGet`` → ``twiccTaskData``
-        (single task dict). The by-id tools (Update / Get) also get
-        ``twiccTasksTotal`` so the summary can render "<id>/<total>".
-      - ``TaskList`` → ``twiccTasksData`` (list of every task in the
-        session, sorted by id) — feeds both the count in the summary
-        header and the TodoContent-style list in the body.
 
-    Idempotent: skips blocks that already carry the enrichment.
-    Returns ``True`` if any block was mutated.
+def _extract_tasks_snapshot(parsed_json: dict) -> list[dict] | None:
+    """Return the **last** ``twiccTasksData`` list embedded in an assistant
+    message's tool_use blocks. None when not found or malformed.
+
+    A single assistant message can carry several task tool_use blocks
+    (parallel tool calls). Each enriched block's ``twiccTasksData`` is
+    the state right after that block was applied, so the last one is
+    the most up-to-date snapshot for the whole message.
     """
-    mutated = False
+    content = get_message_content_list(parsed_json, 'assistant')
+    if content is None:
+        return None
+    last: list[dict] | None = None
     for block in content:
         if not isinstance(block, dict) or block.get('type') != 'tool_use':
             continue
-        name = block.get('name')
+        snapshot = block.get('twiccTasksData')
+        if isinstance(snapshot, list):
+            last = snapshot
+    return last
 
-        if name == 'TaskList':
-            if 'twiccTasksData' in block:
-                continue
-            block['twiccTasksData'] = TasksReader.read_all_tasks(session_id)
-            mutated = True
-            continue
 
-        if 'twiccTaskData' in block:
-            continue
-        if name not in ('TaskCreate',) and name not in _TASK_LOOKUP_BY_ID_TOOLS:
-            continue
-        tool_input = block.get('input')
-        if not isinstance(tool_input, dict):
-            continue
-
-        task_data: dict | None = None
-        if name == 'TaskCreate':
-            subject = tool_input.get('subject')
-            active_form = tool_input.get('activeForm')
-            if isinstance(subject, str) and subject:
-                task_data = TasksReader.find_task_by_create_input(
-                    session_id,
-                    subject,
-                    active_form if isinstance(active_form, str) else None,
-                )
-        else:  # TaskUpdate / TaskGet
-            task_id = tool_input.get('taskId')
-            if isinstance(task_id, str) and task_id:
-                task_data = TasksReader.read_task_file(session_id, task_id)
-
-        if task_data is None:
-            continue
-
-        block['twiccTaskData'] = task_data
-        if name in _TASK_LOOKUP_BY_ID_TOOLS:
-            block['twiccTasksTotal'] = TasksReader.count_session_tasks(session_id)
-        mutated = True
-    return mutated
+def _iter_task_tool_use_blocks(parsed_json: dict):
+    """Yield tool_use blocks whose name is one of the four task tools."""
+    content = get_message_content_list(parsed_json, 'assistant')
+    if content is None:
+        return
+    for block in content:
+        if (
+            isinstance(block, dict)
+            and block.get('type') == 'tool_use'
+            and block.get('name') in _TASK_TOOL_NAMES
+        ):
+            yield block
 
 
 # =============================================================================
@@ -370,15 +348,20 @@ class ClaudeCodeSessionCompute(BaseSessionCompute):
     (sync_session_items_from_file) — is wired here. Each method
     delegates to a matching free function defined earlier in this file.
 
-    The class carries one piece of per-instance state:
-    ``_monitor_task_to_tool_use_id``, a session-scoped map populated
-    on each Monitor tool_result (via ``toolUseResult.taskId``) and
-    consumed when rewriting task-notification user_messages and the
-    terminal attachment into synthetic tool_result rows. The batch
-    path resets the map per session via ``begin/end_session_compute``;
-    the live path relies on eager per-task purges (on terminal
-    arrival) to keep the map bounded. :func:`get_compute` returns a
-    per-process singleton.
+    Per-instance state held by this class:
+      * ``_monitor_task_to_tool_use_id`` — per-session map for the Monitor
+        tool aggregation (see :meth:`begin_session_compute`).
+      * ``_session_task_states`` — per-session in-memory task state used by
+        :meth:`_enrich_task_tool_uses` to snapshot the task list at every
+        task tool_use. Reconstructed lazily on first touch (see
+        :meth:`_rebuild_state_if_missing`). Pruned per session in batch via
+        :meth:`begin_session_compute` / :meth:`end_session_compute`; in the
+        live watcher it grows monotonically over the process lifetime —
+        bounded growth is acceptable for typical install scales (a few KB
+        per session, dozens to low hundreds of sessions per long-running
+        process).
+
+    :func:`get_compute` returns a per-process singleton.
     """
 
     provider: ClassVar[Provider] = Provider.CLAUDE_CODE
@@ -386,23 +369,262 @@ class ClaudeCodeSessionCompute(BaseSessionCompute):
     def __init__(self) -> None:
         super().__init__()
         self._monitor_task_to_tool_use_id: dict[str, dict[str, str]] = {}
+        # Per-process in-memory task state, indexed by session_id.
+        # Inner dict: insertion-ordered task_id_str -> task_dict.
+        # Reconstructed lazily on the first transform_inline that needs
+        # it (see _rebuild_state_if_missing).
+        self._session_task_states: dict[str, dict[str, dict]] = {}
 
     def begin_session_compute(self, session_id: str) -> None:
         self._monitor_task_to_tool_use_id[session_id] = {}
+        self._session_task_states.pop(session_id, None)
 
     def end_session_compute(self, session_id: str) -> None:
         self._monitor_task_to_tool_use_id.pop(session_id, None)
+        self._session_task_states.pop(session_id, None)
+
+    # ------------------------------------------------------------------
+    # In-memory task state machinery
+    # ------------------------------------------------------------------
+
+    def _next_task_id(self, state: dict[str, dict]) -> str:
+        """Sequential id allocator. First id is '1', then max(ids)+1."""
+        if not state:
+            return "1"
+        return str(max(int(k) for k in state) + 1)
+
+    def _apply_task_create(self, state: dict[str, dict], tool_input: dict) -> dict | None:
+        """Add a new task to state. Returns the new task dict, or None
+        when the input is malformed (missing subject).
+
+        Note: nested mutable values from ``tool_input`` (e.g. lists in
+        ``addBlocks``, dicts in ``metadata``) are stored by reference. The
+        embedded snapshot at the call site uses ``dict(task)`` (shallow copy),
+        so any later in-place mutation of those nested values would corrupt
+        historical snapshots. Current code only ever reassigns task fields,
+        never mutates them in place — preserve this invariant.
+        """
+        subject = tool_input.get('subject')
+        if not isinstance(subject, str) or not subject:
+            return None
+        new_id = self._next_task_id(state)
+        # Merge all input fields as-is, then default status to 'pending'
+        # and set our authoritative id. Any incoming 'id'/'taskId' is
+        # dropped (TaskCreate input shouldn't carry them; defensive).
+        task = {
+            **{k: v for k, v in tool_input.items() if k not in ('id', 'taskId')},
+            'status': 'pending',
+            'id': new_id,
+        }
+        state[new_id] = task
+        return task
+
+    def _apply_task_update(self, state: dict[str, dict], tool_input: dict) -> dict | None:
+        """Merge update fields into the existing task. Returns the updated
+        task dict, or None when taskId is missing or unknown.
+
+        Mutation pattern: each input field reassigns the key on the existing
+        task dict (``existing[k] = v``). Nested mutable values from the input
+        are stored by reference. Do not mutate nested values in place (lists,
+        dicts) — embedded snapshots in already-enriched blocks share the
+        references via shallow ``dict(task)`` copies.
+        """
+        task_id = tool_input.get('taskId')
+        if not isinstance(task_id, str) or not task_id:
+            return None
+        existing = state.get(task_id)
+        if existing is None:
+            return None
+        for k, v in tool_input.items():
+            if k in ('taskId', 'id'):
+                continue
+            existing[k] = v
+        return existing
+
+    def _rebuild_state_if_missing(self, session_id: str, current_line_num: int) -> dict[str, dict]:
+        """Ensure self._session_task_states[session_id] is populated
+        consistently with the session's items already persisted in DB
+        up to (but not including) current_line_num.
+
+        Algorithm:
+          1. If state already exists, return it.
+          2. Initialise empty state.
+          3. Find the latest SessionItem (line_num < current_line_num)
+             whose content contains 'twiccTasksData'. Use that snapshot
+             to seed the state.
+          4. Replay TaskCreate / TaskUpdate items between that snapshot
+             (exclusive) and current_line_num (exclusive).
+        """
+        state = self._session_task_states.get(session_id)
+        if state is not None:
+            return state
+
+        state = {}
+        self._session_task_states[session_id] = state
+
+        # Pre-filter on the literal substring 'twiccTasksData' to avoid
+        # scanning every item. False positives are rare (a tool_result
+        # text could in theory mention the string) and benign:
+        # _extract_tasks_snapshot returns None for items that don't carry
+        # a real assistant tool_use snapshot, which falls back to
+        # replay_after_line=0 — a slower but still correct rebuild.
+        snapshot_item = (
+            SessionItem.objects
+            .filter(
+                session_id=session_id,
+                line_num__lt=current_line_num,
+                content__contains='twiccTasksData',
+            )
+            .order_by('-line_num')
+            .first()
+        )
+
+        replay_after_line = 0
+        if snapshot_item is not None:
+            try:
+                parsed = orjson.loads(snapshot_item.content)
+            except orjson.JSONDecodeError:
+                parsed = None
+            snapshot = _extract_tasks_snapshot(parsed) if parsed else None
+            if snapshot is not None:
+                for task in snapshot:
+                    if not isinstance(task, dict):
+                        continue
+                    task_id = task.get('id')
+                    if isinstance(task_id, str):
+                        state[task_id] = dict(task)
+                replay_after_line = snapshot_item.line_num
+
+        # Same idea here: pre-filter on the literal tool_use name
+        # substring. _iter_task_tool_use_blocks discriminates further
+        # (block.type == 'tool_use' and block.name in _TASK_TOOL_NAMES),
+        # so false positives from tool_results / user_messages mentioning
+        # those strings are safely dropped.
+        replay_items = (
+            SessionItem.objects
+            .filter(
+                session_id=session_id,
+                line_num__gt=replay_after_line,
+                line_num__lt=current_line_num,
+            )
+            .filter(
+                Q(content__contains='"name":"TaskCreate"')
+                | Q(content__contains='"name":"TaskUpdate"')
+            )
+            .order_by('line_num')
+        )
+        for item in replay_items:
+            try:
+                parsed = orjson.loads(item.content)
+            except orjson.JSONDecodeError:
+                continue
+            for block in _iter_task_tool_use_blocks(parsed):
+                name = block.get('name')
+                tool_input = block.get('input') or {}
+                if name == 'TaskCreate':
+                    self._apply_task_create(state, tool_input)
+                elif name == 'TaskUpdate':
+                    self._apply_task_update(state, tool_input)
+
+        return state
+
+    def _enrich_task_tool_uses(self, content: list, session_id: str, line_num: int) -> bool:
+        """In-memory enrichment of the four task-tracking tool_use blocks.
+
+        For each tool_use of name TaskCreate / TaskUpdate / TaskGet /
+        TaskList in ``content``:
+          * If the block already carries ``twiccTasksData`` (TaskList path)
+            or ``twiccTaskData`` only (legacy disk-based by-id), the block
+            is left untouched (immutability). On the ``twiccTasksData``
+            path, the in-memory state is reset from the snapshot so
+            subsequent blocks remain consistent.
+          * Otherwise, the in-memory state is advanced and the block is
+            enriched with ``twiccTaskData`` (when applicable),
+            ``twiccTasksData`` (always), and ``twiccTasksTotal`` (only
+            for by-id tools matching ``_TASK_LOOKUP_BY_ID_TOOLS``).
+
+        Returns True if any block was mutated.
+        """
+        mutated = False
+        state: dict[str, dict] | None = None
+
+        for block in content:
+            if not isinstance(block, dict) or block.get('type') != 'tool_use':
+                continue
+            name = block.get('name')
+            if name not in _TASK_TOOL_NAMES:
+                continue
+
+            # --- Immutability paths ---
+            if 'twiccTasksData' in block:
+                if state is None:
+                    state = self._rebuild_state_if_missing(session_id, line_num)
+                snapshot = block.get('twiccTasksData')
+                if isinstance(snapshot, list):
+                    state.clear()
+                    for task in snapshot:
+                        if not isinstance(task, dict):
+                            continue
+                        task_id = task.get('id')
+                        if isinstance(task_id, str):
+                            state[task_id] = dict(task)
+                continue
+
+            if 'twiccTaskData' in block:
+                # Legacy by-id block enriched with twiccTaskData only (no
+                # twiccTasksData). Immutable, but we have no full snapshot
+                # to restore state from. Skip; rely on the next snapshot
+                # or reconstruction to recover state.
+                continue
+
+            # --- Advance path ---
+            if state is None:
+                state = self._rebuild_state_if_missing(session_id, line_num)
+
+            tool_input = block.get('input') or {}
+
+            if name == 'TaskCreate':
+                task = self._apply_task_create(state, tool_input)
+                if task is None:
+                    continue
+                block['twiccTaskData'] = dict(task)
+            elif name == 'TaskUpdate':
+                task = self._apply_task_update(state, tool_input)
+                if task is None:
+                    continue
+                block['twiccTaskData'] = dict(task)
+            elif name == 'TaskGet':
+                task_id = tool_input.get('taskId')
+                if isinstance(task_id, str) and task_id in state:
+                    block['twiccTaskData'] = dict(state[task_id])
+                # If taskId unknown, no twiccTaskData written. We still
+                # attach the list snapshot + total below.
+
+            # All four task tools reach this point in the "advance" path.
+            # TaskCreate / TaskUpdate / TaskGet may have written
+            # twiccTaskData above (or skipped via 'continue' on bad input);
+            # TaskList simply falls through here — no state advance, just
+            # the list snapshot attached below.
+            block['twiccTasksData'] = [dict(t) for t in state.values()]
+
+            if name in _TASK_LOOKUP_BY_ID_TOOLS:
+                block['twiccTasksTotal'] = len(state)
+
+            mutated = True
+
+        return mutated
 
     # ------------------------------------------------------------------
     # Extraction
     # ------------------------------------------------------------------
 
-    def transform_inline(self, parsed_json: dict) -> str | None:
-        # Claude-Code-specific rewrites:
-        #   1. enrich TaskCreate / TaskUpdate / TaskGet tool_use items with
-        #      the canonical task payload from ``~/.claude/tasks/`` so the
-        #      frontend can render a meaningful summary without an extra
-        #      round-trip (label, status icon, id / total count);
+    def transform_inline(self, parsed_json: dict, *, line_num: int) -> str | None:
+        # Three Claude-Code-specific rewrites:
+        #   1. enrich TaskCreate / TaskUpdate / TaskGet / TaskList tool_use
+        #      blocks with twiccTaskData / twiccTasksData / twiccTasksTotal,
+        #      computed from an in-memory per-session task state that's
+        #      reconstructed from the tool_use inputs themselves (see
+        #      _enrich_task_tool_uses + _rebuild_state_if_missing);
         #   2. populate the session-scoped Monitor task→tool_use_id map
         #      from each Monitor tool_result's ``toolUseResult.taskId``
         #      (side-effect only, no content rewrite);
@@ -430,7 +652,7 @@ class ClaudeCodeSessionCompute(BaseSessionCompute):
             session_id = parsed_json.get('sessionId')
             if isinstance(session_id, str) and session_id:
                 content = get_message_content_list(parsed_json, 'assistant')
-                if content is not None and _enrich_task_tool_uses(content, session_id):
+                if content is not None and self._enrich_task_tool_uses(content, session_id, line_num):
                     return orjson.dumps(parsed_json).decode('utf-8')
 
         # --- Monitor tool_result side-effect: index its taskId so later
@@ -1497,9 +1719,10 @@ def get_compute() -> ClaudeCodeSessionCompute:
     """
     Return the process-local :class:`ClaudeCodeSessionCompute` singleton.
 
-    The class is stateless (its methods all delegate to module-level
-    helpers); the singleton just avoids re-instantiating it on every
-    call site. Each multiprocessing worker gets its own instance because
+    The class holds per-instance state (``_monitor_task_to_tool_use_id``
+    and ``_session_task_states``); the singleton ensures the same instance
+    is reused across all calls within the process, so the state persists
+    naturally. Each multiprocessing worker gets its own instance because
     module globals are not shared across processes — that's exactly the
     behaviour we want for the batch worker.
     """

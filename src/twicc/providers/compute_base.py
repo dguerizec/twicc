@@ -494,7 +494,7 @@ class BaseSessionCompute:
     # Extraction surface — overridden by each provider
     # ------------------------------------------------------------------
 
-    def transform_inline(self, parsed_json: dict) -> str | None:
+    def transform_inline(self, parsed_json: dict, *, line_num: int) -> str | None:
         """
         Optionally rewrite a parsed item in place before metadata computation.
 
@@ -1698,7 +1698,7 @@ class BaseSessionCompute:
 
             # Provider-specific inline transformations (e.g. Claude's
             # task-notification / local-command rewrites).
-            new_content = self.transform_inline(parsed)
+            new_content = self.transform_inline(parsed, line_num=item.line_num)
             if new_content is not None and new_content != item.content:
                 item.content = new_content
                 content_overrides.append({'id': item.id, 'content': new_content})
@@ -2289,7 +2289,7 @@ class BaseSessionCompute:
                 parsed = {}
 
             # Provider-specific inline transformations
-            new_content = self.transform_inline(parsed)
+            new_content = self.transform_inline(parsed, line_num=current_line_num)
             if new_content is not None:
                 item.content = new_content
 

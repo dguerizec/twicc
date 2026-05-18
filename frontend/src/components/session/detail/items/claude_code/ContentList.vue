@@ -78,7 +78,9 @@ const emit = defineEmits(['toggle-suffix'])
  * round-trip:
  *   - ``twiccTaskData`` / ``twiccTasksTotal`` — single task lookup for
  *     ``TaskCreate`` / ``TaskUpdate`` / ``TaskGet``;
- *   - ``twiccTasksData`` — full task list snapshot for ``TaskList``.
+ *   - ``twiccTasksData`` — full task list snapshot, attached to
+ *     ``TaskList`` as well as to the by-id tools (frozen at the moment
+ *     of the call so historical statuses are preserved across recompute).
  * Returns ``null`` when nothing is attached, keeping the prop shape clean
  * for tools that don't need it.
  */

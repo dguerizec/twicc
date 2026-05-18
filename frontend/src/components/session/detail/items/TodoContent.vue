@@ -41,6 +41,11 @@ defineProps({
                 class="todo-item-icon todo-item-icon-in-progress"
             ></wa-icon>
             <wa-icon
+                v-else-if="todo.status === 'deleted'"
+                name="xmark"
+                class="todo-item-icon todo-item-icon-deleted"
+            ></wa-icon>
+            <wa-icon
                 v-else
                 name="circle"
                 class="todo-item-icon todo-item-icon-pending"
@@ -90,8 +95,17 @@ defineProps({
     color: var(--wa-color-text-quiet);
 }
 
+.todo-item-icon-deleted {
+    color: var(--wa-color-danger-50);
+}
+
 .todo-item-completed .todo-item-text {
     color: var(--wa-color-text-quiet);
+}
+
+.todo-item-deleted .todo-item-text {
+    color: var(--wa-color-text-quiet);
+    text-decoration: line-through;
 }
 
 .todo-item-in-progress .todo-item-text {
