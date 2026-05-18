@@ -19,6 +19,11 @@ Main stack:
 - Code, comments, variable names, and UI strings must be in English. Documentation files may contain French.
 - The project prefers high-quality implementation. The only accepted shortcuts called out by the project are no mandatory tests and no mandatory linting.
 
+## Commit Conventions
+
+- When creating commits, include a descriptive commit body that explains the change, not only a subject line.
+- Add a `Co-Authored-By: Codex <codex@openai.com>` trailer for the agent that performed the work, matching the style used in recent commits.
+
 ## Development Commands
 
 Use `devctl.py` for development servers:
