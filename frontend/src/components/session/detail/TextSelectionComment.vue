@@ -18,6 +18,9 @@ const props = defineProps({
     autoExpand: { type: Boolean, default: false },
     /** Optional source suffix for the formatted output (e.g. "from terminal"). */
     sourceLabel: { type: String, default: '' },
+    /** Optional source metadata used to enrich the formatted comment.
+     *  Shape: { filePath: string, lineFrom: number, lineTo: number }. */
+    metadata: { type: Object, default: null },
     /** Function called when the widget needs to dismiss the source selection
      *  (on Comment/Copy clicks). Defaults to clearing the DOM selection, which is
      *  enough for normal HTML; consumers (e.g. FilePane) override it to also clear
@@ -164,7 +167,13 @@ function addToMessage() {
     if (!canAdd.value) return
 
     const formatted = formatComment(
-        { lineText: props.selectedText, content: commentText.value },
+        {
+            lineText: props.selectedText,
+            content: commentText.value,
+            filePath: props.metadata?.filePath,
+            lineFrom: props.metadata?.lineFrom,
+            lineTo: props.metadata?.lineTo,
+        },
         { isSelectedText: true, sourceLabel: props.sourceLabel },
     )
     insertTextAtCursor(formatted + '\n')

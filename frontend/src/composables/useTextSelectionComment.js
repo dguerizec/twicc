@@ -50,6 +50,10 @@ export function useTextSelectionComment({ containerRef, isInScope = null, getSel
     const textSelectionCommentRef = ref(null)
     const textSelectionText = ref('')
     const textSelectionPosition = ref(null)
+    // Optional consumer-provided metadata about the selection (e.g. file path +
+    // line range for CodeMirror selections). Surfaced to the widget so it can
+    // enrich the formatted comment.
+    const textSelectionMetadata = ref(null)
 
     function resolveEl() {
         const c = containerRef.value
@@ -60,6 +64,7 @@ export function useTextSelectionComment({ containerRef, isInScope = null, getSel
     function close() {
         textSelectionPosition.value = null
         textSelectionText.value = ''
+        textSelectionMetadata.value = null
     }
 
     function anchorIsInScope(anchor, selection = null) {
@@ -88,6 +93,7 @@ export function useTextSelectionComment({ containerRef, isInScope = null, getSel
                     return {
                         text,
                         anchor: ov.anchor,
+                        metadata: ov.metadata ?? null,
                         position: {
                             top: above ? rect.top : rect.bottom,
                             left: (rect.left + rect.right) / 2,
@@ -123,10 +129,12 @@ export function useTextSelectionComment({ containerRef, isInScope = null, getSel
         const info = readSelectionInfo()
         if (!info || !anchorIsInScope(info.anchor, info.nativeSelection)) {
             textSelectionPosition.value = null
+            textSelectionMetadata.value = null
             return
         }
         textSelectionText.value = info.text
         textSelectionPosition.value = info.position
+        textSelectionMetadata.value = info.metadata ?? null
     }
 
     function handleScroll() {
@@ -149,6 +157,7 @@ export function useTextSelectionComment({ containerRef, isInScope = null, getSel
         }
         textSelectionText.value = info.text
         textSelectionPosition.value = info.position
+        textSelectionMetadata.value = info.metadata ?? null
     }
 
     // Track current attachment so we can move listeners when the container element
@@ -218,6 +227,7 @@ export function useTextSelectionComment({ containerRef, isInScope = null, getSel
         textSelectionCommentRef,
         textSelectionText,
         textSelectionPosition,
+        textSelectionMetadata,
         closeTextSelectionComment: close,
         // Re-evaluate the current selection on demand. Works around Firefox +
         // CodeMirror cases where the native `selectionchange` event isn't

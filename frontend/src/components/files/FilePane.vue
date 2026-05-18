@@ -271,11 +271,22 @@ function getCmSelectionOverride() {
             // selections spanning multiple lines.
             const backward = sel.head < sel.anchor
             const above = backward && rect.height > 30
+            const startLine = view.state.doc.lineAt(sel.from)
+            const endLine = view.state.doc.lineAt(sel.to)
+            // Trim the range at both edges so it matches what's visible in the
+            // quoted excerpt:
+            //  - end exactly at the start of a line → user took nothing from that line
+            //  - start exactly at the end of a line → user took nothing from that line
+            let lineFrom = startLine.number
+            let lineTo = endLine.number
+            if (lineTo > lineFrom && startLine.to === sel.from) lineFrom += 1
+            if (lineTo > lineFrom && endLine.from === sel.to) lineTo -= 1
             return {
                 text,
                 anchor: view.dom,
                 rect: { top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right },
                 above,
+                metadata: { filePath: props.filePath, lineFrom, lineTo },
             }
         } catch {
             continue
@@ -288,6 +299,7 @@ const {
     textSelectionCommentRef,
     textSelectionText,
     textSelectionPosition,
+    textSelectionMetadata,
     closeTextSelectionComment,
     refreshSelection,
 } = useTextSelectionComment({
@@ -867,6 +879,7 @@ function goToNextDiff() {
                 ref="textSelectionCommentRef"
                 :selected-text="textSelectionText"
                 :position="textSelectionPosition"
+                :metadata="textSelectionMetadata"
                 :clear-source-selection="clearSourceSelection"
                 @close="closeTextSelectionComment"
             />
