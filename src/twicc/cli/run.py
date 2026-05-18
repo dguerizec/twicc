@@ -74,7 +74,7 @@ from twicc.search_indexing_task import (  # noqa: E402
     stop_search_index_task,
 )
 from twicc.version_check_task import start_version_check_task, stop_version_check_task  # noqa: E402
-from twicc.tips_manifest import init_manifest  # noqa: E402
+from twicc.tips_manifest import init_manifest, start_tips_watcher_task  # noqa: E402
 
 
 async def _cancel_task(task: asyncio.Task, name: str) -> None:
@@ -176,6 +176,10 @@ async def run_server(port: int):
     # Cross-provider periodic tasks
     price_sync_task = asyncio.create_task(start_price_sync_task(shutdown_event))
     version_check_task = asyncio.create_task(start_version_check_task())
+    # Dev-only: re-scan the tips dir every 10 s and broadcast on change.
+    # The task short-circuits to a no-op outside TWICC_DEBUG so this is a
+    # zero-cost coroutine in production.
+    tips_watcher_task = asyncio.create_task(start_tips_watcher_task(shutdown_event))
 
     # CLI session-create plumbing (cf. docs/superpowers/specs/2026-05-17-cli-session-create-design.md)
     from twicc.heartbeat import heartbeat_loop
@@ -221,6 +225,12 @@ async def run_server(port: int):
         logger.info("Stopping version check task...")
         stop_version_check_task()
         await _cancel_task(version_check_task, "Version check task")
+
+        # Tips watcher exits cleanly when shutdown_event fires (set above),
+        # but we still cancel it explicitly to cover the no-op TWICC_DEBUG=
+        # off path (coroutine already returned) and any awaited wait_for.
+        logger.info("Stopping tips watcher task...")
+        await _cancel_task(tips_watcher_task, "Tips watcher task")
 
         logger.info("Stopping heartbeat task...")
         await _cancel_task(heartbeat_task, "Heartbeat task")

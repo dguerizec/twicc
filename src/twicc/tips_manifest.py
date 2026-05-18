@@ -1,8 +1,13 @@
 """In-memory manifest of available tips.
 
 Built once at boot by scanning the tips assets dir and parsing each .md
-file's YAML front-matter. Read-only after init — adding / removing tip
-files requires a restart of the backend.
+file's YAML front-matter. In production the manifest stays frozen until
+the next restart. In dev (``TWICC_DEBUG`` set by devctl), the
+:func:`start_tips_watcher_task` background loop re-scans the tips
+directory every :data:`TIPS_WATCH_INTERVAL_S` seconds and re-broadcasts
+the manifest over the ``tips_manifest_pushed`` WS message whenever it
+detects a change — so adding, renaming, or removing a tip while the
+backend is running no longer requires a restart.
 
 The body of each .md is **not** read here. The frontend fetches it
 directly via HTTP from /static/tips/<key>.md.
@@ -10,7 +15,9 @@ directly via HTTP from /static/tips/<key>.md.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
 import re
 from pathlib import Path
 from typing import NamedTuple
@@ -23,6 +30,12 @@ KEY_PATTERN = re.compile(r"^[a-z0-9-]+$")
 PLATFORM_VALUES = frozenset({"mobile", "desktop"})
 OS_VALUES = frozenset({"mac", "linux", "windows"})
 FRONT_MATTER_RE = re.compile(r"^---\r?\n(.*?)\r?\n---\r?\n", re.DOTALL)
+
+# Dev-only polling interval. Polling rather than watchfiles/inotify keeps
+# the kernel surface to zero and is cheap enough for a couple dozen .md
+# files — the loop wakes every TIPS_WATCH_INTERVAL_S seconds, re-scans,
+# and broadcasts only when the serialized manifest actually changed.
+TIPS_WATCH_INTERVAL_S = 10
 
 
 class TipMeta(NamedTuple):
@@ -37,12 +50,81 @@ class TipMeta(NamedTuple):
 _manifest: dict[str, TipMeta] = {}
 
 
-def init_manifest() -> None:
-    """Called once at startup. Scans the tips dir and fills the in-memory manifest."""
+def init_manifest(quiet: bool = False) -> None:
+    """Scan the tips dir and (re)bind the in-memory manifest.
+
+    Called once at startup by :mod:`twicc.cli.run`. Also called repeatedly
+    by :func:`start_tips_watcher_task` in dev mode; that caller passes
+    ``quiet=True`` so the periodic re-scan doesn't spam the log.
+    """
     global _manifest
     from twicc.paths import get_tips_assets_dir
     _manifest = scan_tips_dir(get_tips_assets_dir())
-    logger.info("Tips manifest: %d tips loaded", len(_manifest))
+    if not quiet:
+        logger.info("Tips manifest: %d tips loaded", len(_manifest))
+
+
+async def start_tips_watcher_task(stop_event: asyncio.Event) -> None:
+    """Dev-only periodic re-scan of the tips dir.
+
+    When ``TWICC_DEBUG`` is set (devctl injects it into the backend
+    process; production wheels never see it), this coroutine polls the
+    tips dir every :data:`TIPS_WATCH_INTERVAL_S` seconds, rebuilds the
+    in-memory manifest, and pushes ``tips_manifest_pushed`` to every
+    connected client when the serialized form differs from the previous
+    snapshot. No-op otherwise — production manifests stay frozen at boot.
+
+    Polling (rather than watchfiles/inotify) keeps the kernel footprint
+    to zero and matches the volume here (a few dozen small ``.md`` files
+    scanned in under a millisecond).
+    """
+    if os.environ.get("TWICC_DEBUG", "").strip().lower() not in ("1", "true", "yes"):
+        return
+
+    # Import here so the prod path doesn't pay the channels import cost
+    # at module load. ``get_channel_layer()`` returns the same in-memory
+    # layer the WSConsumer joins under the ``updates`` group.
+    from channels.layers import get_channel_layer
+    channel_layer = get_channel_layer()
+
+    last_snapshot = manifest_to_dict()
+    logger.info(
+        "Tips watcher: polling every %ds (TWICC_DEBUG enabled)",
+        TIPS_WATCH_INTERVAL_S,
+    )
+
+    while not stop_event.is_set():
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=TIPS_WATCH_INTERVAL_S)
+        except asyncio.TimeoutError:
+            # Timeout means it's time to re-scan
+            pass
+        else:
+            # stop_event fired — exit cleanly
+            break
+
+        try:
+            # scan_tips_dir does file I/O — run off the event loop.
+            await asyncio.to_thread(init_manifest, True)
+            current = manifest_to_dict()
+            if current != last_snapshot:
+                last_snapshot = current
+                await channel_layer.group_send(
+                    "updates",
+                    {
+                        "type": "broadcast",
+                        "data": {
+                            "type": "tips_manifest_pushed",
+                            "manifest": current,
+                        },
+                    },
+                )
+                logger.info(
+                    "Tips manifest changed, re-broadcasted (%d tips)",
+                    len(current),
+                )
+        except Exception:  # noqa: BLE001 — keep the loop alive across transient errors
+            logger.exception("Tips watcher: scan/broadcast failed")
 
 
 def get_manifest() -> dict[str, TipMeta]:
