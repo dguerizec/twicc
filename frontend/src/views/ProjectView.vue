@@ -8,6 +8,7 @@ import { useWorkspacesStore } from '../stores/workspaces'
 import { COLOR_SCHEME } from '../constants'
 import { useCommandRegistry } from '../composables/useCommandRegistry'
 import { useStartupPolling } from '../composables/useStartupPolling'
+import { useToast } from '../composables/useToast'
 import { useTerminalCommandStore } from '../stores/terminalCommand'
 import { getRegisteredProviders, getProviderHelpers, getProviderStore, getProviderLabel, getProviderIcon } from '../providers'
 import { toWorkspaceProjectId } from '../utils/workspaceIds'
@@ -20,6 +21,7 @@ import ProjectDetailPanel from '../components/project/ProjectDetailPanel.vue'
 import SessionRenameDialog from '../components/session/detail/SessionRenameDialog.vue'
 import ProjectEditDialog from '../components/project/ProjectEditDialog.vue'
 import WorkspaceManageDialog from '../components/workspace/WorkspaceManageDialog.vue'
+import BulkArchiveConfirmDialog from '../components/sidebar/BulkArchiveConfirmDialog.vue'
 import { getUsageRingColor, formatRecentDelta } from '../utils/usage'
 import { buildProjectTree, flattenProjectTree } from '../utils/projectTree'
 import CostDisplay from '../components/ui/CostDisplay.vue'
@@ -497,14 +499,43 @@ async function handleRetry() {
     }
 }
 
+const bulkArchiveDialog = ref({ open: false, preset: '7d' })
+const toast = useToast()
+
+// Computed rather than inline call in the template, so we don't rebuild
+// the object on every render and we keep a stable reference.
+const currentBulkArchiveScope = computed(() => {
+    if (!isAllProjectsMode.value) {
+        return { type: 'project', id: projectId.value }
+    }
+    if (activeWorkspaceId.value) {
+        return { type: 'workspace', id: activeWorkspaceId.value }
+    }
+    return { type: 'all', id: null }
+})
+
+function openBulkArchiveDialog(preset) {
+    bulkArchiveDialog.value = { open: true, preset }
+}
+
+function handleBulkArchived({ count }) {
+    toast.success(`Archived ${count} session${count > 1 ? 's' : ''}.`)
+}
+
 // Handle session options dropdown selection
 function handleSessionOptionsSelect(event) {
     const item = event.detail.item
-    if (item.value === 'show-archived') {
+    const value = item.value
+    if (value && value.startsWith('archive-older-')) {
+        const preset = value.slice('archive-older-'.length)
+        openBulkArchiveDialog(preset)
+        return
+    }
+    if (value === 'show-archived') {
         settingsStore.setShowArchivedSessions(item.checked)
-    } else if (item.value === 'compact-view') {
+    } else if (value === 'compact-view') {
         settingsStore.setCompactSessionList(item.checked)
-    } else if (item.value === 'show-active') {
+    } else if (value === 'show-active') {
         settingsStore.setShowActiveAcrossFilters(item.checked)
     }
 }
@@ -1254,6 +1285,18 @@ function updateSidebarClosedClass(closed) {
                         >
                             Show archived sessions
                         </wa-dropdown-item>
+                        <wa-dropdown-item value="archive-older">
+                            <wa-icon slot="icon" name="box-archive"></wa-icon>
+                            Archive sessions older than…
+                            <wa-dropdown-item slot="submenu" value="archive-older-3d">3 days</wa-dropdown-item>
+                            <wa-dropdown-item slot="submenu" value="archive-older-7d">7 days</wa-dropdown-item>
+                            <wa-dropdown-item slot="submenu" value="archive-older-10d">10 days</wa-dropdown-item>
+                            <wa-dropdown-item slot="submenu" value="archive-older-20d">20 days</wa-dropdown-item>
+                            <wa-dropdown-item slot="submenu" value="archive-older-30d">30 days</wa-dropdown-item>
+                            <wa-dropdown-item slot="submenu" value="archive-older-2m">2 months</wa-dropdown-item>
+                            <wa-dropdown-item slot="submenu" value="archive-older-3m">3 months</wa-dropdown-item>
+                            <wa-dropdown-item slot="submenu" value="archive-older-6m">6 months</wa-dropdown-item>
+                        </wa-dropdown-item>
                         <wa-dropdown-item
                             type="checkbox"
                             value="compact-view"
@@ -1752,6 +1795,14 @@ function updateSidebarClosedClass(closed) {
 
     <!-- Workspace management dialog -->
     <WorkspaceManageDialog ref="manageWorkspacesDialogRef" />
+
+    <!-- Bulk archive confirmation dialog -->
+    <BulkArchiveConfirmDialog
+        v-model:open="bulkArchiveDialog.open"
+        :preset="bulkArchiveDialog.preset"
+        :scope="currentBulkArchiveScope"
+        @archived="handleBulkArchived"
+    />
     </div>
 </template>
 

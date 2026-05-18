@@ -776,6 +776,9 @@ export function useWebSocket() {
                 }
                 break
             }
+            case 'sessions_bulk_archived':
+                store.applyBulkArchiveFromBroadcast(msg.session_ids)
+                break
             case 'session_items_added':
                 // Mark items as live (arrived via WebSocket) before adding them,
                 // so the live flag is available when components mount during addSessionItems.

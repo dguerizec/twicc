@@ -3232,6 +3232,54 @@ export const useDataStore = defineStore('data', {
         },
 
         /**
+         * Apply a bulk-archive broadcast from the backend. Local-only:
+         * marks sessions as archived in the store and removes them from MRU.
+         * Does NOT call the backend (the backend already archived them).
+         * Does NOT touch pinned sessions (the backend filtered them out).
+         */
+        applyBulkArchiveFromBroadcast(sessionIds) {
+            for (const sid of sessionIds) {
+                const session = this.sessions[sid]
+                if (session) {
+                    session.archived = true
+                }
+                this.removeMruSession(sid)
+            }
+        },
+
+        /**
+         * Call the bulk-archive endpoint.
+         *
+         * @param {Object} params
+         * @param {string} params.olderThan   - ISO timestamp threshold.
+         * @param {Object} params.scope       - { type: 'project'|'workspace'|'all', id: string|null }.
+         * @param {boolean} [params.dryRun]   - If true, returns only the count.
+         * @param {AbortSignal} [params.signal] - Abort signal for cancellable dry-runs.
+         * @returns {Promise<{count: number}>}
+         */
+        async bulkArchiveSessions({ olderThan, scope, dryRun = false, signal = null }) {
+            const body = {
+                older_than: olderThan,
+                scope: scope.type,
+                dry_run: dryRun,
+            }
+            if (scope.type === 'project') body.project_id = scope.id
+            if (scope.type === 'workspace') body.workspace_id = scope.id
+
+            const res = await apiFetch('/api/sessions/bulk-archive/', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+                signal,
+            })
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}))
+                throw new Error(err.error || `HTTP ${res.status}`)
+            }
+            return res.json()
+        },
+
+        /**
          * Set the pin mode of a session.
          * @param {string} projectId - The project ID
          * @param {string} sessionId - The session ID

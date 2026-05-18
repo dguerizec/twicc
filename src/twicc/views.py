@@ -2,17 +2,21 @@
 
 import logging
 import os
+import threading
 from bisect import bisect_left
 from datetime import datetime, timedelta
 
 from django.conf import settings
-from django.db import IntegrityError
-from django.http import Http404, HttpResponse, JsonResponse
+from django.db import IntegrityError, close_old_connections
+from django.http import Http404, HttpResponse, HttpResponseNotAllowed, JsonResponse
 from django.utils import timezone
 
+from asgiref.sync import async_to_sync
+from channels.layers import get_channel_layer
 import orjson
 
 from twicc import search
+from twicc.agent.registry import get_agent_manager_registry
 from twicc.core.enums import ItemKind, Provider
 from twicc.core.models import AgentLink, Command, DailyActivity, PinMode, Project, Session, SessionItem, SessionType, ToolResultLink, UsageSnapshot, WeeklyActivity
 from twicc.core.serializers import (
@@ -25,6 +29,8 @@ from twicc.paths import path_to_project_id
 from twicc.projects import register_project_sync
 from twicc.providers.state import ProviderDisabledError, ensure_provider_running
 from twicc.providers.helpers import get_provider_helpers, get_provider_helpers_registry
+from twicc.terminal import kill_all_tmux_terminals
+from twicc.workspaces import read_workspaces
 
 logger = logging.getLogger(__name__)
 
@@ -567,6 +573,123 @@ def session_detail(request, project_id, session_id, parent_session_id=None):
             )
 
     return JsonResponse(serialize_session(session))
+
+
+def bulk_archive_sessions(request):
+    """POST /api/sessions/bulk-archive/ - Archive multiple sessions in one shot.
+
+    Body:
+        older_than (str, required): ISO timestamp. Sessions with mtime < this are eligible.
+        scope (str, required): 'project' | 'workspace' | 'all'.
+        project_id (str): required if scope == 'project'.
+        workspace_id (str): required if scope == 'workspace'.
+        dry_run (bool, optional, default False): if True, return only the count.
+
+    Excludes: subagents, already-archived, pinned, sessions with an active agent,
+    and sessions without user messages or without created_at (not visible in sidebar).
+
+    Returns: {"count": N}. Session IDs are not in the response — the frontend
+    receives them via the `sessions_bulk_archived` WS broadcast.
+    """
+    if request.method != "POST":
+        return HttpResponseNotAllowed(["POST"])
+
+    try:
+        data = orjson.loads(request.body)
+    except orjson.JSONDecodeError:
+        return JsonResponse({"error": "Invalid JSON"}, status=400)
+
+    older_than_iso = data.get("older_than")
+    scope_type = data.get("scope")
+    project_id = data.get("project_id")
+    workspace_id = data.get("workspace_id")
+    dry_run = bool(data.get("dry_run", False))
+
+    if not older_than_iso:
+        return JsonResponse({"error": "older_than is required"}, status=400)
+    if scope_type not in ("project", "workspace", "all"):
+        return JsonResponse({"error": "Invalid scope"}, status=400)
+    if scope_type == "project" and not project_id:
+        return JsonResponse({"error": "project_id required for scope=project"}, status=400)
+    if scope_type == "workspace" and not workspace_id:
+        return JsonResponse({"error": "workspace_id required for scope=workspace"}, status=400)
+
+    try:
+        older_than_epoch = datetime.fromisoformat(
+            older_than_iso.replace("Z", "+00:00")
+        ).timestamp()
+    except (ValueError, AttributeError, TypeError):
+        return JsonResponse({"error": "Invalid older_than format"}, status=400)
+
+    active_ids = {
+        info.session_id
+        for info in get_agent_manager_registry().get_active_agents()
+    }
+
+    qs = Session.objects.filter(
+        type=SessionType.SESSION,
+        user_message_count__gt=0,
+        created_at__isnull=False,
+        archived=False,
+        pinned__isnull=True,
+        mtime__lt=older_than_epoch,
+    ).exclude(id__in=active_ids)
+
+    if scope_type == "project":
+        qs = qs.filter(project_id=project_id)
+    elif scope_type == "workspace":
+        ws_data = read_workspaces()
+        ws = next(
+            (w for w in ws_data.get("workspaces", []) if w["id"] == workspace_id),
+            None,
+        )
+        if ws is None:
+            return JsonResponse({"error": "Workspace not found"}, status=404)
+        qs = qs.filter(project_id__in=ws.get("projectIds", []))
+    # scope_type == "all": no additional filter
+
+    if dry_run:
+        return JsonResponse({"count": qs.count()})
+
+    # Capture IDs before UPDATE (queryset becomes empty after).
+    # Re-check active_ids just before UPDATE to close the TOCTOU window.
+    ids = set(qs.values_list("id", flat=True))
+    active_ids_now = {
+        info.session_id
+        for info in get_agent_manager_registry().get_active_agents()
+    }
+    ids -= active_ids_now
+
+    Session.objects.filter(id__in=ids).update(archived=True)
+
+    if ids:
+        channel_layer = get_channel_layer()
+        async_to_sync(channel_layer.group_send)("updates", {
+            "type": "broadcast",
+            "data": {
+                "type": "sessions_bulk_archived",
+                "session_ids": list(ids),
+            },
+        })
+
+        ids_snapshot = list(ids)
+
+        def post_archive_work():
+            for sid in ids_snapshot:
+                try:
+                    if search.is_initialized():
+                        search.reindex_session(sid)
+                except Exception:
+                    logger.exception("bulk archive: reindex failed for session %s", sid)
+                try:
+                    kill_all_tmux_terminals(f"s:{sid}")
+                except Exception:
+                    logger.exception("bulk archive: tmux cleanup failed for session %s", sid)
+            close_old_connections()
+
+        threading.Thread(target=post_archive_work, daemon=True, name="bulk-archive-cleanup").start()
+
+    return JsonResponse({"count": len(ids)})
 
 
 def session_items(request, project_id, session_id, parent_session_id=None):

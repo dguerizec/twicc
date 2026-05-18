@@ -19,6 +19,7 @@ import { useWorkspacesStore } from '../../stores/workspaces'
 import { apiFetch } from '../../utils/api'
 import { debounce } from '../../utils/debounce'
 import { formatDate } from '../../utils/date'
+import { presetToDate } from '../../utils/datePresets'
 import { pendingSessionSearch } from '../../utils/pendingSearch'
 import { SESSION_TIME_FORMAT } from '../../constants'
 import ProjectBadge from '../project/ProjectBadge.vue'
@@ -145,23 +146,6 @@ const activeFilterCount = computed(() => {
     if (filters.includeArchived) count++
     return count
 })
-
-// Convert a duration preset (e.g. '7d', '3m') to an ISO timestamp in the past.
-function presetToDate(preset) {
-    const d = new Date()
-    switch (preset) {
-        case '3d': d.setDate(d.getDate() - 3); break
-        case '7d': d.setDate(d.getDate() - 7); break
-        case '10d': d.setDate(d.getDate() - 10); break
-        case '20d': d.setDate(d.getDate() - 20); break
-        case '30d': d.setDate(d.getDate() - 30); break
-        case '2m': d.setMonth(d.getMonth() - 2); break
-        case '3m': d.setMonth(d.getMonth() - 3); break
-        case '6m': d.setMonth(d.getMonth() - 6); break
-        default: return null
-    }
-    return d.toISOString()
-}
 
 // Compute date range from the two preset bounds.
 // `newerThan` -> backend `after`  (keep items younger than X)
