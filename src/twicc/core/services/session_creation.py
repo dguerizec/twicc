@@ -21,6 +21,7 @@ from asgiref.sync import sync_to_async
 from twicc.core.enums import Provider
 from twicc.pending_agent_settings import set_pending_agent_settings
 from twicc.pending_titles import set_pending_title
+from twicc.projects import register_project
 from twicc.providers.helpers import AgentSettings, get_provider_helpers
 from twicc.providers.state import (
     ProviderDisabledError,
@@ -48,7 +49,15 @@ async def create_session_from_payload(payload: dict) -> SessionCreationResult:
     Expected keys in ``payload``:
     - ``session_id``: client-supplied UUID (used as Claude Code session id;
       Codex mints its own and the canonical id is returned).
-    - ``project_id``: must exist in DB with ``directory`` set.
+    - ``project_id``: project identifier (must exist in DB unless
+      ``directory`` is also provided — see next entry).
+    - ``directory``: optional. When present (CLI flow), the server creates
+      the Project here via :func:`twicc.projects.register_project` if it
+      doesn't exist yet. This is what makes ``project_added`` and
+      ``workspaces_updated`` broadcasts originate from the main process,
+      where they can reach connected UI clients live (the CLI runs in a
+      separate process and can't broadcast itself). UI flow omits this
+      key — the Project is then required to exist already.
     - ``provider``: string value of ``Provider`` enum.
     - ``text``: non-empty for new sessions.
     - ``title``: optional, max 200 chars.
@@ -59,6 +68,7 @@ async def create_session_from_payload(payload: dict) -> SessionCreationResult:
     # --- payload extraction (defensive, no schema validation) ----
     session_id = payload.get("session_id")
     project_id = payload.get("project_id")
+    directory_hint = payload.get("directory")
     provider_str = payload.get("provider")
     text = (payload.get("text") or "").strip()
     title = payload.get("title")
@@ -93,15 +103,28 @@ async def create_session_from_payload(payload: dict) -> SessionCreationResult:
             SessionCreationError("provider", "provider_disabled", str(e))
         ])
 
-    # --- project directory ----------------------------------------
+    # --- project resolution / creation ---------------------------
+    # CLI flow (``directory`` provided): get-or-create the Project here so
+    # ``project_added`` + workspace auto-add broadcasts fire from the main
+    # process. ``register_project`` also adopts the directory if the row
+    # existed but had none yet (typical of claude_code/initial_sync rows
+    # before background compute filled in the cwd).
+    #
+    # UI flow (no ``directory`` in payload): the Project is expected to
+    # exist in DB already (created via ``POST /api/projects/`` or detected
+    # by the sessions watcher).
     from twicc.core.models import Project
-    try:
-        project = await sync_to_async(Project.objects.get)(id=project_id)
-    except Project.DoesNotExist:
-        return SessionCreationResult(False, None, None, None, [
-            SessionCreationError("project_id", "project_not_found",
-                                  f"Project {project_id!r} not found")
-        ])
+    if directory_hint:
+        project, _ = await register_project(project_id, directory=directory_hint)
+    else:
+        try:
+            project = await sync_to_async(Project.objects.get)(id=project_id)
+        except Project.DoesNotExist:
+            return SessionCreationResult(False, None, None, None, [
+                SessionCreationError("project_id", "project_not_found",
+                                      f"Project {project_id!r} not found")
+            ])
+
     cwd = project.directory
     if not cwd:
         return SessionCreationResult(False, None, None, None, [

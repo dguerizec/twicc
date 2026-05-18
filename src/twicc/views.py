@@ -22,6 +22,7 @@ from twicc.core.serializers import (
     serialize_session_item_metadata,
 )
 from twicc.paths import path_to_project_id
+from twicc.projects import register_project_sync
 from twicc.providers.state import ProviderDisabledError, ensure_provider_running
 from twicc.providers.helpers import get_provider_helpers, get_provider_helpers_registry
 
@@ -228,31 +229,23 @@ def _create_project(request):
     if color is not None and not isinstance(color, str):
         color = None
 
-    # 6. Create project (IntegrityError guards against race conditions on id/name uniqueness)
+    # 6. Create project — single entry point handles ``project_added``
+    # broadcast and workspace auto-add. IntegrityError can still fire on a
+    # ``name`` collision (the ``id`` collision path goes through the early
+    # exists-check at step 3 and the get_or_create race window below).
     try:
-        project = Project.objects.create(
-            id=project_id,
+        project, created = register_project_sync(
+            project_id,
             directory=resolved,
             name=name,
             color=color or None,
         )
     except IntegrityError:
         return JsonResponse({"error": "A project already exists for this directory"}, status=409)
-
-    # 7. Broadcast via WebSocket
-    from asgiref.sync import async_to_sync
-    from channels.layers import get_channel_layer
-    channel_layer = get_channel_layer()
-    async_to_sync(channel_layer.group_send)(
-        "updates",
-        {
-            "type": "broadcast",
-            "data": {
-                "type": "project_added",
-                "project": serialize_project(project),
-            },
-        },
-    )
+    if not created:
+        # Lost a race with another creator between the early exists-check
+        # and now — same friendly 409 as the early-out.
+        return JsonResponse({"error": "A project already exists for this directory"}, status=409)
 
     return JsonResponse(serialize_project(project), status=201)
 

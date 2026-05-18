@@ -22,6 +22,7 @@ from django.db.models import Max
 from twicc.core.enums import Provider
 from twicc.core.models import Project, Session, SessionType
 from twicc.paths import path_to_project_id
+from twicc.projects import register_project_sync
 from twicc.sync_helpers import check_file_has_content, sync_session_items
 from .helpers import CodexHelpers
 
@@ -229,8 +230,13 @@ def sync_project(
     ) -> Session:
         nonlocal project
         if project is None:
-            project = Project.objects.create(
-                id=project_id,
+            # Codex carries cwd on the first JSONL line, so we can pass it
+            # at creation time and have ``register_project_sync`` run the
+            # workspace auto-add against the canonical directory right away.
+            # The ``project_added`` / ``workspaces_updated`` broadcasts are
+            # no-ops when no WS client is connected yet (typical at startup).
+            project, _ = register_project_sync(
+                project_id,
                 directory=entry.cwd,
                 stale=not os.path.isdir(entry.cwd),
             )

@@ -36,6 +36,7 @@ from channels.layers import get_channel_layer
 from twicc.core.enums import Provider
 from twicc.logging_context import current_provider
 from twicc.startup_progress import broadcast_startup_progress
+from twicc.workspaces import auto_add_project_to_workspaces
 
 if TYPE_CHECKING:
     from twicc.providers.compute_base import BaseSessionCompute
@@ -396,6 +397,14 @@ async def consume_compute_results(
         sessions_since_project_broadcast = 0
         pending_project_ids: set[str] = set()
 
+        # Track which projects we've already evaluated for workspace
+        # auto-add this run. The first ``apply_session_complete`` for a
+        # project sets its directory in DB (via ``ensure_project_directory``
+        # inside ``apply_session_complete``); after that we run the
+        # workspace patterns against it once. Subsequent sessions for the
+        # same project don't change anything pattern-wise, so we skip them.
+        auto_added_project_ids: set[str] = set()
+
         while not ctx.stop_event.is_set():
             # Collect available messages (non-blocking)
             try:
@@ -423,6 +432,22 @@ async def consume_compute_results(
                     project_id = msg.get('project_id')
                     if project_id:
                         pending_project_ids.add(project_id)
+
+                    # First time we see this project in this run, evaluate
+                    # workspace auto-add patterns. ``apply_session_complete``
+                    # has just persisted the directory (Claude Code: from
+                    # JSONL body; Codex: already set at initial_sync) so
+                    # the pattern matching has the canonical cwd to work
+                    # with. Idempotent — the helper no-ops if the project
+                    # is already a member of every matching workspace.
+                    project_directory = msg.get('project_directory')
+                    if (
+                        project_id
+                        and project_directory
+                        and project_id not in auto_added_project_ids
+                    ):
+                        auto_added_project_ids.add(project_id)
+                        await auto_add_project_to_workspaces(project_id, project_directory)
 
                     # Broadcast progress only for real sessions (not subagents)
                     session_id = msg['session_id']

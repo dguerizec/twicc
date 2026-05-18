@@ -16,8 +16,13 @@ from __future__ import annotations
 import logging
 import os
 
+from asgiref.sync import async_to_sync, sync_to_async
+from channels.layers import get_channel_layer
+
 from twicc.core.models import Project, Session, SessionType
+from twicc.core.serializers import serialize_project
 from twicc.git import resolve_git_from_path
+from twicc.workspaces import auto_add_project_to_workspaces
 
 logger = logging.getLogger(__name__)
 
@@ -133,6 +138,121 @@ def ensure_project_git_root(project_id: str, directory: str | None = None) -> No
     # Update DB and cache
     Project.objects.filter(id=project_id).update(git_root=git_root)
     _project_git_roots[project_id] = git_root
+
+
+# =============================================================================
+# Project creation — single entry point
+# =============================================================================
+#
+# Every code path that creates a ``Project`` row goes through one of the two
+# helpers below (``register_project`` async, ``register_project_sync`` sync).
+# They wrap ``Project.objects.get_or_create`` and run the after-creation
+# hooks atomically: WS broadcast of ``project_added`` and workspace
+# auto-add (when the directory is already known).
+#
+# For callers that learn the directory only later (the watcher between
+# ``parse_session_file`` and ``sync_session_items_from_file``, and the
+# claude_code initial sync where the cwd is in the JSONL body), pass
+# ``directory=None`` here and call :func:`auto_add_project_to_workspaces`
+# (or its sync sibling) once the directory has been resolved. That second
+# call is idempotent — a workspace that already lists the project is left
+# untouched and no broadcast fires.
+
+
+def _create_or_get_project(
+    project_id: str,
+    *,
+    directory: str | None = None,
+    name: str | None = None,
+    color: str | None = None,
+    stale: bool | None = None,
+) -> tuple[Project, bool]:
+    """Pure DB operation: get-or-create a Project row.
+
+    Returns ``(project, was_just_created)``. No broadcasts, no auto-add —
+    callers should go through ``register_project`` /
+    ``register_project_sync`` instead, which run the post-creation hooks.
+    """
+    defaults: dict = {}
+    if directory:
+        defaults["directory"] = directory
+    if name is not None:
+        defaults["name"] = name
+    if color is not None:
+        defaults["color"] = color
+    if stale is not None:
+        defaults["stale"] = stale
+    project, created = Project.objects.get_or_create(id=project_id, defaults=defaults)
+    if created and directory:
+        # Mirror the cache update that ``ensure_project_directory`` would do
+        # so subsequent reads don't have to round-trip the DB.
+        _project_directories[project_id] = directory
+    return project, created
+
+
+async def _broadcast_project_added(project: Project) -> None:
+    channel_layer = get_channel_layer()
+    await channel_layer.group_send("updates", {
+        "type": "broadcast",
+        "data": {"type": "project_added", "project": serialize_project(project)},
+    })
+
+
+def _adopt_directory_sync(project: Project, directory: str) -> None:
+    """Patch ``project.directory`` in DB + cache (sync). Caller checks that
+    the project actually lacks a directory before invoking."""
+    project.directory = directory
+    project.save(update_fields=["directory"])
+    _project_directories[project.id] = directory
+
+
+async def register_project(
+    project_id: str,
+    *,
+    directory: str | None = None,
+    name: str | None = None,
+    color: str | None = None,
+    stale: bool | None = None,
+) -> tuple[Project, bool]:
+    """Single entry point for Project creation. Returns ``(project, was_just_created)``.
+
+    On creation:
+
+    1. Broadcasts ``project_added`` via the channel layer.
+    2. If ``directory`` is provided, runs workspace auto-add (which
+       broadcasts ``workspaces_updated`` on hit).
+
+    If the project already exists *without* a directory and one is provided
+    here, the directory is adopted and workspace auto-add is re-evaluated.
+    Common when ``claude_code/initial_sync.py`` created the row before the
+    background compute pass filled the cwd in.
+
+    Pass ``directory=None`` for flows that resolve the directory only after
+    creation (the file watcher between the bare ``get_or_create`` and the
+    JSONL sync that fills in ``cwd``); call
+    :func:`twicc.workspaces.auto_add_project_to_workspaces` once the
+    directory has been set.
+
+    Sync callers use :data:`register_project_sync` (an
+    ``async_to_sync(register_project)`` alias). Broadcasts targeting a
+    channel layer with no subscribers (e.g. initial sync before any WS
+    client is connected) are silent no-ops.
+    """
+    project, created = await sync_to_async(_create_or_get_project)(
+        project_id,
+        directory=directory, name=name, color=color, stale=stale,
+    )
+    if created:
+        await _broadcast_project_added(project)
+    elif directory and not project.directory:
+        await sync_to_async(_adopt_directory_sync)(project, directory)
+    if project.directory:
+        await auto_add_project_to_workspaces(project.id, project.directory)
+
+    return project, created
+
+
+register_project_sync = async_to_sync(register_project)
 
 
 def update_project_total_cost(project_id: str) -> None:

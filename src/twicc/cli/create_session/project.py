@@ -1,7 +1,12 @@
-"""Resolve the ``--project`` argument to a ``Project`` row.
+"""Resolve the ``--project`` argument to a ``(project_id, directory)`` pair.
 
 Heuristic:
-- ``os.path.isdir(value)`` → path. Resolve realpath, ``get_or_create``.
+- ``os.path.isdir(value)`` → path. Resolve realpath and derive the canonical
+  ``project_id`` via ``path_to_project_id``. No DB write — actual Project
+  creation happens server-side in :func:`create_session_from_payload`,
+  which runs inside the TwiCC server's main process and can therefore
+  broadcast ``project_added`` / ``workspaces_updated`` over WS while UI
+  clients are connected.
 - otherwise → project id. Try ``value`` first, then ``"-" + value``
   (sucre syntaxique for the common case where the id starts with a
   dash from a leading ``/`` in the original path).
@@ -21,7 +26,9 @@ class ProjectError(Exception):
 class ResolvedProject(NamedTuple):
     project_id: str
     directory: str
-    created: bool
+    # True when the project was already in DB at resolution time. False means
+    # the server will create it from the drop-file payload.
+    existed: bool
 
 
 def resolve_project(project_arg: str | None) -> ResolvedProject:
@@ -34,16 +41,12 @@ def resolve_project(project_arg: str | None) -> ResolvedProject:
     if os.path.isdir(project_arg):
         resolved_dir = os.path.realpath(project_arg)
         project_id = path_to_project_id(resolved_dir)
-        project, created = Project.objects.get_or_create(
-            id=project_id,
-            defaults={"directory": resolved_dir},
+        existed = Project.objects.filter(id=project_id).exists()
+        return ResolvedProject(
+            project_id=project_id,
+            directory=resolved_dir,
+            existed=existed,
         )
-        if not project.directory:
-            project.directory = resolved_dir
-            project.save(update_fields=["directory"])
-        return ResolvedProject(project_id=project.id,
-                               directory=project.directory,
-                               created=created)
 
     # Treat as canonical id. Try the value as-is, then with a leading "-".
     for candidate in (project_arg, "-" + project_arg):
@@ -55,9 +58,11 @@ def resolve_project(project_arg: str | None) -> ResolvedProject:
             raise ProjectError(
                 f"--project: project {project.id!r} exists but has no directory set"
             )
-        return ResolvedProject(project_id=project.id,
-                               directory=project.directory,
-                               created=False)
+        return ResolvedProject(
+            project_id=project.id,
+            directory=project.directory,
+            existed=True,
+        )
 
     raise ProjectError(
         f"--project: {project_arg!r} is neither an existing directory "

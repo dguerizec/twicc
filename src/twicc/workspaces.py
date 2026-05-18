@@ -8,6 +8,7 @@ filter configuration. They are stored as a simple JSON object in
 Follow the exact same pattern as synced_settings.py.
 """
 
+import asyncio
 import logging
 import os
 import re
@@ -20,6 +21,14 @@ from channels.layers import get_channel_layer
 from twicc.paths import get_workspaces_path
 
 logger = logging.getLogger(__name__)
+
+
+# Serializes the read-modify-write cycle on workspaces.json across the main
+# process: ``auto_add_project_to_workspaces`` (watcher, views, …) and
+# ``_handle_update_workspaces`` (WS handler that writes whole-blob updates
+# from the UI) must not interleave their reads and writes, or one side's
+# changes get clobbered.
+_workspaces_lock = asyncio.Lock()
 
 
 def read_workspaces() -> dict:
@@ -68,28 +77,41 @@ def match_pattern(directory: str, pattern: str) -> bool:
 
 
 async def auto_add_project_to_workspaces(project_id: str, directory: str) -> None:
-    """Auto-add a newly detected project to workspaces whose patterns match its directory.
+    """Auto-add a newly detected project to workspaces whose patterns match
+    its directory.
 
-    Acquires ``_workspaces_lock`` for the read-modify-write cycle, then
-    broadcasts ``workspaces_updated`` (outside the lock) if any workspace
-    was modified.
+    The read-modify-write on ``workspaces.json`` runs inside
+    ``_workspaces_lock`` so a concurrent ``_handle_update_workspaces``
+    (whole-blob writes from the UI) can't clobber the appended project_id
+    (and vice versa). If at least one workspace was modified, broadcasts
+    ``workspaces_updated`` outside the lock.
+
+    Idempotent: a workspace that already lists the project is skipped, no
+    write, no broadcast.
     """
-    data = await sync_to_async(read_workspaces)()
-    workspaces = data.get("workspaces", [])
-    modified = False
-    for ws in workspaces:
-        patterns = ws.get("autoProjectPatterns", [])
-        if not patterns or project_id in ws.get("projectIds", []):
-            continue
-        if any(match_pattern(directory, p) for p in patterns):
-            ws.setdefault("projectIds", []).append(project_id)
-            modified = True
-            logger.info("Auto-added project %s to workspace %r", project_id, ws.get("name", ws.get("id")))
-    if not modified:
-        return
-    await sync_to_async(write_workspaces)(data)
+    def _read_modify_write() -> list[dict] | None:
+        data = read_workspaces()
+        workspaces = data.get("workspaces", [])
+        modified = False
+        for ws in workspaces:
+            patterns = ws.get("autoProjectPatterns", [])
+            if not patterns or project_id in ws.get("projectIds", []):
+                continue
+            if any(match_pattern(directory, p) for p in patterns):
+                ws.setdefault("projectIds", []).append(project_id)
+                modified = True
+                logger.info("Auto-added project %s to workspace %r",
+                            project_id, ws.get("name", ws.get("id")))
+        if not modified:
+            return None
+        write_workspaces(data)
+        return workspaces
 
-    #
+    async with _workspaces_lock:
+        workspaces = await sync_to_async(_read_modify_write)()
+    if workspaces is None:
+        return
+
     channel_layer = get_channel_layer()
     await channel_layer.group_send("updates", {
         "type": "broadcast",

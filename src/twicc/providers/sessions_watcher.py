@@ -40,9 +40,11 @@ from twicc.core.serializers import (
 from twicc.projects import (
     load_project_directories,
     load_project_git_roots,
+    register_project,
     update_project_metadata as _update_project_metadata_sync,
 )
 from twicc.providers.helpers import AgentSettings, get_provider_helpers
+from twicc.workspaces import auto_add_project_to_workspaces
 
 if TYPE_CHECKING:
     from twicc.providers.compute_base import BaseSessionCompute, ToolResultUpdate
@@ -90,12 +92,6 @@ class ParsedSessionFile:
 
 
 # ---- @sync_to_async helpers (stateless, no provider coupling) ----
-
-@sync_to_async
-def get_or_create_project(project_id: str) -> tuple[Project, bool]:
-    """Get or create a project in the database."""
-    return Project.objects.get_or_create(id=project_id)
-
 
 @sync_to_async
 def update_project_metadata(project: Project) -> None:
@@ -466,13 +462,21 @@ class BaseSessionsWatcher:
         # Check if session already exists in DB
         session = await get_session_by_id(parsed.session_id)
 
-        # Ensure project exists first
-        project, project_created = await get_or_create_project(parsed.project_id)
-        if project_created:
-            await broadcast_message(channel_layer, {
-                "type": "project_added",
-                "project": serialize_project(project),
-            })
+        # For new sessions, check that the file has content BEFORE creating
+        # the Project row. Otherwise we'd create the project on the empty-file
+        # event, return early, and the next event (file now populated) would
+        # see ``project_created=False`` — silently skipping the workspace
+        # auto-add at the end of this method forever.
+        if session is None:
+            has_content = await check_file_has_content_async(path)
+            if not has_content:
+                return
+
+        # Ensure project exists. ``register_project`` broadcasts
+        # ``project_added`` on creation. Auto-add is deferred until after
+        # ``sync_session_items_from_file`` has resolved the directory from
+        # the JSONL body — see the explicit call at the end of this method.
+        project, project_created = await register_project(parsed.project_id)
 
         # Track whether this session was just created via TwiCC (had pending settings).
         # Used below to broadcast an early session_updated even before the user message
@@ -480,12 +484,6 @@ class BaseSessionsWatcher:
         pending_agent_settings: AgentSettings | None = None
 
         if session is None:
-            # New file - check if it has content before creating
-            has_content = await check_file_has_content_async(path)
-            if not has_content:
-                # Empty file (0 lines) - ignore completely
-                return
-
             # Provider-specific initial title (e.g. read from Codex state DB).
             # Mutate parsed in place — it's local to this call.
             if parsed.title is None:
@@ -643,12 +641,14 @@ class BaseSessionsWatcher:
                 "session": serialize_session(session),
             })
 
-        # Auto-add newly created project to workspaces whose patterns match its directory.
+        # Auto-add newly created project to workspaces whose patterns match
+        # its directory. Deferred to here (rather than into
+        # ``register_project`` above) because the directory is only resolved
+        # by ``sync_session_items_from_file`` — at creation time the watcher
+        # only knows ``project_id``, not the cwd.
         if project_created:
             project = await refresh_project(project)
             if project.directory:
-                from twicc.workspaces import auto_add_project_to_workspaces
-
                 await auto_add_project_to_workspaces(project.id, project.directory)
 
     # ------------------------------------------------------------------

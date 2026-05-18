@@ -255,10 +255,6 @@ def create_session_cmd(
     to the current directory as the project, and lets the defaults from
     settings drive model / effort / permission mode / etc.
     """
-    # --json forces --no-color: a single JSON line never carries ANSI codes.
-    if json_output:
-        no_color = True
-
     # Lazy imports to keep --help fast (no Django setup until we need it).
     import os
     os.environ.setdefault("DJANGO_SETTINGS_MODULE", "twicc.settings")
@@ -359,7 +355,7 @@ def create_session_cmd(
     emit_progress(f"✓ Prompt resolved ({len(text)} chars)", json_output=json_output)
     emit_progress(
         f"✓ Project {resolved_project.project_id!r} "
-        f"({'created' if resolved_project.created else 'existing'})",
+        f"({'existing' if resolved_project.existed else 'new'})",
         json_output=json_output,
     )
 
@@ -411,9 +407,14 @@ def create_session_cmd(
     )
     emit_attachment_summary(attach_result.summary, json_output=json_output)
 
-    # Build the WS-compatible payload.
+    # Build the WS-compatible payload. ``directory`` is passed alongside
+    # ``project_id`` so the server (PendingSessionsWatcher → service) can
+    # auto-create the Project from inside the main process — that's where
+    # the WS broadcasts of ``project_added`` and ``workspaces_updated``
+    # need to originate to reach connected UI clients live.
     payload = {
         "project_id": resolved_project.project_id,
+        "directory": resolved_project.directory,
         "provider": provider,
         "text": text,
         "title": title,

@@ -1345,10 +1345,16 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
         if not isinstance(workspaces, list):
             return
 
+        from twicc.workspaces import _workspaces_lock
+
         def _write():
             write_workspaces({"workspaces": workspaces})
 
-        await sync_to_async(_write)()
+        # Serialize with auto-add (watcher / views) so a concurrent
+        # ``auto_add_project_to_workspaces`` doesn't read a stale snapshot,
+        # append a project, and overwrite this whole-blob update.
+        async with _workspaces_lock:
+            await sync_to_async(_write)()
 
         await self.channel_layer.group_send(
             "updates",

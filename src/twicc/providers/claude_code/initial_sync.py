@@ -17,7 +17,7 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from twicc.projects import ensure_project_git_root, update_project_total_cost
+from twicc.projects import ensure_project_git_root, register_project_sync, update_project_total_cost
 from twicc.sync_helpers import check_file_has_content, sync_session_items
 from .helpers import ClaudeCodeHelpers
 from twicc.core.enums import Provider
@@ -237,9 +237,15 @@ def sync_project(
                     on_session_progress(session_id, idx, total_sessions)
                 continue
 
-            # File has content — ensure project exists before creating session
+            # File has content — ensure project exists before creating
+            # session. We can't pass the directory here (Claude Code stores
+            # it in the JSONL body, not the project folder name); it gets
+            # filled in later by the background compute path, which also
+            # re-runs workspace auto-add at that point. The ``project_added``
+            # broadcast is a no-op when no WS client is connected yet
+            # (typical at startup).
             if project is None:
-                project = Project.objects.create(id=project_id)
+                project, _ = register_project_sync(project_id)
                 stats["project_created"] = 1
 
             session = Session(
