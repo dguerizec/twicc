@@ -342,12 +342,18 @@ export function formatComment(comment, { isSelectedText = false, sourceLabel = '
         // When the selection comes from a code editor we include the source file and
         // line range so the message is unambiguous (especially for agents reading it):
         // the quoted content is only an excerpt of those lines, not the full lines.
+        // When only the file path is known (e.g. selection in a rendered markdown
+        // preview) we still surface it without a line range.
         let location = ''
-        if (comment.filePath && comment.lineFrom != null) {
-            const range = comment.lineFrom === comment.lineTo
-                ? `line ${comment.lineFrom}`
-                : `lines ${comment.lineFrom}-${comment.lineTo}`
-            location = ` from **\`${comment.filePath}\`** ${range}`
+        if (comment.filePath) {
+            if (comment.lineFrom != null) {
+                const range = comment.lineFrom === comment.lineTo
+                    ? `line ${comment.lineFrom}`
+                    : `lines ${comment.lineFrom}-${comment.lineTo}`
+                location = ` from **\`${comment.filePath}\`** ${range}`
+            } else {
+                location = ` from **\`${comment.filePath}\`**`
+            }
         }
         const header = hasComment
             ? `Comment on selected text${location}${suffix}:`

@@ -43,10 +43,14 @@ function getSelectionPosition() {
  *   work around Firefox + CodeMirror cases where the DOM native selection isn't kept in
  *   sync with CodeMirror's internal selection. Should return null when no relevant
  *   selection is active.
+ * @param {(anchor: Node) => (object | null)} [options.enrichNativeMetadata] -
+ *   Optional hook called when the native (window.getSelection) path produces a result.
+ *   Receives the anchor node and returns metadata to attach (e.g. file path for a
+ *   selection inside a rendered markdown preview).
  * @param {Ref<boolean>|ComputedRef<boolean>} options.enabled - When false, all listeners
  *   are detached and the widget is closed.
  */
-export function useTextSelectionComment({ containerRef, isInScope = null, getSelectionOverride = null, enabled }) {
+export function useTextSelectionComment({ containerRef, isInScope = null, getSelectionOverride = null, enrichNativeMetadata = null, enabled }) {
     const textSelectionCommentRef = ref(null)
     const textSelectionText = ref('')
     const textSelectionPosition = ref(null)
@@ -112,10 +116,14 @@ export function useTextSelectionComment({ containerRef, isInScope = null, getSel
         const rect = range.getBoundingClientRect()
         if (!rect.width && !rect.height) return null
         const above = isSelectionBackward(sel) && rect.height > 30
+        const metadata = typeof enrichNativeMetadata === 'function'
+            ? (enrichNativeMetadata(sel.anchorNode) ?? null)
+            : null
         return {
             text,
             anchor: sel.anchorNode,
             nativeSelection: sel,
+            metadata,
             position: {
                 top: above ? rect.top : rect.bottom,
                 left: rect.left + rect.width / 2,

@@ -295,6 +295,18 @@ function getCmSelectionOverride() {
     return null
 }
 
+function getMarkdownPreviewMetadata(anchor) {
+    // Selections inside the rendered markdown preview don't carry line numbers
+    // (the source line range isn't recoverable from rendered HTML), but we can
+    // still surface the file path to disambiguate the message.
+    if (!anchor || !props.filePath) return null
+    const el = anchor.nodeType === Node.ELEMENT_NODE ? anchor : anchor.parentElement
+    if (el?.closest?.('.markdown-preview-container')) {
+        return { filePath: props.filePath }
+    }
+    return null
+}
+
 const {
     textSelectionCommentRef,
     textSelectionText,
@@ -305,6 +317,7 @@ const {
 } = useTextSelectionComment({
     containerRef: editorAreaRef,
     getSelectionOverride: getCmSelectionOverride,
+    enrichNativeMetadata: getMarkdownPreviewMetadata,
     enabled: computed(() => !!insertTextAtCursor),
 })
 
