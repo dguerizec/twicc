@@ -536,6 +536,44 @@ function selectOption(questionIndex, label, multiSelect) {
 }
 
 /**
+ * Handle keyboard navigation and selection on option cards.
+ * Enter/Space select; ArrowLeft/Right wrap-navigate within the question;
+ * Home/End jump to first/last card.
+ */
+function handleOptionKeydown(event, qIndex, option, multiSelect) {
+    if (props.isResponding) return
+
+    const key = event.key
+
+    if (key === 'Enter' || key === ' ') {
+        event.preventDefault()
+        selectOption(qIndex, option.label, multiSelect)
+        return
+    }
+
+    if (key === 'ArrowLeft' || key === 'ArrowRight' || key === 'Home' || key === 'End') {
+        const currentCard = event.currentTarget
+        const container = currentCard.parentElement
+        if (!container) return
+        const cards = Array.from(container.querySelectorAll(':scope > .option-card'))
+        const currentIndex = cards.indexOf(currentCard)
+        if (currentIndex === -1) return
+        event.preventDefault()
+        let targetIndex
+        if (key === 'ArrowLeft') {
+            targetIndex = (currentIndex - 1 + cards.length) % cards.length
+        } else if (key === 'ArrowRight') {
+            targetIndex = (currentIndex + 1) % cards.length
+        } else if (key === 'Home') {
+            targetIndex = 0
+        } else {
+            targetIndex = cards.length - 1
+        }
+        cards[targetIndex].focus()
+    }
+}
+
+/**
  * Check if an option is currently selected for a question.
  *
  * @param {number} questionIndex - Index in the questions array
@@ -832,7 +870,12 @@ function handleSubmitQuestions() {
                         appearance="outlined"
                         class="option-card"
                         :class="{ selected: isOptionSelected(qIndex, option.label, question.multiSelect), disabled: isResponding }"
+                        role="button"
+                        :tabindex="isResponding ? -1 : 0"
+                        :aria-pressed="isOptionSelected(qIndex, option.label, question.multiSelect) ? 'true' : 'false'"
+                        :aria-disabled="isResponding ? 'true' : null"
                         @click="!isResponding && selectOption(qIndex, option.label, question.multiSelect)"
+                        @keydown="handleOptionKeydown($event, qIndex, option, question.multiSelect)"
                     >
                         <div class="option-card-content">
                             <span class="option-label">{{ option.label }}</span>
@@ -1092,6 +1135,11 @@ wa-button.auto-focused::part(base):focus {
 .option-card.disabled {
     opacity: 0.6;
     cursor: not-allowed;
+}
+
+.option-card:focus-visible {
+    outline: 2px solid var(--wa-color-brand-fill-loud);
+    outline-offset: 2px;
 }
 
 .option-card-content {
