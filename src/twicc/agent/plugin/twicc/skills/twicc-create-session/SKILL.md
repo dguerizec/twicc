@@ -49,7 +49,7 @@ All options are optional. Omitted values fall back to the synced defaults.
 - `--project ID-OR-PATH` — project id (with or without leading dash) or directory (absolute / relative). New directories are auto-created as projects after `realpath` resolution. Defaults to the current working directory.
 - `--provider claude_code|codex` — provider to use. Falls back to the synced `defaultProvider` when omitted.
 - `--preset NAME` — name of a saved agent-settings preset for the chosen provider. Per-flag options below override preset values; unset fields fall back to the synced defaults.
-- `--title TEXT` — custom session title (max 200 chars). When omitted, the title is auto-derived from the prompt.
+- `--title TEXT` — **you MUST always pass this.** A concise 5–7 word title — not necessarily a grammatical sentence, but specific enough that the user can find the session later in a long list. Derive it from the prompt; don't fall back on the auto-derived title (it's rarely as good).
 - `--timeout SECONDS` — how long to wait for the server's final status (default 30). Independent of the session itself — even if the CLI times out, the session may still get created on the server.
 
 ### Agent settings (per provider)
@@ -193,7 +193,7 @@ Use `--tail N` for more turns when needed.
 
 ## How to present results
 
-1. On success, give the user the canonical session id and (when available) a clickable link to the new session: `[link text](/project/{project_id}/session/{session_id})`.
+1. On success, give the user the title you set, the canonical session id, and (when available) a clickable link to the new session: `[link text](/project/{project_id}/session/{session_id})`.
 2. On a validation error, summarise the failing fields and the expected values — don't just dump the raw output.
 3. If the server is down (exit 2), tell the user to start TwiCC (`twicc` in another terminal) and offer to retry.
 4. If the request was rejected (exit 3), parse `errors[].code` from JSON mode to give a precise diagnosis:
