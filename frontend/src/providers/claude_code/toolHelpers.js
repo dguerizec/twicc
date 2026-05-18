@@ -142,7 +142,7 @@ function tasksDataToTodos(tasksData) {
  * Build the ``parts`` array consumed by ``TodoSummary`` for the three
  * by-id task tools (TaskCreate / TaskUpdate / TaskGet).
  *
- *   - TaskCreate → ``[{text: '#<id>'}, {text: subject, status: 'pending'}]``
+ *   - TaskCreate → ``[{text: '<id>'}, {text: subject, status: 'pending'}]``
  *     (the id slot is dropped when the backend couldn't resolve it — e.g.
  *     the task file isn't on disk yet during a live race).
  *   - TaskUpdate → ``[{text: '<id>/<total>'}, {text: activeForm || subject,
@@ -169,7 +169,7 @@ function buildTaskSummaryParts(name, input, options) {
         if (!subject) return null
         const id = taskData?.id ?? null
         const parts = []
-        if (id != null) parts.push({ text: `#${id}` })
+        if (id != null) parts.push({ text: `${id}` })
         parts.push({ text: subject, status: 'pending' })
         return parts
     }
@@ -178,7 +178,7 @@ function buildTaskSummaryParts(name, input, options) {
     const taskId = safeInput.taskId
     if (taskId == null) return null
 
-    const counter = tasksTotal != null ? `${taskId}/${tasksTotal}` : `#${taskId}`
+    const counter = tasksTotal != null ? `${taskId}/${tasksTotal}` : `${taskId}`
 
     let label = null
     let status = null
