@@ -543,10 +543,13 @@ function handleCancelTurn() {
     gap: var(--wa-space-s);
 }
 
-/* Always show the focus outline on this button (mirrors Web Awesome's :focus-visible
-   style). Default :focus-visible would skip mouse and programmatic focus — we want
-   the auto-focused Approve button to make its focused state obvious for everyone. */
-wa-button.auto-focused::part(base):focus {
+/* Always show the focus outline on the Approve dropdown trigger. Default
+   :focus-visible would skip mouse and programmatic focus, which hides the
+   indicator we want for this primary action.
+   We use :focus-within (not :focus) because wa-button delegates focus to an
+   inner element in its shadow DOM; the host doesn't carry :focus, but the
+   browser keeps :focus-within accurate via activeElement. */
+wa-button.auto-focused:focus-within::part(base) {
     outline: var(--wa-focus-ring);
     outline-offset: var(--wa-focus-ring-offset);
 }

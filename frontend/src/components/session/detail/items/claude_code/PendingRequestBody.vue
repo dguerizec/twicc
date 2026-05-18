@@ -191,24 +191,31 @@ watch(() => props.pendingRequest?.request_id, () => {
     Object.keys(questionSelections).forEach(k => delete questionSelections[k])
     Object.keys(otherTexts).forEach(k => delete otherTexts[k])
     Object.keys(otherActive).forEach(k => delete otherActive[k])
-    // Re-focus the Approve button for the new request
-    focusApproveButton()
+    // Re-focus the primary target for the new request
+    focusPrimaryTarget()
 })
 
-// Auto-focus the Approve button when the approval block appears or a new request arrives.
-// Scoped to tool_approval — ask_user_question intentionally doesn't grab focus.
-// Also gated by canStealFocus(): we don't yank focus when the user is typing
-// in another field or has an overlay (dialog/popover/dropdown/text-selection
+// Auto-focus the primary target when the pending request block appears or a new
+// request arrives:
+//   - tool_approval     → Approve button (approveButtonRef)
+//   - ask_user_question → first option-card of the first question
+//     (already marked with the `auto-focused` class in the template)
+// Gated by canStealFocus(): we don't yank focus when the user is typing in
+// another field or has an overlay (dialog/popover/dropdown/text-selection
 // comment) open. The matching outline is driven by CSS — see the style block.
-function focusApproveButton() {
-    if (requestType.value !== 'tool_approval') return
+function focusPrimaryTarget() {
+    if (!['tool_approval', 'ask_user_question'].includes(requestType.value)) return
     nextTick(() => {
         if (!canStealFocus()) return
-        approveButtonRef.value?.focus()
+        if (requestType.value === 'tool_approval') {
+            approveButtonRef.value?.focus()
+        } else {
+            document.querySelector('.pending-request-form .option-card.auto-focused')?.focus()
+        }
     })
 }
 
-onMounted(focusApproveButton)
+onMounted(focusPrimaryTarget)
 
 // ============================================================================
 // Tool approval computed
@@ -803,7 +810,7 @@ function handleSubmitQuestions() {
                         :value.prop="denyReason"
                         @input="denyReason = $event.target.value"
                         @keydown="onDenyReasonKeydown"
-                        class="deny-reason-input"
+                        class="deny-reason-input auto-focused"
                     ></wa-textarea>
                     <wa-button
                         variant="neutral"
@@ -836,6 +843,7 @@ function handleSubmitQuestions() {
                     Cancel
                 </wa-button>
                 <wa-button
+                    class="auto-focused"
                     variant="brand"
                     size="small"
                     :disabled="isResponding"
@@ -865,11 +873,15 @@ function handleSubmitQuestions() {
                 <!-- Options as selectable cards -->
                 <div class="question-options">
                     <wa-card
-                        v-for="option in question.options"
+                        v-for="(option, optionIndex) in question.options"
                         :key="option.label"
                         appearance="outlined"
                         class="option-card"
-                        :class="{ selected: isOptionSelected(qIndex, option.label, question.multiSelect), disabled: isResponding }"
+                        :class="{
+                            selected: isOptionSelected(qIndex, option.label, question.multiSelect),
+                            disabled: isResponding,
+                            'auto-focused': qIndex === 0 && optionIndex === 0,
+                        }"
                         role="button"
                         :tabindex="isResponding ? -1 : 0"
                         :aria-pressed="isOptionSelected(qIndex, option.label, question.multiSelect) ? 'true' : 'false'"
@@ -1031,12 +1043,29 @@ function handleSubmitQuestions() {
     max-width: 24rem;
 }
 
-/* Always show the focus outline on this button (mirrors Web Awesome's :focus-visible
-   style). Default :focus-visible would skip mouse and programmatic focus — we want
-   the auto-focused Approve button to make its focused state obvious for everyone. */
-wa-button.auto-focused::part(base):focus {
+/* Always show the focus outline on the primary target of the form (initial Approve,
+   "Approve with changes" in edit mode, deny reason textarea, first option-card).
+   The `auto-focused` class is placed statically on these elements; the rules below
+   render the outline whenever focus lands on them, regardless of how it got there
+   (programmatic from Alt+Shift+M or component auto-focus, keyboard tab, or mouse
+   click). Default :focus-visible would skip mouse and programmatic focus, which
+   hides the indicator we want for these primary actions.
+   We use :focus-within (not :focus) because wa-button / wa-textarea delegate focus
+   to an element in their shadow DOM; the host doesn't carry :focus, but the browser
+   keeps :focus-within accurate via activeElement. For .option-card (a plain
+   tabindex element), :focus-within is also true while it holds focus, so the same
+   selector works there. */
+wa-button.auto-focused:focus-within::part(base),
+wa-textarea.auto-focused:focus-within::part(base) {
     outline: var(--wa-focus-ring);
     outline-offset: var(--wa-focus-ring-offset);
+}
+
+/* Match the existing .option-card:focus-visible style so Alt+Shift+M and Tab focus
+   look identical on the same card. */
+.option-card.auto-focused:focus-within {
+    outline: 2px solid var(--wa-color-brand-fill-loud);
+    outline-offset: 2px;
 }
 
 .pending-request-actions {
