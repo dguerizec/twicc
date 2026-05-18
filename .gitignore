@@ -263,6 +263,7 @@ workspaces.json
 
 # Agent local files
 CLAUDE.local.md
+AGENTS.local.md
 /.claude/
 .superpowers/
 .codex
