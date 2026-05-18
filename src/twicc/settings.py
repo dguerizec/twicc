@@ -219,3 +219,18 @@ PROCESS_TIMEOUT_ASSISTANT_TURN_ABSOLUTE = 6 * 60 * 60  # 6 hours - max total dur
 # Set TWICC_NO_CRON_RESTART=1 to disable automatic restart of cron jobs,
 # both at startup (for sessions with persisted crons) and when recurring crons expire.
 CRON_AUTO_RESTART = os.environ.get("TWICC_NO_CRON_RESTART", "").strip().lower() not in ("1", "true", "yes")
+
+# Codex plugin install
+# Set TWICC_NO_CODEX_PLUGIN=1 to skip ``ensure_twicc_plugin_installed`` at Codex
+# orchestrator start. ``~/.codex/config.toml`` is global and already managed by
+# the main install — worktrees set this flag so they don't race on it.
+CODEX_PLUGIN_INSTALL_ENABLED = os.environ.get("TWICC_NO_CODEX_PLUGIN", "").strip().lower() not in ("1", "true", "yes")
+
+# Auto-enable every registered provider at first boot
+# Set TWICC_AUTO_ENABLE_PROVIDERS=1 to bypass the initial provider activation
+# dialog: at backend startup, if ``disabledProviders`` is absent from
+# settings.json, ``apply_auto_enable_providers_bootstrap()`` writes an empty
+# list (equivalent to validating the dialog with every provider checked).
+# Idempotent once the key exists, so user toggles from Settings are preserved.
+# Used by devctl in worktree mode so dev servers come up without prompting.
+AUTO_ENABLE_PROVIDERS = os.environ.get("TWICC_AUTO_ENABLE_PROVIDERS", "").strip().lower() in ("1", "true", "yes")

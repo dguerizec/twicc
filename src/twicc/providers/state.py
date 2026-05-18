@@ -121,6 +121,35 @@ def is_provider_enabled(provider: Provider) -> bool:
     return provider in get_enabled_providers()
 
 
+def apply_auto_enable_providers_bootstrap() -> None:
+    """Simulate the activation dialog being validated with every provider checked.
+
+    Runs once at backend startup (cf. :func:`twicc.cli.run.run_server`). When
+    ``TWICC_AUTO_ENABLE_PROVIDERS=1`` is set and the ``disabledProviders`` key
+    is absent from ``settings.json``, writes ``disabledProviders = []`` so the
+    initial activation dialog never opens and every orchestrator starts. The
+    user is still free to toggle providers from Settings afterwards — the
+    one-shot write only seeds the missing initial choice.
+
+    Idempotent: a no-op once the key is present (any prior user choice wins),
+    or when the flag is unset.
+    """
+    from django.conf import settings as django_settings
+
+    if not django_settings.AUTO_ENABLE_PROVIDERS:
+        return
+
+    from twicc.synced_settings import _settings_lock, write_synced_settings
+
+    with _settings_lock:
+        snapshot = read_synced_settings()
+        if "disabledProviders" in snapshot:
+            return
+        snapshot["disabledProviders"] = []
+        write_synced_settings(snapshot)
+    logger.info("Auto-enabled all providers (TWICC_AUTO_ENABLE_PROVIDERS is set)")
+
+
 # ---------------------------------------------------------------------------
 # Runtime layer (in-memory)
 # ---------------------------------------------------------------------------

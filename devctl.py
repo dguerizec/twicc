@@ -295,7 +295,18 @@ def get_process_config(backend_port: int, frontend_port: int) -> dict:
                 #   (browsers share cookies across ports).
                 # - Disable cron auto-restart (worktrees are for development, not for running
                 #   persistent cron jobs from previous sessions).
-                **({"TWICC_SESSION_COOKIE": f"sessionid_{backend_port}", "TWICC_NO_CRON_RESTART": "1"} if is_git_worktree() else {}),
+                # - Auto-enable every registered provider: at backend boot, if settings.json has
+                #   no ``disabledProviders`` key yet, seed it with an empty list so the activation
+                #   dialog never opens and the orchestrators start immediately. After that one-shot
+                #   seed, toggles from Settings keep working normally.
+                # - Skip the Codex marketplace + plugin install (~/.codex/config.toml is global
+                #   and already managed by the main install — worktrees must not race on it).
+                **({
+                    "TWICC_SESSION_COOKIE": f"sessionid_{backend_port}",
+                    "TWICC_NO_CRON_RESTART": "1",
+                    "TWICC_AUTO_ENABLE_PROVIDERS": "1",
+                    "TWICC_NO_CODEX_PLUGIN": "1",
+                } if is_git_worktree() else {}),
             },
         },
     }

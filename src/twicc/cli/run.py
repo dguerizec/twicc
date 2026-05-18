@@ -143,6 +143,14 @@ async def run_server(port: int):
     # ``OPENROUTER_MODEL_PREFIX``; failure here is logged and non-fatal.
     await sync_all_providers()
 
+    # When ``TWICC_AUTO_ENABLE_PROVIDERS=1`` (devctl worktree mode) seeds the
+    # initial ``disabledProviders=[]`` choice if the file lacks one, so the
+    # orchestrators below see every provider as enabled instead of the empty
+    # set that gates the activation dialog. No-op once the user has made a
+    # choice — toggles from Settings keep working normally.
+    from twicc.providers.state import apply_auto_enable_providers_bootstrap
+    apply_auto_enable_providers_bootstrap()
+
     # Cross-provider search lifecycle event: set once ``init_search_index()``
     # has returned, so provider watchers know they can write into the
     # index. Created here, owned by ``_orchestrate_global_search``,
