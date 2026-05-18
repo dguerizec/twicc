@@ -24,6 +24,7 @@ import TodoContent from '../../components/session/detail/items/TodoContent.vue'
 import ReadResultContent from '../../components/session/detail/items/claude_code/ReadResultContent.vue'
 import BashResultContent from '../../components/session/detail/items/claude_code/BashResultContent.vue'
 import WebContentResult from '../../components/session/detail/items/claude_code/WebContentResult.vue'
+import MonitorResultContent from '../../components/session/detail/items/claude_code/MonitorResultContent.vue'
 
 import DescriptionSummary from '../../components/session/detail/items/summary/DescriptionSummary.vue'
 import SkillSummary from '../../components/session/detail/items/claude_code/summary/SkillSummary.vue'
@@ -37,6 +38,7 @@ import TodoSummary from '../../components/session/detail/items/summary/TodoSumma
 const FILE_PATH_TOOLS = new Set(['Edit', 'Write', 'Read'])
 const FILE_CHANGE_TOOLS = new Set(['Edit', 'Write'])
 const DIRECT_CONTENT_TOOLS = new Set(['Bash', 'WebFetch', 'WebSearch'])
+const MONITOR_TOOL_NAME = 'Monitor'
 // Built-in task-tracking tools (``TaskCreate`` / ``TaskUpdate`` / ``TaskGet`` /
 // ``TaskList``) share a hidden result section. Each keeps its raw header
 // label so the operation stays readable. The canonical task payload is
@@ -195,6 +197,48 @@ function buildTaskSummaryParts(name, input, options) {
     return parts
 }
 
+// ─── Monitor aggregation ─────────────────────────────────────────────────
+
+function aggregateMonitorOutput(toolId, options) {
+    // ``options.resultsArray`` is the already-fetched tool_result payload list
+    // for this tool_use (see ToolUseContent.vue's ``aggregatedExecOutput``
+    // computed). The backend returns one entry per ToolResultLink, in
+    // tool_result_line_num ASC order, with the tool_result block unwrapped
+    // (see ``claude_code/helpers.py:get_tool_results``). We use this directly
+    // instead of going back through the session items store, which only
+    // carries the visible window of items and would yield placeholders for
+    // Monitor chunks outside that window.
+    const results = options?.resultsArray
+    if (!Array.isArray(results) || results.length === 0) return null
+
+    const bodies = []
+    let isTerminated = false
+    for (let idx = 0; idx < results.length; idx++) {
+        // Index 0 is the original Monitor "Monitor started …" row — its
+        // content is not user-facing; the backend only used it to map
+        // taskId → tool_use_id. Backend orders results by line_num ASC and
+        // the SDK writes the Monitor tool_result before any task
+        // notification or terminal attachment, so index 0 is reliable.
+        if (idx === 0) continue
+        const block = results[idx]
+        if (!block || block.type !== 'tool_result') continue
+        // The terminal chunk carries twiccMonitorTerminal (mirror of the
+        // top-level flag the backend uses for compute_link_extra). Skipping
+        // it here keeps the terminal's status string out of the concatenated
+        // body; isTerminated is enough for the renderer.
+        if (block.twiccMonitorTerminal === true) {
+            isTerminated = true
+            continue
+        }
+        const body = typeof block.content === 'string' ? block.content : ''
+        if (body) bodies.push(body)
+    }
+    return {
+        aggregatedOutput: bodies.join('\n'),
+        isTerminated,
+    }
+}
+
 // ─── ClaudeCodeToolHelpers ──────────────────────────────────────────────
 
 export class ClaudeCodeToolHelpers extends BaseToolHelpers {
@@ -316,7 +360,16 @@ export class ClaudeCodeToolHelpers extends BaseToolHelpers {
         return null
     }
 
-    getResultRendering(name, result, input /*, ctx */) {
+    getResultRendering(name, result, input, ctx) {
+        if (name === MONITOR_TOOL_NAME) {
+            const agg = ctx?.aggregatedExecOutput
+            const aggregatedOutput = (agg && typeof agg.aggregatedOutput === 'string') ? agg.aggregatedOutput : ''
+            const isTerminated = !!(agg && agg.isTerminated)
+            return {
+                component: MonitorResultContent,
+                props: { aggregatedOutput, isTerminated },
+            }
+        }
         if (name === 'Read') {
             const content = typeof result === 'string' ? result : result?.content
             if (parseCatNContent(content)) {
@@ -472,11 +525,41 @@ export class ClaudeCodeToolHelpers extends BaseToolHelpers {
         return Object.keys(rest).length > 0 ? rest : null
     }
 
-    getExpectedResultCount(_name, input) {
+    getExpectedResultCount(name, input, _options) {
+        if (name === MONITOR_TOOL_NAME) return 1
         // Claude Code's Bash tool emits two tool_result events when launched
         // with ``run_in_background``: one for the start, one for the final
         // output. Every other tool emits a single result.
         return input?.run_in_background ? 2 : 1
+    }
+
+    getRequiredResultCountForDisplay(name, input, options) {
+        if (name === MONITOR_TOOL_NAME) return 1
+        return this.getExpectedResultCount(name, input, options)
+    }
+
+    isToolRunning(name, input, options) {
+        if (name === MONITOR_TOOL_NAME) {
+            if (options?.toolState?.error) return false
+            const extra = options?.toolState?.extra
+            if (!extra) return true
+            try {
+                const parsed = typeof extra === 'string' ? JSON.parse(extra) : extra
+                return !parsed?.is_terminated
+            } catch {
+                return true
+            }
+        }
+        return super.isToolRunning(name, input, options)
+    }
+
+    shouldAggregateExecOutput(name) {
+        return name === MONITOR_TOOL_NAME
+    }
+
+    getAggregatedExecOutput(name, toolId, options) {
+        if (name !== MONITOR_TOOL_NAME) return null
+        return aggregateMonitorOutput(toolId, options)
     }
 
     // ─── Capability flags ────────────────────────────────────────────────

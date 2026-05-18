@@ -26,7 +26,6 @@ import { capitalize } from '../utils/format'
 import { formatRelativePath, fileIconFor, resolveAbsolutePath } from '../utils/path'
 import { parseCommand } from './parseCommand'
 import { parseApplyPatchEnvelope } from './parsePatch'
-import { getParsedContent } from '../../utils/parsedContent'
 import { getTodoDescription } from '../../utils/todoList'
 
 import DescriptionSummary from '../../components/session/detail/items/summary/DescriptionSummary.vue'
@@ -391,21 +390,16 @@ function extractCommandPayload(name, input) {
  */
 function findCodexEndEventPayload(toolId, options) {
     if (!toolId) return null
-    const toolState = options?.getToolState?.(toolId)
-    const lineNums = toolState?.toolResultLineNums
-    if (!Array.isArray(lineNums) || lineNums.length === 0) return null
-    const getSessionItem = options?.getSessionItem
-    if (typeof getSessionItem !== 'function') return null
-    for (const ln of lineNums) {
-        if (!Number.isInteger(ln) || ln < 1) continue
-        const item = getSessionItem(ln)
-        if (!item) continue
-        const parsed = getParsedContent(item)
-        if (!parsed || parsed.type !== 'event_msg') continue
-        const payload = parsed.payload
+    // ``options.resultsArray`` carries every payload paired with this
+    // tool_use_id by ``get_tool_results`` (wrapper dropped — entries are
+    // ``payload`` objects). The backend already filtered by ``call_id``,
+    // so any entry whose ``type`` belongs to PERSISTED_END_EVENT_TYPES
+    // is ours; we just return the first.
+    const results = options?.resultsArray
+    if (!Array.isArray(results) || results.length === 0) return null
+    for (const payload of results) {
         if (!payload || typeof payload !== 'object') continue
         if (!PERSISTED_END_EVENT_TYPES.has(payload.type)) continue
-        if (payload.call_id !== toolId) continue
         return payload
     }
     return null
@@ -472,24 +466,22 @@ const FREEFORM_EXIT_CODE_RE = /^Exit code: (-?\d+)$/m
  *     code below.
  */
 function aggregateExecCommandOutput(name, toolId, options) {
-    if (!toolId) return null
-    const toolState = options?.getToolState?.(toolId)
-    const lineNums = toolState?.toolResultLineNums
-    if (!Array.isArray(lineNums) || lineNums.length === 0) return null
-    const getSessionItem = options?.getSessionItem
-    if (typeof getSessionItem !== 'function') return null
+    // ``options.resultsArray`` is the already-fetched tool_result payload
+    // list for this tool_use (see ToolUseContent.vue's
+    // ``aggregatedExecOutput`` computed). The backend returns one entry
+    // per ToolResultLink in tool_result_line_num ASC order, with the
+    // ``response_item`` wrapper unwrapped — every entry is the payload
+    // directly (see ``codex/helpers.py:get_tool_results``). We use this
+    // instead of walking the session items store, which only carries the
+    // visible window and would yield placeholders for chunks outside it.
+    const results = options?.resultsArray
+    if (!Array.isArray(results) || results.length === 0) return null
     const isStructuredJson = STRUCTURED_JSON_OUTPUT_TOOLS.has(name)
     const isFreeformText = FREEFORM_TEXT_OUTPUT_TOOLS.has(name)
     const bodies = []
     let isTerminated = false
     let exitCode = null
-    for (const ln of lineNums) {
-        if (!Number.isInteger(ln) || ln < 1) continue
-        const item = getSessionItem(ln)
-        if (!item) continue
-        const parsed = getParsedContent(item)
-        if (!parsed || parsed.type !== 'response_item') continue
-        const payload = parsed.payload
+    for (const payload of results) {
         if (!payload || typeof payload !== 'object') continue
         if (payload.type !== 'function_call_output' && payload.type !== 'custom_tool_call_output') continue
         const output = typeof payload.output === 'string' ? payload.output : ''

@@ -394,6 +394,14 @@ const helperOptions = computed(() => {
     // ref re-emits and any helper using ``agentSlug`` (e.g. Codex's
     // ``getSummaryRendering`` for ``spawn_agent`` showing ``(Bohr)``
     // next to the header) re-renders automatically.
+    //
+    // ``resultsArray`` exposes the already-fetched tool_result payload
+    // list (one entry per ``ToolResultLink``, in tool_result_line_num
+    // ASC order, with the wrapper unwrapped by ``get_tool_results``).
+    // Helpers that need to walk the chain (aggregators, end-event
+    // resolvers) read this directly instead of walking the session
+    // items store — which only carries the visible window of items
+    // and yields placeholders for chunks outside it.
     const agentLink = dataStore.getAgentLink(props.sessionId, props.toolId)
     return {
         ...(props.extra || {}),
@@ -403,15 +411,17 @@ const helperOptions = computed(() => {
         agentSlug: agentLink?.slug || null,
         getSessionItem: (lineNum) => dataStore.getSessionItem(props.sessionId, lineNum),
         getToolState: (toolUseId) => dataStore.getToolState(props.sessionId, toolUseId),
+        resultsArray: resultData.value,
     }
 })
 
 // Aggregated payload for chained-result tools (Codex's exec_command
-// family). Computed lazily — the helper short-circuits to ``null`` for
-// every other tool, so the cost is paid only when the tool opted in
-// via :meth:`shouldAggregateExecOutput`. Recomputes whenever the
-// toolState changes (new chunk arrives via WS), which is exactly what
-// drives the progressive rendering downstream.
+// family, Claude Code's Monitor). Computed lazily — the helper
+// short-circuits to ``null`` for every other tool, so the cost is paid
+// only when the tool opted in via :meth:`shouldAggregateExecOutput`.
+// Recomputes whenever ``resultData`` changes (new chunks arrive through
+// the fetch / poll loop, which propagate via ``helperOptions``), driving
+// the progressive rendering downstream.
 const aggregatedExecOutput = computed(() => {
     const helpers = toolHelpers.value
     if (!helpers?.shouldAggregateExecOutput?.(props.name)) return null
