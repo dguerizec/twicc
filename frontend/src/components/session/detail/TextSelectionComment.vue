@@ -18,6 +18,11 @@ const props = defineProps({
     autoExpand: { type: Boolean, default: false },
     /** Optional source suffix for the formatted output (e.g. "from terminal"). */
     sourceLabel: { type: String, default: '' },
+    /** Function called when the widget needs to dismiss the source selection
+     *  (on Comment/Copy clicks). Defaults to clearing the DOM selection, which is
+     *  enough for normal HTML; consumers (e.g. FilePane) override it to also clear
+     *  the internal CodeMirror selection so the behavior is consistent there. */
+    clearSourceSelection: { type: Function, default: () => window.getSelection()?.removeAllRanges() },
 })
 
 const emit = defineEmits(['close'])
@@ -138,6 +143,11 @@ function onDragPointerUp() {
 function expand() {
     panelOffset.value = { dx: 0, dy: 0 }
     expanded.value = true
+    // Dismiss the source selection so the highlight goes away. In plain HTML the
+    // browser already drops the page selection when the textarea below gains focus,
+    // but for CodeMirror sources the internal selection persists — the consumer's
+    // override clears it for consistency.
+    props.clearSourceSelection?.()
     window.visualViewport?.addEventListener('resize', onVisualViewportResize)
     nextTick(() => {
         clampToViewport()
@@ -164,7 +174,7 @@ function addToMessage() {
 function copy() {
     navigator.clipboard.writeText(props.selectedText)
     toast.success('Copied to clipboard', { duration: 2000 })
-    window.getSelection()?.removeAllRanges()
+    props.clearSourceSelection?.()
     close()
 }
 

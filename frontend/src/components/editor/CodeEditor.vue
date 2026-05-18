@@ -37,7 +37,7 @@ const props = defineProps({
 
 // ─── Emits ───────────────────────────────────────────────────────────────────
 
-const emit = defineEmits(['update:modelValue', 'save', 'ready'])
+const emit = defineEmits(['update:modelValue', 'save', 'ready', 'cm-update'])
 
 // ─── Template ref & state ────────────────────────────────────────────────────
 
@@ -161,6 +161,13 @@ onMounted(async () => {
             _internalUpdate = true
             emit('update:modelValue', update.state.doc.toString())
             nextTick(() => { _internalUpdate = false })
+        }
+        // Surface selection/focus changes so consumers (e.g. FilePane's text
+        // selection widget) can re-read the DOM selection on demand. Works
+        // around Firefox cases where `selectionchange` isn't fired when CM
+        // finalizes the DOM selection.
+        if (update.selectionSet || update.focusChanged) {
+            emit('cm-update')
         }
     })
 

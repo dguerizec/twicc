@@ -1298,13 +1298,6 @@ const {
     closeTextSelectionComment,
 } = useTextSelectionComment({
     containerRef: scrollerRef,
-    isInScope: (selection) => {
-        // Exclude selections inside CodeMirror editors (they have their own comments)
-        const anchor = selection?.anchorNode
-        if (!anchor) return false
-        if (anchor.closest?.('.cm-editor') || anchor.parentElement?.closest('.cm-editor')) return false
-        return true
-    },
     enabled: ref(true),
 })
 

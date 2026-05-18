@@ -140,19 +140,6 @@ const isMarkdownFile = computed(() => {
 })
 const showMarkdownPreview = ref(false)
 
-// Text selection comment widget: active only while previewing a markdown file
-// inside an active session (so we can actually append to the message input).
-const markdownPreviewRef = ref(null)
-const {
-    textSelectionCommentRef,
-    textSelectionText,
-    textSelectionPosition,
-    closeTextSelectionComment,
-} = useTextSelectionComment({
-    containerRef: markdownPreviewRef,
-    enabled: computed(() => !!insertTextAtCursor && showMarkdownPreview.value && isMarkdownFile.value),
-})
-
 // --- SVG preview state ---
 const isSvgFile = computed(() => {
     if (!props.filePath) return false
@@ -220,6 +207,94 @@ watch(editorAreaRef, (el, _oldEl, onCleanup) => {
 
 const canSideBySide = computed(() => editorAreaWidth.value > SIDE_BY_SIDE_MIN_WIDTH)
 const effectiveSideBySide = computed(() => sideBySide.value && canSideBySide.value)
+
+// Text selection comment widget: active whenever the pane is inside an active
+// session — covers the markdown preview as well as the CodeMirror code/diff
+// editors, all of which live under .editor-area.
+//
+// Firefox + CodeMirror have a known sync issue where the DOM native selection
+// (`window.getSelection()`) doesn't reflect the CodeMirror internal selection
+// after certain interactions (tab-switch sequences, gutter widget cycles).
+// `getCmSelectionOverride()` reads the truthy selection directly from each
+// active EditorView and is preferred by the composable when it returns data.
+function forEachCmView(fn) {
+    const ceView = codeEditorRef.value?.view
+    if (ceView) fn(ceView)
+    const de = diffEditorRef.value
+    if (de) {
+        const m = de.getModifiedView?.()
+        const o = de.getOriginalView?.()
+        if (m) fn(m)
+        if (o) fn(o)
+    }
+}
+
+function clearSourceSelection() {
+    // Drop the DOM selection (covers markdown preview and the focused side effects).
+    window.getSelection()?.removeAllRanges()
+    // Also collapse each CodeMirror view's internal selection — focus shifts don't
+    // clear it on their own, so without this the highlight would stay visible.
+    forEachCmView((view) => {
+        const head = view.state.selection.main.head
+        view.dispatch({ selection: { anchor: head, head } })
+    })
+}
+
+function getCmSelectionOverride() {
+    const views = []
+    const ceView = codeEditorRef.value?.view
+    if (ceView) views.push(ceView)
+    const de = diffEditorRef.value
+    if (de) {
+        const m = de.getModifiedView?.()
+        const o = de.getOriginalView?.()
+        if (m) views.push(m)
+        if (o) views.push(o)
+    }
+    for (const view of views) {
+        const sel = view.state.selection.main
+        if (sel.empty) continue
+        const text = view.state.doc.sliceString(sel.from, sel.to)
+        if (!text.trim()) continue
+        // Build a real DOM Range from CodeMirror's authoritative selection so we get
+        // the exact bounding rect — same algorithm the native path uses, just bypassing
+        // window.getSelection() (which Firefox doesn't keep in sync with CM here).
+        try {
+            const fromDom = view.domAtPos(sel.from)
+            const toDom = view.domAtPos(sel.to)
+            const range = document.createRange()
+            range.setStart(fromDom.node, fromDom.offset)
+            range.setEnd(toDom.node, toDom.offset)
+            const rect = range.getBoundingClientRect()
+            if (!rect.width && !rect.height) continue
+            // Mirror the native logic: widget appears above only for backward
+            // selections spanning multiple lines.
+            const backward = sel.head < sel.anchor
+            const above = backward && rect.height > 30
+            return {
+                text,
+                anchor: view.dom,
+                rect: { top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right },
+                above,
+            }
+        } catch {
+            continue
+        }
+    }
+    return null
+}
+
+const {
+    textSelectionCommentRef,
+    textSelectionText,
+    textSelectionPosition,
+    closeTextSelectionComment,
+    refreshSelection,
+} = useTextSelectionComment({
+    containerRef: editorAreaRef,
+    getSelectionOverride: getCmSelectionOverride,
+    enabled: computed(() => !!insertTextAtCursor),
+})
 
 // Whether the editor content differs from the last saved/fetched content.
 // Delegates to the CodeMirror editor's own dirty tracking.
@@ -709,7 +784,7 @@ function goToNextDiff() {
         <!-- Content area: editor is always mounted once, overlays sit on top -->
         <div ref="editorAreaRef" class="editor-area">
             <!-- Markdown preview (when toggled on for .md files) -->
-            <div v-if="showMarkdownPreview && isMarkdownFile" ref="markdownPreviewRef" class="markdown-preview-container">
+            <div v-if="showMarkdownPreview && isMarkdownFile" class="markdown-preview-container">
                 <MarkdownContent
                     :source="diffMode ? (modifiedContent ?? '') : currentContent"
                     :show-toolbar="false"
@@ -741,6 +816,7 @@ function goToNextDiff() {
                 @update:modified="onDiffModifiedChange"
                 @save="save"
                 @ready="onDiffReady"
+                @cm-update="refreshSelection"
             />
 
             <!-- CodeMirror editor — mounted once, never destroyed on file switch -->
@@ -757,6 +833,7 @@ function goToNextDiff() {
                 :comment-context="commentContext"
                 @save="save"
                 @ready="onEditorReady"
+                @cm-update="refreshSelection"
             />
 
             <!-- Overlay: initial loading (before any file has been displayed) -->
@@ -790,6 +867,7 @@ function goToNextDiff() {
                 ref="textSelectionCommentRef"
                 :selected-text="textSelectionText"
                 :position="textSelectionPosition"
+                :clear-source-selection="clearSourceSelection"
                 @close="closeTextSelectionComment"
             />
         </Teleport>

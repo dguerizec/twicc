@@ -48,7 +48,7 @@ const props = defineProps({
 
 // ─── Emits ───────────────────────────────────────────────────────────────────
 
-const emit = defineEmits(['update:modified', 'save', 'ready'])
+const emit = defineEmits(['update:modified', 'save', 'ready', 'cm-update'])
 
 // ─── Template ref & state ────────────────────────────────────────────────────
 
@@ -200,6 +200,13 @@ function buildUpdateListener() {
             _internalUpdate = true
             emit('update:modified', update.state.doc.toString())
             nextTick(() => { _internalUpdate = false })
+        }
+        // Surface selection/focus changes so consumers (e.g. FilePane's text
+        // selection widget) can re-read the DOM selection on demand. Works
+        // around Firefox cases where `selectionchange` isn't fired when CM
+        // finalizes the DOM selection.
+        if (update.selectionSet || update.focusChanged) {
+            emit('cm-update')
         }
     })
 }
@@ -561,6 +568,8 @@ defineExpose({
     isDirty,
     resetDirty() { isDirty.value = false },
     openSearch() { toggleSearchPanel(getModifiedView()) },
+    getModifiedView,
+    getOriginalView,
 })
 </script>
 
