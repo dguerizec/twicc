@@ -1,14 +1,16 @@
 <script setup>
 // SettingsPopover.vue - Settings button with popover panel
-import { computed, nextTick, onBeforeUnmount, ref, useId, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useSettingsStore, SETTINGS_SCHEMA } from '../../stores/settings'
 import { useDataStore } from '../../stores/data'
 import { useAuthStore } from '../../stores/auth'
+import { useTipsStore } from '../../stores/tips'
 import { getProviderHelpers, getProviderLabel, getProviderOptions, getRegisteredProviders, getProviderIcon } from '../../providers'
 import { getActivationCharMetadata } from '../../utils/commandActivation'
 import { DISPLAY_MODE, COLOR_SCHEME, SESSION_TIME_FORMAT, DEFAULT_MAX_CACHED_SESSIONS, WA_THEME, WA_THEME_LABELS, WA_BRAND, WA_BRAND_LABELS } from '../../constants'
 import NotificationSettings from './NotificationSettings.vue'
+import TipsSettings from '../settings/TipsSettings.vue'
 import AppTooltip from '../ui/AppTooltip.vue'
 import ChangelogDialog from './ChangelogDialog.vue'
 import ProviderSettingsSection from './ProviderSettingsSection.vue'
@@ -19,6 +21,19 @@ const router = useRouter()
 const store = useSettingsStore()
 const dataStore = useDataStore()
 const authStore = useAuthStore()
+const tipsStore = useTipsStore()
+
+// Tips section is hidden from the nav (and the active-section watcher
+// below redirects away from it) when no tip matches the current
+// environment's constraints. Empty manifest, or all tips filtered out
+// by platform / os / providers, → no entry. Reactive: re-evaluates when
+// the manifest, the touch-device flag, the OS, or enabledProviders changes.
+const availableTips = computed(() => tipsStore.getAvailableTips({
+    platform: store._isTouchDevice ? 'mobile' : 'desktop',
+    os: store.os,
+    enabledProviders: store.enabledProviders,
+}))
+const hasTips = computed(() => availableTips.value.length > 0)
 
 // Reactive set of currently enabled providers (derived from the settings store).
 const enabledProviders = computed(() => new Set(store.enabledProviders))
@@ -65,6 +80,37 @@ const sections = computed(() => [
 
 const activeSection = ref('global')
 const mobileShowContent = ref(false)
+const popoverRef = ref(null)
+
+// If the user is sitting on the Tips section when its nav entry
+// disappears (e.g. they just toggled the last enabled provider that
+// gated the only available tip), bounce them back to Global so the
+// detail panel doesn't render an empty/orphaned TipsSettings.
+watch(hasTips, (now) => {
+    if (!now && activeSection.value === 'tips') {
+        activeSection.value = 'global'
+    }
+})
+
+function handleCloseRequest() {
+    const el = popoverRef.value
+    if (!el) return
+    if (typeof el.hide === 'function') {
+        el.hide()
+    } else {
+        // Fallback: toggle the open attribute. Web Awesome 3 wa-popover should
+        // expose hide(); this is a defensive path.
+        el.removeAttribute('open')
+    }
+}
+
+onMounted(() => {
+    window.addEventListener('twicc:close-settings-popover', handleCloseRequest)
+})
+
+onBeforeUnmount(() => {
+    window.removeEventListener('twicc:close-settings-popover', handleCloseRequest)
+})
 
 const activeSectionObj = computed(() =>
     sections.value.find(s => s.id === activeSection.value)
@@ -72,6 +118,7 @@ const activeSectionObj = computed(() =>
 
 const activeSectionLabel = computed(() => {
     if (activeSection.value === 'shortcuts') return 'Keyboard shortcuts'
+    if (activeSection.value === 'tips') return 'Tips'
     return activeSectionObj.value?.label ?? ''
 })
 
@@ -788,7 +835,7 @@ function onChangelogClose() {
         <wa-icon name="gear"></wa-icon><span>Settings</span>
     </wa-button>
     <AppTooltip for="settings-trigger">Toggle settings</AppTooltip>
-    <wa-popover v-popover-focus-fix for="settings-trigger" placement="top" class="settings-popover" @wa-show="onPopoverShow">
+    <wa-popover ref="popoverRef" v-popover-focus-fix for="settings-trigger" placement="top" class="settings-popover" @wa-show="onPopoverShow">
         <AppTooltip v-if="showLogout" :for="logoutButtonId">Logout</AppTooltip>
         <div class="settings-layout">
             <div class="settings-layout-inner" :class="{ 'showing-content': mobileShowContent }">
@@ -818,6 +865,14 @@ function onChangelogClose() {
                         @click="selectSection('shortcuts')"
                     >
                         Shortcuts
+                    </button>
+                    <button
+                        v-if="hasTips"
+                        class="settings-nav-item tips-nav-item"
+                        :class="{ active: activeSection === 'tips' }"
+                        @click="selectSection('tips')"
+                    >
+                        Tips
                     </button>
                 </nav>
 
@@ -1185,6 +1240,9 @@ function onChangelogClose() {
                         >{{ tmuxConfigValidation.message }}</wa-callout>
                     </div>
                 </section>
+
+                <!-- Tips Section -->
+                <TipsSettings v-if="activeSection === 'tips'" />
 
                 <!-- Providers quotas/usage Section -->
                 <section v-if="activeSection === 'usage'" class="settings-section">

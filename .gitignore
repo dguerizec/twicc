@@ -257,6 +257,7 @@ settings.json
 terminal-config.json
 message-snippets.json
 workspaces.json
+seen-tips.json
 # Per-provider agent settings presets (one file per provider, see
 # BaseProviderHelpers.get_settings_presets_path).
 *-settings-presets.json

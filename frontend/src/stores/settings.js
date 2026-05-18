@@ -63,6 +63,8 @@ export const SETTINGS_SCHEMA = {
     _effectiveColorScheme: null,
     _isTouchDevice: false,
     _isMac: false,
+    _isLinux: false,
+    _isWindows: false,
     _isApplyingRemoteSettings: false,
 }
 
@@ -295,6 +297,9 @@ export const useSettingsStore = defineStore('settings', {
          * Detected once at startup. Used to display platform-appropriate key names.
          */
         isMac: (state) => state._isMac,
+        isLinux: (state) => state._isLinux,
+        isWindows: (state) => state._isWindows,
+        os: (state) => state._isMac ? 'mac' : state._isLinux ? 'linux' : state._isWindows ? 'windows' : null,
     },
 
     actions: {
@@ -836,8 +841,12 @@ export function initSettings() {
 
     // Detect touch device once at startup (primary input has no hover support)
     store._isTouchDevice = window.matchMedia('(hover: none)').matches
-    // Detect macOS once at startup (for platform-appropriate key names)
-    store._isMac = navigator.platform?.startsWith('Mac') || navigator.userAgent?.includes('Macintosh')
+    // Detect OS once at startup (for platform-appropriate key names and tip filtering)
+    const ua = navigator.userAgent || ''
+    const plat = navigator.platform || ''
+    store._isMac     = plat.startsWith('Mac') || /Macintosh/.test(ua)
+    store._isLinux   = /Linux/i.test(plat) && !/Android/i.test(ua)
+    store._isWindows = /Win/i.test(plat)
 
     // Initialize effective color scheme and listen for system preference changes
     store._updateEffectiveColorScheme()

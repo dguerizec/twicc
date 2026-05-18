@@ -81,3 +81,25 @@ export function formatDuration(seconds) {
     }
     return `${secs}s`
 }
+
+/**
+ * Format an epoch ms timestamp as a relative time string.
+ *
+ * - < 1 minute : "just now"
+ * - < 1 hour   : "Nm ago"
+ * - < 24 hours : "Nh ago"
+ * - < 7 days   : "Nd ago"
+ * - older      : falls back to formatDate(timestamp_seconds, { smart: true })
+ *
+ * @param {number} timestampMs - Epoch milliseconds (use Date.parse(iso) for ISO strings).
+ * @returns {string}
+ */
+export function formatRelative(timestampMs) {
+    if (!timestampMs) return '-'
+    const deltaSec = Math.max(0, Math.floor((Date.now() - timestampMs) / 1000))
+    if (deltaSec < 60) return 'just now'
+    if (deltaSec < 3600) return `${Math.floor(deltaSec / 60)}m ago`
+    if (deltaSec < 86400) return `${Math.floor(deltaSec / 3600)}h ago`
+    if (deltaSec < 7 * 86400) return `${Math.floor(deltaSec / 86400)}d ago`
+    return formatDate(Math.floor(timestampMs / 1000), { smart: true })
+}

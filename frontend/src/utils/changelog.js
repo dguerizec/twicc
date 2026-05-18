@@ -113,18 +113,11 @@ function parseVersionContent(content) {
     return entries
 }
 
-/**
- * Resolve an image path from the changelog to a usable URL.
- * Strips the `frontend/public/` prefix and prepends the app base URL.
- *
- * @param {string} path - Raw path from CHANGELOG (e.g. "frontend/public/whats-new/v1.3/image.webp")
- * @returns {string} URL usable in an <img> src
- */
-export function resolveImageLocalUrl(path) {
-    // Strip "frontend/public/" prefix to get the public-relative path
-    const publicPath = path.replace(/^frontend\/public\//, '')
-    return (import.meta.env.BASE_URL || '/') + publicPath
-}
+// Thin alias kept for the existing ChangelogDialog import. The canonical
+// helper now lives in ./publicAsset.js and is reused by other features
+// (e.g. tips) that need to load assets from frontend/public/. New callers
+// should import `resolvePublicAssetUrl` directly.
+export { resolvePublicAssetUrl as resolveImageLocalUrl } from './publicAsset.js'
 
 /**
  * Resolve an image path to the GitHub raw URL (fallback).

@@ -122,6 +122,27 @@ def get_workspaces_path() -> Path:
     return get_data_dir() / "workspaces.json"
 
 
+def get_seen_tips_path() -> Path:
+    """Path to the synced seen-tips state file."""
+    return get_data_dir() / "seen-tips.json"
+
+
+def get_tips_assets_dir() -> Path:
+    """Directory holding tip .md files and their image assets.
+
+    In dev (``settings.DEV_MODE``), this points to ``frontend/public/tips/``
+    in the repo so Vite is the source of truth for live editing.
+
+    In an installed wheel, the tips folder is bundled inside
+    ``FRONTEND_DIST_DIR / "tips"`` by ``hatch_build.py`` (which copies the
+    whole ``frontend/public/`` tree).
+    """
+    from django.conf import settings as django_settings
+    if django_settings.DEV_MODE:
+        return django_settings.PACKAGE_DIR.parent.parent / "frontend" / "public" / "tips"
+    return django_settings.FRONTEND_DIST_DIR / "tips"
+
+
 def path_to_project_id(path: str) -> str:
     """Convert a filesystem path to a TwiCC project ID.
 

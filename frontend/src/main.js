@@ -54,6 +54,7 @@ import { useCodeCommentsStore } from './stores/codeComments'
 import { useWorkspacesStore } from './stores/workspaces'
 import { useTerminalConfigStore } from './stores/terminalConfig'
 import { useMessageSnippetsStore } from './stores/messageSnippets'
+import { useTipsStore } from './stores/tips'
 
 // Notivue CSS
 import 'notivue/notification.css'
@@ -177,6 +178,8 @@ if (!authStore.needsLogin) {
     useWorkspacesStore().applyWorkspaces(bootstrapData.workspaces)
     useTerminalConfigStore().applyConfig(bootstrapData.terminal_config)
     useMessageSnippetsStore().applyConfig(bootstrapData.message_snippets)
+    useTipsStore().applyManifest(bootstrapData.tips_manifest)
+    useTipsStore().applySeenTips(bootstrapData.seen_tips)
 
     // Hydrate drafts from IndexedDB (async, non-blocking)
     // Order matters: sessions first so draft messages have their session available

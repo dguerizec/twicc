@@ -2137,8 +2137,10 @@ def bootstrap(request):
     frontend doesn't have to wait for the WebSocket connection.
     """
     from twicc.message_snippets import read_message_snippets_config
+    from twicc.seen_tips import read_seen_tips
     from twicc.synced_settings import SYNCED_SETTINGS_DEFAULTS, prepare_settings_for_client, read_synced_settings
     from twicc.terminal_config import read_terminal_config
+    from twicc.tips_manifest import manifest_to_dict
     from twicc.workspaces import read_workspaces
 
     raw_settings = read_synced_settings()
@@ -2158,6 +2160,8 @@ def bootstrap(request):
         "workspaces": workspaces_data.get("workspaces", []),
         "terminal_config": read_terminal_config(),
         "message_snippets": read_message_snippets_config(),
+        "seen_tips": read_seen_tips(),
+        "tips_manifest": manifest_to_dict(),
         "providers": {
             provider.value: helpers.get_bootstrap_data()
             for provider, helpers in get_provider_helpers_registry().items()

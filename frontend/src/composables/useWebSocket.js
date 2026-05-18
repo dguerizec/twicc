@@ -368,6 +368,15 @@ export function sendUpdateAgentSettingsPresets(provider, config) {
 }
 
 /**
+ * Push the seen-tips state to the backend for persistence and broadcast.
+ * @param {Object} seenTips - { <tip_key>: <ISO timestamp> }
+ * @returns {boolean} True if message was sent, false if not connected.
+ */
+export function sendUpdateSeenTips(seenTips) {
+    return sendWsMessage({ type: 'update_seen_tips', seen_tips: seenTips })
+}
+
+/**
  * Acknowledge that the user has seen the forced changelog for a version.
  * @param {string} version - The version that was displayed
  * @returns {boolean} - True if message was sent
@@ -960,6 +969,19 @@ export function useWebSocket() {
                         useAgentSettingsPresetsStore().applyConfig(msg.provider, msg.config)
                     })
                 }
+                break
+            case 'tips_manifest_pushed':
+                // Read-only manifest pushed by the backend on connect.
+                import('../stores/tips').then(({ useTipsStore }) => {
+                    useTipsStore().applyManifest(msg.manifest)
+                })
+                break
+            case 'seen_tips_updated':
+                // Multi-device sync : another client (or this one's last write)
+                // updated the seen-state.
+                import('../stores/tips').then(({ useTipsStore }) => {
+                    useTipsStore().applySeenTips(msg.seen_tips)
+                })
                 break
             case 'terminal_list':
                 import('../stores/terminalTabs').then(({ useTerminalTabsStore }) => {

@@ -8,6 +8,7 @@ import { useSettingsStore } from './stores/settings'
 import { useAuthStore } from './stores/auth'
 import { COLOR_SCHEME, PROCESS_STATE } from './constants'
 import { useFavicon } from './composables/useFavicon'
+import { useTipScheduler } from './composables/useTipScheduler'
 import { toast } from './composables/useToast'
 import ProviderAuthToastContent from './components/app/ProviderAuthToastContent.vue'
 import { getRegisteredProviders, getProviderHelpers } from './providers'
@@ -42,6 +43,10 @@ const { wsStatus, openWs, closeWs } = useWebSocket()
 
 // Dynamic favicon: overlays a status badge based on global process state
 useFavicon()
+
+// Start the tip scheduler: first tip after FIRST_TIP_DELAY_MS, then
+// polling every SCHEDULER_POLL_MS once the per-dismiss cooldown expires.
+useTipScheduler()
 
 // Load initial data and connect WebSocket when authenticated
 const dataStore = useDataStore()

@@ -33,6 +33,8 @@ from twicc.providers.helpers import AgentSettings, get_provider_helpers, get_pro
 from twicc.synced_settings import _settings_lock, prepare_settings_for_client, read_synced_settings, write_synced_settings
 from twicc.workspaces import read_workspaces, write_workspaces
 from twicc.message_snippets import read_message_snippets_config, write_message_snippets_config
+from twicc.seen_tips import read_seen_tips, write_seen_tips
+from twicc.tips_manifest import manifest_to_dict
 from twicc.terminal_config import read_terminal_config, write_terminal_config
 from twicc.terminal import terminal_application
 
@@ -428,6 +430,16 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
             workspaces = await sync_to_async(read_workspaces)()
             await self.send_json({"type": "workspaces_updated", "workspaces": workspaces.get("workspaces", [])})
 
+        if self._should_send("tips_manifest_pushed"):
+            await self.send_json({
+                "type": "tips_manifest_pushed",
+                "manifest": manifest_to_dict(),
+            })
+
+        if self._should_send("seen_tips_updated"):
+            seen_tips = await sync_to_async(read_seen_tips)()
+            await self.send_json({"type": "seen_tips_updated", "seen_tips": seen_tips})
+
         # Send current startup progress (if any phase is still active)
         if self._should_send("startup_progress"):
             from twicc.startup_progress import get_startup_progress
@@ -513,6 +525,9 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
 
         elif msg_type == "update_agent_settings_presets":
             await self._handle_update_agent_settings_presets(content)
+
+        elif msg_type == "update_seen_tips":
+            await self._handle_update_seen_tips(content)
 
         elif msg_type == "session_viewed":
             await self._handle_session_viewed(content)
@@ -1416,6 +1431,35 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
                     "type": "agent_settings_presets_updated",
                     "provider": provider.value,
                     "config": config,
+                },
+            },
+        )
+
+    async def _handle_update_seen_tips(self, content: dict) -> None:
+        """Persist the seen-tips state and broadcast the change.
+
+        Expected payload:
+        ``{"type": "update_seen_tips", "seen_tips": {<key>: <iso_timestamp>, ...}}``
+
+        Last-write-wins : no version / clock. Acceptable given the rarity
+        of concurrent updates for this state.
+        """
+        state = content.get("seen_tips", {})
+        if not isinstance(state, dict) or not all(
+            isinstance(k, str) and isinstance(v, str) for k, v in state.items()
+        ):
+            logger.warning("Invalid update_seen_tips payload, ignoring: %r", state)
+            return
+
+        await sync_to_async(write_seen_tips)(state)
+
+        await self.channel_layer.group_send(
+            "updates",
+            {
+                "type": "broadcast",
+                "data": {
+                    "type": "seen_tips_updated",
+                    "seen_tips": state,
                 },
             },
         )

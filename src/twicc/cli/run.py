@@ -74,6 +74,7 @@ from twicc.search_indexing_task import (  # noqa: E402
     stop_search_index_task,
 )
 from twicc.version_check_task import start_version_check_task, stop_version_check_task  # noqa: E402
+from twicc.tips_manifest import init_manifest  # noqa: E402
 
 
 async def _cancel_task(task: asyncio.Task, name: str) -> None:
@@ -142,6 +143,7 @@ async def run_server(port: int):
     # A single OpenRouter fetch covers every provider that has declared an
     # ``OPENROUTER_MODEL_PREFIX``; failure here is logged and non-fatal.
     await sync_all_providers()
+    init_manifest()
 
     # When ``TWICC_AUTO_ENABLE_PROVIDERS=1`` (devctl worktree mode) seeds the
     # initial ``disabledProviders=[]`` choice if the file lacks one, so the
