@@ -1049,8 +1049,8 @@ function updateSidebarClosedClass(closed) {
                                 All Projects
                             </wa-dropdown-item>
 
+                            <wa-divider></wa-divider>
                             <template v-if="workspacesStore.getSelectableWorkspaces.length">
-                                <wa-divider></wa-divider>
                                 <wa-dropdown-item disabled class="section-header-item">
                                     <wa-icon slot="icon" name="check" style="visibility: hidden;"></wa-icon>
                                     Workspaces
@@ -1069,11 +1069,11 @@ function updateSidebarClosedClass(closed) {
                                         </span>
                                     </span>
                                 </wa-dropdown-item>
-                                <wa-dropdown-item value="__manage_workspaces__">
-                                    <wa-icon slot="icon" name="gear"></wa-icon>
-                                    Manage workspaces...
-                                </wa-dropdown-item>
                             </template>
+                            <wa-dropdown-item value="__manage_workspaces__">
+                                <wa-icon slot="icon" name="gear"></wa-icon>
+                                Manage workspaces...
+                            </wa-dropdown-item>
 
                             <!-- Named projects -->
                             <wa-divider v-if="selectorNamedProjects.length"></wa-divider>
