@@ -1,0 +1,11 @@
+---
+title: "Search every session: Ctrl+Shift+F"
+platform: [desktop]
+os: [linux, windows]
+---
+
+Press **Ctrl+Shift+F** to search across all sessions.
+
+You can filter by project, workspace, source, date and archived sessions, then open a result in context.
+
+You can also open it from the **+** next to the sidebar session filter.
