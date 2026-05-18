@@ -1,5 +1,6 @@
 <script setup>
 import { computed, watch, ref, provide, nextTick, inject, onMounted, onBeforeUnmount, onActivated, onDeactivated } from 'vue'
+import { useRouter } from 'vue-router'
 import { useDebounceFn } from '@vueuse/core'
 import { useDataStore } from '../../../stores/data'
 import { INITIAL_ITEMS_COUNT, DISPLAY_MODE } from '../../../constants'
@@ -8,6 +9,7 @@ import { toast } from '../../../composables/useToast'
 import { apiFetch } from '../../../utils/api'
 import { getParsedContent, hasContent } from '../../../utils/parsedContent'
 import { pendingSessionSearch } from '../../../utils/pendingSearch'
+import { classifyHref } from '../../../utils/fileLinks.js'
 import VirtualScroller from '../../virtual-scroller/VirtualScroller.vue'
 import SessionItem from './SessionItem.vue'
 import SessionSearchBar from '../list/SessionSearchBar.vue'
@@ -116,6 +118,7 @@ const messageInputRef = ref(null)
 
 // Session data
 const session = computed(() => store.getSession(props.sessionId))
+const project = computed(() => store.getProject(props.projectId))
 const providerLabel = computed(() => getProviderLabel(session.value?.provider))
 
 // Whether the session is stale (JSONL files deleted, history preserved as read-only)
@@ -1022,6 +1025,24 @@ async function processDroppedFile(file) {
 // Search highlight terms provided to child components (MarkdownContent uses them)
 const searchHighlightTerms = ref([])
 provide('searchHighlightTerms', searchHighlightTerms)
+
+// File-link resolution for MarkdownContent rendered inside the session items
+// list. Classification reads the current session/project roots lazily so that
+// late-arriving sync data (cwd, git_directory) is picked up on the next render.
+const fileLinksRouter = useRouter()
+const openFileInFilesTab = inject('viewFileInFilesTab', null)
+provide('markdownFileLinks', {
+    classifyHref: (href) => classifyHref(href, {
+        router: fileLinksRouter,
+        roots: {
+            gitDirectory: session.value?.git_directory,
+            cwd: session.value?.cwd,
+            projectDirectory: project.value?.directory,
+            projectGitRoot: project.value?.git_root,
+        },
+    }),
+    openFile: openFileInFilesTab,
+})
 
 // Provide a function for child components (e.g., ToolUseContent) to request
 // scroll-to-bottom when they are about to expand (auto-open diffs, etc.).

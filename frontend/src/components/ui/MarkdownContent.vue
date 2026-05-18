@@ -27,6 +27,12 @@ const router = useRouter()
 // Search highlight terms injected from SessionItemsList (empty when no search active)
 const highlightTerms = inject('searchHighlightTerms', ref([]))
 
+// File-link resolution context, provided by SessionItemsList. Absent (null)
+// when this component is mounted outside a session (e.g., whats-new, tips):
+// in that case the post-processing step is skipped and links keep their
+// default SPA behavior.
+const fileLinks = inject('markdownFileLinks', null)
+
 const renderedHtml = ref('')
 const container = ref(null)
 const rendering = ref(true)
@@ -91,11 +97,35 @@ function addLanguageLabels() {
     }
 }
 
+// Annotate file-path links so handleLinkClick can route them to the Files tab.
+// Skips external (http/mailto/...), anchor-only, and Vue Router routes.
+function annotateFileLinks() {
+    if (!container.value || !fileLinks) return
+
+    for (const a of container.value.querySelectorAll('a')) {
+        if (a.getAttribute('target') === '_blank') continue
+        const href = a.getAttribute('href')
+        if (!href) continue
+        if (/^[a-z][a-z0-9+.-]*:/i.test(href)) continue
+        if (href.startsWith('#')) continue
+
+        const result = fileLinks.classifyHref(href)
+        if (result.kind === 'file') {
+            a.setAttribute('data-file-resolved', result.absolutePath)
+            if (result.lineNum != null) a.setAttribute('data-file-line', String(result.lineNum))
+        } else if (result.kind === 'file-broken') {
+            a.setAttribute('data-file-broken', 'true')
+            a.removeAttribute('href')
+        }
+    }
+}
+
 async function render() {
     rendering.value = true
     try {
         renderedHtml.value = await renderMarkdown(props.source)
         await nextTick()
+        annotateFileLinks()
         addLanguageLabels()
         await renderMermaidDiagrams()
     } finally {
@@ -118,14 +148,30 @@ function copySource() {
     toast.success('Markdown copied to clipboard', { duration: 2000 })
 }
 
-// Intercept clicks on relative links inside rendered markdown to use Vue Router
-// navigation instead of full page reloads (SPA-friendly).
+// Route clicks on rendered <a> elements:
+//   - data-file-resolved → open in Files tab via injected openFile
+//   - data-file-broken   → swallow the click (link is rendered as plain text)
+//   - external / mailto  → leave the browser to handle (target=_blank or default)
+//   - anchor-only (#…)   → leave the browser to scroll
+//   - everything else    → SPA navigation via router.push
 function handleLinkClick(event) {
-    // Walk up from the click target to find an <a> element (if any)
     const anchor = event.target.closest('a')
     if (!anchor) return
 
-    // Skip absolute links (they already have target="_blank")
+    if (anchor.getAttribute('data-file-broken') === 'true') {
+        event.preventDefault()
+        return
+    }
+
+    const fileAbs = anchor.getAttribute('data-file-resolved')
+    if (fileAbs) {
+        event.preventDefault()
+        const lineAttr = anchor.getAttribute('data-file-line')
+        const lineNum = lineAttr ? parseInt(lineAttr, 10) : null
+        fileLinks?.openFile?.(fileAbs, { lineNum })
+        return
+    }
+
     if (anchor.getAttribute('target') === '_blank') return
 
     const href = anchor.getAttribute('href')
@@ -133,6 +179,9 @@ function handleLinkClick(event) {
 
     // Skip non-http(s) protocols (mailto:, tel:, etc.)
     if (/^[a-z][a-z0-9+.-]*:/i.test(href) && !/^https?:/i.test(href)) return
+
+    // Let the browser scroll for in-page anchors
+    if (href.startsWith('#')) return
 
     // Let the browser handle modifier clicks (open in new tab)
     if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || event.button !== 0) return
@@ -299,6 +348,13 @@ mark.search-highlight {
 html.wa-dark mark.search-highlight {
     background-color: oklch(0.65 0.15 90);  /* Dimmer yellow for dark mode */
     color: oklch(0.95 0 0);                 /* Light text for contrast */
+}
+
+/* -- File-path links that don't match any session root render as plain text */
+.markdown-body a[data-file-broken] {
+    color: inherit;
+    text-decoration: none;
+    cursor: text;
 }
 
 </style>
