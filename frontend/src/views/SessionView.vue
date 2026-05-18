@@ -32,6 +32,7 @@ import {
     parseRouteTermIndex,
 } from '../utils/granularRoutes'
 import { getAgentDisplayLabel } from '../utils/agentLabel'
+import { focusChatPrimary } from '../utils/focusChat'
 
 const route = useRoute()
 const router = useRouter()
@@ -607,14 +608,12 @@ function onTabShow(event) {
     if (!panel) return
     switchToTab(panel)
 
-    // Auto-focus message input when arriving on chat tab via keyboard navigation
+    // Auto-focus the chat's primary control (pending request form when active,
+    // message input otherwise) when arriving on the chat tab via keyboard navigation.
     if (pendingKeyboardFocus) {
         pendingKeyboardFocus = false
         if (panel === 'main') {
-            nextTick(() => {
-                const textarea = document.querySelector('.session-view .message-input wa-textarea')
-                if (textarea) textarea.focus()
-            })
+            nextTick(() => focusChatPrimary())
         }
     }
 }
@@ -908,12 +907,10 @@ function registerSessionCommands() {
             label: 'Focus Message Input',
             icon: 'keyboard',
             category: 'session',
-            action: () => {
-                const textarea = document.querySelector('.session-view .message-input wa-textarea')
-                if (textarea) {
-                    textarea.focus()
-                }
-            },
+            // Despite the legacy "Message Input" label, this lands on whichever
+            // primary control the chat is showing: pending request form when
+            // active, message input textarea otherwise.
+            action: () => focusChatPrimary(),
         },
         ...buildSessionSettingsCommands(),
     ])
