@@ -382,24 +382,32 @@ class CodexHelpers(BaseProviderHelpers):
         (or rebound to one):
 
         - ``response_item.{function_call_output, custom_tool_call_output}``
-          (the LLM-facing string — for long-running shells, multiple of
-          these chain together via :meth:`CodexSessionCompute.remap_tool_result_id`).
+          (the LLM-facing string — for long-running shells, every
+          ``write_stdin`` polling output is rebound to the parent
+          ``exec_command``'s ``call_id`` via
+          :meth:`CodexSessionCompute.remap_tool_result_id`, so the
+          payload's own ``call_id`` legitimately diverges from
+          ``tool_use_id`` on every chunk past the first).
         - ``event_msg`` lines whose sub-type is in
           :data:`_PERSISTED_END_EVENT_TYPES` (the structured End events
-          we still consume).
+          we still consume). These are never rebound, so the payload's
+          ``call_id`` always equals ``tool_use_id``.
         - ``response_item.message role=user`` whose text body opens with
           ``<subagent_notification>``: synthetic tool_result for the
           originating ``spawn_agent``, rebound by
           :meth:`CodexSessionCompute.remap_tool_result_id` /
           :meth:`remap_tool_result_id_live`. Its payload doesn't carry
-          a ``call_id`` (the rebind is purely DB-side), so we skip the
-          ``call_id`` check for this shape — the caller already filtered
-          ``items`` to the matching ``ToolResultLink`` rows.
+          a ``call_id`` at all (the rebind is purely DB-side).
 
         Callers already filtered ``items`` to the lines linked via
-        :class:`ToolResultLink` for this ``tool_use_id``; we parse each
-        one and return the payload as-is so the frontend can dispatch
-        on the payload's own ``type`` (the wrapper ``type`` is dropped).
+        :class:`ToolResultLink` for this ``tool_use_id``, which is the
+        authoritative mapping once any DB-side rebind kicks in. We
+        therefore trust the link table and skip a payload-level
+        ``call_id`` re-check on the rebound shapes; we keep it only on
+        the non-rebound ``event_msg`` shape as a defensive mirror of
+        :func:`_event_msg_call_id`. Each surviving payload is returned
+        as-is so the frontend can dispatch on the payload's own
+        ``type`` (the wrapper ``type`` is dropped).
         """
         results: list[dict] = []
         for item in items:
@@ -416,11 +424,14 @@ class CodexHelpers(BaseProviderHelpers):
             if wrapper_type == _TYPE_RESPONSE_ITEM:
                 payload_type = payload.get("type")
                 if payload_type in _RESPONSE_TOOL_RESULT_PAYLOAD_TYPES:
-                    if payload.get("call_id") != tool_use_id:
-                        continue
+                    # No payload-level call_id check: write_stdin polling
+                    # outputs land here with their own call_id but
+                    # ToolResultLink already rebound them to the parent
+                    # exec_command's tool_use_id.
+                    pass
                 elif payload_type == "message" and payload.get("role") == "user":
-                    # Subagent notification — already pre-filtered via
-                    # ToolResultLink; no call_id on this shape.
+                    # Subagent notification — same: rebound DB-side and
+                    # no call_id on this shape anyway.
                     pass
                 else:
                     continue
@@ -432,7 +443,7 @@ class CodexHelpers(BaseProviderHelpers):
                 event_call_id = payload.get("call_id")
                 if not isinstance(event_call_id, str) or not event_call_id:
                     continue
-                if payload.get("call_id") != tool_use_id:
+                if event_call_id != tool_use_id:
                     continue
             else:
                 continue
