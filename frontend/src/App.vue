@@ -598,6 +598,11 @@ body {
     -webkit-tap-highlight-color: transparent;
     position: relative;
     align-self: flex-start;
+    /* Without this, the close button (a flex item of .Notivue__notification)
+       gets squeezed by longer message content, distorting the X icon's width
+       while keeping its height — Notivue applies the same protection on
+       .Notivue__icon but forgot it here. */
+    flex-shrink: 0;
 }
 
 /* Add separator line below title in notifications */
