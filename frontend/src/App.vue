@@ -24,6 +24,7 @@ import {
     cancelPendingStop,
     stopSessionProcess,
 } from './composables/useStopSessionProcess'
+import { canStealFocus, hasBlockingOverlay } from './utils/focusGuard'
 
 const route = useRoute()
 const router = useRouter()
@@ -242,48 +243,32 @@ function handleGlobalKeydown(e) {
     }
     // Alt+Shift+M: focus the message input. Active on any session sub-route
     // (chat, files, git, terminal, subagent); navigates to the chat tab
-    // first if needed. Ignored when a blocking overlay (dialog, popover,
-    // dropdown, text-selection comment) is open, or when focus is in an
-    // editable element other than the xterm helper textarea (terminals
-    // aren't "edit fields" from the user's perspective).
+    // first if needed. Standard focus-steal rules apply (see canStealFocus).
     //
     // Exception: the Agent Settings popover (identified by
     // .settings-panel-presets, since it shares the .settings-popover class
     // with the global app SettingsPopover) is NOT a blocker — instead
     // Alt+Shift+M closes it and refocuses the textarea, same as Alt+Shift+O
-    // from inside the popover.
+    // from inside the popover. This branch deliberately skips the in-editable
+    // check (handled by hasBlockingOverlay only) so the shortcut still
+    // closes the popover even if focus is inside one of its inputs.
     if (e.altKey && e.shiftKey && !e.ctrlKey && !e.metaKey && e.code === 'KeyM' && SESSION_ROUTES.has(route.name)) {
-        const openPopovers = [...document.querySelectorAll('wa-popover[open]')]
-        const agentPopoverOpen = openPopovers.some(p => p.querySelector('.settings-panel-presets') !== null)
-        const otherPopoverOpen = openPopovers.some(p => p.querySelector('.settings-panel-presets') === null)
-        const otherOverlayOpen = document.querySelector('wa-dialog[open], wa-dropdown[open], .text-selection-comment') !== null
-        const overlayBlocked = otherPopoverOpen || otherOverlayOpen
+        const agentPopoverOpen = document.querySelector('wa-popover[open] .settings-panel-presets') !== null
 
-        if (agentPopoverOpen && !overlayBlocked) {
+        if (agentPopoverOpen && !hasBlockingOverlay({ allowPopoverContaining: '.settings-panel-presets' })) {
             // Reuse the toggle event — its handler closes the popover and
             // focuses the textarea when the popover was open.
             e.preventDefault()
             e.stopPropagation()
             window.dispatchEvent(new CustomEvent('twicc:toggle-agent-settings'))
-        } else if (!overlayBlocked) {
-            const active = document.activeElement
-            const inEditable = active != null && active.closest('.xterm') === null && (
-                active.tagName === 'INPUT' ||
-                active.tagName === 'TEXTAREA' ||
-                active.tagName === 'WA-INPUT' ||
-                active.tagName === 'WA-TEXTAREA' ||
-                active.tagName === 'WA-SELECT' ||
-                active.isContentEditable
-            )
-            if (!inEditable) {
-                e.preventDefault()
-                e.stopPropagation()
-                if (SESSION_CHAT_ROUTES.has(route.name)) {
-                    focusMessageTextarea()
-                } else {
-                    const chatRouteName = route.name.startsWith('projects-session') ? 'projects-session' : 'session'
-                    router.push({ name: chatRouteName, params: route.params }).then(() => focusMessageTextarea())
-                }
+        } else if (canStealFocus()) {
+            e.preventDefault()
+            e.stopPropagation()
+            if (SESSION_CHAT_ROUTES.has(route.name)) {
+                focusMessageTextarea()
+            } else {
+                const chatRouteName = route.name.startsWith('projects-session') ? 'projects-session' : 'session'
+                router.push({ name: chatRouteName, params: route.params }).then(() => focusMessageTextarea())
             }
         }
     }

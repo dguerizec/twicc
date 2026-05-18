@@ -15,10 +15,11 @@
 // Instead, each button handler emits ('submit', payload) and the parent shell
 // is responsible for dispatching the response.
 
-import { ref, computed, reactive, watch, nextTick, useId } from 'vue'
+import { ref, computed, reactive, watch, nextTick, onMounted, useId } from 'vue'
 import JsonHumanView from '../../../../json/JsonHumanView.vue'
 import AppTooltip from '../../../../ui/AppTooltip.vue'
 import { getLanguageFromPath } from '../../../../../utils/languages'
+import { canStealFocus } from '../../../../../utils/focusGuard'
 
 // Per-tool overrides for JsonHumanView display types.
 // Only keys that need an override (not auto-detected) are listed.
@@ -127,6 +128,9 @@ const showDenyReason = ref(false)
 // Template ref for the deny reason input
 const denyReasonInputRef = ref(null)
 
+// Template ref for the Approve button (auto-focused when the approval block appears)
+const approveButtonRef = ref(null)
+
 // Whether the form is in "approve with changes" edit mode
 const isEditing = ref(false)
 
@@ -181,7 +185,24 @@ watch(() => props.pendingRequest?.request_id, () => {
     Object.keys(questionSelections).forEach(k => delete questionSelections[k])
     Object.keys(otherTexts).forEach(k => delete otherTexts[k])
     Object.keys(otherActive).forEach(k => delete otherActive[k])
+    // Re-focus the Approve button for the new request
+    focusApproveButton()
 })
+
+// Auto-focus the Approve button when the approval block appears or a new request arrives.
+// Scoped to tool_approval — ask_user_question intentionally doesn't grab focus.
+// Also gated by canStealFocus(): we don't yank focus when the user is typing
+// in another field or has an overlay (dialog/popover/dropdown/text-selection
+// comment) open. The matching outline is driven by CSS — see the style block.
+function focusApproveButton() {
+    if (requestType.value !== 'tool_approval') return
+    nextTick(() => {
+        if (!canStealFocus()) return
+        approveButtonRef.value?.focus()
+    })
+}
+
+onMounted(focusApproveButton)
 
 // ============================================================================
 // Tool approval computed
@@ -713,6 +734,8 @@ function handleSubmitQuestions() {
                 <AppTooltip v-if="hasEditableContent" :for="approveWithChangesButtonId">Approve using the edited tool input.</AppTooltip>
                 <wa-button
                     :id="approveButtonId"
+                    ref="approveButtonRef"
+                    class="auto-focused"
                     variant="brand"
                     size="small"
                     :disabled="isResponding"
@@ -957,6 +980,14 @@ function handleSubmitQuestions() {
 .mode-selector-input {
     flex: 1;
     max-width: 24rem;
+}
+
+/* Always show the focus outline on this button (mirrors Web Awesome's :focus-visible
+   style). Default :focus-visible would skip mouse and programmatic focus — we want
+   the auto-focused Approve button to make its focused state obvious for everyone. */
+wa-button.auto-focused::part(base):focus {
+    outline: var(--wa-focus-ring);
+    outline-offset: var(--wa-focus-ring-offset);
 }
 
 .pending-request-actions {

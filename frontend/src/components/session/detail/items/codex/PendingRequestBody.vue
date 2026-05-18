@@ -1,9 +1,10 @@
 <script setup>
-import { computed, useId } from 'vue'
+import { computed, nextTick, onMounted, ref, useId, watch } from 'vue'
 import AppTooltip from '../../../../ui/AppTooltip.vue'
 import { getProviderLabel } from '../../../../../providers'
 import { useDataStore } from '../../../../../stores/data'
 import { fileIconFor } from '../../../../../providers/utils/path'
+import { canStealFocus } from '../../../../../utils/focusGuard'
 
 const props = defineProps({
     pendingRequest: { type: Object, required: true },
@@ -21,6 +22,25 @@ const approveAddAllowRuleId = useId()
 const approveAllowNetworkId = useId()
 const approvePermsTurnId = useId()
 const approvePermsSessionId = useId()
+
+// Template ref for the Approve dropdown trigger (auto-focused when the approval block appears).
+// Codex has no ask_user_question variant, so every pending request gets the focus.
+const approveButtonRef = ref(null)
+
+// Gated by canStealFocus(): we don't yank focus if the user is typing in
+// another field or has an overlay (dialog/popover/dropdown/text-selection
+// comment) open. The matching outline is driven by CSS — see the style block.
+function focusApproveButton() {
+    nextTick(() => {
+        if (!canStealFocus()) return
+        approveButtonRef.value?.focus()
+    })
+}
+
+onMounted(focusApproveButton)
+
+// Re-focus the Approve button when a new request takes over the slot (queued approvals).
+watch(() => props.pendingRequest?.request_id, focusApproveButton)
 
 // Codex tool_name: 'commandExecution' | 'fileChange' | 'permissions'.
 const toolName = computed(() => props.pendingRequest.tool_name || 'unknown')
@@ -316,6 +336,8 @@ function handleCancelTurn() {
             <wa-dropdown placement="top-end">
                 <wa-button
                     :id="approveButtonId"
+                    ref="approveButtonRef"
+                    class="auto-focused"
                     slot="trigger"
                     variant="brand"
                     size="small"
@@ -519,5 +541,13 @@ function handleCancelTurn() {
     flex-wrap: wrap;
     justify-content: flex-end;
     gap: var(--wa-space-s);
+}
+
+/* Always show the focus outline on this button (mirrors Web Awesome's :focus-visible
+   style). Default :focus-visible would skip mouse and programmatic focus — we want
+   the auto-focused Approve button to make its focused state obvious for everyone. */
+wa-button.auto-focused::part(base):focus {
+    outline: var(--wa-focus-ring);
+    outline-offset: var(--wa-focus-ring-offset);
 }
 </style>
