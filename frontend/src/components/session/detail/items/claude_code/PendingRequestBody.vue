@@ -103,6 +103,12 @@ const props = defineProps({
         type: Boolean,
         default: false,
     },
+    // Declared even though unused locally: the shell passes session-id to every body,
+    // and our fragment-root template can't absorb it as a fallthrough attribute (Vue would warn).
+    sessionId: {
+        type: String,
+        required: true,
+    },
 })
 
 const emit = defineEmits(['submit'])
