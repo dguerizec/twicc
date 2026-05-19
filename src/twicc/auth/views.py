@@ -16,6 +16,12 @@ from django.conf import settings
 from django.http import JsonResponse
 
 from twicc.auth.hashers import verify_password
+from twicc.auth.session_auth import (
+    SESSION_AUTH_KEY,
+    SESSION_FINGERPRINT_KEY,
+    bind_session,
+    is_session_authenticated,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -97,11 +103,20 @@ def auth_check(request):
         - {"authenticated": true, "password_required": false} if no password configured
         - {"authenticated": false, "password_required": true} if not authenticated
     """
-    password_required = bool(settings.TWICC_PASSWORD_HASH)
-    if not password_required:
+    stored_hash = settings.TWICC_PASSWORD_HASH
+    if not stored_hash:
         return JsonResponse({"authenticated": True, "password_required": False})
 
-    authenticated = request.session.get("authenticated", False)
+    session = request.session
+    authenticated = is_session_authenticated(
+        session.get(SESSION_AUTH_KEY),
+        session.get(SESSION_FINGERPRINT_KEY),
+        stored_hash,
+    )
+    # Drop a stale session so the next request doesn't keep retrying it.
+    if not authenticated and session.get(SESSION_AUTH_KEY):
+        session.flush()
+
     return JsonResponse({
         "authenticated": authenticated,
         "password_required": True,
@@ -145,7 +160,7 @@ def login(request):
     password = data.get("password", "")
 
     if verify_password(password, settings.TWICC_PASSWORD_HASH):
-        request.session["authenticated"] = True
+        bind_session(request.session, settings.TWICC_PASSWORD_HASH)
         # Clear failed attempts on success
         _login_attempts.pop(ip, None)
         logger.info("Successful login from %s", ip)

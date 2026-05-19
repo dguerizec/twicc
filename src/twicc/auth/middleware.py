@@ -11,6 +11,12 @@ import logging
 from django.conf import settings
 from django.http import JsonResponse
 
+from twicc.auth.session_auth import (
+    SESSION_AUTH_KEY,
+    SESSION_FINGERPRINT_KEY,
+    is_session_authenticated,
+)
+
 logger = logging.getLogger(__name__)
 
 # Paths that are always accessible (no auth required)
@@ -50,8 +56,18 @@ class PasswordAuthMiddleware:
         if not request.path.startswith("/api/"):
             return self.get_response(request)
 
-        # Check session authentication for API requests
-        if not request.session.get("authenticated"):
+        # Check session authentication for API requests. A session that was
+        # logged in against an older password hash (rotated since) is treated
+        # as unauthenticated, and its server-side row is dropped so it can't
+        # be re-used by a parallel request.
+        session = request.session
+        if not is_session_authenticated(
+            session.get(SESSION_AUTH_KEY),
+            session.get(SESSION_FINGERPRINT_KEY),
+            settings.TWICC_PASSWORD_HASH,
+        ):
+            if session.get(SESSION_AUTH_KEY):
+                session.flush()
             return JsonResponse(
                 {"error": "Authentication required"},
                 status=401,

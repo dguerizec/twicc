@@ -29,6 +29,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - In the `@`, `/`, `$`, and `!` popovers, pressing Enter when nothing matches now closes the popover and keeps the typed text in the textarea.
 - Bump `claude-agent-sdk` from 0.1.69 to 0.2.82 (bundled Claude Code CLI: 2.1.121 → 2.1.142)
 - Password storage upgraded to salted PBKDF2-SHA256 (legacy SHA-256 hashes still accepted, auto-upgraded on next `password set`), with the `.env` forced to mode 0600.
+- Logged-in sessions are now invalidated when the password is changed (or cleared), so rotating the password actually logs out from everywhere.
 
 ### Fixed
 

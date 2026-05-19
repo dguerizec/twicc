@@ -42,6 +42,11 @@ from urllib.parse import parse_qs
 from asgiref.sync import sync_to_async
 from django.conf import settings
 
+from twicc.auth.session_auth import (
+    SESSION_AUTH_KEY,
+    SESSION_FINGERPRINT_KEY,
+    is_session_authenticated,
+)
 from twicc.providers.helpers import get_provider_helpers_registry
 
 logger = logging.getLogger(__name__)
@@ -648,10 +653,14 @@ async def terminal_application(scope, receive, send):
         return
 
     # ── Authentication ────────────────────────────────────────────────
+    # A session bound to an older password hash (rotated since login)
+    # is rejected the same way as an unauthenticated one.
     if settings.TWICC_PASSWORD_HASH:
         session = scope.get("session", {})
-        is_authenticated = await sync_to_async(session.get)("authenticated")
-        if not is_authenticated:
+        session_auth, session_fp = await sync_to_async(
+            lambda: (session.get(SESSION_AUTH_KEY), session.get(SESSION_FINGERPRINT_KEY))
+        )()
+        if not is_session_authenticated(session_auth, session_fp, settings.TWICC_PASSWORD_HASH):
             logger.warning("Terminal WebSocket rejected: not authenticated")
             await send({"type": "websocket.accept"})
             await send({"type": "websocket.send", "text": json.dumps({"type": "auth_failure"})})

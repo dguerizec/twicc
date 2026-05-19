@@ -22,6 +22,11 @@ from django.core.asgi import get_asgi_application
 from django.urls import path
 
 from twicc.agent import AgentInfo, serialize_agent_info
+from twicc.auth.session_auth import (
+    SESSION_AUTH_KEY,
+    SESSION_FINGERPRINT_KEY,
+    is_session_authenticated,
+)
 from twicc.agent.registry import get_agent_manager_registry
 from twicc.agent_settings_presets import read_agent_settings_presets, write_agent_settings_presets
 from twicc.core.enums import Provider
@@ -324,13 +329,17 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
         When set, only messages whose ``type`` matches the list are sent.
         When absent, all messages are sent (backward compatible).
         """
-        # Check authentication if password protection is enabled
+        # Check authentication if password protection is enabled.
+        # A session bound to an older password hash (rotated since login)
+        # is rejected the same way as an unauthenticated one.
         if settings.TWICC_PASSWORD_HASH:
             session = self.scope.get("session", {})
             # Session.get() triggers a synchronous DB load, so we must
             # wrap it with sync_to_async in this async consumer.
-            is_authenticated = await sync_to_async(session.get)("authenticated")
-            if not is_authenticated:
+            session_auth, session_fp = await sync_to_async(
+                lambda: (session.get(SESSION_AUTH_KEY), session.get(SESSION_FINGERPRINT_KEY))
+            )()
+            if not is_session_authenticated(session_auth, session_fp, settings.TWICC_PASSWORD_HASH):
                 logger.warning("WebSocket connection rejected: not authenticated")
                 # Accept first so we can send a message and a close code.
                 # Closing before accept causes the close code to be lost
