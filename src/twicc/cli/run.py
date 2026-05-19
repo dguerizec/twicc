@@ -65,9 +65,11 @@ logging.getLogger("twicc").addHandler(_startup_console)
 # Now we can import Django-dependent modules
 from django.core.management import call_command  # noqa: E402
 
+from twicc.instance_lock import InstanceAlreadyRunning, InstanceLock  # noqa: E402
 from twicc.orchestrator import get_orchestrator_registry  # noqa: E402
+from twicc.paths import get_data_dir  # noqa: E402
 from twicc.pricing_task import start_price_sync_task, sync_all_providers  # noqa: E402
-from twicc.search import init_search_index, shutdown_search_index  # noqa: E402
+from twicc.search import SearchIndexLockedError, init_search_index, shutdown_search_index  # noqa: E402
 from twicc.search_indexing_task import (  # noqa: E402
     get_active_indexing_tasks,
     kick_off_search_indexing,
@@ -91,6 +93,7 @@ async def _orchestrate_global_search(
     orchestrators,
     shutdown_event: asyncio.Event,
     search_index_ready: asyncio.Event,
+    request_shutdown,
 ) -> None:
     """Coordinate the cross-provider parts of the search lifecycle.
 
@@ -109,13 +112,29 @@ async def _orchestrate_global_search(
     against this boot pass.
 
     ``shutdown_event`` short-circuits both gates so a server stopping
-    mid-startup doesn't leave dangling work.
+    mid-startup doesn't leave dangling work. ``request_shutdown`` is the
+    callback used to stop the server when initialization fails fatally
+    (currently: Tantivy writer lock already held by another process).
     """
     await orchestrators.wait_initial_sync_done()
     if shutdown_event.is_set():
         return
 
-    await asyncio.to_thread(init_search_index)
+    try:
+        await asyncio.to_thread(init_search_index)
+    except SearchIndexLockedError as exc:
+        logger.error(
+            "Cannot start TwiCC: the search index writer lock at %s is already held.\n"
+            "This usually means a previous TwiCC process did not shut down cleanly and a\n"
+            "subprocess (typically the background compute worker) is still running.\n"
+            "Run `pkill -f twicc` to clean up stale processes, then start TwiCC again.\n"
+            "If the issue persists, identify the holder with:\n"
+            "  lsof %s/.tantivy-writer.lock",
+            exc.search_dir, exc.search_dir,
+        )
+        request_shutdown()
+        return
+
     logger.info("Search index initialized (after every provider's initial sync)")
     search_index_ready.set()
 
@@ -164,13 +183,40 @@ async def run_server(port: int):
     orchestrators = get_orchestrator_registry()
     await orchestrators.start_all(shutdown_event, search_index_ready)
 
+    # Configure uvicorn
+    # log_config=None prevents Uvicorn from installing its own StreamHandlers;
+    # uvicorn loggers are handled by Django's LOGGING config instead.
+    # The server is created up front so the search-lifecycle coordinator can
+    # request a graceful shutdown via ``request_shutdown`` if it fails fatally
+    # (e.g. another process holds the Tantivy writer lock).
+    config = uvicorn.Config(
+        application,
+        host="0.0.0.0",
+        port=port,
+        log_level="info",
+        log_config=None,
+    )
+    server = uvicorn.Server(config)
+
+    def request_shutdown() -> None:
+        """Trigger a graceful shutdown of every component.
+
+        Used both by the OS signal handler and by background coroutines
+        that encounter a non-recoverable startup error.
+        """
+        # Cooperative stop for any provider's blocking sync threads
+        # (async tasks listen for ``shutdown_event`` directly).
+        orchestrators.request_thread_stop_all()
+        shutdown_event.set()
+        server.should_exit = True
+
     # Cross-provider search-lifecycle coordinator. Runs in parallel to
     # the server so ``init_search_index`` doesn't gate uvicorn startup.
     # The background search-indexing task it spawns (and any hot-toggle
     # re-trigger) is tracked via ``get_active_indexing_tasks`` so we
     # can stop every live run cleanly below.
     search_orchestrator_task = asyncio.create_task(
-        _orchestrate_global_search(orchestrators, shutdown_event, search_index_ready)
+        _orchestrate_global_search(orchestrators, shutdown_event, search_index_ready, request_shutdown)
     )
 
     # Cross-provider periodic tasks
@@ -188,25 +234,9 @@ async def run_server(port: int):
     heartbeat_task = asyncio.create_task(heartbeat_loop())
     pending_watcher_task = asyncio.create_task(get_pending_sessions_watcher().start())
 
-    # Configure uvicorn
-    # log_config=None prevents Uvicorn from installing its own StreamHandlers;
-    # uvicorn loggers are handled by Django's LOGGING config instead.
-    config = uvicorn.Config(
-        application,
-        host="0.0.0.0",
-        port=port,
-        log_level="info",
-        log_config=None,
-    )
-    server = uvicorn.Server(config)
-
     def handle_signal(signum, frame):
         logger.info("Received signal %s, initiating shutdown...", signum)
-        # Cooperative stop for any provider's blocking sync threads
-        # (async tasks listen for ``shutdown_event`` directly).
-        orchestrators.request_thread_stop_all()
-        shutdown_event.set()
-        server.should_exit = True
+        request_shutdown()
 
     signal.signal(signal.SIGTERM, handle_signal)
     signal.signal(signal.SIGINT, handle_signal)
@@ -269,35 +299,54 @@ async def run_server(port: int):
 
 
 def main():
-    logger.info("TWICC starting...")
-    logger.info("Environment loaded")
-
-    from django.conf import settings as django_settings
-    logger.info("TwiCC launch prefix: %s", django_settings.TWICC_LAUNCH_PREFIX)
-
-    # Migrations auto
-    call_command("migrate", verbosity=0)
-    logger.info("Migrations applied")
-
-    # Each provider's auth_task handles CLI authentication detection: it logs
-    # the current state and broadcasts it to connected clients. Sending
-    # messages is disabled in the UI when the owning provider is not
-    # authenticated.
-
-    # Parse port
-    port = os.environ.get("TWICC_PORT", "3500")
+    # Acquire the per-data-dir instance lock before doing anything that
+    # touches state shared by every TwiCC process (DB migrations, Tantivy
+    # writer, ports). The lock is a POSIX flock on <data_dir>/twicc.lock,
+    # released automatically by the kernel on any kind of process death
+    # (including SIGKILL or crash) — no stale-lock cleanup needed.
+    instance_lock = InstanceLock(get_data_dir())
     try:
-        port_int = int(port)
-        if not (1 <= port_int <= 65535):
-            raise ValueError()
-    except ValueError:
-        logger.error("Invalid port '%s'. Must be a number between 1 and 65535.", port)
+        instance_lock.acquire()
+    except InstanceAlreadyRunning as exc:
+        logger.error("%s", exc)
         sys.exit(1)
 
-    logger.info("Server starting on http://0.0.0.0:%d", port_int)
+    try:
+        logger.info("TWICC starting...")
+        logger.info("Environment loaded")
 
-    # Remove the startup console handler -- from now on, only the file handler remains
-    logging.getLogger("twicc").removeHandler(_startup_console)
+        from django.conf import settings as django_settings
+        logger.info("TwiCC launch prefix: %s", django_settings.TWICC_LAUNCH_PREFIX)
 
-    # Run async server (initial sync runs as an async task inside run_server)
-    asyncio.run(run_server(port_int))
+        # Migrations auto
+        call_command("migrate", verbosity=0)
+        logger.info("Migrations applied")
+
+        # Each provider's auth_task handles CLI authentication detection: it logs
+        # the current state and broadcasts it to connected clients. Sending
+        # messages is disabled in the UI when the owning provider is not
+        # authenticated.
+
+        # Parse port
+        port = os.environ.get("TWICC_PORT", "3500")
+        try:
+            port_int = int(port)
+            if not (1 <= port_int <= 65535):
+                raise ValueError()
+        except ValueError:
+            logger.error("Invalid port '%s'. Must be a number between 1 and 65535.", port)
+            sys.exit(1)
+
+        logger.info("Server starting on http://localhost:%d", port_int)
+
+        # Now that the port is known, write the sidecar info file so a second
+        # ``twicc`` invocation can show a helpful "Holder: PID X, port Y" line.
+        instance_lock.write_info(port=port_int)
+
+        # Remove the startup console handler -- from now on, only the file handler remains
+        logging.getLogger("twicc").removeHandler(_startup_console)
+
+        # Run async server (initial sync runs as an async task inside run_server)
+        asyncio.run(run_server(port_int))
+    finally:
+        instance_lock.release()

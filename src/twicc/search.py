@@ -37,6 +37,22 @@ _writer = None  # tantivy.IndexWriter — no public type hint in tantivy-py
 _schema: tantivy.Schema | None = None
 _writer_lock = threading.Lock()  # Serialize all writer operations (add, delete, commit)
 
+
+class SearchIndexLockedError(RuntimeError):
+    """Raised when the Tantivy writer lock is already held by another process.
+
+    Distinguishes the recoverable "another process owns the index" case
+    (handled by the CLI with a user-facing error message) from generic
+    Tantivy failures, which still propagate as ``ValueError``.
+    """
+
+    def __init__(self, search_dir):
+        self.search_dir = search_dir
+        super().__init__(
+            f"Search index writer lock at {search_dir} is held by another process."
+        )
+
+
 # Score multiplier for title matches — titles are more important than message content
 TITLE_SCORE_BOOST = 3.0
 
@@ -129,7 +145,21 @@ def init_search_index() -> None:
 
     _index = tantivy.Index(_schema, path=str(search_dir))
     _register_tokenizer(_index)
-    _writer = _index.writer(heap_size=50_000_000, num_threads=1)
+    try:
+        _writer = _index.writer(heap_size=50_000_000, num_threads=1)
+    except ValueError as exc:
+        # Tantivy raises a plain ValueError with "Failed to acquire Lockfile: LockBusy"
+        # when the writer lock is already held — typically by an orphan TwiCC subprocess
+        # (background compute worker that survived a hard kill of the main server) or
+        # by another live TwiCC instance running on the same data directory. Surface a
+        # specific exception so the CLI can render a user-friendly message instead of
+        # a raw stack trace.
+        message = str(exc)
+        if "LockBusy" in message or "Lockfile" in message:
+            _index = None
+            _schema = None
+            raise SearchIndexLockedError(search_dir) from exc
+        raise
 
     logger.info("Search index initialized at %s", search_dir)
 

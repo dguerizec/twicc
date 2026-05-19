@@ -164,6 +164,41 @@ def stop_background_task(ctx: ComputeContext) -> None:
 # =============================================================================
 
 
+def _set_pdeathsig_linux() -> None:
+    """Ask the kernel to send SIGTERM to this process when its parent dies (Linux only).
+
+    Calls ``prctl(PR_SET_PDEATHSIG, SIGTERM)`` so a hard kill of the main
+    TwiCC server doesn't leave this worker orphaned still holding the
+    Tantivy writer lock — which is what blocked the next ``twicc`` start
+    until a manual ``pkill``. Must be called inside the child process,
+    after spawn/fork, so the setting applies to the child rather than
+    the parent.
+
+    No-op on macOS and Windows: there is no portable equivalent there,
+    so a hard kill of the parent on those platforms still leaves the
+    worker orphaned. That is a known limitation, not a regression
+    introduced by this code.
+
+    Best-effort: any failure is logged at DEBUG level and the worker
+    keeps running with the same lifetime semantics it had before.
+    """
+    import sys
+    if sys.platform != "linux":
+        return
+    try:
+        import ctypes
+        PR_SET_PDEATHSIG = 1
+        libc = ctypes.CDLL("libc.so.6", use_errno=True)
+        import signal as _signal
+        if libc.prctl(PR_SET_PDEATHSIG, _signal.SIGTERM, 0, 0, 0) != 0:
+            logger.debug(
+                "prctl(PR_SET_PDEATHSIG) failed: errno=%d",
+                ctypes.get_errno(),
+            )
+    except Exception as exc:
+        logger.debug("Could not set PR_SET_PDEATHSIG: %s", exc)
+
+
 def compute_worker_main(command_queue, result_queue, stop_event, compute_factory: str) -> None:
     """
     Main function running in the compute worker process.
@@ -177,6 +212,14 @@ def compute_worker_main(command_queue, result_queue, stop_event, compute_factory
     importing the provider's compute module (which pulls in Django models)
     does not crash the spawn worker before the app registry is ready.
     """
+    # Tie the worker's lifetime to the parent's on Linux: if the main TwiCC
+    # process dies hard (SIGKILL, panic), the kernel sends us SIGTERM, which
+    # default-handles to a clean exit. Without this, the orphaned worker would
+    # keep holding the Tantivy writer lock and block the next ``twicc`` start.
+    # Done before any other setup so the window where we could be orphaned is
+    # as small as possible.
+    _set_pdeathsig_linux()
+
     import signal
 
     # Ensure default signal handling — with "fork" mode the child would inherit
