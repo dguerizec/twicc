@@ -33,7 +33,7 @@ from twicc.core.enums import Provider
 from twicc.core.services.session_creation import create_session_from_payload
 from twicc.providers.claude_code.ws import ClaudeCodeWSHandler
 from twicc.providers.codex.ws import CodexWSHandler
-from twicc.providers.state import ProviderDisabledError, ensure_provider_running
+from twicc.providers.state import ProviderDisabledError, ensure_provider_running, is_provider_enabled
 from twicc.providers.helpers import AgentSettings, get_provider_helpers, get_provider_helpers_registry
 from twicc.synced_settings import _settings_lock, prepare_settings_for_client, read_synced_settings, write_synced_settings
 from twicc.workspaces import read_workspaces, write_workspaces
@@ -465,7 +465,12 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
         # Provider-specific on-connect messages (e.g. claude_code:auth_updated,
         # claude_code:settings_presets_updated, claude_code:anthropic_status).
         # Each handler yields fully-formed messages with their type already prefixed.
-        for handler in self._provider_handlers.values():
+        # Disabled providers are skipped: their orchestrator isn't running, so any
+        # state we'd push (auth, usage, statuspage) is either stale or about to
+        # be computed inline (e.g. ``codex login status``) for nothing.
+        for provider, handler in self._provider_handlers.items():
+            if not is_provider_enabled(provider):
+                continue
             async for msg in handler.get_connect_messages():
                 if self._should_send(msg.get("type", "")):
                     await self.send_json(msg)

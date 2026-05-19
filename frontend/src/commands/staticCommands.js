@@ -47,12 +47,13 @@ const PROVIDER_DEFAULTS_SIMPLE_FIELDS = [
  * ``enforceAgentSettingsConsistency`` automatically (rolls back
  * context_max / effort when the new model doesn't support them).
  */
-function buildProviderDefaultsCommands() {
+function buildProviderDefaultsCommands(settings) {
     const commands = []
     for (const provider of getRegisteredProviders()) {
         const helpers = getProviderHelpers(provider)
         if (!helpers) continue
         const category = `provider:${provider}`
+        const whenEnabled = () => settings.enabledProviders.includes(provider)
 
         if (helpers.supportsAgentSetting('selected_model')) {
             commands.push({
@@ -60,6 +61,7 @@ function buildProviderDefaultsCommands() {
                 label: 'Change Default Model…',
                 icon: 'robot',
                 category,
+                when: whenEnabled,
                 items: () => {
                     const current = helpers.getDefaultValue('selected_model')
                     const groups = helpers.getModelSelectGroups(helpers.getModelRegistry?.() ?? [])
@@ -88,6 +90,7 @@ function buildProviderDefaultsCommands() {
                 label,
                 icon,
                 category,
+                when: whenEnabled,
                 items: () => {
                     const current = helpers.getDefaultValue(field)
                     const ctx = { effectiveModel: helpers.getDefaultValue('selected_model') }
@@ -752,7 +755,7 @@ export function initStaticCommands(router) {
 
         // ── Provider defaults (one section per registered provider) ───
 
-        ...buildProviderDefaultsCommands(),
+        ...buildProviderDefaultsCommands(settings),
 
         // ── UI ────────────────────────────────────────────────────────
 
@@ -761,13 +764,15 @@ export function initStaticCommands(router) {
             label: 'Change Default Provider…',
             icon: 'plug',
             category: 'ui',
-            when: () => getRegisteredProviders().length > 1,
-            items: () => getProviderOptions().map(({ value, label }) => ({
-                id: value,
-                label,
-                action: () => settings.setDefaultProvider(value),
-                active: settings.defaultProvider === value,
-            })),
+            when: () => settings.enabledProviders.length > 1,
+            items: () => getProviderOptions()
+                .filter(({ value }) => settings.enabledProviders.includes(value))
+                .map(({ value, label }) => ({
+                    id: value,
+                    label,
+                    action: () => settings.setDefaultProvider(value),
+                    active: settings.defaultProvider === value,
+                })),
         },
         {
             id: 'ui.manage-workspaces',

@@ -99,16 +99,21 @@ watch(versionMismatchDetected, (mismatch) => {
 // Persistent toast(s) when a provider's CLI is not authenticated.
 // One toast per registered provider whose helpers expose ``getAuthState``;
 // providers without an auth gate (default base implementation) are skipped
-// entirely. Each toast stays visible until the matching auth state flips
-// back to ``true``.
+// entirely. The toast is shown only when the provider is BOTH enabled
+// (settingsStore.enabledProviders) AND known to be unauthenticated, so a
+// disabled provider never surfaces a banner — and an active banner is
+// cleared as soon as the user disables its provider.
 const _providerAuthToastItems = new Map()
 for (const provider of getRegisteredProviders()) {
     const helpers = getProviderHelpers(provider)
     const authStateGetter = helpers.getAuthState()
     if (!authStateGetter) continue
-    watch(authStateGetter, (authenticated) => {
+    const shouldShow = computed(
+        () => settingsStore.enabledProviders.includes(provider) && authStateGetter() === false,
+    )
+    watch(shouldShow, (show) => {
         const existing = _providerAuthToastItems.get(provider)
-        if (authenticated === false && !existing) {
+        if (show && !existing) {
             const item = toast.custom(ProviderAuthToastContent, {
                 type: 'warning',
                 title: `${helpers.constructor.label} CLI not authenticated`,
@@ -119,7 +124,7 @@ for (const provider of getRegisteredProviders()) {
                 },
             })
             _providerAuthToastItems.set(provider, item)
-        } else if (authenticated === true && existing) {
+        } else if (!show && existing) {
             existing.clear?.()
             _providerAuthToastItems.delete(provider)
         }

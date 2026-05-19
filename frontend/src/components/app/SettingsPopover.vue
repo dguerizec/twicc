@@ -164,13 +164,15 @@ function goBackToNav() {
 const shortcutGroups = computed(() => {
     const mod = store.isMac ? '⌘' : 'Ctrl'
 
-    // Collect command activation chars across every registered provider so
+    // Collect command activation chars across every enabled provider so
     // the cheat sheet stays in sync with what the message input actually
-    // reacts to. A char shared by several providers (e.g. ``/`` may be
-    // claimed by both Claude Code and Codex once Codex lands) collapses to
-    // a single row whose description lists every provider that handles it.
+    // reacts to. Disabled providers are skipped — their activation chars
+    // don't open the picker. A char shared by several providers (e.g.
+    // ``/`` may be claimed by both Claude Code and Codex) collapses to a
+    // single row whose description lists every provider that handles it.
     const charToProviderLabels = new Map()
     for (const provider of getRegisteredProviders()) {
+        if (!enabledProviders.value.has(provider)) continue
         const helpers = getProviderHelpers(provider)
         const label = getProviderLabel(provider)
         for (const char of helpers?.getCommandActivationChars() ?? []) {

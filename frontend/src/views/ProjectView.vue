@@ -67,8 +67,10 @@ const _authAwareProviders = getRegisteredProviders()
     .filter(({ helpers }) => helpers.getAuthState() !== null)
 
 const unauthenticatedProviders = computed(() => {
+    const enabled = new Set(settingsStore.enabledProviders)
     const result = []
     for (const { provider, helpers } of _authAwareProviders) {
+        if (!enabled.has(provider)) continue
         const authStateGetter = helpers.getAuthState()
         if (authStateGetter() !== false) continue
         result.push({
