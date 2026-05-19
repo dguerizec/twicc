@@ -114,7 +114,7 @@ def sync_session_items(session: Session, file_path: Path) -> list[int]:
             actually_new_count = len(items_to_create) - pre_existing
 
             # Bulk create all items (silently skips items that already exist)
-            SessionItem.objects.bulk_create(items_to_create, ignore_conflicts=True)
+            SessionItem.objects.bulk_create(items_to_create, ignore_conflicts=True, batch_size=50)
 
             # Update session tracking fields
             session.last_line = current_line_num

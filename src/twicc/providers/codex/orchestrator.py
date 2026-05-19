@@ -309,7 +309,7 @@ class CodexOrchestrator(BaseOrchestrator):
                     s.title = new_title
                     changed.append(s)
             if changed:
-                Session.objects.bulk_update(changed, ["title"])
+                Session.objects.bulk_update(changed, ["title"], batch_size=50)
             return changed
 
         changed = await sync_to_async(_apply)()

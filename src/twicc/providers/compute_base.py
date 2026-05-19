@@ -2020,7 +2020,7 @@ class BaseSessionCompute:
                 })
                 for upd in item_updates
             ]
-            SessionItem.objects.bulk_update(items, item_fields, 50)
+            SessionItem.objects.bulk_update(items, item_fields, batch_size=50)
 
         # 2. Apply content overrides (rare: provider-specific transformations applied at compute time)
         content_overrides = msg.get('content_overrides', [])
@@ -2029,7 +2029,7 @@ class BaseSessionCompute:
                 SessionItem(id=ovr['id'], content=ovr['content'])
                 for ovr in content_overrides
             ]
-            SessionItem.objects.bulk_update(items, ['content'], 50)
+            SessionItem.objects.bulk_update(items, ['content'], batch_size=50)
 
         # 3. Sync tool result links (diff-based: create/update/delete)
         trl_to_create = msg.get('tool_result_links_to_create', [])
@@ -2047,7 +2047,7 @@ class BaseSessionCompute:
                 )
                 for d in trl_to_create
             ]
-            ToolResultLink.objects.bulk_create(links, ignore_conflicts=True)
+            ToolResultLink.objects.bulk_create(links, ignore_conflicts=True, batch_size=50)
 
         trl_to_update = msg.get('tool_result_links_to_update', [])
         if trl_to_update:
@@ -2066,7 +2066,7 @@ class BaseSessionCompute:
                 )
                 for d in trl_to_update
             ]
-            ToolResultLink.objects.bulk_update(links, trl_update_fields, 50)
+            ToolResultLink.objects.bulk_update(links, trl_update_fields, batch_size=50)
 
         trl_to_delete = msg.get('tool_result_links_to_delete', [])
         if trl_to_delete:
@@ -2086,7 +2086,7 @@ class BaseSessionCompute:
                 )
                 for d in agent_links_to_create
             ]
-            AgentLink.objects.bulk_create(links, ignore_conflicts=True)
+            AgentLink.objects.bulk_create(links, ignore_conflicts=True, batch_size=50)
 
         agent_links_to_update = msg.get('agent_links_to_update', [])
         if agent_links_to_update:
@@ -2103,7 +2103,7 @@ class BaseSessionCompute:
                 )
                 for d in agent_links_to_update
             ]
-            AgentLink.objects.bulk_update(links, agent_link_fields, 50)
+            AgentLink.objects.bulk_update(links, agent_link_fields, batch_size=50)
 
         agent_links_to_delete = msg.get('agent_links_to_delete', [])
         if agent_links_to_delete:
@@ -2411,7 +2411,7 @@ class BaseSessionCompute:
 
         # Bulk create all items
         items_only = [item for item, _ in items_to_create]
-        SessionItem.objects.bulk_create(items_only, ignore_conflicts=True)
+        SessionItem.objects.bulk_create(items_only, ignore_conflicts=True, batch_size=50)
 
         # Track line_nums of new and updated items
         new_line_nums: set[int] = {item.line_num for item in items_only}
