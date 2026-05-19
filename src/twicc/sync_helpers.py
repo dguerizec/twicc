@@ -15,6 +15,8 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+from django.db import transaction
+
 from twicc.core.models import Session, SessionItem
 
 logger = logging.getLogger(__name__)
@@ -37,6 +39,7 @@ def check_file_has_content(file_path: Path) -> bool:
     return False
 
 
+@transaction.atomic
 def sync_session_items(session: Session, file_path: Path) -> list[int]:
     """
     Read new lines from a JSONL file and insert them as raw SessionItem rows.
@@ -46,6 +49,10 @@ def sync_session_items(session: Session, file_path: Path) -> list[int]:
 
     Used by initial sync where speed matters and metadata will be computed
     in background anyway.
+
+    Wrapped in ``transaction.atomic`` so the pre-existing count, the
+    ``SessionItem`` bulk_create, and the tracking-field save all share a
+    single write-lock acquisition and one fsync per session.
 
     Args:
         session: The session (must already be saved to the database)
