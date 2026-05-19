@@ -143,11 +143,16 @@ function loadSettings() {
                 parsed.displayMode = debugEnabled ? DISPLAY_MODE.DEBUG : baseMode
                 delete parsed.baseDisplayMode
                 delete parsed.debugEnabled
+                _localStorageNeedsRewrite = true
             }
 
             // Migrate themeMode → colorScheme
-            if (!('colorScheme' in parsed) && 'themeMode' in parsed) {
-                parsed.colorScheme = parsed.themeMode
+            if ('themeMode' in parsed) {
+                if (!('colorScheme' in parsed)) {
+                    parsed.colorScheme = parsed.themeMode
+                }
+                delete parsed.themeMode
+                _localStorageNeedsRewrite = true
             }
 
             // Migrate Claude Code default settings to claudeCode-prefixed keys.
@@ -172,6 +177,7 @@ function loadSettings() {
             }
             if (renamed.length) {
                 console.info('[settings] migrated localStorage keys:', renamed.join(', '))
+                _localStorageNeedsRewrite = true
             }
 
             // Stash the parsed dict (full) so initSettings() can dispatch
@@ -729,6 +735,11 @@ export function applyDefaultSettings(defaultSettings, currentSettings, devMode, 
 let _pendingSyncedSettings = null
 // Pending localStorage parsed dict — dispatched to provider helpers at init
 let _pendingLocalStorageSettings = null
+// Raised by loadSettings() when a migration or legacy-key cleanup happened.
+// initSettings() consumes it and triggers an explicit saveSettings() so the
+// stale keys disappear from localStorage instead of re-triggering the same
+// migration on every page load.
+let _localStorageNeedsRewrite = false
 
 // Current settings version from backend (for optimistic concurrency).
 // Module-level (not in store state) to avoid unnecessary reactivity.
@@ -832,6 +843,32 @@ export function initSettings() {
     watch(collectAllSyncedSettings, (newSettings) => {
         saveSettings(newSettings)
     }, { deep: true })
+
+    // If loadSettings() applied a migration, or if localStorage still holds
+    // legacy keys that no longer map to any registered setting, force one
+    // explicit save now. The watch above only fires on subsequent reactive
+    // changes, so without this nudge the stale localStorage would keep
+    // re-triggering the same migration on every page load.
+    if (!_localStorageNeedsRewrite) {
+        try {
+            const stored = localStorage.getItem(STORAGE_KEY)
+            if (stored) {
+                const expectedKeys = new Set(Object.keys(collectAllSyncedSettings()))
+                const parsedKeys = Object.keys(JSON.parse(stored))
+                if (parsedKeys.some(key => !expectedKeys.has(key))) {
+                    _localStorageNeedsRewrite = true
+                }
+            }
+        } catch (e) {
+            // Treat unparseable localStorage as dirty so saveSettings() below
+            // overwrites it with a clean payload.
+            _localStorageNeedsRewrite = true
+        }
+    }
+    if (_localStorageNeedsRewrite) {
+        saveSettings(collectAllSyncedSettings())
+        _localStorageNeedsRewrite = false
+    }
 
     // Watch for color scheme changes
     watch(() => store.colorScheme, (mode) => {
