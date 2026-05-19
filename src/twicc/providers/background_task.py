@@ -430,7 +430,7 @@ class _ConsumerEntry:
     finalized: bool = False
 
 
-_unified_entries: dict[Provider, _ConsumerEntry] = {}
+_consumer_entries: dict[Provider, _ConsumerEntry] = {}
 _unified_consumer_task: asyncio.Task | None = None
 
 
@@ -455,11 +455,11 @@ def register_compute_consumer(
         total_display=total_display,
         compute=ctx.get_compute(),
     )
-    _unified_entries[ctx.provider] = entry
+    _consumer_entries[ctx.provider] = entry
     _ensure_unified_consumer_running()
     logger.info(
         f"Unified consumer: registered provider={ctx.provider.value} "
-        f"(active={[p.value for p in _unified_entries.keys()]})"
+        f"(active={[p.value for p in _consumer_entries.keys()]})"
     )
 
 
@@ -470,10 +470,10 @@ def unregister_compute_consumer(provider: Provider) -> None:
     the map is empty; it will be relaunched lazily on the next
     :func:`register_compute_consumer` call.
     """
-    if _unified_entries.pop(provider, None) is not None:
+    if _consumer_entries.pop(provider, None) is not None:
         logger.info(
             f"Unified consumer: unregistered provider={provider.value} "
-            f"(active={[p.value for p in _unified_entries.keys()]})"
+            f"(active={[p.value for p in _consumer_entries.keys()]})"
         )
 
 
@@ -493,15 +493,15 @@ async def _unified_consumer_loop() -> None:
     happen here sequentially, so no two providers ever race on the SQLite
     write lock.
 
-    Exits when ``_unified_entries`` is empty. Restarted lazily by
+    Exits when ``_consumer_entries`` is empty. Restarted lazily by
     :func:`register_compute_consumer` whenever a new provider needs
     draining.
     """
     try:
-        while _unified_entries:
+        while _consumer_entries:
             any_processed = False
 
-            for provider, entry in list(_unified_entries.items()):
+            for provider, entry in list(_consumer_entries.items()):
                 if entry.finalized:
                     continue
                 # ``stop_background_task`` sets the per-ctx stop_event when a
@@ -544,7 +544,7 @@ async def _unified_consumer_loop() -> None:
         # Make sure no waiter is left hanging even if we crashed or were
         # cancelled mid-drain. Iterate on a snapshot since _finalize_entry
         # touches the dict via finalized flag (not the dict itself).
-        for entry in list(_unified_entries.values()):
+        for entry in list(_consumer_entries.values()):
             if not entry.finalized:
                 entry.finalized = True
                 entry.worker_done_event.set()
