@@ -1332,7 +1332,7 @@ wheels = [
 
 [[package]]
 name = "twicc"
-version = "1.6a0"
+version = "1.6.0"
 source = { editable = "." }
 dependencies = [
     { name = "blacknoise" },
