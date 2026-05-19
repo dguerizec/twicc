@@ -33,8 +33,12 @@ const router = useRouter()
 initStaticCommands(router)
 const authStore = useAuthStore()
 
-const isAuthenticated = computed(() => !authStore.needsLogin)
-const isLoginPage = computed(() => route.name === 'login')
+// "App is ready" — the user is fully through the login layer and visibly
+// off the /login route. Use this for anything that should NOT activate
+// during the brief window between a successful authStore.login() and the
+// full page reload that follows (during which authStore.authenticated is
+// already true but the user is still on /login).
+const isAppReady = computed(() => !authStore.needsLogin && route.name !== 'login')
 const isConnecting = computed(() => authStore.isConnecting)
 
 // Initialize WebSocket connection for real-time updates.
@@ -46,19 +50,22 @@ useFavicon()
 
 // Start the tip scheduler: first tip after FIRST_TIP_DELAY_MS, then
 // polling every SCHEDULER_POLL_MS once the per-dismiss cooldown expires.
-// Skip entirely when not authenticated — no tip should pop on /login.
-// LoginView triggers a full page reload after login, so this setup re-runs
-// in the authenticated state and the scheduler kicks in then.
-if (isAuthenticated.value) {
+// Skipped entirely when the app isn't ready (e.g. on /login). LoginView
+// triggers a full page reload after login, so this setup re-runs with
+// isAppReady true and the scheduler kicks in then.
+if (isAppReady.value) {
     useTipScheduler()
 }
 
 // Load initial data and connect WebSocket when authenticated
 const dataStore = useDataStore()
 
-// React to authentication state changes (initial check + after login)
-watch(isAuthenticated, async (authenticated) => {
-    if (authenticated) {
+// Load app data and open the WS only once the app is actually ready
+// (auth OK AND not on the /login page). The combined `isAppReady`
+// avoids the brief flash where authStore.authenticated has already
+// flipped to true but LoginView's full page reload hasn't fired yet.
+watch(isAppReady, async (ready) => {
+    if (ready) {
         await Promise.all([
             dataStore.loadHomeData(),
             // Preload "sticky" sessions (pinned, unread, running process)
@@ -341,7 +348,7 @@ const toastTheme = computed(() => {
 
 <template>
     <!-- Provider activation: non-dismissible first-run / recovery dialog -->
-    <ProviderActivationDialog v-if="isAuthenticated" />
+    <ProviderActivationDialog v-if="isAppReady" />
 
     <!-- Version mismatch: non-dismissible reload dialog -->
     <wa-dialog :open="versionMismatchDetected || undefined" without-header @wa-hide.prevent>
@@ -359,7 +366,7 @@ const toastTheme = computed(() => {
         </div>
     </div>
 
-    <ConnectionIndicator v-if="!isLoginPage && !isConnecting" :status="wsStatus" />
+    <ConnectionIndicator v-if="isAppReady && !isConnecting" :status="wsStatus" />
     <CommandPalette ref="commandPaletteRef" />
     <SearchOverlay ref="searchOverlayRef" />
     <StopProcessConfirmDialog

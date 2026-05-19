@@ -34,7 +34,20 @@ function redirectAway() {
 // 2. Password was removed from config while we're on the login page
 let recheckInterval = null
 
-onMounted(() => {
+async function focusPasswordInput() {
+    // Wait for Vue's render, then for the wa-input (Lit-based custom
+    // element) to be fully upgraded — at mount time nextTick alone isn't
+    // enough, and a bare `autofocus` attribute is silently dropped.
+    await nextTick()
+    if (passwordInput.value?.updateComplete) {
+        await passwordInput.value.updateComplete
+    }
+    passwordInput.value?.focus()
+}
+
+onMounted(async () => {
+    focusPasswordInput()
+
     recheckInterval = setInterval(async () => {
         await authStore.checkAuthOnce()
         if (!authStore.needsLogin) {
@@ -67,11 +80,10 @@ async function handleSubmit() {
     } finally {
         loading.value = false
         // Re-focus the input on any failure path (bad password, network
-        // error, …). Wait one tick so the just-reset `disabled` is gone
-        // from the rendered DOM before calling focus().
+        // error, …). `focusPasswordInput` waits for the re-render so the
+        // just-reset `disabled` is gone before calling focus().
         if (!succeeded) {
-            await nextTick()
-            passwordInput.value?.focus()
+            await focusPasswordInput()
         }
     }
 }
@@ -98,7 +110,6 @@ async function handleSubmit() {
                         :value="password"
                         @input="password = $event.target.value"
                         @wa-input="password = $event.target.value"
-                        autofocus
                         :disabled="loading"
                         size="small"
                     >
