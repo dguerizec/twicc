@@ -5,10 +5,14 @@ Processes existing sessions that need metadata computation at startup, then stop
 New sessions created by the watcher get compute_version set at creation time.
 
 Architecture:
-- A separate Process handles CPU-intensive work (JSON parsing, metadata computation)
-- The worker process only READS from the database (WAL mode supports multiple readers)
-- All database WRITES happen in the main process via a Queue
-- This eliminates "database is locked" errors by serializing all writes in the event loop
+- A separate Process per provider handles CPU-intensive work (JSON parsing,
+  metadata computation). The worker process only READS from the database
+  (WAL mode supports multiple readers).
+- All database WRITES happen in a single, cross-provider consumer that drains
+  every registered provider's result queue from the main process event loop.
+  This serializes the DB writer side and eliminates "database is locked"
+  errors that arise when multiple providers' consumers race for the SQLite
+  write lock.
 
 This module is provider-agnostic: each provider's orchestrator builds a
 :class:`ComputeContext` carrying its ``Provider`` enum value, its
@@ -26,10 +30,13 @@ import importlib
 import logging
 import multiprocessing
 import queue
+from collections import defaultdict
 from contextlib import suppress
 from dataclasses import dataclass, field
+from datetime import date as date_cls
 from typing import TYPE_CHECKING
 
+import orjson
 from asgiref.sync import sync_to_async
 from channels.layers import get_channel_layer
 
@@ -52,6 +59,9 @@ logger = logging.getLogger(__name__)
 # How often to broadcast project_updated during background compute (every N sessions per project).
 # Lower = more responsive cost updates in the UI, higher = less frontend overhead.
 PROJECT_BROADCAST_INTERVAL = 5
+
+# Batch size for activity recalculation flushes (per provider).
+BATCH_ACTIVITY_COUNT = 50
 
 # Use "spawn" start method to avoid fork-safety issues.
 # The default "fork" method on Linux can deadlock when the parent process has
@@ -276,8 +286,7 @@ def compute_worker_main(command_queue, result_queue, stop_event, compute_factory
                     with suppress(Exception):
                         for handler in logging.getLogger('twicc').handlers:
                             handler.flush()
-                    import orjson as _orjson
-                    result_queue.put(_orjson.dumps({
+                    result_queue.put(orjson.dumps({
                         'type': 'error',
                         'session_id': session_id,
                         'error': str(e),
@@ -290,7 +299,6 @@ def compute_worker_main(command_queue, result_queue, stop_event, compute_factory
                     handler.flush()
 
     # Signal the consumer that the worker is done
-    import orjson
     result_queue.put(orjson.dumps({'type': 'done'}))
     worker_logger.info("Compute worker sent 'done' signal")
 
@@ -332,7 +340,7 @@ async def _handle_compute_done(session_id: str) -> None:
     addSession in the frontend store, causing O(n²) getter re-evaluations.
     Subagent data is fetched on-demand via API when the user opens a subagent tab.
 
-    project_updated broadcasts are handled separately by consume_compute_results
+    project_updated broadcasts are handled separately by the unified consumer
     with throttling (every N sessions per project) to reduce frontend overhead.
     """
     from twicc.core.models import Session, SessionType
@@ -394,180 +402,264 @@ def _flush_pending_activities(provider: Provider, pending_activity_days: dict[st
     PeriodicActivity.recalculate_for_days(None, days, provider=provider, do_global=True)
 
 
-async def consume_compute_results(
+# =============================================================================
+# Unified consumer (cross-provider DB writer)
+# =============================================================================
+
+
+@dataclass
+class _ConsumerEntry:
+    """One provider's slot inside the unified consumer.
+
+    Holds the provider-specific :class:`ComputeContext` plus the per-run
+    counters and pending-broadcast/activity buffers consumed by
+    :func:`_process_compute_message`.
+    """
+
+    ctx: ComputeContext
+    worker_done_event: asyncio.Event
+    display_session_ids: set[str] | None
+    total_display: int
+    compute: BaseSessionCompute
+    pending_activity_days: dict[str, set] = field(default_factory=lambda: defaultdict(set))
+    pending_project_ids: set[str] = field(default_factory=set)
+    auto_added_project_ids: set[str] = field(default_factory=set)
+    sessions_since_project_broadcast: int = 0
+    sessions_since_activities_flush: int = 0
+    completed_count: int = 0
+    finalized: bool = False
+
+
+_unified_entries: dict[Provider, _ConsumerEntry] = {}
+_unified_consumer_task: asyncio.Task | None = None
+
+
+def register_compute_consumer(
     ctx: ComputeContext,
     worker_done_event: asyncio.Event,
     *,
-    display_session_ids: set[str] | None = None,
-    total_display: int = 0,
+    display_session_ids: set[str] | None,
+    total_display: int,
 ) -> None:
+    """Register a provider's compute context with the unified consumer.
+
+    Lazily starts :func:`_unified_consumer_loop` if no loop is currently
+    running. ``worker_done_event`` is set by the loop when this provider's
+    worker emits ``'done'`` (or when the loop sees ``ctx.stop_event`` set,
+    or when the loop exits in its ``finally`` block).
     """
-    Consume results from the compute worker and apply DB writes.
+    entry = _ConsumerEntry(
+        ctx=ctx,
+        worker_done_event=worker_done_event,
+        display_session_ids=display_session_ids,
+        total_display=total_display,
+        compute=ctx.get_compute(),
+    )
+    _unified_entries[ctx.provider] = entry
+    _ensure_unified_consumer_running()
+    logger.info(
+        f"Unified consumer: registered provider={ctx.provider.value} "
+        f"(active={[p.value for p in _unified_entries.keys()]})"
+    )
 
-    Runs in the main process event loop. All DB writes happen here,
-    ensuring no concurrent writes with the FileWatcher.
 
-    Sets worker_done_event when the worker signals it has finished processing
-    all sessions (via a 'done' message in the result queue).
+def unregister_compute_consumer(provider: Provider) -> None:
+    """Remove ``provider`` from the unified consumer's entry map.
 
-    Args:
-        ctx: The compute context with queues and events.
-        worker_done_event: Set when all results have been processed.
-        display_session_ids: Set of session IDs that are real sessions (not subagents),
-            used to filter progress broadcasting. If None, all sessions are counted.
-        total_display: Total number of real sessions for progress display.
+    Idempotent. The consumer task exits naturally on its next tick once
+    the map is empty; it will be relaunched lazily on the next
+    :func:`register_compute_consumer` call.
     """
-    import orjson
+    if _unified_entries.pop(provider, None) is not None:
+        logger.info(
+            f"Unified consumer: unregistered provider={provider.value} "
+            f"(active={[p.value for p in _unified_entries.keys()]})"
+        )
 
-    from collections import defaultdict
-    from datetime import date as date_cls
 
-    compute = ctx.get_compute()
-    provider_value = ctx.provider.value
+def _ensure_unified_consumer_running() -> None:
+    """Start :func:`_unified_consumer_loop` if no task is currently running."""
+    global _unified_consumer_task
+    if _unified_consumer_task is None or _unified_consumer_task.done():
+        _unified_consumer_task = asyncio.create_task(_unified_consumer_loop())
+
+
+async def _unified_consumer_loop() -> None:
+    """Cross-provider drain loop. One coroutine, one DB writer.
+
+    Polls every registered provider's :attr:`ComputeContext.result_queue`
+    in a single asyncio task. All ``apply_session_complete`` calls — and
+    the surrounding broadcasts, activity flushes, and workspace auto-adds —
+    happen here sequentially, so no two providers ever race on the SQLite
+    write lock.
+
+    Exits when ``_unified_entries`` is empty. Restarted lazily by
+    :func:`register_compute_consumer` whenever a new provider needs
+    draining.
+    """
+    try:
+        while _unified_entries:
+            any_processed = False
+
+            for provider, entry in list(_unified_entries.items()):
+                if entry.finalized:
+                    continue
+                # ``stop_background_task`` sets the per-ctx stop_event when a
+                # provider shuts down (or in shutdown() before the compute
+                # task has emitted 'done'). Finalize the entry so the
+                # awaiter unblocks.
+                if entry.ctx.stop_event.is_set():
+                    await _finalize_entry(entry)
+                    continue
+
+                try:
+                    raw_msg = entry.ctx.result_queue.get_nowait()
+                except queue.Empty:
+                    continue
+                except (OSError, ValueError):
+                    # Queue may have been closed by stop_background_task
+                    # racing with us. Treat as terminal for this entry.
+                    await _finalize_entry(entry)
+                    continue
+
+                any_processed = True
+                try:
+                    msg = orjson.loads(raw_msg)
+                except Exception:
+                    logger.error(f"Failed to deserialize result message: {raw_msg!r:.500}")
+                    continue
+
+                await _process_compute_message(entry, msg)
+
+            if not any_processed:
+                await asyncio.sleep(0.05)
+            else:
+                # Yield to event loop between processed messages so other
+                # coroutines (watchers, broadcasts, etc.) get scheduled.
+                await asyncio.sleep(0)
+
+    except Exception as exc:
+        logger.error(f"Unified compute consumer crashed: {exc}", exc_info=True)
+    finally:
+        # Make sure no waiter is left hanging even if we crashed or were
+        # cancelled mid-drain. Iterate on a snapshot since _finalize_entry
+        # touches the dict via finalized flag (not the dict itself).
+        for entry in list(_unified_entries.values()):
+            if not entry.finalized:
+                entry.finalized = True
+                entry.worker_done_event.set()
+        logger.info("Unified compute consumer stopped")
+
+
+async def _process_compute_message(entry: _ConsumerEntry, msg: dict) -> None:
+    """Apply a single message from a provider's result queue."""
+    msg_type = msg.get('type')
 
     try:
-        # Accumulate affected days per project across multiple sessions
-        batch_activity_count = 50
-        pending_activity_days: dict[str, set] = defaultdict(set)
-        sessions_since_activities_flush = 0
+        if msg_type == 'session_complete':
+            await sync_to_async(entry.compute.apply_session_complete)(msg)
+            await _handle_compute_done(msg['session_id'])
 
-        # Progress broadcasting — only count real sessions (not subagents) for display
-        completed_count = 0
+            project_id = msg.get('project_id')
+            if project_id:
+                entry.pending_project_ids.add(project_id)
 
-        # Throttle project_updated broadcasts: every N normal sessions (global counter),
-        # broadcast project_updated for ALL projects that changed since the last broadcast.
-        # Pending projects are flushed at the end.
-        sessions_since_project_broadcast = 0
-        pending_project_ids: set[str] = set()
+            # First time we see this project in this run, evaluate
+            # workspace auto-add patterns. ``apply_session_complete``
+            # has just persisted the directory (Claude Code: from
+            # JSONL body; Codex: already set at initial_sync) so
+            # the pattern matching has the canonical cwd to work
+            # with. Idempotent — the helper no-ops if the project
+            # is already a member of every matching workspace.
+            project_directory = msg.get('project_directory')
+            if (
+                project_id
+                and project_directory
+                and project_id not in entry.auto_added_project_ids
+            ):
+                entry.auto_added_project_ids.add(project_id)
+                await auto_add_project_to_workspaces(project_id, project_directory)
 
-        # Track which projects we've already evaluated for workspace
-        # auto-add this run. The first ``apply_session_complete`` for a
-        # project sets its directory in DB (via ``ensure_project_directory``
-        # inside ``apply_session_complete``); after that we run the
-        # workspace patterns against it once. Subsequent sessions for the
-        # same project don't change anything pattern-wise, so we skip them.
-        auto_added_project_ids: set[str] = set()
+            # Broadcast progress only for real sessions (not subagents)
+            session_id = msg['session_id']
+            if entry.display_session_ids is None or session_id in entry.display_session_ids:
+                entry.completed_count += 1
+                await broadcast_startup_progress(
+                    "background_compute",
+                    entry.completed_count,
+                    entry.total_display,
+                    provider=entry.ctx.provider.value,
+                )
 
-        while not ctx.stop_event.is_set():
-            # Collect available messages (non-blocking)
-            try:
-                raw_msg = ctx.result_queue.get_nowait()
-            except queue.Empty:
-                await asyncio.sleep(0.05)
-                continue
+                # Every N normal sessions, broadcast project_updated for all pending projects
+                entry.sessions_since_project_broadcast += 1
+                if entry.sessions_since_project_broadcast >= PROJECT_BROADCAST_INTERVAL:
+                    for pid in entry.pending_project_ids:
+                        await _broadcast_project_updated(pid)
+                    entry.pending_project_ids.clear()
+                    entry.sessions_since_project_broadcast = 0
 
-            try:
-                msg = orjson.loads(raw_msg)
-            except Exception:
-                logger.error(f"Failed to deserialize result message: {raw_msg!r:.500}")
-                continue
+            # Accumulate affected days for batched activity recalculation
+            affected_days = msg.get('affected_days')
+            if project_id and affected_days:
+                entry.pending_activity_days[project_id].update(
+                    date_cls.fromisoformat(d) for d in affected_days
+                )
+                entry.sessions_since_activities_flush += 1
 
-            # Process collected message
-            msg_type = msg.get('type')
+        elif msg_type == 'done':
+            logger.info(
+                f"Unified consumer: received 'done' from worker (provider={entry.ctx.provider.value})"
+            )
+            await _finalize_entry(entry)
 
-            try:
-                if msg_type == 'session_complete':
-                    # New unified message type - all data in one message
-                    await sync_to_async(compute.apply_session_complete)(msg)
-                    await _handle_compute_done(msg['session_id'])
+        elif msg_type == 'error':
+            logger.error(f"Compute error for {msg['session_id']}: {msg['error']}")
 
-                    # Track project as having pending changes
-                    project_id = msg.get('project_id')
-                    if project_id:
-                        pending_project_ids.add(project_id)
-
-                    # First time we see this project in this run, evaluate
-                    # workspace auto-add patterns. ``apply_session_complete``
-                    # has just persisted the directory (Claude Code: from
-                    # JSONL body; Codex: already set at initial_sync) so
-                    # the pattern matching has the canonical cwd to work
-                    # with. Idempotent — the helper no-ops if the project
-                    # is already a member of every matching workspace.
-                    project_directory = msg.get('project_directory')
-                    if (
-                        project_id
-                        and project_directory
-                        and project_id not in auto_added_project_ids
-                    ):
-                        auto_added_project_ids.add(project_id)
-                        await auto_add_project_to_workspaces(project_id, project_directory)
-
-                    # Broadcast progress only for real sessions (not subagents)
-                    session_id = msg['session_id']
-                    if display_session_ids is None or session_id in display_session_ids:
-                        completed_count += 1
-                        await broadcast_startup_progress(
-                            "background_compute", completed_count, total_display,
-                            provider=provider_value,
-                        )
-
-                        # Every N normal sessions, broadcast project_updated for all pending projects
-                        sessions_since_project_broadcast += 1
-                        if sessions_since_project_broadcast >= PROJECT_BROADCAST_INTERVAL:
-                            for pid in pending_project_ids:
-                                await _broadcast_project_updated(pid)
-                            pending_project_ids.clear()
-                            sessions_since_project_broadcast = 0
-
-                    # Accumulate affected days for batched activity recalculation
-                    affected_days = msg.get('affected_days')
-                    if project_id and affected_days:
-                        pending_activity_days[project_id].update(
-                            date_cls.fromisoformat(d) for d in affected_days
-                        )
-                        sessions_since_activities_flush += 1
-
-                elif msg_type == 'done':
-                    # Worker has finished processing all sessions
-                    logger.info("consume_compute_results: received 'done' from worker")
-                    break
-
-                elif msg_type == 'error':
-                    logger.error(f"Compute error for {msg['session_id']}: {msg['error']}")
-
-                else:
-                    logger.error(f"Unexpected result message type: {msg_type} => {msg}")
-
-            except Exception as e:
-                logger.error(f"Error processing result message {msg_type}: {e}", exc_info=True)
-
-            # Flush activity recalculations every batch_activity_count sessions
-            try:
-                if sessions_since_activities_flush >= batch_activity_count:
-                    await _flush_pending_activities(ctx.provider, pending_activity_days)
-                    pending_activity_days.clear()
-                    sessions_since_activities_flush = 0
-            except Exception as e:
-                logger.error(f"Error flushing activity recalculations: {e}", exc_info=True)
-                pending_activity_days.clear()
-                sessions_since_activities_flush = 0
-
-            # Yield to event loop between batches
-            await asyncio.sleep(0)
-
-        # Flush remaining project_updated broadcasts
-        for pid in pending_project_ids:
-            try:
-                await _broadcast_project_updated(pid)
-            except Exception as e:
-                logger.error(f"Error in final project broadcast for {pid}: {e}")
-        pending_project_ids.clear()
-
-        # Flush any remaining pending activity recalculations before shutdown
-        if pending_activity_days:
-            try:
-                await _flush_pending_activities(ctx.provider, pending_activity_days)
-            except Exception as e:
-                logger.error(f"Error in final activity flush: {e}", exc_info=True)
-            pending_activity_days.clear()
+        else:
+            logger.error(f"Unexpected result message type: {msg_type} => {msg}")
 
     except Exception as e:
-        logger.error(f"consume_compute_results crashed: {e}", exc_info=True)
+        logger.error(f"Error processing result message {msg_type}: {e}", exc_info=True)
 
-    finally:
-        # Always signal done so start_background_compute_task doesn't hang forever
-        worker_done_event.set()
-        logger.info("consume_compute_results: stopped")
+    # Flush activity recalculations every BATCH_ACTIVITY_COUNT sessions for this provider.
+    try:
+        if entry.sessions_since_activities_flush >= BATCH_ACTIVITY_COUNT:
+            await _flush_pending_activities(entry.ctx.provider, entry.pending_activity_days)
+            entry.pending_activity_days.clear()
+            entry.sessions_since_activities_flush = 0
+    except Exception as e:
+        logger.error(f"Error flushing activity recalculations: {e}", exc_info=True)
+        entry.pending_activity_days.clear()
+        entry.sessions_since_activities_flush = 0
+
+
+async def _finalize_entry(entry: _ConsumerEntry) -> None:
+    """Flush an entry's pending broadcasts/activities and unblock its waiter.
+
+    Idempotent: subsequent calls are no-ops thanks to :attr:`finalized`.
+    """
+    if entry.finalized:
+        return
+    entry.finalized = True
+
+    # Final flush of project_updated broadcasts pending for this provider.
+    for pid in entry.pending_project_ids:
+        try:
+            await _broadcast_project_updated(pid)
+        except Exception as e:
+            logger.error(f"Error in final project broadcast for {pid}: {e}")
+    entry.pending_project_ids.clear()
+
+    # Final flush of activity recalculations pending for this provider.
+    if entry.pending_activity_days:
+        try:
+            await _flush_pending_activities(entry.ctx.provider, entry.pending_activity_days)
+        except Exception as e:
+            logger.error(f"Error in final activity flush: {e}", exc_info=True)
+        entry.pending_activity_days.clear()
+
+    entry.worker_done_event.set()
 
 
 async def start_background_compute_task(ctx: ComputeContext) -> None:
@@ -577,8 +669,9 @@ async def start_background_compute_task(ctx: ComputeContext) -> None:
     Architecture:
     - Starts a separate Process for CPU-intensive work (JSON parsing, metadata computation)
     - The worker process only READS from the database
-    - All database WRITES happen in the main process via consume_compute_results()
-    - This eliminates "database is locked" errors
+    - All database WRITES happen in the main process via the unified consumer
+      (:func:`_unified_consumer_loop`), which serializes writes across providers
+      and eliminates "database is locked" errors
 
     This task processes all sessions with outdated or missing compute_version,
     then stops. New sessions created by the watcher get compute_version set
@@ -638,55 +731,54 @@ async def start_background_compute_task(ctx: ComputeContext) -> None:
     # Start the worker process
     start_compute_process(ctx)
 
-    # Start the result consumer as a concurrent task (passes display info for progress broadcasting)
+    # Register with the unified consumer. It drains every registered
+    # provider's result queue from a single coroutine, so the SQLite write
+    # lock is no longer contended between providers.
     worker_done_event = asyncio.Event()
-    consumer_task = asyncio.create_task(
-        consume_compute_results(
-            ctx, worker_done_event,
-            display_session_ids=sessions_to_display,
-            total_display=total_display,
-        )
+    register_compute_consumer(
+        ctx,
+        worker_done_event,
+        display_session_ids=sessions_to_display,
+        total_display=total_display,
     )
 
     logger.info(f"Background compute task started ({total_to_compute} sessions to process)")
 
-    # Load all session IDs needing computation in one query, ordered by most recent first
-    session_ids_to_compute = await sync_to_async(
-        lambda: list(
-            Session.objects
-            .filter(provider=ctx.provider)
-            .exclude(compute_version=ctx.compute_version)
-            .order_by('-mtime')
-            .values_list('id', flat=True)
+    try:
+        # Load all session IDs needing computation in one query, ordered by most recent first
+        session_ids_to_compute = await sync_to_async(
+            lambda: list(
+                Session.objects
+                .filter(provider=ctx.provider)
+                .exclude(compute_version=ctx.compute_version)
+                .order_by('-mtime')
+                .values_list('id', flat=True)
+            )
+        )()
+
+        # Send all session IDs to the worker process at once
+        for session_id in session_ids_to_compute:
+            if ctx.stop_event.is_set():
+                break
+            ctx.command_queue.put({'session_id': session_id})
+
+        logger.info(f"Background compute: all {len(session_ids_to_compute)} sessions sent to worker")
+
+        # Send stop signal to worker so it finishes and sends 'done'
+        ctx.command_queue.put(None)
+
+        # Wait for the unified consumer to drain everything for this provider
+        # (the worker has emitted 'done' and any pending flushes have run).
+        await worker_done_event.wait()
+
+        # Broadcast completion (using display total — sessions only, not subagents)
+        await broadcast_startup_progress(
+            "background_compute", total_display, total_display,
+            provider=provider_value, completed=True,
         )
-    )()
-
-    # Send all session IDs to the worker process at once
-    for session_id in session_ids_to_compute:
-        if ctx.stop_event.is_set():
-            break
-        ctx.command_queue.put({'session_id': session_id})
-
-    logger.info(f"Background compute: all {len(session_ids_to_compute)} sessions sent to worker")
-
-    # Send stop signal to worker so it finishes and sends 'done'
-    ctx.command_queue.put(None)
-
-    # Wait for the consumer to receive the worker's 'done' signal
-    # (which means all results have been processed and activities flushed)
-    await worker_done_event.wait()
-
-    # Broadcast completion (using display total — sessions only, not subagents)
-    await broadcast_startup_progress(
-        "background_compute", total_display, total_display,
-        provider=provider_value, completed=True,
-    )
-
-    # Stop the consumer task gracefully via stop_event
-    ctx.stop_event.set()
-    await consumer_task
-
-    # Stop the worker process
-    stop_background_task(ctx)
+    finally:
+        unregister_compute_consumer(ctx.provider)
+        # Stop the worker process. Idempotent if it has already exited.
+        stop_background_task(ctx)
 
     logger.info("Background compute task completed")
