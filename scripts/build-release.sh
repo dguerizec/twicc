@@ -18,7 +18,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 PLATFORMS=(
-    linux_x86_64
+    manylinux_2_17_x86_64
     macosx_11_0_arm64
     macosx_10_9_x86_64
     win_amd64
@@ -36,6 +36,13 @@ for tag in "${PLATFORMS[@]}"; do
     echo "=== Building wheel for ${tag} ==="
     TWICC_BUILD_PLATFORM="${tag}" uv build --wheel
 done
+
+echo
+echo "=== Re-populating _bundled/ for host platform (so the editable install keeps working) ==="
+# The wheel loop above leaves `_bundled/` filled with the last platform's
+# binary (typically codex.exe), which breaks the local editable install.
+# Re-fetch the host binary as a last step so `./run.py` keeps working.
+uv run python hatch_build.py
 
 echo
 echo "=== Final dist/ ==="

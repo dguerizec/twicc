@@ -5,7 +5,7 @@
 The Codex provider relies on OpenAI's Codex Python SDK (`codex_app_server`) plus the Codex CLI binary it drives over JSON-RPC. Neither is consumed from PyPI in a normal way:
 
 - The SDK itself (`openai-codex-app-server-sdk`) is **not published on PyPI**. We vendor its source into `src/codex_app_server/`, extracted from the `openai/codex` GitHub repo at tag [`rust-v0.131.0-alpha.4`](https://github.com/openai/codex/releases/tag/rust-v0.131.0-alpha.4).
-- The Codex CLI binary (`openai-codex-cli-bin`) **is** on PyPI, but the Linux wheels are tagged `musllinux_1_1_*` only — uv refuses those on glibc systems even though the binaries are static-pie ELFs that run anywhere. So we **fetch the wheel ourselves at build time** from the same GitHub release, extract just the binary, and bundle it into our wheel under a regular `linux_x86_64` (or `macosx_*` / `win_amd64`) platform tag.
+- The Codex CLI binary (`openai-codex-cli-bin`) **is** on PyPI, but the Linux wheels are tagged `musllinux_1_1_*` only — uv refuses those on glibc systems even though the binaries are static-pie ELFs that run anywhere. So we **fetch the wheel ourselves at build time** from the same GitHub release, extract just the binary, and bundle it into our wheel under a `manylinux_2_17_x86_64` (or `macosx_*` / `win_amd64`) platform tag. On Linux we restamp the upstream musllinux wheel as manylinux_2_17 because PyPI rejects the plain `linux_*` tag, and the static-pie binary is ABI-compatible with any glibc ≥ 2.17 system anyway.
 
 ## Layout
 

@@ -11,7 +11,17 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
-from hatchling.builders.hooks.plugin.interface import BuildHookInterface
+try:
+    from hatchling.builders.hooks.plugin.interface import BuildHookInterface
+except ImportError:
+    # hatchling is only present in the build environment (it's in
+    # `[build-system].requires` and uv installs it into a temporary env when
+    # running `uv build`). Running this file standalone — `python hatch_build.py`
+    # to repopulate `_bundled/` for an editable dev install — does not need
+    # hatchling at all; only the CLI path below is exercised. Fall back to
+    # `object` so the module still imports and `CustomBuildHook` remains
+    # defined (and harmlessly unused) outside a Hatch invocation.
+    BuildHookInterface = object  # type: ignore[assignment, misc]
 
 FRONTEND_DIR = "frontend"
 STATIC_DIR = os.path.join("src", "twicc", "static", "frontend")
@@ -22,19 +32,21 @@ STATIC_DIR = os.path.join("src", "twicc", "static", "frontend")
 # but from the GitHub release URL — this avoids depending on the PyPI package whose
 # Linux wheels are tagged musllinux (rejected by uv on glibc systems even though
 # the binary itself is a static-pie ELF that runs anywhere). We bundle the binary
-# directly into our wheel and tag the wheel with the regular linux_x86_64 / macOS /
-# Windows platform tags so `uv tool install twicc` works without a manylinux wheel
-# upstream.
+# directly into our wheel; on Linux we restamp it as manylinux_2_17 (PyPI refuses
+# the plain `linux_*` tag, and the static-pie binary is compatible with any
+# glibc ≥ 2.17 system anyway), and on macOS / Windows we keep the upstream tag.
 CODEX_RELEASE_TAG = "rust-v0.131.0-alpha.4"
 CODEX_BIN_VERSION = "0.131.0a4"
 CODEX_RELEASE_URL = f"https://github.com/openai/codex/releases/download/{CODEX_RELEASE_TAG}"
 
 # Map normalized build-platform tags → upstream wheel filename. Keys cover the
-# canonical `linux_*` / `macosx_*` / `win_*` tags we will stamp on the resulting
-# TwiCC wheel; values are the upstream wheels we extract the binary from.
+# canonical wheel tags we will stamp on the resulting TwiCC wheel; values are
+# the upstream wheels we extract the binary from. On Linux the upstream wheel
+# is musllinux but we restamp our wheel manylinux_2_17 — see the module docstring
+# above for why this is correct.
 CODEX_BIN_WHEELS = {
-    "linux_x86_64": f"openai_codex_cli_bin-{CODEX_BIN_VERSION}-py3-none-musllinux_1_1_x86_64.whl",
-    "linux_aarch64": f"openai_codex_cli_bin-{CODEX_BIN_VERSION}-py3-none-musllinux_1_1_aarch64.whl",
+    "manylinux_2_17_x86_64": f"openai_codex_cli_bin-{CODEX_BIN_VERSION}-py3-none-musllinux_1_1_x86_64.whl",
+    "manylinux_2_17_aarch64": f"openai_codex_cli_bin-{CODEX_BIN_VERSION}-py3-none-musllinux_1_1_aarch64.whl",
     "macosx_11_0_arm64": f"openai_codex_cli_bin-{CODEX_BIN_VERSION}-py3-none-macosx_11_0_arm64.whl",
     "macosx_10_9_x86_64": f"openai_codex_cli_bin-{CODEX_BIN_VERSION}-py3-none-macosx_10_9_x86_64.whl",
     "win_amd64": f"openai_codex_cli_bin-{CODEX_BIN_VERSION}-py3-none-win_amd64.whl",
@@ -59,9 +71,9 @@ def _resolve_target_platform_tag() -> str:
     if explicit:
         return explicit
 
-    # Fall back to the host platform. We deliberately avoid manylinux/musllinux
-    # tags here: the binary is static-pie on Linux so the plain `linux_<arch>`
-    # tag is what we want to advertise.
+    # Fall back to the host platform. Linux is tagged manylinux_2_17 because
+    # PyPI rejects the plain `linux_*` tag, and the static-pie binary is
+    # ABI-compatible with any glibc ≥ 2.17 system.
     import platform
 
     machine = platform.machine().lower()
@@ -69,9 +81,9 @@ def _resolve_target_platform_tag() -> str:
 
     if system.startswith("linux"):
         if machine in ("x86_64", "amd64"):
-            return "linux_x86_64"
+            return "manylinux_2_17_x86_64"
         if machine in ("aarch64", "arm64"):
-            return "linux_aarch64"
+            return "manylinux_2_17_aarch64"
     elif system == "darwin":
         if machine == "arm64":
             return "macosx_11_0_arm64"
@@ -185,25 +197,7 @@ class CustomBuildHook(BuildHookInterface):
         platform_tag = _resolve_target_platform_tag()
         bundled_dir = Path(self.root) / CODEX_BUNDLED_DIR
         bin_name = _binary_filename_for(platform_tag)
-        bin_path = bundled_dir / bin_name
-        marker_path = bundled_dir / ".platform"
-
-        # Skip the network fetch when the binary already present in `_bundled/`
-        # was placed there for the same target platform. We can't trust the
-        # filename alone — `codex` looks the same for Linux and macOS — so we
-        # track the platform via a sentinel marker written next to the binary.
-        cached_platform = (
-            marker_path.read_text().strip()
-            if marker_path.is_file()
-            else None
-        )
-        if cached_platform != platform_tag:
-            if bundled_dir.exists():
-                for f in bundled_dir.iterdir():
-                    if f.is_file():
-                        f.unlink()
-            fetch_codex_binary(platform_tag, bundled_dir)
-            marker_path.write_text(platform_tag)
+        bin_path = _populate_bundled(platform_tag, bundled_dir)
 
         # Mark the wheel as platform-specific. Without these, hatchling produces
         # a pure-python wheel tagged `py3-none-any`, which would lie about its
@@ -220,6 +214,37 @@ class CustomBuildHook(BuildHookInterface):
         force_include[str(bin_path)] = f"codex_app_server/_bundled/{bin_name}"
 
 
+def _populate_bundled(platform_tag: str, bundled_dir: Path) -> Path:
+    """Place the codex binary for ``platform_tag`` into ``bundled_dir``,
+    clearing any stale files left there for a different platform, and refresh
+    the ``.platform`` marker. Skips the network fetch (and the cleanup) when
+    the existing cached binary already matches the requested platform.
+
+    Shared between the Hatch build hook (one call per wheel target) and the
+    standalone CLI (so an editable dev install can repopulate the directory).
+    """
+    bin_name = _binary_filename_for(platform_tag)
+    bin_path = bundled_dir / bin_name
+    marker_path = bundled_dir / ".platform"
+
+    # We can't trust the binary's filename alone to identify its origin —
+    # `codex` is the same name on Linux and macOS — so we track the platform
+    # via a sentinel marker written next to the binary.
+    cached_platform = (
+        marker_path.read_text().strip()
+        if marker_path.is_file()
+        else None
+    )
+    if cached_platform != platform_tag:
+        if bundled_dir.exists():
+            for f in bundled_dir.iterdir():
+                if f.is_file():
+                    f.unlink()
+        fetch_codex_binary(platform_tag, bundled_dir)
+        marker_path.write_text(platform_tag)
+    return bin_path
+
+
 def _main_cli() -> None:
     """Allow running ``python hatch_build.py [platform_tag]`` to populate the
     bundled binary directory locally (useful for editable dev setups where the
@@ -227,7 +252,7 @@ def _main_cli() -> None:
     """
     platform_tag = sys.argv[1] if len(sys.argv) > 1 else _resolve_target_platform_tag()
     repo_root = Path(__file__).resolve().parent
-    fetch_codex_binary(platform_tag, repo_root / CODEX_BUNDLED_DIR)
+    _populate_bundled(platform_tag, repo_root / CODEX_BUNDLED_DIR)
 
 
 if __name__ == "__main__":

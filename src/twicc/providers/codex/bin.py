@@ -39,7 +39,7 @@ def resolve_bundled_binary() -> Path:
         raise FileNotFoundError(
             f"Bundled Codex binary not found at {bin_path}. Did the build "
             "hook run? See hatch_build.py for the install/build path, or run "
-            "`python hatch_build.py` to populate it in an editable install.",
+            "`uv run python hatch_build.py` to populate it in an editable install.",
         )
     _BIN_PATH = bin_path
     return _BIN_PATH
