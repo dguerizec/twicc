@@ -99,8 +99,8 @@ function handleHide(event) {
         <h2 class="dialog-title">Choose your providers</h2>
         <p>
             TwiCC supports multiple AI coding providers. Pick the ones you want
-            to enable. You can change this anytime from
-            <strong>Settings &rarr; Providers</strong>.
+            to enable and choose a default for new sessions. You can change
+            these anytime from <strong>Settings &rarr; Providers</strong>.
         </p>
         <div class="provider-choices">
             <wa-switch
@@ -151,6 +151,9 @@ function handleHide(event) {
                     {{ option.label }}
                 </wa-option>
             </wa-select>
+            <p class="default-provider-hint">
+                You can always pick a different provider when creating a new session.
+            </p>
         </div>
         <wa-button
             slot="footer"
@@ -191,6 +194,12 @@ function handleHide(event) {
 .default-provider-label {
     font-weight: var(--wa-font-weight-semibold);
     font-size: var(--wa-font-size-s);
+}
+.default-provider-hint {
+    margin: 0;
+    font-size: var(--wa-font-size-s);
+    color: var(--wa-color-text-quiet);
+    font-style: italic;
 }
 .provider-option-icon {
     margin-right: var(--wa-space-2xs);
