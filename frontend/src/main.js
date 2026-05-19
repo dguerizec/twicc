@@ -55,6 +55,9 @@ import { useWorkspacesStore } from './stores/workspaces'
 import { useTerminalConfigStore } from './stores/terminalConfig'
 import { useMessageSnippetsStore } from './stores/messageSnippets'
 import { useTipsStore } from './stores/tips'
+import { useAgentSettingsPresetsStore } from './stores/agentSettingsPresets'
+import { getProviderStore } from './providers'
+import { computeUsageData } from './utils/usage'
 
 // Notivue CSS
 import 'notivue/notification.css'
@@ -122,18 +125,13 @@ if (!authStore.needsLogin) {
             // ``frontend/src/utils/twiccLaunch.js``).
             setTwiccLaunchPrefix(twicc_launch_prefix)
             applyDefaultSettings(default_settings, settings, dev_mode, uvx_mode, settings_version, disabledProvidersPresent, disabledProviders)
-            // Seed the data store's provider lifecycle map. Lazy import keeps
-            // the bootstrap path light; the data store is unconditionally
-            // needed once the app is up anyway.
-            const { useDataStore } = await import('./stores/data')
+            // Seed the data store's provider lifecycle map.
             useDataStore().applyProviderStates(providerStates ?? {})
             // Seed each provider's bootstrap-driven state (agent-setting categories
             // for ``classifyAgentSettingsChanges``, model registry for capability
             // and retired-model lookups, agent-setting presets). Optional chaining:
             // providers without one of those concerns simply won't expose the
             // corresponding setter.
-            const { getProviderStore } = await import('./providers')
-            const { useAgentSettingsPresetsStore } = await import('./stores/agentSettingsPresets')
             const presetsStore = useAgentSettingsPresetsStore()
             for (const [provider, providerData] of Object.entries(providers ?? {})) {
                 // Cross-provider: presets land in the shared keyed store, not on
@@ -190,8 +188,6 @@ if (!authStore.needsLogin) {
     // still send fresh data on (re)connect and at every periodic sync — those
     // updates flow through the same setUsage path.
     {
-        const { computeUsageData } = await import('./utils/usage')
-        const { getProviderStore } = await import('./providers')
         for (const [provider, providerData] of Object.entries(bootstrapData.providers ?? {})) {
             if (providerData?.tracks_usage && providerData.usage) {
                 const computed = computeUsageData(providerData.usage)
