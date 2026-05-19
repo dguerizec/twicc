@@ -1,7 +1,8 @@
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
+import { resolvePublicAssetUrl } from '../utils/publicAsset'
 
 const authStore = useAuthStore()
 const router = useRouter()
@@ -9,6 +10,9 @@ const router = useRouter()
 const password = ref('')
 const error = ref('')
 const loading = ref(false)
+const passwordInput = ref(null)
+
+const robotIconUrl = resolvePublicAssetUrl('robot-brand.svg')
 
 /**
  * Redirect to the originally requested page (from ?redirect=) or home.
@@ -49,17 +53,26 @@ onUnmounted(() => {
 async function handleSubmit() {
     error.value = ''
     loading.value = true
+    let succeeded = false
 
     try {
         const result = await authStore.login(password.value)
         if (result.success) {
+            succeeded = true
             redirectAway()
-        } else {
-            error.value = result.error
-            password.value = ''
+            return
         }
+        error.value = result.error
+        password.value = ''
     } finally {
         loading.value = false
+        // Re-focus the input on any failure path (bad password, network
+        // error, …). Wait one tick so the just-reset `disabled` is gone
+        // from the rendered DOM before calling focus().
+        if (!succeeded) {
+            await nextTick()
+            passwordInput.value?.focus()
+        }
     }
 }
 </script>
@@ -68,8 +81,8 @@ async function handleSubmit() {
     <div class="login-backdrop">
         <wa-card class="login-card">
             <div class="login-header">
-                <wa-icon name="terminal" class="login-icon"></wa-icon>
-                <h1 class="login-title">TWICC</h1>
+                <img :src="robotIconUrl" alt="" class="login-icon" />
+                <h1 class="login-title">TwiCC</h1>
                 <p class="login-subtitle">Password required to continue</p>
             </div>
 
@@ -79,6 +92,7 @@ async function handleSubmit() {
                 <div class="form-group">
                     <label class="form-label">Password</label>
                     <wa-input
+                        ref="passwordInput"
                         type="password"
                         placeholder="Enter password"
                         :value="password"
@@ -139,8 +153,9 @@ async function handleSubmit() {
 }
 
 .login-icon {
-    font-size: var(--wa-font-size-2xl);
-    color: var(--wa-color-brand);
+    width: 64px;
+    height: 64px;
+    display: block;
 }
 
 .login-title {
