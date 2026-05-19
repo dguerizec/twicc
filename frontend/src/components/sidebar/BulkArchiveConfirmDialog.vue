@@ -159,28 +159,27 @@ function handleDialogHide(event) {
             </div>
 
             <div class="bulk-archive-scope">
-                <div class="bulk-archive-scope-label">Scope:</div>
-                <div v-if="scope.type === 'project'">
-                    <ProjectBadge :project-id="scope.id" />
-                </div>
-                <div v-else-if="scope.type === 'workspace' && workspace">
-                    <div class="workspace-header">
+                <div class="bulk-archive-scope-main">
+                    <span class="bulk-archive-scope-label">Scope:</span>
+                    <ProjectBadge v-if="scope.type === 'project'" :project-id="scope.id" />
+                    <template v-else-if="scope.type === 'workspace' && workspace">
                         <wa-icon
                             name="layer-group"
                             auto-width
                             :style="workspace.color ? { color: workspace.color } : null"
                         ></wa-icon>
                         <span>{{ workspace.name }}</span>
-                    </div>
-                    <div class="workspace-projects">
-                        <ProjectBadge
-                            v-for="pid in workspaceProjectIds"
-                            :key="pid"
-                            :project-id="pid"
-                        />
-                    </div>
+                    </template>
+                    <span v-else>All projects</span>
                 </div>
-                <div v-else>All projects</div>
+                <div v-if="scope.type === 'workspace' && workspace" class="workspace-projects">
+                    <span class="bulk-archive-scope-label">Workspace projects:</span>
+                    <ProjectBadge
+                        v-for="pid in workspaceProjectIds"
+                        :key="pid"
+                        :project-id="pid"
+                    />
+                </div>
             </div>
 
             <div class="bulk-archive-count">
@@ -237,23 +236,25 @@ function handleDialogHide(event) {
     margin-bottom: var(--wa-space-m);
 }
 
+.bulk-archive-scope-main {
+    display: flex;
+    align-items: center;
+    gap: var(--wa-space-xs);
+    flex-wrap: wrap;
+}
+
 .bulk-archive-scope-label {
     color: var(--wa-color-text-quiet);
     font-size: var(--wa-font-size-s);
-    margin-bottom: var(--wa-space-2xs);
-}
-
-.workspace-header {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--wa-space-xs);
-    margin-bottom: var(--wa-space-2xs);
 }
 
 .workspace-projects {
     display: flex;
     flex-wrap: wrap;
+    align-items: center;
     gap: var(--wa-space-xs);
+    margin-top: var(--wa-space-2xs);
+    font-size: var(--wa-font-size-s);
 }
 
 .bulk-archive-count {
