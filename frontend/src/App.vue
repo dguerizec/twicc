@@ -46,7 +46,12 @@ useFavicon()
 
 // Start the tip scheduler: first tip after FIRST_TIP_DELAY_MS, then
 // polling every SCHEDULER_POLL_MS once the per-dismiss cooldown expires.
-useTipScheduler()
+// Skip entirely when not authenticated — no tip should pop on /login.
+// LoginView triggers a full page reload after login, so this setup re-runs
+// in the authenticated state and the scheduler kicks in then.
+if (isAuthenticated.value) {
+    useTipScheduler()
+}
 
 // Load initial data and connect WebSocket when authenticated
 const dataStore = useDataStore()
@@ -336,7 +341,7 @@ const toastTheme = computed(() => {
 
 <template>
     <!-- Provider activation: non-dismissible first-run / recovery dialog -->
-    <ProviderActivationDialog />
+    <ProviderActivationDialog v-if="isAuthenticated" />
 
     <!-- Version mismatch: non-dismissible reload dialog -->
     <wa-dialog :open="versionMismatchDetected || undefined" without-header @wa-hide.prevent>
