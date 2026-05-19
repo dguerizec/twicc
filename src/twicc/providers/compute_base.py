@@ -36,6 +36,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple
 
 import orjson
 from django.core.exceptions import MultipleObjectsReturned
+from django.db import transaction
 from django.db.models import Count, Max, QuerySet
 
 from twicc.core.enums import ItemDisplayLevel, ItemKind, Provider
@@ -1992,6 +1993,7 @@ class BaseSessionCompute:
 
         connection.close()
 
+    @transaction.atomic
     def apply_session_complete(self, msg: dict) -> None:
         """
         Apply a ``session_complete`` payload produced by :meth:`compute_session_metadata`.
@@ -2000,6 +2002,10 @@ class BaseSessionCompute:
         bulk_updates, link create/update/delete diffs, session field
         updates, cost recalculation, title persistence, and project
         metadata refresh.
+
+        Wrapped in ``transaction.atomic`` so the dozen-ish SQL statements
+        below run as a single transaction: one write-lock acquisition and
+        one fsync per session instead of one per statement.
         """
         session_id = msg['session_id']
 
