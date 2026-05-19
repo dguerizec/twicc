@@ -9,18 +9,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Added
 
 - TwiCC can now be used with Codex from OpenAI in addition to Claude Code from Anthropic.
-- Workspaces in the CLI and the TwiCC plugin skills: new `twicc workspaces` / `twicc workspace <id>` commands (and matching skills), `--workspace <id>` filter on `twicc projects` and `twicc sessions`, and a `workspaces` field on each project entry listing the workspace IDs it belongs to.
+- Bulk-archive old sessions from the sidebar.
+- Permission mode picker on Claude Code approval screens: switch the session to `acceptEdits` or `bypassPermissions` in the same form as approving the current tool.
+- Product-discovery tips to help discover features of the application.
+- Improved rendering of the Claude Code Monitor and Task tools.
+- The floating Comment widget now has a Copy button and is accessible on files in the Files and Git tabs.
+- Approval and question forms now auto-focus their primary control when they appear.
+- Full-text search date filter split into two independent bounds: "Newer than X" and "Older than X".
+- Submit the approval or question forms by using the **Cmd / Ctrl + Enter** keyboard shortcut.
+- Focus the chat form from any session tab using the **Alt+Shift+M** keyboard shortcut.
+- While in the message input, open or close agent settings (model, effort, …) using the **Alt+Shift+O** keyboard shortcut.
+- In question forms, navigate options using **Arrow keys** (and **Space / Enter** to select).
+- New CLI commands `create-session`, `session messages`, `workspaces` (and matching skills) to create a session, list its messages, or list workspaces.
 
 ### Changed
 
 - Image attachments now support the higher resolutions accepted by Opus 4.7 (2576 px for max dimension, still at 1568 for other Claude models, 2048 for Codex)
+- In the `@`, `/`, `$`, and `!` popovers, pressing Enter when nothing matches now closes the popover and keeps the typed text in the textarea.
 - Bump `claude-agent-sdk` from 0.1.69 to 0.2.82 (bundled Claude Code CLI: 2.1.121 → 2.1.142)
 
 ### Fixed
 
 - Scrolling in long chat sessions on Chrome no longer jump uncontrollably (reported by @LeoPartt)
 - Claude Code SDK instances are now properly killed when you stop the agent during an assistant turn (based on PR #13 by @LeoPartt)
+- Draft sessions no longer falsely show "Forced to 1M" when 200K is explicitly picked.
+- The current session stays unread when the agent finishes while the tab is inactive.
+- Workspace auto-add rules now work more reliably.
 - Better handling of tool calls in "Claude is..."
+- Improved highlighting of search terms.
+- In-session search (Ctrl+F) is now pre-filled with the selected text.
+- The title-suggestion system prompt setting no longer fights with the cursor while typing — changes are now committed with an explicit Apply button.
 
 
 ## [1.5.5] - 2026-04-28
