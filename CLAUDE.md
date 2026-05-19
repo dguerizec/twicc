@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-**TwiCC** — *Twi* for Twidi, *CC* for Claude Code — The Web Interface for Claude Code. A standalone, self-contained web application that provides a rich UI for browsing and interacting with Claude Code sessions. Single process, zero external services, one command to launch.
+**TwiCC** — *Twi* for Twidi, *CC* for Claude and Codex — The Web Interface for Claude and Codex. A standalone, self-contained web application that provides a rich UI for browsing and interacting with Claude Code and Codex sessions. Single process, zero external services, one command to launch.
 
 **Quality approach:** We aim to implement everything to the best standards possible. The only shortcuts we allow: no tests and no linting.
 
@@ -12,28 +12,27 @@
 
 ## Stack
 
-| Layer            | Technology                                  |
-|------------------|---------------------------------------------|
-| Package Manager  | uv (Python), npm (frontend)                 |
-| Backend          | Django 6 (ASGI) + Uvicorn, Python ≥ 3.13    |
-| WebSocket        | Django Channels + InMemoryChannelLayer      |
-| Database         | SQLite (WAL mode)                           |
-| File Watching    | watchfiles                                  |
-| Claude SDK       | claude-agent-sdk (for interactive sessions) |
-| Codex SDK        | codex_app_server (vendored at `src/codex_app_server/` + bundled binary — see README "Codex Python SDK — vendored" for the why and how to update) |
-| Frontend         | Vue.js 3 (SFC, Composition API) + Vite 7    |
-| State Management | Pinia + VueUse                              |
-| UI Components    | Web Awesome 3+ (wa-* elements)              |
-| Code Editor      | CodeMirror 6 (bundled via npm)               |
-| Terminal         | xterm.js with PTY backend                   |
-| Markdown         | markdown-it + shiki + mermaid               |
+| Layer            | Technology                                                   |
+|------------------|--------------------------------------------------------------|
+| Package Manager  | uv (Python), npm (frontend)                                  |
+| Backend          | Django 6 (ASGI) + Uvicorn, Python ≥ 3.13                     |
+| WebSocket        | Django Channels + InMemoryChannelLayer                       |
+| Database         | SQLite (WAL mode)                                            |
+| File Watching    | watchfiles                                                   |
+| Agent SDKs       | claude-agent-sdk for Claude Code; codex_app_server for Codex |
+| Frontend         | Vue.js 3 (SFC, Composition API) + Vite 7                     |
+| State Management | Pinia + VueUse                                               |
+| UI Components    | Web Awesome 3+ (wa-* elements)                               |
+| Code Editor      | CodeMirror 6 (bundled via npm)                               |
+| Terminal         | xterm.js with PTY backend                                    |
+| Markdown         | markdown-it + shiki + mermaid                                |
 
 ## Architecture
 
 ```
 twicc (entry: run.py → cli.main())
 ├── Startup
-│   ├── Initial sync — scans ~/.claude/projects/, bulk-inserts raw SessionItems (no metadata)
+│   ├── Initial sync — scans every provider's data root (~/.claude/projects/, ~/.codex/sessions/, ...), bulk-inserts raw SessionItems (no metadata)
 │   └── Background compute (multiprocessing) — computes metadata for all sessions if
 │       the owning provider's CURRENT_COMPUTE_VERSION (e.g. CLAUDE_CODE_COMPUTE_VERSION)
 │       changed (display_level, kind, groups, costs, git info). Runs once at startup
@@ -47,16 +46,16 @@ twicc (entry: run.py → cli.main())
 │   └── JSONL file changed → incremental read → save to DB (with full metadata) → broadcast via WS
 ├── Periodic tasks
 │   ├── Price sync from OpenRouter API (every 24h)
-│   └── Usage quota fetch from Anthropic OAuth API (every 5min)
-└── ProcessManager (Claude SDK)
-    └── Manages interactive Claude sessions → SDK writes JSONL → watcher picks up
+│   └── Usage quota fetch from provider APIs (every 5min where supported)
+└── Agent managers (provider SDKs)
+    └── Manage interactive Claude Code and Codex sessions → providers write JSONL → watcher picks up
 ```
 
 **Startup flow:** Initial sync bulk-inserts raw JSONL lines (fast, no computation). Then background compute (separate process) fills in metadata for sessions whose `compute_version` is outdated. The watcher computes metadata inline for real-time accuracy during normal operation.
 
-**Data flow:** Claude SDK writes JSONL → watchfiles detects change → incremental read from last offset → save to Django models (with metadata) → WebSocket broadcast → Pinia store updates → Vue UI re-renders.
+**Data flow:** Provider SDK/CLI writes JSONL → watchfiles detects change → incremental read from last offset → save to Django models (with metadata) → WebSocket broadcast → Pinia store updates → Vue UI re-renders.
 
-**Agent flow:** User sends message via WS → ProcessManager creates/resumes ClaudeProcess (SDK) → SDK writes JSONL → watcher picks up → broadcast back to frontend.
+**Agent flow:** User sends message via WS → provider agent manager creates/resumes the agent process/thread → provider writes JSONL → watcher picks up → broadcast back to frontend.
 
 ## Data Directory
 
@@ -70,14 +69,23 @@ All persistent data (database, logs, configuration) lives in a **data directory*
 
 ```
 <data_dir>/
-├── .env                              # Configuration (ports, password hash)
+├── .env                              # Infrastructure config (ports, password hash, etc.)
+├── settings.json                     # User preferences synced across devices
+├── workspaces.json                   # User-defined workspaces
+├── terminal-config.json              # Terminal preferences
+├── message-snippets.json             # Saved message snippets
+├── seen-tips.json                    # Tip dismissal state
+├── {provider}-settings-presets.json  # Agent settings presets per provider (e.g. claude_code-, codex-)
 ├── db/
-│   └── data.sqlite (+shm, +wal)     # SQLite database
+│   └── data.sqlite (+shm, +wal)      # SQLite database
+├── search-index/                     # Tantivy full-text search index
+├── sessions-pending/                 # Pending session payloads picked up by the watcher
 └── logs/
     ├── backend.log                   # Backend application logs
     ├── frontend.log                  # Frontend (Vite) process output
-    └── sdk/
-        └── {session_id}.jsonl        # Raw SDK message logs (debug mode)
+    └── sdk/                          # Raw SDK message logs, one subdirectory per provider
+        ├── claude_code/{session_id}.jsonl
+        └── codex/{session_id}.jsonl
 ```
 
 Path resolution is centralized in `src/twicc/paths.py`. The `devctl.py` script has its own equivalent logic (since it doesn't depend on Django).
@@ -164,14 +172,17 @@ Key models in `src/twicc/core/models.py`:
 
 | Model | Purpose |
 |-------|---------|
-| `Project` | Maps to a `~/.claude/projects/{id}/` folder. Has `name`, `color`, `total_cost`, `sessions_count`. |
-| `Session` | One JSONL file per session. Tracks `last_offset`/`last_line` for incremental sync. Has `title`, costs (`self_cost`, `subagents_cost`, `total_cost`), `type` (session/subagent), `parent_session` (self FK), `model`, `archived`, `pinned`. |
+| `Project` | Cross-provider working directory. ID derived from the directory path via `path_to_project_id`. Has `name`, `color`, `directory`, `git_root`, `total_cost`, `sessions_count`. |
+| `Session` | One JSONL file per session. Tracks `last_offset`/`last_line` for incremental sync. Carries `provider`, `file_path`, `title`, costs (`self_cost`, `subagents_cost`, `total_cost`), `type` (session/subagent), `parent_session` (self FK), `model`, `archived`, `pinned`, plus the closed `AgentSettings` bundle (`selected_model`, `effort`, `thinking_enabled`, `permission_mode`, `context_max`, `claude_in_chrome`) and lifecycle timestamps (`last_started_at`, `last_updated_at`, `last_stopped_at`, etc.). |
 | `SessionItem` | One row per JSONL line. Has `display_level` (ALWAYS/COLLAPSIBLE/DEBUG_ONLY), `kind` (user_message, assistant_message, etc.), `group_head`/`group_tail` for collapsible groups, `cost`, `timestamp`. |
-| `ToolResultLink` | Links tool_use to tool_result items within a session. |
-| `AgentLink` | Links Task tool_use to spawned subagent session. |
-| `ModelPrice` | Historical model pricing from OpenRouter API. |
-| `UsageSnapshot` | Anthropic OAuth usage quota snapshots (5h and 7-day quotas). |
-| `WeeklyActivity` / `DailyActivity` | Pre-computed activity stats per project. |
+| `ToolResultLink` | Links tool_use to tool_result items within a session (provider-agnostic). |
+| `AgentLink` | Links a spawn-an-agent tool_use to its subagent session (provider-agnostic). |
+| `ModelPrice` | Historical model pricing from OpenRouter API, scoped per provider. |
+| `UsageSnapshot` | Per-provider usage quota snapshots (e.g. Anthropic OAuth 5h and 7-day quotas for Claude Code). |
+| `WeeklyActivity` / `DailyActivity` | Pre-computed activity stats keyed by `(project, date, provider)`; `project=NULL` means global. |
+| `ProcessRun` | Tracks a running agent process for cron lifecycle management and crash recovery. |
+| `SessionCron` | Persisted cron jobs created by a Claude Code session via the CLI cron tool. |
+| `Command` | Synced slash-command definitions (per provider). |
 
 **Sync strategy:** On file change, compare `mtime` → `seek()` to `last_offset` → read new lines → insert to DB → update offset. Files are append-only.
 
@@ -231,7 +242,7 @@ The six per-session agent setting fields (`selected_model`, `effort`, `thinking_
 
 ## Web Awesome Components
 
-**Version:** Web Awesome 3.1. Since version 3, **native** browser events are no longer prefixed with `wa-` (e.g., `@click`, `@focus`, `@input`). However, **custom** Web Awesome events still use the `wa-` prefix (e.g., `@wa-show`, `@wa-hide`, `@wa-after-show`).
+**Version:** Web Awesome 3.3+. Since version 3, **native** browser events are no longer prefixed with `wa-` (e.g., `@click`, `@focus`, `@input`). However, **custom** Web Awesome events still use the `wa-` prefix (e.g., `@wa-show`, `@wa-hide`, `@wa-after-show`).
 
 **IMPORTANT:** Each Web Awesome component used must be explicitly imported in `frontend/src/main.js`. Imports load both the component JS and its styles (via shadow DOM).
 
@@ -311,7 +322,7 @@ When the user asks to make a new release, follow these steps in order:
 
 ## Dialog Forms Pattern
 
-When creating a form inside a `wa-dialog`, refer to `frontend/src/components/ProjectEditDialog.vue` as the reference implementation. Key patterns:
+When creating a form inside a `wa-dialog`, refer to `frontend/src/components/project/ProjectEditDialog.vue` as the reference implementation. Key patterns:
 
 - **Form element:** Wrap content in a `<form>` with `@submit.prevent="handleSave"` and a unique `id`
 - **Submit button outside form:** Use `type="submit"` and set the `form` attribute via `setAttribute()` in a sync function (wa-button doesn't expose `form` as a property)

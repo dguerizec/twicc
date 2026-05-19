@@ -27,7 +27,7 @@ def _normalize_project_id(project_id: str) -> str:
 
 app = typer.Typer(
     name="twicc",
-    help="TwiCC — The Web Interface for Claude Code.",
+    help="TwiCC — The Web Interface for Claude and Codex.",
     invoke_without_command=True,
     no_args_is_help=False,
 )
