@@ -9,11 +9,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Added
 
 - TwiCC can now be used with Codex from OpenAI in addition to Claude Code from Anthropic.
+  - ![Providers pick screen](frontend/public/whats-new/v1.6/multi-providers.webp)
 - Bulk-archive old sessions from the sidebar.
+  - ![Bulk archiving menu](frontend/public/whats-new/v1.6/bulk-archiving-1.webp)
+  - ![Bulk archiving dialog](frontend/public/whats-new/v1.6/bulk-archiving-2.webp)
 - Permission mode picker on Claude Code approval screens: switch the session to `acceptEdits` or `bypassPermissions` in the same form as approving the current tool.
+  - ![Approval with permission choice](frontend/public/whats-new/v1.6/approval-permission-mode.webp)
 - Product-discovery tips to help discover features of the application.
+  - ![Example of tips](frontend/public/whats-new/v1.6/tips.webp)
 - Improved rendering of the Claude Code Monitor and Task tools.
 - The floating Comment widget now has a Copy button and is accessible on files in the Files and Git tabs.
+  - ![Select & Comment widget on files](frontend/public/whats-new/v1.6/select-and-comment-on-files.webp)
 - Approval and question forms now auto-focus their primary control when they appear.
 - Full-text search date filter split into two independent bounds: "Newer than X" and "Older than X".
 - Submit the approval or question forms by using the **Cmd / Ctrl + Enter** keyboard shortcut.
