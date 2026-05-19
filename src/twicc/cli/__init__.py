@@ -234,6 +234,12 @@ from twicc.cli.create_session.command import create_session_cmd  # noqa: E402
 app.command(name="create-session")(create_session_cmd)
 
 
+# ``password`` is a Typer sub-app (set/clear/status). The module is lightweight
+# (no Django setup) so importing it at module load is cheap.
+from twicc.cli.password import app as password_app  # noqa: E402
+app.add_typer(password_app)
+
+
 def main() -> None:
     """Entry point for ``pyproject.toml`` scripts and ``__main__.py``."""
     app()

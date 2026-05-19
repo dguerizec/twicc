@@ -21,12 +21,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - While in the message input, open or close agent settings (model, effort, …) using the **Alt+Shift+O** keyboard shortcut.
 - In question forms, navigate options using **Arrow keys** (and **Space / Enter** to select).
 - New CLI commands `create-session`, `session messages`, `workspaces` (and matching skills) to create a session, list its messages, or list workspaces.
+- New CLI commands `password set`, `password clear`, and `password status` to manage the optional password protection interactively, without editing `.env` by hand.
 
 ### Changed
 
 - Image attachments now support the higher resolutions accepted by Opus 4.7 (2576 px for max dimension, still at 1568 for other Claude models, 2048 for Codex)
 - In the `@`, `/`, `$`, and `!` popovers, pressing Enter when nothing matches now closes the popover and keeps the typed text in the textarea.
 - Bump `claude-agent-sdk` from 0.1.69 to 0.2.82 (bundled Claude Code CLI: 2.1.121 → 2.1.142)
+- Password storage upgraded to salted PBKDF2-SHA256 (legacy SHA-256 hashes still accepted, auto-upgraded on next `password set`), with the `.env` forced to mode 0600.
 
 ### Fixed
 

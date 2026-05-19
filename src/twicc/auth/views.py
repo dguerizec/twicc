@@ -3,13 +3,10 @@
 Provides login, logout, and auth status check endpoints.
 All endpoints are under /api/auth/ and always accessible (no auth required).
 
-The password is never stored in clear text. TWICC_PASSWORD_HASH contains a
-SHA-256 hex digest. On login, the submitted password is hashed and compared
-to the stored hash using constant-time comparison.
+Password storage and verification (PBKDF2-SHA256, with legacy SHA-256
+support for hashes set before the upgrade) lives in ``twicc.auth.hashers``.
 """
 
-import hashlib
-import hmac
 import logging
 import time
 from collections import defaultdict
@@ -17,6 +14,8 @@ from collections import defaultdict
 import orjson
 from django.conf import settings
 from django.http import JsonResponse
+
+from twicc.auth.hashers import verify_password
 
 logger = logging.getLogger(__name__)
 
@@ -90,11 +89,6 @@ def _get_client_ip(request) -> str:
     return request.META.get("REMOTE_ADDR", "unknown")
 
 
-def _hash_password(password: str) -> str:
-    """Hash a password with SHA-256 and return its hex digest."""
-    return hashlib.sha256(password.encode()).hexdigest()
-
-
 def auth_check(request):
     """GET /api/auth/check/ - Check if user is authenticated.
 
@@ -119,8 +113,9 @@ def login(request):
 
     Body: {"password": "the_password"}
 
-    The password is hashed with SHA-256 and compared to the stored hash
-    using constant-time comparison to prevent timing attacks.
+    Verification (constant-time, dispatched per format) is delegated to
+    ``verify_password`` so both legacy SHA-256 and current PBKDF2 hashes
+    are accepted.
 
     On success, sets session["authenticated"] = True and returns 200.
     On failure, returns 401.
@@ -148,10 +143,8 @@ def login(request):
         return JsonResponse({"error": "Invalid JSON"}, status=400)
 
     password = data.get("password", "")
-    password_hash = _hash_password(password)
 
-    # Constant-time comparison to prevent timing attacks
-    if hmac.compare_digest(password_hash, settings.TWICC_PASSWORD_HASH):
+    if verify_password(password, settings.TWICC_PASSWORD_HASH):
         request.session["authenticated"] = True
         # Clear failed attempts on success
         _login_attempts.pop(ip, None)

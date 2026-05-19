@@ -112,8 +112,8 @@ MIDDLEWARE = [
 
 # Password protection
 # Set TWICC_PASSWORD_HASH in .env to enable password protection.
-# Generate a hash with: python -c "import hashlib; print(hashlib.sha256(b'your_password').hexdigest())"
-# If not set or empty, the app is accessible without authentication.
+# Use `twicc password set` (or `uvx twicc password set`, etc.) to set it
+# interactively. If not set or empty, the app is accessible without authentication.
 TWICC_PASSWORD_HASH = os.environ.get("TWICC_PASSWORD_HASH", "")
 
 # Session settings

@@ -151,14 +151,20 @@ All configuration goes through environment variables, set in `~/.twicc/.env`:
 | Variable              | Default     | Description                                |
 |-----------------------|-------------|--------------------------------------------|
 | `TWICC_PORT`          | `3500`      | Server port                                |
-| `TWICC_PASSWORD_HASH` | *(empty)*   | SHA-256 hash to enable password protection |
+| `TWICC_PASSWORD_HASH` | *(empty)*   | Password hash to enable password protection (managed by `twicc password set`) |
 | `TWICC_DATA_DIR`      | `~/.twicc/` | Data directory (database, logs, settings)  |
 
-Generate a password hash:
+### Password protection
+
+Set, clear, or check the password interactively. Use the same invocation prefix as for launching TwiCC — `twicc` if you installed it permanently, `uvx twicc` for a one-off run, or `uv run twicc` from a source checkout:
 
 ```bash
-python -c "import hashlib; print(hashlib.sha256(b'your_password').hexdigest())"
+twicc password set      # prompt for a password (with confirmation) and write it to .env
+twicc password clear    # disable password protection
+twicc password status   # show whether password protection is enabled
 ```
+
+Restart TwiCC after setting or clearing the password for the change to take effect.
 
 ## Platform support
 
