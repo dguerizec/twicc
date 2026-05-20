@@ -13,8 +13,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import queue
 import threading
+from contextlib import suppress
 
 from asgiref.sync import sync_to_async
 from channels.layers import get_channel_layer
@@ -25,10 +25,8 @@ from twicc.core.models import Session, SessionType
 from twicc.orchestrator import BaseOrchestrator
 from twicc.providers.background_compute_task import (
     ComputeContext,
-    register_initial_sync_entry,
     start_background_compute_task,
     stop_background_task,
-    unregister_initial_sync_entry,
 )
 from twicc.providers.codex.agent import get_codex_agent_manager
 from twicc.providers.codex.agent.original_files_cache import (
@@ -93,6 +91,10 @@ class CodexOrchestrator(BaseOrchestrator):
         self._sync_stop_event = threading.Event()
 
         self._sync_task: asyncio.Task | None = None
+        # Future of the initial-sync producer thread (asyncio.to_thread).
+        # shutdown() awaits it so the thread is really finished, not just
+        # the wrapping coroutine cancelled.
+        self._sync_thread_future: asyncio.Future | None = None
         self._orch_task: asyncio.Task | None = None
         self._auth_check_task: asyncio.Task | None = None
         self._usage_sync_task: asyncio.Task | None = None
@@ -174,6 +176,15 @@ class CodexOrchestrator(BaseOrchestrator):
 
         if self._sync_task is not None:
             await _cancel_task(self._sync_task, "Codex initial sync task")
+        # asyncio.to_thread does not kill the producer thread on cancel —
+        # only awaiting its future proves the thread actually stopped (it
+        # cooperates via _sync_stop_event, set above). Block here so the
+        # provider does not reach the "stopped" phase with a live thread
+        # still pushing onto the shared queue.
+        if self._sync_thread_future is not None and not self._sync_thread_future.done():
+            with suppress(Exception):
+                await asyncio.shield(self._sync_thread_future)
+            self._sync_thread_future = None
 
         if self._orch_task is not None:
             await _cancel_task(self._orch_task, "Codex orchestrator task")
@@ -235,13 +246,18 @@ class CodexOrchestrator(BaseOrchestrator):
     # ------------------------------------------------------------------
 
     async def _initial_sync_task(self) -> None:
-        """Run sync_all() in a thread with progress broadcasting.
+        """Run sync_all() in a thread, pushing payloads onto the shared queue.
 
-        The producer thread no longer writes to DB directly: it pushes
-        initial-sync payloads onto ``sync_queue``, drained by the
-        cross-provider unified consumer in :mod:`background_compute_task`.
+        The producer thread does not write to DB directly: it pushes
+        initial-sync payloads onto the process-wide shared queue, drained by
+        the unified DB writer (:mod:`twicc.providers.db_writer`).
+
+        No try/finally cleanup here: with the permanent consumer, a thread
+        that keeps pushing after a cancel pushes onto a still-drained queue —
+        no lost writes. The zombie-thread / overlap concern is handled by
+        ``shutdown()`` blocking on ``_sync_thread_future``.
         """
-        from twicc.sync_helpers import InitialSyncDoneMarker
+        from twicc.providers.db_writer import InitialSyncDoneMarker, get_initial_sync_queue
 
         loop = asyncio.get_running_loop()
         provider_value = self.provider.value
@@ -264,26 +280,28 @@ class CodexOrchestrator(BaseOrchestrator):
                 loop,
             )
 
-        sync_queue: queue.Queue = queue.Queue()
-        worker_done_event = asyncio.Event()
-        register_initial_sync_entry(
-            provider=self.provider,
-            sync_queue=sync_queue,
-            worker_done_event=worker_done_event,
-        )
-
+        sync_queue = get_initial_sync_queue()
         logger.info("Starting Codex data synchronization...")
-        try:
-            await asyncio.to_thread(
+
+        # Keep an explicit reference to the producer thread future so
+        # shutdown() can wait for the *real* thread end, not just this
+        # coroutine being cancelled.
+        self._sync_thread_future = asyncio.ensure_future(
+            asyncio.to_thread(
                 sync_all,
                 sync_queue,
                 on_session_progress=on_session_progress,
                 stop_event=self._sync_stop_event,
             )
-            sync_queue.put(InitialSyncDoneMarker(provider=self.provider))
-            await worker_done_event.wait()
-        finally:
-            unregister_initial_sync_entry(self.provider)
+        )
+        await self._sync_thread_future
+
+        # Producer thread finished pushing — close the run with the marker.
+        # The marker carries the Event the writer sets once it has drained
+        # every payload this run produced.
+        done_event = asyncio.Event()
+        sync_queue.put(InitialSyncDoneMarker(provider=self.provider, done_event=done_event))
+        await done_event.wait()
 
         await broadcast_startup_progress(
             "initial_sync", total_sessions, total_sessions,

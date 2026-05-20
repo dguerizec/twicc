@@ -2,12 +2,13 @@
 Cross-provider JSONL sync helpers.
 
 Each provider stores session content as an append-only JSONL file. The
-helpers in this module are the provider-agnostic plumbing every initial
-sync needs: a content probe before creating an empty session, and an
-incremental reader that bulk-inserts new lines as raw
-:class:`~twicc.core.models.SessionItem` rows. Metadata computation
-(``kind``, ``display_level``, costs, ...) stays in each provider's own
-compute path.
+helpers in this module are the provider-agnostic, read-only plumbing every
+initial-sync producer needs: a content probe before creating an empty
+session, and an incremental reader that parses new JSONL lines into a
+:class:`SessionItemsToInsert`. The producer turns that into a queue payload
+(see :mod:`twicc.providers.db_writer`) — the actual DB writes happen in the
+unified DB writer. Metadata computation (``kind``, ``display_level``,
+costs, ...) stays in each provider's own compute path.
 """
 
 from __future__ import annotations
@@ -16,129 +17,19 @@ import logging
 from pathlib import Path
 from typing import NamedTuple
 
-from twicc.core.enums import Provider
 from twicc.core.models import Session, SessionItem
 
 logger = logging.getLogger(__name__)
 
 
-# =============================================================================
-# Initial-sync payloads
-# =============================================================================
-#
-# These NamedTuples are pushed by per-provider initial-sync producers (running
-# in their ``asyncio.to_thread`` worker) onto a ``queue.Queue``, then drained
-# by the cross-provider unified consumer in ``background_compute_task.py``. They
-# describe a self-contained unit of DB work the producer has prepared but
-# intentionally not executed yet, so all writes happen in a single serialised
-# coroutine and never race with another provider's writes.
-
-
-class CreateSessionPayload(NamedTuple):
-    """Producer parsed a JSONL file for a session that does not exist in DB.
-
-    The consumer creates the ``Project`` (idempotent — no-op if it exists),
-    saves the unsaved ``Session`` instance, bulk-creates the items, then
-    persists the tracking fields. ``new_project_directory`` may be ``None``
-    (Claude Code stores the cwd inside the JSONL body, so initial sync
-    cannot pass it; it gets filled in later by the background compute).
-    """
-
-    provider: Provider
-    project_id: str
-    new_project_directory: str | None
-    new_project_stale: bool
-    session: Session
-    items: list[tuple[int, str]]
-    last_offset: int
-    last_line: int
-    mtime: float
-
-
-class UpdateSessionPayload(NamedTuple):
-    """Producer parsed a JSONL file for a session that already exists in DB.
-
-    The consumer appends the new items (``ignore_conflicts=True`` covers the
-    rare watcher-already-inserted-them race), persists the tracking fields,
-    optionally clears the ``stale`` flag, and optionally resets
-    ``compute_version`` to ``None`` so background compute will re-process the
-    session.
-    """
-
-    provider: Provider
-    session: Session
-    items: list[tuple[int, str]]
-    last_offset: int
-    last_line: int
-    mtime: float
-    reset_compute_version: bool
-    clear_stale: bool
-
-
-class MarkSessionsStalePayload(NamedTuple):
-    """Producer wants to flag a set of sessions as stale (no longer on disk).
-
-    Used by initial sync at two points:
-
-    - Per-project at the end of ``sync_project`` once it has scanned the disk
-      and seen which DB sessions have no matching file.
-    - Per-subagent inside ``_sync_session_subagents`` when a DB subagent has
-      no matching file under the session's ``subagents/`` folder.
-
-    The consumer issues a single ``Session.objects.filter(id__in=..., stale=False).update(stale=True)``.
-    """
-
-    provider: Provider
-    session_ids: list[str]
-
-
-class UpdateProjectMetadataPayload(NamedTuple):
-    """Producer has computed end-of-sync metadata for one project.
-
-    Each non-``None`` field is applied; ``None`` means "leave that field
-    alone". Two boolean flags ask the consumer to invoke heavier helpers
-    that themselves write to DB:
-
-    - ``recalc_total_cost``: the consumer calls
-      :func:`twicc.projects.update_project_total_cost` after the
-      ``project.save`` (re-aggregates all sessions' costs).
-    - ``resolve_git_root`` (with optional ``git_root_directory`` override):
-      the consumer calls :func:`twicc.projects.ensure_project_git_root`
-      which resolves and persists ``project.git_root`` if missing.
-
-    Bundling them into a single payload keeps the project's
-    end-of-sync writes in one transaction.
-    """
-
-    provider: Provider
-    project_id: str
-    new_sessions_count: int | None
-    new_mtime: float | None
-    new_stale: bool | None
-    recalc_total_cost: bool
-    resolve_git_root: bool
-    git_root_directory: str | None
-
-
-class InitialSyncDoneMarker(NamedTuple):
-    """Sentinel pushed by a producer when it has finished pushing payloads.
-
-    The unified consumer finalises the matching entry (unblocking the
-    producer task that was awaiting completion) and removes it from the
-    registry. Other registered providers continue to be drained.
-    """
-
-    provider: Provider
-
-
 class SessionItemsToInsert(NamedTuple):
     """Result of parsing a session's JSONL file in the producer.
 
-    The producer turns this into a :class:`CreateSessionPayload` or
-    :class:`UpdateSessionPayload` (with ``items``, ``last_offset``,
-    ``last_line``, ``mtime`` carried over) before pushing it onto the
-    consumer queue. ``actually_new_count`` lets the caller decide whether
-    to flag ``reset_compute_version`` on the payload.
+    The producer turns this into a ``CreateSessionPayload`` or
+    ``UpdateSessionPayload`` (with ``items``, ``last_offset``, ``last_line``,
+    ``mtime`` carried over) before pushing it onto the unified DB writer's
+    queue. ``actually_new_count`` lets the caller decide whether to flag
+    ``reset_compute_version`` on the payload.
 
     Producers receive ``None`` from :func:`read_session_items_from_file`
     when the file has not changed since last sync — nothing to push.
@@ -177,8 +68,8 @@ def read_session_items_from_file(
     Reads-only — performs the filesystem I/O and the ``pre_existing`` count
     (a DB read, safe under WAL) but does no writes. The caller (a producer
     inside ``asyncio.to_thread``) turns the result into a
-    :class:`CreateSessionPayload` or :class:`UpdateSessionPayload` and pushes
-    it onto the unified consumer queue.
+    ``CreateSessionPayload`` or ``UpdateSessionPayload`` and pushes it onto
+    the unified DB writer's queue.
 
     Returns ``None`` when there is nothing to do (file missing, unchanged
     since last sync).

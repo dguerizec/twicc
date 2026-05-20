@@ -25,14 +25,13 @@ from django.db.models import Max
 from twicc.core.enums import Provider
 from twicc.core.models import Project, Session, SessionType
 from twicc.paths import path_to_project_id
-from twicc.sync_helpers import (
+from twicc.providers.db_writer import (
     CreateSessionPayload,
     MarkSessionsStalePayload,
     UpdateProjectMetadataPayload,
     UpdateSessionPayload,
-    check_file_has_content,
-    read_session_items_from_file,
 )
+from twicc.sync_helpers import check_file_has_content, read_session_items_from_file
 from .helpers import CodexHelpers
 
 logger = logging.getLogger(__name__)

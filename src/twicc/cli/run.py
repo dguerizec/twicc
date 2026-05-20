@@ -181,6 +181,13 @@ async def run_server(port: int):
     # Per-provider orchestrators (started in parallel; each one is
     # responsible for its own task graph and dependency ordering).
     orchestrators = get_orchestrator_registry()
+
+    # Start the unified DB writer before any producer (orchestrator) starts,
+    # so its shared queues already exist when the orchestrators wire them in.
+    # ``stop_unified_consumer`` is used later in this function's shutdown path.
+    from twicc.providers.db_writer import start_unified_consumer, stop_unified_consumer
+    start_unified_consumer()
+
     await orchestrators.start_all(shutdown_event, search_index_ready)
 
     # Configure uvicorn
@@ -289,6 +296,12 @@ async def run_server(port: int):
 
         # Then let every provider tear down its own tasks (in parallel).
         await orchestrators.shutdown_all()
+
+        # Stop the unified DB writer. Done after every orchestrator has shut
+        # down — their blocking shutdown() guarantees no producer thread or
+        # subprocess is still alive, so nothing is left pushing onto the
+        # shared queues.
+        await stop_unified_consumer()
 
         # Finally tear down the search index itself. Done after the
         # providers' watchers are stopped so no late write races us.

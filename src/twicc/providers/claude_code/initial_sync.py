@@ -24,14 +24,13 @@ from typing import TYPE_CHECKING
 
 from twicc.core.enums import Provider
 from twicc.core.models import Project, Session, SessionType
-from twicc.sync_helpers import (
+from twicc.providers.db_writer import (
     CreateSessionPayload,
     MarkSessionsStalePayload,
     UpdateProjectMetadataPayload,
     UpdateSessionPayload,
-    check_file_has_content,
-    read_session_items_from_file,
 )
+from twicc.sync_helpers import check_file_has_content, read_session_items_from_file
 from .helpers import ClaudeCodeHelpers
 
 logger = logging.getLogger(__name__)

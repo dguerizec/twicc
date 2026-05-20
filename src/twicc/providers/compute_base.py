@@ -1586,6 +1586,7 @@ class BaseSessionCompute:
             logger.error(f"Session {session_id} not found for metadata computation")
             result_queue.put(orjson.dumps({
                 'type': 'error',
+                'provider': self.provider.value,
                 'session_id': session_id,
                 'error': 'Session not found',
             }))
@@ -1940,6 +1941,7 @@ class BaseSessionCompute:
 
         result_queue.put(orjson.dumps({
             'type': 'session_complete',
+            'provider': self.provider.value,
             'session_id': session_id,
             'project_id': session.project_id,
             'item_updates': all_item_updates,
@@ -1993,8 +1995,9 @@ class BaseSessionCompute:
 
         connection.close()
 
+    @staticmethod
     @transaction.atomic
-    def apply_session_complete(self, msg: dict) -> None:
+    def apply_session_complete(msg: dict) -> None:
         """
         Apply a ``session_complete`` payload produced by :meth:`compute_session_metadata`.
 

@@ -1,18 +1,18 @@
 """
-Background compute task for session metadata.
+Background compute producer.
 
-Processes existing sessions that need metadata computation at startup, then stops.
-New sessions created by the watcher get compute_version set at creation time.
+Processes existing sessions that need metadata computation at startup, then
+stops. New sessions created by the watcher get compute_version set at
+creation time.
 
 Architecture:
 - A separate Process per provider handles CPU-intensive work (JSON parsing,
   metadata computation). The worker process only READS from the database
   (WAL mode supports multiple readers).
-- All database WRITES happen in a single, cross-provider consumer that drains
-  every registered provider's result queue from the main process event loop.
-  This serializes the DB writer side and eliminates "database is locked"
-  errors that arise when multiple providers' consumers race for the SQLite
-  write lock.
+- The worker pushes its results onto the process-wide shared compute result
+  queue owned by :mod:`twicc.providers.db_writer`; the unified DB writer
+  applies every write. This module is purely the *producer* side — it never
+  writes to the database from the main process.
 
 This module is provider-agnostic: each provider's orchestrator builds a
 :class:`ComputeContext` carrying its ``Provider`` enum value, its
@@ -30,21 +30,16 @@ import importlib
 import logging
 import multiprocessing
 import queue
-from collections import defaultdict
 from contextlib import suppress
 from dataclasses import dataclass, field
-from datetime import date as date_cls
 from typing import TYPE_CHECKING
 
 import orjson
 from asgiref.sync import sync_to_async
-from channels.layers import get_channel_layer
-from django.db import transaction
 
 from twicc.core.enums import Provider
 from twicc.logging_context import current_provider
 from twicc.startup_progress import broadcast_startup_progress
-from twicc.workspaces import auto_add_project_to_workspaces
 
 if TYPE_CHECKING:
     from twicc.providers.compute_base import BaseSessionCompute
@@ -54,15 +49,10 @@ if TYPE_CHECKING:
 # at module level. The "spawn" start method re-imports this module in the child
 # process before django.setup() runs. Top-level model imports would trigger
 # AppRegistryNotReady. All such imports are done inside functions instead.
+# For the same reason, db_writer (which the main process needs here) is only
+# imported lazily inside functions, never at module level.
 
 logger = logging.getLogger(__name__)
-
-# How often to broadcast project_updated during background compute (every N sessions per project).
-# Lower = more responsive cost updates in the UI, higher = less frontend overhead.
-PROJECT_BROADCAST_INTERVAL = 5
-
-# Batch size for activity recalculation flushes (per provider).
-BATCH_ACTIVITY_COUNT = 50
 
 # Use "spawn" start method to avoid fork-safety issues.
 # The default "fork" method on Linux can deadlock when the parent process has
@@ -94,13 +84,16 @@ class ComputeContext:
       this value through pickle without importing the provider's compute
       module before ``django.setup()`` has run in the child process. The
       module is imported lazily on first :meth:`get_compute` call.
+
+    The worker's result queue is NOT held here — it is the process-wide
+    shared queue owned by :mod:`twicc.providers.db_writer`. Only the
+    ``command_queue`` (one-way main→worker) is per-context.
     """
 
     provider: Provider
     compute_version: int
     compute_factory: str
     command_queue: _mp_ctx.Queue = field(default_factory=_mp_ctx.Queue)
-    result_queue: _mp_ctx.Queue = field(default_factory=_mp_ctx.Queue)
     worker_stop_event: _mp_ctx.Event = field(default_factory=_mp_ctx.Event)
     stop_event: asyncio.Event = field(default_factory=asyncio.Event)
     process: _mp_ctx.Process | None = None
@@ -158,14 +151,12 @@ def stop_background_task(ctx: ComputeContext) -> None:
     else:
         logger.info("stop_background_task: no worker process to stop")
 
-    # Cancel queue threads to prevent blocking on shutdown
-    # (don't wait for queue data to be flushed)
+    # Cancel the command queue's feeder thread to prevent blocking on shutdown.
+    # The result queue is the process-wide shared queue owned by db_writer —
+    # it is NOT closed here; it outlives every per-provider compute run.
     with suppress(Exception):
         ctx.command_queue.cancel_join_thread()
         ctx.command_queue.close()
-    with suppress(Exception):
-        ctx.result_queue.cancel_join_thread()
-        ctx.result_queue.close()
 
     logger.info("stop_background_task: shutdown complete")
 
@@ -215,13 +206,16 @@ def compute_worker_main(command_queue, result_queue, stop_event, compute_factory
     Main function running in the compute worker process.
 
     Receives session_ids via command_queue, computes metadata (READ-ONLY DB access),
-    sends update batches via result_queue.
+    sends update batches via result_queue (the process-wide shared queue).
 
     This function runs in a separate process and must initialize Django itself.
     ``compute_factory`` is the dotted ``"module:attribute"`` path of the
     provider's compute factory; it is resolved AFTER ``django.setup()`` so
     importing the provider's compute module (which pulls in Django models)
     does not crash the spawn worker before the app registry is ready.
+
+    Every message put on ``result_queue`` carries a ``'provider'`` key so the
+    cross-provider unified consumer can route it without a per-queue registry.
     """
     # Tie the worker's lifetime to the parent's on Linux: if the main TwiCC
     # process dies hard (SIGKILL, panic), the kernel sends us SIGTERM, which
@@ -246,11 +240,12 @@ def compute_worker_main(command_queue, result_queue, stop_event, compute_factory
     worker_logger = logging.getLogger(__name__)
 
     compute = _resolve_factory(compute_factory)()
+    provider_value = compute.provider.value
     # Tag every subsequent log line emitted by this worker process with
     # the provider this worker was spawned for. The worker process has a
     # fresh ContextVar default, so this set() is what makes log lines
     # show up under the right provider rather than ``"global"``.
-    current_provider.set(compute.provider.value)
+    current_provider.set(provider_value)
     worker_logger.info("Compute worker process started")
 
     while True:
@@ -289,6 +284,7 @@ def compute_worker_main(command_queue, result_queue, stop_event, compute_factory
                             handler.flush()
                     result_queue.put(orjson.dumps({
                         'type': 'error',
+                        'provider': provider_value,
                         'session_id': session_id,
                         'error': str(e),
                     }))
@@ -300,7 +296,7 @@ def compute_worker_main(command_queue, result_queue, stop_event, compute_factory
                     handler.flush()
 
     # Signal the consumer that the worker is done
-    result_queue.put(orjson.dumps({'type': 'done'}))
+    result_queue.put(orjson.dumps({'type': 'done', 'provider': provider_value}))
     worker_logger.info("Compute worker sent 'done' signal")
 
     # Drain command queue before exiting to prevent blocking
@@ -319,612 +315,26 @@ def compute_worker_main(command_queue, result_queue, stop_event, compute_factory
 
 
 def start_compute_process(ctx: ComputeContext) -> None:
-    """Start the compute worker process if not already running."""
+    """Start the compute worker process if not already running.
+
+    The worker writes onto the process-wide shared compute result queue
+    owned by :mod:`twicc.providers.db_writer` (lazy-imported here so this
+    module is never dragged into the spawn subprocess before Django setup).
+    """
     if ctx.process is None or not ctx.process.is_alive():
+        from twicc.providers.db_writer import get_compute_result_queue
+
+        result_queue = get_compute_result_queue()
         # Reset stop event for new process
         ctx.worker_stop_event = _mp_ctx.Event()
         ctx.process = _mp_ctx.Process(
             target=compute_worker_main,
-            args=(ctx.command_queue, ctx.result_queue, ctx.worker_stop_event, ctx.compute_factory),
+            args=(ctx.command_queue, result_queue, ctx.worker_stop_event, ctx.compute_factory),
             daemon=True,
             name="compute-worker",
         )
         ctx.process.start()
         logger.info(f"Started compute worker process (PID: {ctx.process.pid})")
-
-
-async def _handle_compute_done(session_id: str) -> None:
-    """Handle completion of a session compute - broadcast session_updated.
-
-    Only broadcasts for real sessions (not subagents) that have user messages.
-    Subagents don't appear in session lists but each broadcast would trigger
-    addSession in the frontend store, causing O(n²) getter re-evaluations.
-    Subagent data is fetched on-demand via API when the user opens a subagent tab.
-
-    project_updated broadcasts are handled separately by the unified consumer
-    with throttling (every N sessions per project) to reduce frontend overhead.
-    """
-    from twicc.core.models import Session, SessionType
-    from twicc.core.serializers import serialize_session
-
-    try:
-        session = await sync_to_async(Session.objects.get)(id=session_id)
-
-        # Only broadcast real sessions with user messages
-        if session.user_message_count == 0 or session.type != SessionType.SESSION:
-            return
-
-        channel_layer = get_channel_layer()
-        await channel_layer.group_send(
-            "updates",
-            {
-                "type": "broadcast",
-                "data": {
-                    "type": "session_updated",
-                    "session": serialize_session(session),
-                },
-            },
-        )
-    except Session.DoesNotExist:
-        logger.warning(f"Session {session_id} not found for broadcast")
-    except Exception as e:
-        logger.error(f"Error broadcasting updates for {session_id}: {e}")
-
-
-async def _broadcast_project_updated(project_id: str) -> None:
-    """Broadcast project_updated for a single project."""
-    from twicc.core.models import Project
-    from twicc.core.serializers import serialize_project
-
-    try:
-        if project := await sync_to_async(Project.objects.filter(id=project_id).first)():
-            channel_layer = get_channel_layer()
-            await channel_layer.group_send(
-                "updates",
-                {
-                    "type": "broadcast",
-                    "data": {
-                        "type": "project_updated",
-                        "project": serialize_project(project),
-                    },
-                },
-            )
-    except Exception as e:
-        logger.error(f"Error broadcasting project_updated for {project_id}: {e}")
-
-
-@sync_to_async
-def _flush_pending_activities(provider: Provider, pending_activity_days: dict[str, set]) -> None:
-    """Flush accumulated activity recalculations for all projects."""
-    from twicc.core.models import PeriodicActivity
-    for project_id, days in pending_activity_days.items():
-        PeriodicActivity.recalculate_for_days(project_id, days, provider=provider, do_global=False)
-    days = set.union(*pending_activity_days.values())
-    PeriodicActivity.recalculate_for_days(None, days, provider=provider, do_global=True)
-
-
-# =============================================================================
-# Unified consumer (cross-provider DB writer)
-# =============================================================================
-
-
-@dataclass
-class _ConsumerEntry:
-    """One provider's slot inside the unified consumer.
-
-    Holds the provider-specific :class:`ComputeContext` plus the per-run
-    counters and pending-broadcast/activity buffers consumed by
-    :func:`_process_compute_message`.
-    """
-
-    ctx: ComputeContext
-    worker_done_event: asyncio.Event
-    display_session_ids: set[str] | None
-    total_display: int
-    compute: BaseSessionCompute
-    pending_activity_days: dict[str, set] = field(default_factory=lambda: defaultdict(set))
-    pending_project_ids: set[str] = field(default_factory=set)
-    auto_added_project_ids: set[str] = field(default_factory=set)
-    sessions_since_project_broadcast: int = 0
-    sessions_since_activities_flush: int = 0
-    completed_count: int = 0
-    finalized: bool = False
-
-
-@dataclass
-class _InitialSyncEntry:
-    """One provider's initial-sync slot inside the unified consumer.
-
-    The producer (running in the per-provider ``asyncio.to_thread`` worker)
-    pushes ``CreateSessionPayload``, ``UpdateSessionPayload``, or
-    ``InitialSyncDoneMarker`` instances onto :attr:`sync_queue`; the
-    consumer applies the writes in a single serialised coroutine, so no
-    initial-sync write ever races with another provider's initial-sync
-    write or with a ``apply_session_complete`` from the compute side.
-    """
-
-    provider: Provider
-    sync_queue: queue.Queue
-    worker_done_event: asyncio.Event
-    finalized: bool = False
-
-
-_consumer_entries: dict[Provider, _ConsumerEntry] = {}
-_initial_sync_entries: dict[Provider, _InitialSyncEntry] = {}
-_unified_consumer_task: asyncio.Task | None = None
-
-
-def register_compute_consumer(
-    ctx: ComputeContext,
-    worker_done_event: asyncio.Event,
-    *,
-    display_session_ids: set[str] | None,
-    total_display: int,
-) -> None:
-    """Register a provider's compute context with the unified consumer.
-
-    Lazily starts :func:`_unified_consumer_loop` if no loop is currently
-    running. ``worker_done_event`` is set by the loop when this provider's
-    worker emits ``'done'`` (or when the loop sees ``ctx.stop_event`` set,
-    or when the loop exits in its ``finally`` block).
-    """
-    entry = _ConsumerEntry(
-        ctx=ctx,
-        worker_done_event=worker_done_event,
-        display_session_ids=display_session_ids,
-        total_display=total_display,
-        compute=ctx.get_compute(),
-    )
-    _consumer_entries[ctx.provider] = entry
-    _ensure_unified_consumer_running()
-    logger.info(
-        f"Unified consumer: registered provider={ctx.provider.value} "
-        f"(active={[p.value for p in _consumer_entries.keys()]})"
-    )
-
-
-def unregister_compute_consumer(provider: Provider) -> None:
-    """Remove ``provider`` from the unified consumer's entry map.
-
-    Idempotent. The consumer task exits naturally on its next tick once
-    the map is empty; it will be relaunched lazily on the next
-    :func:`register_compute_consumer` call.
-    """
-    if _consumer_entries.pop(provider, None) is not None:
-        logger.info(
-            f"Unified consumer: unregistered provider={provider.value} "
-            f"(active={[p.value for p in _consumer_entries.keys()]})"
-        )
-
-
-def _ensure_unified_consumer_running() -> None:
-    """Start :func:`_unified_consumer_loop` if no task is currently running."""
-    global _unified_consumer_task
-    if _unified_consumer_task is None or _unified_consumer_task.done():
-        _unified_consumer_task = asyncio.create_task(_unified_consumer_loop())
-
-
-async def _unified_consumer_loop() -> None:
-    """Cross-provider drain loop. One coroutine, one DB writer.
-
-    Polls every registered provider's compute :attr:`ComputeContext.result_queue`
-    AND every registered provider's initial-sync queue in a single asyncio
-    task. All DB writes — ``apply_session_complete`` from the compute side,
-    ``CreateSessionPayload`` / ``UpdateSessionPayload`` from the initial-sync
-    side, plus broadcasts, activity flushes, and workspace auto-adds — happen
-    here sequentially, so two providers never race on the SQLite write lock,
-    and the compute side never races with the initial-sync side either.
-
-    Exits when both :data:`_consumer_entries` and :data:`_initial_sync_entries`
-    are empty. Restarted lazily by :func:`register_compute_consumer` or
-    :func:`register_initial_sync_entry` whenever new work needs draining.
-    """
-    try:
-        while _consumer_entries or _initial_sync_entries:
-            any_processed = False
-
-            # ---- Compute side ----
-            for provider, entry in list(_consumer_entries.items()):
-                if entry.finalized:
-                    continue
-                # ``stop_background_task`` sets the per-ctx stop_event when a
-                # provider shuts down (or in shutdown() before the compute
-                # task has emitted 'done'). Finalize the entry so the
-                # awaiter unblocks.
-                if entry.ctx.stop_event.is_set():
-                    await _finalize_entry(entry)
-                    continue
-
-                try:
-                    raw_msg = entry.ctx.result_queue.get_nowait()
-                except queue.Empty:
-                    continue
-                except (OSError, ValueError):
-                    # Queue may have been closed by stop_background_task
-                    # racing with us. Treat as terminal for this entry.
-                    await _finalize_entry(entry)
-                    continue
-
-                any_processed = True
-                try:
-                    msg = orjson.loads(raw_msg)
-                except Exception:
-                    logger.error(f"Failed to deserialize result message: {raw_msg!r:.500}")
-                    continue
-
-                await _process_compute_message(entry, msg)
-
-            # ---- Initial-sync side ----
-            for provider, init_entry in list(_initial_sync_entries.items()):
-                if init_entry.finalized:
-                    continue
-
-                try:
-                    init_msg = init_entry.sync_queue.get_nowait()
-                except queue.Empty:
-                    continue
-
-                any_processed = True
-                await _process_initial_sync_message(init_entry, init_msg)
-
-            if not any_processed:
-                await asyncio.sleep(0.05)
-            else:
-                # Yield to event loop between processed messages so other
-                # coroutines (watchers, broadcasts, etc.) get scheduled.
-                await asyncio.sleep(0)
-
-    except Exception as exc:
-        logger.error(f"Unified compute consumer crashed: {exc}", exc_info=True)
-    finally:
-        # Make sure no waiter is left hanging even if we crashed or were
-        # cancelled mid-drain. Iterate on snapshots since both finalize
-        # helpers only flip the ``finalized`` flag and set events, they
-        # don't mutate the dicts themselves.
-        for entry in list(_consumer_entries.values()):
-            if not entry.finalized:
-                entry.finalized = True
-                entry.worker_done_event.set()
-        for init_entry in list(_initial_sync_entries.values()):
-            if not init_entry.finalized:
-                init_entry.finalized = True
-                init_entry.worker_done_event.set()
-        logger.info("Unified compute consumer stopped")
-
-
-async def _process_compute_message(entry: _ConsumerEntry, msg: dict) -> None:
-    """Apply a single message from a provider's result queue."""
-    msg_type = msg.get('type')
-
-    try:
-        if msg_type == 'session_complete':
-            await sync_to_async(entry.compute.apply_session_complete)(msg)
-            await _handle_compute_done(msg['session_id'])
-
-            project_id = msg.get('project_id')
-            if project_id:
-                entry.pending_project_ids.add(project_id)
-
-            # First time we see this project in this run, evaluate
-            # workspace auto-add patterns. ``apply_session_complete``
-            # has just persisted the directory (Claude Code: from
-            # JSONL body; Codex: already set at initial_sync) so
-            # the pattern matching has the canonical cwd to work
-            # with. Idempotent — the helper no-ops if the project
-            # is already a member of every matching workspace.
-            project_directory = msg.get('project_directory')
-            if (
-                project_id
-                and project_directory
-                and project_id not in entry.auto_added_project_ids
-            ):
-                entry.auto_added_project_ids.add(project_id)
-                await auto_add_project_to_workspaces(project_id, project_directory)
-
-            # Broadcast progress only for real sessions (not subagents)
-            session_id = msg['session_id']
-            if entry.display_session_ids is None or session_id in entry.display_session_ids:
-                entry.completed_count += 1
-                await broadcast_startup_progress(
-                    "background_compute",
-                    entry.completed_count,
-                    entry.total_display,
-                    provider=entry.ctx.provider.value,
-                )
-
-                # Every N normal sessions, broadcast project_updated for all pending projects
-                entry.sessions_since_project_broadcast += 1
-                if entry.sessions_since_project_broadcast >= PROJECT_BROADCAST_INTERVAL:
-                    for pid in entry.pending_project_ids:
-                        await _broadcast_project_updated(pid)
-                    entry.pending_project_ids.clear()
-                    entry.sessions_since_project_broadcast = 0
-
-            # Accumulate affected days for batched activity recalculation
-            affected_days = msg.get('affected_days')
-            if project_id and affected_days:
-                entry.pending_activity_days[project_id].update(
-                    date_cls.fromisoformat(d) for d in affected_days
-                )
-                entry.sessions_since_activities_flush += 1
-
-        elif msg_type == 'done':
-            logger.info(
-                f"Unified consumer: received 'done' from worker (provider={entry.ctx.provider.value})"
-            )
-            await _finalize_entry(entry)
-
-        elif msg_type == 'error':
-            logger.error(f"Compute error for {msg['session_id']}: {msg['error']}")
-
-        else:
-            logger.error(f"Unexpected result message type: {msg_type} => {msg}")
-
-    except Exception as e:
-        logger.error(f"Error processing result message {msg_type}: {e}", exc_info=True)
-
-    # Flush activity recalculations every BATCH_ACTIVITY_COUNT sessions for this provider.
-    try:
-        if entry.sessions_since_activities_flush >= BATCH_ACTIVITY_COUNT:
-            await _flush_pending_activities(entry.ctx.provider, entry.pending_activity_days)
-            entry.pending_activity_days.clear()
-            entry.sessions_since_activities_flush = 0
-    except Exception as e:
-        logger.error(f"Error flushing activity recalculations: {e}", exc_info=True)
-        entry.pending_activity_days.clear()
-        entry.sessions_since_activities_flush = 0
-
-
-async def _finalize_entry(entry: _ConsumerEntry) -> None:
-    """Flush an entry's pending broadcasts/activities and unblock its waiter.
-
-    Idempotent: subsequent calls are no-ops thanks to :attr:`finalized`.
-    """
-    if entry.finalized:
-        return
-    entry.finalized = True
-
-    # Final flush of project_updated broadcasts pending for this provider.
-    for pid in entry.pending_project_ids:
-        try:
-            await _broadcast_project_updated(pid)
-        except Exception as e:
-            logger.error(f"Error in final project broadcast for {pid}: {e}")
-    entry.pending_project_ids.clear()
-
-    # Final flush of activity recalculations pending for this provider.
-    if entry.pending_activity_days:
-        try:
-            await _flush_pending_activities(entry.ctx.provider, entry.pending_activity_days)
-        except Exception as e:
-            logger.error(f"Error in final activity flush: {e}", exc_info=True)
-        entry.pending_activity_days.clear()
-
-    entry.worker_done_event.set()
-
-
-# =============================================================================
-# Initial-sync side of the unified consumer
-# =============================================================================
-
-
-def register_initial_sync_entry(
-    provider: Provider,
-    sync_queue: queue.Queue,
-    worker_done_event: asyncio.Event,
-) -> None:
-    """Register a provider's initial-sync queue with the unified consumer.
-
-    Same lazy-start semantics as :func:`register_compute_consumer`: the
-    consumer task is launched (or restarted) on first registration.
-    ``worker_done_event`` is set when the consumer has finalised this entry,
-    which happens either when an :class:`InitialSyncDoneMarker` is drained
-    from the queue, or when the consumer exits in its ``finally`` block
-    (crash, cancel).
-    """
-    entry = _InitialSyncEntry(
-        provider=provider,
-        sync_queue=sync_queue,
-        worker_done_event=worker_done_event,
-    )
-    _initial_sync_entries[provider] = entry
-    _ensure_unified_consumer_running()
-    logger.info(
-        f"Unified consumer: registered initial-sync provider={provider.value} "
-        f"(active_initial_sync={[p.value for p in _initial_sync_entries.keys()]})"
-    )
-
-
-def unregister_initial_sync_entry(provider: Provider) -> None:
-    """Remove a provider's initial-sync slot from the unified consumer.
-
-    Idempotent. Mirrors :func:`unregister_compute_consumer`.
-    """
-    if _initial_sync_entries.pop(provider, None) is not None:
-        logger.info(
-            f"Unified consumer: unregistered initial-sync provider={provider.value} "
-            f"(active_initial_sync={[p.value for p in _initial_sync_entries.keys()]})"
-        )
-
-
-async def _process_initial_sync_message(entry: _InitialSyncEntry, msg) -> None:
-    """Apply a single message drained from an initial-sync queue."""
-    # Lazy imports so the spawn worker does not pull in Django models at
-    # ``background_compute_task.py`` import time (see module-level note).
-    from twicc.sync_helpers import (
-        CreateSessionPayload,
-        InitialSyncDoneMarker,
-        MarkSessionsStalePayload,
-        UpdateProjectMetadataPayload,
-        UpdateSessionPayload,
-    )
-
-    try:
-        if isinstance(msg, CreateSessionPayload):
-            await sync_to_async(_apply_create_session_payload)(msg)
-        elif isinstance(msg, UpdateSessionPayload):
-            await sync_to_async(_apply_update_session_payload)(msg)
-        elif isinstance(msg, MarkSessionsStalePayload):
-            await sync_to_async(_apply_mark_sessions_stale_payload)(msg)
-        elif isinstance(msg, UpdateProjectMetadataPayload):
-            await sync_to_async(_apply_update_project_metadata_payload)(msg)
-        elif isinstance(msg, InitialSyncDoneMarker):
-            logger.info(
-                f"Unified consumer: received initial-sync done marker "
-                f"(provider={entry.provider.value})"
-            )
-            _finalize_initial_sync_entry(entry)
-        else:
-            logger.error(
-                f"Unexpected initial-sync message type: {type(msg).__name__} "
-                f"=> {msg!r:.300}"
-            )
-    except Exception as e:
-        logger.error(
-            f"Error processing initial-sync message {type(msg).__name__}: {e}",
-            exc_info=True,
-        )
-
-
-def _apply_create_session_payload(payload) -> None:
-    """Persist a new session (and project if missing) plus its items, in one transaction."""
-    # Lazy imports so the spawn worker does not pull in Django models at
-    # ``background_compute_task.py`` import time.
-    from twicc.core.models import SessionItem
-    from twicc.projects import register_project_sync
-
-    with transaction.atomic():
-        # 1. Ensure the project row exists. ``register_project_sync`` is
-        # idempotent — no-op when the project is already in DB, otherwise
-        # creates it with the given directory/stale flags.
-        register_project_sync(
-            payload.project_id,
-            directory=payload.new_project_directory,
-            stale=payload.new_project_stale,
-        )
-
-        # 2. Save the new session row. The producer instantiated it with
-        # ``project_id=...`` (FK by id) so the FK is satisfied as soon as
-        # step 1 above committed (or had already committed before this run).
-        payload.session.save()
-
-        # 3. Bulk-create the items.
-        if payload.items:
-            session_items = [
-                SessionItem(session=payload.session, line_num=ln, content=ct)
-                for ln, ct in payload.items
-            ]
-            SessionItem.objects.bulk_create(
-                session_items, ignore_conflicts=True, batch_size=50,
-            )
-
-        # 4. Persist tracking fields (the producer already computed them).
-        payload.session.last_offset = payload.last_offset
-        payload.session.last_line = payload.last_line
-        payload.session.mtime = payload.mtime
-        payload.session.save(update_fields=["last_offset", "last_line", "mtime"])
-
-
-def _apply_update_session_payload(payload) -> None:
-    """Append items to an existing session and update its tracking fields, in one transaction."""
-    # Lazy imports so the spawn worker does not pull in Django models at
-    # ``background_compute_task.py`` import time.
-    from twicc.core.models import SessionItem
-
-    with transaction.atomic():
-        if payload.items:
-            session_items = [
-                SessionItem(session=payload.session, line_num=ln, content=ct)
-                for ln, ct in payload.items
-            ]
-            SessionItem.objects.bulk_create(
-                session_items, ignore_conflicts=True, batch_size=50,
-            )
-
-        update_fields = ["last_offset", "last_line", "mtime"]
-        payload.session.last_offset = payload.last_offset
-        payload.session.last_line = payload.last_line
-        payload.session.mtime = payload.mtime
-        if payload.clear_stale and payload.session.stale:
-            payload.session.stale = False
-            update_fields.append("stale")
-        if payload.reset_compute_version and payload.session.compute_version is not None:
-            payload.session.compute_version = None
-            update_fields.append("compute_version")
-        payload.session.save(update_fields=update_fields)
-
-
-def _apply_mark_sessions_stale_payload(payload) -> None:
-    """Mark a batch of sessions as stale via a single bulk UPDATE."""
-    # Lazy imports so the spawn worker does not pull in Django models at
-    # ``background_compute_task.py`` import time.
-    from twicc.core.models import Session
-
-    if not payload.session_ids:
-        return
-    with transaction.atomic():
-        Session.objects.filter(
-            id__in=payload.session_ids, stale=False,
-        ).update(stale=True)
-
-
-def _apply_update_project_metadata_payload(payload) -> None:
-    """Apply end-of-sync metadata updates for one project, in one transaction.
-
-    Bundles the ``project.save`` (sessions_count / mtime / stale fields),
-    the optional ``update_project_total_cost`` aggregate recompute, and the
-    optional ``ensure_project_git_root`` resolution into a single atomic
-    block so the entire project's end-of-sync writes share one fsync.
-    """
-    # Lazy imports so the spawn worker does not pull in Django models at
-    # ``background_compute_task.py`` import time.
-    from twicc.core.models import Project
-    from twicc.projects import ensure_project_git_root, update_project_total_cost
-
-    with transaction.atomic():
-        update_fields: list[str] = []
-        if (
-            payload.new_sessions_count is not None
-            or payload.new_mtime is not None
-            or payload.new_stale is not None
-        ):
-            try:
-                project = Project.objects.get(id=payload.project_id)
-            except Project.DoesNotExist:
-                logger.warning(
-                    f"UpdateProjectMetadataPayload: project {payload.project_id} not found"
-                )
-                project = None
-            if project is not None:
-                if payload.new_sessions_count is not None:
-                    project.sessions_count = payload.new_sessions_count
-                    update_fields.append("sessions_count")
-                if payload.new_mtime is not None:
-                    project.mtime = payload.new_mtime
-                    update_fields.append("mtime")
-                if payload.new_stale is not None:
-                    project.stale = payload.new_stale
-                    update_fields.append("stale")
-                if update_fields:
-                    project.save(update_fields=update_fields)
-
-        if payload.recalc_total_cost:
-            update_project_total_cost(payload.project_id)
-        if payload.resolve_git_root and payload.git_root_directory:
-            ensure_project_git_root(payload.project_id, payload.git_root_directory)
-
-
-def _finalize_initial_sync_entry(entry: _InitialSyncEntry) -> None:
-    """Mark an initial-sync entry as done and unblock its waiter.
-
-    Idempotent: subsequent calls are no-ops thanks to :attr:`finalized`.
-    Synchronous (unlike :func:`_finalize_entry`) because the initial-sync
-    side has no pending broadcasts or activity flushes to await.
-    """
-    if entry.finalized:
-        return
-    entry.finalized = True
-    entry.worker_done_event.set()
 
 
 async def start_background_compute_task(ctx: ComputeContext) -> None:
@@ -934,17 +344,14 @@ async def start_background_compute_task(ctx: ComputeContext) -> None:
     Architecture:
     - Starts a separate Process for CPU-intensive work (JSON parsing, metadata computation)
     - The worker process only READS from the database
-    - All database WRITES happen in the main process via the unified consumer
-      (:func:`_unified_consumer_loop`), which serializes writes across providers
-      and eliminates "database is locked" errors
+    - All database WRITES happen via the unified DB writer (:mod:`db_writer`),
+      which serializes writes across providers and phases
 
     This task processes all sessions with outdated or missing compute_version,
     then stops. New sessions created by the watcher get compute_version set
     at creation time, so they don't need background reprocessing.
-
-    Progress logging: Logs progress at 10% intervals during processing.
     """
-
+    from twicc.providers.db_writer import arm_compute_completion
     from twicc.projects import load_project_directories, load_project_git_roots
     from twicc.core.models import Session, SessionType
 
@@ -996,16 +403,10 @@ async def start_background_compute_task(ctx: ComputeContext) -> None:
     # Start the worker process
     start_compute_process(ctx)
 
-    # Register with the unified consumer. It drains every registered
-    # provider's result queue from a single coroutine, so the SQLite write
-    # lock is no longer contended between providers.
-    worker_done_event = asyncio.Event()
-    register_compute_consumer(
-        ctx,
-        worker_done_event,
-        display_session_ids=sessions_to_display,
-        total_display=total_display,
-    )
+    # Arm the completion Event with the unified DB writer. The writer sets it
+    # when it drains this provider's 'done' message — i.e. once every
+    # session_complete this run produced has been applied.
+    done_event = arm_compute_completion(ctx.provider, sessions_to_display, total_display)
 
     logger.info(f"Background compute task started ({total_to_compute} sessions to process)")
 
@@ -1032,9 +433,9 @@ async def start_background_compute_task(ctx: ComputeContext) -> None:
         # Send stop signal to worker so it finishes and sends 'done'
         ctx.command_queue.put(None)
 
-        # Wait for the unified consumer to drain everything for this provider
+        # Wait for the unified DB writer to drain everything for this provider
         # (the worker has emitted 'done' and any pending flushes have run).
-        await worker_done_event.wait()
+        await done_event.wait()
 
         # Broadcast completion (using display total — sessions only, not subagents)
         await broadcast_startup_progress(
@@ -1042,7 +443,6 @@ async def start_background_compute_task(ctx: ComputeContext) -> None:
             provider=provider_value, completed=True,
         )
     finally:
-        unregister_compute_consumer(ctx.provider)
         # Stop the worker process. Idempotent if it has already exited.
         stop_background_task(ctx)
 
