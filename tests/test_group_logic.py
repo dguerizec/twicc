@@ -157,7 +157,9 @@ def get_item_state(item: SessionItem) -> tuple[int | None, int | None]:
 def run_batch(session_id: str):
     """Run batch processing."""
     result_queue = queue.Queue()
-    get_compute().compute_session_metadata(session_id, result_queue)
+    # run_id only tags messages for the unified DB writer's run routing; this
+    # test applies results directly via apply_compute_results, so 0 is fine.
+    get_compute().compute_session_metadata(session_id, result_queue, run_id=0)
     apply_compute_results(result_queue)
 
 
