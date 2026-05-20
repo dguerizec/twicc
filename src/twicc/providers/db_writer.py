@@ -996,9 +996,9 @@ def _compute_project_mtime(project_id: str) -> float:
 
     Shared by ``recalc_mtime`` in :func:`_apply_update_project_metadata_payload`
     and the per-project refresh in :func:`_apply_mark_sessions_stale_payload`.
-    Same visible-session filter as ``update_project_metadata()``, plus
-    ``stale=False`` so a session whose JSONL is gone from disk does not keep
-    the project's mtime up.
+    Same filter as the ``mtime`` aggregate in ``update_project_metadata()``:
+    the visible-session filter plus ``stale=False`` so a session whose JSONL
+    is gone from disk does not keep the project's mtime up.
     """
     from django.db.models import Max
 

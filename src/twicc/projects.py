@@ -328,7 +328,15 @@ def update_project_metadata(project_id: str) -> None:
         project=project, type=SessionType.SESSION, created_at__isnull=False, user_message_count__gt=0
     )
     project.sessions_count = sessions.count()
-    max_mtime = sessions.order_by("-mtime").values_list("mtime", flat=True).first()
+    # mtime excludes stale sessions (JSONL gone from disk): a stale session
+    # must not keep the project's mtime -- and thus its sort position -- high.
+    # sessions_count above intentionally keeps stale sessions (matching
+    # recalc_sessions_count in the unified DB writer); only this mtime
+    # aggregate filters them out. Keep this filter aligned with
+    # _compute_project_mtime() in twicc.providers.db_writer.
+    max_mtime = (
+        sessions.filter(stale=False).order_by("-mtime").values_list("mtime", flat=True).first()
+    )
     project.mtime = max_mtime or 0
     project.save(update_fields=["sessions_count", "mtime"])
 
