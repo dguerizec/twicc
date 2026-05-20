@@ -173,6 +173,17 @@ class CodexOrchestrator(BaseOrchestrator):
         self.initial_sync_done.set()
         self.compute_done.set()
 
+        # Cancel the dependency orchestrator first, before any await below.
+        # ``initial_sync_done.set()`` just unblocked _dependency_orchestrator's
+        # ``await self.initial_sync_done.wait()``; awaiting anything else first
+        # would let it resume and start the boot title sync, the background
+        # compute and the watcher *while the provider is shutting down*.
+        # ``_cancel_task`` runs ``.cancel()`` synchronously — before this
+        # coroutine yields — so the orchestrator is killed at its wait() and
+        # never runs its body.
+        if self._orch_task is not None:
+            await _cancel_task(self._orch_task, "Codex orchestrator task")
+
         if self._sync_task is not None:
             await _cancel_task(self._sync_task, "Codex initial sync task")
         # asyncio.to_thread does not kill the producer thread on cancel —
@@ -209,9 +220,6 @@ class CodexOrchestrator(BaseOrchestrator):
                     InitialSyncDoneMarker(provider=self.provider, done_future=done_future)
                 )
                 await done_future
-
-        if self._orch_task is not None:
-            await _cancel_task(self._orch_task, "Codex orchestrator task")
 
         # Watcher (may not have started yet — depends on initial sync + search index ready)
         if self._watcher_task is not None:
