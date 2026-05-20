@@ -39,6 +39,7 @@ from typing import TYPE_CHECKING
 import orjson
 from asgiref.sync import sync_to_async
 from channels.layers import get_channel_layer
+from django.db import transaction
 
 from twicc.core.enums import Provider
 from twicc.logging_context import current_provider
@@ -430,7 +431,26 @@ class _ConsumerEntry:
     finalized: bool = False
 
 
+@dataclass
+class _InitialSyncEntry:
+    """One provider's initial-sync slot inside the unified consumer.
+
+    The producer (running in the per-provider ``asyncio.to_thread`` worker)
+    pushes ``CreateSessionPayload``, ``UpdateSessionPayload``, or
+    ``InitialSyncDoneMarker`` instances onto :attr:`sync_queue`; the
+    consumer applies the writes in a single serialised coroutine, so no
+    initial-sync write ever races with another provider's initial-sync
+    write or with a ``apply_session_complete`` from the compute side.
+    """
+
+    provider: Provider
+    sync_queue: queue.Queue
+    worker_done_event: asyncio.Event
+    finalized: bool = False
+
+
 _consumer_entries: dict[Provider, _ConsumerEntry] = {}
+_initial_sync_entries: dict[Provider, _InitialSyncEntry] = {}
 _unified_consumer_task: asyncio.Task | None = None
 
 
@@ -487,20 +507,23 @@ def _ensure_unified_consumer_running() -> None:
 async def _unified_consumer_loop() -> None:
     """Cross-provider drain loop. One coroutine, one DB writer.
 
-    Polls every registered provider's :attr:`ComputeContext.result_queue`
-    in a single asyncio task. All ``apply_session_complete`` calls — and
-    the surrounding broadcasts, activity flushes, and workspace auto-adds —
-    happen here sequentially, so no two providers ever race on the SQLite
-    write lock.
+    Polls every registered provider's compute :attr:`ComputeContext.result_queue`
+    AND every registered provider's initial-sync queue in a single asyncio
+    task. All DB writes — ``apply_session_complete`` from the compute side,
+    ``CreateSessionPayload`` / ``UpdateSessionPayload`` from the initial-sync
+    side, plus broadcasts, activity flushes, and workspace auto-adds — happen
+    here sequentially, so two providers never race on the SQLite write lock,
+    and the compute side never races with the initial-sync side either.
 
-    Exits when ``_consumer_entries`` is empty. Restarted lazily by
-    :func:`register_compute_consumer` whenever a new provider needs
-    draining.
+    Exits when both :data:`_consumer_entries` and :data:`_initial_sync_entries`
+    are empty. Restarted lazily by :func:`register_compute_consumer` or
+    :func:`register_initial_sync_entry` whenever new work needs draining.
     """
     try:
-        while _consumer_entries:
+        while _consumer_entries or _initial_sync_entries:
             any_processed = False
 
+            # ---- Compute side ----
             for provider, entry in list(_consumer_entries.items()):
                 if entry.finalized:
                     continue
@@ -531,6 +554,19 @@ async def _unified_consumer_loop() -> None:
 
                 await _process_compute_message(entry, msg)
 
+            # ---- Initial-sync side ----
+            for provider, init_entry in list(_initial_sync_entries.items()):
+                if init_entry.finalized:
+                    continue
+
+                try:
+                    init_msg = init_entry.sync_queue.get_nowait()
+                except queue.Empty:
+                    continue
+
+                any_processed = True
+                await _process_initial_sync_message(init_entry, init_msg)
+
             if not any_processed:
                 await asyncio.sleep(0.05)
             else:
@@ -542,12 +578,17 @@ async def _unified_consumer_loop() -> None:
         logger.error(f"Unified compute consumer crashed: {exc}", exc_info=True)
     finally:
         # Make sure no waiter is left hanging even if we crashed or were
-        # cancelled mid-drain. Iterate on a snapshot since _finalize_entry
-        # touches the dict via finalized flag (not the dict itself).
+        # cancelled mid-drain. Iterate on snapshots since both finalize
+        # helpers only flip the ``finalized`` flag and set events, they
+        # don't mutate the dicts themselves.
         for entry in list(_consumer_entries.values()):
             if not entry.finalized:
                 entry.finalized = True
                 entry.worker_done_event.set()
+        for init_entry in list(_initial_sync_entries.values()):
+            if not init_entry.finalized:
+                init_entry.finalized = True
+                init_entry.worker_done_event.set()
         logger.info("Unified compute consumer stopped")
 
 
@@ -659,6 +700,164 @@ async def _finalize_entry(entry: _ConsumerEntry) -> None:
             logger.error(f"Error in final activity flush: {e}", exc_info=True)
         entry.pending_activity_days.clear()
 
+    entry.worker_done_event.set()
+
+
+# =============================================================================
+# Initial-sync side of the unified consumer
+# =============================================================================
+
+
+def register_initial_sync_entry(
+    provider: Provider,
+    sync_queue: queue.Queue,
+    worker_done_event: asyncio.Event,
+) -> None:
+    """Register a provider's initial-sync queue with the unified consumer.
+
+    Same lazy-start semantics as :func:`register_compute_consumer`: the
+    consumer task is launched (or restarted) on first registration.
+    ``worker_done_event`` is set when the consumer has finalised this entry,
+    which happens either when an :class:`InitialSyncDoneMarker` is drained
+    from the queue, or when the consumer exits in its ``finally`` block
+    (crash, cancel).
+    """
+    entry = _InitialSyncEntry(
+        provider=provider,
+        sync_queue=sync_queue,
+        worker_done_event=worker_done_event,
+    )
+    _initial_sync_entries[provider] = entry
+    _ensure_unified_consumer_running()
+    logger.info(
+        f"Unified consumer: registered initial-sync provider={provider.value} "
+        f"(active_initial_sync={[p.value for p in _initial_sync_entries.keys()]})"
+    )
+
+
+def unregister_initial_sync_entry(provider: Provider) -> None:
+    """Remove a provider's initial-sync slot from the unified consumer.
+
+    Idempotent. Mirrors :func:`unregister_compute_consumer`.
+    """
+    if _initial_sync_entries.pop(provider, None) is not None:
+        logger.info(
+            f"Unified consumer: unregistered initial-sync provider={provider.value} "
+            f"(active_initial_sync={[p.value for p in _initial_sync_entries.keys()]})"
+        )
+
+
+async def _process_initial_sync_message(entry: _InitialSyncEntry, msg) -> None:
+    """Apply a single message drained from an initial-sync queue."""
+    # Lazy imports so the spawn worker does not pull in Django models at
+    # ``background_task.py`` import time (see module-level note).
+    from twicc.sync_helpers import (
+        CreateSessionPayload,
+        InitialSyncDoneMarker,
+        UpdateSessionPayload,
+    )
+
+    try:
+        if isinstance(msg, CreateSessionPayload):
+            await sync_to_async(_apply_create_session_payload)(msg)
+        elif isinstance(msg, UpdateSessionPayload):
+            await sync_to_async(_apply_update_session_payload)(msg)
+        elif isinstance(msg, InitialSyncDoneMarker):
+            logger.info(
+                f"Unified consumer: received initial-sync done marker "
+                f"(provider={entry.provider.value})"
+            )
+            _finalize_initial_sync_entry(entry)
+        else:
+            logger.error(
+                f"Unexpected initial-sync message type: {type(msg).__name__} "
+                f"=> {msg!r:.300}"
+            )
+    except Exception as e:
+        logger.error(
+            f"Error processing initial-sync message {type(msg).__name__}: {e}",
+            exc_info=True,
+        )
+
+
+def _apply_create_session_payload(payload) -> None:
+    """Persist a new session (and project if missing) plus its items, in one transaction."""
+    # Lazy imports so the spawn worker does not pull in Django models at
+    # ``background_task.py`` import time.
+    from twicc.core.models import SessionItem
+    from twicc.projects import register_project_sync
+
+    with transaction.atomic():
+        # 1. Ensure the project row exists. ``register_project_sync`` is
+        # idempotent — no-op when the project is already in DB, otherwise
+        # creates it with the given directory/stale flags.
+        register_project_sync(
+            payload.project_id,
+            directory=payload.new_project_directory,
+            stale=payload.new_project_stale,
+        )
+
+        # 2. Save the new session row. The producer instantiated it with
+        # ``project_id=...`` (FK by id) so the FK is satisfied as soon as
+        # step 1 above committed (or had already committed before this run).
+        payload.session.save()
+
+        # 3. Bulk-create the items.
+        if payload.items:
+            session_items = [
+                SessionItem(session=payload.session, line_num=ln, content=ct)
+                for ln, ct in payload.items
+            ]
+            SessionItem.objects.bulk_create(
+                session_items, ignore_conflicts=True, batch_size=50,
+            )
+
+        # 4. Persist tracking fields (the producer already computed them).
+        payload.session.last_offset = payload.last_offset
+        payload.session.last_line = payload.last_line
+        payload.session.mtime = payload.mtime
+        payload.session.save(update_fields=["last_offset", "last_line", "mtime"])
+
+
+def _apply_update_session_payload(payload) -> None:
+    """Append items to an existing session and update its tracking fields, in one transaction."""
+    # Lazy imports so the spawn worker does not pull in Django models at
+    # ``background_task.py`` import time.
+    from twicc.core.models import SessionItem
+
+    with transaction.atomic():
+        if payload.items:
+            session_items = [
+                SessionItem(session=payload.session, line_num=ln, content=ct)
+                for ln, ct in payload.items
+            ]
+            SessionItem.objects.bulk_create(
+                session_items, ignore_conflicts=True, batch_size=50,
+            )
+
+        update_fields = ["last_offset", "last_line", "mtime"]
+        payload.session.last_offset = payload.last_offset
+        payload.session.last_line = payload.last_line
+        payload.session.mtime = payload.mtime
+        if payload.clear_stale and payload.session.stale:
+            payload.session.stale = False
+            update_fields.append("stale")
+        if payload.reset_compute_version and payload.session.compute_version is not None:
+            payload.session.compute_version = None
+            update_fields.append("compute_version")
+        payload.session.save(update_fields=update_fields)
+
+
+def _finalize_initial_sync_entry(entry: _InitialSyncEntry) -> None:
+    """Mark an initial-sync entry as done and unblock its waiter.
+
+    Idempotent: subsequent calls are no-ops thanks to :attr:`finalized`.
+    Synchronous (unlike :func:`_finalize_entry`) because the initial-sync
+    side has no pending broadcasts or activity flushes to await.
+    """
+    if entry.finalized:
+        return
+    entry.finalized = True
     entry.worker_done_event.set()
 
 

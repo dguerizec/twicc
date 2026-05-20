@@ -14,12 +14,78 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import NamedTuple
 
 from django.db import transaction
 
+from twicc.core.enums import Provider
 from twicc.core.models import Session, SessionItem
 
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# Initial-sync payloads
+# =============================================================================
+#
+# These NamedTuples are pushed by per-provider initial-sync producers (running
+# in their ``asyncio.to_thread`` worker) onto a ``queue.Queue``, then drained
+# by the cross-provider unified consumer in ``background_task.py``. They
+# describe a self-contained unit of DB work the producer has prepared but
+# intentionally not executed yet, so all writes happen in a single serialised
+# coroutine and never race with another provider's writes.
+
+
+class CreateSessionPayload(NamedTuple):
+    """Producer parsed a JSONL file for a session that does not exist in DB.
+
+    The consumer creates the ``Project`` (idempotent — no-op if it exists),
+    saves the unsaved ``Session`` instance, bulk-creates the items, then
+    persists the tracking fields. ``new_project_directory`` may be ``None``
+    (Claude Code stores the cwd inside the JSONL body, so initial sync
+    cannot pass it; it gets filled in later by the background compute).
+    """
+
+    provider: Provider
+    project_id: str
+    new_project_directory: str | None
+    new_project_stale: bool
+    session: Session
+    items: list[tuple[int, str]]
+    last_offset: int
+    last_line: int
+    mtime: float
+
+
+class UpdateSessionPayload(NamedTuple):
+    """Producer parsed a JSONL file for a session that already exists in DB.
+
+    The consumer appends the new items (``ignore_conflicts=True`` covers the
+    rare watcher-already-inserted-them race), persists the tracking fields,
+    optionally clears the ``stale`` flag, and optionally resets
+    ``compute_version`` to ``None`` so background compute will re-process the
+    session.
+    """
+
+    provider: Provider
+    session: Session
+    items: list[tuple[int, str]]
+    last_offset: int
+    last_line: int
+    mtime: float
+    reset_compute_version: bool
+    clear_stale: bool
+
+
+class InitialSyncDoneMarker(NamedTuple):
+    """Sentinel pushed by a producer when it has finished pushing payloads.
+
+    The unified consumer finalises the matching entry (unblocking the
+    producer task that was awaiting completion) and removes it from the
+    registry. Other registered providers continue to be drained.
+    """
+
+    provider: Provider
 
 
 def check_file_has_content(file_path: Path) -> bool:
