@@ -17,7 +17,6 @@ import threading
 from contextlib import suppress
 
 from asgiref.sync import sync_to_async
-from channels.layers import get_channel_layer
 from django.conf import settings
 
 from twicc.core.enums import Provider
@@ -321,54 +320,33 @@ class CodexOrchestrator(BaseOrchestrator):
         """Import Codex Thread.name into Session.title for every known thread.
 
         Runs once between the initial JSONL sync and the background compute.
-        For each Codex Session whose title differs from Thread.name (and
-        Thread.name is non-empty), we update the row and broadcast a
-        session_updated event so clients connected during the boot window
-        see the new title without a full reload.
+        The title bulk-update is routed through the unified DB writer (a
+        SyncSessionTitlesPayload) so it never writes to SQLite in parallel
+        with the consumer still draining initial-sync or compute payloads —
+        the very contention the unified writer exists to remove. We await the
+        payload's done Event so the new titles are applied and broadcast
+        before the compute phase starts.
         """
         from twicc.providers.codex.titles import bulk_sync_titles_from_codex
-        from twicc.providers.sessions_watcher import broadcast_message
-        from twicc.core.serializers import serialize_session
+        from twicc.providers.db_writer import (
+            SyncSessionTitlesPayload,
+            get_initial_sync_queue,
+        )
 
         titles = await bulk_sync_titles_from_codex()
         if not titles:
             logger.info("Codex title sync at boot: no titles to import")
             return
 
-        # Pull only Codex sessions whose id is in the fetched map and whose
-        # current title differs. bulk_update keeps it one SQL round-trip.
-        def _apply() -> list[Session]:
-            sessions = list(
-                Session.objects.filter(
-                    provider=Provider.CODEX,
-                    id__in=titles.keys(),
-                )
-            )
-            changed: list[Session] = []
-            for s in sessions:
-                new_title = titles.get(s.id)
-                if new_title and s.title != new_title:
-                    s.title = new_title
-                    changed.append(s)
-            if changed:
-                Session.objects.bulk_update(changed, ["title"], batch_size=50)
-            return changed
-
-        changed = await sync_to_async(_apply)()
+        done_event = asyncio.Event()
+        get_initial_sync_queue().put(SyncSessionTitlesPayload(
+            provider=self.provider, titles=titles, done_event=done_event,
+        ))
+        await done_event.wait()
         logger.info(
-            "Codex title sync at boot: %d/%d titles imported",
-            len(changed), len(titles),
+            "Codex title sync at boot: %d title(s) routed through the unified DB writer",
+            len(titles),
         )
-
-        if changed:
-            channel_layer = get_channel_layer()
-            for s in changed:
-                # No refresh_from_db needed — title was just set on the instance.
-                await broadcast_message(channel_layer, {
-                    "type": "session_updated",
-                    "session": serialize_session(s),
-                })
-                await asyncio.sleep(0)
 
     async def _dependency_orchestrator(self) -> None:
         """Wait for the initial sync, then start the background compute and
