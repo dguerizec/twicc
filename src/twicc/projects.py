@@ -213,28 +213,33 @@ def register_project_db_only(
     name: str | None = None,
     color: str | None = None,
     stale: bool | None = None,
-) -> tuple[Project, bool]:
+) -> tuple[Project, bool, bool]:
     """DB-only half of project registration: get-or-create + directory adoption.
 
-    Returns ``(project, was_just_created)`` and runs **no** side effects — no
-    ``project_added`` broadcast, no workspace auto-add — so it is safe to call
-    from inside a ``transaction.atomic()`` block.
+    Returns ``(project, was_just_created, adopted_directory)`` and runs **no**
+    side effects — no ``project_added`` broadcast, no workspace auto-add — so
+    it is safe to call from inside a ``transaction.atomic()`` block.
 
     Callers that need the side effects must run them themselves once the
     surrounding transaction has committed: broadcast ``project_added`` when
     ``created`` is true, and call
-    :func:`twicc.workspaces.auto_add_project_to_workspaces` when
-    ``project.directory`` is set. :func:`register_project` is the async
-    wrapper that does exactly that; the unified DB writer
+    :func:`twicc.workspaces.auto_add_project_to_workspaces` only when the
+    project was just created or just adopted a directory
+    (``created or adopted_directory``) — never on every call, since an
+    existing project's workspace membership cannot change just because another
+    of its sessions was synced. :func:`register_project` is the async wrapper
+    that does exactly that; the unified DB writer
     (:mod:`twicc.providers.db_writer`) calls this directly so a project is
     never announced from inside — or despite a rollback of — its transaction.
     """
     project, created = _create_or_get_project(
         project_id, directory=directory, name=name, color=color, stale=stale,
     )
+    adopted = False
     if not created and directory and not project.directory:
         _adopt_directory_sync(project, directory)
-    return project, created
+        adopted = True
+    return project, created, adopted
 
 
 async def register_project(
@@ -269,13 +274,13 @@ async def register_project(
     channel layer with no subscribers (e.g. initial sync before any WS
     client is connected) are silent no-ops.
     """
-    project, created = await sync_to_async(register_project_db_only)(
+    project, created, adopted = await sync_to_async(register_project_db_only)(
         project_id,
         directory=directory, name=name, color=color, stale=stale,
     )
     if created:
         await _broadcast_project_added(project)
-    if project.directory:
+    if (created or adopted) and project.directory:
         await auto_add_project_to_workspaces(project.id, project.directory)
 
     return project, created

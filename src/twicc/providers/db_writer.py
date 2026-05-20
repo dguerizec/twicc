@@ -708,13 +708,16 @@ async def _process_initial_sync_message(msg) -> None:
 
     try:
         if isinstance(msg, CreateSessionPayload):
-            project, created = await sync_to_async(_apply_create_session_payload)(msg)
+            project, created, adopted = await sync_to_async(_apply_create_session_payload)(msg)
             if project is not None:
                 # Post-commit side effects, kept out of transaction.atomic so
-                # a project is never announced before it commits.
+                # a project is never announced before it commits. Workspace
+                # auto-add runs only when the project was just created or just
+                # adopted a directory — not for every session of an existing
+                # project (its workspace membership cannot change per-session).
                 if created:
                     await _broadcast_project_added(project)
-                if project.directory:
+                if (created or adopted) and project.directory:
                     await auto_add_project_to_workspaces(project.id, project.directory)
             else:
                 # _apply_create_session_payload skipped an orphan subagent
@@ -759,20 +762,20 @@ async def _apply_and_broadcast_titles(payload: SyncSessionTitlesPayload) -> None
     )
 
 
-def _apply_create_session_payload(payload: CreateSessionPayload) -> tuple[object, bool]:
+def _apply_create_session_payload(payload: CreateSessionPayload) -> tuple[object, bool, bool]:
     """Persist a new session (and project if missing) plus its items, atomically.
 
-    Returns ``(project, project_was_created)`` so the async caller can run the
-    post-commit side effects — the ``project_added`` broadcast and workspace
-    auto-add — *outside* this transaction. ``register_project_db_only`` is the
-    DB-only half of project registration precisely so the broadcast never
-    fires from inside ``transaction.atomic`` (Codex review finding #7).
+    Returns ``(project, project_was_created, adopted_directory)`` so the async
+    caller can run the post-commit side effects — the ``project_added``
+    broadcast and workspace auto-add — *outside* this transaction.
+    ``register_project_db_only`` is the DB-only half of project registration
+    precisely so the broadcast never fires from inside ``transaction.atomic``.
 
-    Returns ``(None, False)`` when the payload is a subagent whose parent row
-    is absent — an upstream CreateSessionPayload was rejected, or the parent
-    is an orphan. The session is skipped cleanly with one warning rather than
-    cascading into an opaque IntegrityError on the parent_session FK (Codex
-    review finding #3).
+    Returns ``(None, False, False)`` when the payload is a subagent whose
+    parent row is absent — an upstream CreateSessionPayload was rejected, or
+    the parent is an orphan. The session is skipped cleanly with one warning
+    rather than cascading into an opaque IntegrityError on the parent_session
+    FK.
     """
     from twicc.core.models import Session, SessionItem
     from twicc.projects import register_project_db_only
@@ -784,10 +787,10 @@ def _apply_create_session_payload(payload: CreateSessionPayload) -> tuple[object
             "(upstream payload rejected, or orphan subagent)",
             payload.session.id, payload.provider.value, parent_id,
         )
-        return None, False
+        return None, False, False
 
     with transaction.atomic():
-        project, created = register_project_db_only(
+        project, created, adopted = register_project_db_only(
             payload.project_id,
             directory=payload.new_project_directory,
             stale=payload.new_project_stale,
@@ -803,7 +806,7 @@ def _apply_create_session_payload(payload: CreateSessionPayload) -> tuple[object
         payload.session.last_line = payload.last_line
         payload.session.mtime = payload.mtime
         payload.session.save(update_fields=["last_offset", "last_line", "mtime"])
-    return project, created
+    return project, created, adopted
 
 
 def _apply_update_session_payload(payload: UpdateSessionPayload) -> None:
