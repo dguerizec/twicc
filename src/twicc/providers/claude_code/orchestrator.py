@@ -327,7 +327,12 @@ class ClaudeCodeOrchestrator(BaseOrchestrator):
                 stop_event=self._sync_stop_event,
             )
         )
-        await self._sync_thread_future
+        # Shield the await: shutdown() cancels _sync_task, and a bare await
+        # would propagate that cancel to _sync_thread_future — marking it
+        # done() and making shutdown()'s `not done()` guard skip the wait,
+        # leaving the producer thread alive after shutdown. The shield keeps
+        # the real thread future uncancelled so shutdown() can await it.
+        await asyncio.shield(self._sync_thread_future)
 
         # Producer thread finished pushing — close the run with the marker.
         # The marker carries the Event the writer sets once it has drained
