@@ -754,6 +754,8 @@ async def _process_initial_sync_message(entry: _InitialSyncEntry, msg) -> None:
     from twicc.sync_helpers import (
         CreateSessionPayload,
         InitialSyncDoneMarker,
+        MarkSessionsStalePayload,
+        UpdateProjectMetadataPayload,
         UpdateSessionPayload,
     )
 
@@ -762,6 +764,10 @@ async def _process_initial_sync_message(entry: _InitialSyncEntry, msg) -> None:
             await sync_to_async(_apply_create_session_payload)(msg)
         elif isinstance(msg, UpdateSessionPayload):
             await sync_to_async(_apply_update_session_payload)(msg)
+        elif isinstance(msg, MarkSessionsStalePayload):
+            await sync_to_async(_apply_mark_sessions_stale_payload)(msg)
+        elif isinstance(msg, UpdateProjectMetadataPayload):
+            await sync_to_async(_apply_update_project_metadata_payload)(msg)
         elif isinstance(msg, InitialSyncDoneMarker):
             logger.info(
                 f"Unified consumer: received initial-sync done marker "
@@ -846,6 +852,66 @@ def _apply_update_session_payload(payload) -> None:
             payload.session.compute_version = None
             update_fields.append("compute_version")
         payload.session.save(update_fields=update_fields)
+
+
+def _apply_mark_sessions_stale_payload(payload) -> None:
+    """Mark a batch of sessions as stale via a single bulk UPDATE."""
+    # Lazy imports so the spawn worker does not pull in Django models at
+    # ``background_task.py`` import time.
+    from twicc.core.models import Session
+
+    if not payload.session_ids:
+        return
+    with transaction.atomic():
+        Session.objects.filter(
+            id__in=payload.session_ids, stale=False,
+        ).update(stale=True)
+
+
+def _apply_update_project_metadata_payload(payload) -> None:
+    """Apply end-of-sync metadata updates for one project, in one transaction.
+
+    Bundles the ``project.save`` (sessions_count / mtime / stale fields),
+    the optional ``update_project_total_cost`` aggregate recompute, and the
+    optional ``ensure_project_git_root`` resolution into a single atomic
+    block so the entire project's end-of-sync writes share one fsync.
+    """
+    # Lazy imports so the spawn worker does not pull in Django models at
+    # ``background_task.py`` import time.
+    from twicc.core.models import Project
+    from twicc.projects import ensure_project_git_root, update_project_total_cost
+
+    with transaction.atomic():
+        update_fields: list[str] = []
+        if (
+            payload.new_sessions_count is not None
+            or payload.new_mtime is not None
+            or payload.new_stale is not None
+        ):
+            try:
+                project = Project.objects.get(id=payload.project_id)
+            except Project.DoesNotExist:
+                logger.warning(
+                    f"UpdateProjectMetadataPayload: project {payload.project_id} not found"
+                )
+                project = None
+            if project is not None:
+                if payload.new_sessions_count is not None:
+                    project.sessions_count = payload.new_sessions_count
+                    update_fields.append("sessions_count")
+                if payload.new_mtime is not None:
+                    project.mtime = payload.new_mtime
+                    update_fields.append("mtime")
+                if payload.new_stale is not None:
+                    project.stale = payload.new_stale
+                    update_fields.append("stale")
+                if update_fields:
+                    project.save(update_fields=update_fields)
+
+        if payload.recalc_total_cost:
+            update_project_total_cost(payload.project_id)
+        if payload.resolve_git_root and payload.git_root_directory:
+            ensure_project_git_root(payload.project_id, payload.git_root_directory)
 
 
 def _finalize_initial_sync_entry(entry: _InitialSyncEntry) -> None:
