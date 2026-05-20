@@ -14,6 +14,8 @@ costs, ...) stays in each provider's own compute path.
 from __future__ import annotations
 
 import logging
+import queue
+import threading
 from pathlib import Path
 from typing import NamedTuple
 
@@ -40,6 +42,42 @@ class SessionItemsToInsert(NamedTuple):
     last_line: int
     mtime: float
     actually_new_count: int
+
+
+class BackpressureSyncQueue:
+    """A bounded-queue facade that blocks the producer instead of growing.
+
+    The initial-sync producers run in ``asyncio.to_thread`` threads and parse
+    JSONL far faster than the unified DB writer commits to SQLite. Pushing
+    straight onto an unbounded queue would let the backlog — each payload
+    carrying a whole session's lines — grow to gigabytes of RAM. ``sync_all``
+    wraps the shared queue in this facade so every :meth:`put` blocks while the
+    queue is full: the block *is* the backpressure, throttling the producer to
+    the consumer's write rate.
+
+    The wait is stop-aware. ``shutdown()`` awaits the producer thread, so a
+    plain blocking ``put`` on a full queue could deadlock it; :meth:`put` polls
+    ``stop_event`` instead and returns once shutdown is signalled.
+    """
+
+    def __init__(self, sync_queue: queue.Queue, stop_event: threading.Event | None):
+        self._queue = sync_queue
+        self._stop_event = stop_event
+
+    def put(self, payload: object) -> None:
+        """Enqueue ``payload``, blocking while the queue is full.
+
+        Drops the payload and returns if ``stop_event`` fires first — shutdown
+        is underway and the permanent consumer is going away regardless.
+        """
+        while True:
+            if self._stop_event is not None and self._stop_event.is_set():
+                return
+            try:
+                self._queue.put(payload, timeout=0.5)
+                return
+            except queue.Full:
+                continue
 
 
 def check_file_has_content(file_path: Path) -> bool:

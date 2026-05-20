@@ -331,9 +331,13 @@ class ClaudeCodeOrchestrator(BaseOrchestrator):
 
         # Producer thread finished pushing — close the run with the marker.
         # The marker carries the Event the writer sets once it has drained
-        # every payload this run produced.
+        # every payload this run produced. Pushed via to_thread because the
+        # queue is bounded now — a full queue must not block the event loop.
         done_event = asyncio.Event()
-        sync_queue.put(InitialSyncDoneMarker(provider=self.provider, done_event=done_event))
+        await asyncio.to_thread(
+            sync_queue.put,
+            InitialSyncDoneMarker(provider=self.provider, done_event=done_event),
+        )
         await done_event.wait()
 
         await broadcast_startup_progress(

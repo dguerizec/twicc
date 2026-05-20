@@ -58,6 +58,15 @@ PROJECT_BROADCAST_INTERVAL = 5
 # Batch size for activity recalculation flushes (per provider).
 BATCH_ACTIVITY_COUNT = 50
 
+# Bounded-queue capacities. Both boot-time producers (initial-sync threads,
+# compute subprocesses) can parse far faster than the consumer commits to
+# SQLite. An unbounded queue would let the backlog — each initial-sync payload
+# carrying a whole session's JSONL lines — grow to gigabytes of RAM. A bounded
+# queue makes a full queue block the producer instead: the backlog is capped,
+# and the producer is throttled to the consumer's write rate.
+INITIAL_SYNC_QUEUE_MAXSIZE = 200
+COMPUTE_QUEUE_MAXSIZE = 200
+
 # "spawn" context — the compute result queue is created here and passed to
 # the spawn workers, so it must come from the same context they use.
 _mp_ctx = multiprocessing.get_context("spawn")
@@ -240,8 +249,8 @@ def start_unified_consumer() -> None:
     if _consumer_task is not None:
         raise RuntimeError("unified DB writer already started")
 
-    _initial_sync_queue = queue.Queue()
-    _compute_result_queue = _mp_ctx.Queue()
+    _initial_sync_queue = queue.Queue(maxsize=INITIAL_SYNC_QUEUE_MAXSIZE)
+    _compute_result_queue = _mp_ctx.Queue(maxsize=COMPUTE_QUEUE_MAXSIZE)
     _consumer_stop_event = asyncio.Event()
     _consumer_task = asyncio.create_task(_consumer_loop())
     logger.info("Unified DB writer started")

@@ -30,7 +30,7 @@ from twicc.providers.db_writer import (
     UpdateProjectMetadataPayload,
     UpdateSessionPayload,
 )
-from twicc.sync_helpers import check_file_has_content, read_session_items_from_file
+from twicc.sync_helpers import BackpressureSyncQueue, check_file_has_content, read_session_items_from_file
 from .helpers import CodexHelpers
 
 logger = logging.getLogger(__name__)
@@ -164,7 +164,7 @@ def sync_project(
     project_id: str,
     new_entries: list[_NewEntry],
     existing_entries: list[_ExistingEntry],
-    sync_queue: queue.Queue,
+    sync_queue: BackpressureSyncQueue,
     on_session_progress: Callable[[str, int, int], None] | None = None,
     stop_event: threading.Event | None = None,
 ) -> dict[str, int]:
@@ -437,6 +437,10 @@ def sync_all(
     Pushes payloads onto ``sync_queue`` (the unified consumer drains them).
     """
     sync_start = time.monotonic()
+
+    # Throttle the producer to the consumer's write rate: a full bounded
+    # queue blocks .put() instead of letting the backlog grow unbounded.
+    sync_queue = BackpressureSyncQueue(sync_queue, stop_event)
 
     stats = {
         "projects_created": 0,
