@@ -918,8 +918,17 @@ def _apply_update_project_metadata_payload(payload: UpdateProjectMetadataPayload
                 if payload.recalc_mtime:
                     # Recompute from the DB now that every session payload
                     # this provider pushed for the project has landed (FIFO).
+                    # Same visible-session filter as recalc_sessions_count
+                    # above (and update_project_metadata()), plus stale=False:
+                    # a session whose JSONL is gone from disk — just marked
+                    # stale by the preceding MarkSessionsStalePayload — must
+                    # not keep pulling the project's mtime up.
                     max_mtime = Session.objects.filter(
-                        project_id=payload.project_id, type=SessionType.SESSION,
+                        project_id=payload.project_id,
+                        type=SessionType.SESSION,
+                        created_at__isnull=False,
+                        user_message_count__gt=0,
+                        stale=False,
                     ).aggregate(value=Max("mtime"))["value"]
                     project.mtime = max_mtime or 0
                     update_fields.append("mtime")
