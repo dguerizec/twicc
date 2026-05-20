@@ -368,12 +368,50 @@ def arm_compute_completion(
 # =============================================================================
 
 
+async def _drain_one() -> bool:
+    """Process at most one message from each shared queue.
+
+    Returns True if anything was processed this call.
+    """
+    any_processed = False
+
+    # ---- Compute side (mp.Queue, shared by every provider) ----
+    try:
+        raw = _compute_result_queue.get_nowait()
+    except queue.Empty:
+        pass
+    else:
+        any_processed = True
+        try:
+            msg = orjson.loads(raw)
+        except Exception:
+            logger.error(f"Failed to deserialize compute message: {raw!r:.500}")
+        else:
+            await _process_compute_message(msg)
+
+    # ---- Initial-sync side (queue.Queue, shared by every provider) ----
+    try:
+        payload = _initial_sync_queue.get_nowait()
+    except queue.Empty:
+        pass
+    else:
+        any_processed = True
+        await _process_initial_sync_message(payload)
+
+    return any_processed
+
+
 async def _consumer_loop() -> None:
     """Drain both shared queues until the application shuts down.
 
     Permanent: runs from start_unified_consumer() to stop_unified_consumer().
     Resilient: an unexpected exception in one tick is logged and the loop
     continues — a single bad message must never take the writer down.
+
+    On stop, before exiting, both queues are fully drained.
+    stop_unified_consumer() runs only after every producer has shut down, so
+    the queues can no longer grow — draining them guarantees no boot-time
+    write still queued at shutdown is silently abandoned.
     """
     assert _consumer_stop_event is not None
     assert _initial_sync_queue is not None
@@ -382,38 +420,29 @@ async def _consumer_loop() -> None:
     logger.info("Unified DB writer loop running")
     while not _consumer_stop_event.is_set():
         try:
-            any_processed = False
-
-            # ---- Compute side (mp.Queue, shared by every provider) ----
-            try:
-                raw = _compute_result_queue.get_nowait()
-            except queue.Empty:
-                pass
-            else:
-                any_processed = True
-                try:
-                    msg = orjson.loads(raw)
-                except Exception:
-                    logger.error(f"Failed to deserialize compute message: {raw!r:.500}")
-                else:
-                    await _process_compute_message(msg)
-
-            # ---- Initial-sync side (queue.Queue, shared by every provider) ----
-            try:
-                payload = _initial_sync_queue.get_nowait()
-            except queue.Empty:
-                pass
-            else:
-                any_processed = True
-                await _process_initial_sync_message(payload)
-
+            any_processed = await _drain_one()
             # Yield: tightly when busy, back off when idle.
             await asyncio.sleep(0 if any_processed else 0.05)
-
         except Exception as exc:
             logger.error(f"Unified DB writer tick crashed: {exc}", exc_info=True)
             await asyncio.sleep(0.05)
 
+    # Final drain: producers are all stopped by the time stop is signalled, so
+    # the queues only shrink — apply everything still queued before exiting.
+    drained_passes = 0
+    while True:
+        try:
+            if not await _drain_one():
+                break
+        except Exception as exc:
+            logger.error(f"Unified DB writer shutdown-drain tick crashed: {exc}", exc_info=True)
+            break
+        drained_passes += 1
+    if drained_passes:
+        logger.info(
+            "Unified DB writer drained %d queued message pass(es) at shutdown",
+            drained_passes,
+        )
     logger.info("Unified DB writer loop exited")
 
 
