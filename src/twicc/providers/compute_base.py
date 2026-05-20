@@ -1554,7 +1554,7 @@ class BaseSessionCompute:
     # Batch orchestration — concrete in later steps
     # ------------------------------------------------------------------
 
-    def compute_session_metadata(self, session_id: str, result_queue) -> None:
+    def compute_session_metadata(self, session_id: str, result_queue, run_id: int) -> None:
         """
         Compute metadata for every item in a session and push the result on ``result_queue``.
 
@@ -1587,6 +1587,7 @@ class BaseSessionCompute:
             result_queue.put(orjson.dumps({
                 'type': 'error',
                 'provider': self.provider.value,
+                'run_id': run_id,
                 'session_id': session_id,
                 'error': 'Session not found',
             }))
@@ -1942,6 +1943,7 @@ class BaseSessionCompute:
         result_queue.put(orjson.dumps({
             'type': 'session_complete',
             'provider': self.provider.value,
+            'run_id': run_id,
             'session_id': session_id,
             'project_id': session.project_id,
             'item_updates': all_item_updates,

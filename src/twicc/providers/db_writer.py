@@ -33,6 +33,7 @@ convention of ``background_compute_task.py``.
 from __future__ import annotations
 
 import asyncio
+import itertools
 import logging
 import multiprocessing
 import queue
@@ -201,15 +202,21 @@ _compute_result_queue: object | None = None  # _mp_ctx.Queue()
 _consumer_task: asyncio.Task | None = None
 _consumer_stop_event: asyncio.Event | None = None
 
-# Compute completion: the mp.Queue cannot transport an asyncio.Event, so the
-# orchestrator arms an Event here before a run and the consumer sets it when
-# it drains that provider's 'done' message.
-_compute_done_events: dict[Provider, asyncio.Event] = {}
+# Compute completion is keyed by a per-run id, not by provider: a cancelled
+# run's worker can still have stale messages in the shared queue when a
+# hot-restarted run is armed, and the run_id keeps each run's state and
+# completion Event isolated. arm_compute_completion() mints the ids.
+_compute_run_id_seq = itertools.count(1)
 
-# Per-provider accumulated state for the compute side only (broadcast
-# throttling, batched activity flushes). Initial-sync payloads are
+# run_id -> the completion Event the orchestrator awaits (set when the run's
+# 'done' message is drained). The mp.Queue cannot transport an asyncio.Event,
+# so arm_compute_completion() hands the orchestrator a fresh Event kept here.
+_compute_done_events: dict[int, asyncio.Event] = {}
+
+# run_id -> that run's accumulated compute state (broadcast throttling,
+# batched activity flushes, failure tally). Initial-sync payloads are
 # self-contained; the only initial-sync run state is the failure tally below.
-_compute_states: dict[Provider, "_ComputeProviderState"] = {}
+_compute_states: dict[int, "_ComputeProviderState"] = {}
 
 # Per-provider failed-payload counter for the in-flight initial-sync run.
 # Incremented when an _apply_* raises; surfaced as a single ERROR summary and
@@ -219,8 +226,15 @@ _initial_sync_failures: dict[Provider, int] = defaultdict(int)
 
 @dataclass
 class _ComputeProviderState:
-    """Per-provider compute-run state, created by arm_compute_completion()."""
+    """One compute run's accumulated state, created by arm_compute_completion().
 
+    Keyed in ``_compute_states`` by ``run_id``; ``provider`` is kept for
+    logging and so arm_compute_completion() can drop a previous run's leftover
+    state for the same provider.
+    """
+
+    provider: Provider
+    run_id: int
     display_session_ids: set[str] | None
     total_display: int
     pending_activity_days: dict[str, set] = field(default_factory=lambda: defaultdict(set))
@@ -286,29 +300,37 @@ def arm_compute_completion(
     provider: Provider,
     display_session_ids: set[str] | None,
     total_display: int,
-) -> asyncio.Event:
-    """Declare a compute run for ``provider`` and return its completion Event.
+) -> tuple[int, asyncio.Event]:
+    """Declare a compute run for ``provider``; return ``(run_id, Event)``.
 
-    Creates a fresh ``_ComputeProviderState`` and a fresh ``asyncio.Event``.
-    The consumer sets the Event when it drains the ``done`` message for this
-    provider (and pops the state). Overwrites any leftover state from a
-    previous run — safe because the blocking ``shutdown()`` guarantees runs
-    never overlap. A warning is logged if leftover state is found, which
-    would mean a previous run did not finalize (lifecycle bug).
+    Mints a fresh ``run_id`` and creates this run's ``_ComputeProviderState``
+    and completion ``asyncio.Event``, both keyed by ``run_id``. The worker is
+    spawned with this ``run_id`` and tags every message with it, so the
+    consumer routes each message to its own run — a stale message from a
+    cancelled run can never touch a hot-restarted one.
+
+    Any leftover state for the same provider (a previous run whose worker was
+    force-killed before emitting ``done``) is dropped here, with a warning —
+    that state would otherwise leak for the process lifetime.
     """
-    if provider in _compute_states:
+    run_id = next(_compute_run_id_seq)
+    for stale_run_id in [rid for rid, st in _compute_states.items() if st.provider == provider]:
         logger.warning(
-            "arm_compute_completion: provider=%s still has compute state from "
-            "a previous run — runs should not overlap (lifecycle bug?)",
-            provider.value,
+            "arm_compute_completion: dropping leftover compute state for "
+            "provider=%s run_id=%d — its run never finalized (force-killed worker?)",
+            provider.value, stale_run_id,
         )
-    _compute_states[provider] = _ComputeProviderState(
+        _compute_states.pop(stale_run_id, None)
+        _compute_done_events.pop(stale_run_id, None)
+    _compute_states[run_id] = _ComputeProviderState(
+        provider=provider,
+        run_id=run_id,
         display_session_ids=display_session_ids,
         total_display=total_display,
     )
     event = asyncio.Event()
-    _compute_done_events[provider] = event
-    return event
+    _compute_done_events[run_id] = event
+    return run_id, event
 
 
 # =============================================================================
@@ -383,13 +405,18 @@ async def _process_compute_message(msg: dict) -> None:
         logger.error(f"Compute message with unknown provider {provider_value!r}")
         return
 
+    # Every message is tagged with the run_id arm_compute_completion() minted;
+    # the consumer routes state/completion by run_id so a stale message from a
+    # cancelled run can never touch a hot-restarted one.
+    run_id = msg.get("run_id")
+
     if msg_type == "done":
-        await _finalize_compute_run(provider)
+        await _finalize_compute_run(run_id, provider)
         return
 
     if msg_type == "error":
         logger.error(f"Compute error for {msg.get('session_id')}: {msg.get('error')}")
-        state = _compute_states.get(provider)
+        state = _compute_states.get(run_id)
         if state is not None:
             state.failed_count += 1
         return
@@ -399,14 +426,16 @@ async def _process_compute_message(msg: dict) -> None:
         return
 
     # session_complete — the heavy path.
-    state = _compute_states.get(provider)
+    state = _compute_states.get(run_id)
     if state is None:
-        # A session_complete arrived without arm_compute_completion() having
-        # run. Abnormal, but the write itself does not need state — apply it
-        # and skip the broadcast/activity bookkeeping.
-        logger.warning(
-            "session_complete for provider=%s with no armed compute state",
-            provider.value,
+        # No tracked state for this run_id: the run was cancelled (typically a
+        # provider hot-toggle) and its state already dropped. The metadata is
+        # still valid, so apply the write — just skip the run bookkeeping
+        # (counts, broadcasts, activity flushes) so a stale run cannot touch a
+        # live one.
+        logger.info(
+            "session_complete for an untracked compute run (run_id=%s) — "
+            "applying the write, skipping run bookkeeping", run_id,
         )
 
     try:
@@ -461,14 +490,27 @@ async def _process_compute_message(msg: dict) -> None:
         state.sessions_since_activities_flush = 0
 
 
-async def _finalize_compute_run(provider: Provider) -> None:
-    """Drain-time finalisation when a provider's compute worker is done.
+async def _finalize_compute_run(run_id: int | None, provider: Provider) -> None:
+    """Drain-time finalisation when a compute run's worker is done.
 
-    Flushes the provider's pending broadcasts + activities, sets its
-    completion Event, and drops its state so the next run starts clean.
+    Flushes the run's pending broadcasts + activities, sets its completion
+    Event, and drops its state so the next run starts clean. A 'done' for an
+    untracked ``run_id`` (a stale message from a cancelled run) is ignored —
+    it must not touch a live run's completion.
     """
-    logger.info(f"Unified DB writer: compute 'done' for provider={provider.value}")
-    state = _compute_states.pop(provider, None)
+    state = _compute_states.pop(run_id, None)
+    event = _compute_done_events.pop(run_id, None)
+    if state is None and event is None:
+        logger.info(
+            "compute 'done' for an untracked run (run_id=%s, provider=%s) — "
+            "ignoring (stale message from a cancelled run)",
+            run_id, provider.value,
+        )
+        return
+
+    logger.info(
+        f"Unified DB writer: compute 'done' for provider={provider.value} (run_id={run_id})"
+    )
     if state is not None:
         if state.failed_count:
             logger.error(
@@ -487,14 +529,8 @@ async def _finalize_compute_run(provider: Provider) -> None:
             except Exception as e:
                 logger.error(f"Error in final activity flush: {e}", exc_info=True)
 
-    event = _compute_done_events.pop(provider, None)
     if event is not None:
         event.set()
-    else:
-        logger.warning(
-            "compute 'done' for provider=%s with no armed completion event",
-            provider.value,
-        )
 
 
 async def _handle_compute_done(session_id: str) -> None:

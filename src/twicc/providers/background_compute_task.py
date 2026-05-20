@@ -97,6 +97,10 @@ class ComputeContext:
     worker_stop_event: _mp_ctx.Event = field(default_factory=_mp_ctx.Event)
     stop_event: asyncio.Event = field(default_factory=asyncio.Event)
     process: _mp_ctx.Process | None = None
+    # Set by start_background_compute_task before the worker is spawned. The
+    # worker tags every result message with it so the unified DB writer can
+    # isolate this run from stale messages of a cancelled one.
+    run_id: int = 0
 
     def get_compute(self) -> BaseSessionCompute:
         """Resolve :attr:`compute_factory` and return a fresh compute instance.
@@ -210,7 +214,7 @@ def _set_pdeathsig_linux() -> None:
         logger.debug("Could not set PR_SET_PDEATHSIG: %s", exc)
 
 
-def compute_worker_main(command_queue, result_queue, stop_event, compute_factory: str) -> None:
+def compute_worker_main(command_queue, result_queue, stop_event, compute_factory: str, run_id: int) -> None:
     """
     Main function running in the compute worker process.
 
@@ -223,8 +227,9 @@ def compute_worker_main(command_queue, result_queue, stop_event, compute_factory
     importing the provider's compute module (which pulls in Django models)
     does not crash the spawn worker before the app registry is ready.
 
-    Every message put on ``result_queue`` carries a ``'provider'`` key so the
-    cross-provider unified consumer can route it without a per-queue registry.
+    Every message put on ``result_queue`` carries a ``'provider'`` key (for
+    routing/logging) and this run's ``run_id``, so the unified consumer can
+    isolate this run from a cancelled run's stale messages.
     """
     # Tie the worker's lifetime to the parent's on Linux: if the main TwiCC
     # process dies hard (SIGKILL, panic), the kernel sends us SIGTERM, which
@@ -284,7 +289,7 @@ def compute_worker_main(command_queue, result_queue, stop_event, compute_factory
             if session_id:
                 try:
                     # This function reads DB and sends batches via result_queue
-                    compute.compute_session_metadata(session_id, result_queue)
+                    compute.compute_session_metadata(session_id, result_queue, run_id)
                 except Exception as e:
                     worker_logger.error(f"Error computing session {session_id}: {e}", exc_info=True)
                     # Flush the file handler so the error survives process termination
@@ -294,6 +299,7 @@ def compute_worker_main(command_queue, result_queue, stop_event, compute_factory
                     result_queue.put(orjson.dumps({
                         'type': 'error',
                         'provider': provider_value,
+                        'run_id': run_id,
                         'session_id': session_id,
                         'error': str(e),
                     }))
@@ -305,7 +311,7 @@ def compute_worker_main(command_queue, result_queue, stop_event, compute_factory
                     handler.flush()
 
     # Signal the consumer that the worker is done
-    result_queue.put(orjson.dumps({'type': 'done', 'provider': provider_value}))
+    result_queue.put(orjson.dumps({'type': 'done', 'provider': provider_value, 'run_id': run_id}))
     worker_logger.info("Compute worker sent 'done' signal")
 
     # Drain command queue before exiting to prevent blocking
@@ -338,7 +344,7 @@ def start_compute_process(ctx: ComputeContext) -> None:
         ctx.worker_stop_event = _mp_ctx.Event()
         ctx.process = _mp_ctx.Process(
             target=compute_worker_main,
-            args=(ctx.command_queue, result_queue, ctx.worker_stop_event, ctx.compute_factory),
+            args=(ctx.command_queue, result_queue, ctx.worker_stop_event, ctx.compute_factory, ctx.run_id),
             daemon=True,
             name="compute-worker",
         )
@@ -409,13 +415,16 @@ async def start_background_compute_task(ctx: ComputeContext) -> None:
     await sync_to_async(load_project_directories)()
     await sync_to_async(load_project_git_roots)()
 
+    # Arm the completion before spawning the worker: arm_compute_completion()
+    # mints the run_id, and the worker must be spawned with it so every result
+    # message it emits is tagged for this run. The Event is set when the
+    # writer drains this run's 'done' message — i.e. once every
+    # session_complete this run produced has been applied.
+    run_id, done_event = arm_compute_completion(ctx.provider, sessions_to_display, total_display)
+    ctx.run_id = run_id
+
     # Start the worker process
     start_compute_process(ctx)
-
-    # Arm the completion Event with the unified DB writer. The writer sets it
-    # when it drains this provider's 'done' message — i.e. once every
-    # session_complete this run produced has been applied.
-    done_event = arm_compute_completion(ctx.provider, sessions_to_display, total_display)
 
     logger.info(f"Background compute task started ({total_to_compute} sessions to process)")
 
