@@ -37,7 +37,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple
 import orjson
 from django.core.exceptions import MultipleObjectsReturned
 from django.db import transaction
-from django.db.models import Count, Max, QuerySet
+from django.db.models import Count, F, Max, QuerySet
 
 from twicc.core.enums import ItemDisplayLevel, ItemKind, Provider
 from twicc.core.models import AgentLink, Session, SessionItem, SessionType, ToolResultLink
@@ -2025,23 +2025,28 @@ class BaseSessionCompute:
         # last_offset has advanced past what the worker saw — the worker's
         # result is stale. Applying it would overwrite the watcher's fresher
         # metadata and still bump compute_version to current, which would also
-        # stop a later recompute pass from correcting it. Skip instead: the
-        # watcher already produced the up-to-date version. compute's
-        # session_fields never include last_offset, so only the watcher
-        # advances it — a reliable monotonic revision marker.
+        # stop a later recompute pass from correcting it.
+        #
+        # The check is a conditional no-op UPDATE, not a SELECT, so it is the
+        # transaction's first statement and takes the write lock up front. A
+        # SELECT-then-write guard would open a read snapshot a concurrent
+        # watcher commit could invalidate, turning the whole apply into a
+        # SQLITE_BUSY_SNAPSHOT / "database is locked" failure instead of a
+        # clean skip. 0 rows matched => last_offset advanced past the observed
+        # value (or the row is gone) => skip. compute's session_fields never
+        # include last_offset, so only the watcher advances it — a reliable
+        # monotonic revision marker.
         observed_last_offset = msg.get('observed_last_offset')
         if observed_last_offset is not None:
-            current_last_offset = (
-                Session.objects.filter(id=session_id)
-                .values_list('last_offset', flat=True)
-                .first()
-            )
-            if current_last_offset is not None and current_last_offset > observed_last_offset:
+            rows = Session.objects.filter(
+                id=session_id, last_offset__lte=observed_last_offset,
+            ).update(last_offset=F('last_offset'))
+            if rows == 0:
                 logger.info(
                     "apply_session_complete: skipping stale compute result for "
-                    "session %s — last_offset advanced %s -> %s since the worker "
-                    "read it (watcher live-computed newer lines)",
-                    session_id, observed_last_offset, current_last_offset,
+                    "session %s — last_offset advanced past the worker's observed "
+                    "value %s (watcher live-computed newer lines, or the row is gone)",
+                    session_id, observed_last_offset,
                 )
                 return
 
