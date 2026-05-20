@@ -393,6 +393,14 @@ class OrchestratorRegistry:
                 # fire), and a second call just returns the cached value.
                 if t.cancelled() or t.exception() is not None:
                     return
+                # Global shutdown began while finish_start was in flight
+                # (round-3 #3 makes shutdown_all() await such in-flight
+                # tasks, so this callback can fire during shutdown_all()).
+                # run.py cancels the active search-indexing tasks just
+                # before shutdown_all(), so scheduling a fresh kick now
+                # would race the search index teardown — skip it.
+                if self._shutdown_event is not None and self._shutdown_event.is_set():
+                    return
                 asyncio.create_task(
                     self._kick_search_after_compute(provider),
                     context=self._provider_context(provider),
@@ -590,6 +598,13 @@ class OrchestratorRegistry:
         if orch is None:
             return
         await orch.compute_done.wait()
+        # compute_done is also set idempotently by shutdown() during
+        # teardown, so reaching here does not mean compute really finished.
+        # If the global shutdown began while we were waiting, skip the
+        # re-index: run.py has already cancelled the active search-indexing
+        # tasks and a fresh kick now would race the search index teardown.
+        if self._shutdown_event is not None and self._shutdown_event.is_set():
+            return
         # Lazy import to avoid pulling search_indexing_task at module
         # import time (it would in turn import Django models). The
         # orchestrator registry is imported very early in the CLI boot
