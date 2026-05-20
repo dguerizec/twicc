@@ -210,7 +210,7 @@ _consumer_stop_event: asyncio.Event | None = None
 # Compute completion is keyed by a per-run id, not by provider: a cancelled
 # run's worker can still have stale messages in the shared queue when a
 # hot-restarted run is armed, and the run_id keeps each run's state and
-# completion Event isolated. arm_compute_completion() mints the ids.
+# completion Future isolated. arm_compute_completion() mints the ids.
 _compute_run_id_seq = itertools.count(1)
 
 # run_id -> the completion Future the orchestrator awaits. The mp.Queue cannot

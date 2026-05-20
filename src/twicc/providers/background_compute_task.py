@@ -417,10 +417,10 @@ async def start_background_compute_task(ctx: ComputeContext) -> None:
 
     # Arm the completion before spawning the worker: arm_compute_completion()
     # mints the run_id, and the worker must be spawned with it so every result
-    # message it emits is tagged for this run. The Event is set when the
-    # writer drains this run's 'done' message — i.e. once every
-    # session_complete this run produced has been applied.
-    run_id, done_event = arm_compute_completion(ctx.provider, sessions_to_display, total_display)
+    # message it emits is tagged for this run. The Future is resolved (with
+    # this run's failed-session count) when the writer drains this run's
+    # 'done' message — i.e. once every session_complete has been applied.
+    run_id, done_future = arm_compute_completion(ctx.provider, sessions_to_display, total_display)
     ctx.run_id = run_id
 
     # Start the worker process
