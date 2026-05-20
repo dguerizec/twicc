@@ -3,14 +3,17 @@ Synchronization logic for JSONL files from Codex sessions.
 
 Walks :attr:`CodexHelpers.SESSIONS_DIR` (~/.codex/sessions/YYYY/MM/DD/),
 groups files by project (resolved from the first JSONL line's
-``payload.cwd``), and inserts new lines as raw :class:`SessionItem`
-rows.
+``payload.cwd``), and pushes initial-sync payloads onto the unified
+consumer queue. Producer-side reads only — every DB write is delegated to
+the unified consumer via ``CreateSessionPayload`` / ``UpdateSessionPayload`` /
+``MarkSessionsStalePayload`` / ``UpdateProjectMetadataPayload``.
 """
 
 from __future__ import annotations
 
 import logging
 import os
+import queue
 import threading
 import time
 from pathlib import Path
@@ -22,8 +25,14 @@ from django.db.models import Max
 from twicc.core.enums import Provider
 from twicc.core.models import Project, Session, SessionType
 from twicc.paths import path_to_project_id
-from twicc.projects import register_project_sync
-from twicc.sync_helpers import check_file_has_content, sync_session_items
+from twicc.sync_helpers import (
+    CreateSessionPayload,
+    MarkSessionsStalePayload,
+    UpdateProjectMetadataPayload,
+    UpdateSessionPayload,
+    check_file_has_content,
+    read_session_items_from_file,
+)
 from .helpers import CodexHelpers
 
 logger = logging.getLogger(__name__)
@@ -157,16 +166,17 @@ def sync_project(
     project_id: str,
     new_entries: list[_NewEntry],
     existing_entries: list[_ExistingEntry],
+    sync_queue: queue.Queue,
     on_session_progress: Callable[[str, int, int], None] | None = None,
     stop_event: threading.Event | None = None,
 ) -> dict[str, int]:
     """
-    Synchronize one project's Codex sessions.
+    Synchronize one project's Codex sessions by pushing payloads on ``sync_queue``.
 
-    Both lists must belong to the same ``project_id``. Creates the
-    :class:`Project` row lazily (with ``directory`` and ``stale`` set
-    from the first new entry's ``cwd``) only when the project does not
-    already exist and at least one new entry has content.
+    Producer-side reads only. The unified consumer applies every write
+    inside ``transaction.atomic`` from a single coroutine, so two
+    providers (Claude Code + Codex) and two phases (initial sync +
+    compute) never race on the SQLite write lock.
     """
     project_start = time.monotonic()
 
@@ -184,7 +194,9 @@ def sync_project(
     logger.info(f"  Syncing project {project_id} ({total_sessions} Codex sessions)")
 
     idx = 0
+    project_will_be_created = False
 
+    # Pass 1 — existing entries (UPDATEs only).
     for entry in existing_entries:
         idx += 1
         if stop_event is not None and stop_event.is_set():
@@ -194,20 +206,22 @@ def sync_project(
             )
             return stats
 
-        new_line_nums = sync_session_items(entry.session, entry.file_path)
-        stats["items_added"] += len(new_line_nums)
-
-        update_fields: list[str] = []
-        # The file is on disk (we just read it), so the session is not stale.
-        if entry.session.stale:
-            entry.session.stale = False
-            update_fields.append("stale")
-        # If new items were added, reset compute_version to trigger background recompute
-        if new_line_nums and entry.session.compute_version is not None:
-            entry.session.compute_version = None
-            update_fields.append("compute_version")
-        if update_fields:
-            entry.session.save(update_fields=update_fields)
+        to_insert = read_session_items_from_file(entry.session, entry.file_path)
+        if to_insert is not None:
+            stats["items_added"] += to_insert.actually_new_count
+            sync_queue.put(UpdateSessionPayload(
+                provider=Provider.CODEX,
+                session=entry.session,
+                items=to_insert.items,
+                last_offset=to_insert.last_offset,
+                last_line=to_insert.last_line,
+                mtime=to_insert.mtime,
+                reset_compute_version=(
+                    to_insert.actually_new_count > 0
+                    and entry.session.compute_version is not None
+                ),
+                clear_stale=entry.session.stale,
+            ))
 
         if on_session_progress:
             on_session_progress(entry.session.id, idx, total_sessions)
@@ -215,53 +229,77 @@ def sync_project(
     # Split new entries by topology: regular sessions have no parent
     # dependency and can be created in any order; subagents must wait
     # for their parent ``Session`` row to exist (the parent may itself
-    # be a subagent — Codex supports nested spawns). We process the
-    # regular ones first, then run a multi-pass loop over the subagents
-    # so that each iteration creates every subagent whose parent is now
-    # in DB. The pass count is bounded by the depth of the spawn tree
-    # (each pass resolves at least one level), and any leftover after
-    # convergence is logged and skipped (the watcher will retry on the
-    # next file change).
+    # be a subagent — Codex supports nested spawns). Process the regular
+    # ones first, then run a multi-pass loop over the subagents so that
+    # each iteration pushes every subagent whose parent is already
+    # resolvable (DB row or already-pushed CreateSessionPayload).
     regular_new = [e for e in new_entries if e.parent_session_id is None]
     subagent_new = [e for e in new_entries if e.parent_session_id is not None]
 
-    def _create_session_row(
-        entry: _NewEntry, parent_session: Session | None
-    ) -> Session:
-        nonlocal project
-        if project is None:
-            # Codex carries cwd on the first JSONL line, so we can pass it
-            # at creation time and have ``register_project_sync`` run the
-            # workspace auto-add against the canonical directory right away.
-            # The ``project_added`` / ``workspaces_updated`` broadcasts are
-            # no-ops when no WS client is connected yet (typical at startup).
-            project, _ = register_project_sync(
-                project_id,
-                directory=entry.cwd,
-                stale=not os.path.isdir(entry.cwd),
-            )
-            stats["project_created"] = 1
+    # ``resolvable_parent_ids`` is the set of session ids the consumer
+    # will have created by the time it applies a later payload — initial
+    # DB content plus everything we've already pushed in this run.
+    resolvable_parent_ids: set[str] = set(
+        Session.objects.filter(
+            project_id=project_id,
+        ).values_list("id", flat=True)
+    )
+
+    def _build_create_payload(
+        entry: _NewEntry,
+        is_subagent: bool,
+    ) -> CreateSessionPayload | None:
+        """Build the CreateSessionPayload for a new entry, or None on parse failure."""
+        nonlocal project_will_be_created
+
         relative_path = entry.file_path.relative_to(CodexHelpers.SESSIONS_DIR)
-        if parent_session is not None:
+        if is_subagent:
             session = Session(
                 id=entry.session_id,
-                project=project,
+                project_id=project_id,
                 provider=Provider.CODEX,
                 file_path=str(relative_path),
                 type=SessionType.SUBAGENT,
-                parent_session=parent_session,
+                parent_session_id=entry.parent_session_id,
                 agent_id=entry.session_id,
             )
         else:
             session = Session(
                 id=entry.session_id,
-                project=project,
+                project_id=project_id,
                 provider=Provider.CODEX,
                 file_path=str(relative_path),
                 type=SessionType.SESSION,
             )
-        session.save()
-        return session
+
+        to_insert = read_session_items_from_file(session, entry.file_path)
+        if to_insert is None:
+            return None
+
+        stats["items_added"] += to_insert.actually_new_count
+        stats["sessions_created"] += 1
+
+        # If this is the first session forcing project creation, flag for stats.
+        if project is None and not project_will_be_created:
+            project_will_be_created = True
+            stats["project_created"] = 1
+
+        # Codex stores cwd in the first JSONL line, so we can pass it to
+        # the consumer for ``register_project_sync`` to create the project
+        # with the right directory/stale right away. Subsequent payloads
+        # for the same project also pass the cwd — the helper is
+        # idempotent (no-op if project already exists with same directory).
+        return CreateSessionPayload(
+            provider=Provider.CODEX,
+            project_id=project_id,
+            new_project_directory=entry.cwd,
+            new_project_stale=not os.path.isdir(entry.cwd),
+            session=session,
+            items=to_insert.items,
+            last_offset=to_insert.last_offset,
+            last_line=to_insert.last_line,
+            mtime=to_insert.mtime,
+        )
 
     for entry in regular_new:
         idx += 1
@@ -274,24 +312,27 @@ def sync_project(
 
         # Defensive: extract_session_meta already proved the first line
         # is parseable, but the rest of the file might be empty after a
-        # failed write — skip without creating a session row.
+        # failed write — skip without pushing.
         if not check_file_has_content(entry.file_path):
             if on_session_progress:
                 on_session_progress(entry.session_id, idx, total_sessions)
             continue
 
-        session = _create_session_row(entry, parent_session=None)
-        stats["sessions_created"] += 1
+        payload = _build_create_payload(entry, is_subagent=False)
+        if payload is None:
+            if on_session_progress:
+                on_session_progress(entry.session_id, idx, total_sessions)
+            continue
 
-        new_line_nums = sync_session_items(session, entry.file_path)
-        stats["items_added"] += len(new_line_nums)
+        sync_queue.put(payload)
+        resolvable_parent_ids.add(entry.session_id)
 
         if on_session_progress:
             on_session_progress(entry.session_id, idx, total_sessions)
 
-    # Subagent topology pass — repeat until no new subagent gets
-    # resolved in a full sweep. Worst case: O(depth × N), with depth
-    # bounded by the spawn-tree height (a handful in practice).
+    # Subagent topology pass — repeat until no new subagent gets resolved
+    # in a full sweep. Worst case: O(depth × N), with depth bounded by
+    # the spawn-tree height (a handful in practice).
     remaining = list(subagent_new)
     while remaining:
         progressed = False
@@ -310,20 +351,22 @@ def sync_project(
                     on_session_progress(entry.session_id, idx, total_sessions)
                 continue
 
-            try:
-                parent_session = Session.objects.get(id=entry.parent_session_id)
-            except Session.DoesNotExist:
-                # Parent isn't in DB yet — try again on the next pass
-                # (it might be a subagent later in this batch).
+            if entry.parent_session_id not in resolvable_parent_ids:
+                # Parent isn't in DB yet and not in the queue yet either —
+                # try again on the next pass (it might be a subagent later
+                # in this batch).
                 idx -= 1  # don't double-count progress for this entry
                 next_remaining.append(entry)
                 continue
 
-            session = _create_session_row(entry, parent_session=parent_session)
-            stats["sessions_created"] += 1
+            payload = _build_create_payload(entry, is_subagent=True)
+            if payload is None:
+                if on_session_progress:
+                    on_session_progress(entry.session_id, idx, total_sessions)
+                continue
 
-            new_line_nums = sync_session_items(session, entry.file_path)
-            stats["items_added"] += len(new_line_nums)
+            sync_queue.put(payload)
+            resolvable_parent_ids.add(entry.session_id)
 
             if on_session_progress:
                 on_session_progress(entry.session_id, idx, total_sessions)
@@ -339,7 +382,7 @@ def sync_project(
             break
         remaining = next_remaining
 
-    if project is None:
+    if project is None and not project_will_be_created:
         elapsed = time.monotonic() - project_start
         logger.info(
             f"  ⊘ Project {project_id} skipped in {elapsed:.1f}s — no Codex sessions with content"
@@ -349,19 +392,33 @@ def sync_project(
     # ``sessions_count`` and ``mtime`` are cross-provider — recomputed
     # from every session of the project, not just the Codex ones we just
     # synced, so a project shared with Claude doesn't lose values the
-    # other provider already wrote.
-    project.sessions_count = Session.objects.filter(
-        project=project,
+    # other provider already wrote. Read-only here; the actual UPDATE
+    # goes through the consumer.
+    new_sessions_count = Session.objects.filter(
+        project_id=project_id,
         type=SessionType.SESSION,
         created_at__isnull=False,
         user_message_count__gt=0,
     ).count()
-    project.mtime = (
-        Session.objects.filter(project=project)
+    new_mtime = (
+        Session.objects.filter(project_id=project_id)
         .aggregate(max_mtime=Max("mtime"))["max_mtime"]
         or 0
     )
-    project.save(update_fields=["sessions_count", "mtime"])
+
+    sync_queue.put(UpdateProjectMetadataPayload(
+        provider=Provider.CODEX,
+        project_id=project_id,
+        new_sessions_count=new_sessions_count,
+        new_mtime=new_mtime,
+        # Codex sync_project leaves ``project.stale`` alone; it is handled
+        # by Claude Code's sync_all (which iterates every Project and
+        # recomputes stale from disk).
+        new_stale=None,
+        recalc_total_cost=False,
+        resolve_git_root=False,
+        git_root_directory=None,
+    ))
 
     elapsed = time.monotonic() - project_start
     logger.info(
@@ -373,6 +430,7 @@ def sync_project(
 
 
 def sync_all(
+    sync_queue: queue.Queue,
     on_project_start: Callable[[str, int, int], None] | None = None,
     on_project_done: Callable[[str, dict[str, int]], None] | None = None,
     on_session_progress: Callable[[str, int, int], None] | None = None,
@@ -381,15 +439,7 @@ def sync_all(
     """
     Synchronize all Codex sessions from :attr:`CodexHelpers.SESSIONS_DIR`.
 
-    Args:
-        on_project_start: Callback called before syncing a project
-            with (project_id, current_index, total_projects).
-        on_project_done: Callback called after syncing a project
-            with (project_id, project_stats).
-        on_session_progress: Callback passed to sync_project.
-        stop_event: Optional threading event; when set, sync stops early.
-
-    Returns aggregate statistics.
+    Pushes payloads onto ``sync_queue`` (the unified consumer drains them).
     """
     sync_start = time.monotonic()
 
@@ -471,6 +521,7 @@ def sync_all(
             project_id,
             new_entries=new_by_project.get(project_id, []),
             existing_entries=existing_by_project.get(project_id, []),
+            sync_queue=sync_queue,
             on_session_progress=on_session_progress,
             stop_event=stop_event,
         )
@@ -484,17 +535,22 @@ def sync_all(
 
     interrupted = stop_event is not None and stop_event.is_set()
 
+    # Mark stale sessions (on DB but no longer on disk). Pushed as a
+    # single batch payload so the consumer issues exactly one bulk UPDATE.
     if not interrupted:
         stale_paths = (
             set(db_sessions_by_path.keys()) - set(disk_files_by_relative_path.keys())
         )
-        if stale_paths:
-            updated = Session.objects.filter(
+        stale_session_ids = [
+            db_sessions_by_path[p].id for p in stale_paths
+            if not db_sessions_by_path[p].stale
+        ]
+        if stale_session_ids:
+            sync_queue.put(MarkSessionsStalePayload(
                 provider=Provider.CODEX,
-                file_path__in=stale_paths,
-                stale=False,
-            ).update(stale=True)
-            stats["sessions_stale"] = updated
+                session_ids=stale_session_ids,
+            ))
+            stats["sessions_stale"] = len(stale_session_ids)
 
     elapsed = time.monotonic() - sync_start
     if interrupted:
