@@ -1946,6 +1946,11 @@ class BaseSessionCompute:
             'run_id': run_id,
             'session_id': session_id,
             'project_id': session.project_id,
+            # Revision marker — the session's last_offset as this worker saw
+            # it. apply_session_complete skips the apply if the row's
+            # last_offset has since advanced (watcher live-computed newer
+            # lines), so a stale worker result can't clobber fresher data.
+            'observed_last_offset': session.last_offset,
             'item_updates': all_item_updates,
             'item_fields': [
                 'display_level', 'group_head', 'group_tail', 'kind', 'message_id',
@@ -2013,6 +2018,32 @@ class BaseSessionCompute:
         one fsync per session instead of one per statement.
         """
         session_id = msg['session_id']
+
+        # Revision guard. The worker computed this result against the session
+        # as it was when it read the row (observed_last_offset). If the watcher
+        # has since appended new JSONL lines and live-computed them, the row's
+        # last_offset has advanced past what the worker saw — the worker's
+        # result is stale. Applying it would overwrite the watcher's fresher
+        # metadata and still bump compute_version to current, which would also
+        # stop a later recompute pass from correcting it. Skip instead: the
+        # watcher already produced the up-to-date version. compute's
+        # session_fields never include last_offset, so only the watcher
+        # advances it — a reliable monotonic revision marker.
+        observed_last_offset = msg.get('observed_last_offset')
+        if observed_last_offset is not None:
+            current_last_offset = (
+                Session.objects.filter(id=session_id)
+                .values_list('last_offset', flat=True)
+                .first()
+            )
+            if current_last_offset is not None and current_last_offset > observed_last_offset:
+                logger.info(
+                    "apply_session_complete: skipping stale compute result for "
+                    "session %s — last_offset advanced %s -> %s since the worker "
+                    "read it (watcher live-computed newer lines)",
+                    session_id, observed_last_offset, current_last_offset,
+                )
+                return
 
         # 1. Apply item updates (only items that changed)
         item_updates = msg.get('item_updates', [])
