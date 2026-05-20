@@ -301,7 +301,9 @@ def get_initial_sync_queue() -> queue.Queue:
     return _initial_sync_queue
 
 
-async def put_initial_sync_item(item: object, stop_event: threading.Event) -> bool:
+async def put_initial_sync_item(
+    item: object, stop_event: threading.Event | None = None
+) -> bool:
     """Push a completion marker / title payload onto the initial-sync queue.
 
     For event-loop callers (the orchestrators). The shared queue is bounded,
@@ -310,12 +312,19 @@ async def put_initial_sync_item(item: object, stop_event: threading.Event) -> bo
     put-with-timeout off the loop (so the thread always returns within the
     timeout); ``stop_event`` is rechecked between attempts.
 
-    Returns ``True`` once the item is enqueued, ``False`` if ``stop_event``
-    fired first — the item is dropped, which is safe at shutdown since nothing
-    awaits its completion then.
+    With a ``stop_event``: returns ``True`` once the item is enqueued,
+    ``False`` if ``stop_event`` fired first — the item is dropped, which is
+    safe at shutdown since nothing awaits its completion then.
+
+    With ``stop_event=None``: the item is never dropped — the loop retries
+    until the put succeeds, then returns ``True``. Used for the drain marker
+    ``shutdown()`` pushes once ``_sync_stop_event`` is already set: that marker
+    proves the queue is drained and must not be dropped. The consumer is
+    permanent (it outlives every provider shutdown), so it keeps draining and
+    a slot always frees up.
     """
     q = get_initial_sync_queue()
-    while not stop_event.is_set():
+    while stop_event is None or not stop_event.is_set():
         try:
             await asyncio.to_thread(q.put, item, True, 0.5)
             return True

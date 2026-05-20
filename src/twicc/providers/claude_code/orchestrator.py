@@ -211,6 +211,30 @@ class ClaudeCodeOrchestrator(BaseOrchestrator):
             with suppress(Exception):
                 await asyncio.shield(self._sync_thread_future)
             self._sync_thread_future = None
+        # The producer thread is now stopped, so every initial-sync payload
+        # it produced (CreateSession, UpdateSession, MarkSessionsStale, ...)
+        # is enqueued. But a cancelled _initial_sync_task never pushed its
+        # completion marker, so nothing yet proves those payloads have been
+        # drained. Push the marker ourselves and await it: the queue is FIFO,
+        # so the marker's done future resolving proves every payload of this
+        # run has been applied. Without this, a queued payload could be
+        # applied after the provider reaches the "stopped" phase and race the
+        # next hot-start's producer (duplicate-row IntegrityError, or a stale
+        # staleness write landing after the new producer read the DB). A
+        # harmless no-op when _initial_sync_task ran to completion and already
+        # drained its own marker. Pushed with no stop_event — _sync_stop_event
+        # is set, but this marker is the drain proof and must not be dropped.
+        if self._sync_task is not None:
+            from twicc.providers.db_writer import (
+                InitialSyncDoneMarker,
+                put_initial_sync_item,
+            )
+            with suppress(Exception):
+                done_future = asyncio.get_running_loop().create_future()
+                await put_initial_sync_item(
+                    InitialSyncDoneMarker(provider=self.provider, done_future=done_future)
+                )
+                await done_future
         if self._orch_task is not None:
             await _cancel_task(self._orch_task, "Orchestrator task")
 
