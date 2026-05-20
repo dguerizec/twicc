@@ -18,6 +18,7 @@ import os
 
 from asgiref.sync import async_to_sync, sync_to_async
 from channels.layers import get_channel_layer
+from django.db import transaction
 
 from twicc.core.models import Project, Session, SessionType
 from twicc.core.serializers import serialize_project
@@ -96,10 +97,15 @@ def ensure_project_directory(project_id: str, cwd: str) -> None:
     if _project_directories[project_id] == cwd:
         return
 
-    # Update DB and cache, and set stale based on directory existence
+    # Update DB now; refresh the cache only once the surrounding transaction
+    # commits. apply_session_complete and the unified DB writer call this
+    # inside transaction.atomic — a rollback there would otherwise leave the
+    # cache ahead of the DB, and the `== cwd` check above would then suppress
+    # the corrective write forever. on_commit runs immediately when there is
+    # no active transaction, so non-transactional callers are unaffected.
     should_be_stale = not os.path.isdir(cwd)
     Project.objects.filter(id=project_id).update(directory=cwd, stale=should_be_stale)
-    _project_directories[project_id] = cwd
+    transaction.on_commit(lambda: _project_directories.update({project_id: cwd}))
 
     # Re-resolve git_root when directory changes
     ensure_project_git_root(project_id, cwd)
@@ -135,9 +141,12 @@ def ensure_project_git_root(project_id: str, directory: str | None = None) -> No
     if _project_git_roots.get(project_id) == git_root:
         return
 
-    # Update DB and cache
+    # Update DB now; refresh the cache only once the surrounding transaction
+    # commits, so a rollback never leaves the cache ahead of the DB (the
+    # `== git_root` check above would otherwise suppress the corrective
+    # write). on_commit runs immediately when there is no active transaction.
     Project.objects.filter(id=project_id).update(git_root=git_root)
-    _project_git_roots[project_id] = git_root
+    transaction.on_commit(lambda: _project_git_roots.update({project_id: git_root}))
 
 
 # =============================================================================
@@ -185,8 +194,10 @@ def _create_or_get_project(
     project, created = Project.objects.get_or_create(id=project_id, defaults=defaults)
     if created and directory:
         # Mirror the cache update that ``ensure_project_directory`` would do
-        # so subsequent reads don't have to round-trip the DB.
-        _project_directories[project_id] = directory
+        # so subsequent reads don't have to round-trip the DB. Deferred to
+        # post-commit so a rolled-back transaction never leaves the cache
+        # ahead of the DB (on_commit runs immediately outside a transaction).
+        transaction.on_commit(lambda: _project_directories.update({project_id: directory}))
     return project, created
 
 
@@ -200,10 +211,13 @@ async def _broadcast_project_added(project: Project) -> None:
 
 def _adopt_directory_sync(project: Project, directory: str) -> None:
     """Patch ``project.directory`` in DB + cache (sync). Caller checks that
-    the project actually lacks a directory before invoking."""
+    the project actually lacks a directory before invoking. The cache refresh
+    is deferred to post-commit so a rolled-back transaction never leaves the
+    cache ahead of the DB (on_commit runs immediately outside a transaction)."""
     project.directory = directory
     project.save(update_fields=["directory"])
-    _project_directories[project.id] = directory
+    project_id = project.id
+    transaction.on_commit(lambda: _project_directories.update({project_id: directory}))
 
 
 def register_project_db_only(
