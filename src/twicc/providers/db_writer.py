@@ -468,6 +468,27 @@ async def _handle_compute_done(session_id: str) -> None:
         logger.error(f"Error broadcasting updates for {session_id}: {e}")
 
 
+async def _broadcast_project_added(project) -> None:
+    """Broadcast project_added for a newly-created project.
+
+    Called by the initial-sync consumer *after* the create-session
+    transaction has committed — never from inside it.
+    """
+    from twicc.core.serializers import serialize_project
+
+    try:
+        channel_layer = get_channel_layer()
+        await channel_layer.group_send(
+            "updates",
+            {"type": "broadcast", "data": {
+                "type": "project_added",
+                "project": serialize_project(project),
+            }},
+        )
+    except Exception as e:
+        logger.error(f"Error broadcasting project_added for {project.id}: {e}")
+
+
 async def _broadcast_project_updated(project_id: str) -> None:
     """Broadcast project_updated for a single project."""
     from twicc.core.models import Project
@@ -507,7 +528,14 @@ async def _process_initial_sync_message(msg) -> None:
     """Apply one message drained from the shared initial-sync queue."""
     try:
         if isinstance(msg, CreateSessionPayload):
-            await sync_to_async(_apply_create_session_payload)(msg)
+            project, created = await sync_to_async(_apply_create_session_payload)(msg)
+            # Post-commit side effects — kept out of transaction.atomic so a
+            # project is never announced before its commit (or despite a
+            # rollback). See Codex review finding #7.
+            if created:
+                await _broadcast_project_added(project)
+            if project.directory:
+                await auto_add_project_to_workspaces(project.id, project.directory)
         elif isinstance(msg, UpdateSessionPayload):
             await sync_to_async(_apply_update_session_payload)(msg)
         elif isinstance(msg, MarkSessionsStalePayload):
@@ -530,13 +558,20 @@ async def _process_initial_sync_message(msg) -> None:
         )
 
 
-def _apply_create_session_payload(payload: CreateSessionPayload) -> None:
-    """Persist a new session (and project if missing) plus its items, atomically."""
+def _apply_create_session_payload(payload: CreateSessionPayload) -> tuple[object, bool]:
+    """Persist a new session (and project if missing) plus its items, atomically.
+
+    Returns ``(project, project_was_created)`` so the async caller can run the
+    post-commit side effects — the ``project_added`` broadcast and workspace
+    auto-add — *outside* this transaction. ``register_project_db_only`` is the
+    DB-only half of project registration precisely so the broadcast never
+    fires from inside ``transaction.atomic`` (Codex review finding #7).
+    """
     from twicc.core.models import SessionItem
-    from twicc.projects import register_project_sync
+    from twicc.projects import register_project_db_only
 
     with transaction.atomic():
-        register_project_sync(
+        project, created = register_project_db_only(
             payload.project_id,
             directory=payload.new_project_directory,
             stale=payload.new_project_stale,
@@ -552,6 +587,7 @@ def _apply_create_session_payload(payload: CreateSessionPayload) -> None:
         payload.session.last_line = payload.last_line
         payload.session.mtime = payload.mtime
         payload.session.save(update_fields=["last_offset", "last_line", "mtime"])
+    return project, created
 
 
 def _apply_update_session_payload(payload: UpdateSessionPayload) -> None:
