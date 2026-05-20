@@ -372,18 +372,6 @@ def sync_project(
         ))
         stats["sessions_stale"] += len(stale_session_ids)
 
-    # Compute project metadata (read-only). ``user_message_count__gt=0`` and
-    # ``created_at__isnull=False`` exclude every session we just pushed
-    # (those fields get filled in by background compute, not by initial
-    # sync), so the count is stable regardless of when the consumer applies
-    # the create/update payloads.
-    new_sessions_count = Session.objects.filter(
-        project_id=project_id,
-        type=SessionType.SESSION,
-        created_at__isnull=False,
-        user_message_count__gt=0,
-    ).count()
-
     # Decide new_stale:
     # - existing project with directory → recompute from os.path.isdir
     # - existing project without directory but stale=True → clear stale (legacy)
@@ -399,7 +387,7 @@ def sync_project(
     sync_queue.put(UpdateProjectMetadataPayload(
         provider=Provider.CLAUDE_CODE,
         project_id=project_id,
-        new_sessions_count=new_sessions_count,
+        recalc_sessions_count=True,
         recalc_mtime=True,
         new_stale=new_stale,
         recalc_total_cost=True,
@@ -471,7 +459,7 @@ def sync_all(
             sync_queue.put(UpdateProjectMetadataPayload(
                 provider=Provider.CLAUDE_CODE,
                 project_id=project.id,
-                new_sessions_count=None,
+                recalc_sessions_count=False,
                 recalc_mtime=False,
                 new_stale=should_be_stale,
                 recalc_total_cost=False,
@@ -523,7 +511,7 @@ def sync_all(
             sync_queue.put(UpdateProjectMetadataPayload(
                 provider=Provider.CLAUDE_CODE,
                 project_id=project.id,
-                new_sessions_count=None,
+                recalc_sessions_count=False,
                 recalc_mtime=False,
                 new_stale=None,
                 recalc_total_cost=False,

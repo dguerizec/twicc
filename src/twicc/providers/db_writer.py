@@ -140,25 +140,25 @@ class MarkSessionsStalePayload(NamedTuple):
 class UpdateProjectMetadataPayload(NamedTuple):
     """End-of-sync metadata for one project.
 
-    Each non-``None`` field is applied; ``None`` means leave it alone. Three
-    boolean flags ask the consumer to do work that reads back from the DB:
-    ``recalc_mtime`` recomputes ``Project.mtime`` from the project's sessions,
-    ``recalc_total_cost`` and ``resolve_git_root`` invoke heavier helpers that
-    themselves write to DB. Bundled so the project's end-of-sync writes commit
-    in one transaction.
+    ``new_stale`` is applied when non-``None``. Four boolean flags ask the
+    consumer to do work that reads back from the DB: ``recalc_sessions_count``
+    and ``recalc_mtime`` recompute those ``Project`` fields from the project's
+    sessions; ``recalc_total_cost`` and ``resolve_git_root`` invoke heavier
+    helpers that themselves write to DB. Bundled so the project's end-of-sync
+    writes commit in one transaction.
 
-    ``recalc_mtime`` exists because ``mtime`` cannot be computed correctly in
-    the producer: the producer only sees the sessions it changed (so an
-    unchanged project would regress to ``0``), and reading ``Max(mtime)`` from
-    the DB there races the consumer, which has not yet applied this run's
-    session payloads. The consumer recomputes it instead — by the time it
-    handles this payload, FIFO ordering guarantees every session payload this
-    provider pushed for the project has already landed.
+    ``recalc_sessions_count`` / ``recalc_mtime`` exist because neither value
+    can be computed in the producer: both are cross-provider, so a value
+    counted in one provider's producer could clobber — or be clobbered by — a
+    fresher value another provider's compute writes; reading them from the DB
+    in the producer also races the consumer, which has not yet applied this
+    run's session payloads. The consumer recomputes them instead, inside the
+    same transaction that applies the payload.
     """
 
     provider: Provider
     project_id: str
-    new_sessions_count: int | None
+    recalc_sessions_count: bool
     recalc_mtime: bool
     new_stale: bool | None
     recalc_total_cost: bool
@@ -851,7 +851,7 @@ def _apply_update_project_metadata_payload(payload: UpdateProjectMetadataPayload
     from twicc.projects import ensure_project_git_root, update_project_total_cost
 
     with transaction.atomic():
-        if (payload.new_sessions_count is not None
+        if (payload.recalc_sessions_count
                 or payload.recalc_mtime
                 or payload.new_stale is not None):
             try:
@@ -863,8 +863,18 @@ def _apply_update_project_metadata_payload(payload: UpdateProjectMetadataPayload
                 project = None
             if project is not None:
                 update_fields: list[str] = []
-                if payload.new_sessions_count is not None:
-                    project.sessions_count = payload.new_sessions_count
+                if payload.recalc_sessions_count:
+                    # Recompute from the DB (not a producer-supplied count):
+                    # sessions_count is cross-provider, so a value counted in
+                    # the producer could clobber a fresher one another
+                    # provider's compute wrote. Same filter as
+                    # update_project_metadata().
+                    project.sessions_count = Session.objects.filter(
+                        project_id=payload.project_id,
+                        type=SessionType.SESSION,
+                        created_at__isnull=False,
+                        user_message_count__gt=0,
+                    ).count()
                     update_fields.append("sessions_count")
                 if payload.recalc_mtime:
                     # Recompute from the DB now that every session payload

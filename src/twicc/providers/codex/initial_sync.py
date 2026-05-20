@@ -387,24 +387,15 @@ def sync_project(
         )
         return stats
 
-    # ``sessions_count`` is cross-provider — counted over every session of
-    # the project, not just the Codex ones we just synced, so a project
-    # shared with Claude doesn't lose the value the other provider wrote.
-    # Read-only here; the actual UPDATE goes through the consumer. ``mtime``
-    # is recomputed by the consumer itself (recalc_mtime) because reading it
-    # here would race the consumer, which has not yet applied this run's
-    # session payloads.
-    new_sessions_count = Session.objects.filter(
-        project_id=project_id,
-        type=SessionType.SESSION,
-        created_at__isnull=False,
-        user_message_count__gt=0,
-    ).count()
-
+    # ``sessions_count`` and ``mtime`` are recomputed by the consumer
+    # (recalc_sessions_count / recalc_mtime): both are cross-provider, so a
+    # value counted in this producer could clobber — or be clobbered by — a
+    # fresher value another provider's compute writes, and reading them here
+    # would also race the consumer applying this run's session payloads.
     sync_queue.put(UpdateProjectMetadataPayload(
         provider=Provider.CODEX,
         project_id=project_id,
-        new_sessions_count=new_sessions_count,
+        recalc_sessions_count=True,
         recalc_mtime=True,
         # Codex sync_project leaves ``project.stale`` alone; it is handled
         # by Claude Code's sync_all (which iterates every Project and
