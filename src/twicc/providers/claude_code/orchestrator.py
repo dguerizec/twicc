@@ -257,6 +257,14 @@ class ClaudeCodeOrchestrator(BaseOrchestrator):
         # Background compute (may not have started yet)
         if self._compute_task is not None:
             logger.info("Stopping background compute task...")
+            # Abandon the compute run before stopping the worker: from here on,
+            # every still-queued or still-incoming session_complete for this
+            # run is skipped by the unified DB writer (untracked run), so a
+            # shut-down provider's partial compute results never apply — not
+            # during this teardown, and not racing the next hot-start. The
+            # run's sessions are recomputed on the next start.
+            from twicc.providers.db_writer import abandon_compute_run
+            abandon_compute_run(self._compute_ctx.run_id, self.provider)
             await stop_background_task(self._compute_ctx)
             await _cancel_task(self._compute_task, "Background compute task")
         else:

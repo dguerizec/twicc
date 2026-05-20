@@ -377,6 +377,36 @@ def arm_compute_completion(
     return run_id, future
 
 
+def abandon_compute_run(run_id: int, provider: Provider) -> None:
+    """Drop a compute run's tracked state so its still-queued messages are ignored.
+
+    Called by a provider orchestrator's ``shutdown()`` once it has decided to
+    stop the compute worker. From that point every ``session_complete`` still
+    queued (or still being pushed) for this ``run_id`` hits the untracked-run
+    path in ``_process_compute_message`` and is skipped, and a late ``done`` is
+    ignored by ``_finalize_compute_run`` — a shut-down provider's partial
+    compute results must never apply after the provider has stopped, where
+    they could clobber a hot-restart's fresher state (and leave freshly synced
+    lines with ``compute_version`` already current). The run's sessions are
+    recomputed from scratch on the next start.
+
+    No-op when ``run_id`` is untracked or its tracked state belongs to another
+    provider — e.g. the ``ComputeContext`` default ``run_id=0`` when the worker
+    was torn down before :func:`arm_compute_completion` ran.
+    """
+    state = _compute_states.get(run_id)
+    if state is None or state.provider != provider:
+        return
+    _compute_states.pop(run_id, None)
+    _compute_done_events.pop(run_id, None)
+    logger.info(
+        "Abandoned compute run_id=%d for provider=%s at shutdown "
+        "(%d session(s) applied, %d failed) — its remaining queued results "
+        "will be ignored",
+        run_id, provider.value, state.completed_count, state.failed_count,
+    )
+
+
 # =============================================================================
 # The consumer loop
 # =============================================================================
