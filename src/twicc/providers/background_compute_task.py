@@ -114,8 +114,14 @@ def _resolve_factory(dotted_path: str):
     return getattr(importlib.import_module(module_name), attr)
 
 
-def stop_background_task(ctx: ComputeContext) -> None:
-    """Signal the background compute task to stop and terminate worker process."""
+async def stop_background_task(ctx: ComputeContext) -> None:
+    """Signal the background compute task to stop and terminate worker process.
+
+    Async so the blocking ``process.join()`` calls can run off the event loop:
+    joining on the loop thread would freeze the unified DB writer's consumer,
+    and a worker blocked on a full result queue only makes progress (drains,
+    then exits) while that consumer keeps running.
+    """
     logger.info("stop_background_task: starting shutdown...")
 
     # Signal asyncio tasks to stop
@@ -133,18 +139,21 @@ def stop_background_task(ctx: ComputeContext) -> None:
     except Exception as e:
         logger.warning(f"stop_background_task: failed to send stop signal to queue: {e}")
 
-    # Wait for worker process to exit gracefully, then terminate if needed
+    # Wait for worker process to exit gracefully, then terminate if needed.
+    # join() runs off the event loop (asyncio.to_thread) so the consumer
+    # keeps draining while we wait — terminate()/kill() are non-blocking
+    # signals and stay on the loop.
     if ctx.process is not None and ctx.process.is_alive():
         logger.info(f"stop_background_task: waiting for worker process (PID: {ctx.process.pid}) to exit...")
-        ctx.process.join(timeout=2.0)
+        await asyncio.to_thread(ctx.process.join, 2.0)
         if ctx.process.is_alive():
             logger.warning("stop_background_task: worker process still alive, terminating...")
             ctx.process.terminate()
-            ctx.process.join(timeout=1.0)
+            await asyncio.to_thread(ctx.process.join, 1.0)
             if ctx.process.is_alive():
                 logger.error("stop_background_task: worker process did not terminate, killing...")
                 ctx.process.kill()
-                ctx.process.join(timeout=0.5)
+                await asyncio.to_thread(ctx.process.join, 0.5)
         else:
             logger.info("stop_background_task: worker process exited gracefully")
         ctx.process = None
@@ -444,6 +453,6 @@ async def start_background_compute_task(ctx: ComputeContext) -> None:
         )
     finally:
         # Stop the worker process. Idempotent if it has already exited.
-        stop_background_task(ctx)
+        await stop_background_task(ctx)
 
     logger.info("Background compute task completed")

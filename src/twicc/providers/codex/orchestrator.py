@@ -199,7 +199,7 @@ class CodexOrchestrator(BaseOrchestrator):
         # Background compute (may not have started yet — depends on initial sync)
         if self._compute_task is not None:
             logger.info("Stopping Codex background compute task...")
-            stop_background_task(self._compute_ctx)
+            await stop_background_task(self._compute_ctx)
             await _cancel_task(self._compute_task, "Codex background compute task")
         else:
             logger.info("Codex background compute was not started, skipping")

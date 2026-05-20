@@ -225,7 +225,7 @@ class ClaudeCodeOrchestrator(BaseOrchestrator):
         # Background compute (may not have started yet)
         if self._compute_task is not None:
             logger.info("Stopping background compute task...")
-            stop_background_task(self._compute_ctx)
+            await stop_background_task(self._compute_ctx)
             await _cancel_task(self._compute_task, "Background compute task")
         else:
             logger.info("Background compute was not started, skipping")
