@@ -207,6 +207,14 @@ _compute_result_queue: object | None = None  # _mp_ctx.Queue()
 _consumer_task: asyncio.Task | None = None
 _consumer_stop_event: asyncio.Event | None = None
 
+# Intra-process queue of finalization jobs the consumer must run itself, so
+# their writes are serialized with every other consumer write — the
+# single-writer guarantee. abandon_compute_run() runs in a provider's
+# shutdown() task, not in the consumer task, and uses this to have the
+# consumer flush an abandoned compute run's batched state instead of writing
+# to the DB directly and racing the consumer.
+_consumer_jobs: "asyncio.Queue | None" = None
+
 # Compute completion is keyed by a per-run id, not by provider: a cancelled
 # run's worker can still have stale messages in the shared queue when a
 # hot-restarted run is armed, and the run_id keeps each run's state and
@@ -223,12 +231,6 @@ _compute_done_events: dict[int, asyncio.Future] = {}
 # batched activity flushes, failure tally). Initial-sync payloads are
 # self-contained; the only initial-sync run state is the failure tally below.
 _compute_states: dict[int, "_ComputeProviderState"] = {}
-
-# run_id -> a Future resolved when the consumer finishes applying a
-# session_complete it has already dequeued for that run. abandon_compute_run()
-# awaits it so a provider shutdown does not reach STOPPED while a compute write
-# for the run it just abandoned is still committing.
-_inflight_compute_applies: dict[int, "asyncio.Future"] = {}
 
 # Per-provider failed-payload counter for the in-flight initial-sync run.
 # Incremented when an _apply_* raises; reported to the orchestrator via the
@@ -248,6 +250,11 @@ class _ComputeProviderState:
     Keyed in ``_compute_states`` by ``run_id``; ``provider`` is kept for
     logging and so arm_compute_completion() can drop a previous run's leftover
     state for the same provider.
+
+    ``abandoned`` is set by :func:`abandon_compute_run` when a provider shuts
+    down: once set, the consumer skips every remaining ``session_complete`` for
+    the run, and the run's batched state is flushed and dropped by the
+    :class:`_AbandonComputeRunJob` the consumer runs.
     """
 
     provider: Provider
@@ -261,6 +268,22 @@ class _ComputeProviderState:
     sessions_since_activities_flush: int = 0
     completed_count: int = 0
     failed_count: int = 0
+    abandoned: bool = False
+
+
+class _AbandonComputeRunJob(NamedTuple):
+    """A request for the consumer to finalize an abandoned compute run.
+
+    Pushed onto ``_consumer_jobs`` by :func:`abandon_compute_run` (which runs
+    in a provider's ``shutdown()`` task) and executed by the consumer task
+    itself, so the run's batched activity-recalculation flush is serialized
+    with every other consumer write. ``done`` is resolved once the consumer
+    has finalized and dropped the run, letting ``shutdown()`` move on.
+    """
+
+    run_id: int
+    provider: Provider
+    done: asyncio.Future
 
 
 # =============================================================================
@@ -275,13 +298,14 @@ def start_unified_consumer() -> None:
     starts. Raises if called twice (programming error).
     """
     global _initial_sync_queue, _compute_result_queue
-    global _consumer_stop_event, _consumer_task
+    global _consumer_stop_event, _consumer_task, _consumer_jobs
 
     if _consumer_task is not None:
         raise RuntimeError("unified DB writer already started")
 
     _initial_sync_queue = queue.Queue(maxsize=INITIAL_SYNC_QUEUE_MAXSIZE)
     _compute_result_queue = _mp_ctx.Queue(maxsize=COMPUTE_QUEUE_MAXSIZE)
+    _consumer_jobs = asyncio.Queue()
     _consumer_stop_event = asyncio.Event()
     _consumer_task = asyncio.create_task(_consumer_loop())
     logger.info("Unified DB writer started")
@@ -384,46 +408,53 @@ def arm_compute_completion(
 
 
 async def abandon_compute_run(run_id: int, provider: Provider) -> None:
-    """Drop a compute run's tracked state and wait out any in-flight apply.
+    """Abandon a compute run at provider shutdown and flush its batched state.
 
     Awaited by a provider orchestrator's ``shutdown()`` once it has decided to
-    stop the compute worker. Dropping the state makes every ``session_complete``
-    still queued (or still being pushed) for this ``run_id`` hit the
-    untracked-run path in ``_process_compute_message`` and be skipped, and a
-    late ``done`` ignored by ``_finalize_compute_run`` — a shut-down provider's
-    partial compute results must never apply after the provider has stopped,
-    where they could clobber a hot-restart's fresher state (and leave freshly
-    synced lines with ``compute_version`` already current). The run's sessions
-    are recomputed from scratch on the next start.
+    stop the compute worker. Two things happen:
 
-    A ``session_complete`` the consumer has *already dequeued* is past that
-    skip, so its ``apply_session_complete`` still commits; this coroutine then
-    awaits that in-flight apply (tracked in ``_inflight_compute_applies``), so
-    the provider does not reach STOPPED — and a hot restart cannot begin —
-    while a write for the abandoned run is still committing.
+    1. The run is flagged ``abandoned`` synchronously, before any ``await``.
+       From here on the consumer skips every ``session_complete`` still queued
+       (or still incoming) for this ``run_id`` — a shut-down provider's partial
+       compute results must never apply after the provider has stopped, where
+       they could clobber a hot-restart's fresher state (and leave freshly
+       synced lines with ``compute_version`` already current). The run's
+       sessions are recomputed from scratch on the next start.
+
+    2. Finalization is handed to the consumer task via an
+       :class:`_AbandonComputeRunJob` on ``_consumer_jobs``. The consumer
+       processes one message at a time, so by the time it runs the job any
+       in-flight ``session_complete`` apply — and its post-apply bookkeeping
+       that accumulates the session's affected activity days — has fully
+       finished. The job flushes the run's batched project broadcasts and
+       activity recalculations for the sessions applied before the abandon,
+       then drops the run state. The flush runs *in the consumer*, never as a
+       direct DB write from this ``shutdown()`` task, so the single-writer
+       guarantee holds. This coroutine awaits the job, so the provider does
+       not reach STOPPED — and a hot restart cannot begin — until the
+       finalization has committed.
 
     No-op when ``run_id`` is untracked or its tracked state belongs to another
     provider — e.g. the ``ComputeContext`` default ``run_id=0`` when the worker
-    was torn down before :func:`arm_compute_completion` ran.
+    was torn down before :func:`arm_compute_completion` ran, or a run whose
+    worker already emitted ``done`` and was finalized by
+    :func:`_finalize_compute_run`.
     """
     state = _compute_states.get(run_id)
     if state is None or state.provider != provider:
         return
-    _compute_states.pop(run_id, None)
-    _compute_done_events.pop(run_id, None)
-    logger.info(
-        "Abandoned compute run_id=%d for provider=%s at shutdown "
-        "(%d session(s) applied, %d failed) — its remaining queued results "
-        "will be ignored",
-        run_id, provider.value, state.completed_count, state.failed_count,
+    # Flag synchronously, before any await: every session_complete the
+    # consumer dequeues for this run from now on is skipped.
+    state.abandoned = True
+    assert _consumer_jobs is not None, "unified DB writer not started"
+    done = asyncio.get_running_loop().create_future()
+    _consumer_jobs.put_nowait(
+        _AbandonComputeRunJob(run_id=run_id, provider=provider, done=done)
     )
-    # If the consumer already dequeued a session_complete for this run and is
-    # mid-apply, that apply (past the untracked-run skip) still commits — wait
-    # it out before returning so shutdown does not reach STOPPED first.
-    inflight = _inflight_compute_applies.get(run_id)
-    if inflight is not None and not inflight.done():
-        with suppress(Exception):
-            await inflight
+    # Await the consumer-side finalization so shutdown does not reach STOPPED
+    # before the run's batched state has been flushed and committed.
+    with suppress(Exception):
+        await done
 
 
 # =============================================================================
@@ -432,9 +463,11 @@ async def abandon_compute_run(run_id: int, provider: Provider) -> None:
 
 
 async def _drain_one() -> bool:
-    """Process at most one message from each shared queue.
+    """Process at most one message from each queue.
 
-    Returns True if anything was processed this call.
+    Covers the two shared producer queues (compute, initial-sync) and the
+    intra-process consumer-jobs queue. Returns True if anything was processed
+    this call.
     """
     any_processed = False
 
@@ -461,17 +494,37 @@ async def _drain_one() -> bool:
         any_processed = True
         await _process_initial_sync_message(payload)
 
+    # ---- Consumer-side finalization jobs (intra-process) ----
+    try:
+        job = _consumer_jobs.get_nowait()
+    except asyncio.QueueEmpty:
+        pass
+    else:
+        any_processed = True
+        try:
+            await _finalize_abandoned_run(job.run_id, job.provider)
+        except Exception as exc:
+            logger.error(
+                f"Error finalizing abandoned compute run {job.run_id}: {exc}",
+                exc_info=True,
+            )
+        finally:
+            # Always resolve, on success or error, so abandon_compute_run()
+            # (and the provider shutdown awaiting it) can never hang.
+            if not job.done.done():
+                job.done.set_result(None)
+
     return any_processed
 
 
 async def _consumer_loop() -> None:
-    """Drain both shared queues until the application shuts down.
+    """Drain the producer queues and consumer jobs until the app shuts down.
 
     Permanent: runs from start_unified_consumer() to stop_unified_consumer().
     Resilient: an unexpected exception in one tick is logged and the loop
     continues — a single bad message must never take the writer down.
 
-    On stop, before exiting, both queues are fully drained.
+    On stop, before exiting, every queue is fully drained.
     stop_unified_consumer() runs only after every producer has shut down, so
     the queues can no longer grow — draining them guarantees no boot-time
     write still queued at shutdown is silently abandoned.
@@ -549,27 +602,22 @@ async def _process_compute_message(msg: dict) -> None:
 
     # session_complete — the heavy path.
     state = _compute_states.get(run_id)
-    if state is None:
-        # No tracked state for this run_id: the run was cancelled (typically a
-        # provider hot-toggle) and its state already dropped. Ignore the
-        # message — do NOT apply it. The metadata was computed against a
-        # possibly-outdated view of the session and could clobber fresher data
-        # written since (by a hot-restarted run, or by the watcher). The
-        # session's compute_version was never advanced by this skipped
-        # message, so a live run (or the watcher) will recompute it.
+    if state is None or state.abandoned:
+        # No live state for this run_id: either the run was never tracked / its
+        # state already dropped, or it was abandoned at provider shutdown
+        # (abandon_compute_run flags it; the consumer finalizes it via an
+        # _AbandonComputeRunJob). Ignore the message — do NOT apply it. The
+        # metadata was computed against a possibly-outdated view of the session
+        # and could clobber fresher data written since (by a hot-restarted run,
+        # or by the watcher). The session's compute_version was never advanced
+        # by this skipped message, so a live run (or the watcher) recomputes it.
         logger.info(
-            "Ignoring session_complete for an untracked compute run "
-            "(run_id=%s, session_id=%s) — stale run",
+            "Ignoring session_complete for an untracked or abandoned compute "
+            "run (run_id=%s, session_id=%s) — stale run",
             run_id, msg.get("session_id"),
         )
         return
 
-    # Publish this apply as in-flight so abandon_compute_run() can wait for it:
-    # once dequeued, this session_complete is past the untracked-run skip
-    # above, so a provider shutdown abandoning the run mid-apply must still
-    # wait this commit out before the provider reaches STOPPED.
-    apply_done = asyncio.get_running_loop().create_future()
-    _inflight_compute_applies[run_id] = apply_done
     try:
         from twicc.providers.compute_base import BaseSessionCompute
         await sync_to_async(BaseSessionCompute.apply_session_complete)(msg)
@@ -578,10 +626,6 @@ async def _process_compute_message(msg: dict) -> None:
         logger.error(f"Error applying session_complete: {e}", exc_info=True)
         state.failed_count += 1
         return
-    finally:
-        _inflight_compute_applies.pop(run_id, None)
-        if not apply_done.done():
-            apply_done.set_result(None)
 
     project_id = msg.get("project_id")
     if project_id:
@@ -659,6 +703,52 @@ async def _finalize_compute_run(run_id: int | None, provider: Provider) -> None:
     # compute orchestrator (start_background_compute_task) logs the summary.
     if future is not None and not future.done():
         future.set_result(state.failed_count if state is not None else 0)
+
+
+async def _finalize_abandoned_run(run_id: int, provider: Provider) -> None:
+    """Consumer-side finalization of a compute run abandoned at shutdown.
+
+    Runs inside the consumer task (dispatched via ``_consumer_jobs`` by
+    :func:`abandon_compute_run`), so the activity-recalculation flush is
+    serialized with every other consumer write — the single-writer guarantee
+    holds. The consumer handles one message at a time, so any in-flight
+    ``session_complete`` for the run, and its post-apply bookkeeping, has
+    already finished by the time this runs: ``state.pending_activity_days``
+    and ``state.pending_project_ids`` are final.
+
+    Flushes the run's batched project broadcasts and activity recalculations
+    for the sessions applied before the abandon — without this, those
+    already-applied sessions would keep their ``compute_version`` current (so
+    the next start does not recompute them) yet leave their ``PeriodicActivity``
+    rows stale — then drops the run state. Unlike :func:`_finalize_compute_run`
+    it does not resolve the completion Future: the orchestrator that armed the
+    run is shutting the provider down and cancels the compute task that
+    awaited it.
+    """
+    state = _compute_states.pop(run_id, None)
+    _compute_done_events.pop(run_id, None)
+    if state is None:
+        # Already finalized by _finalize_compute_run — the worker emitted
+        # 'done' between abandon_compute_run flagging the run and this job
+        # running, so the flush already happened. Nothing left to do.
+        return
+
+    logger.info(
+        "Finalizing abandoned compute run_id=%d for provider=%s "
+        "(%d session(s) applied, %d failed) — remaining queued results "
+        "are ignored",
+        run_id, provider.value, state.completed_count, state.failed_count,
+    )
+    for pid in state.pending_project_ids:
+        try:
+            await _broadcast_project_updated(pid)
+        except Exception as e:
+            logger.error(f"Error in abandoned-run project broadcast for {pid}: {e}")
+    if state.pending_activity_days:
+        try:
+            await _flush_pending_activities(provider, state.pending_activity_days)
+        except Exception as e:
+            logger.error(f"Error in abandoned-run activity flush: {e}", exc_info=True)
 
 
 async def _handle_compute_done(session_id: str) -> None:
