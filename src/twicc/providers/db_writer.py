@@ -182,9 +182,14 @@ _consumer_stop_event: asyncio.Event | None = None
 _compute_done_events: dict[Provider, asyncio.Event] = {}
 
 # Per-provider accumulated state for the compute side only (broadcast
-# throttling, batched activity flushes). The initial-sync side has no
-# accumulated state — every payload is self-contained.
+# throttling, batched activity flushes). Initial-sync payloads are
+# self-contained; the only initial-sync run state is the failure tally below.
 _compute_states: dict[Provider, "_ComputeProviderState"] = {}
+
+# Per-provider failed-payload counter for the in-flight initial-sync run.
+# Incremented when an _apply_* raises; surfaced as a single ERROR summary and
+# reset when that provider's InitialSyncDoneMarker is drained.
+_initial_sync_failures: dict[Provider, int] = defaultdict(int)
 
 
 @dataclass
@@ -199,6 +204,7 @@ class _ComputeProviderState:
     sessions_since_project_broadcast: int = 0
     sessions_since_activities_flush: int = 0
     completed_count: int = 0
+    failed_count: int = 0
 
 
 # =============================================================================
@@ -358,6 +364,9 @@ async def _process_compute_message(msg: dict) -> None:
 
     if msg_type == "error":
         logger.error(f"Compute error for {msg.get('session_id')}: {msg.get('error')}")
+        state = _compute_states.get(provider)
+        if state is not None:
+            state.failed_count += 1
         return
 
     if msg_type != "session_complete":
@@ -381,6 +390,8 @@ async def _process_compute_message(msg: dict) -> None:
         await _handle_compute_done(msg["session_id"])
     except Exception as e:
         logger.error(f"Error applying session_complete: {e}", exc_info=True)
+        if state is not None:
+            state.failed_count += 1
         return
 
     if state is None:
@@ -434,6 +445,12 @@ async def _finalize_compute_run(provider: Provider) -> None:
     logger.info(f"Unified DB writer: compute 'done' for provider={provider.value}")
     state = _compute_states.pop(provider, None)
     if state is not None:
+        if state.failed_count:
+            logger.error(
+                "Background compute for provider=%s finished with %d session(s) "
+                "that failed to compute or apply — see the errors above for details",
+                provider.value, state.failed_count,
+            )
         for pid in state.pending_project_ids:
             try:
                 await _broadcast_project_updated(pid)
@@ -536,27 +553,41 @@ def _flush_pending_activities(provider: Provider, pending_activity_days: dict[st
 
 async def _process_initial_sync_message(msg) -> None:
     """Apply one message drained from the shared initial-sync queue."""
+    if isinstance(msg, InitialSyncDoneMarker):
+        # Drained after every real payload of the run (FIFO) — surface the
+        # run's failures, if any, before signalling completion. Handled
+        # outside the try below so the done Event is always set.
+        failures = _initial_sync_failures.pop(msg.provider, 0)
+        if failures:
+            logger.error(
+                "Initial sync for provider=%s finished with %d payload(s) that "
+                "failed to apply — see the errors logged above for details",
+                msg.provider.value, failures,
+            )
+        logger.info(
+            f"Unified DB writer: initial-sync 'done' for provider={msg.provider.value}"
+        )
+        msg.done_event.set()
+        return
+
     try:
         if isinstance(msg, CreateSessionPayload):
             project, created = await sync_to_async(_apply_create_session_payload)(msg)
             # Post-commit side effects — kept out of transaction.atomic so a
             # project is never announced before its commit (or despite a
-            # rollback). See Codex review finding #7.
-            if created:
-                await _broadcast_project_added(project)
-            if project.directory:
-                await auto_add_project_to_workspaces(project.id, project.directory)
+            # rollback, finding #7). ``project`` is None when the payload was
+            # skipped (orphan subagent — finding #3).
+            if project is not None:
+                if created:
+                    await _broadcast_project_added(project)
+                if project.directory:
+                    await auto_add_project_to_workspaces(project.id, project.directory)
         elif isinstance(msg, UpdateSessionPayload):
             await sync_to_async(_apply_update_session_payload)(msg)
         elif isinstance(msg, MarkSessionsStalePayload):
             await sync_to_async(_apply_mark_sessions_stale_payload)(msg)
         elif isinstance(msg, UpdateProjectMetadataPayload):
             await sync_to_async(_apply_update_project_metadata_payload)(msg)
-        elif isinstance(msg, InitialSyncDoneMarker):
-            logger.info(
-                f"Unified DB writer: initial-sync 'done' for provider={msg.provider.value}"
-            )
-            msg.done_event.set()
         else:
             logger.error(
                 f"Unexpected initial-sync message type: {type(msg).__name__} => {msg!r:.300}"
@@ -566,6 +597,9 @@ async def _process_initial_sync_message(msg) -> None:
             f"Error processing initial-sync message {type(msg).__name__}: {e}",
             exc_info=True,
         )
+        provider = getattr(msg, "provider", None)
+        if provider is not None:
+            _initial_sync_failures[provider] += 1
 
 
 def _apply_create_session_payload(payload: CreateSessionPayload) -> tuple[object, bool]:
@@ -576,9 +610,24 @@ def _apply_create_session_payload(payload: CreateSessionPayload) -> tuple[object
     auto-add — *outside* this transaction. ``register_project_db_only`` is the
     DB-only half of project registration precisely so the broadcast never
     fires from inside ``transaction.atomic`` (Codex review finding #7).
+
+    Returns ``(None, False)`` when the payload is a subagent whose parent row
+    is absent — an upstream CreateSessionPayload was rejected, or the parent
+    is an orphan. The session is skipped cleanly with one warning rather than
+    cascading into an opaque IntegrityError on the parent_session FK (Codex
+    review finding #3).
     """
-    from twicc.core.models import SessionItem
+    from twicc.core.models import Session, SessionItem
     from twicc.projects import register_project_db_only
+
+    parent_id = payload.session.parent_session_id
+    if parent_id is not None and not Session.objects.filter(id=parent_id).exists():
+        logger.warning(
+            "Skipping session %s for provider=%s: parent %s does not exist "
+            "(upstream payload rejected, or orphan subagent)",
+            payload.session.id, payload.provider.value, parent_id,
+        )
+        return None, False
 
     with transaction.atomic():
         project, created = register_project_db_only(
