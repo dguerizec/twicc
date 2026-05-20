@@ -336,15 +336,22 @@ async def put_initial_sync_item(
 ) -> bool:
     """Push a completion marker / title payload onto the initial-sync queue.
 
-    For event-loop callers (the orchestrators). The shared queue is bounded,
-    so a blocking put on a full queue must not block the loop, and the worker
-    thread doing the put must not outlive shutdown. Each attempt runs a
-    put-with-timeout off the loop (so the thread always returns within the
-    timeout); ``stop_event`` is rechecked between attempts.
+    For event-loop callers (the orchestrators). The shared queue is bounded;
+    a full queue is handled by polling ``put_nowait()`` and awaiting a short
+    sleep between attempts — entirely on the event loop, with no worker
+    thread. A blocking put offloaded to a thread (``asyncio.to_thread``) is
+    not cancellation-safe: if the awaiting coroutine is cancelled at shutdown,
+    the thread's put keeps running and can enqueue the item *afterwards* —
+    behind the drain marker ``shutdown()`` already pushed and awaited — which
+    breaks the FIFO drain proof and can interleave with a hot restart. Polling
+    keeps the whole wait inside the coroutine, so cancellation enqueues
+    nothing: ``put_nowait()`` is atomic, and a cancel can only land on the
+    ``await asyncio.sleep`` between attempts.
 
     With a ``stop_event``: returns ``True`` once the item is enqueued,
     ``False`` if ``stop_event`` fired first — the item is dropped, which is
-    safe at shutdown since nothing awaits its completion then.
+    safe at shutdown since nothing awaits its completion then. ``stop_event``
+    is rechecked before every attempt.
 
     With ``stop_event=None``: the item is never dropped — the loop retries
     until the put succeeds, then returns ``True``. Used for the drain marker
@@ -356,10 +363,10 @@ async def put_initial_sync_item(
     q = get_initial_sync_queue()
     while stop_event is None or not stop_event.is_set():
         try:
-            await asyncio.to_thread(q.put, item, True, 0.5)
+            q.put_nowait(item)
             return True
         except queue.Full:
-            continue
+            await asyncio.sleep(0.05)
     return False
 
 
