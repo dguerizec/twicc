@@ -493,14 +493,18 @@ async def _process_compute_message(msg: dict) -> None:
     state = _compute_states.get(run_id)
     if state is None:
         # No tracked state for this run_id: the run was cancelled (typically a
-        # provider hot-toggle) and its state already dropped. The metadata is
-        # still valid, so apply the write — just skip the run bookkeeping
-        # (counts, broadcasts, activity flushes) so a stale run cannot touch a
-        # live one.
+        # provider hot-toggle) and its state already dropped. Ignore the
+        # message — do NOT apply it. The metadata was computed against a
+        # possibly-outdated view of the session and could clobber fresher data
+        # written since (by a hot-restarted run, or by the watcher). The
+        # session's compute_version was never advanced by this skipped
+        # message, so a live run (or the watcher) will recompute it.
         logger.info(
-            "session_complete for an untracked compute run (run_id=%s) — "
-            "applying the write, skipping run bookkeeping", run_id,
+            "Ignoring session_complete for an untracked compute run "
+            "(run_id=%s, session_id=%s) — stale run",
+            run_id, msg.get("session_id"),
         )
+        return
 
     try:
         from twicc.providers.compute_base import BaseSessionCompute
@@ -508,11 +512,7 @@ async def _process_compute_message(msg: dict) -> None:
         await _handle_compute_done(msg["session_id"])
     except Exception as e:
         logger.error(f"Error applying session_complete: {e}", exc_info=True)
-        if state is not None:
-            state.failed_count += 1
-        return
-
-    if state is None:
+        state.failed_count += 1
         return
 
     project_id = msg.get("project_id")
