@@ -451,9 +451,16 @@ async def start_background_compute_task(ctx: ComputeContext) -> None:
         # Send stop signal to worker so it finishes and sends 'done'
         ctx.command_queue.put(None)
 
-        # Wait for the unified DB writer to drain everything for this provider
+        # Wait for the unified DB writer to drain everything for this run
         # (the worker has emitted 'done' and any pending flushes have run).
-        await done_event.wait()
+        # The Future resolves to this run's failed-session count.
+        failed_sessions = await done_future
+        if failed_sessions:
+            logger.error(
+                "Background compute for %s finished with %d session(s) that "
+                "failed to compute or apply — they will be recomputed on the "
+                "next start", provider_value, failed_sessions,
+            )
 
         # Broadcast completion (using display total — sessions only, not subagents)
         await broadcast_startup_progress(

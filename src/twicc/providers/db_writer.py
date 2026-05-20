@@ -18,12 +18,15 @@ each message carries its own ``provider``.
 
 Completion signalling: a producer pushes a sentinel *last*, after all its
 real messages. Because the queues are FIFO, draining the sentinel proves
-every preceding message of that run has been applied.
-- Initial sync: ``InitialSyncDoneMarker`` carries its own ``asyncio.Event``
-  (the queue is intra-process, the Event travels by reference).
-- Compute: the ``done`` message comes from a subprocess and cannot carry an
-  Event, so ``arm_compute_completion`` hands the orchestrator a fresh Event
-  kept in ``_compute_done_events`` and set when the ``done`` is drained.
+every preceding message of that run has been applied. The completion carries
+the run's failure count so the producer learns the run was not clean.
+- Initial sync: ``InitialSyncDoneMarker`` carries its own ``asyncio.Future``
+  (the queue is intra-process, the Future travels by reference); the consumer
+  resolves it with the count of payloads that failed to apply.
+- Compute: the ``done`` message comes from a subprocess and cannot carry a
+  Future, so ``arm_compute_completion`` hands the orchestrator a fresh Future
+  kept in ``_compute_done_events``, resolved with the failed-session count
+  when the ``done`` is drained.
 
 Import discipline: this module is never imported by the spawn subprocess.
 Django model imports are still done lazily inside functions, matching the
@@ -165,13 +168,14 @@ class UpdateProjectMetadataPayload(NamedTuple):
 class InitialSyncDoneMarker(NamedTuple):
     """Sentinel pushed last by an initial-sync producer.
 
-    Carries the ``asyncio.Event`` the consumer sets once it drains the
-    marker — i.e. once every payload of that run has been applied. The
-    producer awaits this same Event.
+    Carries an ``asyncio.Future`` the consumer resolves once it drains the
+    marker — i.e. once every payload of that run has been applied. The Future
+    resolves to the count of payloads that failed to apply, so the producer
+    (which awaits it) learns whether the run was clean.
     """
 
     provider: Provider
-    done_event: asyncio.Event
+    done_future: asyncio.Future
 
 
 class SyncSessionTitlesPayload(NamedTuple):
@@ -208,10 +212,11 @@ _consumer_stop_event: asyncio.Event | None = None
 # completion Event isolated. arm_compute_completion() mints the ids.
 _compute_run_id_seq = itertools.count(1)
 
-# run_id -> the completion Event the orchestrator awaits (set when the run's
-# 'done' message is drained). The mp.Queue cannot transport an asyncio.Event,
-# so arm_compute_completion() hands the orchestrator a fresh Event kept here.
-_compute_done_events: dict[int, asyncio.Event] = {}
+# run_id -> the completion Future the orchestrator awaits. The mp.Queue cannot
+# transport a Future, so arm_compute_completion() keeps one here and the
+# consumer resolves it (with the run's failed-session count) when it drains
+# that run's 'done' message.
+_compute_done_events: dict[int, asyncio.Future] = {}
 
 # run_id -> that run's accumulated compute state (broadcast throttling,
 # batched activity flushes, failure tally). Initial-sync payloads are
@@ -300,14 +305,15 @@ def arm_compute_completion(
     provider: Provider,
     display_session_ids: set[str] | None,
     total_display: int,
-) -> tuple[int, asyncio.Event]:
-    """Declare a compute run for ``provider``; return ``(run_id, Event)``.
+) -> tuple[int, asyncio.Future]:
+    """Declare a compute run for ``provider``; return ``(run_id, Future)``.
 
     Mints a fresh ``run_id`` and creates this run's ``_ComputeProviderState``
-    and completion ``asyncio.Event``, both keyed by ``run_id``. The worker is
+    and completion ``asyncio.Future``, both keyed by ``run_id``. The worker is
     spawned with this ``run_id`` and tags every message with it, so the
     consumer routes each message to its own run — a stale message from a
-    cancelled run can never touch a hot-restarted one.
+    cancelled run can never touch a hot-restarted one. The Future resolves to
+    the run's failed-session count when its ``done`` message is drained.
 
     Any leftover state for the same provider (a previous run whose worker was
     force-killed before emitting ``done``) is dropped here, with a warning —
@@ -328,9 +334,9 @@ def arm_compute_completion(
         display_session_ids=display_session_ids,
         total_display=total_display,
     )
-    event = asyncio.Event()
-    _compute_done_events[run_id] = event
-    return run_id, event
+    future = asyncio.get_running_loop().create_future()
+    _compute_done_events[run_id] = future
+    return run_id, future
 
 
 # =============================================================================
@@ -493,14 +499,14 @@ async def _process_compute_message(msg: dict) -> None:
 async def _finalize_compute_run(run_id: int | None, provider: Provider) -> None:
     """Drain-time finalisation when a compute run's worker is done.
 
-    Flushes the run's pending broadcasts + activities, sets its completion
-    Event, and drops its state so the next run starts clean. A 'done' for an
-    untracked ``run_id`` (a stale message from a cancelled run) is ignored —
-    it must not touch a live run's completion.
+    Flushes the run's pending broadcasts + activities, resolves its completion
+    Future with the run's failed-session count, and drops its state so the
+    next run starts clean. A 'done' for an untracked ``run_id`` (a stale
+    message from a cancelled run) is ignored — it must not touch a live run.
     """
     state = _compute_states.pop(run_id, None)
-    event = _compute_done_events.pop(run_id, None)
-    if state is None and event is None:
+    future = _compute_done_events.pop(run_id, None)
+    if state is None and future is None:
         logger.info(
             "compute 'done' for an untracked run (run_id=%s, provider=%s) — "
             "ignoring (stale message from a cancelled run)",
@@ -512,12 +518,6 @@ async def _finalize_compute_run(run_id: int | None, provider: Provider) -> None:
         f"Unified DB writer: compute 'done' for provider={provider.value} (run_id={run_id})"
     )
     if state is not None:
-        if state.failed_count:
-            logger.error(
-                "Background compute for provider=%s finished with %d session(s) "
-                "that failed to compute or apply — see the errors above for details",
-                provider.value, state.failed_count,
-            )
         for pid in state.pending_project_ids:
             try:
                 await _broadcast_project_updated(pid)
@@ -529,8 +529,10 @@ async def _finalize_compute_run(run_id: int | None, provider: Provider) -> None:
             except Exception as e:
                 logger.error(f"Error in final activity flush: {e}", exc_info=True)
 
-    if event is not None:
-        event.set()
+    # Resolve the completion Future with the run's failed-session count; the
+    # compute orchestrator (start_background_compute_task) logs the summary.
+    if future is not None and not future.done():
+        future.set_result(state.failed_count if state is not None else 0)
 
 
 async def _handle_compute_done(session_id: str) -> None:
@@ -615,20 +617,16 @@ def _flush_pending_activities(provider: Provider, pending_activity_days: dict[st
 async def _process_initial_sync_message(msg) -> None:
     """Apply one message drained from the shared initial-sync queue."""
     if isinstance(msg, InitialSyncDoneMarker):
-        # Drained after every real payload of the run (FIFO) — surface the
-        # run's failures, if any, before signalling completion. Handled
-        # outside the try below so the done Event is always set.
+        # Drained after every real payload of the run (FIFO). Resolve the
+        # marker's Future with the run's failure count so the producer learns
+        # the run was not clean. Handled outside the try below so the Future
+        # is always resolved.
         failures = _initial_sync_failures.pop(msg.provider, 0)
-        if failures:
-            logger.error(
-                "Initial sync for provider=%s finished with %d payload(s) that "
-                "failed to apply — see the errors logged above for details",
-                msg.provider.value, failures,
-            )
         logger.info(
             f"Unified DB writer: initial-sync 'done' for provider={msg.provider.value}"
         )
-        msg.done_event.set()
+        if not msg.done_future.done():
+            msg.done_future.set_result(failures)
         return
 
     if isinstance(msg, SyncSessionTitlesPayload):

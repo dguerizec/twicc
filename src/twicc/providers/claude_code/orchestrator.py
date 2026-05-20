@@ -335,15 +335,22 @@ class ClaudeCodeOrchestrator(BaseOrchestrator):
         await asyncio.shield(self._sync_thread_future)
 
         # Producer thread finished pushing — close the run with the marker.
-        # The marker carries the Event the writer sets once it has drained
-        # every payload this run produced. Pushed via to_thread because the
-        # queue is bounded now — a full queue must not block the event loop.
-        done_event = asyncio.Event()
+        # The marker carries a Future the writer resolves with the run's
+        # failure count once it has drained every payload this run produced.
+        # Pushed via to_thread because the queue is bounded — a full queue
+        # must not block the event loop.
+        done_future = loop.create_future()
         await asyncio.to_thread(
             sync_queue.put,
-            InitialSyncDoneMarker(provider=self.provider, done_event=done_event),
+            InitialSyncDoneMarker(provider=self.provider, done_future=done_future),
         )
-        await done_event.wait()
+        failed_payloads = await done_future
+        if failed_payloads:
+            logger.error(
+                "Initial sync for %s completed with %d payload(s) that failed "
+                "to apply — affected sessions will be re-synced on the next start",
+                provider_value, failed_payloads,
+            )
 
         await broadcast_startup_progress(
             "initial_sync", total_sessions, total_sessions,
