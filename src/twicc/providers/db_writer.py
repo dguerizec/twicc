@@ -224,6 +224,12 @@ _compute_done_events: dict[int, asyncio.Future] = {}
 # self-contained; the only initial-sync run state is the failure tally below.
 _compute_states: dict[int, "_ComputeProviderState"] = {}
 
+# run_id -> a Future resolved when the consumer finishes applying a
+# session_complete it has already dequeued for that run. abandon_compute_run()
+# awaits it so a provider shutdown does not reach STOPPED while a compute write
+# for the run it just abandoned is still committing.
+_inflight_compute_applies: dict[int, "asyncio.Future"] = {}
+
 # Per-provider failed-payload counter for the in-flight initial-sync run.
 # Incremented when an _apply_* raises; reported to the orchestrator via the
 # InitialSyncDoneMarker's Future and reset when that marker is drained.
@@ -377,18 +383,24 @@ def arm_compute_completion(
     return run_id, future
 
 
-def abandon_compute_run(run_id: int, provider: Provider) -> None:
-    """Drop a compute run's tracked state so its still-queued messages are ignored.
+async def abandon_compute_run(run_id: int, provider: Provider) -> None:
+    """Drop a compute run's tracked state and wait out any in-flight apply.
 
-    Called by a provider orchestrator's ``shutdown()`` once it has decided to
-    stop the compute worker. From that point every ``session_complete`` still
-    queued (or still being pushed) for this ``run_id`` hits the untracked-run
-    path in ``_process_compute_message`` and is skipped, and a late ``done`` is
-    ignored by ``_finalize_compute_run`` — a shut-down provider's partial
-    compute results must never apply after the provider has stopped, where
-    they could clobber a hot-restart's fresher state (and leave freshly synced
-    lines with ``compute_version`` already current). The run's sessions are
-    recomputed from scratch on the next start.
+    Awaited by a provider orchestrator's ``shutdown()`` once it has decided to
+    stop the compute worker. Dropping the state makes every ``session_complete``
+    still queued (or still being pushed) for this ``run_id`` hit the
+    untracked-run path in ``_process_compute_message`` and be skipped, and a
+    late ``done`` ignored by ``_finalize_compute_run`` — a shut-down provider's
+    partial compute results must never apply after the provider has stopped,
+    where they could clobber a hot-restart's fresher state (and leave freshly
+    synced lines with ``compute_version`` already current). The run's sessions
+    are recomputed from scratch on the next start.
+
+    A ``session_complete`` the consumer has *already dequeued* is past that
+    skip, so its ``apply_session_complete`` still commits; this coroutine then
+    awaits that in-flight apply (tracked in ``_inflight_compute_applies``), so
+    the provider does not reach STOPPED — and a hot restart cannot begin —
+    while a write for the abandoned run is still committing.
 
     No-op when ``run_id`` is untracked or its tracked state belongs to another
     provider — e.g. the ``ComputeContext`` default ``run_id=0`` when the worker
@@ -405,6 +417,13 @@ def abandon_compute_run(run_id: int, provider: Provider) -> None:
         "will be ignored",
         run_id, provider.value, state.completed_count, state.failed_count,
     )
+    # If the consumer already dequeued a session_complete for this run and is
+    # mid-apply, that apply (past the untracked-run skip) still commits — wait
+    # it out before returning so shutdown does not reach STOPPED first.
+    inflight = _inflight_compute_applies.get(run_id)
+    if inflight is not None and not inflight.done():
+        with suppress(Exception):
+            await inflight
 
 
 # =============================================================================
@@ -545,6 +564,12 @@ async def _process_compute_message(msg: dict) -> None:
         )
         return
 
+    # Publish this apply as in-flight so abandon_compute_run() can wait for it:
+    # once dequeued, this session_complete is past the untracked-run skip
+    # above, so a provider shutdown abandoning the run mid-apply must still
+    # wait this commit out before the provider reaches STOPPED.
+    apply_done = asyncio.get_running_loop().create_future()
+    _inflight_compute_applies[run_id] = apply_done
     try:
         from twicc.providers.compute_base import BaseSessionCompute
         await sync_to_async(BaseSessionCompute.apply_session_complete)(msg)
@@ -553,6 +578,10 @@ async def _process_compute_message(msg: dict) -> None:
         logger.error(f"Error applying session_complete: {e}", exc_info=True)
         state.failed_count += 1
         return
+    finally:
+        _inflight_compute_applies.pop(run_id, None)
+        if not apply_done.done():
+            apply_done.set_result(None)
 
     project_id = msg.get("project_id")
     if project_id:

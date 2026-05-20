@@ -264,7 +264,7 @@ class ClaudeCodeOrchestrator(BaseOrchestrator):
             # during this teardown, and not racing the next hot-start. The
             # run's sessions are recomputed on the next start.
             from twicc.providers.db_writer import abandon_compute_run
-            abandon_compute_run(self._compute_ctx.run_id, self.provider)
+            await abandon_compute_run(self._compute_ctx.run_id, self.provider)
             await stop_background_task(self._compute_ctx)
             await _cancel_task(self._compute_task, "Background compute task")
         else:
