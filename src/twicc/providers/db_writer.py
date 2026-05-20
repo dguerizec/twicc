@@ -475,6 +475,12 @@ async def _drain_one() -> bool:
     Covers the two shared producer queues (compute, initial-sync) and the
     intra-process consumer-jobs queue. Returns True if anything was processed
     this call.
+
+    Never raises an ordinary exception: a message is removed from its queue
+    before processing, and every per-message failure (deserialization, apply,
+    finalization) is caught and logged. So one bad message can neither crash a
+    steady-state consumer tick nor abort the shutdown drain — which would
+    strand the messages queued behind it.
     """
     any_processed = False
 
@@ -483,6 +489,10 @@ async def _drain_one() -> bool:
         raw = _compute_result_queue.get_nowait()
     except queue.Empty:
         pass
+    except Exception as exc:
+        # The mp.Queue is never closed, so get_nowait() should only ever raise
+        # Empty; guard anyway so an unexpected failure cannot abort the drain.
+        logger.error(f"Compute result queue read failed: {exc}", exc_info=True)
     else:
         any_processed = True
         try:
@@ -490,7 +500,10 @@ async def _drain_one() -> bool:
         except Exception:
             logger.error(f"Failed to deserialize compute message: {raw!r:.500}")
         else:
-            await _process_compute_message(msg)
+            try:
+                await _process_compute_message(msg)
+            except Exception as exc:
+                logger.error(f"Error processing compute message: {exc}", exc_info=True)
 
     # ---- Initial-sync side (queue.Queue, shared by every provider) ----
     try:
@@ -499,7 +512,10 @@ async def _drain_one() -> bool:
         pass
     else:
         any_processed = True
-        await _process_initial_sync_message(payload)
+        try:
+            await _process_initial_sync_message(payload)
+        except Exception as exc:
+            logger.error(f"Error processing initial-sync message: {exc}", exc_info=True)
 
     # ---- Consumer-side finalization jobs (intra-process) ----
     try:
@@ -552,6 +568,11 @@ async def _consumer_loop() -> None:
 
     # Final drain: producers are all stopped by the time stop is signalled, so
     # the queues only shrink — apply everything still queued before exiting.
+    # On a crashed tick, log and continue (mirroring the steady-state loop):
+    # a bad message is removed from its queue before processing, so the next
+    # pass still makes progress. A break here would strand every message
+    # queued behind the bad one. _drain_one() is written not to raise, so the
+    # except is a last-resort guard.
     drained_passes = 0
     while True:
         try:
@@ -559,7 +580,7 @@ async def _consumer_loop() -> None:
                 break
         except Exception as exc:
             logger.error(f"Unified DB writer shutdown-drain tick crashed: {exc}", exc_info=True)
-            break
+            continue
         drained_passes += 1
     if drained_passes:
         logger.info(
