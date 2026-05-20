@@ -2190,7 +2190,13 @@ class BaseSessionCompute:
         # 10. Resolve project git_root if session has git info but project doesn't
         session_git_dir = session_fields.get('git_directory') if session_fields else None
         if session_git_dir and project_id and get_project_git_root(project_id) is None:
-            ensure_project_git_root(project_id)
+            # Pass project_directory explicitly. Step 9's ensure_project_directory
+            # defers its directory-cache write to on_commit, so a bare
+            # ensure_project_git_root(project_id) would fall back to the
+            # pre-step-9 cached directory and resolve git_root from the wrong
+            # path. When project_directory is None, step 9 did not run and the
+            # cache fallback is reliable, so passing None is also correct.
+            ensure_project_git_root(project_id, project_directory)
 
         # 11. Update last_stopped_at for subagents that finished naturally
         agent_stopped = msg.get('agent_stopped')
