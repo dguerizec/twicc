@@ -255,7 +255,6 @@ def sync_project(
 
     sessions_to_sync = list(disk_session_ids)
     total_sessions = len(sessions_to_sync)
-    max_mtime = 0.0
     project_will_be_created = False
 
     logger.info(f"  Syncing project {project_id} ({total_sessions} sessions)")
@@ -277,8 +276,6 @@ def sync_project(
 
             if to_insert is not None:
                 stats["items_added"] += to_insert.actually_new_count
-                if to_insert.mtime > max_mtime:
-                    max_mtime = to_insert.mtime
 
                 sync_queue.put(UpdateSessionPayload(
                     provider=Provider.CLAUDE_CODE,
@@ -328,8 +325,6 @@ def sync_project(
 
         stats["items_added"] += to_insert.actually_new_count
         stats["sessions_created"] += 1
-        if to_insert.mtime > max_mtime:
-            max_mtime = to_insert.mtime
 
         if project is None and not project_will_be_created:
             project_will_be_created = True
@@ -405,7 +400,7 @@ def sync_project(
         provider=Provider.CLAUDE_CODE,
         project_id=project_id,
         new_sessions_count=new_sessions_count,
-        new_mtime=max_mtime,
+        recalc_mtime=True,
         new_stale=new_stale,
         recalc_total_cost=True,
         # git_root is resolved at the end of ``sync_all`` once every project
@@ -473,7 +468,7 @@ def sync_all(
                 provider=Provider.CLAUDE_CODE,
                 project_id=project.id,
                 new_sessions_count=None,
-                new_mtime=None,
+                recalc_mtime=False,
                 new_stale=should_be_stale,
                 recalc_total_cost=False,
                 resolve_git_root=False,
@@ -525,7 +520,7 @@ def sync_all(
                 provider=Provider.CLAUDE_CODE,
                 project_id=project.id,
                 new_sessions_count=None,
-                new_mtime=None,
+                recalc_mtime=False,
                 new_stale=None,
                 recalc_total_cost=False,
                 resolve_git_root=True,

@@ -126,16 +126,26 @@ class MarkSessionsStalePayload(NamedTuple):
 class UpdateProjectMetadataPayload(NamedTuple):
     """End-of-sync metadata for one project.
 
-    Each non-``None`` field is applied; ``None`` means leave it alone. Two
-    boolean flags ask the consumer to invoke heavier helpers that themselves
-    write to DB (``update_project_total_cost``, ``ensure_project_git_root``).
-    Bundled so the project's end-of-sync writes commit in one transaction.
+    Each non-``None`` field is applied; ``None`` means leave it alone. Three
+    boolean flags ask the consumer to do work that reads back from the DB:
+    ``recalc_mtime`` recomputes ``Project.mtime`` from the project's sessions,
+    ``recalc_total_cost`` and ``resolve_git_root`` invoke heavier helpers that
+    themselves write to DB. Bundled so the project's end-of-sync writes commit
+    in one transaction.
+
+    ``recalc_mtime`` exists because ``mtime`` cannot be computed correctly in
+    the producer: the producer only sees the sessions it changed (so an
+    unchanged project would regress to ``0``), and reading ``Max(mtime)`` from
+    the DB there races the consumer, which has not yet applied this run's
+    session payloads. The consumer recomputes it instead — by the time it
+    handles this payload, FIFO ordering guarantees every session payload this
+    provider pushed for the project has already landed.
     """
 
     provider: Provider
     project_id: str
     new_sessions_count: int | None
-    new_mtime: float | None
+    recalc_mtime: bool
     new_stale: bool | None
     recalc_total_cost: bool
     resolve_git_root: bool
@@ -626,12 +636,14 @@ def _apply_mark_sessions_stale_payload(payload: MarkSessionsStalePayload) -> Non
 
 def _apply_update_project_metadata_payload(payload: UpdateProjectMetadataPayload) -> None:
     """Apply end-of-sync metadata updates for one project, atomically."""
-    from twicc.core.models import Project
+    from django.db.models import Max
+
+    from twicc.core.models import Project, Session, SessionType
     from twicc.projects import ensure_project_git_root, update_project_total_cost
 
     with transaction.atomic():
         if (payload.new_sessions_count is not None
-                or payload.new_mtime is not None
+                or payload.recalc_mtime
                 or payload.new_stale is not None):
             try:
                 project = Project.objects.get(id=payload.project_id)
@@ -645,8 +657,13 @@ def _apply_update_project_metadata_payload(payload: UpdateProjectMetadataPayload
                 if payload.new_sessions_count is not None:
                     project.sessions_count = payload.new_sessions_count
                     update_fields.append("sessions_count")
-                if payload.new_mtime is not None:
-                    project.mtime = payload.new_mtime
+                if payload.recalc_mtime:
+                    # Recompute from the DB now that every session payload
+                    # this provider pushed for the project has landed (FIFO).
+                    max_mtime = Session.objects.filter(
+                        project_id=payload.project_id, type=SessionType.SESSION,
+                    ).aggregate(value=Max("mtime"))["value"]
+                    project.mtime = max_mtime or 0
                     update_fields.append("mtime")
                 if payload.new_stale is not None:
                     project.stale = payload.new_stale

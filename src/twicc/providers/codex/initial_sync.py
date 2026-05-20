@@ -20,7 +20,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
 
 import orjson
-from django.db.models import Max
 
 from twicc.core.enums import Provider
 from twicc.core.models import Project, Session, SessionType
@@ -388,28 +387,25 @@ def sync_project(
         )
         return stats
 
-    # ``sessions_count`` and ``mtime`` are cross-provider — recomputed
-    # from every session of the project, not just the Codex ones we just
-    # synced, so a project shared with Claude doesn't lose values the
-    # other provider already wrote. Read-only here; the actual UPDATE
-    # goes through the consumer.
+    # ``sessions_count`` is cross-provider — counted over every session of
+    # the project, not just the Codex ones we just synced, so a project
+    # shared with Claude doesn't lose the value the other provider wrote.
+    # Read-only here; the actual UPDATE goes through the consumer. ``mtime``
+    # is recomputed by the consumer itself (recalc_mtime) because reading it
+    # here would race the consumer, which has not yet applied this run's
+    # session payloads.
     new_sessions_count = Session.objects.filter(
         project_id=project_id,
         type=SessionType.SESSION,
         created_at__isnull=False,
         user_message_count__gt=0,
     ).count()
-    new_mtime = (
-        Session.objects.filter(project_id=project_id)
-        .aggregate(max_mtime=Max("mtime"))["max_mtime"]
-        or 0
-    )
 
     sync_queue.put(UpdateProjectMetadataPayload(
         provider=Provider.CODEX,
         project_id=project_id,
         new_sessions_count=new_sessions_count,
-        new_mtime=new_mtime,
+        recalc_mtime=True,
         # Codex sync_project leaves ``project.stale`` alone; it is handled
         # by Claude Code's sync_all (which iterates every Project and
         # recomputes stale from disk).
