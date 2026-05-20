@@ -40,6 +40,7 @@ import itertools
 import logging
 import multiprocessing
 import queue
+import threading
 from collections import defaultdict
 from contextlib import suppress
 from dataclasses import dataclass, field
@@ -293,6 +294,29 @@ def get_initial_sync_queue() -> queue.Queue:
     """Return the shared initial-sync queue (for an orchestrator's producer)."""
     assert _initial_sync_queue is not None, "unified DB writer not started"
     return _initial_sync_queue
+
+
+async def put_initial_sync_item(item: object, stop_event: threading.Event) -> bool:
+    """Push a completion marker / title payload onto the initial-sync queue.
+
+    For event-loop callers (the orchestrators). The shared queue is bounded,
+    so a blocking put on a full queue must not block the loop, and the worker
+    thread doing the put must not outlive shutdown. Each attempt runs a
+    put-with-timeout off the loop (so the thread always returns within the
+    timeout); ``stop_event`` is rechecked between attempts.
+
+    Returns ``True`` once the item is enqueued, ``False`` if ``stop_event``
+    fired first — the item is dropped, which is safe at shutdown since nothing
+    awaits its completion then.
+    """
+    q = get_initial_sync_queue()
+    while not stop_event.is_set():
+        try:
+            await asyncio.to_thread(q.put, item, True, 0.5)
+            return True
+        except queue.Full:
+            continue
+    return False
 
 
 def get_compute_result_queue():

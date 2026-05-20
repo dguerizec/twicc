@@ -256,7 +256,11 @@ class CodexOrchestrator(BaseOrchestrator):
         no lost writes. The zombie-thread / overlap concern is handled by
         ``shutdown()`` blocking on ``_sync_thread_future``.
         """
-        from twicc.providers.db_writer import InitialSyncDoneMarker, get_initial_sync_queue
+        from twicc.providers.db_writer import (
+            InitialSyncDoneMarker,
+            get_initial_sync_queue,
+            put_initial_sync_item,
+        )
 
         loop = asyncio.get_running_loop()
         provider_value = self.provider.value
@@ -306,10 +310,11 @@ class CodexOrchestrator(BaseOrchestrator):
         # Pushed via to_thread because the queue is bounded — a full queue
         # must not block the event loop.
         done_future = loop.create_future()
-        await asyncio.to_thread(
-            sync_queue.put,
+        if not await put_initial_sync_item(
             InitialSyncDoneMarker(provider=self.provider, done_future=done_future),
-        )
+            self._sync_stop_event,
+        ):
+            return  # shutdown signalled — marker dropped, completion is moot
         failed_payloads = await done_future
         if failed_payloads:
             logger.error(
@@ -346,7 +351,7 @@ class CodexOrchestrator(BaseOrchestrator):
         from twicc.providers.codex.titles import bulk_sync_titles_from_codex
         from twicc.providers.db_writer import (
             SyncSessionTitlesPayload,
-            get_initial_sync_queue,
+            put_initial_sync_item,
         )
 
         titles = await bulk_sync_titles_from_codex()
@@ -355,14 +360,13 @@ class CodexOrchestrator(BaseOrchestrator):
             return
 
         done_event = asyncio.Event()
-        # Pushed via to_thread: the queue is bounded, a full queue would
-        # otherwise block the event loop.
-        await asyncio.to_thread(
-            get_initial_sync_queue().put,
+        if not await put_initial_sync_item(
             SyncSessionTitlesPayload(
                 provider=self.provider, titles=titles, done_event=done_event,
             ),
-        )
+            self._sync_stop_event,
+        ):
+            return  # shutdown signalled — the title payload was dropped
         await done_event.wait()
         logger.info(
             "Codex title sync at boot: %d title(s) routed through the unified DB writer",

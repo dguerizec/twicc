@@ -290,7 +290,11 @@ class ClaudeCodeOrchestrator(BaseOrchestrator):
         no lost writes. The zombie-thread / overlap concern is handled by
         ``shutdown()`` blocking on ``_sync_thread_future``.
         """
-        from twicc.providers.db_writer import InitialSyncDoneMarker, get_initial_sync_queue
+        from twicc.providers.db_writer import (
+            InitialSyncDoneMarker,
+            get_initial_sync_queue,
+            put_initial_sync_item,
+        )
 
         loop = asyncio.get_running_loop()
         provider_value = self.provider.value
@@ -340,10 +344,11 @@ class ClaudeCodeOrchestrator(BaseOrchestrator):
         # Pushed via to_thread because the queue is bounded — a full queue
         # must not block the event loop.
         done_future = loop.create_future()
-        await asyncio.to_thread(
-            sync_queue.put,
+        if not await put_initial_sync_item(
             InitialSyncDoneMarker(provider=self.provider, done_future=done_future),
-        )
+            self._sync_stop_event,
+        ):
+            return  # shutdown signalled — marker dropped, completion is moot
         failed_payloads = await done_future
         if failed_payloads:
             logger.error(
