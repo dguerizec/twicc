@@ -225,9 +225,14 @@ _compute_done_events: dict[int, asyncio.Future] = {}
 _compute_states: dict[int, "_ComputeProviderState"] = {}
 
 # Per-provider failed-payload counter for the in-flight initial-sync run.
-# Incremented when an _apply_* raises; surfaced as a single ERROR summary and
-# reset when that provider's InitialSyncDoneMarker is drained.
+# Incremented when an _apply_* raises; reported to the orchestrator via the
+# InitialSyncDoneMarker's Future and reset when that marker is drained.
 _initial_sync_failures: dict[Provider, int] = defaultdict(int)
+
+# Per-provider count of subagents skipped because their parent row was absent
+# (orphan-parent guard). A deliberate skip, distinct from a failure, but
+# surfaced in the run summary so it is never silently lost.
+_initial_sync_orphan_skips: dict[Provider, int] = defaultdict(int)
 
 
 @dataclass
@@ -675,9 +680,16 @@ async def _process_initial_sync_message(msg) -> None:
         # the run was not clean. Handled outside the try below so the Future
         # is always resolved.
         failures = _initial_sync_failures.pop(msg.provider, 0)
+        orphan_skips = _initial_sync_orphan_skips.pop(msg.provider, 0)
         logger.info(
             f"Unified DB writer: initial-sync 'done' for provider={msg.provider.value}"
         )
+        if orphan_skips:
+            logger.warning(
+                "Initial sync for provider=%s: %d subagent(s) skipped — parent "
+                "row absent (orphan, or an upstream payload failed)",
+                msg.provider.value, orphan_skips,
+            )
         if not msg.done_future.done():
             msg.done_future.set_result(failures)
         return
@@ -697,15 +709,18 @@ async def _process_initial_sync_message(msg) -> None:
     try:
         if isinstance(msg, CreateSessionPayload):
             project, created = await sync_to_async(_apply_create_session_payload)(msg)
-            # Post-commit side effects — kept out of transaction.atomic so a
-            # project is never announced before its commit (or despite a
-            # rollback, finding #7). ``project`` is None when the payload was
-            # skipped (orphan subagent — finding #3).
             if project is not None:
+                # Post-commit side effects, kept out of transaction.atomic so
+                # a project is never announced before it commits.
                 if created:
                     await _broadcast_project_added(project)
                 if project.directory:
                     await auto_add_project_to_workspaces(project.id, project.directory)
+            else:
+                # _apply_create_session_payload skipped an orphan subagent
+                # (parent row absent). A deliberate skip, not an apply error —
+                # counted separately, but still surfaced in the run summary.
+                _initial_sync_orphan_skips[msg.provider] += 1
         elif isinstance(msg, UpdateSessionPayload):
             await sync_to_async(_apply_update_session_payload)(msg)
         elif isinstance(msg, MarkSessionsStalePayload):
