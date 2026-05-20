@@ -901,20 +901,56 @@ def _apply_update_session_payload(payload: UpdateSessionPayload) -> None:
         payload.session.save(update_fields=update_fields)
 
 
+def _compute_project_mtime(project_id: str) -> float:
+    """Max ``mtime`` over a project's visible, non-stale SESSION rows (0 if none).
+
+    Shared by ``recalc_mtime`` in :func:`_apply_update_project_metadata_payload`
+    and the per-project refresh in :func:`_apply_mark_sessions_stale_payload`.
+    Same visible-session filter as ``update_project_metadata()``, plus
+    ``stale=False`` so a session whose JSONL is gone from disk does not keep
+    the project's mtime up.
+    """
+    from django.db.models import Max
+
+    from twicc.core.models import Session, SessionType
+
+    return Session.objects.filter(
+        project_id=project_id,
+        type=SessionType.SESSION,
+        created_at__isnull=False,
+        user_message_count__gt=0,
+        stale=False,
+    ).aggregate(value=Max("mtime"))["value"] or 0
+
+
 def _apply_mark_sessions_stale_payload(payload: MarkSessionsStalePayload) -> None:
-    """Mark a batch of sessions stale via a single bulk UPDATE."""
-    from twicc.core.models import Session
+    """Mark a batch of sessions stale, then refresh their projects' mtime.
+
+    Marking sessions stale removes them from the project-mtime aggregate
+    (:func:`_compute_project_mtime` excludes ``stale=True``), so a session
+    whose file is gone from disk no longer keeps its project's ``mtime`` — and
+    its sort position — high. Self-contained on purpose: every producer that
+    marks sessions stale gets the refresh without enqueueing a follow-up
+    ``UpdateProjectMetadataPayload`` of its own.
+    """
+    from twicc.core.models import Project, Session
 
     if not payload.session_ids:
         return
     with transaction.atomic():
+        affected_project_ids = set(
+            Session.objects.filter(id__in=payload.session_ids)
+            .values_list("project_id", flat=True)
+        )
         Session.objects.filter(id__in=payload.session_ids, stale=False).update(stale=True)
+        for project_id in affected_project_ids:
+            Project.objects.filter(id=project_id).update(
+                mtime=_compute_project_mtime(project_id)
+            )
 
 
 def _apply_update_project_metadata_payload(payload: UpdateProjectMetadataPayload) -> None:
     """Apply end-of-sync metadata updates for one project, atomically."""
-    from django.db.models import Max
-
     from twicc.core.models import Project, Session, SessionType
     from twicc.projects import ensure_project_git_root, update_project_total_cost
 
@@ -947,19 +983,7 @@ def _apply_update_project_metadata_payload(payload: UpdateProjectMetadataPayload
                 if payload.recalc_mtime:
                     # Recompute from the DB now that every session payload
                     # this provider pushed for the project has landed (FIFO).
-                    # Same visible-session filter as recalc_sessions_count
-                    # above (and update_project_metadata()), plus stale=False:
-                    # a session whose JSONL is gone from disk — just marked
-                    # stale by the preceding MarkSessionsStalePayload — must
-                    # not keep pulling the project's mtime up.
-                    max_mtime = Session.objects.filter(
-                        project_id=payload.project_id,
-                        type=SessionType.SESSION,
-                        created_at__isnull=False,
-                        user_message_count__gt=0,
-                        stale=False,
-                    ).aggregate(value=Max("mtime"))["value"]
-                    project.mtime = max_mtime or 0
+                    project.mtime = _compute_project_mtime(payload.project_id)
                     update_fields.append("mtime")
                 if payload.new_stale is not None:
                     project.stale = payload.new_stale
