@@ -188,6 +188,14 @@ class OrchestratorRegistry:
         self._shutdown_event: asyncio.Event | None = None
         self._search_index_ready: asyncio.Event | None = None
 
+        # In-flight fire-and-forget hot-toggle tasks (finish_start /
+        # finish_shutdown). Tracked so shutdown_all() can await them before
+        # the caller stops the unified DB writer: a hot-toggled provider's
+        # producer (initial-sync thread / compute worker) is alive until its
+        # finish_shutdown completes, and the writer must outlive every
+        # producer. Each task removes itself via a done-callback.
+        self._inflight_hot_toggle_tasks: set[asyncio.Task[None]] = set()
+
     def get(self, provider: Provider) -> BaseOrchestrator:
         """Return the orchestrator for ``provider``."""
         return self._orchestrators[provider]
@@ -375,6 +383,7 @@ class OrchestratorRegistry:
             self.finish_start(provider),
             context=self._provider_context(provider),
         )
+        self._track_hot_toggle_task(task)
         task.add_done_callback(self._log_failure_done_callback(provider, "start"))
         if trigger_search_reindex:
             def _kick_on_success(t: asyncio.Task[None]) -> None:
@@ -454,6 +463,7 @@ class OrchestratorRegistry:
             self.finish_shutdown(provider),
             context=self._provider_context(provider),
         )
+        self._track_hot_toggle_task(task)
         task.add_done_callback(self._log_failure_done_callback(provider, "shut down cleanly"))
         return task
 
@@ -467,6 +477,18 @@ class OrchestratorRegistry:
         """
         await self.begin_shutdown(provider)
         await self.finish_shutdown(provider)
+
+    def _track_hot_toggle_task(self, task: asyncio.Task[None]) -> None:
+        """Register a fire-and-forget hot-toggle task so :meth:`shutdown_all`
+        can await it before the caller stops the unified DB writer.
+
+        A hot-toggled provider's producer (initial-sync thread / compute
+        worker) is alive until its ``finish_start`` / ``finish_shutdown`` task
+        completes; the writer must outlive every producer. The task removes
+        itself from the set on completion.
+        """
+        self._inflight_hot_toggle_tasks.add(task)
+        task.add_done_callback(self._inflight_hot_toggle_tasks.discard)
 
     @staticmethod
     def _log_failure_done_callback(provider: Provider, action: str):
@@ -611,6 +633,11 @@ class OrchestratorRegistry:
     async def shutdown_all(self) -> None:
         """Stop every enabled provider's tasks in parallel.
 
+        First awaits any in-flight fire-and-forget hot-toggle task
+        (``finish_start`` / ``finish_shutdown``) — see the body — so a
+        provider mid hot-toggle is not missed by the per-enabled teardown
+        below while its producer is still alive.
+
         Filters on the **currently enabled** providers (i.e. the present
         value of :func:`get_enabled_providers`). Under normal operation this
         is the right set: a provider's ``start()`` was either invoked by
@@ -631,6 +658,19 @@ class OrchestratorRegistry:
         processes, ...). ``return_exceptions=True`` ensures a single
         failing provider doesn't leave the others' tasks dangling.
         """
+        # A hot-toggled provider is brought up / torn down by a fire-and-forget
+        # finish_start / finish_shutdown task and may not be in the current
+        # enabled set, so the per-enabled teardown below would miss it — yet
+        # its producer (initial-sync thread / compute worker) is alive until
+        # that task completes, and the caller stops the unified DB writer
+        # right after this returns. Await the in-flight ones first.
+        inflight = list(self._inflight_hot_toggle_tasks)
+        if inflight:
+            logger.info(
+                "shutdown_all: awaiting %d in-flight hot-toggle task(s)", len(inflight),
+            )
+            await asyncio.gather(*inflight, return_exceptions=True)
+
         enabled = get_enabled_providers()
         if not enabled:
             return
