@@ -48,14 +48,19 @@ def check_file_has_content(file_path: Path) -> bool:
 
     This function performs no database operations and is used to determine
     if a session should be created before saving it.
-    """
-    if not file_path.exists():
-        return False
 
-    with open(file_path, "r", encoding="utf-8") as f:
-        for line in f:
-            if line.strip():
-                return True
+    EAFP, not LBYL: the file is opened directly and any ``OSError`` (most
+    often ``FileNotFoundError`` from the file vanishing between a scan and
+    this call) is treated as "no content". A pre-flight ``exists()`` check
+    would only reintroduce a TOCTOU race.
+    """
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            for line in f:
+                if line.strip():
+                    return True
+    except OSError:
+        return False
     return False
 
 
@@ -74,10 +79,14 @@ def read_session_items_from_file(
     Returns ``None`` when there is nothing to do (file missing, unchanged
     since last sync).
     """
-    if not file_path.exists():
+    # EAFP, not LBYL: stat()/open() are attempted directly and any OSError
+    # (typically FileNotFoundError from the file vanishing between a scan
+    # and this call) returns None — there is nothing to sync. A pre-flight
+    # exists() check would only reintroduce a TOCTOU race.
+    try:
+        stat = file_path.stat()
+    except OSError:
         return None
-
-    stat = file_path.stat()
     file_mtime = stat.st_mtime
 
     # If mtime hasn't changed and file hasn't grown beyond last_offset, nothing to do.
@@ -86,10 +95,13 @@ def read_session_items_from_file(
     if session.mtime == file_mtime and session.last_offset >= stat.st_size:
         return None
 
-    with open(file_path, "r", encoding="utf-8") as f:
-        f.seek(session.last_offset)
-        new_content = f.read()
-        last_offset = f.tell()
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            f.seek(session.last_offset)
+            new_content = f.read()
+            last_offset = f.tell()
+    except OSError:
+        return None
 
     if not new_content:
         # File was touched but no new content — caller still needs to persist
