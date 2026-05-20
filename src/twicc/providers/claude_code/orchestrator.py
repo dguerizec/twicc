@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import queue
 import threading
 
 from asgiref.sync import sync_to_async
@@ -28,8 +29,10 @@ from twicc.core.enums import Provider
 from twicc.orchestrator import BaseOrchestrator
 from twicc.providers.background_task import (
     ComputeContext,
+    register_initial_sync_entry,
     start_background_compute_task,
     stop_background_task,
+    unregister_initial_sync_entry,
 )
 from twicc.providers.claude_code.agent import get_claude_code_agent_manager
 from twicc.providers.claude_code.agent.original_file_cache import (
@@ -265,7 +268,15 @@ class ClaudeCodeOrchestrator(BaseOrchestrator):
     # ------------------------------------------------------------------
 
     async def _initial_sync_task(self) -> None:
-        """Run sync_all() in a thread with progress broadcasting."""
+        """Run sync_all() in a thread with progress broadcasting.
+
+        The producer thread no longer writes to DB directly: it pushes
+        initial-sync payloads onto ``sync_queue``, which is drained by the
+        cross-provider unified consumer in :mod:`background_task` (one
+        serialised coroutine, one writer for every provider).
+        """
+        from twicc.sync_helpers import InitialSyncDoneMarker
+
         loop = asyncio.get_running_loop()
         provider_value = self.provider.value
 
@@ -287,12 +298,28 @@ class ClaudeCodeOrchestrator(BaseOrchestrator):
                 loop,
             )
 
-        logger.info("Starting data synchronization...")
-        await asyncio.to_thread(
-            sync_all,
-            on_session_progress=on_session_progress,
-            stop_event=self._sync_stop_event,
+        sync_queue: queue.Queue = queue.Queue()
+        worker_done_event = asyncio.Event()
+        register_initial_sync_entry(
+            provider=self.provider,
+            sync_queue=sync_queue,
+            worker_done_event=worker_done_event,
         )
+
+        logger.info("Starting data synchronization...")
+        try:
+            await asyncio.to_thread(
+                sync_all,
+                sync_queue,
+                on_session_progress=on_session_progress,
+                stop_event=self._sync_stop_event,
+            )
+            # Signal end-of-pushes; the consumer finalises this provider's
+            # entry after draining everything it had queued.
+            sync_queue.put(InitialSyncDoneMarker(provider=self.provider))
+            await worker_done_event.wait()
+        finally:
+            unregister_initial_sync_entry(self.provider)
 
         await broadcast_startup_progress(
             "initial_sync", total_sessions, total_sessions,
