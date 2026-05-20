@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 #
 # These NamedTuples are pushed by per-provider initial-sync producers (running
 # in their ``asyncio.to_thread`` worker) onto a ``queue.Queue``, then drained
-# by the cross-provider unified consumer in ``background_task.py``. They
+# by the cross-provider unified consumer in ``background_compute_task.py``. They
 # describe a self-contained unit of DB work the producer has prepared but
 # intentionally not executed yet, so all writes happen in a single serialised
 # coroutine and never race with another provider's writes.

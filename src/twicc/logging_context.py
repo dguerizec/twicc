@@ -3,7 +3,7 @@ Per-task provider tagging for log records.
 
 The TwiCC backend runs code from several providers concurrently (Claude
 Code, Codex, ...). Most of the long-lived modules under
-``twicc.providers.`` (background_task, sessions_watcher, compute_base)
+``twicc.providers.`` (background_compute_task, sessions_watcher, compute_base)
 are provider-agnostic by design, so their logger names alone do not say
 which provider a given log line belongs to.
 

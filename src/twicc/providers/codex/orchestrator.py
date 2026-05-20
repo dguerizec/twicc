@@ -23,7 +23,7 @@ from django.conf import settings
 from twicc.core.enums import Provider
 from twicc.core.models import Session, SessionType
 from twicc.orchestrator import BaseOrchestrator
-from twicc.providers.background_task import (
+from twicc.providers.background_compute_task import (
     ComputeContext,
     register_initial_sync_entry,
     start_background_compute_task,
@@ -239,7 +239,7 @@ class CodexOrchestrator(BaseOrchestrator):
 
         The producer thread no longer writes to DB directly: it pushes
         initial-sync payloads onto ``sync_queue``, drained by the
-        cross-provider unified consumer in :mod:`background_task`.
+        cross-provider unified consumer in :mod:`background_compute_task`.
         """
         from twicc.sync_helpers import InitialSyncDoneMarker
 

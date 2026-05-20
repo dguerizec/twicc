@@ -750,7 +750,7 @@ def unregister_initial_sync_entry(provider: Provider) -> None:
 async def _process_initial_sync_message(entry: _InitialSyncEntry, msg) -> None:
     """Apply a single message drained from an initial-sync queue."""
     # Lazy imports so the spawn worker does not pull in Django models at
-    # ``background_task.py`` import time (see module-level note).
+    # ``background_compute_task.py`` import time (see module-level note).
     from twicc.sync_helpers import (
         CreateSessionPayload,
         InitialSyncDoneMarker,
@@ -789,7 +789,7 @@ async def _process_initial_sync_message(entry: _InitialSyncEntry, msg) -> None:
 def _apply_create_session_payload(payload) -> None:
     """Persist a new session (and project if missing) plus its items, in one transaction."""
     # Lazy imports so the spawn worker does not pull in Django models at
-    # ``background_task.py`` import time.
+    # ``background_compute_task.py`` import time.
     from twicc.core.models import SessionItem
     from twicc.projects import register_project_sync
 
@@ -828,7 +828,7 @@ def _apply_create_session_payload(payload) -> None:
 def _apply_update_session_payload(payload) -> None:
     """Append items to an existing session and update its tracking fields, in one transaction."""
     # Lazy imports so the spawn worker does not pull in Django models at
-    # ``background_task.py`` import time.
+    # ``background_compute_task.py`` import time.
     from twicc.core.models import SessionItem
 
     with transaction.atomic():
@@ -857,7 +857,7 @@ def _apply_update_session_payload(payload) -> None:
 def _apply_mark_sessions_stale_payload(payload) -> None:
     """Mark a batch of sessions as stale via a single bulk UPDATE."""
     # Lazy imports so the spawn worker does not pull in Django models at
-    # ``background_task.py`` import time.
+    # ``background_compute_task.py`` import time.
     from twicc.core.models import Session
 
     if not payload.session_ids:
@@ -877,7 +877,7 @@ def _apply_update_project_metadata_payload(payload) -> None:
     block so the entire project's end-of-sync writes share one fsync.
     """
     # Lazy imports so the spawn worker does not pull in Django models at
-    # ``background_task.py`` import time.
+    # ``background_compute_task.py`` import time.
     from twicc.core.models import Project
     from twicc.projects import ensure_project_git_root, update_project_total_cost
 
