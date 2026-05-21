@@ -1143,6 +1143,7 @@ def _apply_resolve_git_roots_payload(payload: ResolveProjectGitRootsPayload) -> 
     only when the resolved root actually changes.
     """
     from twicc.core.models import Project
+    from twicc.projects import ensure_project_git_root
 
     for project in Project.objects.filter(directory__isnull=False, stale=False):
         ensure_project_git_root(project.id, project.directory)
