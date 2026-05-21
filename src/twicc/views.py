@@ -443,6 +443,35 @@ def project_sessions(request, project_id):
     return JsonResponse(_get_sessions_page(project_id, before_mtime))
 
 
+def _resolve_session_or_404(session_id, project_id, parent_session_id):
+    """Fetch the session for a session/subagent route, or raise Http404.
+
+    Subagent route (``parent_session_id`` is set): the subagent is keyed by
+    its globally-unique id and is NOT scoped by the URL's ``project_id`` --
+    that is the *parent's* project, and a subagent may live in a different
+    project than its parent (a Codex subagent can run from another cwd).
+    The parent link is validated instead.
+
+    Session route (``parent_session_id`` is None): the session must belong
+    to the named project and must not be a subagent -- subagents are only
+    reachable through the subagent route.
+    """
+    try:
+        if parent_session_id is not None:
+            session = Session.objects.get(id=session_id)
+        else:
+            session = Session.objects.get(id=session_id, project_id=project_id)
+    except Session.DoesNotExist:
+        raise Http404("Session not found")
+
+    if parent_session_id is not None:
+        if session.parent_session_id != parent_session_id:
+            raise Http404("Subagent not found for this parent session")
+    elif session.parent_session_id is not None:
+        raise Http404("Session not found")
+    return session
+
+
 def session_detail(request, project_id, session_id, parent_session_id=None):
     """GET/PATCH /api/projects/<id>/sessions/<session_id>/ - Detail or rename session.
 
@@ -458,20 +487,7 @@ def session_detail(request, project_id, session_id, parent_session_id=None):
         - Max 200 characters
         - Writes custom-title entry to JSONL file (deferred if process is busy)
     """
-    try:
-        session = Session.objects.get(id=session_id, project_id=project_id)
-    except Session.DoesNotExist:
-        raise Http404("Session not found")
-
-    # Validate parent_session_id
-    if parent_session_id is not None:
-        # Subagent route: validate parent matches
-        if session.parent_session_id != parent_session_id:
-            raise Http404("Subagent not found for this parent session")
-    else:
-        # Session route: reject subagents (they must be accessed via subagent route)
-        if session.parent_session_id is not None:
-            raise Http404("Session not found")
+    session = _resolve_session_or_404(session_id, project_id, parent_session_id)
 
     if request.method == "PATCH":
         # Reject subagents (cannot be modified)
@@ -715,20 +731,7 @@ def session_items(request, project_id, session_id, parent_session_id=None):
         ?range=:10              -> all lines up to 10
         ?range=0:10&range=20:30&range=50:  -> multiple ranges combined
     """
-    try:
-        session = Session.objects.get(id=session_id, project_id=project_id)
-    except Session.DoesNotExist:
-        raise Http404("Session not found")
-
-    # Validate parent_session_id
-    if parent_session_id is not None:
-        # Subagent route: validate parent matches
-        if session.parent_session_id != parent_session_id:
-            raise Http404("Subagent not found for this parent session")
-    else:
-        # Session route: reject subagents (they must be accessed via subagent route)
-        if session.parent_session_id is not None:
-            raise Http404("Session not found")
+    session = _resolve_session_or_404(session_id, project_id, parent_session_id)
 
     # Filter by line_num ranges (required — refusing to serve the whole session).
     ranges = request.GET.getlist("range")
@@ -789,20 +792,7 @@ def session_items_metadata(request, project_id, session_id, parent_session_id=No
     Returns all items with metadata fields but WITHOUT content.
     Used for initial session load to build the visual items list.
     """
-    try:
-        session = Session.objects.get(id=session_id, project_id=project_id)
-    except Session.DoesNotExist:
-        raise Http404("Session not found")
-
-    # Validate parent_session_id
-    if parent_session_id is not None:
-        # Subagent route: validate parent matches
-        if session.parent_session_id != parent_session_id:
-            raise Http404("Subagent not found for this parent session")
-    else:
-        # Session route: reject subagents (they must be accessed via subagent route)
-        if session.parent_session_id is not None:
-            raise Http404("Session not found")
+    session = _resolve_session_or_404(session_id, project_id, parent_session_id)
 
     items = session.items.all().defer('content')  # Already ordered by line_num (see Meta.ordering)
     data = [serialize_session_item_metadata(item) for item in items]
@@ -818,20 +808,7 @@ def tool_results(request, project_id, session_id, line_num, tool_id, parent_sess
     Returns the tool_result content(s) for a specific tool_use.
     Uses ToolResultLink to find related tool_result items.
     """
-    try:
-        session = Session.objects.get(id=session_id, project_id=project_id)
-    except Session.DoesNotExist:
-        raise Http404("Session not found")
-
-    # Validate parent_session_id
-    if parent_session_id is not None:
-        # Subagent route: validate parent matches
-        if session.parent_session_id != parent_session_id:
-            raise Http404("Subagent not found for this parent session")
-    else:
-        # Session route: reject subagents (they must be accessed via subagent route)
-        if session.parent_session_id is not None:
-            raise Http404("Session not found")
+    session = _resolve_session_or_404(session_id, project_id, parent_session_id)
 
     link_lines = ToolResultLink.objects.filter(
         session=session,
