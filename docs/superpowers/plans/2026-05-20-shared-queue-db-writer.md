@@ -1,5 +1,27 @@
 # Shared-Queue DB Writer Implementation Plan
 
+> ⚠️ **HISTORICAL — OUT OF DATE.** Do not read the plan below as a description
+> of the current code.
+>
+> This is the *implementation plan* as written on **2026-05-20**, before any
+> code existed. The feature was built from it and then **hardened through 16
+> rounds of review-driven fixes (57 commits on `feature/centralize-db-writes`)**.
+> The shipped code **diverged from this plan** on several load-bearing points —
+> for example:
+>
+> - initial-sync completion is signalled by an **`asyncio.Future`** carrying
+>   the run's failure count, not a bare `asyncio.Event`;
+> - compute-run state and completion are keyed by a per-run **`run_id`**, not
+>   by provider (the planned `dict[Provider, Event]`);
+> - a compute run interrupted by a provider shutdown is finalized through a
+>   **consumer-side path** (`abandon_compute_run` → `_AbandonComputeRunJob` →
+>   `_finalize_abandoned_run`) that did not exist at planning time.
+>
+> The plan body below is **kept verbatim, as a historical record** of the
+> design intent; it is *not* maintained. For the **accurate, as-built
+> description of the whole feature**, read the **"Appendix — As-built design"**
+> section appended at the end of this file.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace the per-provider register/unregister registry of the unified DB consumer with two process-wide shared queues drained by a single permanent consumer, extracted into its own `db_writer.py`.
@@ -1228,3 +1250,249 @@ EOF
 - **`_compute_done_events` / `_compute_states` are keyed by provider with no run-id.** Correct only while runs never overlap. The blocking `shutdown()` is what guarantees that — if the `arm_compute_completion` warning ever fires in logs, a lifecycle assumption broke.
 - **`asyncio.shield` in `shutdown()`**: shielding the thread future means a second cancel of `shutdown()` itself won't abandon the wait. If `sync_all` ignored `stop_event` forever the shutdown would hang — acceptable, because `sync_all` checks `stop_event` between every project and every session, so the wait is bounded.
 - **No tests:** this project ships without a test suite (per CLAUDE.md). Verification is py_compile + the import smoke test + manual restart by the user. Do not add a test scaffold.
+
+---
+
+## Appendix — As-built design (2026-05-21)
+
+> Added after the feature was completed, to resolve the only finding of the
+> final code review: *the plan above is stale*. This appendix describes the
+> centralisation **as it was actually shipped** on `feature/centralize-db-writes`
+> — the net result of the initial refonte plus 16 rounds of review-driven
+> hardening (the authoritative round-by-round record is `git log main..HEAD`).
+> It supersedes the plan body wherever the two disagree. It is written for a
+> reader who needs to understand **how the code works**, not the history of how
+> it got there.
+
+### The problem
+
+TwiCC runs on **SQLite in WAL mode**. WAL allows many concurrent readers but
+**exactly one writer**. At boot, two providers (Claude Code and Codex) each run
+two write-heavy jobs:
+
+1. **Initial sync** — scan the provider's data directory and bulk-insert raw
+   `Session` / `SessionItem` rows (thousands of rows at boot). Producer: one
+   thread per provider (`asyncio.to_thread`).
+2. **Background compute** — compute per-session metadata (`kind`,
+   `display_level`, costs, git info, collapsible groups). Producer: one
+   `multiprocessing` (spawn) subprocess per provider.
+
+These jobs ran as **parallel DB writers**. The second writer to ask for the
+lock gets `SQLITE_BUSY`, and Django retries within `busy_timeout` (30 s). But
+SQLite has **no fair waiter queue**: a writer running a tight loop of small
+transactions repeatedly re-acquires the lock before a starved writer — asleep
+in its `busy_timeout` — is ever woken. At boot, with 1000+ sessions, the
+starved writer exhausts its 30 s timeout and the app crashes with **`database
+is locked`**. WAL does not fix this; the only robust fix is a **single logical
+writer**.
+
+### The solution, in one sentence
+
+A **single permanent consumer** (`src/twicc/providers/db_writer.py`) becomes
+the **sole DB writer** for those two big boot jobs. The producers become
+**read-only**: they read the DB and parse JSONL, then push **typed payloads**
+onto two process-wide shared queues. The consumer drains the queues and
+performs **every write from one place**, inside `transaction.atomic`. With one
+writer there is no lock to contend for and no starvation.
+
+**Deliberately out of scope:** the live-file **watcher** and the **periodic
+tasks** (price sync, usage quotas) keep writing to the DB directly. Their write
+volume is marginal — a few rows per JSONL event — so routing them through the
+consumer would add complexity for no measurable gain.
+
+### Components and files
+
+| File | Role in the as-built design |
+|---|---|
+| `src/twicc/providers/db_writer.py` | **The permanent consumer.** Owns the two shared queues, the payload vocabulary (NamedTuples), the consumer loop (`_consumer_loop` / `_drain_one`), every `_apply_*` write handler, and the lifecycle + completion API. |
+| `src/twicc/providers/background_compute_task.py` | The **compute producer** only (renamed from `background_task.py`). `ComputeContext`, `compute_worker_main` (subprocess entry), process start/stop. Reads the DB; never writes it. |
+| `src/twicc/providers/compute_base.py` | `BaseSessionCompute`: `compute_session_metadata` (worker side, **read**), `apply_session_complete` (now a `@staticmethod @transaction.atomic`, run **by the consumer**, **write**). |
+| `src/twicc/providers/{claude_code,codex}/initial_sync.py` | The **initial-sync producers**. Read the DB and parse JSONL; build and push payloads. No DB writes. |
+| `src/twicc/providers/{claude_code,codex}/orchestrator.py` | Per-provider task lifecycle. Wire the shared queue into the initial-sync task; arm compute completion; **blocking `shutdown()`**. |
+| `src/twicc/orchestrator.py` | `OrchestratorRegistry`: `start_all` / `shutdown_all`, provider hot-toggle, the post-compute search-index kick. |
+| `src/twicc/cli/run.py` | `run_server`: starts the consumer **before** the orchestrators, stops it **after** them. |
+| `src/twicc/sync_helpers.py` | Producer-side initial-sync helpers (`read_session_items_from_file`, `BackpressureSyncQueue`). |
+| `src/twicc/projects.py` | Cross-provider project helpers + process caches (`ensure_project_*`, `register_project*`, `update_project_metadata`). |
+
+### The producer/consumer contract
+
+**Two process-wide shared queues**, both created by `start_unified_consumer()`:
+
+- `_initial_sync_queue` — a `queue.Queue` (intra-process; the initial-sync
+  producers are threads). Bounded, `maxsize=200`.
+- `_compute_result_queue` — a `multiprocessing.Queue` from the **spawn** context
+  (the compute producers are subprocesses). Bounded, `maxsize=200`.
+
+Bounding the queues is what gives **backpressure**: a producer that parses
+faster than the consumer commits eventually fills the queue and blocks on
+`put` — the backlog is capped instead of growing to gigabytes of RAM (each
+initial-sync payload carries a whole session's JSONL lines).
+
+**There is no routing registry.** Every message carries its own `provider`
+field; the consumer dispatches on the message *type*, not on a registration.
+(The pre-refonte design had a `register`/`unregister` registry — its removal is
+what mechanically eliminated the lost-writes-on-shutdown bug.)
+
+The **payload vocabulary** — NamedTuples defined in `db_writer.py` and pushed
+onto the initial-sync queue:
+
+| Payload | Meaning |
+|---|---|
+| `CreateSessionPayload` | A session not yet in DB: create the project (idempotent), save the session, bulk-create its items. |
+| `UpdateSessionPayload` | A session already in DB: append new items, advance the tracking offsets, optionally clear `stale` / reset `compute_version`. |
+| `MarkSessionsStalePayload` | Flag a set of sessions whose JSONL is gone from disk. |
+| `UpdateProjectMetadataPayload` | End-of-sync, one project: apply `new_stale`, recompute `sessions_count` / `mtime` / `total_cost`, resolve `git_root`. |
+| `ResolveProjectGitRootsPayload` | End-of-sync: resolve `git_root` for every on-disk project — run **by the consumer** so it sees this run's already-applied updates. |
+| `InitialSyncDoneMarker` | The FIFO completion sentinel for an initial-sync run (see below). |
+| `SyncSessionTitlesPayload` | Boot-time bulk title import for one provider. |
+
+The **compute side does not use these**: a compute worker emits plain
+`orjson`-encoded dicts (a `session_complete` per session, a `done` at the end),
+because a `multiprocessing.Queue` would have to pickle anything richer.
+
+The contract is strict: **producers only read and parse; the consumer performs
+every write.** Producers never call `.save()` / `bulk_create` — they hand the
+data to the consumer in a payload, and the consumer issues every INSERT/UPDATE.
+
+### Lifecycle and the central invariant
+
+**The central invariant: the consumer strictly outlives every producer.**
+
+`run_server` (`cli/run.py`) enforces it by ordering:
+
+1. `start_unified_consumer()` — create the queues, launch the consumer task.
+2. `orchestrators.start_all(...)` — only now do the providers (and their
+   producers) start. The shared queues already exist for them to wire in.
+3. … the application runs …
+4. `orchestrators.shutdown_all()` — every provider tears down; each
+   `shutdown()` **blocks** until its own producers (initial-sync thread,
+   compute subprocess) have really ended.
+5. `stop_unified_consumer()` — only now, with no producer left alive, signal
+   the consumer to drain whatever remains and stop.
+
+The consumer is never started or stopped by a provider orchestrator. The
+invariant holds **across a provider hot-toggle** (a provider disabled, then
+re-enabled, at runtime): the toggled provider's producers come and go, but the
+consumer they push onto is the same permanent task, alive the whole time.
+
+### Completion: proven by FIFO sentinels
+
+A producer cannot simply "return" — its writes are applied asynchronously by
+the consumer. Completion is proven by a **sentinel pushed last**: because each
+queue is FIFO, the moment the consumer drains a run's sentinel, **every earlier
+message of that run has already been applied.**
+
+**Initial sync.** The producer pushes an `InitialSyncDoneMarker` last. The
+marker carries an **`asyncio.Future`** (the initial-sync queue is intra-process,
+so the Future travels by reference). The consumer resolves that Future when it
+drains the marker, **with the count of payloads that failed to apply** — so the
+orchestrator awaiting it learns whether the run was clean and logs a summary if
+not. *(The plan specified a bare `asyncio.Event`; the Future-with-failure-count
+is the shipped form.)*
+
+**Compute.** The `done` message comes from a subprocess and cannot carry a
+Future. Instead, before each run the orchestrator calls
+`arm_compute_completion(provider, …)`, which **mints a fresh `run_id`**
+(`itertools.count(1)`, so `0` is never a real run) and returns
+`(run_id, asyncio.Future)`. The worker is spawned with that `run_id` and **tags
+every message with it**. The consumer keys all compute run state by `run_id`:
+
+- `_compute_states[run_id]` — that run's accumulated state (broadcast
+  throttling, batched activity-day recomputation, failure tally);
+- `_compute_done_events[run_id]` — the completion Future, resolved with the
+  run's failed-session count when its `done` message is drained.
+
+Keying by `run_id` rather than by provider is what makes a **hot restart** safe:
+a cancelled run's worker can still have stale messages sitting in the shared
+queue when the next run is armed; those messages carry the **old** `run_id`,
+find no live state, and are ignored — they cannot corrupt the new run.
+
+**Title sync.** `SyncSessionTitlesPayload` carries an `asyncio.Event` the
+orchestrator awaits, so the boot-time bulk title import also goes through the
+single writer instead of racing the consumer.
+
+### Transaction discipline
+
+The consumer wraps **each payload's writes in one `transaction.atomic` block**.
+This coalesces what would be many tiny implicit transactions (one per `save()`)
+into a single lock-acquire + `fsync` — a large speedup, **but correct only
+because there is a single writer.** With concurrent writers, a longer-held
+transaction would *worsen* contention; `atomic` and the single consumer are
+inseparable.
+
+**Side effects never fire from inside an uncommitted transaction.** WebSocket
+broadcasts, workspace auto-add, and process-cache mutations are deliberately
+kept **outside** the atomic block (or deferred with `transaction.on_commit`),
+so nothing observes — or caches — a state that a rollback would undo.
+
+### Shutdown, hot-toggle, and abandon-on-shutdown
+
+A provider's `shutdown()` is **blocking and ordered**:
+
+- It **cancels the dependency orchestrator first**, before any `await`, so no
+  new compute / watcher / title-sync phase can start mid-teardown.
+- It **drains its initial-sync run**: it pushes its own `InitialSyncDoneMarker`
+  and awaits it, so every already-queued payload of the run is applied before
+  the provider reaches `STOPPED`. This holds even when the run was **cancelled**
+  or **crashed** — the exception is captured, the marker is still pushed and
+  awaited, and only then is the error re-raised.
+- It **abandons the in-flight compute run** rather than applying its partial
+  results late.
+
+**`abandon_compute_run`** is a consumer-side finalization path. It (1) flags the
+run `abandoned` *synchronously*, before any `await` — from then on the consumer
+skips every remaining `session_complete` for that `run_id` — and (2) hands an
+`_AbandonComputeRunJob` to the consumer via the intra-process `_consumer_jobs`
+queue. The **consumer itself** runs the job (`_finalize_abandoned_run`): it
+flushes the run's batched project broadcasts and activity recomputations for the
+sessions applied *before* the abandon, then drops the run state. Running the
+flush in the consumer keeps the single-writer guarantee; `shutdown()` awaits the
+job, so the provider does not reach `STOPPED` — and a hot restart cannot
+begin — until that flush has committed. The abandoned run's sessions are simply
+recomputed on the next boot.
+
+**The final drain is resilient.** Once `stop_unified_consumer()` signals it, the
+consumer keeps draining until both queues are empty; `_drain_one` is *total* —
+an exception applying one message is logged and swallowed, never propagated — so
+one bad message can never strand the messages queued behind it.
+
+### Cross-provider fields are recomputed by the consumer
+
+`Project.mtime` and `Project.sessions_count` are **shared by both providers**.
+A producer must never carry them as a precomputed value: a number computed
+early in one provider's producer could clobber — or be clobbered by — a fresher
+value from the other provider, and reading the current value in a producer
+races the consumer (which has not yet applied this run's session payloads).
+
+So the consumer **recomputes them from the DB**, inside the same transaction
+that applies the payload (the `recalc_sessions_count` / `recalc_mtime` flags on
+`UpdateProjectMetadataPayload`). `mtime` aggregates only **visible, non-`stale`**
+sessions; `sessions_count` includes `stale` ones. The same filter rule is
+applied everywhere those two values are written — the consumer paths *and* the
+watcher/compute path (`update_project_metadata` in `projects.py`) — so the two
+never drift.
+
+### Key divergences from the plan above
+
+| The plan said | The shipped code does | Why |
+|---|---|---|
+| Initial-sync completion via a bare `asyncio.Event`. | `InitialSyncDoneMarker` carries an `asyncio.Future` resolved with the run's **failure count**. | A failed run must not signal "completed" silently; the orchestrator needs to log a summary. |
+| Compute completion via `dict[Provider, Event]`, armed per run. | State and completion keyed by a per-run **`run_id`** (`dict[int, …]`). | A cancelled run's stale messages must not touch a hot-restarted run for the same provider. |
+| No mechanism named for an interrupted compute run. | `abandon_compute_run` + `_AbandonComputeRunJob` + `_finalize_abandoned_run` — a consumer-side finalization path. | A shut-down provider's partial compute results must be flushed (not lost, not applied late) by the single writer. |
+| `shutdown()` awaits the producer thread; then `stop_unified_consumer` runs. | Same — **plus** each `shutdown()` pushes and awaits its own drain marker (cancel and crash paths included). | Awaiting the thread is not enough: the run's already-queued payloads must also be *drained* before `STOPPED`. |
+| Findings #2–#7 of the first review were "follow-up, out of scope". | All addressed, plus 14 further review rounds. | The branch was hardened all the way to a clean review verdict. |
+
+`git log --oneline main..HEAD` is the authoritative, commit-by-commit record of
+how the design reached this state.
+
+### Verification and status
+
+- The existing test suite — **339 tests** — passes against the branch
+  (`uv run --extra test pytest`; `settings_test.py` forces in-memory SQLite).
+- The branch went through **14 round-by-round Codex reviews** plus **3 holistic
+  "fresh reviewer" reviews**. The final holistic verdict was
+  **"architecturally sound and mergeable"**, with **no code-level finding** —
+  the only item raised was that *this plan document* had gone stale, which the
+  banner at the top and this appendix resolve.
+- Remaining before merge (deliberate steps, not code fixes): rebase on local
+  `main`, a real runtime boot / shutdown / hot-toggle test, then merge.
