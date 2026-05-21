@@ -27,6 +27,7 @@ from twicc.core.models import Project, Session, SessionType
 from twicc.providers.db_writer import (
     CreateSessionPayload,
     MarkSessionsStalePayload,
+    ResolveProjectGitRootsPayload,
     UpdateProjectMetadataPayload,
     UpdateSessionPayload,
 )
@@ -507,20 +508,14 @@ def sync_all(
 
     interrupted = stop_event is not None and stop_event.is_set()
 
-    # Resolve git_root for all projects with a directory. Pushed as payloads
-    # so the consumer applies them in its own atomic blocks.
+    # Resolve git_root for every project with a directory. Enqueued as a
+    # single marker, not a producer-side query + one payload per project:
+    # the consumer runs the Project query when it drains the marker, after
+    # every prior FIFO project payload of this run has committed — so a
+    # project being un-staled earlier in the same sync is not wrongly
+    # skipped by a stale=False filter evaluated against a pre-commit view.
     if not interrupted:
-        for project in Project.objects.filter(directory__isnull=False, stale=False):
-            sync_queue.put(UpdateProjectMetadataPayload(
-                provider=Provider.CLAUDE_CODE,
-                project_id=project.id,
-                recalc_sessions_count=False,
-                recalc_mtime=False,
-                new_stale=None,
-                recalc_total_cost=False,
-                resolve_git_root=True,
-                git_root_directory=project.directory,
-            ))
+        sync_queue.put(ResolveProjectGitRootsPayload(provider=Provider.CLAUDE_CODE))
 
     elapsed = time.monotonic() - sync_start
     if interrupted:

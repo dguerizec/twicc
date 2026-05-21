@@ -166,6 +166,21 @@ class UpdateProjectMetadataPayload(NamedTuple):
     git_root_directory: str | None
 
 
+class ResolveProjectGitRootsPayload(NamedTuple):
+    """End-of-sync request to resolve git_root for every project on disk.
+
+    A provider enqueues this once, last in its run, instead of running
+    ``Project.objects.filter(directory__isnull=False, stale=False)`` itself
+    and pushing one payload per project: that producer-side query runs
+    before the consumer has applied this run's earlier project payloads
+    (FIFO), so a project being un-staled in the same sync would still look
+    stale and be skipped. The consumer runs the query when it drains this
+    marker — after every prior project update of the run has committed.
+    """
+
+    provider: Provider
+
+
 class InitialSyncDoneMarker(NamedTuple):
     """Sentinel pushed last by an initial-sync producer.
 
@@ -916,6 +931,8 @@ async def _process_initial_sync_message(msg) -> None:
             await sync_to_async(_apply_mark_sessions_stale_payload)(msg)
         elif isinstance(msg, UpdateProjectMetadataPayload):
             await sync_to_async(_apply_update_project_metadata_payload)(msg)
+        elif isinstance(msg, ResolveProjectGitRootsPayload):
+            await sync_to_async(_apply_resolve_git_roots_payload)(msg)
         else:
             logger.error(
                 f"Unexpected initial-sync message type: {type(msg).__name__} => {msg!r:.300}"
@@ -1113,6 +1130,22 @@ def _apply_update_project_metadata_payload(payload: UpdateProjectMetadataPayload
             update_project_total_cost(payload.project_id)
         if payload.resolve_git_root and payload.git_root_directory:
             ensure_project_git_root(payload.project_id, payload.git_root_directory)
+
+
+def _apply_resolve_git_roots_payload(payload: ResolveProjectGitRootsPayload) -> None:
+    """Resolve git_root for every non-stale project that has a directory.
+
+    Run by the consumer when it drains a ResolveProjectGitRootsPayload —
+    after every prior FIFO project payload of the same sync run has
+    committed — so the ``stale=False`` filter reflects this run's fresh
+    state (a project being un-staled earlier in the same run is no longer
+    wrongly excluded). ``ensure_project_git_root`` is idempotent and writes
+    only when the resolved root actually changes.
+    """
+    from twicc.core.models import Project
+
+    for project in Project.objects.filter(directory__isnull=False, stale=False):
+        ensure_project_git_root(project.id, project.directory)
 
 
 def _apply_sync_session_titles_payload(payload: SyncSessionTitlesPayload) -> list[dict]:
