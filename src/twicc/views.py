@@ -446,29 +446,42 @@ def project_sessions(request, project_id):
 def _resolve_session_or_404(session_id, project_id, parent_session_id):
     """Fetch the session for a session/subagent route, or raise Http404.
 
-    Subagent route (``parent_session_id`` is set): the subagent is keyed by
-    its globally-unique id and is NOT scoped by the URL's ``project_id`` --
-    that is the *parent's* project, and a subagent may live in a different
-    project than its parent (a Codex subagent can run from another cwd).
-    The parent link is validated instead.
-
     Session route (``parent_session_id`` is None): the session must belong
     to the named project and must not be a subagent -- subagents are only
     reachable through the subagent route.
-    """
-    try:
-        if parent_session_id is not None:
-            session = Session.objects.get(id=session_id)
-        else:
-            session = Session.objects.get(id=session_id, project_id=project_id)
-    except Session.DoesNotExist:
-        raise Http404("Session not found")
 
-    if parent_session_id is not None:
-        if session.parent_session_id != parent_session_id:
-            raise Http404("Subagent not found for this parent session")
-    elif session.parent_session_id is not None:
+    Subagent route (``parent_session_id`` is set): the URL is
+    ``/projects/<project_id>/sessions/<parent_session_id>/subagent/<session_id>/``.
+    Its ``/projects/<project_id>/sessions/<parent_session_id>/`` prefix must
+    name a real top-level session of that project -- the same constraint the
+    session route enforces -- so ``project_id`` stays meaningful and is not a
+    free parameter. The subagent itself is then resolved by its
+    globally-unique ``session_id`` and checked to be a child of that parent;
+    it is deliberately NOT scoped by ``project_id``, because a Codex subagent
+    can run in a different project than its parent.
+    """
+    if parent_session_id is None:
+        try:
+            session = Session.objects.get(id=session_id, project_id=project_id)
+        except Session.DoesNotExist:
+            raise Http404("Session not found")
+        if session.parent_session_id is not None:
+            raise Http404("Session not found")
+        return session
+
+    # Subagent route: the parent must be a top-level session of project_id.
+    if not Session.objects.filter(
+        id=parent_session_id,
+        project_id=project_id,
+        parent_session_id__isnull=True,
+    ).exists():
         raise Http404("Session not found")
+    try:
+        session = Session.objects.get(id=session_id)
+    except Session.DoesNotExist:
+        raise Http404("Subagent not found for this parent session")
+    if session.parent_session_id != parent_session_id:
+        raise Http404("Subagent not found for this parent session")
     return session
 
 
