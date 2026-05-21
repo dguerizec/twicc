@@ -862,10 +862,12 @@ def _flush_pending_activities(provider: Provider, pending_activity_days: dict[st
     """Flush accumulated activity recalculations for all projects."""
     from twicc.core.models import PeriodicActivity
 
-    for project_id, days in pending_activity_days.items():
-        PeriodicActivity.recalculate_for_days(project_id, days, provider=provider, do_global=False)
-    days = set.union(*pending_activity_days.values())
-    PeriodicActivity.recalculate_for_days(None, days, provider=provider, do_global=True)
+    # One atomic batch for the whole flush, like every other consumer write.
+    with transaction.atomic():
+        for project_id, days in pending_activity_days.items():
+            PeriodicActivity.recalculate_for_days(project_id, days, provider=provider, do_global=False)
+        days = set.union(*pending_activity_days.values())
+        PeriodicActivity.recalculate_for_days(None, days, provider=provider, do_global=True)
 
 
 # =============================================================================
@@ -1150,8 +1152,10 @@ def _apply_resolve_git_roots_payload(payload: ResolveProjectGitRootsPayload) -> 
     from twicc.core.models import Project
     from twicc.projects import ensure_project_git_root
 
-    for project in Project.objects.filter(directory__isnull=False, stale=False):
-        ensure_project_git_root(project.id, project.directory)
+    # One atomic batch for the whole payload, like every other consumer write.
+    with transaction.atomic():
+        for project in Project.objects.filter(directory__isnull=False, stale=False):
+            ensure_project_git_root(project.id, project.directory)
 
 
 def _apply_sync_session_titles_payload(payload: SyncSessionTitlesPayload) -> list[dict]:
