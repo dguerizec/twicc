@@ -898,11 +898,16 @@ async def _process_initial_sync_message(msg) -> None:
     if isinstance(msg, SyncSessionTitlesPayload):
         # Carries a done Event the producer awaits — always set it, even on
         # failure, so the orchestrator's boot-time title sync can never hang.
+        # A failure is logged but deliberately NOT counted in
+        # _initial_sync_failures: the boot-time title sync is its own
+        # operation, not part of an initial-sync run, and its producer
+        # observes only the Event. Counting it there would pollute an
+        # unrelated run's failure tally and linger until that run's
+        # InitialSyncDoneMarker pops the counter.
         try:
             await _apply_and_broadcast_titles(msg)
         except Exception as e:
             logger.error(f"Error applying SyncSessionTitlesPayload: {e}", exc_info=True)
-            _initial_sync_failures[msg.provider] += 1
         finally:
             msg.done_event.set()
         return
