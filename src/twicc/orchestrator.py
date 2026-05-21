@@ -26,6 +26,8 @@ from twicc.providers.state import (
     ProviderState,
     force_disable_after_failed_start,
     get_enabled_providers,
+    is_provider_enabled,
+    is_provider_running,
     set_provider_state,
 )
 
@@ -604,6 +606,16 @@ class OrchestratorRegistry:
         # re-index: run.py has already cancelled the active search-indexing
         # tasks and a fresh kick now would race the search index teardown.
         if self._shutdown_event is not None and self._shutdown_event.is_set():
+            return
+        # A provider hot-toggle off also sets compute_done — shutdown() sets
+        # it idempotently to release waiters — without touching the global
+        # shutdown event the guard above checks. If this provider is no longer
+        # running-and-enabled, the wait was unblocked by its teardown, not by
+        # compute finishing: skip the re-index. search_indexing_task writes
+        # Session.search_version directly, outside the unified DB writer, so a
+        # kick now would reintroduce SQLite write contention against the
+        # still-draining shutdown and index a partial hot-toggled run.
+        if not is_provider_running(provider) or not is_provider_enabled(provider):
             return
         # Lazy import to avoid pulling search_indexing_task at module
         # import time (it would in turn import Django models). The
