@@ -55,6 +55,11 @@ async def _cancel_task(task: asyncio.Task, name: str) -> None:
         await task
     except asyncio.CancelledError:
         pass
+    except Exception:
+        # The task had already finished with an error before we cancelled it.
+        # shutdown() must not be derailed by it — log and carry on so the rest
+        # of the teardown (notably the initial-sync drain marker) still runs.
+        logger.exception("%s ended with an exception during shutdown", name)
     logger.info("%s stopped", name)
 
 
@@ -286,16 +291,36 @@ class CodexOrchestrator(BaseOrchestrator):
     # ------------------------------------------------------------------
 
     async def _initial_sync_task(self) -> None:
+        """Exception-safe wrapper around :meth:`_run_initial_sync`.
+
+        ``_run_initial_sync`` can raise — e.g. ``sync_all`` hitting an
+        unexpected error. On any non-cancellation exception, log it and still
+        set ``initial_sync_done`` in the ``finally``: otherwise
+        ``_dependency_orchestrator`` (which awaits that event) would hang
+        forever and the provider would never start its compute/watcher. The
+        provider then runs degraded on whatever was synced before the failure,
+        recovered on the next restart.
+        """
+        try:
+            await self._run_initial_sync()
+        except Exception:
+            logger.exception("Initial sync task for %s failed", self.provider.value)
+        finally:
+            self.initial_sync_done.set()
+
+    async def _run_initial_sync(self) -> None:
         """Run sync_all() in a thread, pushing payloads onto the shared queue.
 
         The producer thread does not write to DB directly: it pushes
         initial-sync payloads onto the process-wide shared queue, drained by
         the unified DB writer (:mod:`twicc.providers.db_writer`).
 
-        No try/finally cleanup here: with the permanent consumer, a thread
-        that keeps pushing after a cancel pushes onto a still-drained queue —
-        no lost writes. The zombie-thread / overlap concern is handled by
-        ``shutdown()`` blocking on ``_sync_thread_future``.
+        A producer thread that keeps pushing after a cancel pushes onto a
+        still-drained queue — no lost writes; the zombie-thread / overlap
+        concern is handled by ``shutdown()`` blocking on
+        ``_sync_thread_future``. Exception safety — always releasing
+        ``initial_sync_done`` — is handled by the :meth:`_initial_sync_task`
+        wrapper.
         """
         from twicc.providers.db_writer import (
             InitialSyncDoneMarker,
@@ -375,8 +400,6 @@ class CodexOrchestrator(BaseOrchestrator):
             ).count
         )()
         logger.info("Codex data synchronized (%d sessions)", sessions_count)
-
-        self.initial_sync_done.set()
 
     async def _sync_titles_at_boot(self) -> None:
         """Import Codex Thread.name into Session.title for every known thread.
