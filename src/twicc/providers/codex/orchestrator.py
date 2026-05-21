@@ -318,9 +318,10 @@ class CodexOrchestrator(BaseOrchestrator):
         A producer thread that keeps pushing after a cancel pushes onto a
         still-drained queue — no lost writes; the zombie-thread / overlap
         concern is handled by ``shutdown()`` blocking on
-        ``_sync_thread_future``. Exception safety — always releasing
-        ``initial_sync_done`` — is handled by the :meth:`_initial_sync_task`
-        wrapper.
+        ``_sync_thread_future``. Releasing ``initial_sync_done`` is handled by
+        the :meth:`_initial_sync_task` wrapper; this method first pushes and
+        drains the run's completion marker — even when the producer crashes —
+        so ``initial_sync_done`` is never released mid-drain.
         """
         from twicc.providers.db_writer import (
             InitialSyncDoneMarker,
@@ -363,25 +364,52 @@ class CodexOrchestrator(BaseOrchestrator):
                 stop_event=self._sync_stop_event,
             )
         )
-        # Shield the await: shutdown() cancels _sync_task, and a bare await
-        # would propagate that cancel to _sync_thread_future — marking it
-        # done() and making shutdown()'s `not done()` guard skip the wait,
+        # Wait for the producer thread, capturing a crash rather than letting
+        # it propagate yet: the thread has ended either way, so the marker
+        # pushed below still sits last in this run and the consumer's FIFO
+        # drain of it still proves every payload applied. That proof must
+        # complete before initial_sync_done is released (by the
+        # _initial_sync_task wrapper) -- on the crash path too, or the compute
+        # phase could start while the consumer is still applying this run's
+        # payloads.
+        #
+        # The await is shielded: shutdown() cancels _sync_task, and a bare
+        # await would propagate that cancel to _sync_thread_future, mark it
+        # done() and make shutdown()'s `not done()` guard skip the wait,
         # leaving the producer thread alive after shutdown. The shield keeps
-        # the real thread future uncancelled so shutdown() can await it.
-        await asyncio.shield(self._sync_thread_future)
+        # the thread future uncancelled so shutdown() can await it. A
+        # CancelledError (this coroutine cancelled) still propagates;
+        # shutdown() then pushes its own drain marker.
+        sync_error: Exception | None = None
+        try:
+            await asyncio.shield(self._sync_thread_future)
+        except Exception as exc:
+            sync_error = exc
 
-        # Producer thread finished pushing — close the run with the marker.
-        # The marker carries a Future the writer resolves with the run's
-        # failure count once it has drained every payload this run produced.
-        # Pushed via to_thread because the queue is bounded — a full queue
-        # must not block the event loop.
+        # Producer thread finished (cleanly or by crashing) — close the run
+        # with the marker. It carries a Future the writer resolves with the
+        # run's failure count once it has drained every payload this run
+        # produced.
         done_future = loop.create_future()
         if not await put_initial_sync_item(
             InitialSyncDoneMarker(provider=self.provider, done_future=done_future),
             self._sync_stop_event,
         ):
-            return  # shutdown signalled — marker dropped, completion is moot
+            # shutdown signalled — marker dropped (shutdown() pushes its own).
+            if sync_error is not None:
+                logger.error(
+                    "Initial sync for %s crashed during shutdown",
+                    provider_value, exc_info=sync_error,
+                )
+            return
         failed_payloads = await done_future
+
+        if sync_error is not None:
+            # Producer crashed; its payloads are now fully drained, so
+            # initial_sync_done is safe to release — re-raise for the
+            # _initial_sync_task wrapper to log.
+            raise sync_error
+
         if failed_payloads:
             logger.error(
                 "Initial sync for %s completed with %d payload(s) that failed "
