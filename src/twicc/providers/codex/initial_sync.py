@@ -68,7 +68,7 @@ def extract_session_meta(file_path: Path) -> SessionMeta | None:
 
     For subagent rollouts the ``payload.source`` field carries
     ``{"subagent": {"thread_spawn": {"parent_thread_id": "...", ...}}}``
-    — we surface ``parent_thread_id`` so :func:`sync_project` can wire
+    — we surface ``parent_thread_id`` so :func:`_sync_subagents` can wire
     the subagent to its parent ``Session`` row. Codex supports nested
     subagents (a subagent can itself spawn subagents) but
     ``parent_thread_id`` always points to the *direct* parent, so a
@@ -146,7 +146,7 @@ class _NewEntry(NamedTuple):
 
     ``parent_session_id`` is non-``None`` for subagent rollouts; the
     sync resolves it to the parent ``Session`` row before creating the
-    subagent (multi-pass topological order — see :func:`sync_project`).
+    subagent (multi-pass topological order — see :func:`_sync_subagents`).
     """
     file_path: Path
     session_id: str
@@ -160,21 +160,169 @@ class _ExistingEntry(NamedTuple):
     session: Session
 
 
+def _build_create_payload(
+    entry: _NewEntry,
+    project_id: str,
+    is_subagent: bool,
+    stats: dict[str, int],
+) -> CreateSessionPayload | None:
+    """Build the CreateSessionPayload for a new entry, or None on parse failure.
+
+    Reads the entry's JSONL file (producer-side read); when it has content,
+    bumps ``stats['items_added']`` and ``stats['sessions_created']``.
+
+    Codex stores the cwd on the first JSONL line, so every payload carries
+    ``new_project_directory``: the consumer's ``register_project_sync`` is
+    idempotent (no-op when the project already exists), and a cross-project
+    subagent may be the first session the consumer ever sees for its own
+    project.
+    """
+    relative_path = entry.file_path.relative_to(CodexHelpers.SESSIONS_DIR)
+    if is_subagent:
+        session = Session(
+            id=entry.session_id,
+            project_id=project_id,
+            provider=Provider.CODEX,
+            file_path=str(relative_path),
+            type=SessionType.SUBAGENT,
+            parent_session_id=entry.parent_session_id,
+            agent_id=entry.session_id,
+        )
+    else:
+        session = Session(
+            id=entry.session_id,
+            project_id=project_id,
+            provider=Provider.CODEX,
+            file_path=str(relative_path),
+            type=SessionType.SESSION,
+        )
+
+    to_insert = read_session_items_from_file(session, entry.file_path)
+    if to_insert is None:
+        return None
+
+    stats["items_added"] += to_insert.actually_new_count
+    stats["sessions_created"] += 1
+
+    return CreateSessionPayload(
+        provider=Provider.CODEX,
+        project_id=project_id,
+        new_project_directory=entry.cwd,
+        new_project_stale=not os.path.isdir(entry.cwd),
+        session=session,
+        items=to_insert.items,
+        last_offset=to_insert.last_offset,
+        last_line=to_insert.last_line,
+        mtime=to_insert.mtime,
+    )
+
+
+def _sync_subagents(
+    subagents: list[_NewEntry],
+    resolvable_parent_ids: set[str],
+    sync_queue: BackpressureSyncQueue,
+    stats: dict[str, int],
+    on_session_progress: Callable[[str, int, int], None] | None = None,
+    stop_event: threading.Event | None = None,
+) -> None:
+    """Push CreateSessionPayloads for every new Codex subagent, resolved globally.
+
+    Runs once, after every project's top-level sessions have been pushed, so
+    parent resolution spans all projects: a Codex subagent can run in a
+    different cwd — hence a different project — than its parent, so its
+    parent ``Session`` may belong to another project. Resolving per project
+    (as an earlier revision of this module did) silently dropped such a
+    subagent as an orphan.
+
+    ``resolvable_parent_ids`` is the process-wide set of session ids the
+    consumer will have created (existing DB rows plus everything pushed in
+    this run). Multi-pass: each sweep pushes every subagent whose parent is
+    already resolvable and records its own id, so a deeper subagent resolves
+    on a later sweep; the pass count is bounded by the spawn-tree depth. A
+    subagent still unresolved once a full sweep makes no progress is a
+    genuine orphan (its parent is on disk nowhere) — logged and skipped; the
+    watcher retries it on the next file change.
+    """
+    total = len(subagents)
+    done = 0
+    remaining = list(subagents)
+    while remaining:
+        progressed = False
+        next_remaining: list[_NewEntry] = []
+        for entry in remaining:
+            if stop_event is not None and stop_event.is_set():
+                logger.info(
+                    "  Codex subagent sync interrupted (after %d/%d subagents)",
+                    done, total,
+                )
+                return
+
+            # Defensive: the first line parsed (extract_session_meta), but
+            # the rest of the file might be empty after a failed write.
+            if not check_file_has_content(entry.file_path):
+                done += 1
+                if on_session_progress:
+                    on_session_progress(entry.session_id, done, total)
+                continue
+
+            if entry.parent_session_id not in resolvable_parent_ids:
+                # Parent isn't resolvable yet — retry on the next sweep
+                # (it may itself be a subagent resolved later in this pass).
+                next_remaining.append(entry)
+                continue
+
+            payload = _build_create_payload(
+                entry, path_to_project_id(entry.cwd), True, stats
+            )
+            if payload is None:
+                done += 1
+                if on_session_progress:
+                    on_session_progress(entry.session_id, done, total)
+                continue
+
+            sync_queue.put(payload)
+            resolvable_parent_ids.add(entry.session_id)
+            done += 1
+            if on_session_progress:
+                on_session_progress(entry.session_id, done, total)
+            progressed = True
+
+        if not progressed:
+            for entry in next_remaining:
+                logger.warning(
+                    "  Skipping orphan Codex subagent %s: parent %s not found "
+                    "(file %s)",
+                    entry.session_id, entry.parent_session_id, entry.file_path,
+                )
+            break
+        remaining = next_remaining
+
+
 def sync_project(
     project_id: str,
     new_entries: list[_NewEntry],
     existing_entries: list[_ExistingEntry],
     sync_queue: BackpressureSyncQueue,
+    resolvable_parent_ids: set[str],
+    subagents_out: list[_NewEntry],
     on_session_progress: Callable[[str, int, int], None] | None = None,
     stop_event: threading.Event | None = None,
 ) -> dict[str, int]:
     """
-    Synchronize one project's Codex sessions by pushing payloads on ``sync_queue``.
+    Synchronize one project's top-level Codex sessions by pushing payloads
+    on ``sync_queue``.
 
     Producer-side reads only. The unified consumer applies every write
     inside ``transaction.atomic`` from a single coroutine, so two
     providers (Claude Code + Codex) and two phases (initial sync +
     compute) never race on the SQLite write lock.
+
+    Handles this project's existing-session updates and new top-level
+    sessions. New subagents are appended to ``subagents_out`` and resolved
+    globally by :func:`_sync_subagents` once *every* project's top-level
+    sessions have been pushed — a Codex subagent's parent may belong to
+    another project. Every session id pushed here is recorded in the shared
+    ``resolvable_parent_ids`` so that later subagent resolution can see it.
     """
     project_start = time.monotonic()
 
@@ -188,11 +336,22 @@ def sync_project(
     except Project.DoesNotExist:
         project = None
 
-    total_sessions = len(new_entries) + len(existing_entries)
-    logger.info(f"  Syncing project {project_id} ({total_sessions} Codex sessions)")
+    # Split new entries by topology. Top-level sessions have no parent
+    # dependency and are created here; subagents are handed to
+    # _sync_subagents for one global, cross-project resolution pass.
+    regular_new = [e for e in new_entries if e.parent_session_id is None]
+    subagent_new = [e for e in new_entries if e.parent_session_id is not None]
+    # Hand subagents off now, so they are collected even when this project
+    # has no top-level session and returns early below.
+    subagents_out.extend(subagent_new)
+
+    total_sessions = len(existing_entries) + len(regular_new)
+    logger.info(
+        f"  Syncing project {project_id} ({total_sessions} top-level Codex "
+        f"sessions, {len(subagent_new)} subagents)"
+    )
 
     idx = 0
-    project_will_be_created = False
 
     # Pass 1 — existing entries (UPDATEs only).
     for entry in existing_entries:
@@ -224,81 +383,9 @@ def sync_project(
         if on_session_progress:
             on_session_progress(entry.session.id, idx, total_sessions)
 
-    # Split new entries by topology: regular sessions have no parent
-    # dependency and can be created in any order; subagents must wait
-    # for their parent ``Session`` row to exist (the parent may itself
-    # be a subagent — Codex supports nested spawns). Process the regular
-    # ones first, then run a multi-pass loop over the subagents so that
-    # each iteration pushes every subagent whose parent is already
-    # resolvable (DB row or already-pushed CreateSessionPayload).
-    regular_new = [e for e in new_entries if e.parent_session_id is None]
-    subagent_new = [e for e in new_entries if e.parent_session_id is not None]
-
-    # ``resolvable_parent_ids`` is the set of session ids the consumer
-    # will have created by the time it applies a later payload — initial
-    # DB content plus everything we've already pushed in this run.
-    resolvable_parent_ids: set[str] = set(
-        Session.objects.filter(
-            project_id=project_id,
-        ).values_list("id", flat=True)
-    )
-
-    def _build_create_payload(
-        entry: _NewEntry,
-        is_subagent: bool,
-    ) -> CreateSessionPayload | None:
-        """Build the CreateSessionPayload for a new entry, or None on parse failure."""
-        nonlocal project_will_be_created
-
-        relative_path = entry.file_path.relative_to(CodexHelpers.SESSIONS_DIR)
-        if is_subagent:
-            session = Session(
-                id=entry.session_id,
-                project_id=project_id,
-                provider=Provider.CODEX,
-                file_path=str(relative_path),
-                type=SessionType.SUBAGENT,
-                parent_session_id=entry.parent_session_id,
-                agent_id=entry.session_id,
-            )
-        else:
-            session = Session(
-                id=entry.session_id,
-                project_id=project_id,
-                provider=Provider.CODEX,
-                file_path=str(relative_path),
-                type=SessionType.SESSION,
-            )
-
-        to_insert = read_session_items_from_file(session, entry.file_path)
-        if to_insert is None:
-            return None
-
-        stats["items_added"] += to_insert.actually_new_count
-        stats["sessions_created"] += 1
-
-        # If this is the first session forcing project creation, flag for stats.
-        if project is None and not project_will_be_created:
-            project_will_be_created = True
-            stats["project_created"] = 1
-
-        # Codex stores cwd in the first JSONL line, so we can pass it to
-        # the consumer for ``register_project_sync`` to create the project
-        # with the right directory/stale right away. Subsequent payloads
-        # for the same project also pass the cwd — the helper is
-        # idempotent (no-op if project already exists with same directory).
-        return CreateSessionPayload(
-            provider=Provider.CODEX,
-            project_id=project_id,
-            new_project_directory=entry.cwd,
-            new_project_stale=not os.path.isdir(entry.cwd),
-            session=session,
-            items=to_insert.items,
-            last_offset=to_insert.last_offset,
-            last_line=to_insert.last_line,
-            mtime=to_insert.mtime,
-        )
-
+    # Pass 2 — new top-level sessions (CREATEs). Subagents are resolved
+    # later, globally, by _sync_subagents.
+    created_a_regular = False
     for entry in regular_new:
         idx += 1
         if stop_event is not None and stop_event.is_set():
@@ -316,11 +403,17 @@ def sync_project(
                 on_session_progress(entry.session_id, idx, total_sessions)
             continue
 
-        payload = _build_create_payload(entry, is_subagent=False)
+        payload = _build_create_payload(entry, project_id, False, stats)
         if payload is None:
             if on_session_progress:
                 on_session_progress(entry.session_id, idx, total_sessions)
             continue
+
+        # The first session of a not-yet-existing project: the consumer
+        # creates the Project row from this payload's cwd.
+        if project is None and not created_a_regular:
+            stats["project_created"] = 1
+        created_a_regular = True
 
         sync_queue.put(payload)
         resolvable_parent_ids.add(entry.session_id)
@@ -328,62 +421,17 @@ def sync_project(
         if on_session_progress:
             on_session_progress(entry.session_id, idx, total_sessions)
 
-    # Subagent topology pass — repeat until no new subagent gets resolved
-    # in a full sweep. Worst case: O(depth × N), with depth bounded by
-    # the spawn-tree height (a handful in practice).
-    remaining = list(subagent_new)
-    while remaining:
-        progressed = False
-        next_remaining: list[_NewEntry] = []
-        for entry in remaining:
-            idx += 1
-            if stop_event is not None and stop_event.is_set():
-                logger.info(
-                    "  Sync interrupted for project %s (after %d/%d sessions)",
-                    project_id, idx - 1, total_sessions,
-                )
-                return stats
-
-            if not check_file_has_content(entry.file_path):
-                if on_session_progress:
-                    on_session_progress(entry.session_id, idx, total_sessions)
-                continue
-
-            if entry.parent_session_id not in resolvable_parent_ids:
-                # Parent isn't in DB yet and not in the queue yet either —
-                # try again on the next pass (it might be a subagent later
-                # in this batch).
-                idx -= 1  # don't double-count progress for this entry
-                next_remaining.append(entry)
-                continue
-
-            payload = _build_create_payload(entry, is_subagent=True)
-            if payload is None:
-                if on_session_progress:
-                    on_session_progress(entry.session_id, idx, total_sessions)
-                continue
-
-            sync_queue.put(payload)
-            resolvable_parent_ids.add(entry.session_id)
-
-            if on_session_progress:
-                on_session_progress(entry.session_id, idx, total_sessions)
-            progressed = True
-
-        if not progressed:
-            for entry in next_remaining:
-                logger.warning(
-                    "  Skipping orphan Codex subagent %s: parent %s not found "
-                    "(file %s)",
-                    entry.session_id, entry.parent_session_id, entry.file_path,
-                )
-            break
-        remaining = next_remaining
-
-    if project is None and not project_will_be_created:
+    if project is None and not created_a_regular:
+        # No top-level Codex session with content for this project this
+        # run. Any subagents were handed to _sync_subagents (which also
+        # creates their project row from the payload's cwd); a
+        # subagent-only project's metadata would recompute to 0/0
+        # (subagents are excluded from sessions_count and mtime), so the
+        # UpdateProjectMetadataPayload is correctly skipped here.
         elapsed = time.monotonic() - project_start
         logger.info(
-            f"  ⊘ Project {project_id} skipped in {elapsed:.1f}s — no Codex sessions with content"
+            f"  ⊘ Project {project_id} skipped in {elapsed:.1f}s — "
+            f"no top-level Codex sessions with content"
         )
         return stats
 
@@ -409,7 +457,8 @@ def sync_project(
     elapsed = time.monotonic() - project_start
     logger.info(
         f"  ✓ Project {project_id} done in {elapsed:.1f}s — "
-        f"{stats['items_added']} items, {stats['sessions_created']} new Codex sessions"
+        f"{stats['items_added']} items, {stats['sessions_created']} new "
+        f"top-level Codex sessions"
     )
 
     return stats
@@ -426,6 +475,9 @@ def sync_all(
     Synchronize all Codex sessions from :attr:`CodexHelpers.SESSIONS_DIR`.
 
     Pushes payloads onto ``sync_queue`` (the unified consumer drains them).
+    Every project's top-level sessions are pushed first; subagents are then
+    resolved in one global pass (:func:`_sync_subagents`), so a subagent
+    whose parent lives in another project is still linked correctly.
     """
     sync_start = time.monotonic()
 
@@ -496,6 +548,13 @@ def sync_all(
         f"{len(disk_files_by_relative_path)} session files"
     )
 
+    # Subagent parents are resolved globally (see _sync_subagents): a Codex
+    # subagent can run in a different cwd — hence project — than its parent.
+    # Seed with every existing Codex session id; sync_project adds each
+    # top-level session it pushes, and _sync_subagents adds each subagent.
+    resolvable_parent_ids: set[str] = {s.id for s in db_sessions_by_path.values()}
+    all_subagents: list[_NewEntry] = []
+
     for idx, project_id in enumerate(all_project_ids, start=1):
         if stop_event is not None and stop_event.is_set():
             logger.info(
@@ -512,6 +571,8 @@ def sync_all(
             new_entries=new_by_project.get(project_id, []),
             existing_entries=existing_by_project.get(project_id, []),
             sync_queue=sync_queue,
+            resolvable_parent_ids=resolvable_parent_ids,
+            subagents_out=all_subagents,
             on_session_progress=on_session_progress,
             stop_event=stop_event,
         )
@@ -524,6 +585,20 @@ def sync_all(
             on_project_done(project_id, project_stats)
 
     interrupted = stop_event is not None and stop_event.is_set()
+
+    # Subagent topology pass — global, after every project's top-level
+    # sessions have been pushed, so a subagent's parent is resolvable even
+    # when it belongs to another project.
+    if not interrupted:
+        _sync_subagents(
+            all_subagents,
+            resolvable_parent_ids,
+            sync_queue,
+            stats,
+            on_session_progress=on_session_progress,
+            stop_event=stop_event,
+        )
+        interrupted = stop_event is not None and stop_event.is_set()
 
     # Mark stale sessions (on DB but no longer on disk). Pushed as a
     # single batch payload so the consumer issues exactly one bulk UPDATE.
