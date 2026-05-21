@@ -34,7 +34,8 @@ class SessionItemsToInsert(NamedTuple):
     ``reset_compute_version`` on the payload.
 
     Producers receive ``None`` from :func:`read_session_items_from_file`
-    when the file has not changed since last sync — nothing to push.
+    when there is nothing to push — file missing, or unchanged since last
+    sync (unless the session is still flagged ``stale``; see that function).
     """
 
     items: list[tuple[int, str]]
@@ -114,8 +115,10 @@ def read_session_items_from_file(
     ``CreateSessionPayload`` or ``UpdateSessionPayload`` and pushes it onto
     the unified DB writer's queue.
 
-    Returns ``None`` when there is nothing to do (file missing, unchanged
-    since last sync).
+    Returns ``None`` when there is nothing to do (file missing, or unchanged
+    since last sync). Exception: an unchanged file whose session is still
+    flagged ``stale`` yields an empty result (no items) instead of ``None``,
+    so the caller can enqueue a stale-clearing ``UpdateSessionPayload``.
     """
     # EAFP, not LBYL: stat()/open() are attempted directly and any OSError
     # (typically FileNotFoundError from the file vanishing between a scan
@@ -131,6 +134,22 @@ def read_session_items_from_file(
     # Check file size too: mtime has ~1s resolution, so two writes within the same second
     # share the same mtime. Without the size check, the second write would be silently skipped.
     if session.mtime == file_mtime and session.last_offset >= stat.st_size:
+        if session.stale:
+            # The file is back on disk unchanged, but the session is still
+            # flagged stale from a run where the file was missing. There is no
+            # new content, yet the caller must still enqueue an
+            # UpdateSessionPayload so the consumer's clear_stale path can run —
+            # otherwise a deleted-then-restored session stays stale forever and
+            # is wrongly excluded from the project mtime. Return an empty
+            # result with the tracking fields unchanged. The stat() above
+            # succeeded, so this never fires for a vanished file.
+            return SessionItemsToInsert(
+                items=[],
+                last_offset=session.last_offset,
+                last_line=session.last_line,
+                mtime=file_mtime,
+                actually_new_count=0,
+            )
         return None
 
     try:

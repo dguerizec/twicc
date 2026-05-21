@@ -148,8 +148,11 @@ def _sync_session_subagents(
                     to_insert.actually_new_count > 0
                     and subagent.compute_version is not None
                 ),
-                # Old path never touched ``subagent.stale`` on items-changed
-                # branch — only the explicit mark-stale branch below.
+                # Subagent stale is deliberately left set: the stale-clear fix
+                # targets top-level sessions only. read_session_items_from_file
+                # may now return an empty result for a stale subagent whose
+                # file is back unchanged; with clear_stale=False that payload
+                # is a harmless consumer-side no-op.
                 clear_stale=False,
             ))
         else:
