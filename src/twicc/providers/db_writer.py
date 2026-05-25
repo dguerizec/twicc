@@ -301,6 +301,90 @@ class _AbandonComputeRunJob(NamedTuple):
     done: asyncio.Future
 
 
+# -----------------------------------------------------------------------------
+# Generic consumer jobs (periodic tasks routed through the unified writer)
+# -----------------------------------------------------------------------------
+#
+# These are pushed onto ``_consumer_jobs`` by an async producer (a periodic
+# task: commands sync, usage sync, model retirement, pricing) via
+# :func:`submit_consumer_job`. The producer prepares its payload — HTTP fetch,
+# filesystem scan, parsing — entirely outside the consumer; only the actual DB
+# write (and, for commands, the SELECT-current diff that precedes it) runs in
+# the consumer, in one ``transaction.atomic``. The job carries an
+# ``asyncio.Future`` the consumer settles with the result (or the exception),
+# so the producer awaits the apply just like any other consumer-routed work.
+#
+# Boot-time motivation: the periodic tasks' *first* iteration fires immediately
+# when their provider's orchestrator starts, in parallel with the initial-sync
+# producer the consumer is already draining. Two concurrent connections then
+# race for SQLite's WAL write lock and trip "database is locked" errors. By
+# routing them through the consumer we restore the single-writer guarantee.
+
+
+class _ApplyDesiredCommandsJob(NamedTuple):
+    """A request to reconcile ``Command`` rows for one ``(provider, activation_char)`` scope.
+
+    The producer (each provider's ``commands_task``) builds ``desired`` from
+    its own discovery source — filesystem scan for Claude Code, ``skills/list``
+    JSON-RPC for Codex — and submits this job. The consumer reads the current
+    rows from DB, computes the diff, and applies create/update/delete in one
+    ``transaction.atomic``. ``future`` resolves to the same stats dict the old
+    ``apply_desired_commands`` helper returned.
+    """
+
+    provider: Provider
+    activation_char: str
+    desired: dict[tuple[str | None, str], dict]
+    future: asyncio.Future  # → dict[str, int] with keys created/updated/deleted/unchanged
+
+
+class _CreateUsageSnapshotJob(NamedTuple):
+    """A request to insert a new ``UsageSnapshot`` row.
+
+    The producer (each provider's ``usage_task``) calls its ``fetch_usage``,
+    parses the API response into the ``UsageSnapshot`` column fields, and
+    submits this job. The consumer issues one ``UsageSnapshot.objects.create``.
+    ``future`` resolves to the created ``UsageSnapshot`` instance so the
+    producer can log its values.
+    """
+
+    provider: Provider
+    fields: dict
+    future: asyncio.Future  # → UsageSnapshot
+
+
+class _RetireSessionsJob(NamedTuple):
+    """A request to apply per-session retirement-driven field updates.
+
+    The producer (``model_retirement_task``) iterates the active agent
+    managers, decides which sessions need their ``selected_model`` (and
+    possibly ``effort``) upgraded, and submits the resulting
+    ``{session_id: field_updates}`` map. The consumer applies them in one
+    ``transaction.atomic`` via ``Session.objects.filter(id=sid).update(**upd)``
+    per session. ``future`` resolves to the number of sessions touched.
+    """
+
+    provider: Provider
+    updates: dict[str, dict[str, object]]
+    future: asyncio.Future  # → int (count of sessions updated)
+
+
+class _PersistProviderPricesJob(NamedTuple):
+    """A request to upsert OpenRouter prices for one provider.
+
+    The producer (``pricing_task``) calls ``fetch_openrouter_models`` and
+    ``extract_provider_prices`` (HTTP + parse, no DB), then submits this job.
+    The consumer applies the diff in one ``transaction.atomic``: for each row,
+    SELECT the latest, INSERT a new history row only if anything actually
+    changed. Invalidates the in-process price cache when at least one row was
+    created. ``future`` resolves to a ``{"created": N, "unchanged": M}`` dict.
+    """
+
+    provider: Provider
+    prices: list[dict]
+    future: asyncio.Future  # → dict[str, int] with keys created/unchanged
+
+
 # =============================================================================
 # Lifecycle + completion API (called by run_server and the orchestrators)
 # =============================================================================
@@ -479,6 +563,32 @@ async def abandon_compute_run(run_id: int, provider: Provider) -> None:
         await done
 
 
+async def submit_consumer_job(job) -> object:
+    """Push a periodic-task job onto the consumer queue and await its result.
+
+    Used by the periodic-task producers (commands sync, usage sync, model
+    retirement, pricing) to route their DB writes through the unified writer.
+    The caller pre-creates ``job.future`` (typically with
+    ``loop.create_future()``) so this function can stay tiny and the job's
+    NamedTuple is fully immutable. The consumer settles ``job.future`` with
+    the apply's return value, or with the apply's exception so the producer
+    sees the failure rather than silently dropping it.
+
+    Raises ``RuntimeError`` if the writer is not started or has been signalled
+    to stop. A producer that has just received its task-level stop event
+    should check it before calling this — the periodic loops do so via their
+    own ``stop_event.is_set()`` check, and the consumer outlives them all
+    (the global shutdown stops every orchestrator before the writer, so a
+    live periodic task always has a live writer to talk to).
+    """
+    if _consumer_task is None or _consumer_stop_event is None or _consumer_jobs is None:
+        raise RuntimeError("unified DB writer not started")
+    if _consumer_stop_event.is_set():
+        raise RuntimeError("unified DB writer is stopping")
+    _consumer_jobs.put_nowait(job)
+    return await job.future
+
+
 # =============================================================================
 # The consumer loop
 # =============================================================================
@@ -532,13 +642,38 @@ async def _drain_one() -> bool:
         except Exception as exc:
             logger.error(f"Error processing initial-sync message: {exc}", exc_info=True)
 
-    # ---- Consumer-side finalization jobs (intra-process) ----
+    # ---- Consumer-side jobs (intra-process) ----
     try:
         job = _consumer_jobs.get_nowait()
     except asyncio.QueueEmpty:
         pass
     else:
         any_processed = True
+        await _dispatch_consumer_job(job)
+
+    return any_processed
+
+
+async def _dispatch_consumer_job(job) -> None:
+    """Apply one consumer job and settle its caller-visible Future.
+
+    Two job families share ``_consumer_jobs``:
+
+    - :class:`_AbandonComputeRunJob` is a finalization request from a
+      provider's ``shutdown()``; the producer awaits ``job.done`` and only
+      cares that the consumer reached this point, so we always resolve it
+      with ``None`` (even on failure — a hang would block shutdown).
+    - The four periodic-task jobs (:class:`_ApplyDesiredCommandsJob`,
+      :class:`_CreateUsageSnapshotJob`, :class:`_RetireSessionsJob`,
+      :class:`_PersistProviderPricesJob`) carry the actual apply result; we
+      settle their ``job.future`` with the result on success, or with the
+      raised exception so the producer can log / surface it instead of
+      silently dropping the failure.
+
+    Every per-job apply is wrapped here so one bad message can neither crash
+    the consumer tick nor strand the messages queued behind it.
+    """
+    if isinstance(job, _AbandonComputeRunJob):
         try:
             await _finalize_abandoned_run(job.run_id, job.provider)
         except Exception as exc:
@@ -547,12 +682,50 @@ async def _drain_one() -> bool:
                 exc_info=True,
             )
         finally:
-            # Always resolve, on success or error, so abandon_compute_run()
-            # (and the provider shutdown awaiting it) can never hang.
             if not job.done.done():
                 job.done.set_result(None)
+        return
 
-    return any_processed
+    if isinstance(job, _ApplyDesiredCommandsJob):
+        await _settle_periodic_job(job, _apply_desired_commands_job, "commands sync")
+        return
+
+    if isinstance(job, _CreateUsageSnapshotJob):
+        await _settle_periodic_job(job, _apply_create_usage_snapshot_job, "usage sync")
+        return
+
+    if isinstance(job, _RetireSessionsJob):
+        await _settle_periodic_job(job, _apply_retire_sessions_job, "model retirement")
+        return
+
+    if isinstance(job, _PersistProviderPricesJob):
+        await _settle_periodic_job(job, _apply_persist_provider_prices_job, "price sync")
+        return
+
+    logger.error(f"Unknown consumer job type: {type(job).__name__} => {job!r:.300}")
+
+
+async def _settle_periodic_job(job, apply_fn, label: str) -> None:
+    """Run a periodic-task job's sync apply, then settle its Future.
+
+    ``apply_fn`` is a synchronous function (it runs in ``transaction.atomic``
+    on a worker thread via ``sync_to_async``) that takes the job and returns
+    the value the caller awaits. Any exception is logged and forwarded to the
+    Future as an exception result, so the producer sees a real failure rather
+    than a stranded ``await``.
+    """
+    try:
+        result = await sync_to_async(apply_fn)(job)
+    except Exception as exc:
+        logger.error(
+            f"Error applying {label} job for provider={job.provider.value}: {exc}",
+            exc_info=True,
+        )
+        if not job.future.done():
+            job.future.set_exception(exc)
+        return
+    if not job.future.done():
+        job.future.set_result(result)
 
 
 async def _consumer_loop() -> None:
@@ -1181,3 +1354,81 @@ def _apply_sync_session_titles_payload(payload: SyncSessionTitlesPayload) -> lis
         if changed:
             Session.objects.bulk_update(changed, ["title"], batch_size=50)
     return [serialize_session(s) for s in changed]
+
+
+# =============================================================================
+# Periodic-task job handlers (commands, usage, model retirement, pricing)
+# =============================================================================
+#
+# Each handler runs synchronously on a worker thread (via ``sync_to_async`` in
+# :func:`_settle_periodic_job`) inside its own ``transaction.atomic``, like
+# every other consumer write. The producer side prepared everything that does
+# not touch DB (HTTP fetches, filesystem scans, parsing); only the actual
+# diff/write happens here.
+
+
+def _apply_desired_commands_job(job: _ApplyDesiredCommandsJob) -> dict[str, int]:
+    """Reconcile ``Command`` rows for one ``(provider, activation_char)`` scope.
+
+    Delegates to the existing shared helper :func:`apply_desired_commands`
+    so the diff/apply logic stays in one place — wrapped here in
+    ``transaction.atomic`` so the SELECT current + delete/create/update all
+    commit (or roll back) together, and so the helper is never invoked from a
+    different writer.
+    """
+    from twicc.providers.commands_sync import apply_desired_commands
+
+    with transaction.atomic():
+        return apply_desired_commands(
+            provider=job.provider.value,
+            activation_char=job.activation_char,
+            desired=job.desired,
+        )
+
+
+def _apply_create_usage_snapshot_job(job: _CreateUsageSnapshotJob) -> object:
+    """Insert one ``UsageSnapshot`` row from the producer-prepared ``fields``.
+
+    The producer (each provider's ``usage_task``) parsed the API response
+    into ``fields`` before submitting, so this is a single ``create()`` — no
+    upstream parsing happens in the consumer thread.
+    """
+    from twicc.core.models import UsageSnapshot
+
+    with transaction.atomic():
+        return UsageSnapshot.objects.create(**job.fields)
+
+
+def _apply_retire_sessions_job(job: _RetireSessionsJob) -> int:
+    """Apply per-session field updates for retirement-driven upgrades.
+
+    ``updates`` maps each session id to the field/value dict the producer
+    wants applied (``selected_model``, possibly ``effort``). Sessions that no
+    longer exist (e.g. the row was deleted between the producer's iteration
+    and the consumer's apply) contribute 0 to the count — a transient miss,
+    not an error. Returns the number of rows actually updated.
+    """
+    from twicc.core.models import Session
+
+    if not job.updates:
+        return 0
+    count = 0
+    with transaction.atomic():
+        for session_id, fields in job.updates.items():
+            count += Session.objects.filter(id=session_id).update(**fields)
+    return count
+
+
+def _apply_persist_provider_prices_job(job: _PersistProviderPricesJob) -> dict[str, int]:
+    """Persist OpenRouter prices for one provider.
+
+    Delegates to the existing :func:`persist_provider_prices` helper so the
+    SELECT-latest / INSERT-on-change logic stays in one place — wrapped here
+    in ``transaction.atomic`` so the per-row SELECT and INSERT pairs commit
+    (or roll back) together, and so the helper is never invoked from a
+    different writer.
+    """
+    from twicc.pricing import persist_provider_prices
+
+    with transaction.atomic():
+        return persist_provider_prices(job.provider, job.prices)
