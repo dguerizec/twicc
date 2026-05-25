@@ -14,6 +14,7 @@ Credentials access lives in :mod:`.credentials`.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
@@ -125,19 +126,22 @@ def _extract_window_fields(window: dict | None, prefix: str) -> dict:
     }
 
 
-def save_usage_snapshot(raw: dict) -> UsageSnapshot:
-    """Translate a raw Codex usage response into a ``UsageSnapshot`` row.
+def _build_usage_snapshot_fields(raw: dict) -> dict:
+    """Translate a raw Codex usage response into ``UsageSnapshot`` columns.
 
-    The raw payload is preserved verbatim in ``raw_response`` so we can
-    surface anything Codex-specific (``credits``, ``plan_type``,
-    ``email``, …) from the wire snapshot later without a backfill.
-    Quota windows are mapped onto the cross-provider columns so the
+    Pure — no DB access. The raw payload is preserved verbatim in
+    ``raw_response`` so we can surface anything Codex-specific (``credits``,
+    ``plan_type``, ``email``, …) from the wire snapshot later without a
+    backfill. Quota windows are mapped onto the cross-provider columns so the
     front-end consumes the same shape as Claude Code's snapshots.
 
     Codex has no equivalent of Anthropic's ``extra_usage`` block (the
-    semantics of ``credits.balance`` are *remaining* credits, not
-    *used* ones, and would mislead the existing UI), so the
-    ``extra_usage_*`` columns stay at their default zero/null values.
+    semantics of ``credits.balance`` are *remaining* credits, not *used*
+    ones, and would mislead the existing UI), so the ``extra_usage_*``
+    columns stay at their default zero/null values.
+
+    The actual ``UsageSnapshot.objects.create`` happens on the unified
+    consumer's single-writer path, via :class:`_CreateUsageSnapshotJob`.
     """
     from twicc.core.enums import Provider
 
@@ -151,7 +155,7 @@ def save_usage_snapshot(raw: dict) -> UsageSnapshot:
     fields.update(_extract_window_fields(rate_limit.get("primary_window"), "five_hour"))
     fields.update(_extract_window_fields(rate_limit.get("secondary_window"), "seven_day"))
 
-    return UsageSnapshot.objects.create(**fields)
+    return fields
 
 
 def read_usage_from_file(file_path: str) -> dict | None:
@@ -190,15 +194,13 @@ def dump_usage_to_file(raw: dict, file_path: str) -> None:
         logger.warning("Failed to dump Codex usage to file: %s — %s", file_path, e)
 
 
-def fetch_and_save_usage() -> UsageSnapshot | None:
-    """Fetch (or read from file) a Codex usage payload and store a snapshot.
+def _fetch_usage_raw_blocking() -> dict | None:
+    """Blocking half of :func:`fetch_and_save_usage` — pure I/O, no DB.
 
-    Mirrors the Claude Code orchestration: when the user has enabled
-    read mode in synced settings, load from the configured path
-    instead of hitting the API; when dump mode is on, persist the
-    fresh API response to the configured path before saving the
-    snapshot. The two modes are mutually exclusive — read mode wins
-    and dump is skipped.
+    Reads the synced settings and either loads a previously dumped payload
+    from disk (read mode) or hits ChatGPT's ``wham/usage`` endpoint. On a
+    successful API fetch, optionally dumps the raw response to disk. Returns
+    the raw payload, or ``None`` when nothing usable was fetched.
     """
     from twicc.synced_settings import read_synced_settings
 
@@ -209,17 +211,48 @@ def fetch_and_save_usage() -> UsageSnapshot | None:
     dump_path = settings.get("codexUsageDumpFilePath", "")
 
     if read_enabled and read_path:
-        raw = read_usage_from_file(read_path)
-    else:
-        raw = fetch_usage()
-        if raw is not None and dump_enabled and dump_path:
-            dump_usage_to_file(raw, dump_path)
+        return read_usage_from_file(read_path)
 
+    raw = fetch_usage()
+    if raw is not None and dump_enabled and dump_path:
+        dump_usage_to_file(raw, dump_path)
+    return raw
+
+
+async def fetch_and_save_usage() -> UsageSnapshot | None:
+    """Fetch a Codex usage payload (API or replay file) and persist via the consumer.
+
+    Mirrors the Claude Code orchestration: when the user has enabled read
+    mode in synced settings, load from the configured path instead of hitting
+    the API; when dump mode is on, persist the fresh API response to the
+    configured path before saving the snapshot. The two modes are mutually
+    exclusive — read mode wins and dump is skipped.
+
+    The HTTP / file read happens on a worker thread; the parsed-fields dict
+    is then routed through the unified DB writer via
+    :class:`_CreateUsageSnapshotJob`, so the ``UsageSnapshot.objects.create``
+    never races the consumer on the SQLite write lock.
+    """
+    from twicc.core.enums import Provider
+    from twicc.providers.db_writer import _CreateUsageSnapshotJob, submit_consumer_job
+
+    raw = await asyncio.to_thread(_fetch_usage_raw_blocking)
     if raw is None:
         return None
 
     try:
-        return save_usage_snapshot(raw)
-    except Exception as e:
+        fields = _build_usage_snapshot_fields(raw)
+    except Exception as e:  # noqa: BLE001 — log and surface as a soft miss
+        logger.error("Failed to parse Codex usage snapshot fields: %s", e, exc_info=True)
+        return None
+
+    future = asyncio.get_running_loop().create_future()
+    try:
+        return await submit_consumer_job(_CreateUsageSnapshotJob(
+            provider=Provider.CODEX,
+            fields=fields,
+            future=future,
+        ))
+    except Exception as e:  # noqa: BLE001 — log and surface as a soft miss
         logger.error("Failed to save Codex usage snapshot: %s", e, exc_info=True)
         return None

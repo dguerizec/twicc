@@ -57,7 +57,7 @@ async def start_usage_sync_task() -> None:
     while not stop_event.is_set():
         success = False
         try:
-            snapshot = await asyncio.to_thread(fetch_and_save_usage)
+            snapshot = await fetch_and_save_usage()
             if snapshot:
                 success = True
                 logger.info(

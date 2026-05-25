@@ -9,6 +9,7 @@ Also provides cost estimation for quota periods by summing
 SessionItem costs within the relevant time windows.
 """
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
@@ -103,23 +104,19 @@ def _extract_quota_fields(data: dict | None, prefix: str) -> dict:
     }
 
 
-def save_usage_snapshot(raw: dict) -> UsageSnapshot:
-    """
-    Parse a raw usage API response and save it as a UsageSnapshot.
+def _build_usage_snapshot_fields(raw: dict) -> dict:
+    """Translate a raw Anthropic usage API response into ``UsageSnapshot`` columns.
 
-    Args:
-        raw: The raw JSON response from the usage API.
-
-    Returns:
-        The created UsageSnapshot instance.
+    Pure — no DB access. The producer (``fetch_and_save_usage``) calls this
+    on the worker thread that did the HTTP fetch, then hands the result to
+    the unified consumer via :class:`_CreateUsageSnapshotJob` so the actual
+    ``UsageSnapshot.objects.create`` happens on the single-writer path.
     """
     from twicc.core.enums import Provider
 
-    now = datetime.now(timezone.utc)
-
     fields = {
         "provider": Provider.CLAUDE_CODE.value,
-        "fetched_at": now,
+        "fetched_at": datetime.now(timezone.utc),
         "raw_response": raw,
     }
 
@@ -143,7 +140,7 @@ def save_usage_snapshot(raw: dict) -> UsageSnapshot:
         fields["extra_usage_used_credits"] = None
         fields["extra_usage_utilization"] = None
 
-    return UsageSnapshot.objects.create(**fields)
+    return fields
 
 
 def read_usage_from_file(file_path: str) -> dict | None:
@@ -197,13 +194,13 @@ def dump_usage_to_file(raw: dict, file_path: str) -> None:
         logger.warning("Failed to dump usage to file: %s — %s", file_path, e)
 
 
-def fetch_and_save_usage() -> UsageSnapshot | None:
-    """
-    Fetch usage data from the API (or from a local JSON file if configured)
-    and save a snapshot. Optionally dumps the raw API response to a file.
+def _fetch_usage_raw_blocking() -> dict | None:
+    """Blocking half of :func:`fetch_and_save_usage` — pure I/O, no DB.
 
-    Returns:
-        The created UsageSnapshot, or None if fetch failed.
+    Reads the synced settings (file read), then either loads a previously
+    dumped payload from disk or hits the Anthropic API; on a successful
+    API fetch, optionally dumps the raw response to disk. Returns the raw
+    payload, or ``None`` when nothing usable was fetched.
     """
     from twicc.synced_settings import read_synced_settings
 
@@ -214,18 +211,45 @@ def fetch_and_save_usage() -> UsageSnapshot | None:
     dump_path = settings.get("claudeCodeUsageDumpFilePath", "")
 
     if read_enabled and read_path:
-        raw = read_usage_from_file(read_path)
-    else:
-        raw = fetch_usage()
-        # Dump raw response to file if enabled (only when fetching from API)
-        if raw is not None and dump_enabled and dump_path:
-            dump_usage_to_file(raw, dump_path)
+        return read_usage_from_file(read_path)
 
+    raw = fetch_usage()
+    # Dump raw response to file if enabled (only when fetching from API)
+    if raw is not None and dump_enabled and dump_path:
+        dump_usage_to_file(raw, dump_path)
+    return raw
+
+
+async def fetch_and_save_usage() -> UsageSnapshot | None:
+    """Fetch a usage payload (API or replay file) and persist it via the consumer.
+
+    The HTTP / file read happens on a worker thread; the parsed-fields dict
+    is then routed through the unified DB writer via
+    :class:`_CreateUsageSnapshotJob`, so the ``UsageSnapshot.objects.create``
+    never races the consumer on the SQLite write lock. Returns the created
+    ``UsageSnapshot``, or ``None`` when nothing was fetched (credentials
+    missing, API error, or replay file unreadable).
+    """
+    from twicc.core.enums import Provider
+    from twicc.providers.db_writer import _CreateUsageSnapshotJob, submit_consumer_job
+
+    raw = await asyncio.to_thread(_fetch_usage_raw_blocking)
     if raw is None:
         return None
 
     try:
-        return save_usage_snapshot(raw)
-    except Exception as e:
+        fields = _build_usage_snapshot_fields(raw)
+    except Exception as e:  # noqa: BLE001 — log and surface as a soft miss
+        logger.error("Failed to parse usage snapshot fields: %s", e, exc_info=True)
+        return None
+
+    future = asyncio.get_running_loop().create_future()
+    try:
+        return await submit_consumer_job(_CreateUsageSnapshotJob(
+            provider=Provider.CLAUDE_CODE,
+            fields=fields,
+            future=future,
+        ))
+    except Exception as e:  # noqa: BLE001 — log and surface as a soft miss
         logger.error("Failed to save usage snapshot: %s", e, exc_info=True)
         return None
