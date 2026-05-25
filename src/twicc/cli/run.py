@@ -157,10 +157,24 @@ async def run_server(port: int):
     # Set up signal handlers to ensure clean shutdown
     shutdown_event = asyncio.Event()
 
+    # Start the unified DB writer FIRST, before any producer that writes to
+    # the DB. Every periodic task that lands a write — initial price sync
+    # below, commands_task / usage_task / model_retirement_task spawned by
+    # the orchestrators, and the per-provider initial sync + compute they
+    # drive — routes its writes through this consumer's queues. Standing it
+    # up before any of them guarantees the consumer always exists by the
+    # time a producer tries to submit. ``stop_unified_consumer`` is used at
+    # the very end of this function's shutdown path, after every producer
+    # has shut down.
+    from twicc.providers.db_writer import start_unified_consumer, stop_unified_consumer
+    start_unified_consumer()
+
     # Cross-provider initial price sync runs *before* per-provider orchestrators
     # so they can rely on prices being in DB by the time their compute paths run.
     # A single OpenRouter fetch covers every provider that has declared an
-    # ``OPENROUTER_MODEL_PREFIX``; failure here is logged and non-fatal.
+    # ``OPENROUTER_MODEL_PREFIX``; failure here is logged and non-fatal. The
+    # actual ``ModelPrice`` inserts flow through the unified consumer started
+    # just above.
     await sync_all_providers()
     init_manifest()
 
@@ -181,12 +195,6 @@ async def run_server(port: int):
     # Per-provider orchestrators (started in parallel; each one is
     # responsible for its own task graph and dependency ordering).
     orchestrators = get_orchestrator_registry()
-
-    # Start the unified DB writer before any producer (orchestrator) starts,
-    # so its shared queues already exist when the orchestrators wire them in.
-    # ``stop_unified_consumer`` is used later in this function's shutdown path.
-    from twicc.providers.db_writer import start_unified_consumer, stop_unified_consumer
-    start_unified_consumer()
 
     await orchestrators.start_all(shutdown_event, search_index_ready)
 
