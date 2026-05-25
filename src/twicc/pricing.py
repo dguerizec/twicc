@@ -33,6 +33,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, NamedTuple
 
 import httpx
+from django.db import transaction
 
 if TYPE_CHECKING:
     from twicc.core.enums import Provider
@@ -183,7 +184,16 @@ def persist_provider_prices(
         stats["created"] += 1
 
     if stats["created"] > 0:
-        ModelPrice.invalidate_price_cache()
+        # Defer the in-process cache invalidation until the surrounding
+        # transaction commits. R17#5 wraps every call to this helper in
+        # ``transaction.atomic`` on the consumer's single-writer path; without
+        # ``on_commit`` the new rows are still uncommitted when we invalidate,
+        # and a concurrent reader can repopulate the cache from the OLD
+        # committed rows — leaving stale prices cached *after* our commit.
+        # When no transaction is active (legacy / test-time auto-commit call
+        # sites), Django runs the callback immediately, so the non-atomic
+        # path behaves the same as before.
+        transaction.on_commit(ModelPrice.invalidate_price_cache)
 
     return stats
 

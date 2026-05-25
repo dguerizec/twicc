@@ -586,7 +586,17 @@ async def submit_consumer_job(job) -> object:
     if _consumer_stop_event.is_set():
         raise RuntimeError("unified DB writer is stopping")
     _consumer_jobs.put_nowait(job)
-    return await job.future
+    # ``asyncio.shield`` guards ``job.future`` against producer-task cancellation.
+    # asyncio normally cancels the Future a cancelled Task is awaiting (via
+    # ``Task._fut_waiter``); without the shield, ``job.future.cancelled()`` would
+    # then be True by the time the consumer reaches ``_settle_periodic_job``, and
+    # its ``if not job.future.done(): set_result/set_exception`` guard would
+    # silently drop the apply's outcome. With the shield, a CancelledError still
+    # propagates out of this ``await`` to the caller (so a hot-toggle / shutdown
+    # cancel still tears down promptly), but the future itself stays settleable
+    # — the consumer's apply is always observed, even if no producer is left
+    # awaiting it.
+    return await asyncio.shield(job.future)
 
 
 # =============================================================================
