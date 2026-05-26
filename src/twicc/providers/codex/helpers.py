@@ -7,6 +7,7 @@ provider helpers registry.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterable
 from decimal import Decimal
 from pathlib import Path
@@ -33,6 +34,9 @@ from .constants import (
 )
 from .pricing import extract_model_info
 from .streaming_registry import get_streamed_item_registry
+
+logger = logging.getLogger(__name__)
+
 
 # Wrapper-level types and their tool-result payload sub-types. Mirrors
 # the discovery rules in ``codex.compute``; kept inline to avoid a
