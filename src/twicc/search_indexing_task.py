@@ -85,15 +85,30 @@ class _MarkIndexedBuffer:
     is reached, or after ``MAX_AGE_SECONDS`` of inactivity for the tail
     that may not fill an entire batch.
 
-    The submission is fire-and-forget for throughput (we don't want a slow
-    apply to gate the next ``_index_session``), but every in-flight job's
-    Future is kept on :attr:`_pending_futures` so :meth:`drain` can await
-    them all before the sweep is declared complete. Both the happy path
-    end of :func:`_run_indexing` and the cancellation ``finally`` route
-    through :meth:`drain` — Tantivy commit and DB mark already form a
-    non-atomic pair (a crash between them re-indexes the session at next
-    boot, see migration ``0066_backfill_search_version``), and the batch
-    widens that window by at most ``MAX_SIZE`` sessions or ``MAX_AGE_SECONDS``.
+    **Fire-and-forget batching.** The submission goes through
+    :func:`enqueue_async_job`, the synchronous enqueue-only sibling of
+    :func:`submit_async_job`: ``_flush_now`` returns as soon as the job
+    lands on the DB writer's async queue, without awaiting the apply.
+    Without this, the buffer would still reduce N UPDATEs to ceil(N /
+    MAX_SIZE), but the indexer would stall on every size-triggered flush
+    waiting for the DB writer to settle the Future — i.e. the apply time
+    becomes a per-batch latency multiplier and we lose the "indexer keeps
+    going while previous batch is committing" property the batching is
+    supposed to buy.
+
+    To keep :meth:`drain` honest the Future is recorded on
+    :attr:`_pending_futures` BEFORE the enqueue, so even an unlikely
+    ``enqueue_async_job`` failure (writer stopping / not started, which
+    we then settle the Future with) is observed by the drain. Both the
+    happy path end of :func:`_run_indexing` and the cancellation
+    ``finally`` route through :meth:`drain` so nothing that already hit
+    Tantivy stays ``search_version=NULL`` in DB just because the loop
+    stopped between ``_index_session`` and the next implicit flush.
+    Tantivy commit and DB mark form a non-atomic pair (a crash between
+    them re-indexes the session at next boot — same baseline migration
+    ``0066_backfill_search_version`` already covers), and the batch
+    widens that window by at most ``MAX_SIZE`` sessions or
+    ``MAX_AGE_SECONDS``.
     """
 
     MAX_SIZE = 50
@@ -124,11 +139,29 @@ class _MarkIndexedBuffer:
     async def _flush_now(self) -> None:
         """Submit the current batch as one :class:`_MarkSessionsIndexedJob`.
 
-        Cancels the inactivity timer (if any) so a delayed flush can't
-        double-submit after a size-triggered flush already drained the
-        buffer.
+        Two callers: the size-triggered path inside :meth:`add` (sibling of
+        the timer), and the timer task itself reaching this method through
+        :meth:`_delayed_flush`. In the second case ``self._flush_task is
+        asyncio.current_task()``, so we must NOT cancel it — that would
+        inject ``CancelledError`` into our own continuation and (depending on
+        which await fires first) bypass the bookkeeping that keeps
+        :meth:`drain` honest about which apply Futures are still in flight.
+
+        Everything past the ``_items`` swap is synchronous (the enqueue is
+        sync, the Future is appended before the enqueue) so the entire
+        critical section is atomic with respect to the event loop: no
+        cancellation point can sneak between "swap the items" and
+        "record the Future".
         """
-        if self._flush_task is not None and not self._flush_task.done():
+        # Cancel the inactivity timer only when it is a SIBLING task. If we
+        # are the timer task ourselves, just clear the slot — Python lets
+        # us cancel ``current_task`` but doing so silently dropped the
+        # ``_pending_futures.append`` below in the original implementation.
+        if (
+            self._flush_task is not None
+            and not self._flush_task.done()
+            and self._flush_task is not asyncio.current_task()
+        ):
             self._flush_task.cancel()
         self._flush_task = None
         if not self._items:
@@ -137,15 +170,24 @@ class _MarkIndexedBuffer:
         self._items = []
         # Lazy import: avoids a top-level dependency on ``db_writer`` (which
         # imports Django models) at module import time.
-        from twicc.providers.db_writer import _MarkSessionsIndexedJob, submit_async_job
+        from twicc.providers.db_writer import _MarkSessionsIndexedJob, enqueue_async_job
 
         future: asyncio.Future = asyncio.get_running_loop().create_future()
-        await submit_async_job(_MarkSessionsIndexedJob(
-            session_ids=batch,
-            future=future,
-            provider=None,
-        ))
+        # Track the Future BEFORE submitting so :meth:`drain` always sees it,
+        # even on an unlikely ``enqueue_async_job`` failure path. If the
+        # enqueue raises (writer stopping / not started), settle the Future
+        # ourselves so the eventual :meth:`drain` ``gather`` doesn't hang
+        # waiting for a result the DB writer will never produce.
         self._pending_futures.append(future)
+        try:
+            enqueue_async_job(_MarkSessionsIndexedJob(
+                session_ids=batch,
+                future=future,
+                provider=None,
+            ))
+        except Exception as exc:
+            if not future.done():
+                future.set_exception(exc)
 
     async def drain(self) -> None:
         """Flush the buffer and await every in-flight mark apply.

@@ -611,10 +611,13 @@ class OrchestratorRegistry:
         # it idempotently to release waiters — without touching the global
         # shutdown event the guard above checks. If this provider is no longer
         # running-and-enabled, the wait was unblocked by its teardown, not by
-        # compute finishing: skip the re-index. search_indexing_task writes
-        # Session.search_version directly, outside the DB writer, so a
-        # kick now would reintroduce SQLite write contention against the
-        # still-draining shutdown and index a partial hot-toggled run.
+        # compute finishing: skip the re-index. The mark writes themselves go
+        # through the DB writer now (R19's _MarkSessionsIndexedJob), so this
+        # is no longer about SQLite write contention; the concern is that
+        # kicking off a fresh sweep right as a provider is tearing down would
+        # index a partial / inconsistent slice of its sessions and add an
+        # asyncio task to the indexer pool that the teardown path then has
+        # to chase down through ``get_active_indexing_tasks``.
         if not is_provider_running(provider) or not is_provider_enabled(provider):
             return
         # Lazy import to avoid pulling search_indexing_task at module

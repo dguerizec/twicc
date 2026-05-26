@@ -568,6 +568,31 @@ async def abandon_compute_run(run_id: int, provider: Provider) -> None:
         await done
 
 
+def enqueue_async_job(job) -> None:
+    """Queue an async-queue job for the DB writer without awaiting its result.
+
+    Synchronous shape of :func:`submit_async_job`: the caller keeps the
+    ``job.future`` reference and decides when (if ever) to await it. Useful
+    for producers that batch many small jobs and want to keep submitting
+    while previous batches are still being applied — most notably the
+    cross-provider search-indexing sweep, which would otherwise serialize
+    one batch's apply between successive indexed-session loops (the size
+    of the batch becomes a latency multiplier, defeating the point of
+    batching).
+
+    Same lifecycle guards as :func:`submit_async_job`: raises ``RuntimeError``
+    if the writer is not started or has been signalled to stop. The caller
+    is responsible for settling ``job.future`` (with an exception, typically)
+    if this raises — the DB writer will never see the job in that case, and
+    nothing else would otherwise complete the Future.
+    """
+    if _db_writer_task is None or _db_writer_stop_event is None or _async_queue is None:
+        raise RuntimeError("DB writer not started")
+    if _db_writer_stop_event.is_set():
+        raise RuntimeError("DB writer is stopping")
+    _async_queue.put_nowait(job)
+
+
 async def submit_async_job(job) -> object:
     """Push a periodic-task job onto the DB writer queue and await its result.
 
@@ -586,11 +611,7 @@ async def submit_async_job(job) -> object:
     (the global shutdown stops every orchestrator before the writer, so a
     live periodic task always has a live writer to talk to).
     """
-    if _db_writer_task is None or _db_writer_stop_event is None or _async_queue is None:
-        raise RuntimeError("DB writer not started")
-    if _db_writer_stop_event.is_set():
-        raise RuntimeError("DB writer is stopping")
-    _async_queue.put_nowait(job)
+    enqueue_async_job(job)
     # ``asyncio.shield`` guards ``job.future`` against producer-task cancellation.
     # asyncio normally cancels the Future a cancelled Task is awaiting (via
     # ``Task._fut_waiter``); without the shield, ``job.future.cancelled()`` would
@@ -750,12 +771,13 @@ async def _dispatch_async_job(job) -> None:
     - **Convention check up front**: every async job MUST declare a
       ``provider`` field — either a :class:`Provider` value (per-provider
       jobs) or ``None`` (cross-provider / system jobs such as
-      :class:`MarkSessionsIndexedJob`, which sweeps sessions of every
-      provider in one shot). The field is read by :func:`_settle_async_job`
-      for logging and by :func:`provider_log_context` for the log-record
-      tag; ``None`` falls back to the ``"global"`` tag. A job missing the
-      field outright, or carrying a non-Provider non-None value, is
-      rejected before dispatch and its future settled with a ``TypeError``.
+      :class:`_MarkSessionsIndexedJob`, which sweeps sessions of every
+      provider in one shot). The field is read by :func:`_drain_one` to
+      bind :func:`provider_log_context` around the apply, so log records
+      emitted from inside the apply carry the right provider tag (``None``
+      falls back to the ``"global"`` tag). A job missing the field outright,
+      or carrying a non-Provider non-None value, is rejected before dispatch
+      and its future settled with a ``TypeError``.
     - **Unmatched job at the end**: if no generic ``isinstance`` matched
       AND no provider helper claimed the job, we settle the future with
       a ``RuntimeError`` rather than ``return``-ing silently.
@@ -854,12 +876,14 @@ async def _settle_async_job(job, apply_fn, label: str) -> None:
     Future as an exception result, so the producer sees a real failure rather
     than a stranded ``await``.
 
-    Every job is expected to carry a ``provider`` attribute — either a
-    :class:`twicc.core.enums.Provider` (generic R17 jobs fan out across
-    providers, provider-specific jobs routed via
-    :meth:`BaseProviderHelpers.try_handle_async_job` belong to one provider
-    too) or ``None`` for cross-provider / system jobs like
-    :class:`MarkSessionsIndexedJob`. The field is read here for logging.
+    The ``provider`` attribute carried by every job (either a
+    :class:`twicc.core.enums.Provider` for per-provider jobs or ``None``
+    for cross-provider / system jobs like :class:`_MarkSessionsIndexedJob`)
+    is not read here — :func:`_drain_one` already wraps the dispatch in
+    :func:`provider_log_context` so log records emitted from the apply
+    carry the right tag. This function's own logging uses ``label`` so the
+    failure line identifies which periodic task failed without needing the
+    provider value.
     """
     try:
         result = await sync_to_async(apply_fn)(job)
