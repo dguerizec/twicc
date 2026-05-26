@@ -418,7 +418,7 @@ def get_thread_queue() -> queue.Queue:
 async def put_thread_message(
     item: object, stop_event: threading.Event | None = None
 ) -> bool:
-    """Push a completion marker / title payload onto the thread queue.
+    """Push a payload (initial-sync entry or completion marker) onto the thread queue.
 
     For event-loop callers (the orchestrators). The shared queue is bounded;
     a full queue is handled by polling ``put_nowait()`` and awaiting a short
@@ -633,7 +633,7 @@ async def _drain_one() -> bool:
                 except Exception as exc:
                     logger.error(f"Error processing compute message: {exc}", exc_info=True)
 
-    # ---- Thread queue (initial-sync + boot title sync, shared by every provider) ----
+    # ---- Thread queue (initial-sync, shared by every provider) ----
     try:
         payload = _thread_queue.get_nowait()
     except queue.Empty:

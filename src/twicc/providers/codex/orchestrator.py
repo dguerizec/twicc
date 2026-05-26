@@ -440,10 +440,11 @@ class CodexOrchestrator(BaseOrchestrator):
         payloads — the very contention the DB writer exists to remove.
 
         ``submit_async_job`` awaits the job's future, which the helper
-        resolves once the apply has committed and the post-apply
-        ``session_updated`` broadcasts have been queued. The producer
-        therefore sees the new titles applied before the compute phase
-        starts.
+        resolves once the title rows have been **committed** to the DB.
+        The ``session_updated`` WS broadcasts run as a best-effort
+        post-apply side effect after the producer is already unblocked
+        — they may finish before or after the compute phase starts, but
+        the DB titles are guaranteed to be in place when we return.
         """
         from twicc.providers.codex.titles import (
             SyncSessionTitlesJob,
