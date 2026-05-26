@@ -215,6 +215,19 @@ _db_writer_stop_event: asyncio.Event | None = None
 # to the DB directly and racing the DB writer.
 _async_queue: "asyncio.Queue | None" = None
 
+# Shared write lock — serializes every SQLite-writing critical section that
+# happens in the main process. The DB writer itself acquires it around each
+# of the three queue branches in ``_drain_one``; external callers (the JSONL
+# watcher, agent lifecycle hooks, the cron expiry monitor, the Codex title
+# flush — every direct writer R19 left in place) will eventually acquire it
+# via :func:`get_db_write_lock` before their own ``transaction.atomic``. The
+# point is to move the contention from SQLite's busy_timeout (no fairness,
+# 30 s grace period, raises "database is locked" on loss) into asyncio's
+# FIFO lock (fair, no timeout, never raises). ``None`` outside of an active
+# DB writer lifetime so a stray ``get_db_write_lock`` call surfaces a clear
+# RuntimeError instead of silently handing out a stale Lock.
+_db_write_lock: asyncio.Lock | None = None
+
 # Compute completion is keyed by a per-run id, not by provider: a cancelled
 # run's worker can still have stale messages in the shared queue when a
 # hot-restarted run is armed, and the run_id keeps each run's state and
@@ -403,6 +416,7 @@ def start_db_writer() -> None:
     """
     global _thread_queue, _subprocess_queue
     global _db_writer_stop_event, _db_writer_task, _async_queue
+    global _db_write_lock
 
     if _db_writer_task is not None:
         raise RuntimeError("DB writer already started")
@@ -411,6 +425,10 @@ def start_db_writer() -> None:
     _subprocess_queue = _mp_ctx.Queue(maxsize=COMPUTE_QUEUE_MAXSIZE)
     _async_queue = asyncio.Queue()
     _db_writer_stop_event = asyncio.Event()
+    # Created here, not at module level, so the Lock binds to the event loop
+    # that the rest of the DB writer infrastructure (queue, task, stop event)
+    # will actually run on.
+    _db_write_lock = asyncio.Lock()
     _db_writer_task = asyncio.create_task(_db_writer_loop())
     logger.info("DB writer started")
 
@@ -421,12 +439,45 @@ async def stop_db_writer() -> None:
     Idempotent. Must run after every provider orchestrator has shut down, so
     no producer is still pushing.
     """
+    global _db_write_lock
+
     if _db_writer_stop_event is not None:
         _db_writer_stop_event.set()
     if _db_writer_task is not None:
         with suppress(Exception):
             await _db_writer_task
+    # Release the write-lock reference only after the writer task has fully
+    # exited, so the final drain inside :func:`_db_writer_loop` still has
+    # a lock to acquire around each remaining message.
+    _db_write_lock = None
     logger.info("DB writer stopped")
+
+
+def get_db_write_lock() -> asyncio.Lock:
+    """Return the shared write lock for SQLite serialization.
+
+    Future direct writers from outside the DB writer (the JSONL watcher,
+    agent lifecycle hooks, the cron expiry monitor, the Codex title flush —
+    every path R19 documented as still bypassing the queue) acquire this
+    lock around their own ``transaction.atomic`` block, so all
+    main-process SQLite writers serialize through asyncio's FIFO lock
+    instead of competing for SQLite's ``busy_timeout`` (which has no
+    fairness, gives up after 30 s, and surfaces as ``database is locked``).
+
+    **Currently only the DB writer itself acquires this lock**: each of
+    the three queue branches in :func:`_drain_one` wraps its apply in
+    ``async with _db_write_lock``. External wiring (watcher etc.) is
+    intentionally deferred to a later commit so the lock infrastructure
+    can land and stabilise first.
+
+    Raises :class:`RuntimeError` if the DB writer is not started (or has
+    been stopped) — handing out a stale ``None`` would silently let the
+    caller's ``async with`` succeed on whatever the call site happens to
+    cache, breaking serialisation.
+    """
+    if _db_write_lock is None:
+        raise RuntimeError("DB writer not started")
+    return _db_write_lock
 
 
 def get_thread_queue() -> queue.Queue:
@@ -644,12 +695,24 @@ async def _drain_one() -> bool:
     itself runs in the global context, but each individual message
     belongs to one provider.
 
+    Each of the three branches acquires :data:`_db_write_lock` for the
+    duration of its apply: the lock is the single FIFO serialisation
+    point shared with every future external writer (the watcher, agent
+    lifecycle, etc.). Acquiring per-branch rather than once around the
+    whole function gives the lock 3 release points per tick — a future
+    external waiter never has to wait longer than one apply, even when
+    all three queues happen to fire on the same tick. The pulls
+    themselves (``get_nowait``) run outside the lock: they are
+    synchronous and never block, and we only need the lock once we have
+    actual work to apply.
+
     Never raises an ordinary exception: a message is removed from its queue
     before processing, and every per-message failure (deserialization, apply,
     finalization) is caught and logged. So one bad message can neither crash a
     steady-state DB writer tick nor abort the shutdown drain — which would
     strand the messages queued behind it.
     """
+    assert _db_write_lock is not None
     any_processed = False
 
     # ---- Compute side (mp.Queue, shared by every provider) ----
@@ -668,11 +731,12 @@ async def _drain_one() -> bool:
         except Exception:
             logger.error(f"Failed to deserialize compute message: {raw!r:.500}")
         else:
-            with provider_log_context(_provider_from_compute_message(msg)):
-                try:
-                    await _process_compute_message(msg)
-                except Exception as exc:
-                    logger.error(f"Error processing compute message: {exc}", exc_info=True)
+            async with _db_write_lock:
+                with provider_log_context(_provider_from_compute_message(msg)):
+                    try:
+                        await _process_compute_message(msg)
+                    except Exception as exc:
+                        logger.error(f"Error processing compute message: {exc}", exc_info=True)
 
     # ---- Thread queue (initial-sync, shared by every provider) ----
     try:
@@ -681,11 +745,12 @@ async def _drain_one() -> bool:
         pass
     else:
         any_processed = True
-        with provider_log_context(getattr(payload, "provider", None)):
-            try:
-                await _process_thread_message(payload)
-            except Exception as exc:
-                logger.error(f"Error processing thread message: {exc}", exc_info=True)
+        async with _db_write_lock:
+            with provider_log_context(getattr(payload, "provider", None)):
+                try:
+                    await _process_thread_message(payload)
+                except Exception as exc:
+                    logger.error(f"Error processing thread message: {exc}", exc_info=True)
 
     # ---- DB writer-side jobs (intra-process) ----
     try:
@@ -694,8 +759,9 @@ async def _drain_one() -> bool:
         pass
     else:
         any_processed = True
-        with provider_log_context(getattr(job, "provider", None)):
-            await _dispatch_async_job(job)
+        async with _db_write_lock:
+            with provider_log_context(getattr(job, "provider", None)):
+                await _dispatch_async_job(job)
 
     return any_processed
 
