@@ -122,7 +122,7 @@ async def stop_background_task(ctx: ComputeContext) -> None:
     """Signal the background compute task to stop and terminate worker process.
 
     Async so the blocking ``process.join()`` calls can run off the event loop:
-    joining on the loop thread would freeze the DB writer's DB writer,
+    joining on the loop thread would freeze the DB writer task,
     and a worker blocked on a full result queue only makes progress (drains,
     then exits) while that DB writer keeps running.
     """

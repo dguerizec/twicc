@@ -652,7 +652,7 @@ async def _drain_one() -> bool:
         except Exception as exc:
             logger.error(f"Error processing initial-sync message: {exc}", exc_info=True)
 
-    # ---- Consumer-side jobs (intra-process) ----
+    # ---- DB writer-side jobs (intra-process) ----
     try:
         job = _async_queue.get_nowait()
     except asyncio.QueueEmpty:
@@ -932,7 +932,7 @@ async def _finalize_compute_run(run_id: int | None, provider: Provider) -> None:
 
 
 async def _finalize_abandoned_run(run_id: int, provider: Provider) -> None:
-    """Consumer-side finalization of a compute run abandoned at shutdown.
+    """DB writer-side finalization of a compute run abandoned at shutdown.
 
     Runs inside the DB writer task (dispatched via ``_async_queue`` by
     :func:`abandon_compute_run`), so the activity-recalculation flush is

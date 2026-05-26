@@ -60,7 +60,7 @@ def _fetch_and_extract_all_blocking() -> dict:
     return extracted
 
 
-async def _persist_all_via_consumer(extracted: dict) -> dict[str, dict[str, int]]:
+async def _persist_all_via_db_writer(extracted: dict) -> dict[str, dict[str, int]]:
     """Submit one :class:`_PersistProviderPricesJob` per provider and await each.
 
     The fetch + extract step that built ``extracted`` already ran on a worker
@@ -114,7 +114,7 @@ async def sync_all_providers() -> dict[str, dict[str, int]]:
         logger.info("Initial price sync: no providers configured")
         return {}
 
-    results = await _persist_all_via_consumer(extracted)
+    results = await _persist_all_via_db_writer(extracted)
 
     for provider_value, stats in results.items():
         logger.info(
@@ -152,7 +152,7 @@ async def start_price_sync_task(stop_event: asyncio.Event) -> None:
                 logger.error("Price sync fetch failed: %s", e, exc_info=True)
                 continue
 
-            results = await _persist_all_via_consumer(extracted)
+            results = await _persist_all_via_db_writer(extracted)
 
             for provider_value, stats in results.items():
                 logger.info(
