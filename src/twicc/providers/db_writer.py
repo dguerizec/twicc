@@ -667,18 +667,27 @@ async def _drain_one() -> bool:
 async def _dispatch_async_job(job) -> None:
     """Apply one DB writer job and settle its caller-visible Future.
 
-    Two job families share ``_async_queue``:
+    Two job families are dispatched here:
 
-    - :class:`_AbandonComputeRunJob` is a finalization request from a
+    - **Generic, cross-provider jobs** owned by this module:
+      :class:`_AbandonComputeRunJob` (a finalization request from a
       provider's ``shutdown()``; the producer awaits ``job.done`` and only
       cares that the DB writer reached this point, so we always resolve it
-      with ``None`` (even on failure — a hang would block shutdown).
-    - The four periodic-task jobs (:class:`_ApplyDesiredCommandsJob`,
+      with ``None`` — a hang would block shutdown) and the four periodic-
+      task jobs (:class:`_ApplyDesiredCommandsJob`,
       :class:`_CreateUsageSnapshotJob`, :class:`_RetireSessionsJob`,
-      :class:`_PersistProviderPricesJob`) carry the actual apply result; we
-      settle their ``job.future`` with the result on success, or with the
-      raised exception so the producer can log / surface it instead of
-      silently dropping the failure.
+      :class:`_PersistProviderPricesJob`) carry the actual apply result;
+      we settle their ``job.future`` with the result on success, or with
+      the raised exception so the producer can log / surface it instead
+      of silently dropping the failure.
+    - **Provider-specific jobs** owned by a provider's helper module
+      (e.g. cron-restart preparation, which is Claude Code-only). When no
+      generic ``isinstance`` matches, we fall back to the helpers registry
+      and ask each provider in turn via
+      :meth:`BaseProviderHelpers.try_handle_async_job`; the first one
+      that returns ``True`` wins. Lets a provider keep its job type +
+      apply handler co-located in its own subpackage without polluting
+      this module's vocabulary.
 
     Every per-job apply is wrapped here so one bad message can neither crash
     the DB writer tick nor strand the messages queued behind it.
@@ -711,6 +720,23 @@ async def _dispatch_async_job(job) -> None:
     if isinstance(job, _PersistProviderPricesJob):
         await _settle_async_job(job, _apply_persist_provider_prices_job, "price sync")
         return
+
+    # Fallback: ask every provider's helper. Lazy import to avoid a cycle —
+    # ``twicc.providers.helpers`` instantiates each provider's helpers,
+    # which transitively imports Django models / this module's payloads.
+    from twicc.providers.helpers import get_provider_helpers_registry
+
+    for helpers in get_provider_helpers_registry().values():
+        try:
+            handled = await helpers.try_handle_async_job(job, _settle_async_job)
+        except Exception as exc:
+            logger.error(
+                "Provider helper %s.try_handle_async_job raised on job %s: %s",
+                type(helpers).__name__, type(job).__name__, exc, exc_info=True,
+            )
+            handled = False
+        if handled:
+            return
 
     logger.error(f"Unknown DB writer job type: {type(job).__name__} => {job!r:.300}")
 

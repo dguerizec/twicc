@@ -572,6 +572,30 @@ class BaseProviderHelpers:
         """
         return None
 
+    async def try_handle_async_job(self, job, settle_async_job) -> bool:
+        """Provider hook to handle a provider-specific async-queue job.
+
+        Called by the DB writer's dispatch fallback (in
+        :func:`twicc.providers.db_writer._dispatch_async_job`) when none of
+        the generic job types matched. Iterates over every helper in the
+        :class:`ProviderHelpersRegistry`; the first one that returns ``True``
+        wins (the DB writer moves on), the others are skipped.
+
+        ``settle_async_job`` is :func:`db_writer._settle_async_job` — the
+        DB-writer helper that runs the sync apply in ``transaction.atomic``
+        on a worker thread and resolves the job's ``future`` with the
+        result, or with the raised exception so the producer sees real
+        failures. Provider-specific job types are expected to follow the
+        same shape as the generic R17 ones: a NamedTuple with a ``future``
+        field, settled via this helper.
+
+        The default is a no-op so a provider only pays for the jobs it
+        actually contributes. Override in the provider's helper to register
+        its own job types, typically with an ``isinstance(job, X): await
+        settle_async_job(...); return True`` ladder.
+        """
+        return False
+
     def get_bootstrap_data(self) -> dict:
         """Return provider-specific keys merged into the ``/api/bootstrap/`` payload.
 
