@@ -586,8 +586,9 @@ class BaseProviderHelpers:
         on a worker thread and resolves the job's ``future`` with the
         result, or with the raised exception so the producer sees real
         failures. Provider-specific job types are expected to follow the
-        same shape as the generic R17 ones: a NamedTuple with a ``future``
-        field, settled via this helper.
+        same shape as the generic R17 ones: a NamedTuple carrying a
+        ``future: asyncio.Future`` field and a ``provider: Provider`` field
+        (read for logging in ``_settle_async_job``).
 
         The default is a no-op so a provider only pays for the jobs it
         actually contributes. Override in the provider's helper to register

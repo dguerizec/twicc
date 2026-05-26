@@ -15,6 +15,8 @@ from typing import NamedTuple
 
 from django.db import transaction
 
+from twicc.core.enums import Provider
+
 logger = logging.getLogger(__name__)
 
 RETRY_ESCALATION = [0, 5, 15, 30, 60, 120]
@@ -34,11 +36,15 @@ class PrepareCronRestartsJob(NamedTuple):
     ``transaction.atomic``, so the cleanup commits atomically and never
     contends with the DB writer on the SQLite write lock.
 
+    ``provider`` is fixed (this job is CC-only) but kept so the job
+    follows the same convention as every other async-queue job — the DB
+    writer's :func:`_settle_async_job` reads it for logging.
     ``future`` resolves to the list of session ids the caller should
     restart.
     """
 
     future: asyncio.Future  # → list[str] (session ids)
+    provider: Provider = Provider.CLAUDE_CODE
 
 
 def _apply_prepare_cron_restarts_job(job: PrepareCronRestartsJob) -> list[str]:
