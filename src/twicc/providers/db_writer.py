@@ -217,8 +217,10 @@ _async_queue: "asyncio.Queue | None" = None
 
 # Shared write lock — serializes every SQLite-writing critical section that
 # happens in the main process. The DB writer itself acquires it via
-# :func:`run_under_db_write_lock` around each of the three queue branches in
-# ``_drain_one``; external callers (the JSONL watcher, agent lifecycle hooks,
+# :func:`_run_under_db_write_lock` (the internal version, which bypasses the
+# public stop-event guard so the final shutdown drain can apply messages
+# queued before the stop) around each of the three queue branches in
+# ``_drain_one``. External callers (the JSONL watcher, agent lifecycle hooks,
 # the cron expiry monitor, the Codex title flush — every direct writer R19
 # left in place) will eventually adopt either :func:`run_under_db_write_lock`
 # (cancellation-safe, the recommended path for anything that awaits
@@ -527,15 +529,35 @@ async def stop_db_writer() -> None:
         # lock is quiescent. Shielded against our own cancellation so we
         # don't bail mid-drain and leave the next ``_db_write_lock = None``
         # racing an active holder.
+        #
+        # Pattern matches the writer-task wait above: ONE drain Task,
+        # shield-looped until ``.done()``. A naive
+        # ``while True: shield(_acquire_then_release(lock))`` would
+        # create a fresh coroutine on every cancel retry, queueing
+        # multiple orphan acquirers in the FIFO and leaving earlier
+        # ``_acquire_then_release`` Tasks unobserved.
         if _db_write_lock is not None:
-            while True:
+            drain_task = asyncio.create_task(_acquire_then_release(_db_write_lock))
+            while not drain_task.done():
                 try:
-                    await asyncio.shield(_acquire_then_release(_db_write_lock))
-                    break
+                    await asyncio.shield(drain_task)
                 except asyncio.CancelledError:
                     cancelled = True
-                    # Loop and keep waiting for the inner acquire/release
-                    # to finish. The acquire is FIFO so we will be served.
+                    # Loop and keep waiting for the SAME drain task; the
+                    # shield kept it alive across our cancel.
+            # Drain the result so asyncio doesn't log "Task exception was
+            # never retrieved". ``_acquire_then_release`` doesn't raise
+            # in normal operation; this is the defensive guard.
+            try:
+                drain_task.result()
+            except asyncio.CancelledError:
+                pass
+            except Exception as exc:
+                logger.error(
+                    "DB write-lock drain at shutdown raised: %s",
+                    exc,
+                    exc_info=True,
+                )
     finally:
         # Reset the entire lifecycle bundle once the writer task is done
         # AND in-flight external lock holders have released. Same-process
@@ -1407,6 +1429,7 @@ async def _db_writer_loop() -> None:
     assert _db_writer_stop_event is not None
     assert _thread_queue is not None
     assert _subprocess_queue is not None
+    assert _async_queue is not None
 
     logger.info("DB writer loop running")
     while not _db_writer_stop_event.is_set():
