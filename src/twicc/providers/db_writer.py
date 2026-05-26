@@ -467,8 +467,16 @@ async def stop_db_writer() -> None:
 
     Clearing **all** of the lifecycle globals (not just the lock) lets a
     same-process restart of the DB writer work, and turns any post-stop
-    call to a queue API into a clean :class:`AssertionError` rather than
+    call to a queue API into a clean :class:`RuntimeError` rather than
     a hand-out of a stale (and now drained) queue.
+
+    Before clearing the globals, we also drain in-flight external lock
+    holders by briefly acquiring/releasing the lock. That closes the
+    TOCTOU window where an external caller passed the public
+    ``run_under_db_write_lock``'s pre-acquire stop check, joined the
+    FIFO acquire queue, and would otherwise still be holding the lock
+    when we ``= None`` it — leaving them serializing on an orphan lock
+    that nothing else references.
     """
     global _db_write_lock, _db_writer_task, _db_writer_stop_event
     global _thread_queue, _subprocess_queue, _async_queue
@@ -510,13 +518,31 @@ async def stop_db_writer() -> None:
                     exc,
                     exc_info=True,
                 )
+        # Drain in-flight external lock holders. The writer task is done by
+        # this point, so it has released its last apply's hold on the lock;
+        # the only remaining holders/waiters are external callers that
+        # passed ``run_under_db_write_lock``'s pre-check before we set
+        # the stop event. ``acquire()`` blocks until every prior holder
+        # in the FIFO queue has released; we immediately release so the
+        # lock is quiescent. Shielded against our own cancellation so we
+        # don't bail mid-drain and leave the next ``_db_write_lock = None``
+        # racing an active holder.
+        if _db_write_lock is not None:
+            while True:
+                try:
+                    await asyncio.shield(_acquire_then_release(_db_write_lock))
+                    break
+                except asyncio.CancelledError:
+                    cancelled = True
+                    # Loop and keep waiting for the inner acquire/release
+                    # to finish. The acquire is FIFO so we will be served.
     finally:
-        # Reset the entire lifecycle bundle once the writer task is done.
-        # Same-process restart (``start_db_writer`` after ``stop_db_writer``)
-        # then works, and any stray post-stop queue-API call surfaces a
-        # clean ``AssertionError("DB writer not started")`` from the
-        # ``assert _thread_queue is not None`` guards instead of returning
-        # a drained queue.
+        # Reset the entire lifecycle bundle once the writer task is done
+        # AND in-flight external lock holders have released. Same-process
+        # restart (``start_db_writer`` after ``stop_db_writer``) then
+        # works, and any stray post-stop queue-API call surfaces a clean
+        # ``RuntimeError("DB writer not started")`` instead of returning
+        # a drained queue or handing out an orphan lock.
         _db_write_lock = None
         _db_writer_task = None
         _db_writer_stop_event = None
@@ -528,6 +554,13 @@ async def stop_db_writer() -> None:
         # has actually drained and we've cleared module state.
         raise asyncio.CancelledError()
     logger.info("DB writer stopped")
+
+
+async def _acquire_then_release(lock: asyncio.Lock) -> None:
+    """Acquire ``lock``, release it. Used by :func:`stop_db_writer` to wait
+    for in-flight external lock holders to release before lifecycle teardown."""
+    await lock.acquire()
+    lock.release()
 
 
 def get_db_write_lock() -> asyncio.Lock:
@@ -572,6 +605,19 @@ def get_db_write_lock() -> asyncio.Lock:
     ``async with`` succeed on whatever the call site happens to cache,
     breaking serialisation; handing out the live lock during shutdown
     would race with the lifecycle teardown.
+
+    .. important::
+
+       **Never cache the returned lock object.** Call
+       ``get_db_write_lock()`` right before each ``async with``,
+       inside the smallest possible scope. The shutdown guard above
+       only protects the moment of retrieval — once the caller holds
+       a reference, ``stop_db_writer`` cannot guarantee the lock is
+       still the active one when the caller's ``async with`` finally
+       acquires (a same-process restart between cache and acquire
+       leaves you serializing on an orphan).
+       :func:`run_under_db_write_lock` is the safe alternative for
+       any apply that crosses an ``await``.
     """
     if _db_write_lock is None:
         raise RuntimeError("DB writer not started")
@@ -799,8 +845,112 @@ async def submit_async_job(job) -> object:
 _T = TypeVar("_T")
 
 
-async def _run_under_db_write_lock(coro_factory: Callable[[], Coroutine[Any, Any, _T]]) -> _T:
-    """Internal core of :func:`run_under_db_write_lock` — no stop-event guard.
+async def _drive_inner_under_held_lock(
+    coro_factory: Callable[[], Coroutine[Any, Any, _T]],
+) -> _T:
+    """Body of the lock runner — assumes :data:`_db_write_lock` is HELD.
+
+    Factored out of the public and internal runners so the cancellation-
+    safety + factory-after-acquire + outer-vs-inner-cancel logic lives
+    in one place. The caller is responsible for ``async with _db_write_lock:``
+    around this call (otherwise serialization is lost).
+
+    See :func:`run_under_db_write_lock` for the user-facing contract.
+    """
+    # Create the coroutine AFTER the caller has acquired the lock. If a
+    # cancellation arrives while the caller was waiting for ``async with``,
+    # no coroutine has been created yet — no "coroutine was never awaited"
+    # warning, no lost dequeued work.
+    inner = asyncio.create_task(coro_factory())
+    outer_cancelled = False
+    inner_self_cancelled = False
+    while not inner.done():
+        try:
+            # Always shielded — outer cancels never reach the inner Task.
+            await asyncio.shield(inner)
+        except asyncio.CancelledError:
+            # The await raised CancelledError. Two distinct sources:
+            #   * OUR task got ``cancel()``d, which asyncio injects at
+            #     the next await point. ``asyncio.current_task().
+            #     cancelling()`` is ``> 0`` in that case (since the
+            #     cancel counter was incremented and we haven't called
+            #     ``uncancel()``).
+            #   * The INNER Task itself raised ``CancelledError`` (rare
+            #     — only if the apply code deliberately does
+            #     ``raise CancelledError`` or something calls
+            #     ``inner.cancel()``). The shield prevents the outer
+            #     cancel from propagating to inner, but it doesn't
+            #     prevent inner from cancelling itself.
+            # Without this distinction we'd re-raise ``CancelledError``
+            # below in either case. That's the right thing for the
+            # outer-cancel branch (shutdown propagates) but wrong for
+            # the inner-self-cancel branch — the DB writer task's
+            # callers only ``except Exception``, so a stray
+            # ``CancelledError`` from us would kill the writer task.
+            current = asyncio.current_task()
+            if current is not None and current.cancelling() > 0:
+                outer_cancelled = True
+                # Loop and keep waiting. ``inner.done()`` may still be
+                # False if the inner is still running on its executor
+                # thread; the next iteration's shielded await blocks
+                # until inner finishes.
+            else:
+                # Inner self-cancelled. Loop will exit on next check
+                # because ``inner.done()`` is now True; surface it as
+                # a regular Exception below so the caller's
+                # ``except Exception`` catches it.
+                inner_self_cancelled = True
+        except Exception:
+            # Inner raised. ``inner.done()`` is now True, so the loop
+            # will exit naturally on its next ``while`` check. We do
+            # NOT propagate from here, because we still want the
+            # ``outer_cancelled`` branch below to take precedence if
+            # the outer was cancelled too — cancellation wins. The
+            # exception will be drained from ``inner.result()`` in
+            # the right branch.
+            pass
+    # ``inner.done()`` is True. Branch on what happened.
+    if outer_cancelled:
+        # Drain the inner so asyncio doesn't log "Task exception was
+        # never retrieved", AND so an apply that failed during the
+        # cancel doesn't vanish: log it explicitly before re-raising
+        # ``CancelledError``. ``BaseException`` is deliberately NOT
+        # suppressed (``KeyboardInterrupt`` / ``SystemExit`` propagate).
+        try:
+            inner.result()
+        except asyncio.CancelledError:
+            pass
+        except Exception as exc:
+            logger.error(
+                "DB write apply failed during a cancelled outer: %s",
+                exc,
+                exc_info=True,
+            )
+        raise asyncio.CancelledError()
+    if inner_self_cancelled:
+        # The inner raised CancelledError on its own — without us being
+        # cancelled. Surface it as a ``RuntimeError`` so the caller's
+        # ``except Exception`` catches it and the surrounding loop (the
+        # DB writer task) survives. A real CancelledError would slip
+        # past ``except Exception`` and kill whatever is running this
+        # apply.
+        raise RuntimeError(
+            "DB write apply task self-cancelled (no outer cancel) — "
+            "likely a handler bug; surfacing as RuntimeError to keep "
+            "the writer alive"
+        )
+    # Happy path: forward the inner's return value so callers can
+    # use the runner as a transparent wrapper around their coroutine.
+    # ``inner.result()`` raises if the inner raised; that propagates
+    # to the caller's own ``try/except`` (no log here — the caller
+    # owns happy-path error reporting).
+    return inner.result()
+
+
+async def _run_under_db_write_lock(
+    coro_factory: Callable[[], Coroutine[Any, Any, _T]],
+) -> _T:
+    """Internal core — no stop-event guard.
 
     The DB writer's own final drain (the
     ``while True: await _drain_one()`` loop inside :func:`_db_writer_loop`
@@ -810,9 +960,7 @@ async def _run_under_db_write_lock(coro_factory: Callable[[], Coroutine[Any, Any
     rejects new acquisitions once shutdown begins — so we expose this
     unchecked internal version, used exclusively by :func:`_drain_one`.
 
-    All of the cancellation-safety, factory-after-acquire, and
-    branch-on-outer-vs-inner-cancel logic lives here. See the public
-    wrapper for the user-facing contract.
+    See :func:`run_under_db_write_lock` for the user-facing contract.
     """
     lock = _db_write_lock
     if lock is None:
@@ -821,97 +969,12 @@ async def _run_under_db_write_lock(coro_factory: Callable[[], Coroutine[Any, Any
         # survives ``python -O``.
         raise RuntimeError("DB writer not started")
     async with lock:
-        # Create the coroutine AFTER we hold the lock. If a cancellation
-        # arrives while waiting for ``async with``, no coroutine has been
-        # created yet — no "coroutine was never awaited" warning, no lost
-        # dequeued work.
-        inner = asyncio.create_task(coro_factory())
-        outer_cancelled = False
-        inner_self_cancelled = False
-        while not inner.done():
-            try:
-                # Always shielded — outer cancels never reach the inner Task.
-                await asyncio.shield(inner)
-            except asyncio.CancelledError:
-                # The await raised CancelledError. Two distinct sources:
-                #   * OUR task got ``cancel()``d, which asyncio injects at
-                #     the next await point. ``asyncio.current_task().
-                #     cancelling()`` is ``> 0`` in that case (since the
-                #     cancel counter was incremented and we haven't called
-                #     ``uncancel()``).
-                #   * The INNER Task itself raised ``CancelledError`` (rare
-                #     — only if the apply code deliberately does
-                #     ``raise CancelledError`` or something calls
-                #     ``inner.cancel()``). The shield prevents the outer
-                #     cancel from propagating to inner, but it doesn't
-                #     prevent inner from cancelling itself.
-                # Without this distinction we'd re-raise ``CancelledError``
-                # below in either case. That's the right thing for the
-                # outer-cancel branch (shutdown propagates) but wrong for
-                # the inner-self-cancel branch — the DB writer task's
-                # callers only ``except Exception``, so a stray
-                # ``CancelledError`` from us would kill the writer task.
-                current = asyncio.current_task()
-                if current is not None and current.cancelling() > 0:
-                    outer_cancelled = True
-                    # Loop and keep waiting. ``inner.done()`` may still be
-                    # False if the inner is still running on its executor
-                    # thread; the next iteration's shielded await blocks
-                    # until inner finishes.
-                else:
-                    # Inner self-cancelled. Loop will exit on next check
-                    # because ``inner.done()`` is now True; surface it as
-                    # a regular Exception below so the caller's
-                    # ``except Exception`` catches it.
-                    inner_self_cancelled = True
-            except Exception:
-                # Inner raised. ``inner.done()`` is now True, so the loop
-                # will exit naturally on its next ``while`` check. We do
-                # NOT propagate from here, because we still want the
-                # ``outer_cancelled`` branch below to take precedence if
-                # the outer was cancelled too — cancellation wins. The
-                # exception will be drained from ``inner.result()`` in
-                # the right branch.
-                pass
-        # ``inner.done()`` is True. Branch on what happened.
-        if outer_cancelled:
-            # Drain the inner so asyncio doesn't log "Task exception was
-            # never retrieved", AND so an apply that failed during the
-            # cancel doesn't vanish: log it explicitly before re-raising
-            # ``CancelledError``. ``BaseException`` is deliberately NOT
-            # suppressed (``KeyboardInterrupt`` / ``SystemExit`` propagate).
-            try:
-                inner.result()
-            except asyncio.CancelledError:
-                pass
-            except Exception as exc:
-                logger.error(
-                    "DB write apply failed during a cancelled outer: %s",
-                    exc,
-                    exc_info=True,
-                )
-            raise asyncio.CancelledError()
-        if inner_self_cancelled:
-            # The inner raised CancelledError on its own — without us being
-            # cancelled. Surface it as a ``RuntimeError`` so the caller's
-            # ``except Exception`` catches it and the surrounding loop (the
-            # DB writer task) survives. A real CancelledError would slip
-            # past ``except Exception`` and kill whatever is running this
-            # apply.
-            raise RuntimeError(
-                "DB write apply task self-cancelled (no outer cancel) — "
-                "likely a handler bug; surfacing as RuntimeError to keep "
-                "the writer alive"
-            )
-        # Happy path: forward the inner's return value so callers can
-        # use the runner as a transparent wrapper around their coroutine.
-        # ``inner.result()`` raises if the inner raised; that propagates
-        # to the caller's own ``try/except`` (no log here — the caller
-        # owns happy-path error reporting).
-        return inner.result()
+        return await _drive_inner_under_held_lock(coro_factory)
 
 
-async def run_under_db_write_lock(coro_factory: Callable[[], Coroutine[Any, Any, _T]]) -> _T:
+async def run_under_db_write_lock(
+    coro_factory: Callable[[], Coroutine[Any, Any, _T]],
+) -> _T:
     """Run a coroutine under the shared DB write lock, cancellation-safe.
 
     Public, recommended API for every caller that needs to wrap a
@@ -944,8 +1007,12 @@ async def run_under_db_write_lock(coro_factory: Callable[[], Coroutine[Any, Any,
     Rejects new acquisitions once :data:`_db_writer_stop_event` is set:
     a future external caller can not start a fresh apply during the
     DB writer's shutdown drain (which would race the lifecycle
-    teardown). The DB writer's own final drain uses the internal
-    :func:`_run_under_db_write_lock` which has no such guard.
+    teardown). The check happens at BOTH entry time AND after we
+    have acquired the lock — the post-acquire re-check closes the
+    TOCTOU window where ``stop_db_writer`` fires between the entry
+    check and our turn in the FIFO acquire queue. The DB writer's
+    own final drain uses the internal :func:`_run_under_db_write_lock`
+    which has no such guard.
 
     **Lock granularity** (intentional design decision, documented for
     future external callers): the lock is held for the entire duration
@@ -985,11 +1052,21 @@ async def run_under_db_write_lock(coro_factory: Callable[[], Coroutine[Any, Any,
     warning.
     """
     if _db_writer_stop_event is not None and _db_writer_stop_event.is_set():
-        # Reject new acquisitions during shutdown so an external caller
-        # can not start a new apply that would race with the writer's
-        # lifecycle teardown.
+        # Pre-acquire check: cheap RuntimeError for the common case where
+        # the caller is invoked after shutdown has started.
         raise RuntimeError("DB writer is stopping")
-    return await _run_under_db_write_lock(coro_factory)
+    lock = _db_write_lock
+    if lock is None:
+        raise RuntimeError("DB writer not started")
+    async with lock:
+        # Post-acquire re-check. Closes the TOCTOU window where
+        # ``stop_db_writer`` fires between our pre-check and our turn in
+        # the FIFO acquire queue. Without this, a caller that passed the
+        # pre-check would happily start an apply while ``stop_db_writer``
+        # is mid-flight clearing the lifecycle bundle.
+        if _db_writer_stop_event is None or _db_writer_stop_event.is_set():
+            raise RuntimeError("DB writer is stopping")
+        return await _drive_inner_under_held_lock(coro_factory)
 
 
 async def _drain_one() -> bool:
@@ -1007,24 +1084,26 @@ async def _drain_one() -> bool:
     belongs to one provider.
 
     Each of the three branches dispatches its apply through
-    :func:`run_under_db_write_lock`, which acquires :data:`_db_write_lock`
-    for the duration of the apply AND holds it across asyncio
-    cancellation (see the helper's docstring for the cancel-vs-executor-
-    thread rationale). The lock is the single FIFO serialisation point
-    shared with every future external writer (the watcher, agent
-    lifecycle, etc.). Acquiring per-branch rather than once around the
-    whole function gives the lock 3 release points per tick — a future
-    external waiter never has to wait longer than one apply, even when
-    all three queues happen to fire on the same tick. The pulls
-    themselves (``get_nowait``) run outside the lock: they are
-    synchronous and never block, and we only need the lock once we have
-    actual work to apply. The coroutine factory passed to the helper is
-    a ``lambda`` capturing the dequeued message, so the apply coroutine
-    is only created after the lock has been acquired — a cancellation
-    while waiting for the lock cannot leave an unawaited coroutine
-    (or, equivalently, a silently dropped dequeued message).
+    :func:`_run_under_db_write_lock` (the internal version, so the final
+    shutdown drain can bypass the public stop guard and apply messages
+    that were queued before the stop). The helper acquires
+    :data:`_db_write_lock` for the duration of the apply AND holds it
+    across asyncio cancellation (see its docstring for the cancel-vs-
+    executor-thread rationale). The lock is the single FIFO
+    serialisation point shared with every future external writer (the
+    watcher, agent lifecycle, etc.). Acquiring per-branch rather than
+    once around the whole function gives the lock 3 release points per
+    tick — a future external waiter never has to wait longer than one
+    apply, even when all three queues happen to fire on the same tick.
+    The pulls themselves (``get_nowait``) run outside the lock: they
+    are synchronous and never block, and we only need the lock once we
+    have actual work to apply. The coroutine factory passed to the
+    helper is a ``lambda`` capturing the dequeued message, so the apply
+    coroutine is only created after the lock has been acquired — a
+    cancellation while waiting for the lock cannot leave an unawaited
+    coroutine (or, equivalently, a silently dropped dequeued message).
 
-    **Granularity trade-off (intentional)**: ``run_under_db_write_lock``
+    **Granularity trade-off (intentional)**: ``_run_under_db_write_lock``
     holds the lock around the **whole** ``_process_*`` / ``_dispatch_*``
     handler, not just the ``transaction.atomic`` part. Post-commit
     broadcasts (WS via ``channel_layer.group_send``), workspace-JSON
