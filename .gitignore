@@ -262,6 +262,11 @@ seen-tips.json
 # BaseProviderHelpers.get_settings_presets_path).
 *-settings-presets.json
 
+# Single-instance lock (flock anchor) + sidecar info file written by main(),
+# both live in <data_dir>.
+twicc.lock
+twicc.info.json
+
 # Agent local files
 CLAUDE.local.md
 AGENTS.local.md
