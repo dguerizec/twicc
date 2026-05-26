@@ -693,6 +693,26 @@ def _provider_from_compute_message(msg: dict) -> "Provider | None":
         return None
 
 
+def _settle_unhandled_async_job(job, exc: Exception) -> None:
+    """Settle a rejected async-queue job so its producer never hangs.
+
+    Two completion shapes coexist on the async queue: the periodic-task
+    jobs (and any provider-specific job following the same convention)
+    carry a ``future`` settled with a result or exception, while
+    :class:`_AbandonComputeRunJob` carries a ``done`` Future that the
+    producer (shutdown) only awaits as a "DB writer reached this point"
+    signal — that one resolves with ``None`` even on failure so shutdown
+    can never hang.
+    """
+    future = getattr(job, "future", None)
+    if future is not None and not future.done():
+        future.set_exception(exc)
+        return
+    done = getattr(job, "done", None)
+    if done is not None and not done.done():
+        done.set_result(None)
+
+
 async def _dispatch_async_job(job) -> None:
     """Apply one DB writer job and settle its caller-visible Future.
 
@@ -719,8 +739,31 @@ async def _dispatch_async_job(job) -> None:
       this module's vocabulary.
 
     Every per-job apply is wrapped here so one bad message can neither crash
-    the DB writer tick nor strand the messages queued behind it.
+    the DB writer tick nor strand the messages queued behind it. Two
+    safety nets specifically protect the producer from hanging on
+    ``job.future``:
+
+    - **Convention check up front**: every async job MUST carry a
+      ``provider: Provider`` field (used by :func:`_settle_async_job` for
+      logging and by :func:`provider_log_context` for the log-record
+      tag). A job that does not is rejected before dispatch and its
+      future settled with a ``TypeError``.
+    - **Unmatched job at the end**: if no generic ``isinstance`` matched
+      AND no provider helper claimed the job, we settle the future with
+      a ``RuntimeError`` rather than ``return``-ing silently.
     """
+    provider = getattr(job, "provider", None)
+    if not isinstance(provider, Provider):
+        exc = TypeError(
+            f"Async-queue job {type(job).__name__} is missing a valid "
+            f"Provider attribute (got {provider!r}); every async-queue "
+            f"job must carry a `provider: Provider` field per the "
+            f"BaseProviderHelpers.try_handle_async_job contract"
+        )
+        logger.error(str(exc))
+        _settle_unhandled_async_job(job, exc)
+        return
+
     if isinstance(job, _AbandonComputeRunJob):
         try:
             await _finalize_abandoned_run(job.run_id, job.provider)
@@ -767,7 +810,18 @@ async def _dispatch_async_job(job) -> None:
         if handled:
             return
 
-    logger.error(f"Unknown DB writer job type: {type(job).__name__} => {job!r:.300}")
+    # No handler claimed the job — settle the future so the producer's
+    # ``await submit_async_job(...)`` doesn't hang forever. The producer
+    # sees a RuntimeError, which is the right shape: this is a
+    # programming error (forgot to register a handler, helper override
+    # has a bug), not a runtime condition the producer can retry.
+    exc = RuntimeError(
+        f"No DB writer handler matched async-queue job "
+        f"{type(job).__name__} — neither the generic dispatch nor any "
+        f"provider helper claimed it"
+    )
+    logger.error(f"{exc} => {job!r:.300}")
+    _settle_unhandled_async_job(job, exc)
 
 
 async def _settle_async_job(job, apply_fn, label: str) -> None:
