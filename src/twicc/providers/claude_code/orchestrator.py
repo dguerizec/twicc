@@ -242,11 +242,11 @@ class ClaudeCodeOrchestrator(BaseOrchestrator):
         if self._sync_task is not None:
             from twicc.providers.db_writer import (
                 InitialSyncDoneMarker,
-                put_initial_sync_item,
+                put_thread_message,
             )
             with suppress(Exception):
                 done_future = asyncio.get_running_loop().create_future()
-                await put_initial_sync_item(
+                await put_thread_message(
                     InitialSyncDoneMarker(provider=self.provider, done_future=done_future)
                 )
                 await done_future
@@ -264,7 +264,7 @@ class ClaudeCodeOrchestrator(BaseOrchestrator):
             logger.info("Stopping background compute task...")
             # Abandon the compute run before stopping the worker: from here on,
             # every still-queued or still-incoming session_complete for this
-            # run is skipped by the unified DB writer (untracked run), so a
+            # run is skipped by the DB writer (untracked run), so a
             # shut-down provider's partial compute results never apply — not
             # during this teardown, and not racing the next hot-start. The
             # run's sessions are recomputed on the next start.
@@ -346,7 +346,7 @@ class ClaudeCodeOrchestrator(BaseOrchestrator):
 
         The producer thread does not write to DB directly: it pushes
         initial-sync payloads onto the process-wide shared queue, drained by
-        the unified DB writer (:mod:`twicc.providers.db_writer`).
+        the DB writer (:mod:`twicc.providers.db_writer`).
 
         A producer thread that keeps pushing after a cancel pushes onto a
         still-drained queue — no lost writes; the zombie-thread / overlap
@@ -358,8 +358,8 @@ class ClaudeCodeOrchestrator(BaseOrchestrator):
         """
         from twicc.providers.db_writer import (
             InitialSyncDoneMarker,
-            get_initial_sync_queue,
-            put_initial_sync_item,
+            get_thread_queue,
+            put_thread_message,
         )
 
         loop = asyncio.get_running_loop()
@@ -383,7 +383,7 @@ class ClaudeCodeOrchestrator(BaseOrchestrator):
                 loop,
             )
 
-        sync_queue = get_initial_sync_queue()
+        sync_queue = get_thread_queue()
         logger.info("Starting data synchronization...")
 
         # Keep an explicit reference to the producer thread future so
@@ -399,11 +399,11 @@ class ClaudeCodeOrchestrator(BaseOrchestrator):
         )
         # Wait for the producer thread, capturing a crash rather than letting
         # it propagate yet: the thread has ended either way, so the marker
-        # pushed below still sits last in this run and the consumer's FIFO
+        # pushed below still sits last in this run and the DB writer's FIFO
         # drain of it still proves every payload applied. That proof must
         # complete before initial_sync_done is released (by the
         # _initial_sync_task wrapper) -- on the crash path too, or the compute
-        # phase could start while the consumer is still applying this run's
+        # phase could start while the DB writer is still applying this run's
         # payloads.
         #
         # The await is shielded: shutdown() cancels _sync_task, and a bare
@@ -424,7 +424,7 @@ class ClaudeCodeOrchestrator(BaseOrchestrator):
         # run's failure count once it has drained every payload this run
         # produced.
         done_future = loop.create_future()
-        if not await put_initial_sync_item(
+        if not await put_thread_message(
             InitialSyncDoneMarker(provider=self.provider, done_future=done_future),
             self._sync_stop_event,
         ):

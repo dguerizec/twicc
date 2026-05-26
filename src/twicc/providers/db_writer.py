@@ -1,11 +1,11 @@
 """
-Unified DB writer.
+DB writer.
 
 A single permanent coroutine that owns every database write coming from the
 two boot-time "big jobs": the per-provider initial sync (producers run in
 ``asyncio.to_thread`` threads) and the background metadata compute (producers
 run in ``multiprocessing`` subprocesses). Both push onto process-wide shared
-queues; this consumer drains them and applies every write inside
+queues; this DB writer drains them and applies every write inside
 ``transaction.atomic`` from one place — so the SQLite write lock is never
 contended between providers, nor between the initial-sync phase and the
 compute phase.
@@ -21,7 +21,7 @@ real messages. Because the queues are FIFO, draining the sentinel proves
 every preceding message of that run has been applied. The completion carries
 the run's failure count so the producer learns the run was not clean.
 - Initial sync: ``InitialSyncDoneMarker`` carries its own ``asyncio.Future``
-  (the queue is intra-process, the Future travels by reference); the consumer
+  (the queue is intra-process, the Future travels by reference); the DB writer
   resolves it with the count of payloads that failed to apply.
 - Compute: the ``done`` message comes from a subprocess and cannot carry a
   Future, so ``arm_compute_completion`` hands the orchestrator a fresh Future
@@ -64,11 +64,11 @@ PROJECT_BROADCAST_INTERVAL = 5
 BATCH_ACTIVITY_COUNT = 50
 
 # Bounded-queue capacities. Both boot-time producers (initial-sync threads,
-# compute subprocesses) can parse far faster than the consumer commits to
+# compute subprocesses) can parse far faster than the DB writer commits to
 # SQLite. An unbounded queue would let the backlog — each initial-sync payload
 # carrying a whole session's JSONL lines — grow to gigabytes of RAM. A bounded
 # queue makes a full queue block the producer instead: the backlog is capped,
-# and the producer is throttled to the consumer's write rate.
+# and the producer is throttled to the DB writer's write rate.
 INITIAL_SYNC_QUEUE_MAXSIZE = 200
 COMPUTE_QUEUE_MAXSIZE = 200
 
@@ -81,8 +81,8 @@ _mp_ctx = multiprocessing.get_context("spawn")
 # Queue payload vocabulary
 # =============================================================================
 #
-# The consumer owns this vocabulary: every type below has a handler in
-# _process_initial_sync_message. Initial-sync producers
+# The DB writer owns this vocabulary: every type below has a handler in
+# _process_thread_message. Initial-sync producers
 # (providers/<p>/initial_sync.py) import these and push them; they only ever
 # use the subset that applies to them. The compute side does NOT use these —
 # its messages are plain orjson-encoded dicts produced by the subprocess.
@@ -91,7 +91,7 @@ _mp_ctx = multiprocessing.get_context("spawn")
 class CreateSessionPayload(NamedTuple):
     """Producer parsed a JSONL file for a session not yet in DB.
 
-    The consumer creates the ``Project`` (idempotent — no-op if it exists),
+    The DB writer creates the ``Project`` (idempotent — no-op if it exists),
     saves the unsaved ``Session`` instance, bulk-creates the items, then
     persists the tracking fields. ``new_project_directory`` may be ``None``
     (Claude Code stores the cwd inside the JSONL body, not available at
@@ -112,7 +112,7 @@ class CreateSessionPayload(NamedTuple):
 class UpdateSessionPayload(NamedTuple):
     """Producer parsed a JSONL file for a session already in DB.
 
-    The consumer appends the new items (``ignore_conflicts=True`` covers the
+    The DB writer appends the new items (``ignore_conflicts=True`` covers the
     rare watcher-already-inserted-them race), persists the tracking fields,
     optionally clears ``stale``, and optionally resets ``compute_version``.
     """
@@ -130,7 +130,7 @@ class UpdateSessionPayload(NamedTuple):
 class MarkSessionsStalePayload(NamedTuple):
     """Producer wants to flag a set of sessions stale (no longer on disk).
 
-    The consumer issues one ``Session.objects.filter(id__in=..., stale=False).update(stale=True)``.
+    The DB writer issues one ``Session.objects.filter(id__in=..., stale=False).update(stale=True)``.
     """
 
     provider: Provider
@@ -141,7 +141,7 @@ class UpdateProjectMetadataPayload(NamedTuple):
     """End-of-sync metadata for one project.
 
     ``new_stale`` is applied when non-``None``. Four boolean flags ask the
-    consumer to do work that reads back from the DB: ``recalc_sessions_count``
+    DB writer to do work that reads back from the DB: ``recalc_sessions_count``
     and ``recalc_mtime`` recompute those ``Project`` fields from the project's
     sessions; ``recalc_total_cost`` and ``resolve_git_root`` invoke heavier
     helpers that themselves write to DB. Bundled so the project's end-of-sync
@@ -151,8 +151,8 @@ class UpdateProjectMetadataPayload(NamedTuple):
     can be computed in the producer: both are cross-provider, so a value
     counted in one provider's producer could clobber — or be clobbered by — a
     fresher value another provider's compute writes; reading them from the DB
-    in the producer also races the consumer, which has not yet applied this
-    run's session payloads. The consumer recomputes them instead, inside the
+    in the producer also races the DB writer, which has not yet applied this
+    run's session payloads. The DB writer recomputes them instead, inside the
     same transaction that applies the payload.
     """
 
@@ -172,9 +172,9 @@ class ResolveProjectGitRootsPayload(NamedTuple):
     A provider enqueues this once, last in its run, instead of running
     ``Project.objects.filter(directory__isnull=False, stale=False)`` itself
     and pushing one payload per project: that producer-side query runs
-    before the consumer has applied this run's earlier project payloads
+    before the DB writer has applied this run's earlier project payloads
     (FIFO), so a project being un-staled in the same sync would still look
-    stale and be skipped. The consumer runs the query when it drains this
+    stale and be skipped. The DB writer runs the query when it drains this
     marker — after every prior project update of the run has committed.
     """
 
@@ -184,7 +184,7 @@ class ResolveProjectGitRootsPayload(NamedTuple):
 class InitialSyncDoneMarker(NamedTuple):
     """Sentinel pushed last by an initial-sync producer.
 
-    Carries an ``asyncio.Future`` the consumer resolves once it drains the
+    Carries an ``asyncio.Future`` the DB writer resolves once it drains the
     marker — i.e. once every payload of that run has been applied. The Future
     resolves to the count of payloads that failed to apply, so the producer
     (which awaits it) learns whether the run was clean.
@@ -198,11 +198,11 @@ class SyncSessionTitlesPayload(NamedTuple):
     """Boot-time bulk title import for one provider.
 
     Carries a ``{session_id: title}`` map and the ``asyncio.Event`` the
-    consumer sets once the titles have been applied and broadcast. The
+    DB writer sets once the titles have been applied and broadcast. The
     producer (an orchestrator, between the initial JSONL sync and the compute
-    phase) awaits that Event so the title bulk-update runs through the unified
-    DB writer — never as a write that races the consumer — and so the new
-    titles are visible before the compute phase starts.
+    phase) awaits that Event so the title bulk-update runs through the DB
+    writer — never as a write that races it — and so the new titles are
+    visible before the compute phase starts.
     """
 
     provider: Provider
@@ -214,21 +214,21 @@ class SyncSessionTitlesPayload(NamedTuple):
 # Module state
 # =============================================================================
 
-# The two process-wide shared queues, created by start_unified_consumer().
-_initial_sync_queue: queue.Queue | None = None
-_compute_result_queue: object | None = None  # _mp_ctx.Queue()
+# The two process-wide shared queues, created by start_db_writer().
+_thread_queue: queue.Queue | None = None
+_subprocess_queue: object | None = None  # _mp_ctx.Queue()
 
-# The permanent consumer task and its stop signal.
-_consumer_task: asyncio.Task | None = None
-_consumer_stop_event: asyncio.Event | None = None
+# The permanent DB writer task and its stop signal.
+_db_writer_task: asyncio.Task | None = None
+_db_writer_stop_event: asyncio.Event | None = None
 
-# Intra-process queue of finalization jobs the consumer must run itself, so
-# their writes are serialized with every other consumer write — the
+# Intra-process queue of finalization jobs the DB writer must run itself, so
+# their writes are serialized with every other DB writer write — the
 # single-writer guarantee. abandon_compute_run() runs in a provider's
-# shutdown() task, not in the consumer task, and uses this to have the
-# consumer flush an abandoned compute run's batched state instead of writing
-# to the DB directly and racing the consumer.
-_consumer_jobs: "asyncio.Queue | None" = None
+# shutdown() task, not in the DB writer task, and uses this to have the
+# DB writer flush an abandoned compute run's batched state instead of writing
+# to the DB directly and racing the DB writer.
+_async_queue: "asyncio.Queue | None" = None
 
 # Compute completion is keyed by a per-run id, not by provider: a cancelled
 # run's worker can still have stale messages in the shared queue when a
@@ -238,7 +238,7 @@ _compute_run_id_seq = itertools.count(1)
 
 # run_id -> the completion Future the orchestrator awaits. The mp.Queue cannot
 # transport a Future, so arm_compute_completion() keeps one here and the
-# consumer resolves it (with the run's failed-session count) when it drains
+# DB writer resolves it (with the run's failed-session count) when it drains
 # that run's 'done' message.
 _compute_done_events: dict[int, asyncio.Future] = {}
 
@@ -267,9 +267,9 @@ class _ComputeProviderState:
     state for the same provider.
 
     ``abandoned`` is set by :func:`abandon_compute_run` when a provider shuts
-    down: once set, the consumer skips every remaining ``session_complete`` for
+    down: once set, the DB writer skips every remaining ``session_complete`` for
     the run, and the run's batched state is flushed and dropped by the
-    :class:`_AbandonComputeRunJob` the consumer runs.
+    :class:`_AbandonComputeRunJob` the DB writer runs.
     """
 
     provider: Provider
@@ -287,12 +287,12 @@ class _ComputeProviderState:
 
 
 class _AbandonComputeRunJob(NamedTuple):
-    """A request for the consumer to finalize an abandoned compute run.
+    """A request for the DB writer to finalize an abandoned compute run.
 
-    Pushed onto ``_consumer_jobs`` by :func:`abandon_compute_run` (which runs
-    in a provider's ``shutdown()`` task) and executed by the consumer task
+    Pushed onto ``_async_queue`` by :func:`abandon_compute_run` (which runs
+    in a provider's ``shutdown()`` task) and executed by the DB writer task
     itself, so the run's batched activity-recalculation flush is serialized
-    with every other consumer write. ``done`` is resolved once the consumer
+    with every other DB writer write. ``done`` is resolved once the DB writer
     has finalized and dropped the run, letting ``shutdown()`` move on.
     """
 
@@ -302,23 +302,23 @@ class _AbandonComputeRunJob(NamedTuple):
 
 
 # -----------------------------------------------------------------------------
-# Generic consumer jobs (periodic tasks routed through the unified writer)
+# Generic DB writer jobs (periodic tasks routed through the DB writer)
 # -----------------------------------------------------------------------------
 #
-# These are pushed onto ``_consumer_jobs`` by an async producer (a periodic
+# These are pushed onto ``_async_queue`` by an async producer (a periodic
 # task: commands sync, usage sync, model retirement, pricing) via
-# :func:`submit_consumer_job`. The producer prepares its payload — HTTP fetch,
-# filesystem scan, parsing — entirely outside the consumer; only the actual DB
+# :func:`submit_async_job`. The producer prepares its payload — HTTP fetch,
+# filesystem scan, parsing — entirely outside the DB writer; only the actual DB
 # write (and, for commands, the SELECT-current diff that precedes it) runs in
-# the consumer, in one ``transaction.atomic``. The job carries an
-# ``asyncio.Future`` the consumer settles with the result (or the exception),
-# so the producer awaits the apply just like any other consumer-routed work.
+# the DB writer, in one ``transaction.atomic``. The job carries an
+# ``asyncio.Future`` the DB writer settles with the result (or the exception),
+# so the producer awaits the apply just like any other DB-writer-routed work.
 #
 # Boot-time motivation: the periodic tasks' *first* iteration fires immediately
 # when their provider's orchestrator starts, in parallel with the initial-sync
-# producer the consumer is already draining. Two concurrent connections then
+# producer the DB writer is already draining. Two concurrent connections then
 # race for SQLite's WAL write lock and trip "database is locked" errors. By
-# routing them through the consumer we restore the single-writer guarantee.
+# routing them through the DB writer we restore the single-writer guarantee.
 
 
 class _ApplyDesiredCommandsJob(NamedTuple):
@@ -326,7 +326,7 @@ class _ApplyDesiredCommandsJob(NamedTuple):
 
     The producer (each provider's ``commands_task``) builds ``desired`` from
     its own discovery source — filesystem scan for Claude Code, ``skills/list``
-    JSON-RPC for Codex — and submits this job. The consumer reads the current
+    JSON-RPC for Codex — and submits this job. The DB writer reads the current
     rows from DB, computes the diff, and applies create/update/delete in one
     ``transaction.atomic``. ``future`` resolves to the same stats dict the old
     ``apply_desired_commands`` helper returned.
@@ -343,7 +343,7 @@ class _CreateUsageSnapshotJob(NamedTuple):
 
     The producer (each provider's ``usage_task``) calls its ``fetch_usage``,
     parses the API response into the ``UsageSnapshot`` column fields, and
-    submits this job. The consumer issues one ``UsageSnapshot.objects.create``.
+    submits this job. The DB writer issues one ``UsageSnapshot.objects.create``.
     ``future`` resolves to the created ``UsageSnapshot`` instance so the
     producer can log its values.
     """
@@ -359,7 +359,7 @@ class _RetireSessionsJob(NamedTuple):
     The producer (``model_retirement_task``) iterates the active agent
     managers, decides which sessions need their ``selected_model`` (and
     possibly ``effort``) upgraded, and submits the resulting
-    ``{session_id: field_updates}`` map. The consumer applies them in one
+    ``{session_id: field_updates}`` map. The DB writer applies them in one
     ``transaction.atomic`` via ``Session.objects.filter(id=sid).update(**upd)``
     per session. ``future`` resolves to the number of sessions touched.
     """
@@ -374,7 +374,7 @@ class _PersistProviderPricesJob(NamedTuple):
 
     The producer (``pricing_task``) calls ``fetch_openrouter_models`` and
     ``extract_provider_prices`` (HTTP + parse, no DB), then submits this job.
-    The consumer applies the diff in one ``transaction.atomic``: for each row,
+    The DB writer applies the diff in one ``transaction.atomic``: for each row,
     SELECT the latest, INSERT a new history row only if anything actually
     changed. Invalidates the in-process price cache when at least one row was
     created. ``future`` resolves to a ``{"created": N, "unchanged": M}`` dict.
@@ -390,50 +390,50 @@ class _PersistProviderPricesJob(NamedTuple):
 # =============================================================================
 
 
-def start_unified_consumer() -> None:
-    """Create the shared queues and launch the permanent consumer task.
+def start_db_writer() -> None:
+    """Create the shared queues and launch the permanent DB writer task.
 
     Called once by ``run_server`` at boot, before any provider orchestrator
     starts. Raises if called twice (programming error).
     """
-    global _initial_sync_queue, _compute_result_queue
-    global _consumer_stop_event, _consumer_task, _consumer_jobs
+    global _thread_queue, _subprocess_queue
+    global _db_writer_stop_event, _db_writer_task, _async_queue
 
-    if _consumer_task is not None:
-        raise RuntimeError("unified DB writer already started")
+    if _db_writer_task is not None:
+        raise RuntimeError("DB writer already started")
 
-    _initial_sync_queue = queue.Queue(maxsize=INITIAL_SYNC_QUEUE_MAXSIZE)
-    _compute_result_queue = _mp_ctx.Queue(maxsize=COMPUTE_QUEUE_MAXSIZE)
-    _consumer_jobs = asyncio.Queue()
-    _consumer_stop_event = asyncio.Event()
-    _consumer_task = asyncio.create_task(_consumer_loop())
-    logger.info("Unified DB writer started")
+    _thread_queue = queue.Queue(maxsize=INITIAL_SYNC_QUEUE_MAXSIZE)
+    _subprocess_queue = _mp_ctx.Queue(maxsize=COMPUTE_QUEUE_MAXSIZE)
+    _async_queue = asyncio.Queue()
+    _db_writer_stop_event = asyncio.Event()
+    _db_writer_task = asyncio.create_task(_db_writer_loop())
+    logger.info("DB writer started")
 
 
-async def stop_unified_consumer() -> None:
-    """Signal the consumer to stop and await it. Called once at app shutdown.
+async def stop_db_writer() -> None:
+    """Signal the DB writer to stop and await it. Called once at app shutdown.
 
     Idempotent. Must run after every provider orchestrator has shut down, so
     no producer is still pushing.
     """
-    if _consumer_stop_event is not None:
-        _consumer_stop_event.set()
-    if _consumer_task is not None:
+    if _db_writer_stop_event is not None:
+        _db_writer_stop_event.set()
+    if _db_writer_task is not None:
         with suppress(Exception):
-            await _consumer_task
-    logger.info("Unified DB writer stopped")
+            await _db_writer_task
+    logger.info("DB writer stopped")
 
 
-def get_initial_sync_queue() -> queue.Queue:
-    """Return the shared initial-sync queue (for an orchestrator's producer)."""
-    assert _initial_sync_queue is not None, "unified DB writer not started"
-    return _initial_sync_queue
+def get_thread_queue() -> queue.Queue:
+    """Return the shared thread queue (for an orchestrator's producer)."""
+    assert _thread_queue is not None, "DB writer not started"
+    return _thread_queue
 
 
-async def put_initial_sync_item(
+async def put_thread_message(
     item: object, stop_event: threading.Event | None = None
 ) -> bool:
-    """Push a completion marker / title payload onto the initial-sync queue.
+    """Push a completion marker / title payload onto the thread queue.
 
     For event-loop callers (the orchestrators). The shared queue is bounded;
     a full queue is handled by polling ``put_nowait()`` and awaiting a short
@@ -455,11 +455,11 @@ async def put_initial_sync_item(
     With ``stop_event=None``: the item is never dropped — the loop retries
     until the put succeeds, then returns ``True``. Used for the drain marker
     ``shutdown()`` pushes once ``_sync_stop_event`` is already set: that marker
-    proves the queue is drained and must not be dropped. The consumer is
+    proves the queue is drained and must not be dropped. The DB writer is
     permanent (it outlives every provider shutdown), so it keeps draining and
     a slot always frees up.
     """
-    q = get_initial_sync_queue()
+    q = get_thread_queue()
     while stop_event is None or not stop_event.is_set():
         try:
             q.put_nowait(item)
@@ -469,10 +469,10 @@ async def put_initial_sync_item(
     return False
 
 
-def get_compute_result_queue():
+def get_subprocess_queue():
     """Return the shared compute result queue (passed to a compute worker)."""
-    assert _compute_result_queue is not None, "unified DB writer not started"
-    return _compute_result_queue
+    assert _subprocess_queue is not None, "DB writer not started"
+    return _subprocess_queue
 
 
 def arm_compute_completion(
@@ -485,7 +485,7 @@ def arm_compute_completion(
     Mints a fresh ``run_id`` and creates this run's ``_ComputeProviderState``
     and completion ``asyncio.Future``, both keyed by ``run_id``. The worker is
     spawned with this ``run_id`` and tags every message with it, so the
-    consumer routes each message to its own run — a stale message from a
+    DB writer routes each message to its own run — a stale message from a
     cancelled run can never touch a hot-restarted one. The Future resolves to
     the run's failed-session count when its ``done`` message is drained.
 
@@ -520,21 +520,21 @@ async def abandon_compute_run(run_id: int, provider: Provider) -> None:
     stop the compute worker. Two things happen:
 
     1. The run is flagged ``abandoned`` synchronously, before any ``await``.
-       From here on the consumer skips every ``session_complete`` still queued
+       From here on the DB writer skips every ``session_complete`` still queued
        (or still incoming) for this ``run_id`` — a shut-down provider's partial
        compute results must never apply after the provider has stopped, where
        they could clobber a hot-restart's fresher state (and leave freshly
        synced lines with ``compute_version`` already current). The run's
        sessions are recomputed from scratch on the next start.
 
-    2. Finalization is handed to the consumer task via an
-       :class:`_AbandonComputeRunJob` on ``_consumer_jobs``. The consumer
+    2. Finalization is handed to the DB writer task via an
+       :class:`_AbandonComputeRunJob` on ``_async_queue``. The DB writer
        processes one message at a time, so by the time it runs the job any
        in-flight ``session_complete`` apply — and its post-apply bookkeeping
        that accumulates the session's affected activity days — has fully
        finished. The job flushes the run's batched project broadcasts and
        activity recalculations for the sessions applied before the abandon,
-       then drops the run state. The flush runs *in the consumer*, never as a
+       then drops the run state. The flush runs *in the DB writer*, never as a
        direct DB write from this ``shutdown()`` task, so the single-writer
        guarantee holds. This coroutine awaits the job, so the provider does
        not reach STOPPED — and a hot restart cannot begin — until the
@@ -550,57 +550,57 @@ async def abandon_compute_run(run_id: int, provider: Provider) -> None:
     if state is None or state.provider != provider:
         return
     # Flag synchronously, before any await: every session_complete the
-    # consumer dequeues for this run from now on is skipped.
+    # DB writer dequeues for this run from now on is skipped.
     state.abandoned = True
-    assert _consumer_jobs is not None, "unified DB writer not started"
+    assert _async_queue is not None, "DB writer not started"
     done = asyncio.get_running_loop().create_future()
-    _consumer_jobs.put_nowait(
+    _async_queue.put_nowait(
         _AbandonComputeRunJob(run_id=run_id, provider=provider, done=done)
     )
-    # Await the consumer-side finalization so shutdown does not reach STOPPED
+    # Await the DB writer-side finalization so shutdown does not reach STOPPED
     # before the run's batched state has been flushed and committed.
     with suppress(Exception):
         await done
 
 
-async def submit_consumer_job(job) -> object:
-    """Push a periodic-task job onto the consumer queue and await its result.
+async def submit_async_job(job) -> object:
+    """Push a periodic-task job onto the DB writer queue and await its result.
 
     Used by the periodic-task producers (commands sync, usage sync, model
-    retirement, pricing) to route their DB writes through the unified writer.
+    retirement, pricing) to route their DB writes through the DB writer.
     The caller pre-creates ``job.future`` (typically with
     ``loop.create_future()``) so this function can stay tiny and the job's
-    NamedTuple is fully immutable. The consumer settles ``job.future`` with
+    NamedTuple is fully immutable. The DB writer settles ``job.future`` with
     the apply's return value, or with the apply's exception so the producer
     sees the failure rather than silently dropping it.
 
     Raises ``RuntimeError`` if the writer is not started or has been signalled
     to stop. A producer that has just received its task-level stop event
     should check it before calling this — the periodic loops do so via their
-    own ``stop_event.is_set()`` check, and the consumer outlives them all
+    own ``stop_event.is_set()`` check, and the DB writer outlives them all
     (the global shutdown stops every orchestrator before the writer, so a
     live periodic task always has a live writer to talk to).
     """
-    if _consumer_task is None or _consumer_stop_event is None or _consumer_jobs is None:
-        raise RuntimeError("unified DB writer not started")
-    if _consumer_stop_event.is_set():
-        raise RuntimeError("unified DB writer is stopping")
-    _consumer_jobs.put_nowait(job)
+    if _db_writer_task is None or _db_writer_stop_event is None or _async_queue is None:
+        raise RuntimeError("DB writer not started")
+    if _db_writer_stop_event.is_set():
+        raise RuntimeError("DB writer is stopping")
+    _async_queue.put_nowait(job)
     # ``asyncio.shield`` guards ``job.future`` against producer-task cancellation.
     # asyncio normally cancels the Future a cancelled Task is awaiting (via
     # ``Task._fut_waiter``); without the shield, ``job.future.cancelled()`` would
-    # then be True by the time the consumer reaches ``_settle_periodic_job``, and
+    # then be True by the time the DB writer reaches ``_settle_async_job``, and
     # its ``if not job.future.done(): set_result/set_exception`` guard would
     # silently drop the apply's outcome. With the shield, a CancelledError still
     # propagates out of this ``await`` to the caller (so a hot-toggle / shutdown
     # cancel still tears down promptly), but the future itself stays settleable
-    # — the consumer's apply is always observed, even if no producer is left
+    # — the DB writer's apply is always observed, even if no producer is left
     # awaiting it.
     return await asyncio.shield(job.future)
 
 
 # =============================================================================
-# The consumer loop
+# The DB writer loop
 # =============================================================================
 
 
@@ -608,20 +608,20 @@ async def _drain_one() -> bool:
     """Process at most one message from each queue.
 
     Covers the two shared producer queues (compute, initial-sync) and the
-    intra-process consumer-jobs queue. Returns True if anything was processed
+    intra-process async queue. Returns True if anything was processed
     this call.
 
     Never raises an ordinary exception: a message is removed from its queue
     before processing, and every per-message failure (deserialization, apply,
     finalization) is caught and logged. So one bad message can neither crash a
-    steady-state consumer tick nor abort the shutdown drain — which would
+    steady-state DB writer tick nor abort the shutdown drain — which would
     strand the messages queued behind it.
     """
     any_processed = False
 
     # ---- Compute side (mp.Queue, shared by every provider) ----
     try:
-        raw = _compute_result_queue.get_nowait()
+        raw = _subprocess_queue.get_nowait()
     except queue.Empty:
         pass
     except Exception as exc:
@@ -642,36 +642,36 @@ async def _drain_one() -> bool:
 
     # ---- Initial-sync side (queue.Queue, shared by every provider) ----
     try:
-        payload = _initial_sync_queue.get_nowait()
+        payload = _thread_queue.get_nowait()
     except queue.Empty:
         pass
     else:
         any_processed = True
         try:
-            await _process_initial_sync_message(payload)
+            await _process_thread_message(payload)
         except Exception as exc:
             logger.error(f"Error processing initial-sync message: {exc}", exc_info=True)
 
     # ---- Consumer-side jobs (intra-process) ----
     try:
-        job = _consumer_jobs.get_nowait()
+        job = _async_queue.get_nowait()
     except asyncio.QueueEmpty:
         pass
     else:
         any_processed = True
-        await _dispatch_consumer_job(job)
+        await _dispatch_async_job(job)
 
     return any_processed
 
 
-async def _dispatch_consumer_job(job) -> None:
-    """Apply one consumer job and settle its caller-visible Future.
+async def _dispatch_async_job(job) -> None:
+    """Apply one DB writer job and settle its caller-visible Future.
 
-    Two job families share ``_consumer_jobs``:
+    Two job families share ``_async_queue``:
 
     - :class:`_AbandonComputeRunJob` is a finalization request from a
       provider's ``shutdown()``; the producer awaits ``job.done`` and only
-      cares that the consumer reached this point, so we always resolve it
+      cares that the DB writer reached this point, so we always resolve it
       with ``None`` (even on failure — a hang would block shutdown).
     - The four periodic-task jobs (:class:`_ApplyDesiredCommandsJob`,
       :class:`_CreateUsageSnapshotJob`, :class:`_RetireSessionsJob`,
@@ -681,7 +681,7 @@ async def _dispatch_consumer_job(job) -> None:
       silently dropping the failure.
 
     Every per-job apply is wrapped here so one bad message can neither crash
-    the consumer tick nor strand the messages queued behind it.
+    the DB writer tick nor strand the messages queued behind it.
     """
     if isinstance(job, _AbandonComputeRunJob):
         try:
@@ -697,25 +697,25 @@ async def _dispatch_consumer_job(job) -> None:
         return
 
     if isinstance(job, _ApplyDesiredCommandsJob):
-        await _settle_periodic_job(job, _apply_desired_commands_job, "commands sync")
+        await _settle_async_job(job, _apply_desired_commands_job, "commands sync")
         return
 
     if isinstance(job, _CreateUsageSnapshotJob):
-        await _settle_periodic_job(job, _apply_create_usage_snapshot_job, "usage sync")
+        await _settle_async_job(job, _apply_create_usage_snapshot_job, "usage sync")
         return
 
     if isinstance(job, _RetireSessionsJob):
-        await _settle_periodic_job(job, _apply_retire_sessions_job, "model retirement")
+        await _settle_async_job(job, _apply_retire_sessions_job, "model retirement")
         return
 
     if isinstance(job, _PersistProviderPricesJob):
-        await _settle_periodic_job(job, _apply_persist_provider_prices_job, "price sync")
+        await _settle_async_job(job, _apply_persist_provider_prices_job, "price sync")
         return
 
-    logger.error(f"Unknown consumer job type: {type(job).__name__} => {job!r:.300}")
+    logger.error(f"Unknown DB writer job type: {type(job).__name__} => {job!r:.300}")
 
 
-async def _settle_periodic_job(job, apply_fn, label: str) -> None:
+async def _settle_async_job(job, apply_fn, label: str) -> None:
     """Run a periodic-task job's sync apply, then settle its Future.
 
     ``apply_fn`` is a synchronous function (it runs in ``transaction.atomic``
@@ -738,30 +738,30 @@ async def _settle_periodic_job(job, apply_fn, label: str) -> None:
         job.future.set_result(result)
 
 
-async def _consumer_loop() -> None:
-    """Drain the producer queues and consumer jobs until the app shuts down.
+async def _db_writer_loop() -> None:
+    """Drain the producer queues and DB writer jobs until the app shuts down.
 
-    Permanent: runs from start_unified_consumer() to stop_unified_consumer().
+    Permanent: runs from start_db_writer() to stop_db_writer().
     Resilient: an unexpected exception in one tick is logged and the loop
     continues — a single bad message must never take the writer down.
 
     On stop, before exiting, every queue is fully drained.
-    stop_unified_consumer() runs only after every producer has shut down, so
+    stop_db_writer() runs only after every producer has shut down, so
     the queues can no longer grow — draining them guarantees no boot-time
     write still queued at shutdown is silently abandoned.
     """
-    assert _consumer_stop_event is not None
-    assert _initial_sync_queue is not None
-    assert _compute_result_queue is not None
+    assert _db_writer_stop_event is not None
+    assert _thread_queue is not None
+    assert _subprocess_queue is not None
 
-    logger.info("Unified DB writer loop running")
-    while not _consumer_stop_event.is_set():
+    logger.info("DB writer loop running")
+    while not _db_writer_stop_event.is_set():
         try:
             any_processed = await _drain_one()
             # Yield: tightly when busy, back off when idle.
             await asyncio.sleep(0 if any_processed else 0.05)
         except Exception as exc:
-            logger.error(f"Unified DB writer tick crashed: {exc}", exc_info=True)
+            logger.error(f"DB writer tick crashed: {exc}", exc_info=True)
             await asyncio.sleep(0.05)
 
     # Final drain: producers are all stopped by the time stop is signalled, so
@@ -777,15 +777,15 @@ async def _consumer_loop() -> None:
             if not await _drain_one():
                 break
         except Exception as exc:
-            logger.error(f"Unified DB writer shutdown-drain tick crashed: {exc}", exc_info=True)
+            logger.error(f"DB writer shutdown-drain tick crashed: {exc}", exc_info=True)
             continue
         drained_passes += 1
     if drained_passes:
         logger.info(
-            "Unified DB writer drained %d queued message pass(es) at shutdown",
+            "DB writer drained %d queued message pass(es) at shutdown",
             drained_passes,
         )
-    logger.info("Unified DB writer loop exited")
+    logger.info("DB writer loop exited")
 
 
 # =============================================================================
@@ -807,7 +807,7 @@ async def _process_compute_message(msg: dict) -> None:
         return
 
     # Every message is tagged with the run_id arm_compute_completion() minted;
-    # the consumer routes state/completion by run_id so a stale message from a
+    # the DB writer routes state/completion by run_id so a stale message from a
     # cancelled run can never touch a hot-restarted one.
     run_id = msg.get("run_id")
 
@@ -831,7 +831,7 @@ async def _process_compute_message(msg: dict) -> None:
     if state is None or state.abandoned:
         # No live state for this run_id: either the run was never tracked / its
         # state already dropped, or it was abandoned at provider shutdown
-        # (abandon_compute_run flags it; the consumer finalizes it via an
+        # (abandon_compute_run flags it; the DB writer finalizes it via an
         # _AbandonComputeRunJob). Ignore the message — do NOT apply it. The
         # metadata was computed against a possibly-outdated view of the session
         # and could clobber fresher data written since (by a hot-restarted run,
@@ -911,7 +911,7 @@ async def _finalize_compute_run(run_id: int | None, provider: Provider) -> None:
         return
 
     logger.info(
-        f"Unified DB writer: compute 'done' for provider={provider.value} (run_id={run_id})"
+        f"DB writer: compute 'done' for provider={provider.value} (run_id={run_id})"
     )
     if state is not None:
         for pid in state.pending_project_ids:
@@ -934,10 +934,10 @@ async def _finalize_compute_run(run_id: int | None, provider: Provider) -> None:
 async def _finalize_abandoned_run(run_id: int, provider: Provider) -> None:
     """Consumer-side finalization of a compute run abandoned at shutdown.
 
-    Runs inside the consumer task (dispatched via ``_consumer_jobs`` by
+    Runs inside the DB writer task (dispatched via ``_async_queue`` by
     :func:`abandon_compute_run`), so the activity-recalculation flush is
-    serialized with every other consumer write — the single-writer guarantee
-    holds. The consumer handles one message at a time, so any in-flight
+    serialized with every other DB writer write — the single-writer guarantee
+    holds. The DB writer handles one message at a time, so any in-flight
     ``session_complete`` for the run, and its post-apply bookkeeping, has
     already finished by the time this runs: ``state.pending_activity_days``
     and ``state.pending_project_ids`` are final.
@@ -1003,7 +1003,7 @@ async def _handle_compute_done(session_id: str) -> None:
 async def _broadcast_project_added(project) -> None:
     """Broadcast project_added for a newly-created project.
 
-    Called by the initial-sync consumer *after* the create-session
+    Called by the initial-sync DB writer *after* the create-session
     transaction has committed — never from inside it.
     """
     from twicc.core.serializers import serialize_project
@@ -1045,7 +1045,7 @@ def _flush_pending_activities(provider: Provider, pending_activity_days: dict[st
     """Flush accumulated activity recalculations for all projects."""
     from twicc.core.models import PeriodicActivity
 
-    # One atomic batch for the whole flush, like every other consumer write.
+    # One atomic batch for the whole flush, like every other DB writer write.
     with transaction.atomic():
         for project_id, days in pending_activity_days.items():
             PeriodicActivity.recalculate_for_days(project_id, days, provider=provider, do_global=False)
@@ -1058,8 +1058,8 @@ def _flush_pending_activities(provider: Provider, pending_activity_days: dict[st
 # =============================================================================
 
 
-async def _process_initial_sync_message(msg) -> None:
-    """Apply one message drained from the shared initial-sync queue."""
+async def _process_thread_message(msg) -> None:
+    """Apply one message drained from the shared thread queue."""
     if isinstance(msg, InitialSyncDoneMarker):
         # Drained after every real payload of the run (FIFO). Resolve the
         # marker's Future with the run's failure count so the producer learns
@@ -1068,7 +1068,7 @@ async def _process_initial_sync_message(msg) -> None:
         failures = _initial_sync_failures.pop(msg.provider, 0)
         orphan_skips = _initial_sync_orphan_skips.pop(msg.provider, 0)
         logger.info(
-            f"Unified DB writer: initial-sync 'done' for provider={msg.provider.value}"
+            f"DB writer: initial-sync 'done' for provider={msg.provider.value}"
         )
         if orphan_skips:
             logger.warning(
@@ -1150,7 +1150,7 @@ async def _apply_and_broadcast_titles(payload: SyncSessionTitlesPayload) -> None
             }},
         )
     logger.info(
-        "Unified DB writer: %d title(s) applied for provider=%s",
+        "DB writer: %d title(s) applied for provider=%s",
         len(changed), payload.provider.value,
     )
 
@@ -1325,7 +1325,7 @@ def _apply_update_project_metadata_payload(payload: UpdateProjectMetadataPayload
 def _apply_resolve_git_roots_payload(payload: ResolveProjectGitRootsPayload) -> None:
     """Resolve git_root for every non-stale project that has a directory.
 
-    Run by the consumer when it drains a ResolveProjectGitRootsPayload —
+    Run by the DB writer when it drains a ResolveProjectGitRootsPayload —
     after every prior FIFO project payload of the same sync run has
     committed — so the ``stale=False`` filter reflects this run's fresh
     state (a project being un-staled earlier in the same run is no longer
@@ -1335,7 +1335,7 @@ def _apply_resolve_git_roots_payload(payload: ResolveProjectGitRootsPayload) -> 
     from twicc.core.models import Project
     from twicc.projects import ensure_project_git_root
 
-    # One atomic batch for the whole payload, like every other consumer write.
+    # One atomic batch for the whole payload, like every other DB writer write.
     with transaction.atomic():
         for project in Project.objects.filter(directory__isnull=False, stale=False):
             ensure_project_git_root(project.id, project.directory)
@@ -1346,7 +1346,7 @@ def _apply_sync_session_titles_payload(payload: SyncSessionTitlesPayload) -> lis
 
     Reads the provider's sessions named in the map, updates the rows whose
     title actually differs in a single bulk UPDATE, and returns them
-    serialized so the consumer can broadcast ``session_updated`` for each.
+    serialized so the DB writer can broadcast ``session_updated`` for each.
     """
     from twicc.core.models import Session
     from twicc.core.serializers import serialize_session
@@ -1371,8 +1371,8 @@ def _apply_sync_session_titles_payload(payload: SyncSessionTitlesPayload) -> lis
 # =============================================================================
 #
 # Each handler runs synchronously on a worker thread (via ``sync_to_async`` in
-# :func:`_settle_periodic_job`) inside its own ``transaction.atomic``, like
-# every other consumer write. The producer side prepared everything that does
+# :func:`_settle_async_job`) inside its own ``transaction.atomic``, like
+# every other DB writer write. The producer side prepared everything that does
 # not touch DB (HTTP fetches, filesystem scans, parsing); only the actual
 # diff/write happens here.
 
@@ -1401,7 +1401,7 @@ def _apply_create_usage_snapshot_job(job: _CreateUsageSnapshotJob) -> object:
 
     The producer (each provider's ``usage_task``) parsed the API response
     into ``fields`` before submitting, so this is a single ``create()`` — no
-    upstream parsing happens in the consumer thread.
+    upstream parsing happens in the DB writer thread.
     """
     from twicc.core.models import UsageSnapshot
 
@@ -1415,7 +1415,7 @@ def _apply_retire_sessions_job(job: _RetireSessionsJob) -> int:
     ``updates`` maps each session id to the field/value dict the producer
     wants applied (``selected_model``, possibly ``effort``). Sessions that no
     longer exist (e.g. the row was deleted between the producer's iteration
-    and the consumer's apply) contribute 0 to the count — a transient miss,
+    and the DB writer's apply) contribute 0 to the count — a transient miss,
     not an error. Returns the number of rows actually updated.
     """
     from twicc.core.models import Session

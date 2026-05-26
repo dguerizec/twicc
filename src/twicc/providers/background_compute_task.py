@@ -10,7 +10,7 @@ Architecture:
   metadata computation). The worker process only READS from the database
   (WAL mode supports multiple readers).
 - The worker pushes its results onto the process-wide shared compute result
-  queue owned by :mod:`twicc.providers.db_writer`; the unified DB writer
+  queue owned by :mod:`twicc.providers.db_writer`; the DB writer
   applies every write. This module is purely the *producer* side — it never
   writes to the database from the main process.
 
@@ -98,7 +98,7 @@ class ComputeContext:
     stop_event: asyncio.Event = field(default_factory=asyncio.Event)
     process: _mp_ctx.Process | None = None
     # Set by start_background_compute_task before the worker is spawned. The
-    # worker tags every result message with it so the unified DB writer can
+    # worker tags every result message with it so the DB writer can
     # isolate this run from stale messages of a cancelled one.
     run_id: int = 0
 
@@ -122,9 +122,9 @@ async def stop_background_task(ctx: ComputeContext) -> None:
     """Signal the background compute task to stop and terminate worker process.
 
     Async so the blocking ``process.join()`` calls can run off the event loop:
-    joining on the loop thread would freeze the unified DB writer's consumer,
+    joining on the loop thread would freeze the DB writer's DB writer,
     and a worker blocked on a full result queue only makes progress (drains,
-    then exits) while that consumer keeps running.
+    then exits) while that DB writer keeps running.
     """
     logger.info("stop_background_task: starting shutdown...")
 
@@ -144,7 +144,7 @@ async def stop_background_task(ctx: ComputeContext) -> None:
         logger.warning(f"stop_background_task: failed to send stop signal to queue: {e}")
 
     # Wait for worker process to exit gracefully, then terminate if needed.
-    # join() runs off the event loop (asyncio.to_thread) so the consumer
+    # join() runs off the event loop (asyncio.to_thread) so the DB writer
     # keeps draining while we wait — terminate()/kill() are non-blocking
     # signals and stay on the loop.
     if ctx.process is not None and ctx.process.is_alive():
@@ -228,7 +228,7 @@ def compute_worker_main(command_queue, result_queue, stop_event, compute_factory
     does not crash the spawn worker before the app registry is ready.
 
     Every message put on ``result_queue`` carries a ``'provider'`` key (for
-    routing/logging) and this run's ``run_id``, so the unified consumer can
+    routing/logging) and this run's ``run_id``, so the DB writer can
     isolate this run from a cancelled run's stale messages.
     """
     # Tie the worker's lifetime to the parent's on Linux: if the main TwiCC
@@ -310,7 +310,7 @@ def compute_worker_main(command_queue, result_queue, stop_event, compute_factory
                 for handler in logging.getLogger('twicc').handlers:
                     handler.flush()
 
-    # Signal the consumer that the worker is done
+    # Signal the DB writer that the worker is done
     result_queue.put(orjson.dumps({'type': 'done', 'provider': provider_value, 'run_id': run_id}))
     worker_logger.info("Compute worker sent 'done' signal")
 
@@ -337,9 +337,9 @@ def start_compute_process(ctx: ComputeContext) -> None:
     module is never dragged into the spawn subprocess before Django setup).
     """
     if ctx.process is None or not ctx.process.is_alive():
-        from twicc.providers.db_writer import get_compute_result_queue
+        from twicc.providers.db_writer import get_subprocess_queue
 
-        result_queue = get_compute_result_queue()
+        result_queue = get_subprocess_queue()
         # Reset stop event for new process
         ctx.worker_stop_event = _mp_ctx.Event()
         ctx.process = _mp_ctx.Process(
@@ -359,7 +359,7 @@ async def start_background_compute_task(ctx: ComputeContext) -> None:
     Architecture:
     - Starts a separate Process for CPU-intensive work (JSON parsing, metadata computation)
     - The worker process only READS from the database
-    - All database WRITES happen via the unified DB writer (:mod:`db_writer`),
+    - All database WRITES happen via the DB writer (:mod:`db_writer`),
       which serializes writes across providers and phases
 
     This task processes all sessions with outdated or missing compute_version,
@@ -451,7 +451,7 @@ async def start_background_compute_task(ctx: ComputeContext) -> None:
         # Send stop signal to worker so it finishes and sends 'done'
         ctx.command_queue.put(None)
 
-        # Wait for the unified DB writer to drain everything for this run
+        # Wait for the DB writer to drain everything for this run
         # (the worker has emitted 'done' and any pending flushes have run).
         # The Future resolves to this run's failed-session count.
         failed_sessions = await done_future

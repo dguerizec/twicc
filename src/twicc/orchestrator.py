@@ -192,7 +192,7 @@ class OrchestratorRegistry:
 
         # In-flight fire-and-forget hot-toggle tasks (finish_start /
         # finish_shutdown). Tracked so shutdown_all() can await them before
-        # the caller stops the unified DB writer: a hot-toggled provider's
+        # the caller stops the DB writer: a hot-toggled provider's
         # producer (initial-sync thread / compute worker) is alive until its
         # finish_shutdown completes, and the writer must outlive every
         # producer. Each task removes itself via a done-callback.
@@ -490,7 +490,7 @@ class OrchestratorRegistry:
 
     def _track_hot_toggle_task(self, task: asyncio.Task[None]) -> None:
         """Register a fire-and-forget hot-toggle task so :meth:`shutdown_all`
-        can await it before the caller stops the unified DB writer.
+        can await it before the caller stops the DB writer.
 
         A hot-toggled provider's producer (initial-sync thread / compute
         worker) is alive until its ``finish_start`` / ``finish_shutdown`` task
@@ -612,7 +612,7 @@ class OrchestratorRegistry:
         # shutdown event the guard above checks. If this provider is no longer
         # running-and-enabled, the wait was unblocked by its teardown, not by
         # compute finishing: skip the re-index. search_indexing_task writes
-        # Session.search_version directly, outside the unified DB writer, so a
+        # Session.search_version directly, outside the DB writer, so a
         # kick now would reintroduce SQLite write contention against the
         # still-draining shutdown and index a partial hot-toggled run.
         if not is_provider_running(provider) or not is_provider_enabled(provider):
@@ -689,7 +689,7 @@ class OrchestratorRegistry:
         # finish_start / finish_shutdown task and may not be in the current
         # enabled set, so the per-enabled teardown below would miss it — yet
         # its producer (initial-sync thread / compute worker) is alive until
-        # that task completes, and the caller stops the unified DB writer
+        # that task completes, and the caller stops the DB writer
         # right after this returns. Await the in-flight ones first.
         inflight = list(self._inflight_hot_toggle_tasks)
         if inflight:

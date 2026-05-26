@@ -98,7 +98,7 @@ def ensure_project_directory(project_id: str, cwd: str) -> None:
         return
 
     # Update DB now; refresh the cache only once the surrounding transaction
-    # commits. apply_session_complete and the unified DB writer call this
+    # commits. apply_session_complete and the DB writer call this
     # inside transaction.atomic — a rollback there would otherwise leave the
     # cache ahead of the DB, and the `== cwd` check above would then suppress
     # the corrective write forever. on_commit runs immediately when there is
@@ -242,7 +242,7 @@ def register_project_db_only(
     (``created or adopted_directory``) — never on every call, since an
     existing project's workspace membership cannot change just because another
     of its sessions was synced. :func:`register_project` is the async wrapper
-    that does exactly that; the unified DB writer
+    that does exactly that; the DB writer
     (:mod:`twicc.providers.db_writer`) calls this directly so a project is
     never announced from inside — or despite a rollback of — its transaction.
     """
@@ -331,7 +331,7 @@ def update_project_metadata(project_id: str) -> None:
     # mtime excludes stale sessions (JSONL gone from disk): a stale session
     # must not keep the project's mtime -- and thus its sort position -- high.
     # sessions_count above intentionally keeps stale sessions (matching
-    # recalc_sessions_count in the unified DB writer); only this mtime
+    # recalc_sessions_count in the DB writer); only this mtime
     # aggregate filters them out. Keep this filter aligned with
     # _compute_project_mtime() in twicc.providers.db_writer.
     max_mtime = (

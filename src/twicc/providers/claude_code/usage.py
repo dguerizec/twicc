@@ -109,7 +109,7 @@ def _build_usage_snapshot_fields(raw: dict) -> dict:
 
     Pure — no DB access. The producer (``fetch_and_save_usage``) calls this
     on the worker thread that did the HTTP fetch, then hands the result to
-    the unified consumer via :class:`_CreateUsageSnapshotJob` so the actual
+    the DB writer via :class:`_CreateUsageSnapshotJob` so the actual
     ``UsageSnapshot.objects.create`` happens on the single-writer path.
     """
     from twicc.core.enums import Provider
@@ -221,17 +221,17 @@ def _fetch_usage_raw_blocking() -> dict | None:
 
 
 async def fetch_and_save_usage() -> UsageSnapshot | None:
-    """Fetch a usage payload (API or replay file) and persist it via the consumer.
+    """Fetch a usage payload (API or replay file) and persist it via the DB writer.
 
     The HTTP / file read happens on a worker thread; the parsed-fields dict
-    is then routed through the unified DB writer via
+    is then routed through the DB writer via
     :class:`_CreateUsageSnapshotJob`, so the ``UsageSnapshot.objects.create``
-    never races the consumer on the SQLite write lock. Returns the created
+    never races the DB writer on the SQLite write lock. Returns the created
     ``UsageSnapshot``, or ``None`` when nothing was fetched (credentials
     missing, API error, or replay file unreadable).
     """
     from twicc.core.enums import Provider
-    from twicc.providers.db_writer import _CreateUsageSnapshotJob, submit_consumer_job
+    from twicc.providers.db_writer import _CreateUsageSnapshotJob, submit_async_job
 
     raw = await asyncio.to_thread(_fetch_usage_raw_blocking)
     if raw is None:
@@ -245,7 +245,7 @@ async def fetch_and_save_usage() -> UsageSnapshot | None:
 
     future = asyncio.get_running_loop().create_future()
     try:
-        return await submit_consumer_job(_CreateUsageSnapshotJob(
+        return await submit_async_job(_CreateUsageSnapshotJob(
             provider=Provider.CLAUDE_CODE,
             fields=fields,
             future=future,

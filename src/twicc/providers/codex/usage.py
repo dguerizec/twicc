@@ -140,8 +140,8 @@ def _build_usage_snapshot_fields(raw: dict) -> dict:
     ones, and would mislead the existing UI), so the ``extra_usage_*``
     columns stay at their default zero/null values.
 
-    The actual ``UsageSnapshot.objects.create`` happens on the unified
-    consumer's single-writer path, via :class:`_CreateUsageSnapshotJob`.
+    The actual ``UsageSnapshot.objects.create`` happens on the DB writer's
+    single-writer path, via :class:`_CreateUsageSnapshotJob`.
     """
     from twicc.core.enums import Provider
 
@@ -220,7 +220,7 @@ def _fetch_usage_raw_blocking() -> dict | None:
 
 
 async def fetch_and_save_usage() -> UsageSnapshot | None:
-    """Fetch a Codex usage payload (API or replay file) and persist via the consumer.
+    """Fetch a Codex usage payload (API or replay file) and persist via the DB writer.
 
     Mirrors the Claude Code orchestration: when the user has enabled read
     mode in synced settings, load from the configured path instead of hitting
@@ -229,12 +229,12 @@ async def fetch_and_save_usage() -> UsageSnapshot | None:
     exclusive — read mode wins and dump is skipped.
 
     The HTTP / file read happens on a worker thread; the parsed-fields dict
-    is then routed through the unified DB writer via
+    is then routed through the DB writer via
     :class:`_CreateUsageSnapshotJob`, so the ``UsageSnapshot.objects.create``
-    never races the consumer on the SQLite write lock.
+    never races the DB writer on the SQLite write lock.
     """
     from twicc.core.enums import Provider
-    from twicc.providers.db_writer import _CreateUsageSnapshotJob, submit_consumer_job
+    from twicc.providers.db_writer import _CreateUsageSnapshotJob, submit_async_job
 
     raw = await asyncio.to_thread(_fetch_usage_raw_blocking)
     if raw is None:
@@ -248,7 +248,7 @@ async def fetch_and_save_usage() -> UsageSnapshot | None:
 
     future = asyncio.get_running_loop().create_future()
     try:
-        return await submit_consumer_job(_CreateUsageSnapshotJob(
+        return await submit_async_job(_CreateUsageSnapshotJob(
             provider=Provider.CODEX,
             fields=fields,
             future=future,

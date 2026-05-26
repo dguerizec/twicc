@@ -3,9 +3,9 @@ Synchronization logic for JSONL files from Codex sessions.
 
 Walks :attr:`CodexHelpers.SESSIONS_DIR` (~/.codex/sessions/YYYY/MM/DD/),
 groups files by project (resolved from the first JSONL line's
-``payload.cwd``), and pushes initial-sync payloads onto the unified
-consumer queue. Producer-side reads only — every DB write is delegated to
-the unified consumer via ``CreateSessionPayload`` / ``UpdateSessionPayload`` /
+``payload.cwd``), and pushes initial-sync payloads onto the DB writer's
+thread queue. Producer-side reads only — every DB write is delegated to
+the DB writer via ``CreateSessionPayload`` / ``UpdateSessionPayload`` /
 ``MarkSessionsStalePayload`` / ``UpdateProjectMetadataPayload``.
 """
 
@@ -172,9 +172,9 @@ def _build_create_payload(
     bumps ``stats['items_added']`` and ``stats['sessions_created']``.
 
     Codex stores the cwd on the first JSONL line, so every payload carries
-    ``new_project_directory``: the consumer's ``register_project_sync`` is
+    ``new_project_directory``: the DB writer's ``register_project_sync`` is
     idempotent (no-op when the project already exists), and a cross-project
-    subagent may be the first session the consumer ever sees for its own
+    subagent may be the first session the DB writer ever sees for its own
     project.
     """
     relative_path = entry.file_path.relative_to(CodexHelpers.SESSIONS_DIR)
@@ -235,7 +235,7 @@ def _sync_subagents(
     subagent as an orphan.
 
     ``resolvable_parent_ids`` is the process-wide set of session ids the
-    consumer will have created (existing DB rows plus everything pushed in
+    DB writer will have created (existing DB rows plus everything pushed in
     this run). Multi-pass: each sweep pushes every subagent whose parent is
     already resolvable and records its own id, so a deeper subagent resolves
     on a later sweep; the pass count is bounded by the spawn-tree depth. A
@@ -312,7 +312,7 @@ def sync_project(
     Synchronize one project's top-level Codex sessions by pushing payloads
     on ``sync_queue``.
 
-    Producer-side reads only. The unified consumer applies every write
+    Producer-side reads only. The DB writer applies every write
     inside ``transaction.atomic`` from a single coroutine, so two
     providers (Claude Code + Codex) and two phases (initial sync +
     compute) never race on the SQLite write lock.
@@ -409,7 +409,7 @@ def sync_project(
                 on_session_progress(entry.session_id, idx, total_sessions)
             continue
 
-        # The first session of a not-yet-existing project: the consumer
+        # The first session of a not-yet-existing project: the DB writer
         # creates the Project row from this payload's cwd.
         if project is None and not created_a_regular:
             stats["project_created"] = 1
@@ -435,11 +435,11 @@ def sync_project(
         )
         return stats
 
-    # ``sessions_count`` and ``mtime`` are recomputed by the consumer
+    # ``sessions_count`` and ``mtime`` are recomputed by the DB writer
     # (recalc_sessions_count / recalc_mtime): both are cross-provider, so a
     # value counted in this producer could clobber — or be clobbered by — a
     # fresher value another provider's compute writes, and reading them here
-    # would also race the consumer applying this run's session payloads.
+    # would also race the DB writer applying this run's session payloads.
     sync_queue.put(UpdateProjectMetadataPayload(
         provider=Provider.CODEX,
         project_id=project_id,
@@ -474,14 +474,14 @@ def sync_all(
     """
     Synchronize all Codex sessions from :attr:`CodexHelpers.SESSIONS_DIR`.
 
-    Pushes payloads onto ``sync_queue`` (the unified consumer drains them).
+    Pushes payloads onto ``sync_queue`` (the DB writer drains them).
     Every project's top-level sessions are pushed first; subagents are then
     resolved in one global pass (:func:`_sync_subagents`), so a subagent
     whose parent lives in another project is still linked correctly.
     """
     sync_start = time.monotonic()
 
-    # Throttle the producer to the consumer's write rate: a full bounded
+    # Throttle the producer to the DB writer's write rate: a full bounded
     # queue blocks .put() instead of letting the backlog grow unbounded.
     sync_queue = BackpressureSyncQueue(sync_queue, stop_event)
 
@@ -601,7 +601,7 @@ def sync_all(
         interrupted = stop_event is not None and stop_event.is_set()
 
     # Mark stale sessions (on DB but no longer on disk). Pushed as a
-    # single batch payload so the consumer issues exactly one bulk UPDATE.
+    # single batch payload so the DB writer issues exactly one bulk UPDATE.
     if not interrupted:
         stale_paths = (
             set(db_sessions_by_path.keys()) - set(disk_files_by_relative_path.keys())

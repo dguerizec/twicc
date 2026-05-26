@@ -10,13 +10,13 @@ The CLI (:mod:`twicc.cli.run`) drives the lifecycle the same way it
 drives :mod:`twicc.version_check_task`:
 
 - :func:`sync_all_providers` runs the initial sync at startup, after
-  the unified DB writer is up so the actual price inserts flow through
+  the DB writer is up so the actual price inserts flow through
   the single-writer path.
 - :func:`start_price_sync_task` is the long-running periodic loop,
   cancelled via the shared shutdown event when the server stops.
 
 The DB-write step (``persist_provider_prices``) is routed through the
-unified consumer via :class:`_PersistProviderPricesJob`, so a price sync
+DB writer via :class:`_PersistProviderPricesJob`, so a price sync
 can never race the initial-sync drain or the per-provider compute writes
 on the SQLite write lock — and a hot-toggle that triggers a fresh boot-
 time sync at any moment stays safe.
@@ -47,7 +47,7 @@ def _fetch_and_extract_all_blocking() -> dict:
 
     Pure I/O + parsing — runs in a worker thread (no event loop, no DB).
     Returns a mapping ``{Provider: list[dict]}`` whose values are ready to
-    feed :class:`_PersistProviderPricesJob` for the consumer-side persist.
+    feed :class:`_PersistProviderPricesJob` for the DB writer-side persist.
     """
     from twicc.providers.helpers import get_provider_helpers_registry
 
@@ -64,20 +64,20 @@ async def _persist_all_via_consumer(extracted: dict) -> dict[str, dict[str, int]
     """Submit one :class:`_PersistProviderPricesJob` per provider and await each.
 
     The fetch + extract step that built ``extracted`` already ran on a worker
-    thread; here we only do the consumer-routed persists. A per-provider
+    thread; here we only do the DB-writer-routed persists. A per-provider
     failure is logged but does not abort the other providers — a single bad
     response should never strand the rest of the catalogue.
 
     Returns ``{provider_value: stats}`` for every provider that produced a
     completed apply (skipping any whose job raised).
     """
-    from twicc.providers.db_writer import _PersistProviderPricesJob, submit_consumer_job
+    from twicc.providers.db_writer import _PersistProviderPricesJob, submit_async_job
 
     results: dict[str, dict[str, int]] = {}
     for provider, prices in extracted.items():
         future = asyncio.get_running_loop().create_future()
         try:
-            stats = await submit_consumer_job(_PersistProviderPricesJob(
+            stats = await submit_async_job(_PersistProviderPricesJob(
                 provider=provider,
                 prices=prices,
                 future=future,
@@ -95,7 +95,7 @@ async def _persist_all_via_consumer(extracted: dict) -> dict[str, dict[str, int]
 async def sync_all_providers() -> dict[str, dict[str, int]]:
     """Run a one-shot price sync covering every OpenRouter-priced provider.
 
-    Used at startup after the unified DB writer is up: a failure here is
+    Used at startup after the DB writer is up: a failure here is
     non-fatal — existing DB rows or each helper's
     :attr:`DEFAULT_FAMILY_PRICES` continue to serve as fallbacks.
     """
@@ -127,7 +127,7 @@ async def sync_all_providers() -> dict[str, dict[str, int]]:
 async def start_price_sync_task(stop_event: asyncio.Event) -> None:
     """Periodic cross-provider price sync loop.
 
-    Re-runs the fetch + consumer-routed persist every
+    Re-runs the fetch + DB-writer-routed persist every
     :data:`PRICE_SYNC_INTERVAL` seconds until ``stop_event`` is set.
     Caller is expected to have already run :func:`sync_all_providers`
     once at startup (the loop sleeps before its first iteration to

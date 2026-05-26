@@ -43,9 +43,9 @@ def _build_desired_commands() -> dict[tuple[str | None, str], dict]:
     """Discover commands from disk and return the producer-side desired state.
 
     Pure read-side work — scans the filesystem and reads the (non-stale)
-    ``Project`` rows — so the consumer-routed apply only does the DB diff +
+    ``Project`` rows — so the DB-writer-routed apply only does the DB diff +
     writes. Returns the ``(project_id_or_None, name) -> fields`` map the
-    consumer's :class:`_ApplyDesiredCommandsJob` expects.
+    DB writer's :class:`_ApplyDesiredCommandsJob` expects.
 
     Claude Code's hardcoded CLI built-ins live in the frontend
     ``BUILTIN_COMMANDS`` constant and never reach this table, so every row
@@ -123,19 +123,19 @@ async def _sync_to_database() -> dict[str, int]:
 
     The blocking filesystem + DB-read work is isolated in
     :func:`_build_desired_commands` and run in a worker thread; the actual
-    DB writes go through the unified consumer via
-    :class:`_ApplyDesiredCommandsJob`, so this task never races the consumer
+    DB writes go through the DB writer via
+    :class:`_ApplyDesiredCommandsJob`, so this task never races the DB writer
     on the SQLite write lock.
 
-    Returns the stats dict the consumer's apply produced.
+    Returns the stats dict the DB writer's apply produced.
     """
     from twicc.core.enums import Provider
-    from twicc.providers.db_writer import _ApplyDesiredCommandsJob, submit_consumer_job
+    from twicc.providers.db_writer import _ApplyDesiredCommandsJob, submit_async_job
 
     desired = await asyncio.to_thread(_build_desired_commands)
 
     future = asyncio.get_running_loop().create_future()
-    return await submit_consumer_job(_ApplyDesiredCommandsJob(
+    return await submit_async_job(_ApplyDesiredCommandsJob(
         provider=Provider.CLAUDE_CODE,
         activation_char=ACTIVATION_CHAR,
         desired=desired,

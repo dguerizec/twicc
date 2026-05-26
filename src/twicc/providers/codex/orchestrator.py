@@ -217,11 +217,11 @@ class CodexOrchestrator(BaseOrchestrator):
         if self._sync_task is not None:
             from twicc.providers.db_writer import (
                 InitialSyncDoneMarker,
-                put_initial_sync_item,
+                put_thread_message,
             )
             with suppress(Exception):
                 done_future = asyncio.get_running_loop().create_future()
-                await put_initial_sync_item(
+                await put_thread_message(
                     InitialSyncDoneMarker(provider=self.provider, done_future=done_future)
                 )
                 await done_future
@@ -239,7 +239,7 @@ class CodexOrchestrator(BaseOrchestrator):
             logger.info("Stopping Codex background compute task...")
             # Abandon the compute run before stopping the worker: from here on,
             # every still-queued or still-incoming session_complete for this
-            # run is skipped by the unified DB writer (untracked run), so a
+            # run is skipped by the DB writer (untracked run), so a
             # shut-down provider's partial compute results never apply — not
             # during this teardown, and not racing the next hot-start. The
             # run's sessions are recomputed on the next start.
@@ -313,7 +313,7 @@ class CodexOrchestrator(BaseOrchestrator):
 
         The producer thread does not write to DB directly: it pushes
         initial-sync payloads onto the process-wide shared queue, drained by
-        the unified DB writer (:mod:`twicc.providers.db_writer`).
+        the DB writer (:mod:`twicc.providers.db_writer`).
 
         A producer thread that keeps pushing after a cancel pushes onto a
         still-drained queue — no lost writes; the zombie-thread / overlap
@@ -325,8 +325,8 @@ class CodexOrchestrator(BaseOrchestrator):
         """
         from twicc.providers.db_writer import (
             InitialSyncDoneMarker,
-            get_initial_sync_queue,
-            put_initial_sync_item,
+            get_thread_queue,
+            put_thread_message,
         )
 
         loop = asyncio.get_running_loop()
@@ -350,7 +350,7 @@ class CodexOrchestrator(BaseOrchestrator):
                 loop,
             )
 
-        sync_queue = get_initial_sync_queue()
+        sync_queue = get_thread_queue()
         logger.info("Starting Codex data synchronization...")
 
         # Keep an explicit reference to the producer thread future so
@@ -366,11 +366,11 @@ class CodexOrchestrator(BaseOrchestrator):
         )
         # Wait for the producer thread, capturing a crash rather than letting
         # it propagate yet: the thread has ended either way, so the marker
-        # pushed below still sits last in this run and the consumer's FIFO
+        # pushed below still sits last in this run and the DB writer's FIFO
         # drain of it still proves every payload applied. That proof must
         # complete before initial_sync_done is released (by the
         # _initial_sync_task wrapper) -- on the crash path too, or the compute
-        # phase could start while the consumer is still applying this run's
+        # phase could start while the DB writer is still applying this run's
         # payloads.
         #
         # The await is shielded: shutdown() cancels _sync_task, and a bare
@@ -391,7 +391,7 @@ class CodexOrchestrator(BaseOrchestrator):
         # run's failure count once it has drained every payload this run
         # produced.
         done_future = loop.create_future()
-        if not await put_initial_sync_item(
+        if not await put_thread_message(
             InitialSyncDoneMarker(provider=self.provider, done_future=done_future),
             self._sync_stop_event,
         ):
@@ -433,17 +433,17 @@ class CodexOrchestrator(BaseOrchestrator):
         """Import Codex Thread.name into Session.title for every known thread.
 
         Runs once between the initial JSONL sync and the background compute.
-        The title bulk-update is routed through the unified DB writer (a
+        The title bulk-update is routed through the DB writer (a
         SyncSessionTitlesPayload) so it never writes to SQLite in parallel
-        with the consumer still draining initial-sync or compute payloads —
-        the very contention the unified writer exists to remove. We await the
+        with the DB writer still draining initial-sync or compute payloads —
+        the very contention the DB writer exists to remove. We await the
         payload's done Event so the new titles are applied and broadcast
         before the compute phase starts.
         """
         from twicc.providers.codex.titles import bulk_sync_titles_from_codex
         from twicc.providers.db_writer import (
             SyncSessionTitlesPayload,
-            put_initial_sync_item,
+            put_thread_message,
         )
 
         titles = await bulk_sync_titles_from_codex()
@@ -452,7 +452,7 @@ class CodexOrchestrator(BaseOrchestrator):
             return
 
         done_event = asyncio.Event()
-        if not await put_initial_sync_item(
+        if not await put_thread_message(
             SyncSessionTitlesPayload(
                 provider=self.provider, titles=titles, done_event=done_event,
             ),
@@ -461,7 +461,7 @@ class CodexOrchestrator(BaseOrchestrator):
             return  # shutdown signalled — the title payload was dropped
         await done_event.wait()
         logger.info(
-            "Codex title sync at boot: %d title(s) routed through the unified DB writer",
+            "Codex title sync at boot: %d title(s) routed through the DB writer",
             len(titles),
         )
 

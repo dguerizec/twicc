@@ -7,7 +7,7 @@ initial-sync producer needs: a content probe before creating an empty
 session, and an incremental reader that parses new JSONL lines into a
 :class:`SessionItemsToInsert`. The producer turns that into a queue payload
 (see :mod:`twicc.providers.db_writer`) — the actual DB writes happen in the
-unified DB writer. Metadata computation (``kind``, ``display_level``,
+DB writer. Metadata computation (``kind``, ``display_level``,
 costs, ...) stays in each provider's own compute path.
 """
 
@@ -29,7 +29,7 @@ class SessionItemsToInsert(NamedTuple):
 
     The producer turns this into a ``CreateSessionPayload`` or
     ``UpdateSessionPayload`` (with ``items``, ``last_offset``, ``last_line``,
-    ``mtime`` carried over) before pushing it onto the unified DB writer's
+    ``mtime`` carried over) before pushing it onto the DB writer's
     queue. ``actually_new_count`` lets the caller decide whether to flag
     ``reset_compute_version`` on the payload.
 
@@ -49,12 +49,12 @@ class BackpressureSyncQueue:
     """A bounded-queue facade that blocks the producer instead of growing.
 
     The initial-sync producers run in ``asyncio.to_thread`` threads and parse
-    JSONL far faster than the unified DB writer commits to SQLite. Pushing
+    JSONL far faster than the DB writer commits to SQLite. Pushing
     straight onto an unbounded queue would let the backlog — each payload
     carrying a whole session's lines — grow to gigabytes of RAM. ``sync_all``
     wraps the shared queue in this facade so every :meth:`put` blocks while the
     queue is full: the block *is* the backpressure, throttling the producer to
-    the consumer's write rate.
+    the DB writer's write rate.
 
     The wait is stop-aware. ``shutdown()`` awaits the producer thread, so a
     plain blocking ``put`` on a full queue could deadlock it; :meth:`put` polls
@@ -69,7 +69,7 @@ class BackpressureSyncQueue:
         """Enqueue ``payload``, blocking while the queue is full.
 
         Drops the payload and returns if ``stop_event`` fires first — shutdown
-        is underway and the permanent consumer is going away regardless.
+        is underway and the permanent DB writer is going away regardless.
         """
         while True:
             if self._stop_event is not None and self._stop_event.is_set():
@@ -113,7 +113,7 @@ def read_session_items_from_file(
     (a DB read, safe under WAL) but does no writes. The caller (a producer
     inside ``asyncio.to_thread``) turns the result into a
     ``CreateSessionPayload`` or ``UpdateSessionPayload`` and pushes it onto
-    the unified DB writer's queue.
+    the DB writer's queue.
 
     Returns ``None`` when there is nothing to do (file missing, or unchanged
     since last sync). Exception: an unchanged file whose session is still
@@ -138,7 +138,7 @@ def read_session_items_from_file(
             # The file is back on disk unchanged, but the session is still
             # flagged stale from a run where the file was missing. There is no
             # new content, yet the caller must still enqueue an
-            # UpdateSessionPayload so the consumer's clear_stale path can run —
+            # UpdateSessionPayload so the DB writer's clear_stale path can run —
             # otherwise a deleted-then-restored session stays stale forever and
             # is wrongly excluded from the project mtime. Return an empty
             # result with the tracking fields unchanged. The stat() above
@@ -183,10 +183,10 @@ def read_session_items_from_file(
             actually_new_count=0,
         )
 
-    # Build (line_num, content) tuples; the consumer creates the SessionItem
+    # Build (line_num, content) tuples; the DB writer creates the SessionItem
     # rows so that ``session`` references are resolved on the writer side
     # (matters for the create-session case where the row is being saved
-    # inside the consumer's transaction).
+    # inside the DB writer's transaction).
     current_line_num = session.last_line
     items: list[tuple[int, str]] = []
     for line in lines:
@@ -198,7 +198,7 @@ def read_session_items_from_file(
 
     # Count how many of the new line_nums already exist in DB. Happens when
     # the watcher inserted items in a previous run but the session's
-    # tracking fields weren't persisted before shutdown. The consumer's
+    # tracking fields weren't persisted before shutdown. The DB writer's
     # ``ignore_conflicts=True`` skips duplicates silently — the count here
     # lets the caller report accurate stats and decide whether to flag
     # ``reset_compute_version``.

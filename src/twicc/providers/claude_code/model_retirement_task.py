@@ -129,13 +129,13 @@ async def _check_and_retire() -> None:
     #   update the session DB row; _apply_pending_settings will pick it up
     #   at the next USER_TURN transition.
     from twicc.providers.claude_code.agent.manager import get_claude_code_agent_manager
-    from twicc.providers.db_writer import _RetireSessionsJob, submit_consumer_job
+    from twicc.providers.db_writer import _RetireSessionsJob, submit_async_job
 
     manager = get_claude_code_agent_manager()
     # NOTE: ClaudeCodeAgentManager doesn't expose a public get_all_agents() method.
     # We need to iterate over manager._agents.values() which gives ClaudeCodeAgent instances.
-    # Collect updates first, then apply them as a single consumer-routed batch
-    # so this task never races the unified writer on the SQLite write lock.
+    # Collect updates first, then apply them as a single DB-writer-routed batch
+    # so this task never races the DB writer on the SQLite write lock.
     updates_per_session: dict[str, dict[str, object]] = {}
     pending_live_applies: list[tuple[object, object, str, str]] = []
     for process in list(manager._agents.values()):
@@ -150,7 +150,7 @@ async def _check_and_retire() -> None:
             process_settings._replace(selected_model=new_model),
         )
         # Build the DB updates so _apply_pending_settings picks them up if in
-        # ASSISTANT_TURN. The actual UPDATE runs in the consumer (atomic), see
+        # ASSISTANT_TURN. The actual UPDATE runs in the DB writer (atomic), see
         # below.
         session_updates: dict[str, object] = {"selected_model": new_model}
         if adjusted_settings.effort != process_settings.effort:
@@ -158,21 +158,21 @@ async def _check_and_retire() -> None:
         updates_per_session[process.session_id] = session_updates
         pending_live_applies.append((process, adjusted_settings, old_model, new_model))
 
-    # Apply DB updates as a single consumer-routed batch. The consumer wraps
+    # Apply DB updates as a single DB-writer-routed batch. The DB writer wraps
     # every session UPDATE in one transaction.atomic. On failure we skip the
     # live applies — without the DB row updated, set_model() on the SDK
     # would be reverted by the next _apply_pending_settings pass.
     if updates_per_session:
         future = asyncio.get_running_loop().create_future()
         try:
-            await submit_consumer_job(_RetireSessionsJob(
+            await submit_async_job(_RetireSessionsJob(
                 provider=Provider.CLAUDE_CODE,
                 updates=updates_per_session,
                 future=future,
             ))
         except Exception:
             logger.exception(
-                "Failed to apply retirement DB updates via the unified consumer "
+                "Failed to apply retirement DB updates via the DB writer "
                 "— skipping live applies; next cycle will retry"
             )
             pending_live_applies = []

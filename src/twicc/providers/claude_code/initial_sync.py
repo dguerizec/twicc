@@ -2,12 +2,12 @@
 Synchronization logic for JSONL files from Claude Code projects.
 
 Scans :attr:`ClaudeCodeHelpers.PROJECTS_DIR` for projects and sessions and
-pushes initial-sync payloads onto the unified consumer queue (which performs
+pushes initial-sync payloads onto the DB writer queue (which performs
 every DB write inside a single serialised coroutine). Producers in this
 module are strictly read-only on the DB side: they parse JSONL files, run
 their existence/diff checks via ``Session.objects.filter`` reads, and emit
 ``CreateSessionPayload`` / ``UpdateSessionPayload`` / ``MarkSessionsStalePayload``
-/ ``UpdateProjectMetadataPayload`` instances for the consumer to apply.
+/ ``UpdateProjectMetadataPayload`` instances for the DB writer to apply.
 """
 
 from __future__ import annotations
@@ -114,7 +114,7 @@ def _sync_session_subagents(
     """Push initial-sync payloads for a session's subagents.
 
     Producer-side: reads filesystem + DB but performs no writes. Every write
-    is delegated to the unified consumer via :class:`CreateSessionPayload`,
+    is delegated to the DB writer via :class:`CreateSessionPayload`,
     :class:`UpdateSessionPayload`, and :class:`MarkSessionsStalePayload`.
     """
     subagent_files = scan_subagents(project.id, session.id)
@@ -153,7 +153,7 @@ def _sync_session_subagents(
                 # targets top-level sessions only. read_session_items_from_file
                 # may now return an empty result for a stale subagent whose
                 # file is back unchanged; with clear_stale=False that payload
-                # is a harmless consumer-side no-op.
+                # is a harmless DB writer-side no-op.
                 clear_stale=False,
             ))
         else:
@@ -163,7 +163,7 @@ def _sync_session_subagents(
 
             subagent = Session(
                 id=agent_id,
-                project_id=project.id,  # FK by id — consumer ensures project exists first
+                project_id=project.id,  # FK by id — DB writer ensures project exists first
                 provider=Provider.CLAUDE_CODE,
                 file_path=str(file_path.relative_to(ClaudeCodeHelpers.PROJECTS_DIR)),
                 type=SessionType.SUBAGENT,
@@ -212,11 +212,11 @@ def sync_project(
     stop_event: threading.Event | None = None,
 ) -> dict[str, int]:
     """
-    Synchronize a single project by pushing payloads to the unified consumer.
+    Synchronize a single project by pushing payloads to the DB writer.
 
     Args:
         project_id: The project folder name.
-        sync_queue: The queue connected to the unified consumer for this provider.
+        sync_queue: The queue connected to the DB writer for this provider.
         on_session_progress: Optional callback called after each session sync
             with (session_id, current_index, total_sessions).
         stop_event: Optional threading event; when set, sync stops early.
@@ -225,7 +225,7 @@ def sync_project(
         - sessions_created: number of new sessions (including subagents)
         - sessions_stale: number of sessions marked as stale (including subagents)
         - items_added: total number of new session items (including subagent items)
-        - project_created (optional): 1 if the project row will be created by the consumer
+        - project_created (optional): 1 if the project row will be created by the DB writer
     """
     project_start = time.monotonic()
 
@@ -308,7 +308,7 @@ def sync_project(
                 on_session_progress(session_id, idx, total_sessions)
             continue
 
-        # File has content. Build the unsaved Session row (the consumer will
+        # File has content. Build the unsaved Session row (the DB writer will
         # ensure the project exists and then ``session.save()`` it). Claude
         # Code stores cwd inside the JSONL body, so initial sync cannot
         # provide a directory here; it gets filled in later by background
@@ -379,7 +379,7 @@ def sync_project(
     # Decide new_stale:
     # - existing project with directory → recompute from os.path.isdir
     # - existing project without directory but stale=True → clear stale (legacy)
-    # - newly created project → leave alone (consumer's default stale=False)
+    # - newly created project → leave alone (DB writer's default stale=False)
     new_stale: bool | None
     if project is not None and project.directory is not None:
         new_stale = not os.path.isdir(project.directory)
@@ -396,7 +396,7 @@ def sync_project(
         new_stale=new_stale,
         recalc_total_cost=True,
         # git_root is resolved at the end of ``sync_all`` once every project
-        # has settled (the consumer drains all per-project payloads first).
+        # has settled (the DB writer drains all per-project payloads first).
         resolve_git_root=False,
         git_root_directory=None,
     ))
@@ -420,12 +420,12 @@ def sync_all(
     """
     Synchronize all projects from :attr:`ClaudeCodeHelpers.PROJECTS_DIR`.
 
-    Pushes payloads onto ``sync_queue`` (the unified consumer drains them).
-    Producer-side reads are safe under WAL even while the consumer is
+    Pushes payloads onto ``sync_queue`` (the DB writer drains them).
+    Producer-side reads are safe under WAL even while the DB writer is
     writing earlier payloads.
 
     Args:
-        sync_queue: The queue connected to the unified consumer for this provider.
+        sync_queue: The queue connected to the DB writer for this provider.
         on_project_start: Callback called before syncing a project
             with (project_id, current_index, total_projects).
         on_project_done: Callback called after syncing a project
@@ -437,7 +437,7 @@ def sync_all(
     """
     sync_start = time.monotonic()
 
-    # Throttle the producer to the consumer's write rate: a full bounded
+    # Throttle the producer to the DB writer's write rate: a full bounded
     # queue blocks .put() instead of letting the backlog grow unbounded.
     sync_queue = BackpressureSyncQueue(sync_queue, stop_event)
 
@@ -453,7 +453,7 @@ def sync_all(
 
     # Recompute project.stale based on disk presence. Reads-only here;
     # writes are pushed as ``UpdateProjectMetadataPayload`` so they apply
-    # inside an atomic block on the consumer side.
+    # inside an atomic block on the DB writer side.
     for project in Project.objects.only("id", "directory", "stale"):
         should_be_stale = (
             project.directory is not None
@@ -510,7 +510,7 @@ def sync_all(
 
     # Resolve git_root for every project with a directory. Enqueued as a
     # single marker, not a producer-side query + one payload per project:
-    # the consumer runs the Project query when it drains the marker, after
+    # the DB writer runs the Project query when it drains the marker, after
     # every prior FIFO project payload of this run has committed — so a
     # project being un-staled earlier in the same sync is not wrongly
     # skipped by a stale=False filter evaluated against a pre-commit view.
