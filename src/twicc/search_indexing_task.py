@@ -99,16 +99,28 @@ class _MarkIndexedBuffer:
     To keep :meth:`drain` honest the Future is recorded on
     :attr:`_pending_futures` BEFORE the enqueue, so even an unlikely
     ``enqueue_async_job`` failure (writer stopping / not started, which
-    we then settle the Future with) is observed by the drain. Both the
-    happy path end of :func:`_run_indexing` and the cancellation
+    we then settle the Future with AND log) is observed by the drain.
+    Both the happy path end of :func:`_run_indexing` and the cancellation
     ``finally`` route through :meth:`drain` so nothing that already hit
     Tantivy stays ``search_version=NULL`` in DB just because the loop
     stopped between ``_index_session`` and the next implicit flush.
-    Tantivy commit and DB mark form a non-atomic pair (a crash between
-    them re-indexes the session at next boot — same baseline migration
-    ``0066_backfill_search_version`` already covers), and the batch
-    widens that window by at most ``MAX_SIZE`` sessions or
-    ``MAX_AGE_SECONDS``.
+
+    **Widened Tantivy↔DB window — explicit trade-off.** A crash between
+    a Tantivy ``commit`` and the corresponding DB mark re-indexes the
+    affected session at next boot (idempotent — same baseline migration
+    ``0066_backfill_search_version`` already covers). Because the
+    enqueue is fire-and-forget, the window is no longer bounded by a
+    single in-flight batch: every batch sitting on the DB writer's
+    async queue AND every batch already dispatched but not yet
+    settled counts. In practice the DB writer applies each
+    ``_MarkSessionsIndexedJob`` in a couple of ms (one
+    ``UPDATE ... WHERE id IN (...)``) so the indexer outpacing it by
+    more than a few batches is a degenerate case (DB writer blocked on
+    another long apply, slow disk). The worst case is bounded only by
+    "indexer throughput vs writer throughput during the lifetime of one
+    sweep"; the recovery cost is the next-boot re-index of those
+    sessions, which is the same cost as a crash mid-``_index_session``
+    in the pre-R19 layout.
     """
 
     MAX_SIZE = 50
@@ -186,6 +198,18 @@ class _MarkIndexedBuffer:
                 provider=None,
             ))
         except Exception as exc:
+            # Log here, NOT in :meth:`drain`. ``drain`` uses
+            # ``gather(return_exceptions=True)`` to survive a single bad
+            # apply settling the rest; the apply path is already covered
+            # by :func:`_settle_async_job` on the DB writer side, so
+            # ``drain`` discards what comes back. Enqueue failures have
+            # nobody else logging them, so without this line a "DB writer
+            # stopping" race would silently leave ``len(batch)`` sessions
+            # marked in Tantivy but unapplied in DB.
+            logger.error(
+                "Search index: enqueue of %d-session mark batch failed: %s",
+                len(batch), exc, exc_info=True,
+            )
             if not future.done():
                 future.set_exception(exc)
 
