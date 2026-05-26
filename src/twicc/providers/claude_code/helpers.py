@@ -636,3 +636,20 @@ class ClaudeCodeHelpers(BaseProviderHelpers):
         )()
         if crons:
             message["active_crons"] = crons
+
+    async def try_handle_async_job(self, job, settle_async_job) -> bool:
+        """Route Claude Code-specific async-queue jobs to their handler.
+
+        Currently :class:`PrepareCronRestartsJob` only (the boot-time
+        ProcessRun / SessionCron cleanup, see :mod:`.cron_restart`). Lives
+        here rather than in db_writer.py so the job type, its sync handler,
+        and the producer all stay co-located in this provider's subpackage.
+        """
+        from .cron_restart import PrepareCronRestartsJob, _apply_prepare_cron_restarts_job
+
+        if isinstance(job, PrepareCronRestartsJob):
+            await settle_async_job(
+                job, _apply_prepare_cron_restarts_job, "cron restart prepare",
+            )
+            return True
+        return False

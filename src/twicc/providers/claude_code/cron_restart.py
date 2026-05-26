@@ -11,11 +11,47 @@ import logging
 import os
 from collections import defaultdict
 from collections.abc import Iterator
+from typing import NamedTuple
+
+from django.db import transaction
 
 logger = logging.getLogger(__name__)
 
 RETRY_ESCALATION = [0, 5, 15, 30, 60, 120]
 MAX_RETRY_DELAY = 300  # 5 minutes cap between attempts
+
+
+class PrepareCronRestartsJob(NamedTuple):
+    """Async-queue job to run :func:`_prepare_restarts` on the DB writer.
+
+    Claude Code-specific (this provider's helper handles it in
+    :meth:`ClaudeCodeHelpers.try_handle_async_job`). Pushed onto
+    :attr:`db_writer._async_queue` via :func:`submit_async_job`.
+
+    ``_prepare_restarts`` is read+write entrelaced (orphan / duplicate
+    ``ProcessRun`` cleanup), but it is entirely DB-bound — no HTTP, no FS.
+    The whole block runs on the DB writer's single-writer path, in one
+    ``transaction.atomic``, so the cleanup commits atomically and never
+    contends with the DB writer on the SQLite write lock.
+
+    ``future`` resolves to the list of session ids the caller should
+    restart.
+    """
+
+    future: asyncio.Future  # → list[str] (session ids)
+
+
+def _apply_prepare_cron_restarts_job(job: PrepareCronRestartsJob) -> list[str]:
+    """Run :func:`_prepare_restarts` inside ``transaction.atomic``.
+
+    Sync — runs in a worker thread via ``sync_to_async`` inside
+    :func:`db_writer._settle_async_job`. Wrapping the whole call in a single
+    atomic guarantees the three cleanup steps (orphan delete, duplicate
+    keep-oldest, expired/missing-session delete) commit together and stay
+    serialized with every other DB writer write.
+    """
+    with transaction.atomic():
+        return _prepare_restarts()
 
 
 def _retry_delays(initial_delay: int = 0) -> Iterator[int]:
@@ -78,7 +114,7 @@ async def restart_all_session_crons(stop_event: asyncio.Event) -> None:
     """Scan ProcessRun table and restart all sessions with persisted crons.
 
     Steps:
-    1. Clean up orphan/stale process runs
+    1. Clean up orphan/stale process runs (routed through the DB writer)
     2. Launch restart_session_crons() in parallel for each session with active crons
     """
     from django.conf import settings
@@ -87,7 +123,14 @@ async def restart_all_session_crons(stop_event: asyncio.Event) -> None:
         logger.info("Cron auto-restart disabled (TWICC_NO_CRON_RESTART is set)")
         return
 
-    session_ids = await asyncio.to_thread(_prepare_restarts)
+    from twicc.providers.db_writer import submit_async_job
+
+    future = asyncio.get_running_loop().create_future()
+    try:
+        session_ids = await submit_async_job(PrepareCronRestartsJob(future=future))
+    except Exception as e:
+        logger.error("Cron restart prepare failed via DB writer: %s", e, exc_info=True)
+        return
 
     if not session_ids:
         logger.info("No cron jobs to restart")

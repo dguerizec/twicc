@@ -749,12 +749,20 @@ async def _settle_async_job(job, apply_fn, label: str) -> None:
     the value the caller awaits. Any exception is logged and forwarded to the
     Future as an exception result, so the producer sees a real failure rather
     than a stranded ``await``.
+
+    ``provider`` is read off the job for logging only — generic R17 jobs all
+    carry it (the four periodic tasks fan out across providers), but
+    provider-specific jobs routed via :meth:`BaseProviderHelpers.try_handle_async_job`
+    don't need it (the helper that handles them is already scoped to one
+    provider, and ``label`` is descriptive enough).
     """
     try:
         result = await sync_to_async(apply_fn)(job)
     except Exception as exc:
+        provider = getattr(job, "provider", None)
+        provider_part = f" for provider={provider.value}" if provider is not None else ""
         logger.error(
-            f"Error applying {label} job for provider={job.provider.value}: {exc}",
+            f"Error applying {label} job{provider_part}: {exc}",
             exc_info=True,
         )
         if not job.future.done():
