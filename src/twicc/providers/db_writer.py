@@ -697,25 +697,38 @@ async def submit_async_job(job) -> object:
 async def _apply_with_lock(apply_coro) -> None:
     """Hold :data:`_db_write_lock` for the entire duration of ``apply_coro``.
 
-    Cancellation-safe: ``apply_coro`` awaits
-    ``sync_to_async(apply_fn)(job)``, which dispatches the actual
-    ``transaction.atomic`` to an executor thread and only resolves when
-    that thread returns. asyncio cancellation can return to the
-    awaiting coroutine while the executor thread keeps running, so a
-    naive ``async with _db_write_lock: await apply_coro`` would let
-    ``__aexit__`` release the lock the instant we are cancelled — even
-    though the SQLite transaction is still in flight on the orphaned
-    thread, opening a window where a future external waiter could
-    acquire the lock and begin its own transaction concurrently.
+    Cancellation-safe across an arbitrary number of outer cancellations:
+    ``apply_coro`` awaits ``sync_to_async(apply_fn)(job)``, which
+    dispatches the actual ``transaction.atomic`` to an executor thread
+    and only resolves when that thread returns. asyncio cancellation
+    can return to the awaiting coroutine while the executor thread
+    keeps running, so a naive ``async with _db_write_lock: await
+    apply_coro`` would let ``__aexit__`` release the lock the instant
+    we are cancelled — even though the SQLite transaction is still in
+    flight on the orphaned thread, opening a window where a future
+    external waiter could acquire the lock and begin its own
+    transaction concurrently.
 
-    Pattern: run ``apply_coro`` as an inner :class:`asyncio.Task` and
-    :func:`asyncio.shield` it. If our task is cancelled,
-    ``await asyncio.shield(inner)`` raises :class:`CancelledError`
-    immediately but ``inner`` keeps running. We then ``await inner``
-    (which is not cancelled — the shield kept it alive) so the lock
-    only releases at ``__aexit__`` once the worker thread has actually
-    returned. Then we re-raise so the rest of the writer's shutdown
-    path proceeds normally.
+    Pattern: run ``apply_coro`` as an inner :class:`asyncio.Task`,
+    shielded from our cancellation, and **loop** the wait until the
+    inner has actually completed. Every outer ``cancel()`` raises
+    :class:`CancelledError` on a fresh ``await``, but the shield keeps
+    the inner alive; we catch the cancel, remember that we were
+    cancelled, and re-enter the shielded await. A second / third /
+    Nth cancel (from a signal-handler escalation, a forced shutdown
+    re-cancelling tasks that haven't died yet, …) does the same. The
+    loop only exits once ``inner.done()`` is True, which means the
+    executor thread has actually returned. The lock is released at
+    ``__aexit__`` immediately after, and the original cancellation is
+    re-raised so the rest of the writer's shutdown path proceeds.
+
+    Without the loop, the older shape ``try: await shield(inner);
+    except CancelledError: with suppress(Exception): await inner; raise``
+    was safe only for the FIRST cancellation: the cleanup ``await inner``
+    in the except handler is unshielded, and a second cancel propagates
+    via ``Task._fut_waiter`` to cancel the inner itself, releasing the
+    lock with the worker thread still running. The loop closes that
+    hole.
 
     ``apply_coro`` is expected to catch its own apply-level exceptions
     (every existing caller in :func:`_drain_one` already wraps its
@@ -726,17 +739,28 @@ async def _apply_with_lock(apply_coro) -> None:
     assert _db_write_lock is not None
     async with _db_write_lock:
         inner = asyncio.create_task(apply_coro)
-        try:
-            await asyncio.shield(inner)
-        except asyncio.CancelledError:
-            # Outer cancelled, inner kept alive by the shield. Wait for it
-            # to finish so the worker thread actually returns before the
-            # lock is released at __aexit__. We swallow any exception
-            # bubbling out of the inner (the caller's try/except already
-            # handles apply errors); the CancelledError takes priority.
-            with suppress(Exception):
-                await inner
-            raise
+        cancelled = False
+        while not inner.done():
+            try:
+                # Always shielded — outer cancels never reach the inner Task.
+                await asyncio.shield(inner)
+            except asyncio.CancelledError:
+                # Outer cancelled. Loop and re-await; the shield kept the
+                # inner alive. Each subsequent ``cancel()`` will raise here
+                # again on the fresh await, and we'll loop again until
+                # ``inner.done()``.
+                cancelled = True
+        # ``inner.done()`` is True. Drain any inner exception so asyncio
+        # doesn't log "Task exception was never retrieved" — the caller's
+        # ``try/except Exception`` around our entry point would normally
+        # see it via the shield's await re-raise, but if we got here
+        # through the ``cancelled`` path the await never returned a value.
+        with suppress(BaseException):
+            inner.result()
+        if cancelled:
+            # Re-raise so the rest of the writer's teardown can proceed.
+            # The lock is released by ``__aexit__`` just below.
+            raise asyncio.CancelledError()
 
 
 async def _drain_one() -> bool:
