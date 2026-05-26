@@ -370,6 +370,26 @@ class _PersistProviderPricesJob(NamedTuple):
     future: asyncio.Future  # → dict[str, int] with keys created/unchanged
 
 
+class _MarkSessionsIndexedJob(NamedTuple):
+    """A request to bump ``search_version`` on a batch of just-indexed sessions.
+
+    Cross-provider job: the producer (``search_indexing_task``) sweeps every
+    session needing indexing regardless of owning provider, in ``-mtime``
+    order, and accumulates session ids into batches of up to 50 (or up to 2 s
+    worth of slower indexing) before submitting one job for the batch. The
+    DB writer applies a single
+    ``Session.objects.filter(id__in=...).update(search_version=...)`` per job,
+    centralizing what used to be one direct ``session.save()`` per indexed
+    session — the producer was the last non-watcher, non-HTTP/WS writer left
+    in the runtime loop. ``provider`` is ``None`` because the batch mixes
+    sessions of every backend.
+    """
+
+    session_ids: list[str]
+    future: asyncio.Future  # → int (count of sessions actually updated)
+    provider: Provider | None = None
+
+
 # =============================================================================
 # Lifecycle + completion API (called by run_server and the orchestrators)
 # =============================================================================
@@ -727,22 +747,35 @@ async def _dispatch_async_job(job) -> None:
     safety nets specifically protect the producer from hanging on
     ``job.future``:
 
-    - **Convention check up front**: every async job MUST carry a
-      ``provider: Provider`` field (used by :func:`_settle_async_job` for
-      logging and by :func:`provider_log_context` for the log-record
-      tag). A job that does not is rejected before dispatch and its
-      future settled with a ``TypeError``.
+    - **Convention check up front**: every async job MUST declare a
+      ``provider`` field — either a :class:`Provider` value (per-provider
+      jobs) or ``None`` (cross-provider / system jobs such as
+      :class:`MarkSessionsIndexedJob`, which sweeps sessions of every
+      provider in one shot). The field is read by :func:`_settle_async_job`
+      for logging and by :func:`provider_log_context` for the log-record
+      tag; ``None`` falls back to the ``"global"`` tag. A job missing the
+      field outright, or carrying a non-Provider non-None value, is
+      rejected before dispatch and its future settled with a ``TypeError``.
     - **Unmatched job at the end**: if no generic ``isinstance`` matched
       AND no provider helper claimed the job, we settle the future with
       a ``RuntimeError`` rather than ``return``-ing silently.
     """
-    provider = getattr(job, "provider", None)
-    if not isinstance(provider, Provider):
+    if not hasattr(job, "provider"):
         exc = TypeError(
-            f"Async-queue job {type(job).__name__} is missing a valid "
-            f"Provider attribute (got {provider!r}); every async-queue "
-            f"job must carry a `provider: Provider` field per the "
-            f"BaseProviderHelpers.try_handle_async_job contract"
+            f"Async-queue job {type(job).__name__} is missing a "
+            f"`provider` field; every async-queue job must declare one "
+            f"(a Provider value, or None for cross-provider jobs) per "
+            f"the BaseProviderHelpers.try_handle_async_job contract"
+        )
+        logger.error(str(exc))
+        _settle_unhandled_async_job(job, exc)
+        return
+    provider = job.provider
+    if provider is not None and not isinstance(provider, Provider):
+        exc = TypeError(
+            f"Async-queue job {type(job).__name__} has an invalid "
+            f"`provider` value {provider!r}; expected a Provider enum "
+            f"member or None for cross-provider jobs"
         )
         logger.error(str(exc))
         _settle_unhandled_async_job(job, exc)
@@ -775,6 +808,10 @@ async def _dispatch_async_job(job) -> None:
 
     if isinstance(job, _PersistProviderPricesJob):
         await _settle_async_job(job, _apply_persist_provider_prices_job, "price sync")
+        return
+
+    if isinstance(job, _MarkSessionsIndexedJob):
+        await _settle_async_job(job, _apply_mark_sessions_indexed_job, "search-index mark")
         return
 
     # Fallback: ask every provider's helper. Lazy import to avoid a cycle —
@@ -817,11 +854,12 @@ async def _settle_async_job(job, apply_fn, label: str) -> None:
     Future as an exception result, so the producer sees a real failure rather
     than a stranded ``await``.
 
-    Every job is expected to carry a ``provider`` attribute (a
-    :class:`twicc.core.enums.Provider`) — generic R17 jobs fan out across
-    providers, and provider-specific jobs routed via
+    Every job is expected to carry a ``provider`` attribute — either a
+    :class:`twicc.core.enums.Provider` (generic R17 jobs fan out across
+    providers, provider-specific jobs routed via
     :meth:`BaseProviderHelpers.try_handle_async_job` belong to one provider
-    too (whose helper handles them). The field is read here for logging.
+    too) or ``None`` for cross-provider / system jobs like
+    :class:`MarkSessionsIndexedJob`. The field is read here for logging.
     """
     try:
         result = await sync_to_async(apply_fn)(job)
@@ -1477,3 +1515,26 @@ def _apply_persist_provider_prices_job(job: _PersistProviderPricesJob) -> dict[s
 
     with transaction.atomic():
         return persist_provider_prices(job.provider, job.prices)
+
+
+def _apply_mark_sessions_indexed_job(job: _MarkSessionsIndexedJob) -> int:
+    """Bump ``search_version`` on a batch of sessions that just hit Tantivy.
+
+    One ``UPDATE Session SET search_version = ? WHERE id IN (...)`` per job,
+    wrapped in ``transaction.atomic`` for consistency with every other apply
+    on this writer. Sessions that no longer exist (e.g. the row was deleted
+    between the indexer's ``_index_session`` and the DB writer's apply)
+    contribute 0 to the count — a transient miss, not an error. Returns the
+    number of rows actually updated so the producer can sanity-check the
+    batch volumetry in its logs if needed.
+    """
+    from django.conf import settings
+
+    from twicc.core.models import Session
+
+    if not job.session_ids:
+        return 0
+    with transaction.atomic():
+        return Session.objects.filter(id__in=job.session_ids).update(
+            search_version=settings.CURRENT_SEARCH_VERSION
+        )
