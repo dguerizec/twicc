@@ -73,11 +73,23 @@ def provider_log_context(provider: "Provider | None") -> Iterator[None]:
     individual applies belong to a specific provider). ``None`` falls
     back to the ``"global"`` tag like an unset context.
 
+    Defensive against malformed inputs: only :class:`Provider` enum
+    members produce a tag — anything else (a stray string, a wrong
+    type, ``None``) falls back to ``None`` / ``"global"``. This matters
+    because callers typically pass ``getattr(obj, "provider", None)``
+    without pre-validating; a typed-attribute-mismatch here would
+    raise an ``AttributeError`` at ``__enter__`` time, before the
+    wrapped body runs — which would strand any future that body was
+    meant to settle.
+
     Uses :class:`contextvars.ContextVar` ``set`` / ``reset`` so the
     scope is strictly limited to the ``with`` block — sibling tasks
     are unaffected.
     """
-    token = current_provider.set(provider.value if provider is not None else None)
+    from twicc.core.enums import Provider  # local: avoid an import-time cycle
+
+    value = provider.value if isinstance(provider, Provider) else None
+    token = current_provider.set(value)
     try:
         yield
     finally:
