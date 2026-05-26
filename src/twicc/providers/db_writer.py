@@ -53,6 +53,7 @@ from channels.layers import get_channel_layer
 from django.db import transaction
 
 from twicc.core.enums import Provider
+from twicc.logging_context import provider_log_context
 from twicc.startup_progress import broadcast_startup_progress
 from twicc.workspaces import auto_add_project_to_workspaces
 
@@ -497,8 +498,8 @@ def arm_compute_completion(
     for stale_run_id in [rid for rid, st in _compute_states.items() if st.provider == provider]:
         logger.warning(
             "arm_compute_completion: dropping leftover compute state for "
-            "provider=%s run_id=%d — its run never finalized (force-killed worker?)",
-            provider.value, stale_run_id,
+            "run_id=%d — its run never finalized (force-killed worker?)",
+            stale_run_id,
         )
         _compute_states.pop(stale_run_id, None)
         _compute_done_events.pop(stale_run_id, None)
@@ -611,6 +612,13 @@ async def _drain_one() -> bool:
     intra-process async queue. Returns True if anything was processed
     this call.
 
+    Every per-message apply runs inside :func:`provider_log_context` so
+    log records emitted during the apply (including those bubbling up
+    through ``sync_to_async`` and the helpers it transitively calls) get
+    the right ``provider`` tag in the log column — the DB writer task
+    itself runs in the global context, but each individual message
+    belongs to one provider.
+
     Never raises an ordinary exception: a message is removed from its queue
     before processing, and every per-message failure (deserialization, apply,
     finalization) is caught and logged. So one bad message can neither crash a
@@ -635,22 +643,24 @@ async def _drain_one() -> bool:
         except Exception:
             logger.error(f"Failed to deserialize compute message: {raw!r:.500}")
         else:
-            try:
-                await _process_compute_message(msg)
-            except Exception as exc:
-                logger.error(f"Error processing compute message: {exc}", exc_info=True)
+            with provider_log_context(_provider_from_compute_message(msg)):
+                try:
+                    await _process_compute_message(msg)
+                except Exception as exc:
+                    logger.error(f"Error processing compute message: {exc}", exc_info=True)
 
-    # ---- Initial-sync side (queue.Queue, shared by every provider) ----
+    # ---- Thread queue (initial-sync + boot title sync, shared by every provider) ----
     try:
         payload = _thread_queue.get_nowait()
     except queue.Empty:
         pass
     else:
         any_processed = True
-        try:
-            await _process_thread_message(payload)
-        except Exception as exc:
-            logger.error(f"Error processing initial-sync message: {exc}", exc_info=True)
+        with provider_log_context(getattr(payload, "provider", None)):
+            try:
+                await _process_thread_message(payload)
+            except Exception as exc:
+                logger.error(f"Error processing thread message: {exc}", exc_info=True)
 
     # ---- DB writer-side jobs (intra-process) ----
     try:
@@ -659,9 +669,28 @@ async def _drain_one() -> bool:
         pass
     else:
         any_processed = True
-        await _dispatch_async_job(job)
+        with provider_log_context(getattr(job, "provider", None)):
+            await _dispatch_async_job(job)
 
     return any_processed
+
+
+def _provider_from_compute_message(msg: dict) -> "Provider | None":
+    """Extract the ``Provider`` from a compute-side raw JSON message, if any.
+
+    The subprocess tags every message with ``provider`` (a ``Provider.value``
+    string) but ``orjson.loads`` returns it as a plain str — translate
+    back to the enum for :func:`provider_log_context`. Unknown / missing
+    values fall back to ``None`` (logged as ``"global"``); the dispatch
+    in :func:`_process_compute_message` will surface its own error.
+    """
+    raw_provider = msg.get("provider")
+    if raw_provider is None:
+        return None
+    try:
+        return Provider(raw_provider)
+    except ValueError:
+        return None
 
 
 async def _dispatch_async_job(job) -> None:
@@ -760,7 +789,7 @@ async def _settle_async_job(job, apply_fn, label: str) -> None:
         result = await sync_to_async(apply_fn)(job)
     except Exception as exc:
         logger.error(
-            f"Error applying {label} job for provider={job.provider.value}: {exc}",
+            f"Error applying {label} job: {exc}",
             exc_info=True,
         )
         if not job.future.done():
@@ -936,15 +965,13 @@ async def _finalize_compute_run(run_id: int | None, provider: Provider) -> None:
     future = _compute_done_events.pop(run_id, None)
     if state is None and future is None:
         logger.info(
-            "compute 'done' for an untracked run (run_id=%s, provider=%s) — "
+            "compute 'done' for an untracked run (run_id=%s) — "
             "ignoring (stale message from a cancelled run)",
-            run_id, provider.value,
+            run_id,
         )
         return
 
-    logger.info(
-        f"DB writer: compute 'done' for provider={provider.value} (run_id={run_id})"
-    )
+    logger.info(f"DB writer: compute 'done' (run_id={run_id})")
     if state is not None:
         for pid in state.pending_project_ids:
             try:
@@ -992,10 +1019,10 @@ async def _finalize_abandoned_run(run_id: int, provider: Provider) -> None:
         return
 
     logger.info(
-        "Finalizing abandoned compute run_id=%d for provider=%s "
+        "Finalizing abandoned compute run_id=%d "
         "(%d session(s) applied, %d failed) — remaining queued results "
         "are ignored",
-        run_id, provider.value, state.completed_count, state.failed_count,
+        run_id, state.completed_count, state.failed_count,
     )
     for pid in state.pending_project_ids:
         try:
@@ -1099,14 +1126,12 @@ async def _process_thread_message(msg) -> None:
         # is always resolved.
         failures = _initial_sync_failures.pop(msg.provider, 0)
         orphan_skips = _initial_sync_orphan_skips.pop(msg.provider, 0)
-        logger.info(
-            f"DB writer: initial-sync 'done' for provider={msg.provider.value}"
-        )
+        logger.info("DB writer: initial-sync 'done'")
         if orphan_skips:
             logger.warning(
-                "Initial sync for provider=%s: %d subagent(s) skipped — parent "
+                "Initial sync: %d subagent(s) skipped — parent "
                 "row absent (orphan, or an upstream payload failed)",
-                msg.provider.value, orphan_skips,
+                orphan_skips,
             )
         if not msg.done_future.done():
             msg.done_future.set_result(failures)
@@ -1181,10 +1206,7 @@ async def _apply_and_broadcast_titles(payload: SyncSessionTitlesPayload) -> None
                 "session": session_data,
             }},
         )
-    logger.info(
-        "DB writer: %d title(s) applied for provider=%s",
-        len(changed), payload.provider.value,
-    )
+    logger.info("DB writer: %d title(s) applied", len(changed))
 
 
 def _apply_create_session_payload(payload: CreateSessionPayload) -> tuple[object, bool, bool]:
@@ -1208,9 +1230,9 @@ def _apply_create_session_payload(payload: CreateSessionPayload) -> tuple[object
     parent_id = payload.session.parent_session_id
     if parent_id is not None and not Session.objects.filter(id=parent_id).exists():
         logger.warning(
-            "Skipping session %s for provider=%s: parent %s does not exist "
+            "Skipping session %s: parent %s does not exist "
             "(upstream payload rejected, or orphan subagent)",
-            payload.session.id, payload.provider.value, parent_id,
+            payload.session.id, parent_id,
         )
         return None, False, False
 

@@ -35,7 +35,12 @@ ContextVar semantics:
 from __future__ import annotations
 
 import logging
+from contextlib import contextmanager
 from contextvars import ContextVar
+from typing import TYPE_CHECKING, Iterator
+
+if TYPE_CHECKING:
+    from twicc.core.enums import Provider
 
 # ``"global"`` is also used by :class:`ProviderFilter` when the variable
 # is unset; keep the default in sync with the filter so call sites that
@@ -56,3 +61,24 @@ class ProviderFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:  # noqa: A003
         record.provider = current_provider.get() or _PROVIDER_UNSET
         return True
+
+
+@contextmanager
+def provider_log_context(provider: "Provider | None") -> Iterator[None]:
+    """Temporarily tag every log record emitted in the body with ``provider``.
+
+    Used by cross-provider services that process per-provider messages
+    one at a time (notably :mod:`twicc.providers.db_writer`, whose task
+    is launched at the global level with no provider context but whose
+    individual applies belong to a specific provider). ``None`` falls
+    back to the ``"global"`` tag like an unset context.
+
+    Uses :class:`contextvars.ContextVar` ``set`` / ``reset`` so the
+    scope is strictly limited to the ``with`` block — sibling tasks
+    are unaffected.
+    """
+    token = current_provider.set(provider.value if provider is not None else None)
+    try:
+        yield
+    finally:
+        current_provider.reset(token)
