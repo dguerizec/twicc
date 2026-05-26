@@ -488,3 +488,41 @@ class CodexHelpers(BaseProviderHelpers):
             stream_uuid = registry.pop_next(session_id)
             if stream_uuid is not None:
                 item["stream_uuid"] = stream_uuid
+
+    async def try_handle_async_job(self, job, settle_async_job) -> bool:
+        """Route Codex-specific async-queue jobs to their handler.
+
+        Currently :class:`SyncSessionTitlesJob` only (boot-time bulk title
+        import from ``thread_list``). Defined alongside the type, the sync
+        apply, and the post-apply broadcast in :mod:`.titles`.
+
+        Pattern: delegate the sync apply to ``settle_async_job`` (which
+        runs it in ``transaction.atomic`` on a worker thread and resolves
+        ``job.future`` with the result or exception), then read the
+        result off ``job.future`` and run the async broadcast as a
+        post-apply side effect. Skip the broadcast if the future carries
+        an exception — it will propagate to the producer through
+        ``submit_async_job``'s ``await asyncio.shield(job.future)``.
+        """
+        from .titles import (
+            SyncSessionTitlesJob,
+            _apply_sync_session_titles_job,
+            _broadcast_changed_titles,
+        )
+
+        if isinstance(job, SyncSessionTitlesJob):
+            await settle_async_job(
+                job, _apply_sync_session_titles_job, "title sync",
+            )
+            if not job.future.cancelled() and job.future.exception() is None:
+                changed = job.future.result()
+                if changed:
+                    try:
+                        await _broadcast_changed_titles(changed)
+                    except Exception as e:
+                        logger.error(
+                            "Title sync broadcast failed: %s", e, exc_info=True,
+                        )
+                    logger.info("DB writer: %d title(s) applied", len(changed))
+            return True
+        return False

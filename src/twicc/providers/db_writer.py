@@ -195,22 +195,6 @@ class InitialSyncDoneMarker(NamedTuple):
     done_future: asyncio.Future
 
 
-class SyncSessionTitlesPayload(NamedTuple):
-    """Boot-time bulk title import for one provider.
-
-    Carries a ``{session_id: title}`` map and the ``asyncio.Event`` the
-    DB writer sets once the titles have been applied and broadcast. The
-    producer (an orchestrator, between the initial JSONL sync and the compute
-    phase) awaits that Event so the title bulk-update runs through the DB
-    writer — never as a write that races it — and so the new titles are
-    visible before the compute phase starts.
-    """
-
-    provider: Provider
-    titles: dict[str, str]
-    done_event: asyncio.Event
-
-
 # =============================================================================
 # Module state
 # =============================================================================
@@ -1191,23 +1175,6 @@ async def _process_thread_message(msg) -> None:
             msg.done_future.set_result(failures)
         return
 
-    if isinstance(msg, SyncSessionTitlesPayload):
-        # Carries a done Event the producer awaits — always set it, even on
-        # failure, so the orchestrator's boot-time title sync can never hang.
-        # A failure is logged but deliberately NOT counted in
-        # _initial_sync_failures: the boot-time title sync is its own
-        # operation, not part of an initial-sync run, and its producer
-        # observes only the Event. Counting it there would pollute an
-        # unrelated run's failure tally and linger until that run's
-        # InitialSyncDoneMarker pops the counter.
-        try:
-            await _apply_and_broadcast_titles(msg)
-        except Exception as e:
-            logger.error(f"Error applying SyncSessionTitlesPayload: {e}", exc_info=True)
-        finally:
-            msg.done_event.set()
-        return
-
     try:
         if isinstance(msg, CreateSessionPayload):
             project, created, adopted = await sync_to_async(_apply_create_session_payload)(msg)
@@ -1246,21 +1213,6 @@ async def _process_thread_message(msg) -> None:
         provider = getattr(msg, "provider", None)
         if provider is not None:
             _initial_sync_failures[provider] += 1
-
-
-async def _apply_and_broadcast_titles(payload: SyncSessionTitlesPayload) -> None:
-    """Apply a SyncSessionTitlesPayload and broadcast every changed session."""
-    changed = await sync_to_async(_apply_sync_session_titles_payload)(payload)
-    channel_layer = get_channel_layer()
-    for session_data in changed:
-        await channel_layer.group_send(
-            "updates",
-            {"type": "broadcast", "data": {
-                "type": "session_updated",
-                "session": session_data,
-            }},
-        )
-    logger.info("DB writer: %d title(s) applied", len(changed))
 
 
 def _apply_create_session_payload(payload: CreateSessionPayload) -> tuple[object, bool, bool]:
@@ -1447,31 +1399,6 @@ def _apply_resolve_git_roots_payload(payload: ResolveProjectGitRootsPayload) -> 
     with transaction.atomic():
         for project in Project.objects.filter(directory__isnull=False, stale=False):
             ensure_project_git_root(project.id, project.directory)
-
-
-def _apply_sync_session_titles_payload(payload: SyncSessionTitlesPayload) -> list[dict]:
-    """Apply boot-time title updates; return the serialized changed sessions.
-
-    Reads the provider's sessions named in the map, updates the rows whose
-    title actually differs in a single bulk UPDATE, and returns them
-    serialized so the DB writer can broadcast ``session_updated`` for each.
-    """
-    from twicc.core.models import Session
-    from twicc.core.serializers import serialize_session
-
-    with transaction.atomic():
-        sessions = list(Session.objects.filter(
-            provider=payload.provider, id__in=list(payload.titles.keys()),
-        ))
-        changed: list = []
-        for session in sessions:
-            new_title = payload.titles.get(session.id)
-            if new_title and session.title != new_title:
-                session.title = new_title
-                changed.append(session)
-        if changed:
-            Session.objects.bulk_update(changed, ["title"], batch_size=50)
-    return [serialize_session(s) for s in changed]
 
 
 # =============================================================================

@@ -434,35 +434,42 @@ class CodexOrchestrator(BaseOrchestrator):
 
         Runs once between the initial JSONL sync and the background compute.
         The title bulk-update is routed through the DB writer (a
-        SyncSessionTitlesPayload) so it never writes to SQLite in parallel
-        with the DB writer still draining initial-sync or compute payloads —
-        the very contention the DB writer exists to remove. We await the
-        payload's done Event so the new titles are applied and broadcast
-        before the compute phase starts.
+        :class:`SyncSessionTitlesJob` on the async queue, handled by
+        :meth:`CodexHelpers.try_handle_async_job`) so it never writes to
+        SQLite in parallel with the DB writer still draining other
+        payloads — the very contention the DB writer exists to remove.
+
+        ``submit_async_job`` awaits the job's future, which the helper
+        resolves once the apply has committed and the post-apply
+        ``session_updated`` broadcasts have been queued. The producer
+        therefore sees the new titles applied before the compute phase
+        starts.
         """
-        from twicc.providers.codex.titles import bulk_sync_titles_from_codex
-        from twicc.providers.db_writer import (
-            SyncSessionTitlesPayload,
-            put_thread_message,
+        from twicc.providers.codex.titles import (
+            SyncSessionTitlesJob,
+            bulk_sync_titles_from_codex,
         )
+        from twicc.providers.db_writer import submit_async_job
 
         titles = await bulk_sync_titles_from_codex()
         if not titles:
             logger.info("Codex title sync at boot: no titles to import")
             return
 
-        done_event = asyncio.Event()
-        if not await put_thread_message(
-            SyncSessionTitlesPayload(
-                provider=self.provider, titles=titles, done_event=done_event,
-            ),
-            self._sync_stop_event,
-        ):
-            return  # shutdown signalled — the title payload was dropped
-        await done_event.wait()
+        future = asyncio.get_running_loop().create_future()
+        try:
+            changed = await submit_async_job(SyncSessionTitlesJob(
+                titles=titles, future=future,
+            ))
+        except Exception as e:
+            logger.warning(
+                "Codex title sync at boot failed via DB writer: %s", e,
+            )
+            return
         logger.info(
-            "Codex title sync at boot: %d title(s) routed through the DB writer",
-            len(titles),
+            "Codex title sync at boot: %d title(s) routed through the DB "
+            "writer (%d changed)",
+            len(titles), len(changed),
         )
 
     async def _dependency_orchestrator(self) -> None:
