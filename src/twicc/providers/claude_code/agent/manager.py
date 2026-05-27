@@ -12,6 +12,7 @@ from django.conf import settings
 
 from twicc.agent import AgentInfo, AgentState, BaseAgent, BaseAgentManager
 from twicc.core.enums import Provider
+from twicc.providers.db_writer import run_under_db_write_lock
 
 from .agent import ClaudeCodeAgent
 
@@ -456,10 +457,12 @@ class ClaudeCodeAgentManager(BaseAgentManager):
             current_run_id = agent.process_run.pk
             try:
                 from twicc.core.models import ProcessRun
-                deleted_count, _ = await asyncio.to_thread(
-                    lambda: ProcessRun.objects.filter(
-                        session_id=agent.session_id
-                    ).exclude(pk=current_run_id).delete()
+                deleted_count, _ = await run_under_db_write_lock(
+                    lambda: asyncio.to_thread(
+                        lambda: ProcessRun.objects.filter(
+                            session_id=agent.session_id
+                        ).exclude(pk=current_run_id).delete()
+                    )
                 )
                 if deleted_count:
                     logger.info(

@@ -15,6 +15,8 @@ import time
 from collections.abc import Callable, Coroutine
 from typing import TYPE_CHECKING, Any
 
+from twicc.providers.db_writer import run_under_db_write_lock
+
 from .base_agent import BaseAgent
 from .states import AgentInfo, AgentState
 
@@ -320,23 +322,29 @@ class BaseAgentManager:
 
         now = timezone.now()
 
-        # session_id is a plain CharField on ProcessRun, so this works even
-        # when no Session row exists yet (the watcher creates the Session
-        # when the JSONL file appears).
-        process_run = await asyncio.to_thread(
-            lambda: ProcessRun.objects.create(
-                provider=agent.provider.value,
-                session_id=session_id,
-                started_at=now,
+        # Persist both DB writes (ProcessRun create + Session start-timestamps
+        # update) under a single DB write lock acquire. The broadcasts that
+        # follow stay outside the lock — they target the in-process Channels
+        # layer and have no DB dependency. ``session_id`` is a plain
+        # CharField on ProcessRun, so the create works even when no Session
+        # row exists yet (the watcher creates the Session when the JSONL
+        # file appears).
+        async def _persist_run_and_start_timestamps() -> None:
+            pr = await asyncio.to_thread(
+                lambda: ProcessRun.objects.create(
+                    provider=agent.provider.value,
+                    session_id=session_id,
+                    started_at=now,
+                )
             )
-        )
-        agent.process_run = process_run
+            agent.process_run = pr
+            await asyncio.to_thread(
+                lambda: Session.objects.filter(id=session_id).update(
+                    last_started_at=now, last_updated_at=now,
+                )
+            )
 
-        await asyncio.to_thread(
-            lambda: Session.objects.filter(id=session_id).update(
-                last_started_at=now, last_updated_at=now,
-            )
-        )
+        await run_under_db_write_lock(_persist_run_and_start_timestamps)
         await self._broadcast_session_updated(session_id)
 
         # Initial STARTING broadcast (state was set to STARTING in __init__).
