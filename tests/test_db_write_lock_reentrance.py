@@ -110,6 +110,21 @@ def test_reentrance_works_under_eager_task_factory():
         # to admit us via the caller frame. The wrapper inside the
         # drive must have admitted us already from inside this Task
         # for the nested call to short-circuit.
+        #
+        # We pin the invariant explicitly with an assertion BEFORE
+        # the nested call. A regression where the wrapper failed to
+        # self-admit would surface as ``AssertionError`` here (loud,
+        # observable) instead of hanging the suite forever on the
+        # deadlock (the shield-loop in the drive prevents wait_for
+        # from breaking the deadlock, so timeout=2.0 below would
+        # not actually fire if we let the nested call deadlock).
+        lease = _db_write_lock_lease.get()
+        assert lease is not None, "inner task lost the inherited lease"
+        assert asyncio.current_task() in lease.drive_tasks, (
+            "inner task not in drive_tasks at start — the wrapper's "
+            "self-admit failed; a nested run_under_db_write_lock here "
+            "would deadlock"
+        )
         return await run_under_db_write_lock(lambda: _identity("eager-nested"))
 
     async def scenario():
