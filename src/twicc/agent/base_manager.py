@@ -388,11 +388,15 @@ class BaseAgentManager:
 
         try:
             now = timezone.now()
-            await asyncio.to_thread(
-                lambda: Session.objects.filter(id=agent.session_id).update(
-                    last_stopped_at=now, last_updated_at=now,
+
+            async def _persist_stopped() -> None:
+                await asyncio.to_thread(
+                    lambda: Session.objects.filter(id=agent.session_id).update(
+                        last_stopped_at=now, last_updated_at=now,
+                    )
                 )
-            )
+
+            await run_under_db_write_lock(_persist_stopped)
             await self._broadcast_session_updated(agent.session_id)
         except Exception as e:
             logger.error(

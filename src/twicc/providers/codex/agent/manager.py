@@ -24,6 +24,7 @@ from codex_app_server import (
 
 from twicc.agent import AgentState, BaseAgent, BaseAgentManager
 from twicc.core.enums import Provider
+from twicc.providers.db_writer import run_under_db_write_lock
 from twicc.providers.helpers import AgentSettings, get_provider_helpers
 
 from ..bin import resolve_bundled_binary
@@ -84,12 +85,17 @@ class CodexAgentManager(BaseAgentManager):
                 try:
                     # Push to Codex state DB. Use the standalone helper rather
                     # than agent._thread so we don't reach into private state.
+                    # The SDK call stays out of the DB write lock — it's a
+                    # network call to the Codex app server.
                     await rename_thread_via_sdk(agent.session_id, pending)
                     # Mirror into Session.title (the watcher would catch it
                     # eventually but no need to wait).
-                    await sync_to_async(
-                        Session.objects.filter(id=agent.session_id).update
-                    )(title=pending)
+                    async def _persist_session_title() -> None:
+                        await sync_to_async(
+                            Session.objects.filter(id=agent.session_id).update
+                        )(title=pending)
+
+                    await run_under_db_write_lock(_persist_session_title)
                     # Pop only after both writes succeed, so the next
                     # ASSISTANT_TURN retries the whole flush (idempotent) if
                     # the DB update raised.
