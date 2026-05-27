@@ -488,75 +488,20 @@ async def stop_db_writer() -> None:
     cancelled = False
     try:
         if _db_writer_task is not None:
-            writer_external_cancel_logged = False
-            while not _db_writer_task.done():
-                try:
-                    # Shielded so outer cancels never propagate into the
-                    # writer task (which would interrupt the final drain).
-                    await asyncio.shield(_db_writer_task)
-                except asyncio.CancelledError:
-                    # Same outer-vs-shielded discrimination as
-                    # ``_drive_inner_under_held_lock``: the await raises
-                    # CancelledError either because we (stop_db_writer)
-                    # got ``cancel()``d, OR because ``_db_writer_task``
-                    # itself was cancelled directly (unusual — the writer
-                    # loop doesn't cancel itself, but a broad task cleanup
-                    # at shutdown could). Distinguish via
-                    # ``current_task().cancelling()``.
-                    current = asyncio.current_task()
-                    if current is not None and current.cancelling() > 0:
-                        cancelled = True
-                        # Loop and keep waiting for the writer task.
-                    else:
-                        # Writer task was cancelled externally — its final
-                        # drain may be incomplete; messages queued before
-                        # the stop event may not have been applied. Log
-                        # explicitly so the anomaly is visible; don't set
-                        # the outer ``cancelled`` flag (we weren't
-                        # cancelled, no need to re-raise CancelledError at
-                        # our caller). ``_db_writer_task.done()`` is True
-                        # now, so the loop exits naturally.
-                        logger.error(
-                            "DB writer task was cancelled externally during "
-                            "shutdown — final drain may be incomplete; some "
-                            "queued messages may not have been applied"
-                        )
-                        writer_external_cancel_logged = True
-                except Exception:
-                    # The writer task itself raised. ``_db_writer_task.done()``
-                    # is now True, so the loop will exit naturally on its
-                    # next ``while`` check. We don't propagate here, so the
-                    # post-loop ``result()`` block handles the logging once
-                    # (avoids double-handling, and lets outer cancellation
-                    # still "win" if both happened together).
-                    pass
-            # Task is done — retrieve any exception so asyncio doesn't log
-            # "exception was never retrieved". The writer loop catches
-            # everything internally, but the helper guard is cheap. We
-            # narrow the suppression to (Exception, CancelledError) rather
-            # than ``BaseException`` so KeyboardInterrupt / SystemExit
-            # still propagate. The CancelledError branch also covers two
-            # gaps the in-loop discrimination misses: (a) writer task
-            # was already cancelled BEFORE we ran the loop (no iteration
-            # ever observed the cancel); (b) an outer cancel masked the
-            # writer's external cancel via the ``cancelling() > 0`` check.
-            # In both cases ``writer_external_cancel_logged`` is False
-            # and the post-loop log below fills the gap.
-            try:
-                _db_writer_task.result()
-            except asyncio.CancelledError:
-                if not writer_external_cancel_logged:
-                    logger.error(
-                        "DB writer task was cancelled externally during "
-                        "shutdown — final drain may be incomplete; some "
-                        "queued messages may not have been applied"
-                    )
-            except Exception as exc:
-                logger.error(
+            # Wait for the writer task to finish its final drain.
+            cancelled |= await _shielded_shutdown_wait(
+                _db_writer_task,
+                external_cancel_log=lambda: logger.error(
+                    "DB writer task was cancelled externally during shutdown "
+                    "— final drain may be incomplete; some queued messages "
+                    "may not have been applied"
+                ),
+                unexpected_exception_log=lambda exc: logger.error(
                     "DB writer task exited with an unexpected exception: %s",
                     exc,
                     exc_info=True,
-                )
+                ),
+            )
         # Drain in-flight external lock holders. The writer task is done by
         # this point, so it has released its last apply's hold on the lock;
         # the only remaining holders/waiters are external callers that
@@ -567,69 +512,26 @@ async def stop_db_writer() -> None:
         # don't bail mid-drain and leave the next ``_db_write_lock = None``
         # racing an active holder.
         #
-        # Pattern matches the writer-task wait above: ONE drain Task,
-        # shield-looped until ``.done()``. A naive
-        # ``while True: shield(_acquire_then_release(lock))`` would
-        # create a fresh coroutine on every cancel retry, queueing
-        # multiple orphan acquirers in the FIFO and leaving earlier
+        # ONE drain Task created up front, shield-looped until ``.done()``.
+        # A naive ``while True: shield(_acquire_then_release(lock))`` would
+        # create a fresh coroutine on every cancel retry, queueing multiple
+        # orphan acquirers in the FIFO and leaving earlier
         # ``_acquire_then_release`` Tasks unobserved.
         if _db_write_lock is not None:
             drain_task = asyncio.create_task(_acquire_then_release(_db_write_lock))
-            drain_external_cancel_logged = False
-            while not drain_task.done():
-                try:
-                    await asyncio.shield(drain_task)
-                except asyncio.CancelledError:
-                    # Same outer-vs-shielded discrimination as the writer-
-                    # task wait above.
-                    current = asyncio.current_task()
-                    if current is not None and current.cancelling() > 0:
-                        cancelled = True
-                        # Loop and keep waiting for the SAME drain task;
-                        # the shield kept it alive across our cancel.
-                    else:
-                        # drain_task was cancelled externally (broad task
-                        # cleanup at shutdown). In-flight external lock
-                        # holders may not have released — log the anomaly
-                        # and let the loop exit. We deliberately do NOT
-                        # recreate the drain task: re-introducing it would
-                        # risk the v8-fixed orphan pattern under a flurry
-                        # of external cancellations, and the holder-drain
-                        # contract is best-effort anyway (no external
-                        # caller is wired up yet, and the docstring of
-                        # ``get_db_write_lock`` already warns against
-                        # caching the lock object past a single
-                        # ``async with``).
-                        logger.warning(
-                            "Lock holder-drain task was cancelled externally "
-                            "during shutdown — in-flight external lock "
-                            "holders may not have fully released before the "
-                            "lifecycle bundle is cleared"
-                        )
-                        drain_external_cancel_logged = True
-            # Drain the result so asyncio doesn't log "Task exception was
-            # never retrieved". ``_acquire_then_release`` doesn't raise
-            # in normal operation; this is the defensive guard. The
-            # CancelledError branch also covers the case where an outer
-            # cancel masked drain_task's external cancel via the
-            # ``cancelling() > 0`` discrimination — the in-loop warning
-            # was skipped and we log here instead.
-            try:
-                drain_task.result()
-            except asyncio.CancelledError:
-                if not drain_external_cancel_logged:
-                    logger.warning(
-                        "Lock holder-drain task was cancelled externally "
-                        "during shutdown — in-flight external lock "
-                        "holders may not have fully released before the "
-                        "lifecycle bundle is cleared"
-                    )
-            except Exception as exc:
-                logger.error(
+            cancelled |= await _shielded_shutdown_wait(
+                drain_task,
+                external_cancel_log=lambda: logger.warning(
+                    "Lock holder-drain task was cancelled externally during "
+                    "shutdown — in-flight external lock holders may not have "
+                    "fully released before the lifecycle bundle is cleared"
+                ),
+                unexpected_exception_log=lambda exc: logger.error(
                     "DB write-lock drain at shutdown raised: %s",
                     exc,
                     exc_info=True,
-                )
+                ),
+            )
     finally:
         # Reset the entire lifecycle bundle once the writer task is done
         # AND in-flight external lock holders have released. Same-process
@@ -655,6 +557,95 @@ async def _acquire_then_release(lock: asyncio.Lock) -> None:
     for in-flight external lock holders to release before lifecycle teardown."""
     await lock.acquire()
     lock.release()
+
+
+async def _shielded_shutdown_wait(
+    task: "asyncio.Task[Any]",
+    *,
+    external_cancel_log: Callable[[], None],
+    unexpected_exception_log: Callable[[Exception], None],
+) -> bool:
+    """Wait for a shutdown-phase Task to finish, cancellation-safe.
+
+    Shared body of :func:`stop_db_writer`'s two shielded loops (writer-task
+    final-drain wait and lock holder-drain wait). Returns ``True`` if our
+    outer task was cancelled during the wait; the caller is expected to
+    propagate that signal via ``raise asyncio.CancelledError()`` AFTER
+    its lifecycle teardown.
+
+    Invariants:
+
+    1. **Outer cancels never propagate into the shielded task.**
+       :func:`asyncio.shield` keeps ``task`` alive when our own task is
+       cancelled. The while-loop keeps re-awaiting until ``task.done()``
+       is True; an outer ``cancel()`` raises ``CancelledError`` on the
+       await, we catch it, set the return flag, and continue waiting.
+    2. **External cancellation of the shielded task is logged.** Two
+       paths can raise ``CancelledError`` from the await: OUR task got
+       ``cancel()``d (``asyncio.current_task().cancelling() > 0``), OR
+       ``task`` itself was cancelled directly (``cancelling() == 0``).
+       The distinction matters because direct cancellation of ``task``
+       is an anomaly worth surfacing (writer's final drain may be
+       incomplete; lock holders may not have released), but it should
+       not contaminate the outer cancellation signal we return.
+    3. **The post-loop ``result()`` block fills the gaps the in-loop
+       discrimination misses.** Two missed-cancel scenarios:
+
+       - ``task`` was already cancelled BEFORE the loop ran; the
+         ``while not task.done()`` check exits without any iteration.
+       - An outer cancel arrived too, so the in-loop discrimination
+         classified the cancel as outer; ``external_cancel_log`` was
+         skipped.
+
+       The post-loop ``except CancelledError`` calls ``external_cancel_log``
+       if the in-loop branch hasn't already.
+    4. **Other exceptions from ``task`` surface via the post-loop
+       ``result()`` block.** The in-loop ``except Exception: pass``
+       swallows so the loop exits naturally on ``task.done()``; the
+       post-loop ``except Exception`` then calls
+       ``unexpected_exception_log(exc)`` once. ``BaseException``
+       (excluding ``CancelledError`` / ``Exception``) is deliberately
+       not suppressed — ``KeyboardInterrupt`` / ``SystemExit`` propagate.
+
+    Callers provide the two log callbacks so the helper stays
+    message-agnostic; the two existing call sites (writer-task wait and
+    drain-task wait) emit different wording and different levels
+    (error vs warning) — both follow the same shape.
+    """
+    cancelled = False
+    external_cancel_logged = False
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            current = asyncio.current_task()
+            if current is not None and current.cancelling() > 0:
+                cancelled = True
+                # Loop and keep waiting for the shielded task.
+            else:
+                # Shielded task was cancelled externally — log the anomaly.
+                # Don't flip ``cancelled`` (we weren't cancelled, no need
+                # to re-raise CancelledError at our caller).
+                external_cancel_log()
+                external_cancel_logged = True
+        except Exception:
+            # Shielded task raised an Exception. ``task.done()`` is now
+            # True, so the loop will exit naturally on its next ``while``
+            # check; the post-loop ``result()`` block handles the
+            # logging once (avoids double-handling).
+            pass
+    # Task is done — retrieve its outcome so asyncio doesn't log "exception
+    # was never retrieved". (Exception, CancelledError) are narrowed
+    # rather than ``BaseException`` so KeyboardInterrupt / SystemExit
+    # still propagate.
+    try:
+        task.result()
+    except asyncio.CancelledError:
+        if not external_cancel_logged:
+            external_cancel_log()
+    except Exception as exc:
+        unexpected_exception_log(exc)
+    return cancelled
 
 
 def get_db_write_lock() -> asyncio.Lock:
