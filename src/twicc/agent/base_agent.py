@@ -229,6 +229,26 @@ class BaseAgent:
             # ``wait_for_dead()`` only after the inner is genuinely
             # terminal.
             self._dead_callback_done_event.set()
+        # If we entered the helper with an outer cancel already pending
+        # (``cancelling() > 0`` at entry) AND the eager task factory
+        # short-circuited the shield-loop (``notify_task`` was done
+        # before the first ``done()`` check), the pending outer cancel
+        # was never delivered to an await — so neither the watermark
+        # nor the ``notify_task.done()`` discriminator above could
+        # capture it. Force a delivery via a zero-delay yield: asyncio
+        # injects the pending ``CancelledError`` on the next await,
+        # which is our ``sleep(0)``. Without this, the drain below
+        # would propagate the inner cancellation (or return normally),
+        # silently losing the outer cancel that should take precedence.
+        if (
+            captured_outer_cancel is None
+            and current is not None
+            and current.cancelling() > 0
+        ):
+            try:
+                await asyncio.sleep(0)
+            except asyncio.CancelledError as exc:
+                captured_outer_cancel = exc
         # Drain ``notify_task``'s outcome. The shield-loop above exits as
         # soon as ``notify_task.done()`` is True, but two edge cases let
         # it exit without anyone reading the inner outcome:
