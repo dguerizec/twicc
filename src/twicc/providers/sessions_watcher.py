@@ -43,6 +43,7 @@ from twicc.projects import (
     register_project,
     update_project_metadata as _update_project_metadata_sync,
 )
+from twicc.providers.db_writer import run_under_db_write_lock
 from twicc.providers.helpers import AgentSettings, get_provider_helpers
 from twicc.workspaces import auto_add_project_to_workspaces
 
@@ -736,21 +737,37 @@ class BaseSessionsWatcher:
 
                     # Provider-specific path patterns (e.g. project directory
                     # creation/deletion for Claude Code). No-op for providers
-                    # that only care about jsonl files (e.g. Codex).
-                    if await self.maybe_handle_special_change(path, change_type, channel_layer):
+                    # that only care about jsonl files (e.g. Codex). Wrapped
+                    # under the DB write lock unconditionally — cheap when
+                    # the handler is a no-op, and a safety net so any future
+                    # override that writes is automatically serialised with
+                    # every other DB writer.
+                    handled = await run_under_db_write_lock(
+                        lambda p=path, ct=change_type, cl=channel_layer:
+                            self.maybe_handle_special_change(p, ct, cl)
+                    )
+                    if handled:
                         continue
 
                     # Skip non-jsonl files
                     if not path_str.endswith(".jsonl"):
                         continue
 
-                    # Parse path to determine type (session or subagent)
+                    # Parse path to determine type (session or subagent).
+                    # Read-only (FS only, no DB) — runs outside the lock.
                     parsed = await self.parse_session_file(path)
                     if parsed is None:
                         # Invalid path — silently skip
                         continue
 
-                    # Sync and broadcast (works for both sessions and subagents)
-                    await self.sync_and_broadcast(path, parsed, change_type, channel_layer)
+                    # Sync and broadcast (works for both sessions and
+                    # subagents). The handler issues the bulk of the watcher's
+                    # DB writes (sync_session_items_from_file in particular,
+                    # which runs in a thread executor): the runner protects
+                    # the lock against cancellation racing the executor.
+                    await run_under_db_write_lock(
+                        lambda p=path, par=parsed, ct=change_type, cl=channel_layer:
+                            self.sync_and_broadcast(p, par, ct, cl)
+                    )
                 except Exception:
                     logger.exception("Error processing watcher change %s on %s", change_type, path_str)
