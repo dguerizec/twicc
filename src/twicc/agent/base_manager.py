@@ -169,17 +169,32 @@ class BaseAgentManager:
             if self._agents:
                 logger.info("Shutting down %d active agent(s)", len(self._agents))
 
+                agents_snapshot = list(self._agents.values())
                 shutdown_tasks = [
                     asyncio.create_task(
                         agent.interrupt_or_kill(reason="shutdown"),
-                        name=f"shutdown-{session_id}",
+                        name=f"shutdown-{agent.session_id}",
                     )
-                    for session_id, agent in self._agents.items()
+                    for agent in agents_snapshot
                 ]
                 if shutdown_tasks:
                     _, pending = await asyncio.wait(shutdown_tasks, timeout=timeout)
                     for task in pending:
                         task.cancel()
+
+                # Belt-and-suspenders: an ``interrupt_or_kill`` override is
+                # free to return as soon as the agent has reached the DEAD
+                # state, but the DEAD state-change callback may still be in
+                # flight afterwards — and that callback is where the
+                # lifecycle DB writes happen, under ``run_under_db_write_lock``.
+                # ``wait_for_dead`` blocks on both ``_dead_event`` and
+                # ``_dead_callback_done_event``, so this gather guarantees
+                # every callback's lock-protected writes have committed
+                # before we let the caller proceed to ``stop_db_writer()``.
+                await asyncio.gather(
+                    *[agent.wait_for_dead(timeout=timeout) for agent in agents_snapshot],
+                    return_exceptions=True,
+                )
 
                 self._agents.clear()
                 logger.info("All agents shut down")

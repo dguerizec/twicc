@@ -77,6 +77,14 @@ class BaseAgent:
         self.kill_reason: str | None = None
 
         self._dead_event = asyncio.Event()
+        # Set by ``_transition_to_dead`` after the DEAD state-change callback
+        # finishes (success or exception). ``wait_for_dead`` blocks on this
+        # event in addition to ``_dead_event`` so callers that need a
+        # fully-stopped agent — most importantly ``BaseAgentManager.shutdown``,
+        # which runs immediately before ``stop_db_writer()`` in the server
+        # shutdown sequence — only proceed once any DB writes performed in
+        # the DEAD callback under ``run_under_db_write_lock`` have committed.
+        self._dead_callback_done_event = asyncio.Event()
         self._state_change_callback: StateChangeCallback | None = None
 
         # Pending requests waiting on a user click (tool approval, ask user
@@ -122,13 +130,50 @@ class BaseAgent:
                 self.session_id, e, exc_info=True,
             )
 
-    async def wait_for_dead(self, timeout: float = 30.0) -> bool:
-        """Wait until the agent reaches the DEAD state.
+    async def _transition_to_dead(self) -> None:
+        """Atomically transition into DEAD: set state, notify, then signal done.
 
-        Returns ``True`` if it died within ``timeout``, ``False`` otherwise.
+        Callers must set the agent-side attributes that reflect the final
+        state (``kill_reason``, ``error``, ``last_activity``, provider-specific
+        events like ``_first_turn_done_event``) BEFORE invoking this helper —
+        those must be visible to the state-change callback. The helper owns
+        the three steps that must not be split: ``_set_state(DEAD)``, the
+        awaited ``_notify_state_change``, and the
+        ``_dead_callback_done_event`` signal that releases ``wait_for_dead``.
+
+        Keeping these three steps in one helper is what closes the shutdown
+        race exposed by the agent-lifecycle wiring: ``BaseAgentManager.shutdown``
+        gathers ``wait_for_dead`` on every agent before returning, so
+        ``stop_db_writer`` cannot fire while a DEAD callback's
+        ``run_under_db_write_lock`` acquire is still queued. The same
+        guarantee protects every non-shutdown caller that polls
+        ``wait_for_dead`` (cron restart, settings-triggered restart).
         """
+        self._set_state(AgentState.DEAD)
+        try:
+            await self._notify_state_change()
+        finally:
+            self._dead_callback_done_event.set()
+
+    async def wait_for_dead(self, timeout: float = 30.0) -> bool:
+        """Wait until the agent is fully torn down: DEAD state AND callback done.
+
+        Returns ``True`` when both events fire within ``timeout``, ``False``
+        on timeout. ``timeout`` covers the whole wait, not each stage. The
+        two-stage wait is what makes the manager shutdown safe against the
+        DB writer being stopped before a DEAD callback's lock-protected
+        writes commit; see :meth:`_transition_to_dead` for the rationale.
+        """
+        deadline = asyncio.get_event_loop().time() + timeout
         try:
             await asyncio.wait_for(self._dead_event.wait(), timeout)
+        except asyncio.TimeoutError:
+            return False
+        remaining = max(0.0, deadline - asyncio.get_event_loop().time())
+        try:
+            await asyncio.wait_for(
+                self._dead_callback_done_event.wait(), remaining,
+            )
             return True
         except asyncio.TimeoutError:
             return False

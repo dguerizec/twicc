@@ -466,9 +466,8 @@ class CodexAgent(BaseAgent):
             # or shutdown. _handle_error already ran (or will run); avoid a
             # second transition if we're already DEAD.
             if self.state != AgentState.DEAD:
-                self._set_state(AgentState.DEAD)
                 self.last_activity = time.time()
-                await self._notify_state_change()
+                await self._transition_to_dead()
             return
         except asyncio.CancelledError:
             raise
@@ -572,9 +571,8 @@ class CodexAgent(BaseAgent):
         clear_original_files_for_session(self.session_id)
 
         if self.state != AgentState.DEAD:
-            self._set_state(AgentState.DEAD)
             self.last_activity = time.time()
-            await self._notify_state_change()
+            await self._transition_to_dead()
 
     async def _handle_error(
         self, error_message: str, exc: Exception | None = None,
@@ -596,9 +594,8 @@ class CodexAgent(BaseAgent):
                 self.session_id, exc_info=True,
             )
         get_streamed_item_registry().clear_session(self.session_id)
-        self._set_state(AgentState.DEAD)
         self.last_activity = time.time()
-        await self._notify_state_change()
+        await self._transition_to_dead()
 
     # ------------------------------------------------------------------
     # Stream event handling
@@ -755,9 +752,8 @@ class CodexAgent(BaseAgent):
             self._cancel_all_pending_futures()
             self.error = payload.error.message
             self.kill_reason = "auth_required" if is_auth_error else "error"
-            self._set_state(AgentState.DEAD)
             self.last_activity = time.time()
-            await self._notify_state_change()
+            await self._transition_to_dead()
 
             if is_auth_error:
                 from twicc.providers.codex.auth import mark_unauthenticated_and_broadcast
