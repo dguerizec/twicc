@@ -22,6 +22,7 @@ from twicc.core.enums import Provider
 from twicc.pending_agent_settings import set_pending_agent_settings
 from twicc.pending_titles import set_pending_title
 from twicc.projects import register_project
+from twicc.providers.db_writer import run_under_db_write_lock
 from twicc.providers.helpers import AgentSettings, get_provider_helpers
 from twicc.providers.state import (
     ProviderDisabledError,
@@ -115,7 +116,20 @@ async def create_session_from_payload(payload: dict) -> SessionCreationResult:
     # by the sessions watcher).
     from twicc.core.models import Project
     if directory_hint:
-        project, _ = await register_project(project_id, directory=directory_hint)
+        # ``register_project`` is the only DB write in this service —
+        # everything else is reads or in-memory caches. Wrap it under
+        # the DB write lock so the project create/adopt + the
+        # ``project_added`` / workspace-auto-add broadcasts that follow
+        # serialise FIFO with every other DB writer (watcher, DB-writer
+        # consumer, etc.). The lock is NOT held across
+        # ``manager.create_session`` below — that call boots the SDK
+        # and can take seconds; holding the lock through it would
+        # stall every other writer. Reentrance (LOCK#2) makes this
+        # safe even if a future caller of the service wraps it under
+        # the lock too.
+        project, _ = await run_under_db_write_lock(
+            lambda pid=project_id, d=directory_hint: register_project(pid, directory=d)
+        )
     else:
         try:
             project = await sync_to_async(Project.objects.get)(id=project_id)
