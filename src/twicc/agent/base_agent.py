@@ -184,26 +184,37 @@ class BaseAgent:
                 except asyncio.CancelledError as exc:
                     # ``asyncio.shield`` raises ``CancelledError`` for two
                     # distinct sources:
-                    #   * OUR task was cancelled — ``Task.cancelling()``
-                    #     went up. The shield kept ``notify_task``
-                    #     alive; the exception is the outer cancel that
-                    #     asyncio injected at this await.
+                    #   * OUR task was cancelled (outer cancel).
                     #   * ``notify_task`` itself was cancelled (inner
                     #     self-cancel — e.g. someone called
                     #     ``notify_task.cancel()`` directly, or the
                     #     callback awaited an already-cancelled future).
-                    #     ``cancelling()`` is unchanged in this case.
-                    # We capture the outer case only, and only the
-                    # FIRST outer cancel so a later multi-cancel doesn't
-                    # overwrite the original. Inner cancellations
-                    # surface via the drain below as the authoritative
-                    # ones (verbatim message/cause/traceback).
+                    # Discriminate via two complementary signals:
+                    #   (a) ``cancelling()`` advanced past the watermark —
+                    #       a new outer cancel was injected at this await.
+                    #   (b) ``notify_task`` is still NOT done — the shield
+                    #       only raises ``CancelledError`` while the inner
+                    #       is alive when the source is an outer cancel.
+                    #       Catches the pre-entry-pending edge: caller had
+                    #       ``cancel()`` requested but no await had
+                    #       consumed it yet, so ``cancelling()`` started
+                    #       above zero and didn't move when the delivery
+                    #       finally happened at our first shield await.
+                    # Either signal classifies the catch as outer; we keep
+                    # the FIRST outer cancel so multi-outer-cancel doesn't
+                    # overwrite the original message/cause/traceback.
+                    # Inner cancellations surface via the drain below as
+                    # the authoritative ones.
+                    is_outer = False
                     if current is not None:
                         latest = current.cancelling()
                         if latest > cancelling_watermark:
                             cancelling_watermark = latest
-                            if captured_outer_cancel is None:
-                                captured_outer_cancel = exc
+                            is_outer = True
+                    if not is_outer and not notify_task.done():
+                        is_outer = True
+                    if is_outer and captured_outer_cancel is None:
+                        captured_outer_cancel = exc
                     continue
                 except Exception:
                     # Inner raised — ``notify_task.done()`` is True so the
