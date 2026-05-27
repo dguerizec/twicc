@@ -167,26 +167,54 @@ class BaseAgent:
             self._notify_state_change(),
             name=f"dead-notify-{self.session_id}",
         )
-        outer_cancelled = False
+        captured_cancel: asyncio.CancelledError | None = None
         try:
             while not notify_task.done():
                 try:
                     await asyncio.shield(notify_task)
-                except asyncio.CancelledError:
+                except asyncio.CancelledError as exc:
                     # Either our task was cancelled (notify_task is shielded
                     # and still running) or notify_task itself was cancelled
                     # (next loop iteration exits via ``notify_task.done()``).
                     # In both cases, keep going until the inner is finished.
-                    outer_cancelled = True
+                    # Capture the cancellation object so we can re-raise it
+                    # at the end with its original message/cause preserved.
+                    captured_cancel = exc
                     continue
         finally:
-            # ``notify_task.done()`` is now True — the while-loop only exits
-            # on that condition. (A non-cancellation exception from the
-            # inner propagates through the await above; the finally still
-            # fires, then the exception bubbles up to the caller.)
+            # ``notify_task.done()`` is now True — either via the while loop
+            # or because an eager task factory (Python 3.12+) ran the coro
+            # synchronously at ``create_task`` and the very first check saw
+            # the task already done. Signal ``wait_for_dead()`` only after
+            # the inner is genuinely terminal.
             self._dead_callback_done_event.set()
-        if outer_cancelled:
-            raise asyncio.CancelledError()
+        # Drain any inner exception that the shield-loop could not surface.
+        # Two edge cases need this:
+        #   * Eager task factory: the loop body may never run, so a coro
+        #     that synchronously raised would leave its exception on the
+        #     task unread (and trigger an "unretrieved task exception"
+        #     warning at GC time).
+        #   * Same-tick race: an outer cancel arriving on the same tick
+        #     as inner completion exits the loop via ``done()`` without
+        #     re-awaiting, missing the inner exception.
+        # ``_notify_state_change`` swallows callback ``Exception``s
+        # internally, so in practice the inner only surfaces BaseException
+        # subclasses (cancellation, SystemExit, ...). When an outer cancel
+        # was captured, it takes precedence — the inner is logged then
+        # suppressed.
+        if not notify_task.cancelled():
+            inner_exc = notify_task.exception()
+            if inner_exc is not None:
+                if captured_cancel is not None:
+                    logger.error(
+                        "DEAD callback for session %s raised while the "
+                        "transition was being cancelled; suppressing inner: %s",
+                        self.session_id, inner_exc, exc_info=inner_exc,
+                    )
+                else:
+                    raise inner_exc
+        if captured_cancel is not None:
+            raise captured_cancel
 
     async def wait_for_dead(self, timeout: float = 30.0) -> bool:
         """Wait until the agent is fully torn down: DEAD state AND callback done.
