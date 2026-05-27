@@ -116,8 +116,13 @@ async def create_session_from_payload(payload: dict) -> SessionCreationResult:
     # by the sessions watcher).
     from twicc.core.models import Project
     if directory_hint:
-        # ``register_project`` is the only DB write in this service —
-        # everything else is reads or in-memory caches. Wrap it under
+        # ``register_project`` is the only direct DB write in this
+        # service before the manager handoff — everything else here is
+        # reads or in-memory caches. (``manager.create_session`` below
+        # does perform DB writes itself, e.g. ``ProcessRun`` creation
+        # and session-row updates inside ``BaseAgentManager._register_
+        # and_start``; those will be wired separately in WIRE#3.) Wrap
+        # it under
         # the DB write lock so the project create/adopt + the
         # ``project_added`` / workspace-auto-add broadcasts that follow
         # serialise FIFO with every other DB writer (watcher, DB-writer
