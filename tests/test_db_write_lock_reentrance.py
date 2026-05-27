@@ -105,11 +105,11 @@ def test_reentrance_works_under_eager_task_factory():
     """
 
     async def factory():
-        # Immediate nested call. Under eager mode this runs at
-        # ``create_task`` time, before the outer drive has a chance
-        # to admit us via the caller frame. The wrapper inside the
-        # drive must have admitted us already from inside this Task
-        # for the nested call to short-circuit.
+        # Immediate nested call. Under eager mode this body runs at
+        # ``create_task`` time — so the drive's wrapper must have
+        # admitted us (i.e. ``current_task()``) to ``drive_tasks``
+        # as its FIRST statement, before our own body started.
+        # Otherwise the nested call below would not short-circuit.
         #
         # We pin the invariant explicitly with an assertion BEFORE
         # the nested call. A regression where the wrapper failed to

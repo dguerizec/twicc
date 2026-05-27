@@ -243,11 +243,14 @@ _db_write_lock: asyncio.Lock | None = None
 # call (typical when an outer caller wraps a function that itself wraps
 # another function under the lock) is granted the short-circuit only if
 # its ``current_task()`` is registered in ``lease.drive_tasks`` — i.e. it
-# is the Task that installed the lease, OR an inner Task created by
-# :func:`_drive_inner_under_held_lock` during this hold (nested drives
-# included). Anything else (most importantly: sub-tasks spawned via
-# ``asyncio.create_task`` from inside a factory) is excluded from the
-# short-circuit and falls through to a real acquire.
+# is the Task that installed the lease, OR the single inner Task created
+# by :func:`_drive_inner_under_held_lock` for this hold. (Nested
+# ``run_under_db_write_lock`` calls short-circuit on the existing
+# membership rather than entering a fresh drive, so no second inner Task
+# is created during the same hold.) Anything else (most importantly:
+# sub-tasks spawned via ``asyncio.create_task`` from inside a factory)
+# is excluded from the short-circuit and falls through to a real
+# acquire.
 #
 # **Why the ``drive_tasks`` set rather than a plain ``active`` flag.**
 # A sub-task spawned from inside the factory via ``asyncio.create_task``
@@ -313,13 +316,16 @@ class _LockLease:
 
     - The Task that installed the lease (the runner's caller), added
       synchronously by the runner before entering the drive.
-    - Each inner Task the drive creates during this hold (one per
-      ``_drive_inner_under_held_lock`` call — nested drives included).
-      The drive wraps the user factory in a tiny coroutine that admits
+    - The single inner Task the drive creates for this hold. The
+      drive wraps the user factory in a tiny coroutine that admits
       ``asyncio.current_task()`` (= the inner Task) to ``drive_tasks``
       as its FIRST action, before any user code runs. This is
       compatible with both the default task factory and
-      :func:`asyncio.eager_task_factory`.
+      :func:`asyncio.eager_task_factory`. Nested
+      ``run_under_db_write_lock`` calls reuse this admitted inner
+      Task — they short-circuit on the existing membership rather
+      than entering a fresh drive, so no second inner Task is
+      created during the same hold.
 
     Sub-tasks the factory itself spawns via ``asyncio.create_task``
     inherit the lease object (by ContextVar copy) but are NOT added
