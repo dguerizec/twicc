@@ -241,63 +241,104 @@ _db_write_lock: asyncio.Lock | None = None
 # block, then call the user's coroutine factory through
 # :func:`_drive_inner_under_held_lock`. A nested ``run_under_db_write_lock``
 # call (typical when an outer caller wraps a function that itself wraps
-# another function under the lock) sees the lease is ``active`` and skips
-# the acquire entirely — running the nested factory directly, reusing the
-# lock the outer call already holds.
+# another function under the lock) is granted the short-circuit only if
+# its ``current_task()`` is registered in ``lease.drive_tasks`` — i.e. it
+# is the Task that installed the lease, OR an inner Task created by
+# :func:`_drive_inner_under_held_lock` during this hold (nested drives
+# included). Anything else (most importantly: sub-tasks spawned via
+# ``asyncio.create_task`` from inside a factory) is excluded from the
+# short-circuit and falls through to a real acquire.
 #
-# **Why a lease object rather than a plain bool.** A sub-task spawned from
-# inside the factory via ``asyncio.create_task`` copies the parent's
-# :class:`contextvars.Context` at creation time. If the marker were a plain
-# bool the sub-task would inherit ``True`` — and if it ran AFTER the outer
-# released the lock (rather than concurrently with it) it would still see
-# ``True`` and skip the acquire, writing **without any lock held at all**.
-# The lease lets the runner flip ``active = False`` at release time, so a
-# stale-inherited lease falls through to the normal acquire path. The lease
-# object lives in the outer's frame; flipping ``active`` mutates the shared
-# object in place, observable through every Context that inherited it.
+# **Why the ``drive_tasks`` set rather than a plain ``active`` flag.**
+# A sub-task spawned from inside the factory via ``asyncio.create_task``
+# copies the parent's :class:`contextvars.Context` at creation time and
+# therefore inherits the lease object by reference. A bool-only or
+# ``active``-only check would let such a sub-task see the lease, skip
+# its acquire, and run concurrently with the outer factory — either in
+# parallel while the outer still holds the lock, or worse, continuing
+# past the outer's release and writing without any lock held at all (the
+# v3 design caught only the strict "starts entirely after release" case;
+# the "started during hold, continued past release" case still slipped
+# through). Restricting the short-circuit to ``current_task() in
+# lease.drive_tasks`` forces every inherited sub-task to take its own
+# slot in the lock's FIFO, regardless of when it runs relative to the
+# outer's release.
 #
-# ``ContextVar`` was chosen over a global "owner Task" pointer because
-# :func:`_drive_inner_under_held_lock` runs the factory inside an inner
-# Task it creates with ``asyncio.create_task``: the inner Task is NOT the
-# Task that holds the lock, but it MUST see the marker for reentrance to
-# work. ``asyncio.create_task`` copies the parent's
-# :class:`contextvars.Context` by default, so a lease installed BEFORE the
-# drive is visible to the inner Task — and to every further Task it spawns
-# by default.
+# ``ContextVar`` is still needed because :func:`_drive_inner_under_held_lock`
+# runs the factory inside an inner Task it creates with
+# ``asyncio.create_task``: the inner Task must see the lease for the
+# reentrance check to find it. The drive registers itself by adding the
+# new inner Task to ``lease.drive_tasks`` immediately after creation
+# (synchronously — no yield between ``create_task`` and ``.add()``), so
+# the inner is admitted to the short-circuit before it can hit any
+# ``run_under_db_write_lock`` call.
 #
-# **Remaining sub-task footgun.** A sub-task spawned from inside a factory
-# that starts running WHILE the outer is still holding the lock will see
-# ``lease.active == True`` and skip the acquire — running in **parallel**
-# with the outer factory, two concurrent writers under one logical lock.
-# (Once the outer releases and flips ``active = False``, sub-tasks scheduled
-# afterwards correctly fall through to acquire; the lease only fails to
-# protect against parallel sub-tasks during the outer hold.) Callers that
-# need a sub-task to take its own independent slot in the FIFO must use
-# :func:`spawn_isolated_db_write_task`, which always creates a fresh
-# isolated context per call. The intended default pattern is sequential
-# ``await``s or nested ``run_under_db_write_lock`` calls; neither needs
-# anything special.
+# **Consequence for fire-and-forget sub-tasks under lock.** A sub-task
+# spawned naively from inside a factory will block on its own acquire
+# attempt because the outer still holds the lock. If the factory does
+# not ``await`` it, the sub will queue FIFO, acquire normally once the
+# outer releases, and write under its own slot. If the factory ``await``s
+# it from within the locked block, the result is a deadlock (sub waits
+# for the lock; the lock-holder waits for sub). The deadlock is
+# observable immediately, which is strictly safer than the v3 design's
+# silent lockless write. Callers who really want a sub-task that takes
+# its own slot in the FIFO without the deadlock risk should use
+# :func:`spawn_isolated_db_write_task`, which is semantically equivalent
+# to a naive ``create_task`` under this design but documents the intent
+# explicitly and resets the inherited lease for cleanliness.
 
 
 class _LockLease:
     """Per-hold marker installed in :data:`_db_write_lock_lease`.
 
-    ``active`` flips to ``False`` in the runner's ``finally`` so a
-    sub-task that inherited this lease but only starts running after the
-    outer released the lock falls through to a normal acquire instead
-    of skipping silently (which would write outside any lock).
+    ``active`` is flipped to ``False`` in the runner's ``finally``.
+    Combined with ``drive_tasks`` it forms the membership-test the
+    runners apply on every entry to decide whether to short-circuit.
+
+    ``drive_tasks`` is the set of asyncio Tasks that are allowed to
+    reuse this hold without re-acquiring the lock:
+
+    - The Task that installed the lease (the runner's caller), added
+      synchronously by the runner before entering the drive.
+    - Each inner Task the drive creates during this hold (one per
+      ``_drive_inner_under_held_lock`` call — nested drives included),
+      added by the drive immediately after ``create_task``.
+
+    Sub-tasks the factory itself spawns via ``asyncio.create_task``
+    inherit the lease object (by ContextVar copy) but are NOT added
+    to ``drive_tasks``: their reentrance check therefore fails and
+    they fall through to a real acquire.
     """
 
-    __slots__ = ("active",)
+    __slots__ = ("active", "drive_tasks")
 
     def __init__(self) -> None:
         self.active = True
+        # Identity-keyed: asyncio.Task is hashable by id. Mutation is
+        # safe because asyncio is single-threaded — only the runner /
+        # drive write here, and only the runners read.
+        self.drive_tasks: set[asyncio.Task] = set()
 
 
 _db_write_lock_lease: contextvars.ContextVar["_LockLease | None"] = contextvars.ContextVar(
     "twicc.providers.db_writer._db_write_lock_lease",
     default=None,
 )
+
+
+def _lease_admits_current() -> bool:
+    """Return True if the current Task may reuse the active lease.
+
+    Encapsulates the membership-test the runners apply on entry:
+    the lease must exist, be ``active``, and the current Task must
+    be in ``lease.drive_tasks``. Used by both runners so the rule
+    is defined in exactly one place.
+    """
+    lease = _db_write_lock_lease.get()
+    if lease is None or not lease.active:
+        return False
+    current = asyncio.current_task()
+    return current is not None and current in lease.drive_tasks
 
 # Compute completion is keyed by a per-run id, not by provider: a cancelled
 # run's worker can still have stale messages in the shared queue when a
@@ -1069,6 +1110,15 @@ async def _drive_inner_under_held_lock(
     in one place. The caller is responsible for ``async with _db_write_lock:``
     around this call (otherwise serialization is lost).
 
+    The caller is ALSO responsible for installing a :class:`_LockLease`
+    in :data:`_db_write_lock_lease` BEFORE entering us — we add the
+    inner Task we create here to ``lease.drive_tasks`` so a nested
+    ``run_under_db_write_lock`` call made from inside the factory can
+    short-circuit the acquire. The membership is registered
+    synchronously (no ``await`` between ``create_task`` and
+    ``.add(...)``), so the inner is admitted before it can run its
+    first instruction.
+
     See :func:`run_under_db_write_lock` for the user-facing contract.
     """
     # Create the coroutine AFTER the caller has acquired the lock. If a
@@ -1076,6 +1126,34 @@ async def _drive_inner_under_held_lock(
     # no coroutine has been created yet — no "coroutine was never awaited"
     # warning, no lost dequeued work.
     inner = asyncio.create_task(coro_factory())
+    # Admit the inner to the active lease's drive-task set so its
+    # reentrance check passes (nested ``run_under_db_write_lock`` calls
+    # made from inside the factory short-circuit instead of self-
+    # deadlocking on the lock the caller is already holding). The lease
+    # is installed by the runner before calling us; if it is somehow
+    # absent (programming error in this module) the inner simply runs
+    # without reentrance privileges — equivalent to skipping the admit.
+    lease = _db_write_lock_lease.get()
+    if lease is not None:
+        lease.drive_tasks.add(inner)
+    try:
+        return await _drive_inner_loop(inner)
+    finally:
+        # Discard inner from the drive-task set so the set never grows
+        # unboundedly across many calls under the same outer hold (a
+        # nested drive that completes mid-factory should release its
+        # admit immediately). The discard is no-op if the lease is None
+        # or already missing the entry.
+        if lease is not None:
+            lease.drive_tasks.discard(inner)
+
+
+async def _drive_inner_loop(inner: "asyncio.Task[_T]") -> _T:
+    """The shield-loop + branching logic of the drive, factored out so
+    the surrounding ``try/finally`` (which cleans up
+    ``lease.drive_tasks``) stays compact and obvious. Assumes ``inner``
+    has just been created and is owned by the caller.
+    """
     outer_cancelled = False
     inner_self_cancelled = False
     while not inner.done():
@@ -1174,23 +1252,23 @@ async def _run_under_db_write_lock(
     rejects new acquisitions once shutdown begins — so we expose this
     unchecked internal version, used exclusively by :func:`_drain_one`.
 
-    Reentrance: if the current context already holds an active lease on
-    the lock (see :data:`_db_write_lock_lease`), skip the acquire and
-    call the factory directly — ``asyncio.Lock`` is NOT reentrant and a
-    second acquire by the same Task would self-deadlock. A lease whose
-    ``active`` flag has been flipped to ``False`` (by the outer's
-    ``finally`` after release) does NOT short-circuit, so a sub-task that
-    inherited the lease but only runs after the outer released falls
-    through to a normal acquire.
+    Reentrance: if the current Task is admitted by the active lease
+    (see :func:`_lease_admits_current`), skip the acquire and call
+    the factory directly — ``asyncio.Lock`` is NOT reentrant and a
+    second acquire by the same Task would self-deadlock. The admit
+    set covers the Task that installed the lease and the drive's
+    inner Task(s); sub-tasks the factory spawns via
+    ``asyncio.create_task`` inherit the lease but are NOT admitted, so
+    they fall through to a real acquire (FIFO behind the outer).
 
     See :func:`run_under_db_write_lock` for the user-facing contract.
     """
-    lease = _db_write_lock_lease.get()
-    if lease is not None and lease.active:
-        # Nested call inside a context that still holds the lock — the
-        # outer call's drive (and its shielded loop, cancel
-        # discrimination, stop-event checks) already covers us. Just
-        # run the factory transparently.
+    if _lease_admits_current():
+        # Nested call inside a context that still holds the lock and
+        # whose current Task is part of the lease's drive: the outer
+        # call's drive (and its shielded loop, cancel discrimination,
+        # stop-event checks) already covers us. Just run the factory
+        # transparently.
         return await coro_factory()
 
     lock = _db_write_lock
@@ -1200,20 +1278,25 @@ async def _run_under_db_write_lock(
         # survives ``python -O``.
         raise RuntimeError("DB writer not started")
     async with lock:
-        # Install a fresh lease BEFORE the drive so the inner Task created
-        # inside :func:`_drive_inner_under_held_lock` inherits it (and so
-        # does every further Task it spawns by default). ``finally``
-        # invalidates the lease so any sub-task that inherited it
-        # observes ``active == False`` after our release and acquires
-        # normally instead of writing lock-less. ``ContextVar.reset(token)``
-        # restores the prior value in this Task's context only — other
-        # Tasks that copied the context keep their own bindings.
+        # Install a fresh lease and admit the current Task to its
+        # drive-task set BEFORE the drive (the drive will admit its own
+        # inner Task right after creating it). ``finally`` invalidates
+        # the lease so any sub-task that inherited it observes
+        # ``active == False`` after our release and acquires normally
+        # — preventing the silent lock-less write a stale-True bool
+        # would have allowed. ``ContextVar.reset(token)`` restores the
+        # prior value in this Task's context only — other Tasks that
+        # copied the context keep their own bindings.
         new_lease = _LockLease()
+        current = asyncio.current_task()
+        if current is not None:
+            new_lease.drive_tasks.add(current)
         token = _db_write_lock_lease.set(new_lease)
         try:
             return await _drive_inner_under_held_lock(coro_factory)
         finally:
             new_lease.active = False
+            new_lease.drive_tasks.clear()
             _db_write_lock_lease.reset(token)
 
 
@@ -1301,12 +1384,13 @@ async def run_under_db_write_lock(
     outer caller wraps a function under the lock, that function calls
     a helper that ALSO wraps itself under the lock — the runner installs
     a :class:`_LockLease` in a :class:`contextvars.ContextVar`
-    (:data:`_db_write_lock_lease`) at entry. A nested call observes the
-    lease and, if it is still ``active``, **skips the acquire and runs
-    the factory directly**, reusing the lock the outer call already
-    holds. The outer's drive (shield-loop, cancel discrimination,
-    stop-event checks) already protects the entire nested execution, so
-    the inner does not re-establish them.
+    (:data:`_db_write_lock_lease`) at entry, and admits its own Task
+    plus the drive's inner Task to ``lease.drive_tasks``. A nested
+    call whose ``current_task()`` is in ``lease.drive_tasks`` skips
+    the acquire and runs the factory directly, reusing the lock the
+    outer call already holds. The outer's drive (shield-loop, cancel
+    discrimination, stop-event checks) already protects the entire
+    nested execution, so the inner does not re-establish them.
 
     The reentrance check also short-circuits the stop-event guard for
     nested calls: an in-flight outer ``run_under_db_write_lock`` is
@@ -1317,28 +1401,34 @@ async def run_under_db_write_lock(
 
     The lease's ``active`` flag is flipped to ``False`` in the runner's
     ``finally`` after release. A sub-task that inherited an active lease
-    via ``asyncio.create_task`` but only starts running AFTER the outer
-    released sees ``active == False`` and falls through to a normal
-    acquire — it does NOT write lock-less. The lease prevents that
-    silent-stale-True footgun the bool-marker design would have had.
+    via ``asyncio.create_task`` is NOT in ``drive_tasks`` (only the
+    runner's own Task and the drive's inner Task are), so its
+    reentrance check fails anyway — but the ``active`` flip is kept
+    as a defence-in-depth so any future code path that mistakenly
+    reads the lease without going through the membership test still
+    falls through after release.
 
-    **Sub-task footgun (during the outer's hold).** Because
-    ``asyncio.create_task`` propagates the parent context, a Task
-    spawned **from inside** a factory inherits the lease — and if it
-    starts running WHILE the outer still holds the lock, the lease is
-    still ``active`` and the sub-task's ``run_under_db_write_lock``
-    call skips the acquire, running **in parallel** with the outer
-    factory. (Sub-tasks scheduled after the outer release are safe;
-    see the previous paragraph.) For the case where a sub-task must
-    take its own independent slot in the FIFO instead of coalescing
-    under the outer call, spawn it with
-    :func:`spawn_isolated_db_write_task`, which always creates a fresh
-    isolated context per call. The normal case — plain ``await`` of
-    other coroutines or nested ``run_under_db_write_lock`` calls —
-    needs no special handling and is the intended pattern.
+    **Sub-task behaviour.** Because ``asyncio.create_task`` propagates
+    the parent context, a Task spawned **from inside** a factory
+    inherits the lease, but its ``current_task()`` is not in
+    ``drive_tasks`` — so its first ``run_under_db_write_lock`` call
+    falls through to a real acquire. If the outer still holds the
+    lock, the sub-task BLOCKS on the acquire until the outer releases.
+    This serialises the sub-task FIFO behind the outer (safe behaviour:
+    no parallel write under one lock, no lock-less write past the
+    outer's release). The trade-off: if the factory itself ``await``s
+    the sub-task inside the locked block, the result is a deadlock —
+    sub waits for the lock, factory waits for sub. The deadlock is
+    observable immediately, strictly safer than the silent lock-less
+    write a bool-marker design (or a missing membership check) would
+    have allowed. Callers who want the sub-task pattern explicit can
+    use :func:`spawn_isolated_db_write_task`, which is semantically
+    equivalent under this design but documents the intent.
+
+    The intended default pattern is sequential ``await``s or nested
+    ``run_under_db_write_lock`` calls; neither needs special handling.
     """
-    lease = _db_write_lock_lease.get()
-    if lease is not None and lease.active:
+    if _lease_admits_current():
         # Nested call. See the reentrance section of the docstring.
         # The outer call's pre/post-acquire stop-event checks already
         # ran; an in-flight outer means we are by definition past the
@@ -1361,18 +1451,22 @@ async def run_under_db_write_lock(
         # is mid-flight clearing the lifecycle bundle.
         if _db_writer_stop_event is None or _db_writer_stop_event.is_set():
             raise RuntimeError("DB writer is stopping")
-        # Install a fresh lease BEFORE entering the drive so the inner
-        # Task created inside :func:`_drive_inner_under_held_lock`
-        # inherits it (and so does every further Task it spawns by
-        # default). ``finally`` invalidates the lease so a sub-task that
-        # inherited it observes ``active == False`` after our release
-        # and acquires normally instead of writing lock-less.
+        # Install a fresh lease and admit the current Task to its
+        # drive-task set BEFORE the drive (the drive will admit its
+        # inner Task right after creating it). ``finally`` invalidates
+        # the lease (defence-in-depth — the membership check already
+        # excludes non-drive sub-tasks) so an inherited lease never
+        # short-circuits past our release.
         new_lease = _LockLease()
+        current = asyncio.current_task()
+        if current is not None:
+            new_lease.drive_tasks.add(current)
         token = _db_write_lock_lease.set(new_lease)
         try:
             return await _drive_inner_under_held_lock(coro_factory)
         finally:
             new_lease.active = False
+            new_lease.drive_tasks.clear()
             _db_write_lock_lease.reset(token)
 
 

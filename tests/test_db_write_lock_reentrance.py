@@ -298,31 +298,42 @@ def test_spawn_isolated_lets_subtask_acquire_independently():
     assert order == ["outer:enter", "outer:exit", "sub:acquired"]
 
 
-def test_default_context_subtask_inherits_and_coalesces_during_hold():
-    """A sub-task spawned WITHOUT isolation that starts running WHILE
-    the outer still holds the lock inherits the active lease and skips
-    the acquire — running IN PARALLEL with the outer factory. This is
-    the documented "parallel-during-hold" footgun and the reason
-    :func:`spawn_isolated_db_write_task` exists.
+def test_naive_subtask_queues_fifo_behind_outer():
+    """A sub-task spawned WITHOUT isolation inherits the lease but its
+    Task is NOT in ``lease.drive_tasks`` — its reentrance check fails
+    and it falls through to a real acquire. The acquire blocks until
+    the outer releases, so the sub runs AFTER the outer factory has
+    returned, FIFO behind us. This is the strict serialisation the
+    drive_tasks restriction gives us; the previous "parallel-during-
+    hold" footgun is now gone.
+
+    Concretely: the sub records ``sub:acquired`` AFTER the outer's
+    ``outer:exit``, demonstrating it did not run inside the outer's
+    hold despite inheriting the lease.
     """
 
     order: list[str] = []
 
     async def sub_writer():
-        # The lease is inherited — we observe an active lease even
-        # though we are a separate Task, because create_task copied
-        # the parent's contextvars.Context.
-        lease = _db_write_lock_lease.get()
-        assert lease is not None and lease.active is True
-        # Nested call reuses the held lock — runs immediately, in
-        # parallel with the outer.
-        await run_under_db_write_lock(lambda: _append_then("sub", order))
+        # The lease was inherited but our current_task() is not in
+        # lease.drive_tasks, so the reentrance check fails — we take
+        # the real acquire path.
+        await run_under_db_write_lock(lambda: _append_then("sub:acquired", order))
 
     async def outer_factory():
         order.append("outer:enter")
-        sub = asyncio.create_task(sub_writer())  # no context= -> inherits
-        # Yield so the sub can run interleaved with us.
+        # Spawn sub WITHOUT isolation. It inherits the lease, attempts
+        # acquire, blocks because we still hold the lock.
+        sub = asyncio.create_task(sub_writer())
+        # Yield so the sub gets a chance to attempt the acquire (and
+        # block).
         await asyncio.sleep(0.05)
+        # Sub must NOT have run its body — it is waiting for us to
+        # release. If reentrance leaked, "sub:acquired" would already
+        # be in order.
+        assert "sub:acquired" not in order, (
+            f"naive sub ran before outer released: {order}"
+        )
         order.append("outer:exit")
         return sub
 
@@ -331,10 +342,21 @@ def test_default_context_subtask_inherits_and_coalesces_during_hold():
         await asyncio.wait_for(sub, timeout=2.0)
 
     asyncio.run(scenario())
-    # "sub" appears BEFORE "outer:exit" because the sub ran in
-    # parallel with the outer factory — under one logical lock.
-    assert "sub" in order
-    assert order.index("sub") < order.index("outer:exit")
+    assert order == ["outer:enter", "outer:exit", "sub:acquired"]
+
+
+# NOTE: there is no test for the "factory awaits a naive sub-task
+# from inside a locked block" pattern. With the drive_tasks restriction
+# the sub blocks on its own acquire (we hold the lock), and the factory
+# blocks on awaiting the sub. The result is a TRUE deadlock that
+# ``asyncio.wait_for`` cannot break — the shield-loop inside
+# :func:`_drive_inner_under_held_lock` deliberately waits for the
+# inner Task to finish before yielding to a cancellation, so the
+# top-level cancel never reaches the sub. A test for that pattern
+# would hang the test suite indefinitely. The docstring on
+# :func:`run_under_db_write_lock` warns about this; the safer
+# alternative is to await the sub coroutine directly (without
+# ``create_task``), which becomes a transparent reentrant call.
 
 
 def test_stale_lease_after_release_acquires_normally():
