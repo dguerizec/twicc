@@ -1148,19 +1148,20 @@ async def _drive_inner_under_held_lock(
 
     # Wrap the factory so the inner Task admits itself to ``drive_tasks``
     # as its FIRST action, BEFORE any user code runs. Under the default
-    # task factory this is equivalent to admitting from the caller after
-    # ``create_task`` (the new Task does not start until the next
-    # scheduler tick). Under an **eager** task factory
-    # (``asyncio.eager_task_factory``, Python 3.12+), however,
-    # ``asyncio.create_task(coro)`` runs the coroutine eagerly until its
-    # first suspension point — which means a factory body that
-    # immediately calls ``run_under_db_write_lock`` would hit the
-    # membership check (current_task() = inner, not yet in drive_tasks)
-    # and fall through to a real acquire, then block on the lock the
-    # caller already holds, deadlocking the drive. The wrapper makes
-    # admission happen inside the inner Task's own frame, before any
-    # await, so eager-mode runs admit themselves synchronously and the
-    # nested call sees ``current_task() in drive_tasks == True``.
+    # task factory the wrapper body runs at the next scheduler tick,
+    # immediately before the user's coro_factory call — so the inner is
+    # admitted before any nested ``run_under_db_write_lock`` can fire.
+    # Under an **eager** task factory (``asyncio.eager_task_factory``,
+    # Python 3.12+), ``asyncio.create_task(coro)`` runs the coroutine
+    # eagerly until its first suspension point — without the wrapper,
+    # a factory body that immediately called
+    # ``run_under_db_write_lock`` would hit the membership check
+    # (current_task() = inner, not yet in drive_tasks), fall through
+    # to a real acquire, block on the lock the caller already holds,
+    # and deadlock the drive. The wrapper makes the admission happen
+    # inside the inner Task's own frame before any await, so eager-mode
+    # runs admit themselves synchronously and the nested call sees
+    # ``current_task() in drive_tasks == True``.
     async def admitted_factory() -> _T:
         if lease is not None:
             lease.drive_tasks.add(asyncio.current_task())
@@ -1174,11 +1175,12 @@ async def _drive_inner_under_held_lock(
     try:
         return await _drive_inner_loop(inner)
     finally:
-        # Discard inner from the drive-task set so the set never grows
-        # unboundedly across many calls under the same outer hold (a
-        # nested drive that completes mid-factory should release its
-        # admit immediately). The discard is no-op if the lease is None
-        # or already missing the entry.
+        # Balanced cleanup: remove the one inner Task we admitted at
+        # the top of this drive call. The runner's own ``finally``
+        # also does ``drive_tasks.clear()`` so the lease state is
+        # always reset on hold exit, but the per-drive discard keeps
+        # the set tidy and makes the bookkeeping explicit. No-op if
+        # the lease is None.
         if lease is not None:
             lease.drive_tasks.discard(inner)
 
@@ -1292,9 +1294,10 @@ async def _run_under_db_write_lock(
     the factory directly — ``asyncio.Lock`` is NOT reentrant and a
     second acquire by the same Task would self-deadlock. The admit
     set covers the Task that installed the lease and the drive's
-    inner Task(s); sub-tasks the factory spawns via
-    ``asyncio.create_task`` inherit the lease but are NOT admitted, so
-    they fall through to a real acquire (FIFO behind the outer).
+    inner Task; nested calls reuse that existing membership rather
+    than entering a fresh drive. Sub-tasks the factory spawns via
+    ``asyncio.create_task`` inherit the lease but are NOT admitted,
+    so they fall through to a real acquire (FIFO behind the outer).
 
     See :func:`run_under_db_write_lock` for the user-facing contract.
     """
