@@ -488,6 +488,7 @@ async def stop_db_writer() -> None:
     cancelled = False
     try:
         if _db_writer_task is not None:
+            writer_external_cancel_logged = False
             while not _db_writer_task.done():
                 try:
                     # Shielded so outer cancels never propagate into the
@@ -520,6 +521,7 @@ async def stop_db_writer() -> None:
                             "shutdown — final drain may be incomplete; some "
                             "queued messages may not have been applied"
                         )
+                        writer_external_cancel_logged = True
                 except Exception:
                     # The writer task itself raised. ``_db_writer_task.done()``
                     # is now True, so the loop will exit naturally on its
@@ -533,11 +535,22 @@ async def stop_db_writer() -> None:
             # everything internally, but the helper guard is cheap. We
             # narrow the suppression to (Exception, CancelledError) rather
             # than ``BaseException`` so KeyboardInterrupt / SystemExit
-            # still propagate.
+            # still propagate. The CancelledError branch also covers two
+            # gaps the in-loop discrimination misses: (a) writer task
+            # was already cancelled BEFORE we ran the loop (no iteration
+            # ever observed the cancel); (b) an outer cancel masked the
+            # writer's external cancel via the ``cancelling() > 0`` check.
+            # In both cases ``writer_external_cancel_logged`` is False
+            # and the post-loop log below fills the gap.
             try:
                 _db_writer_task.result()
             except asyncio.CancelledError:
-                pass
+                if not writer_external_cancel_logged:
+                    logger.error(
+                        "DB writer task was cancelled externally during "
+                        "shutdown — final drain may be incomplete; some "
+                        "queued messages may not have been applied"
+                    )
             except Exception as exc:
                 logger.error(
                     "DB writer task exited with an unexpected exception: %s",
@@ -562,6 +575,7 @@ async def stop_db_writer() -> None:
         # ``_acquire_then_release`` Tasks unobserved.
         if _db_write_lock is not None:
             drain_task = asyncio.create_task(_acquire_then_release(_db_write_lock))
+            drain_external_cancel_logged = False
             while not drain_task.done():
                 try:
                     await asyncio.shield(drain_task)
@@ -592,13 +606,24 @@ async def stop_db_writer() -> None:
                             "holders may not have fully released before the "
                             "lifecycle bundle is cleared"
                         )
+                        drain_external_cancel_logged = True
             # Drain the result so asyncio doesn't log "Task exception was
             # never retrieved". ``_acquire_then_release`` doesn't raise
-            # in normal operation; this is the defensive guard.
+            # in normal operation; this is the defensive guard. The
+            # CancelledError branch also covers the case where an outer
+            # cancel masked drain_task's external cancel via the
+            # ``cancelling() > 0`` discrimination — the in-loop warning
+            # was skipped and we log here instead.
             try:
                 drain_task.result()
             except asyncio.CancelledError:
-                pass
+                if not drain_external_cancel_logged:
+                    logger.warning(
+                        "Lock holder-drain task was cancelled externally "
+                        "during shutdown — in-flight external lock "
+                        "holders may not have fully released before the "
+                        "lifecycle bundle is cleared"
+                    )
             except Exception as exc:
                 logger.error(
                     "DB write-lock drain at shutdown raised: %s",
