@@ -219,6 +219,7 @@ def test_independent_tasks_serialise_fifo():
     async def scenario():
         started_a = asyncio.Event()
         released_a = asyncio.Event()
+        b_reached_acquire = asyncio.Event()
 
         async def slow_a():
             order.append("a:enter")
@@ -230,16 +231,25 @@ def test_independent_tasks_serialise_fifo():
             order.append("b:enter")
             order.append("b:exit")
 
+        async def call_b():
+            # Signal that we are about to enter the runner; set does
+            # not yield, so B continues synchronously into
+            # ``run_under_db_write_lock`` and parks on its
+            # ``async with lock:`` ``await``.
+            b_reached_acquire.set()
+            await run_under_db_write_lock(lambda: fast_b())
+
         # Spawn A as a top-level task — it does NOT inherit any lease
         # (none is installed), so it acquires the lock.
         ta = asyncio.create_task(run_under_db_write_lock(lambda: slow_a()))
         await started_a.wait()  # A holds the lock now.
 
         # Spawn B; it will queue FIFO behind A.
-        tb = asyncio.create_task(run_under_db_write_lock(lambda: fast_b()))
+        tb = asyncio.create_task(call_b())
 
-        # Give B a chance to attempt acquire (it must block on A).
-        await asyncio.sleep(0.05)
+        # Deterministic handshake: by the time we wake, B has set the
+        # Event AND yielded on the acquire (blocking on A).
+        await b_reached_acquire.wait()
         assert order == ["a:enter"], f"B started before A released: {order}"
 
         # Release A; B should then run.
@@ -258,39 +268,44 @@ def test_independent_tasks_serialise_fifo():
 def test_spawn_isolated_lets_subtask_acquire_independently():
     """A sub-task spawned with ``spawn_isolated_db_write_task()`` does
     NOT inherit the outer's lease, so it queues independently in the
-    lock's FIFO behind the outer call.
+    lock's FIFO behind the outer call. Synchronised via the same
+    Event-handshake trick as ``test_naive_subtask_queues_fifo_behind_outer``
+    to make the "did not run yet" check deterministic.
     """
 
     order: list[str] = []
 
-    async def sub_writer():
-        # When this Task runs, the isolated context means we see no lease.
-        # Without the isolation, we'd see the outer's lease and skip.
-        assert _db_write_lock_lease.get() is None, "sub inherited lease"
-        # The body that records progress runs INSIDE the lock so the
-        # ordering assertions below witness real serialisation.
-        await run_under_db_write_lock(lambda: _append_then("sub:acquired", order))
-
-    async def outer_factory():
-        order.append("outer:enter")
-        lease = _db_write_lock_lease.get()
-        assert lease is not None and lease.active is True
-        sub = spawn_isolated_db_write_task(sub_writer())
-        # Yield so the sub task reaches its run_under_db_write_lock call
-        # and blocks on the acquire (we still hold the lock).
-        await asyncio.sleep(0.05)
-        # Crucial check: the sub's body has NOT executed yet — it is
-        # waiting for us to release. If isolation were broken, the sub
-        # would have skipped the acquire and run in parallel, putting
-        # "sub:acquired" in order already.
-        assert "sub:acquired" not in order, (
-            f"sub ran before outer released: {order}"
-        )
-        order.append("outer:exit")
-        # Returning the sub handle so the scenario can await it.
-        return sub
-
     async def scenario():
+        reached_acquire = asyncio.Event()
+
+        async def sub_writer():
+            # When this Task runs, the isolated context means we see no lease.
+            # Without the isolation, we'd see the outer's lease and skip.
+            assert _db_write_lock_lease.get() is None, "sub inherited lease"
+            # Signal that we are about to enter the runner. Set does
+            # not yield; we continue synchronously into
+            # ``run_under_db_write_lock`` and park on its
+            # ``async with lock:`` ``await``.
+            reached_acquire.set()
+            await run_under_db_write_lock(lambda: _append_then("sub:acquired", order))
+
+        async def outer_factory():
+            order.append("outer:enter")
+            lease = _db_write_lock_lease.get()
+            assert lease is not None and lease.active is True
+            sub = spawn_isolated_db_write_task(sub_writer())
+            await reached_acquire.wait()
+            # Crucial check: the sub's body has NOT executed yet — it
+            # is blocked on the acquire. If isolation were broken, the
+            # sub would have skipped the acquire and run in parallel,
+            # putting "sub:acquired" in order already.
+            assert "sub:acquired" not in order, (
+                f"sub ran before outer released: {order}"
+            )
+            order.append("outer:exit")
+            # Returning the sub handle so the scenario can await it.
+            return sub
+
         sub = await run_under_db_write_lock(lambda: outer_factory())
         await asyncio.wait_for(sub, timeout=2.0)
 
@@ -310,34 +325,52 @@ def test_naive_subtask_queues_fifo_behind_outer():
     Concretely: the sub records ``sub:acquired`` AFTER the outer's
     ``outer:exit``, demonstrating it did not run inside the outer's
     hold despite inheriting the lease.
+
+    Synchronisation: the sub signals an Event right before entering
+    :func:`run_under_db_write_lock`, and the outer waits on it before
+    asserting. Setting the Event does not yield — sub continues
+    synchronously into the runner, through the membership-test
+    short-circuit (False), into ``async with lock:`` which is sub's
+    first ``await``. That ``await`` is where sub blocks (outer holds).
+    Asyncio then resumes the outer (already scheduled by the Event
+    set). When the outer's check runs, sub is provably blocked on
+    the acquire, so the "did not run" assertion is deterministic
+    rather than dependent on a sleep timeout.
     """
 
     order: list[str] = []
 
-    async def sub_writer():
-        # The lease was inherited but our current_task() is not in
-        # lease.drive_tasks, so the reentrance check fails — we take
-        # the real acquire path.
-        await run_under_db_write_lock(lambda: _append_then("sub:acquired", order))
-
-    async def outer_factory():
-        order.append("outer:enter")
-        # Spawn sub WITHOUT isolation. It inherits the lease, attempts
-        # acquire, blocks because we still hold the lock.
-        sub = asyncio.create_task(sub_writer())
-        # Yield so the sub gets a chance to attempt the acquire (and
-        # block).
-        await asyncio.sleep(0.05)
-        # Sub must NOT have run its body — it is waiting for us to
-        # release. If reentrance leaked, "sub:acquired" would already
-        # be in order.
-        assert "sub:acquired" not in order, (
-            f"naive sub ran before outer released: {order}"
-        )
-        order.append("outer:exit")
-        return sub
-
     async def scenario():
+        reached_acquire = asyncio.Event()
+
+        async def sub_writer():
+            # Signal that we are about to enter the runner. Set does
+            # not yield; we continue synchronously into
+            # ``run_under_db_write_lock`` and hit ``async with lock:``
+            # there, which is our first real ``await``. So by the time
+            # outer wakes up from ``await reached_acquire.wait()``
+            # below, sub is guaranteed to be blocked on the acquire.
+            reached_acquire.set()
+            await run_under_db_write_lock(lambda: _append_then("sub:acquired", order))
+
+        async def outer_factory():
+            order.append("outer:enter")
+            # Spawn sub WITHOUT isolation. It inherits the lease,
+            # attempts acquire, blocks because we still hold the lock.
+            sub = asyncio.create_task(sub_writer())
+            # Deterministic handshake: when reached_acquire fires, sub
+            # is past its ``set()`` call and parked on the acquire's
+            # ``await``.
+            await reached_acquire.wait()
+            # Sub must NOT have run its body — it is blocked on the
+            # acquire. If reentrance leaked, "sub:acquired" would
+            # already be in order.
+            assert "sub:acquired" not in order, (
+                f"naive sub ran before outer released: {order}"
+            )
+            order.append("outer:exit")
+            return sub
+
         sub = await run_under_db_write_lock(lambda: outer_factory())
         await asyncio.wait_for(sub, timeout=2.0)
 
@@ -359,68 +392,65 @@ def test_naive_subtask_queues_fifo_behind_outer():
 # ``create_task``), which becomes a transparent reentrant call.
 
 
-def test_stale_lease_after_release_acquires_normally():
-    """A sub-task spawned WITHOUT isolation whose body only resumes
-    after the outer released the lock inherits the lease — but the
-    runner flipped ``active = False`` in its ``finally``, so when the
-    sub resumes it observes the invalidated lease and falls through to
-    a normal acquire instead of writing lock-less. This is the fix for
-    the v2 Codex finding #2.
+def test_lease_invalidation_is_defense_in_depth():
+    """Under the v4 membership design, an inherited sub-task never
+    short-circuits the acquire even if the outer's lease still read
+    ``active = True`` — its ``current_task()`` is not in
+    ``drive_tasks``, and that membership test is what actually gates
+    the short-circuit. The ``active = False`` flip and the
+    ``drive_tasks.clear()`` the runner performs in ``finally`` are
+    therefore **defence-in-depth**: a future code path that ever
+    inspected the lease without going through the membership test
+    would still see it invalidated after release.
 
-    The scenario forces "resume after release" by gating the sub on an
-    Event the scenario sets only **after** ``run_under_db_write_lock``
-    has returned. This guarantees the runner's ``finally`` has run
-    (invalidating the lease and releasing the lock) before the sub
-    inspects the lease.
-
-    Without this gating, asyncio's ready-queue ordering would let the
-    sub run before the runner's drive_continuation — the sub was
-    scheduled (via ``create_task``) earlier than the drive_continuation
-    (which was only scheduled by the inner Task's completion callback).
-    That earlier ordering is the documented parallel-during-hold case
-    and is tested separately.
+    This test pins both defence-in-depth invariants. A sub-task that
+    inherits the lease and is gated to resume only AFTER the outer
+    released observes ``active is False`` AND empty ``drive_tasks``.
+    If either invariant regressed, this test would surface the change.
     """
 
     order: list[str] = []
+    snapshots: list[tuple[bool, int]] = []
 
     async def scenario():
         release_event = asyncio.Event()
 
         async def sub_writer():
-            # Wait until the scenario tells us the outer has released
-            # (i.e. the runner's ``finally`` has run, lock is released,
-            # lease invalidated). Without this gate, we might run before
-            # the drive_continuation and observe lease.active=True
-            # (parallel-during-hold case).
+            # Gate on the scenario: it sets the event only after
+            # ``run_under_db_write_lock`` has returned, which means
+            # the runner's ``finally`` has run (lease invalidated,
+            # drive_tasks cleared, lock released).
             await release_event.wait()
             lease = _db_write_lock_lease.get()
             assert lease is not None, "lease somehow not inherited"
-            assert lease.active is False, (
-                "stale-inherited lease should have been invalidated by "
-                "the outer's release — got active=True, which would mean "
-                "the sub-task writes without holding the lock"
-            )
+            snapshots.append((lease.active, len(lease.drive_tasks)))
             order.append("sub:before-acquire")
-            # Without invalidation, this nested call would skip the
-            # acquire and write lock-less. With invalidation, it
-            # acquires normally.
+            # Under v4 the membership check would already make this
+            # acquire normally (current_task() not in drive_tasks).
+            # The defence-in-depth invariants captured in
+            # ``snapshots`` are what this test asserts beyond the
+            # membership behaviour itself.
             await run_under_db_write_lock(lambda: _append_then("sub:acquired", order))
             order.append("sub:after-release")
 
         async def outer_factory():
             order.append("outer:enter")
-            # Spawn the sub WITHOUT isolation — it inherits the active lease.
             sub = asyncio.create_task(sub_writer())
             order.append("outer:exit")
             return sub
 
         sub = await run_under_db_write_lock(lambda: outer_factory())
         # The outer has returned: ``finally`` ran (lease invalidated,
-        # lock released). Now let the sub proceed.
+        # drive_tasks cleared, lock released). Let the sub proceed.
         release_event.set()
         await asyncio.wait_for(sub, timeout=2.0)
 
     asyncio.run(scenario())
+    # Defence-in-depth invariants pinned by this test:
+    assert snapshots == [(False, 0)], (
+        f"after outer release, inherited lease should be active=False "
+        f"with empty drive_tasks; got {snapshots}"
+    )
     assert order == [
         "outer:enter",
         "outer:exit",

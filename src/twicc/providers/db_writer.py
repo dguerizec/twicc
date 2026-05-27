@@ -278,14 +278,21 @@ _db_write_lock: asyncio.Lock | None = None
 # attempt because the outer still holds the lock. If the factory does
 # not ``await`` it, the sub will queue FIFO, acquire normally once the
 # outer releases, and write under its own slot. If the factory ``await``s
-# it from within the locked block, the result is a deadlock (sub waits
-# for the lock; the lock-holder waits for sub). The deadlock is
-# observable immediately, which is strictly safer than the v3 design's
-# silent lockless write. Callers who really want a sub-task that takes
-# its own slot in the FIFO without the deadlock risk should use
-# :func:`spawn_isolated_db_write_task`, which is semantically equivalent
-# to a naive ``create_task`` under this design but documents the intent
-# explicitly and resets the inherited lease for cleanliness.
+# the returned Task handle from within the locked block, the result is
+# a deadlock (sub waits for the lock; the lock-holder waits for sub).
+# The deadlock cannot be broken by an outer ``asyncio.wait_for`` or a
+# task cancel: :func:`_drive_inner_under_held_lock`'s shield-loop
+# deliberately waits for the inner Task to finish before yielding to
+# a cancellation, so once the deadlock takes hold no top-level
+# timeout can release the lock. This is strictly safer than the v3
+# design's silent lockless write (the misuse is loud, not invisible),
+# but the caller must avoid it by construction. The safer pattern for
+# a "nested step" is to ``await`` the coroutine directly (no
+# ``create_task``) — it becomes a transparent reentrant call. The
+# helper :func:`spawn_isolated_db_write_task` exists only to document
+# "this sub-task takes its own slot in the FIFO"; its returned Task
+# handle has the SAME constraint (await it only AFTER the locked
+# factory returns).
 
 
 class _LockLease:
@@ -1038,36 +1045,26 @@ _T = TypeVar("_T")
 
 
 def spawn_isolated_db_write_task(coro: Coroutine[Any, Any, _T]) -> asyncio.Task[_T]:
-    """Create an :class:`asyncio.Task` that escapes db-write-lock reentrance inheritance.
+    """Create an :class:`asyncio.Task` that documents "take a separate
+    FIFO slot in the DB write lock".
 
-    Use this when spawning a sub-task from **inside** a
-    :func:`run_under_db_write_lock` (or :func:`_run_under_db_write_lock`)
-    factory whose body is a logically separate write that must take its
-    **own** slot in the FIFO — i.e. it must serialise behind every other
-    DB writer, not coalesce under the outer call.
+    **Under the current membership-based reentrance design this helper
+    is semantically equivalent to a naive
+    ``asyncio.create_task(coro)``**: both produce a sub-task whose
+    ``current_task()`` is NOT in the outer lease's ``drive_tasks`` set,
+    so the sub-task's first :func:`run_under_db_write_lock` call falls
+    through to a real acquire (blocks until the outer releases, then
+    runs FIFO behind every other waiter). The helper exists for
+    documentation-of-intent and as a defence-in-depth: it forces the
+    inherited lease binding back to ``None`` in the sub-task's
+    context, so even if a future maintainer ever removed the
+    membership check the sub-task would still acquire normally.
 
-    Without this isolation, ``asyncio.create_task`` propagates the
-    parent's :class:`contextvars.Context` to the new Task: the sub-task
-    inherits the active lease from :data:`_db_write_lock_lease` and its
-    first ``run_under_db_write_lock`` call would skip the acquire. Two
-    distinct hazards follow:
-
-    1. If the sub-task starts running WHILE the outer still holds the
-       lock, it writes **in parallel** with the outer factory — two
-       concurrent writers under one logical lock.
-    2. If the sub-task starts running AFTER the outer released the lock,
-       it sees the now-invalid lease and falls through to a normal
-       acquire (so this case is safe under the current lease design),
-       but only because the runners flip ``lease.active = False`` in
-       their ``finally`` — a future maintainer who reverts that
-       invalidation would silently break case 2.
-
-    Each call to this helper creates a **fresh** isolated
-    :class:`contextvars.Context` and immediately uses it to spawn the
-    Task. The Context is never returned to the caller, so it cannot be
-    accidentally reused across multiple ``create_task`` calls (which
-    would let sibling tasks observe each other's lease through the
-    shared Context, defeating the isolation).
+    Each call creates a **fresh** :class:`contextvars.Context`; the
+    Context is never returned, so it cannot be accidentally reused
+    across multiple ``create_task`` calls (a sibling-leak hazard the
+    earlier ``make_db_write_isolated_context()`` helper had and the
+    reason this helper replaced it).
 
     Usage:
 
@@ -1075,15 +1072,18 @@ def spawn_isolated_db_write_task(coro: Coroutine[Any, Any, _T]) -> asyncio.Task[
 
         async def outer_writer():
             async def with_subtask():
-                # ``sub_writer_coro`` MUST acquire its own slot in the
-                # lock's FIFO queue rather than reuse the outer's hold.
+                # Make it explicit that ``sub_writer_coro`` takes its
+                # own slot in the lock's FIFO.
                 sub = spawn_isolated_db_write_task(sub_writer_coro())
                 # … do the outer write’s remaining steps here …
                 # DO NOT ``await sub`` here — the sub is queued behind
                 # us in the lock's FIFO and cannot run until we release
-                # by returning from this factory. Awaiting it inside the
-                # locked factory would self-deadlock. Hand the handle
-                # back to the caller and let them await it.
+                # by returning from this factory. Awaiting the returned
+                # Task inside the locked factory deadlocks (sub blocks
+                # on acquire; we block on sub; the shield-loop in the
+                # drive prevents an outer ``asyncio.wait_for`` from
+                # breaking it). Hand the handle back to the caller and
+                # let them await it.
                 return sub
 
             sub = await run_under_db_write_lock(lambda: with_subtask())
@@ -1418,12 +1418,24 @@ async def run_under_db_write_lock(
     no parallel write under one lock, no lock-less write past the
     outer's release). The trade-off: if the factory itself ``await``s
     the sub-task inside the locked block, the result is a deadlock —
-    sub waits for the lock, factory waits for sub. The deadlock is
-    observable immediately, strictly safer than the silent lock-less
-    write a bool-marker design (or a missing membership check) would
-    have allowed. Callers who want the sub-task pattern explicit can
-    use :func:`spawn_isolated_db_write_task`, which is semantically
-    equivalent under this design but documents the intent.
+    sub waits for the lock, factory waits for sub.
+
+    **The deadlock is fatal.** ``asyncio.wait_for`` / outer task
+    cancellation cannot break it: the shield-loop inside
+    :func:`_drive_inner_under_held_lock` deliberately waits for the
+    inner Task to finish before yielding to a cancellation, so the
+    cancel never reaches the blocked sub-task and the lock is never
+    released. The misuse is loud (the process hangs forever instead
+    of writing silently lock-less past release like the v3 design
+    would have allowed), but the only recovery is a process kill.
+    Callers MUST avoid the pattern by construction: the safer
+    alternative for a "nested step" is to ``await`` the coroutine
+    directly (no ``create_task``) — it becomes a transparent
+    reentrant call. Callers who want the sub-task pattern explicit
+    can use :func:`spawn_isolated_db_write_task`, which is
+    semantically equivalent under this design but documents the
+    intent; the same deadlock applies if the returned Task is
+    ``await``ed from within the locked factory.
 
     The intended default pattern is sequential ``await``s or nested
     ``run_under_db_write_lock`` calls; neither needs special handling.
