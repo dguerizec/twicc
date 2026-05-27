@@ -32,7 +32,7 @@ from twicc.providers.compute_base import (
     parse_timestamp_to_datetime,
     strip_markdown,
 )
-from .agent.original_file_cache import pop_original_file as _pop_cached_original_file
+from .agent.original_file_cache import pop_original_file
 from .pricing import extract_model_info, to_token_usage
 
 
@@ -1428,7 +1428,7 @@ class ClaudeCodeSessionCompute(BaseSessionCompute):
             return None
 
         # Always pop from the cache (consume the entry whether we use it or not).
-        cached = _pop_cached_original_file(session_id, tool_use_id)
+        cached = pop_original_file(session_id, tool_use_id)
         if cached is None:
             return None
 

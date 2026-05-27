@@ -137,10 +137,10 @@ def get_tips_assets_dir() -> Path:
     ``FRONTEND_DIST_DIR / "tips"`` by ``hatch_build.py`` (which copies the
     whole ``frontend/public/`` tree).
     """
-    from django.conf import settings as django_settings
-    if django_settings.DEV_MODE:
-        return django_settings.PACKAGE_DIR.parent.parent / "frontend" / "public" / "tips"
-    return django_settings.FRONTEND_DIST_DIR / "tips"
+    from django.conf import settings
+    if settings.DEV_MODE:
+        return settings.PACKAGE_DIR.parent.parent / "frontend" / "public" / "tips"
+    return settings.FRONTEND_DIST_DIR / "tips"
 
 
 def path_to_project_id(path: str) -> str:

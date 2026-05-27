@@ -11,7 +11,7 @@ When a retirement is detected:
 
 import asyncio
 import logging
-from datetime import date as date_type
+from datetime import date
 
 logger = logging.getLogger(__name__)
 
@@ -214,7 +214,7 @@ def _log_upcoming_retirements() -> None:
     from twicc.core.enums import Provider
     from twicc.providers.helpers import get_provider_helpers
 
-    today = date_type.today()
+    today = date.today()
     for mv in get_provider_helpers(Provider.CLAUDE_CODE).MODEL_VERSIONS:
         if mv.retirement_date is None:
             continue

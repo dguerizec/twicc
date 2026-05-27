@@ -84,6 +84,7 @@ If the user explicitly asks for any of these operations, perform them without as
 
 - Use `orjson` for backend JSON work instead of the standard `json` module.
 - Use `NamedTuple` for simple immutable data containers instead of dataclasses when mutability is not needed.
+- Use aliased imports (`from X import Y as Z`) sparingly, only when strictly necessary: either to avoid a name collision in scope, or to disambiguate intent at the call site for a noticeably less generic verb (e.g. `patch_client as patch_client_for_logging`). Avoid the cosmetic prefix/suffix style (`as _foo`, `as django_settings`, `as ProcessRunModel`) when the bare name doesn't actually conflict — it adds noise and makes it harder to grep for the canonical symbol.
 - Key models live in `src/twicc/core/models.py`: `Project`, `Session`, `SessionItem`, `ToolResultLink`, `AgentLink`, `ModelPrice`, `UsageSnapshot`, `WeeklyActivity`, and `DailyActivity`.
 - JSONL files are append-only. Sync logic uses offsets and line numbers to incrementally ingest new lines.
 

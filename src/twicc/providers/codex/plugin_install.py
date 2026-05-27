@@ -44,9 +44,9 @@ async def ensure_twicc_plugin_installed() -> None:
     Spawns a short-lived ``codex app-server`` client to drive the
     ``marketplace/add`` + ``plugin/install`` JSON-RPC dance, then closes.
     """
-    from django.conf import settings as django_settings
+    from django.conf import settings
 
-    if not django_settings.CODEX_PLUGIN_INSTALL_ENABLED:
+    if not settings.CODEX_PLUGIN_INSTALL_ENABLED:
         logger.info(
             "Codex plugin install skipped (TWICC_NO_CODEX_PLUGIN is set)"
         )

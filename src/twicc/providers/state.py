@@ -134,9 +134,9 @@ def apply_auto_enable_providers_bootstrap() -> None:
     Idempotent: a no-op once the key is present (any prior user choice wins),
     or when the flag is unset.
     """
-    from django.conf import settings as django_settings
+    from django.conf import settings
 
-    if not django_settings.AUTO_ENABLE_PROVIDERS:
+    if not settings.AUTO_ENABLE_PROVIDERS:
         return
 
     from twicc.synced_settings import _settings_lock, write_synced_settings

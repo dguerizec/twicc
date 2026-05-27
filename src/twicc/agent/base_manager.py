@@ -311,20 +311,20 @@ class BaseAgentManager:
         provider-side id (the draft → canonical resolution, if any, happens
         earlier in ``_start_agent``). Everything below operates on that id.
         """
-        from django.utils import timezone as dj_timezone
+        from django.utils import timezone
 
-        from twicc.core.models import ProcessRun as ProcessRunModel, Session
+        from twicc.core.models import ProcessRun, Session
 
         session_id = agent.session_id
         self._agents[session_id] = agent
 
-        now = dj_timezone.now()
+        now = timezone.now()
 
         # session_id is a plain CharField on ProcessRun, so this works even
         # when no Session row exists yet (the watcher creates the Session
         # when the JSONL file appears).
         process_run = await asyncio.to_thread(
-            lambda: ProcessRunModel.objects.create(
+            lambda: ProcessRun.objects.create(
                 provider=agent.provider.value,
                 session_id=session_id,
                 started_at=now,
@@ -374,12 +374,12 @@ class BaseAgentManager:
 
     async def _update_session_stopped_at(self, agent: BaseAgent) -> None:
         """Update ``Session.last_stopped_at`` and broadcast ``session_updated``."""
-        from django.utils import timezone as dj_timezone
+        from django.utils import timezone
 
         from twicc.core.models import Session
 
         try:
-            now = dj_timezone.now()
+            now = timezone.now()
             await asyncio.to_thread(
                 lambda: Session.objects.filter(id=agent.session_id).update(
                     last_stopped_at=now, last_updated_at=now,

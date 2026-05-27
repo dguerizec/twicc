@@ -455,9 +455,9 @@ class ClaudeCodeAgentManager(BaseAgentManager):
             agent._old_runs_purged = True
             current_run_id = agent.process_run.pk
             try:
-                from twicc.core.models import ProcessRun as ProcessRunModel
+                from twicc.core.models import ProcessRun
                 deleted_count, _ = await asyncio.to_thread(
-                    lambda: ProcessRunModel.objects.filter(
+                    lambda: ProcessRun.objects.filter(
                         session_id=agent.session_id
                     ).exclude(pk=current_run_id).delete()
                 )
@@ -514,9 +514,9 @@ class ClaudeCodeAgentManager(BaseAgentManager):
             clear_protected_title(agent.session_id)
 
             try:
-                from django.utils import timezone as dj_timezone
+                from django.utils import timezone
                 from twicc.core.models import Session
-                now = dj_timezone.now()
+                now = timezone.now()
 
                 # Get the previous cutoff BEFORE updating, to find subagents started in this run
                 session = await asyncio.to_thread(Session.objects.filter(id=agent.session_id).first)

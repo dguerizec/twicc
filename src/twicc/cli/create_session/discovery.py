@@ -20,8 +20,8 @@ def get_data_dir() -> Path:
     package doesn't reach into the wider twicc code apart from the
     well-defined helpers.
     """
-    from twicc.paths import get_data_dir as _get
-    return _get()
+    from twicc.paths import get_data_dir as _get_data_dir
+    return _get_data_dir()
 
 
 def check_heartbeat(data_dir: Path | None = None) -> float:

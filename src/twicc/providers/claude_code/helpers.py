@@ -448,8 +448,7 @@ class ClaudeCodeHelpers(BaseProviderHelpers):
         """
         if not model:
             return None
-        from datetime import date as _date
-        today = _date.today()
+        today = date.today()
         entry = next(
             (mv for mv in self.MODEL_VERSIONS
              if self.selected_model_value(mv) == model),
@@ -582,9 +581,9 @@ class ClaudeCodeHelpers(BaseProviderHelpers):
 
     async def generate_title(self, prompt: str, system_prompt: str) -> str | None:
         """Run a short Haiku SDK query to suggest a title for ``prompt``."""
-        from .title_suggest import generate_title as _generate
+        from .title_suggest import generate_title as _generate_title
 
-        return await _generate(prompt, system_prompt)
+        return await _generate_title(prompt, system_prompt)
 
     def rename_session(self, session_id: str, title: str) -> None:
         """Append the title to the JSONL and mark it protected against CLI stale re-appends.

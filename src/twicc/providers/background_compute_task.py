@@ -204,8 +204,8 @@ def _set_pdeathsig_linux() -> None:
         import ctypes
         PR_SET_PDEATHSIG = 1
         libc = ctypes.CDLL("libc.so.6", use_errno=True)
-        import signal as _signal
-        if libc.prctl(PR_SET_PDEATHSIG, _signal.SIGTERM, 0, 0, 0) != 0:
+        import signal
+        if libc.prctl(PR_SET_PDEATHSIG, signal.SIGTERM, 0, 0, 0) != 0:
             logger.debug(
                 "prctl(PR_SET_PDEATHSIG) failed: errno=%d",
                 ctypes.get_errno(),

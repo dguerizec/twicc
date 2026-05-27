@@ -293,9 +293,9 @@ class CodexHelpers(BaseProviderHelpers):
 
     async def generate_title(self, prompt: str, system_prompt: str) -> str | None:
         """Run a short gpt-5.4-mini SDK query to suggest a title for ``prompt``."""
-        from .title_suggest import generate_title as _generate
+        from .title_suggest import generate_title as _generate_title
 
-        return await _generate(prompt, system_prompt)
+        return await _generate_title(prompt, system_prompt)
 
     def rename_session(self, session_id: str, title: str) -> None:
         """Persist the new title in Codex's state DB via ``thread/name/set``.

@@ -221,10 +221,9 @@ class ClaudeCodeAgent(BaseAgent):
             recurring = tool_response.get("recurring", True)
             prompt = tool_input.get("prompt", "")
 
-            from datetime import datetime as dt, timezone as tz
             from twicc.core.models import cron_occurrences
 
-            created_at = dt.now(tz=tz.utc)
+            created_at = datetime.now(tz=timezone.utc)
 
             # Compute next fire time from the cron expression (always required)
             try:
