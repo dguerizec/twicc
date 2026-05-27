@@ -188,31 +188,48 @@ class BaseAgent:
             # the task already done. Signal ``wait_for_dead()`` only after
             # the inner is genuinely terminal.
             self._dead_callback_done_event.set()
-        # Drain any inner exception that the shield-loop could not surface.
-        # Two edge cases need this:
-        #   * Eager task factory: the loop body may never run, so a coro
-        #     that synchronously raised would leave its exception on the
-        #     task unread (and trigger an "unretrieved task exception"
-        #     warning at GC time).
+        # Drain ``notify_task``'s outcome. The shield-loop above exits as
+        # soon as ``notify_task.done()`` is True, but two edge cases let
+        # it exit without anyone reading the inner outcome:
+        #   * Eager task factory (Python 3.12+): the coro may run to
+        #     completion synchronously at ``create_task``, so the very
+        #     first ``done()`` check passes and the loop body never
+        #     awaits. Without this drain, both a synchronous exception
+        #     AND a synchronous ``CancelledError`` from the inner would
+        #     be silently swallowed.
         #   * Same-tick race: an outer cancel arriving on the same tick
         #     as inner completion exits the loop via ``done()`` without
         #     re-awaiting, missing the inner exception.
-        # ``_notify_state_change`` swallows callback ``Exception``s
-        # internally, so in practice the inner only surfaces BaseException
-        # subclasses (cancellation, SystemExit, ...). When an outer cancel
-        # was captured, it takes precedence — the inner is logged then
-        # suppressed.
-        if not notify_task.cancelled():
-            inner_exc = notify_task.exception()
-            if inner_exc is not None:
-                if captured_cancel is not None:
-                    logger.error(
-                        "DEAD callback for session %s raised while the "
-                        "transition was being cancelled; suppressing inner: %s",
-                        self.session_id, inner_exc, exc_info=inner_exc,
-                    )
-                else:
-                    raise inner_exc
+        # ``task.result()`` raises whatever the inner produced
+        # (CancelledError for a cancelled task, the actual exception for
+        # a failed one) and returns the value otherwise; that's the
+        # cleanest way to consume both kinds of outcome.
+        # Precedence rule:
+        #   * Outer cancellation always wins (the caller's tear-down
+        #     contract is "this is being torn down"). Inner exceptions
+        #     are logged for observability; an inner cancellation is
+        #     suppressed silently (no signal in a redundant cancel).
+        #   * Without an outer cancel, the inner result is propagated
+        #     verbatim — including a synchronous ``CancelledError`` from
+        #     the eager-task-factory path, which would otherwise be lost.
+        try:
+            notify_task.result()
+        except asyncio.CancelledError:
+            if captured_cancel is None:
+                # Inner cancelled with no outer cancel — propagate the
+                # inner cancellation, preserving its message/cause via a
+                # bare ``raise``.
+                raise
+            # Outer cancel takes precedence; inner cancel is redundant.
+        except Exception as inner_exc:
+            if captured_cancel is not None:
+                logger.error(
+                    "DEAD callback for session %s raised while the "
+                    "transition was being cancelled; suppressing inner: %s",
+                    self.session_id, inner_exc, exc_info=inner_exc,
+                )
+            else:
+                raise
         if captured_cancel is not None:
             raise captured_cancel
 
