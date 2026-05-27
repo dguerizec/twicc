@@ -36,6 +36,7 @@ convention of ``background_compute_task.py``.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import itertools
 import logging
 import multiprocessing
@@ -232,6 +233,40 @@ _async_queue: "asyncio.Queue | None" = None
 # DB writer lifetime so a stray ``get_db_write_lock`` call surfaces a clear
 # RuntimeError instead of silently handing out a stale Lock.
 _db_write_lock: asyncio.Lock | None = None
+
+# Reentrance flag for the lock runners. ``asyncio.Lock`` is NOT reentrant:
+# a second ``acquire()`` from the same Task self-deadlocks. The runners
+# (:func:`run_under_db_write_lock` / :func:`_run_under_db_write_lock`) set
+# this flag to ``True`` inside their ``async with`` block, then call the
+# user's coroutine factory through :func:`_drive_inner_under_held_lock`.
+# A nested ``run_under_db_write_lock`` call (typical when an outer caller
+# wraps a function that itself wraps another function under the lock)
+# detects ``True`` here and skips the acquire entirely — running the
+# nested factory directly, reusing the lock the outer call already holds.
+#
+# ``ContextVar`` was chosen over a global "owner Task" pointer because
+# :func:`_drive_inner_under_held_lock` runs the factory inside an inner
+# Task it creates with ``asyncio.create_task``: the inner Task therefore
+# is NOT the Task that holds the lock, but it MUST see the flag for
+# reentrance to work. ``asyncio.create_task`` copies the parent's
+# :class:`contextvars.Context` by default, so a flag set BEFORE the drive
+# is inherited by the inner Task — and by every further Task it spawns by
+# default.
+#
+# **Sub-task footgun and how to opt out.** Because ``create_task``
+# propagates the context, an ``asyncio.create_task`` spawned from inside
+# a factory inherits ``True`` and will skip the acquire too — running in
+# **parallel** with the outer call, defeating the lock. If a sub-task
+# really needs its own independent slot in the FIFO (e.g. a logically
+# separate write that must serialise on its own), spawn it with a
+# context returned by :func:`make_db_write_isolated_context`. Most
+# callers should NOT need this: ``await``ing other coroutines (sequential)
+# or calling ``run_under_db_write_lock`` again (reentrant) work
+# transparently and are the intended pattern.
+_db_write_lock_held: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "twicc.providers.db_writer._db_write_lock_held",
+    default=False,
+)
 
 # Compute completion is keyed by a per-run id, not by provider: a cancelled
 # run's worker can still have stale messages in the shared queue when a
@@ -930,6 +965,54 @@ async def submit_async_job(job) -> object:
 _T = TypeVar("_T")
 
 
+def make_db_write_isolated_context() -> contextvars.Context:
+    """Return a :class:`contextvars.Context` with the db-write reentrance flag reset.
+
+    Use this when spawning an :class:`asyncio.Task` from **inside** a
+    :func:`run_under_db_write_lock` (or :func:`_run_under_db_write_lock`)
+    factory whose body needs its **own** independent acquire of the
+    DB write lock — i.e. a sub-task that is a logically separate write,
+    must serialise on its own (FIFO behind the outer call), and must
+    NOT coalesce under the outer call.
+
+    Without this isolation, ``asyncio.create_task`` propagates the
+    parent's :class:`contextvars.Context` to the new Task: the sub-task
+    inherits ``_db_write_lock_held=True`` and its first
+    ``run_under_db_write_lock`` call would skip the acquire, running in
+    parallel with the outer call — two concurrent writers under one
+    logical lock, exactly what the lock exists to prevent.
+
+    Usage:
+
+    .. code-block:: python
+
+        async def outer_writer():
+            async def with_subtask():
+                # ``sub_writer_coro`` MUST acquire its own slot in the
+                # lock's FIFO queue rather than reuse the outer's hold.
+                sub_ctx = make_db_write_isolated_context()
+                sub = asyncio.create_task(
+                    sub_writer_coro(), context=sub_ctx,
+                )
+                # … do the outer write’s remaining steps here …
+                await sub  # sub queues behind us, runs after we release
+
+            await run_under_db_write_lock(lambda: with_subtask())
+
+    Most callers should **not** need this helper. The default reentrance
+    behaviour — ``await``ing other coroutines, or calling
+    :func:`run_under_db_write_lock` again from inside the factory —
+    transparently reuses the held lock and is the intended pattern.
+
+    The returned :class:`contextvars.Context` snapshots every other
+    :class:`contextvars.ContextVar` from the current context unchanged;
+    only the db-write reentrance flag is forced back to ``False``.
+    """
+    ctx = contextvars.copy_context()
+    ctx.run(_db_write_lock_held.set, False)
+    return ctx
+
+
 async def _drive_inner_under_held_lock(
     coro_factory: Callable[[], Coroutine[Any, Any, _T]],
 ) -> _T:
@@ -1045,8 +1128,20 @@ async def _run_under_db_write_lock(
     rejects new acquisitions once shutdown begins — so we expose this
     unchecked internal version, used exclusively by :func:`_drain_one`.
 
+    Reentrance: if the current context already holds the lock
+    (see :data:`_db_write_lock_held`), skip the acquire and call
+    the factory directly — ``asyncio.Lock`` is NOT reentrant and a
+    second acquire by the same Task would self-deadlock.
+
     See :func:`run_under_db_write_lock` for the user-facing contract.
     """
+    if _db_write_lock_held.get():
+        # Nested call inside a context that already holds the lock —
+        # the outer call's drive (and its shielded loop, cancel
+        # discrimination, stop-event checks) already covers us. Just
+        # run the factory transparently.
+        return await coro_factory()
+
     lock = _db_write_lock
     if lock is None:
         # Explicit guard rather than ``assert`` so the contract matches
@@ -1054,7 +1149,18 @@ async def _run_under_db_write_lock(
         # survives ``python -O``.
         raise RuntimeError("DB writer not started")
     async with lock:
-        return await _drive_inner_under_held_lock(coro_factory)
+        # Set the flag BEFORE the drive so the inner Task created inside
+        # :func:`_drive_inner_under_held_lock` inherits it (and so does
+        # every further Task it spawns by default). Reset in ``finally``
+        # so an exception still cleans up correctly. ``token`` is local
+        # to this Task — the ``Context``'s copy-on-set semantics keep
+        # the reset scoped to this frame even when other Tasks read
+        # the flag concurrently.
+        token = _db_write_lock_held.set(True)
+        try:
+            return await _drive_inner_under_held_lock(coro_factory)
+        finally:
+            _db_write_lock_held.reset(token)
 
 
 async def run_under_db_write_lock(
@@ -1135,7 +1241,46 @@ async def run_under_db_write_lock(
     advanced callers whose critical section does not await on
     orphanable work (no executor calls); see its docstring for the
     warning.
+
+    **Reentrance.** ``asyncio.Lock`` is **not** reentrant: a same-Task
+    re-``acquire`` would self-deadlock. To make composition safe — an
+    outer caller wraps a function under the lock, that function calls
+    a helper that ALSO wraps itself under the lock — the runner checks
+    a :class:`contextvars.ContextVar` flag at entry. When the flag is
+    set (the current context is already inside an outer
+    ``run_under_db_write_lock`` call), the inner call **skips the
+    acquire and runs the factory directly**, reusing the lock the outer
+    call already holds. The outer's drive (shield-loop, cancel
+    discrimination, stop-event checks) already protects the entire
+    nested execution, so the inner does not re-establish them.
+
+    The reentrance check also short-circuits the stop-event guard for
+    nested calls: an in-flight outer ``run_under_db_write_lock`` is
+    by definition already past the guard, so refusing the nested call
+    would be both a no-op (the outer would still complete) and a bug
+    (the inner would raise ``RuntimeError("DB writer is stopping")``
+    out of an in-flight write, breaking the outer's contract).
+
+    Because ``asyncio.create_task`` propagates the parent context, a
+    Task spawned **from inside** a factory inherits ``True`` for the
+    flag — its first ``run_under_db_write_lock`` call would therefore
+    skip the acquire and write **in parallel** with the outer call,
+    defeating the lock. For the rare case where a sub-task must take
+    its own independent slot in the FIFO instead of coalescing,
+    spawn it with a context from
+    :func:`make_db_write_isolated_context`. The normal case — plain
+    ``await`` of other coroutines or nested
+    ``run_under_db_write_lock`` calls — needs no special handling and
+    is the intended pattern.
     """
+    if _db_write_lock_held.get():
+        # Nested call. See the reentrance section of the docstring.
+        # The outer call's pre/post-acquire stop-event checks already
+        # ran; an in-flight outer means we are by definition past the
+        # guard, so we skip both the check and the acquire and just
+        # run the factory transparently.
+        return await coro_factory()
+
     if _db_writer_stop_event is not None and _db_writer_stop_event.is_set():
         # Pre-acquire check: cheap RuntimeError for the common case where
         # the caller is invoked after shutdown has started.
@@ -1151,7 +1296,16 @@ async def run_under_db_write_lock(
         # is mid-flight clearing the lifecycle bundle.
         if _db_writer_stop_event is None or _db_writer_stop_event.is_set():
             raise RuntimeError("DB writer is stopping")
-        return await _drive_inner_under_held_lock(coro_factory)
+        # Set the reentrance flag BEFORE entering the drive so the inner
+        # Task created inside :func:`_drive_inner_under_held_lock`
+        # inherits it (and so does every further Task it spawns by
+        # default). Reset in ``finally`` so an exception path still
+        # restores the previous value.
+        token = _db_write_lock_held.set(True)
+        try:
+            return await _drive_inner_under_held_lock(coro_factory)
+        finally:
+            _db_write_lock_held.reset(token)
 
 
 async def _drain_one() -> bool:
