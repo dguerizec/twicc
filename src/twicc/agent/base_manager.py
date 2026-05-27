@@ -191,10 +191,28 @@ class BaseAgentManager:
                 # ``_dead_callback_done_event``, so this gather guarantees
                 # every callback's lock-protected writes have committed
                 # before we let the caller proceed to ``stop_db_writer()``.
-                await asyncio.gather(
+                wait_results = await asyncio.gather(
                     *[agent.wait_for_dead(timeout=timeout) for agent in agents_snapshot],
                     return_exceptions=True,
                 )
+                # Surface anything that timed out or raised — the caller
+                # (``run_server``) is about to call ``stop_db_writer()``,
+                # and a False/exception here means a DEAD callback's
+                # lock-protected writes may not have committed. We can't
+                # block forever (the user pressed Ctrl-C), but a log line
+                # is what makes the silent drop debuggable after the fact.
+                for agent, result in zip(agents_snapshot, wait_results):
+                    if isinstance(result, BaseException):
+                        logger.error(
+                            "Waiting for DEAD callback of session %s raised during shutdown: %s",
+                            agent.session_id, result, exc_info=result,
+                        )
+                    elif result is False:
+                        logger.warning(
+                            "DEAD callback for session %s did not finish within %.1fs "
+                            "during shutdown — its lifecycle DB writes may have been dropped",
+                            agent.session_id, timeout,
+                        )
 
                 self._agents.clear()
                 logger.info("All agents shut down")

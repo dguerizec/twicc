@@ -148,12 +148,45 @@ class BaseAgent:
         ``run_under_db_write_lock`` acquire is still queued. The same
         guarantee protects every non-shutdown caller that polls
         ``wait_for_dead`` (cron restart, settings-triggered restart).
+
+        Cancellation safety: the notify runs on a separate task we
+        shield-loop on. Without the shield, an outer cancel (e.g.
+        ``BaseAgentManager.shutdown`` cancelling a pending
+        ``interrupt_or_kill`` Task on timeout, or ``kill()`` cancelling the
+        message loop that is mid-``_transition_to_dead``) would propagate
+        through ``await self._notify_state_change()`` BEFORE the callback's
+        ``run_under_db_write_lock`` acquire actually applies its DB writes —
+        and the ``finally`` would still fire the done event, unblocking
+        ``wait_for_dead`` while the writes were never queued. The shield-loop
+        holds the done-event signal back until the notify task is genuinely
+        finished; any outer cancellation we caught is re-raised once the
+        callback has run to completion.
         """
         self._set_state(AgentState.DEAD)
+        notify_task = asyncio.create_task(
+            self._notify_state_change(),
+            name=f"dead-notify-{self.session_id}",
+        )
+        outer_cancelled = False
         try:
-            await self._notify_state_change()
+            while not notify_task.done():
+                try:
+                    await asyncio.shield(notify_task)
+                except asyncio.CancelledError:
+                    # Either our task was cancelled (notify_task is shielded
+                    # and still running) or notify_task itself was cancelled
+                    # (next loop iteration exits via ``notify_task.done()``).
+                    # In both cases, keep going until the inner is finished.
+                    outer_cancelled = True
+                    continue
         finally:
+            # ``notify_task.done()`` is now True — the while-loop only exits
+            # on that condition. (A non-cancellation exception from the
+            # inner propagates through the await above; the finally still
+            # fires, then the exception bubbles up to the caller.)
             self._dead_callback_done_event.set()
+        if outer_cancelled:
+            raise asyncio.CancelledError()
 
     async def wait_for_dead(self, timeout: float = 30.0) -> bool:
         """Wait until the agent is fully torn down: DEAD state AND callback done.
@@ -214,8 +247,19 @@ class BaseAgent:
             # Drop the entry whether we resolved or were cancelled.
             self._pending_requests.pop(request.request_id, None)
             self._pending_futures.pop(request.request_id, None)
-            # Broadcast the cleared state to refresh the frontend.
-            await self._notify_state_change()
+            # If the agent has already transitioned to DEAD (typically because
+            # ``interrupt_or_kill`` cancelled this pending future as part of
+            # its cleanup), the DEAD state-change callback has already fired
+            # — or is in flight — via ``_transition_to_dead``. Re-invoking
+            # ``_notify_state_change`` here would run an untracked second
+            # copy of the DEAD callback whose DB writes are NOT covered by
+            # ``_dead_callback_done_event``, so ``BaseAgentManager.shutdown``'s
+            # ``wait_for_dead`` drain would not block on them and
+            # ``stop_db_writer`` could race the queued lock acquire. Skip
+            # the cleanup broadcast in that case — the DEAD broadcast
+            # already announced the final state to the frontend.
+            if self.state != AgentState.DEAD:
+                await self._notify_state_change()
 
     def _cancel_all_pending_futures(self) -> None:
         """Cancel every in-flight pending Future.
