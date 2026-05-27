@@ -169,6 +169,14 @@ class BaseAgent:
         )
         captured_outer_cancel: asyncio.CancelledError | None = None
         current = asyncio.current_task()
+        # Watermark of pending outer cancellations observed so far.
+        # ``Task.cancelling()`` is sticky (only ``uncancel()`` decrements
+        # it), so a level check ``cancelling() > 0`` would keep matching
+        # forever once any outer cancel arrived — including for a later
+        # inner self-cancel propagating through the shield. The
+        # watermark lets us identify a NEW outer cancel (count went up)
+        # vs the same one we already saw (count unchanged).
+        cancelling_watermark = current.cancelling() if current is not None else 0
         try:
             while not notify_task.done():
                 try:
@@ -176,24 +184,26 @@ class BaseAgent:
                 except asyncio.CancelledError as exc:
                     # ``asyncio.shield`` raises ``CancelledError`` for two
                     # distinct sources:
-                    #   * OUR task was cancelled — ``current.cancelling()``
-                    #     is ``> 0``. The shield kept ``notify_task``
+                    #   * OUR task was cancelled — ``Task.cancelling()``
+                    #     went up. The shield kept ``notify_task``
                     #     alive; the exception is the outer cancel that
                     #     asyncio injected at this await.
                     #   * ``notify_task`` itself was cancelled (inner
                     #     self-cancel — e.g. someone called
                     #     ``notify_task.cancel()`` directly, or the
                     #     callback awaited an already-cancelled future).
-                    # We capture the outer case only. The inner
-                    # cancellation will surface via the drain below as the
-                    # authoritative one. Without this guard, an inner
-                    # self-cancel would set ``captured_outer_cancel`` and
-                    # the drain would suppress the real inner
-                    # ``CancelledError`` — then re-raise the shield-
-                    # generated one, losing the inner's message/cause/
-                    # traceback.
-                    if current is not None and current.cancelling() > 0:
-                        captured_outer_cancel = exc
+                    #     ``cancelling()`` is unchanged in this case.
+                    # We capture the outer case only, and only the
+                    # FIRST outer cancel so a later multi-cancel doesn't
+                    # overwrite the original. Inner cancellations
+                    # surface via the drain below as the authoritative
+                    # ones (verbatim message/cause/traceback).
+                    if current is not None:
+                        latest = current.cancelling()
+                        if latest > cancelling_watermark:
+                            cancelling_watermark = latest
+                            if captured_outer_cancel is None:
+                                captured_outer_cancel = exc
                     continue
                 except Exception:
                     # Inner raised — ``notify_task.done()`` is True so the
