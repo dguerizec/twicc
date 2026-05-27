@@ -1121,21 +1121,37 @@ async def _drive_inner_under_held_lock(
 
     See :func:`run_under_db_write_lock` for the user-facing contract.
     """
+    # Capture the lease NOW (snapshot of the caller's ContextVar binding)
+    # so the wrapped factory and the post-loop discard agree on which
+    # lease they admit / clear, even if the ContextVar binding is later
+    # reset.
+    lease = _db_write_lock_lease.get()
+
+    # Wrap the factory so the inner Task admits itself to ``drive_tasks``
+    # as its FIRST action, BEFORE any user code runs. Under the default
+    # task factory this is equivalent to admitting from the caller after
+    # ``create_task`` (the new Task does not start until the next
+    # scheduler tick). Under an **eager** task factory
+    # (``asyncio.eager_task_factory``, Python 3.12+), however,
+    # ``asyncio.create_task(coro)`` runs the coroutine eagerly until its
+    # first suspension point — which means a factory body that
+    # immediately calls ``run_under_db_write_lock`` would hit the
+    # membership check (current_task() = inner, not yet in drive_tasks)
+    # and fall through to a real acquire, then block on the lock the
+    # caller already holds, deadlocking the drive. The wrapper makes
+    # admission happen inside the inner Task's own frame, before any
+    # await, so eager-mode runs admit themselves synchronously and the
+    # nested call sees ``current_task() in drive_tasks == True``.
+    async def admitted_factory() -> _T:
+        if lease is not None:
+            lease.drive_tasks.add(asyncio.current_task())
+        return await coro_factory()
+
     # Create the coroutine AFTER the caller has acquired the lock. If a
     # cancellation arrives while the caller was waiting for ``async with``,
     # no coroutine has been created yet — no "coroutine was never awaited"
     # warning, no lost dequeued work.
-    inner = asyncio.create_task(coro_factory())
-    # Admit the inner to the active lease's drive-task set so its
-    # reentrance check passes (nested ``run_under_db_write_lock`` calls
-    # made from inside the factory short-circuit instead of self-
-    # deadlocking on the lock the caller is already holding). The lease
-    # is installed by the runner before calling us; if it is somehow
-    # absent (programming error in this module) the inner simply runs
-    # without reentrance privileges — equivalent to skipping the admit.
-    lease = _db_write_lock_lease.get()
-    if lease is not None:
-        lease.drive_tasks.add(inner)
+    inner = asyncio.create_task(admitted_factory())
     try:
         return await _drive_inner_loop(inner)
     finally:
