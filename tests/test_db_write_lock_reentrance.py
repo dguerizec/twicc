@@ -14,10 +14,10 @@ import pytest
 
 from twicc.providers import db_writer
 from twicc.providers.db_writer import (
-    _db_write_lock_held,
+    _db_write_lock_lease,
     _run_under_db_write_lock,
-    make_db_write_isolated_context,
     run_under_db_write_lock,
+    spawn_isolated_db_write_task,
 )
 
 
@@ -86,8 +86,8 @@ def test_nested_via_helper_does_not_deadlock():
 
 
 def test_internal_runner_is_reentrant_too():
-    """``_run_under_db_write_lock`` shares the same reentrance flag,
-    so a nested call from inside an outer internal runner is safe too.
+    """``_run_under_db_write_lock`` shares the same lease, so a nested
+    call from inside an outer internal runner is safe too.
     """
 
     async def scenario():
@@ -130,23 +130,25 @@ def test_public_inside_internal_and_vice_versa():
 
 
 # ---------------------------------------------------------------------------
-# Flag lifecycle — reset on success, reset on exception
+# Lease lifecycle — installed on acquire, invalidated on release
 # ---------------------------------------------------------------------------
 
 
-def test_flag_resets_after_success():
-    """After a clean run, the held-flag must be back to False."""
+def test_lease_resets_after_success():
+    """After a clean run, the outer's lease must be cleared from the
+    caller's context.
+    """
 
     async def scenario():
-        assert _db_write_lock_held.get() is False
+        assert _db_write_lock_lease.get() is None
         await run_under_db_write_lock(lambda: _identity("ok"))
-        assert _db_write_lock_held.get() is False
+        assert _db_write_lock_lease.get() is None
 
     asyncio.run(scenario())
 
 
-def test_flag_resets_after_exception():
-    """A factory that raises must still leave the held-flag back to False."""
+def test_lease_resets_after_exception():
+    """A factory that raises must still leave the caller's lease cleared."""
 
     class Boom(Exception):
         pass
@@ -155,21 +157,22 @@ def test_flag_resets_after_exception():
         raise Boom()
 
     async def scenario():
-        assert _db_write_lock_held.get() is False
+        assert _db_write_lock_lease.get() is None
         with pytest.raises(Boom):
             await run_under_db_write_lock(lambda: raiser())
-        assert _db_write_lock_held.get() is False
+        assert _db_write_lock_lease.get() is None
 
     asyncio.run(scenario())
 
 
-def test_flag_true_inside_factory():
-    """The flag must read True while the factory is running."""
+def test_lease_active_inside_factory():
+    """The lease must read ``active == True`` while the factory is running."""
 
-    seen: list[bool] = []
+    seen: list[bool | None] = []
 
     async def factory():
-        seen.append(_db_write_lock_held.get())
+        lease = _db_write_lock_lease.get()
+        seen.append(None if lease is None else lease.active)
 
     async def scenario():
         await run_under_db_write_lock(lambda: factory())
@@ -178,14 +181,37 @@ def test_flag_true_inside_factory():
     assert seen == [True]
 
 
+def test_lease_invalidated_after_release():
+    """``finally`` flips ``active`` to ``False`` — this is what protects
+    a sub-task that inherited the lease but only runs post-release from
+    skipping the acquire and writing lock-less.
+    """
+
+    captured_lease: list[db_writer._LockLease] = []
+
+    async def factory():
+        lease = _db_write_lock_lease.get()
+        assert lease is not None
+        captured_lease.append(lease)
+        assert lease.active is True
+
+    async def scenario():
+        await run_under_db_write_lock(lambda: factory())
+        # After the outer returns, the captured lease must be invalidated
+        # so any sub-task that inherited it falls through to acquire.
+        assert captured_lease[0].active is False
+
+    asyncio.run(scenario())
+
+
 # ---------------------------------------------------------------------------
 # Independent serialisation — concurrent Tasks queue FIFO on the lock
 # ---------------------------------------------------------------------------
 
 
 def test_independent_tasks_serialise_fifo():
-    """Two independent Tasks (each acquires fresh — neither inherits the
-    held flag) must run serially under the lock, in submission order.
+    """Two independent Tasks (each acquires fresh — neither inherits an
+    active lease) must run serially under the lock, in submission order.
     """
 
     order: list[str] = []
@@ -204,8 +230,8 @@ def test_independent_tasks_serialise_fifo():
             order.append("b:enter")
             order.append("b:exit")
 
-        # Spawn A as a top-level task — it does NOT inherit any flag
-        # (none is set), so it acquires the lock.
+        # Spawn A as a top-level task — it does NOT inherit any lease
+        # (none is installed), so it acquires the lock.
         ta = asyncio.create_task(run_under_db_write_lock(lambda: slow_a()))
         await started_a.wait()  # A holds the lock now.
 
@@ -225,33 +251,31 @@ def test_independent_tasks_serialise_fifo():
 
 
 # ---------------------------------------------------------------------------
-# Isolated context — opt-out from coalescing when spawning a sub-task
+# Sub-task isolation — spawn_isolated_db_write_task opts out
 # ---------------------------------------------------------------------------
 
 
-def test_isolated_context_lets_subtask_acquire_independently():
-    """A sub-task spawned with ``make_db_write_isolated_context()`` does
-    NOT inherit the held flag, so it queues independently in the lock's
-    FIFO behind the outer call.
+def test_spawn_isolated_lets_subtask_acquire_independently():
+    """A sub-task spawned with ``spawn_isolated_db_write_task()`` does
+    NOT inherit the outer's lease, so it queues independently in the
+    lock's FIFO behind the outer call.
     """
 
     order: list[str] = []
 
     async def sub_writer():
-        # When this Task runs, the isolated context means our flag is
-        # False. Without the isolation, we'd see True (the parent's).
-        assert _db_write_lock_held.get() is False, "sub inherited held flag"
+        # When this Task runs, the isolated context means we see no lease.
+        # Without the isolation, we'd see the outer's lease and skip.
+        assert _db_write_lock_lease.get() is None, "sub inherited lease"
         # The body that records progress runs INSIDE the lock so the
         # ordering assertions below witness real serialisation.
         await run_under_db_write_lock(lambda: _append_then("sub:acquired", order))
 
     async def outer_factory():
         order.append("outer:enter")
-        assert _db_write_lock_held.get() is True
-        sub_ctx = make_db_write_isolated_context()
-        # In the isolated context the flag is False.
-        assert sub_ctx.run(_db_write_lock_held.get) is False
-        sub = asyncio.create_task(sub_writer(), context=sub_ctx)
+        lease = _db_write_lock_lease.get()
+        assert lease is not None and lease.active is True
+        sub = spawn_isolated_db_write_task(sub_writer())
         # Yield so the sub task reaches its run_under_db_write_lock call
         # and blocks on the acquire (we still hold the lock).
         await asyncio.sleep(0.05)
@@ -274,21 +298,22 @@ def test_isolated_context_lets_subtask_acquire_independently():
     assert order == ["outer:enter", "outer:exit", "sub:acquired"]
 
 
-def test_default_context_subtask_inherits_and_coalesces():
-    """A sub-task spawned WITHOUT isolation inherits ``True`` for the
-    flag — its nested ``run_under_db_write_lock`` call therefore skips
-    the acquire and runs IN PARALLEL with the outer factory. This is
-    the documented footgun and the reason
-    :func:`make_db_write_isolated_context` exists.
+def test_default_context_subtask_inherits_and_coalesces_during_hold():
+    """A sub-task spawned WITHOUT isolation that starts running WHILE
+    the outer still holds the lock inherits the active lease and skips
+    the acquire — running IN PARALLEL with the outer factory. This is
+    the documented "parallel-during-hold" footgun and the reason
+    :func:`spawn_isolated_db_write_task` exists.
     """
 
     order: list[str] = []
 
     async def sub_writer():
-        # The flag is inherited — we observe True even though we are
-        # a separate Task, because create_task copied the parent's
-        # contextvars.Context.
-        assert _db_write_lock_held.get() is True
+        # The lease is inherited — we observe an active lease even
+        # though we are a separate Task, because create_task copied
+        # the parent's contextvars.Context.
+        lease = _db_write_lock_lease.get()
+        assert lease is not None and lease.active is True
         # Nested call reuses the held lock — runs immediately, in
         # parallel with the outer.
         await run_under_db_write_lock(lambda: _append_then("sub", order))
@@ -310,6 +335,77 @@ def test_default_context_subtask_inherits_and_coalesces():
     # parallel with the outer factory — under one logical lock.
     assert "sub" in order
     assert order.index("sub") < order.index("outer:exit")
+
+
+def test_stale_lease_after_release_acquires_normally():
+    """A sub-task spawned WITHOUT isolation whose body only resumes
+    after the outer released the lock inherits the lease — but the
+    runner flipped ``active = False`` in its ``finally``, so when the
+    sub resumes it observes the invalidated lease and falls through to
+    a normal acquire instead of writing lock-less. This is the fix for
+    the v2 Codex finding #2.
+
+    The scenario forces "resume after release" by gating the sub on an
+    Event the scenario sets only **after** ``run_under_db_write_lock``
+    has returned. This guarantees the runner's ``finally`` has run
+    (invalidating the lease and releasing the lock) before the sub
+    inspects the lease.
+
+    Without this gating, asyncio's ready-queue ordering would let the
+    sub run before the runner's drive_continuation — the sub was
+    scheduled (via ``create_task``) earlier than the drive_continuation
+    (which was only scheduled by the inner Task's completion callback).
+    That earlier ordering is the documented parallel-during-hold case
+    and is tested separately.
+    """
+
+    order: list[str] = []
+
+    async def scenario():
+        release_event = asyncio.Event()
+
+        async def sub_writer():
+            # Wait until the scenario tells us the outer has released
+            # (i.e. the runner's ``finally`` has run, lock is released,
+            # lease invalidated). Without this gate, we might run before
+            # the drive_continuation and observe lease.active=True
+            # (parallel-during-hold case).
+            await release_event.wait()
+            lease = _db_write_lock_lease.get()
+            assert lease is not None, "lease somehow not inherited"
+            assert lease.active is False, (
+                "stale-inherited lease should have been invalidated by "
+                "the outer's release — got active=True, which would mean "
+                "the sub-task writes without holding the lock"
+            )
+            order.append("sub:before-acquire")
+            # Without invalidation, this nested call would skip the
+            # acquire and write lock-less. With invalidation, it
+            # acquires normally.
+            await run_under_db_write_lock(lambda: _append_then("sub:acquired", order))
+            order.append("sub:after-release")
+
+        async def outer_factory():
+            order.append("outer:enter")
+            # Spawn the sub WITHOUT isolation — it inherits the active lease.
+            sub = asyncio.create_task(sub_writer())
+            order.append("outer:exit")
+            return sub
+
+        sub = await run_under_db_write_lock(lambda: outer_factory())
+        # The outer has returned: ``finally`` ran (lease invalidated,
+        # lock released). Now let the sub proceed.
+        release_event.set()
+        await asyncio.wait_for(sub, timeout=2.0)
+
+    asyncio.run(scenario())
+    assert order == [
+        "outer:enter",
+        "outer:exit",
+        "sub:before-acquire",
+        "sub:acquired",
+        "sub:after-release",
+    ]
 
 
 # ---------------------------------------------------------------------------
