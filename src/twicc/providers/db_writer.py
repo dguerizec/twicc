@@ -995,9 +995,16 @@ def make_db_write_isolated_context() -> contextvars.Context:
                     sub_writer_coro(), context=sub_ctx,
                 )
                 # … do the outer write’s remaining steps here …
-                await sub  # sub queues behind us, runs after we release
+                # DO NOT ``await sub`` here — the sub is queued behind
+                # us in the lock's FIFO and cannot run until we release
+                # by returning from this factory. Awaiting it inside the
+                # locked factory would self-deadlock. Hand the handle
+                # back to the caller and let them await it.
+                return sub
 
-            await run_under_db_write_lock(lambda: with_subtask())
+            sub = await run_under_db_write_lock(lambda: with_subtask())
+            # The lock has been released — the sub can now acquire and run.
+            await sub
 
     Most callers should **not** need this helper. The default reentrance
     behaviour — ``await``ing other coroutines, or calling
