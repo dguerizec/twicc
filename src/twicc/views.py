@@ -212,7 +212,7 @@ async def _create_project(request):
         # Directory doesn't exist: create it if requested, otherwise ask the user
         if data.get("create_directory"):
             try:
-                os.makedirs(resolved, exist_ok=True)
+                await asyncio.to_thread(os.makedirs, resolved, exist_ok=True)
             except OSError as e:
                 return JsonResponse({"error": f"Failed to create directory: {e}"}, status=400)
         else:
@@ -2293,6 +2293,14 @@ async def bootstrap(request):
     message_snippets = await asyncio.to_thread(read_message_snippets_config)
     seen_tips = await asyncio.to_thread(read_seen_tips)
     tips_manifest = await asyncio.to_thread(manifest_to_dict)
+    # ``helpers.get_bootstrap_data()`` does sync FS reads and sync ORM
+    # work per provider — build the whole map in one worker thread hop.
+    providers_data = await asyncio.to_thread(
+        lambda: {
+            provider.value: helpers.get_bootstrap_data()
+            for provider, helpers in get_provider_helpers_registry().items()
+        }
+    )
     return JsonResponse({
         "settings": clean_settings,
         "settings_version": version,
@@ -2305,10 +2313,7 @@ async def bootstrap(request):
         "message_snippets": message_snippets,
         "seen_tips": seen_tips,
         "tips_manifest": tips_manifest,
-        "providers": {
-            provider.value: helpers.get_bootstrap_data()
-            for provider, helpers in get_provider_helpers_registry().items()
-        },
+        "providers": providers_data,
         "disabledProvidersPresent": disabled_providers_present,
         "disabledProviders": disabled_providers,
         "providerStates": provider_states,

@@ -11,8 +11,9 @@ import logging
 import time
 from collections import defaultdict
 
+import asyncio
+
 import orjson
-from asgiref.sync import sync_to_async
 from django.conf import settings
 from django.http import JsonResponse
 
@@ -164,7 +165,11 @@ async def login(request):
 
     # PBKDF2 verification is intentionally CPU-heavy — running it on the
     # event loop would stall unrelated async work for the entire request.
-    if await sync_to_async(verify_password)(password, settings.TWICC_PASSWORD_HASH):
+    # ``asyncio.to_thread`` ships it to a fresh worker thread; using
+    # ``sync_to_async(...)`` here would default to ``thread_sensitive=True``
+    # which routes through asgiref's single shared executor, serialising
+    # all PBKDF2 verifications back-to-back.
+    if await asyncio.to_thread(verify_password, password, settings.TWICC_PASSWORD_HASH):
         # ``bind_session`` mutates the session dict (``session[key] = ...``)
         # synchronously. Touching the session for the first time would
         # otherwise trigger a sync ORM load — async-pre-load it via
