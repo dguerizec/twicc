@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- Sidebar filter now supports exact substring matching: prefix the query with `"` or `'`.
+- Bulk archive now respects the sidebar text filter, with an option to include sessions from archived projects.
+
 ### Fixed
 
 - In a non-tmux terminal, the Escape key is now properly forwarded to programs like vim, less, or htop.

@@ -3251,13 +3251,26 @@ export const useDataStore = defineStore('data', {
          * Call the bulk-archive endpoint.
          *
          * @param {Object} params
-         * @param {string} params.olderThan   - ISO timestamp threshold.
-         * @param {Object} params.scope       - { type: 'project'|'workspace'|'all', id: string|null }.
-         * @param {boolean} [params.dryRun]   - If true, returns only the count.
+         * @param {string} params.olderThan    - ISO timestamp threshold.
+         * @param {Object} params.scope        - { type: 'project'|'workspace'|'all', id: string|null }.
+         * @param {string} [params.titleQuery] - If non-empty, restrict to sessions whose title (or id)
+         *                                       subsequence-matches the query — same semantics as the
+         *                                       sidebar filter.
+         * @param {boolean} [params.includeArchivedProjects] - For workspace/all scopes, include
+         *                                       sessions belonging to archived projects. Ignored
+         *                                       server-side for scope='project'.
+         * @param {boolean} [params.dryRun]    - If true, returns only the count.
          * @param {AbortSignal} [params.signal] - Abort signal for cancellable dry-runs.
-         * @returns {Promise<{count: number}>}
+         * @returns {Promise<{count: number, has_archived_in_scope: boolean}>}
          */
-        async bulkArchiveSessions({ olderThan, scope, dryRun = false, signal = null }) {
+        async bulkArchiveSessions({
+            olderThan,
+            scope,
+            titleQuery = '',
+            includeArchivedProjects = false,
+            dryRun = false,
+            signal = null,
+        }) {
             const body = {
                 older_than: olderThan,
                 scope: scope.type,
@@ -3265,6 +3278,8 @@ export const useDataStore = defineStore('data', {
             }
             if (scope.type === 'project') body.project_id = scope.id
             if (scope.type === 'workspace') body.workspace_id = scope.id
+            if (titleQuery) body.title_query = titleQuery
+            if (includeArchivedProjects) body.include_archived_projects = true
 
             const res = await apiFetch('/api/sessions/bulk-archive/', {
                 method: 'POST',

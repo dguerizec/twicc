@@ -9,6 +9,8 @@ const props = defineProps({
     open: { type: Boolean, required: true },
     preset: { type: String, required: true },        // e.g. '7d'
     scope: { type: Object, required: true },         // { type, id }
+    titleQuery: { type: String, default: '' },       // sidebar filter snapshot
+    includeArchivedProjects: { type: Boolean, default: false },  // global toggle snapshot
 })
 
 const emit = defineEmits(['update:open', 'archived'])
@@ -18,6 +20,20 @@ const workspacesStore = useWorkspacesStore()
 
 const currentPreset = ref(props.preset)
 watch(() => props.preset, (v) => { currentPreset.value = v })
+
+// Snapshot of the sidebar filter at dialog-open time. The user can clear it
+// from the dialog (chip remove) to broaden the archive scope without closing.
+const currentTitleQuery = ref(props.titleQuery)
+
+// Snapshot of the global "Show archived projects" toggle. The user can flip
+// this from within the dialog via a wa-switch — but only when the backend
+// confirms there are eligible sessions in archived projects (see
+// hasArchivedInScope below).
+const currentIncludeArchivedProjects = ref(props.includeArchivedProjects)
+
+// Populated from the dry-run response. Drives switch visibility — we only
+// show the toggle when flipping it would actually change the count.
+const hasArchivedInScope = ref(false)
 
 const count = ref(null)         // null = loading, number = result
 const error = ref(null)
@@ -34,9 +50,16 @@ const workspace = computed(() => {
     return workspacesStore.workspaces.find((w) => w.id === props.scope.id) ?? null
 })
 
+// Mirror getVisibleProjectIds' shape but key off the dialog-local toggle
+// rather than the global "show archived projects" setting, so the workspace
+// projects list grows/shrinks in sync with the switch.
 const workspaceProjectIds = computed(() => {
     if (!workspace.value) return []
-    return workspacesStore.getVisibleProjectIds(workspace.value.id)
+    return (workspace.value.projectIds || []).filter((pid) => {
+        const project = dataStore.getProject(pid)
+        if (!project) return false
+        return currentIncludeArchivedProjects.value || !project.archived
+    })
 })
 
 async function refreshCount() {
@@ -58,10 +81,13 @@ async function refreshCount() {
         const res = await dataStore.bulkArchiveSessions({
             olderThan: iso,
             scope: props.scope,
+            titleQuery: currentTitleQuery.value,
+            includeArchivedProjects: currentIncludeArchivedProjects.value,
             dryRun: true,
             signal: abortController.signal,
         })
         count.value = res.count
+        hasArchivedInScope.value = res.has_archived_in_scope ?? false
     } catch (err) {
         if (err.name === 'AbortError') return
         error.value = err.message || 'Failed to fetch count.'
@@ -70,18 +96,29 @@ async function refreshCount() {
 
 watch(() => props.open, (isOpen) => {
     if (!isOpen) return
-    if (currentPreset.value === props.preset) {
-        // Preset unchanged since last open: the currentPreset watcher won't fire,
-        // so trigger the refresh ourselves.
-        refreshCount()
-    } else {
-        // Preset changed since last open: assigning here will trigger the
-        // currentPreset watcher, which calls refreshCount once.
-        currentPreset.value = props.preset
-    }
+    // Snapshot props into local refs. Track whether each changed so we know
+    // if the field watchers will fire (and trigger refreshCount), or if we
+    // need to call refreshCount ourselves. When more than one changed, the
+    // last-firing watcher's request aborts the earlier ones via abortController
+    // — final state is correct.
+    const presetChanged = currentPreset.value !== props.preset
+    const titleChanged = currentTitleQuery.value !== props.titleQuery
+    const archivedChanged = currentIncludeArchivedProjects.value !== props.includeArchivedProjects
+    currentPreset.value = props.preset
+    currentTitleQuery.value = props.titleQuery
+    currentIncludeArchivedProjects.value = props.includeArchivedProjects
+    if (!presetChanged && !titleChanged && !archivedChanged) refreshCount()
 })
 
 watch(currentPreset, () => {
+    if (props.open) refreshCount()
+})
+
+watch(currentTitleQuery, () => {
+    if (props.open) refreshCount()
+})
+
+watch(currentIncludeArchivedProjects, () => {
     if (props.open) refreshCount()
 })
 
@@ -102,6 +139,8 @@ async function handleConfirm() {
         const res = await dataStore.bulkArchiveSessions({
             olderThan: iso,
             scope: props.scope,
+            titleQuery: currentTitleQuery.value,
+            includeArchivedProjects: currentIncludeArchivedProjects.value,
         })
         emit('archived', { count: res.count })
         emit('update:open', false)
@@ -180,6 +219,21 @@ function handleDialogHide(event) {
                         :project-id="pid"
                     />
                 </div>
+                <div v-if="currentTitleQuery" class="bulk-archive-filter">
+                    <span class="bulk-archive-scope-label">Matching:</span>
+                    <wa-tag pill with-remove @wa-remove="currentTitleQuery = ''">
+                        {{ currentTitleQuery }}
+                    </wa-tag>
+                </div>
+                <div v-if="hasArchivedInScope" class="bulk-archive-archived-toggle">
+                    <wa-switch
+                        size="small"
+                        :checked="currentIncludeArchivedProjects"
+                        @change="currentIncludeArchivedProjects = $event.target.checked"
+                    >
+                        Include sessions from archived projects
+                    </wa-switch>
+                </div>
             </div>
 
             <div class="bulk-archive-count">
@@ -254,6 +308,20 @@ function handleDialogHide(event) {
     align-items: center;
     gap: var(--wa-space-xs);
     margin-top: var(--wa-space-2xs);
+    font-size: var(--wa-font-size-s);
+}
+
+.bulk-archive-filter {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--wa-space-xs);
+    margin-top: var(--wa-space-2xs);
+    font-size: var(--wa-font-size-s);
+}
+
+.bulk-archive-archived-toggle {
+    margin-top: var(--wa-space-xs);
     font-size: var(--wa-font-size-s);
 }
 

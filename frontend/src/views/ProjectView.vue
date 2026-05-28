@@ -415,6 +415,7 @@ const didSessionsFailToLoad = computed(() => store.didSessionsFailToLoad(effecti
 
 // Search/filter state for sessions
 const searchQuery = ref('')
+const trimmedSearchQuery = computed(() => searchQuery.value.trim())
 
 // Show archived sessions filter (persistent setting, browser-local via settings store)
 const showArchivedSessions = computed(() => settingsStore.isShowArchivedSessions)
@@ -1289,7 +1290,7 @@ function updateSidebarClosedClass(closed) {
                         </wa-dropdown-item>
                         <wa-dropdown-item value="archive-older">
                             <wa-icon slot="icon" name="box-archive"></wa-icon>
-                            Archive sessions older than…
+                            {{ trimmedSearchQuery ? 'Archive filtered sessions older than…' : 'Archive sessions older than…' }}
                             <wa-dropdown-item slot="submenu" value="archive-older-3d">3 days</wa-dropdown-item>
                             <wa-dropdown-item slot="submenu" value="archive-older-7d">7 days</wa-dropdown-item>
                             <wa-dropdown-item slot="submenu" value="archive-older-10d">10 days</wa-dropdown-item>
@@ -1803,6 +1804,8 @@ function updateSidebarClosedClass(closed) {
         v-model:open="bulkArchiveDialog.open"
         :preset="bulkArchiveDialog.preset"
         :scope="currentBulkArchiveScope"
+        :title-query="trimmedSearchQuery"
+        :include-archived-projects="showArchivedProjects"
         @archived="handleBulkArchived"
     />
     </div>

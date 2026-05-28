@@ -157,7 +157,30 @@ function matchSubsequence(query, text) {
     return queryIndex === lowerQuery.length
 }
 
-// Filtered sessions based on search query (subsequence matching on title)
+/**
+ * Resolve a sidebar filter query against a display string.
+ *
+ * - Queries starting with `"` or `'` switch to case-insensitive substring
+ *   matching. An optional trailing matching quote is stripped, so both
+ *   `"foo` and `"foo"` look for the literal substring `foo`.
+ * - Anything else uses the default subsequence (fuzzy) matching.
+ *
+ * The backend mirrors this dispatch in `_match_session_query` (views.py)
+ * so the bulk-archive scope matches the sidebar exactly.
+ */
+function matchSessionQuery(query, text) {
+    const first = query[0]
+    if (first === '"' || first === "'") {
+        let needle = query.slice(1)
+        if (needle.endsWith(first)) needle = needle.slice(0, -1)
+        if (!needle) return true
+        return text.toLowerCase().includes(needle.toLowerCase())
+    }
+    return matchSubsequence(query, text)
+}
+
+// Filtered sessions based on the search query. Fuzzy by default; exact
+// substring when the query is wrapped/prefixed with `"` or `'`.
 const sessions = computed(() => {
     const query = props.searchQuery.trim()
     if (!query) return allSessions.value
@@ -166,7 +189,7 @@ const sessions = computed(() => {
         const displayName = (session.draft && !session.title)
             ? 'New session'
             : (session.title || session.id)
-        return matchSubsequence(query, displayName)
+        return matchSessionQuery(query, displayName)
     })
 })
 

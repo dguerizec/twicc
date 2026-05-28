@@ -619,6 +619,44 @@ async def session_detail(request, project_id, session_id, parent_session_id=None
     return JsonResponse(serialize_session(session))
 
 
+def _match_subsequence(query: str, text: str) -> bool:
+    """Case-insensitive subsequence match: every char of ``query`` appears in
+    ``text`` in order (not necessarily contiguous). Mirrors the frontend
+    ``matchSubsequence`` in ``SessionList.vue``.
+    """
+    lower_query = query.lower()
+    lower_text = text.lower()
+    qi = 0
+    for ch in lower_text:
+        if qi >= len(lower_query):
+            break
+        if ch == lower_query[qi]:
+            qi += 1
+    return qi == len(lower_query)
+
+
+def _match_session_query(query: str, text: str) -> bool:
+    """Resolve a sidebar filter query against a display string.
+
+    - Queries starting with ``"`` or ``'`` switch to case-insensitive
+      substring matching. An optional trailing matching quote is stripped,
+      so both ``"foo`` and ``"foo"`` look for the literal substring ``foo``.
+    - Anything else uses the default subsequence (fuzzy) matching.
+
+    Mirrors ``matchSessionQuery`` in ``SessionList.vue`` so the bulk-archive
+    scope matches the sidebar exactly.
+    """
+    if query and query[0] in ('"', "'"):
+        first = query[0]
+        needle = query[1:]
+        if needle.endswith(first):
+            needle = needle[:-1]
+        if not needle:
+            return True
+        return needle.lower() in text.lower()
+    return _match_subsequence(query, text)
+
+
 async def bulk_archive_sessions(request):
     """POST /api/sessions/bulk-archive/ - Archive multiple sessions in one shot.
 
@@ -627,13 +665,26 @@ async def bulk_archive_sessions(request):
         scope (str, required): 'project' | 'workspace' | 'all'.
         project_id (str): required if scope == 'project'.
         workspace_id (str): required if scope == 'workspace'.
+        title_query (str, optional): if non-empty, restrict to sessions whose
+            ``title`` (falling back to ``id``) matches the query as a
+            case-insensitive subsequence — same semantics as the sidebar
+            filter input.
+        include_archived_projects (bool, optional, default False): for
+            workspace/all scopes, control whether sessions belonging to
+            archived projects are eligible. Ignored for scope='project'
+            (single-project scope is explicit about its target).
         dry_run (bool, optional, default False): if True, return only the count.
 
     Excludes: subagents, already-archived, pinned, sessions with an active agent,
     and sessions without user messages or without created_at (not visible in sidebar).
 
-    Returns: {"count": N}. Session IDs are not in the response — the frontend
-    receives them via the `sessions_bulk_archived` WS broadcast.
+    Returns:
+        {"count": N, "has_archived_in_scope": bool}. ``has_archived_in_scope``
+        is True iff the (workspace/all) scope currently has at least one
+        eligible session in an archived project — the frontend uses this to
+        decide whether to surface the "Include archived projects" switch.
+        Session IDs are not in the response — the frontend receives them via
+        the ``sessions_bulk_archived`` WS broadcast.
     """
     if request.method != "POST":
         return HttpResponseNotAllowed(["POST"])
@@ -647,6 +698,8 @@ async def bulk_archive_sessions(request):
     scope_type = data.get("scope")
     project_id = data.get("project_id")
     workspace_id = data.get("workspace_id")
+    title_query = (data.get("title_query") or "").strip()
+    include_archived_projects = bool(data.get("include_archived_projects", False))
     dry_run = bool(data.get("dry_run", False))
 
     if not older_than_iso:
@@ -692,12 +745,37 @@ async def bulk_archive_sessions(request):
         qs = qs.filter(project_id__in=ws.get("projectIds", []))
     # scope_type == "all": no additional filter
 
-    if dry_run:
-        return JsonResponse({"count": await qs.acount()})
+    # Materialize candidates with the fields needed for the Python-side
+    # filters: title for subsequence matching, project__archived for the
+    # ``include_archived_projects`` toggle AND for the has_archived_in_scope
+    # signal sent back to the dialog. Fetching all three in one query keeps
+    # the code path linear and the JOIN cost negligible at TwiCC scale.
+    rows = await sync_to_async(list)(
+        qs.values_list("id", "title", "project__archived")
+    )
 
-    # Capture IDs before UPDATE (queryset becomes empty after).
+    if title_query:
+        rows = [r for r in rows if _match_session_query(title_query, r[1] or r[0])]
+
+    # Used by the dialog to decide whether the "Include archived projects"
+    # switch is meaningful. Only relevant for workspace/all — a project scope
+    # always targets exactly one project regardless of its archived state.
+    has_archived_in_scope = (
+        scope_type in ("workspace", "all") and any(r[2] for r in rows)
+    )
+
+    if scope_type in ("workspace", "all") and not include_archived_projects:
+        rows = [r for r in rows if not r[2]]
+
+    ids = {r[0] for r in rows}
+
+    if dry_run:
+        return JsonResponse({
+            "count": len(ids),
+            "has_archived_in_scope": has_archived_in_scope,
+        })
+
     # Re-check active_ids just before UPDATE to close the TOCTOU window.
-    ids = set(await sync_to_async(list)(qs.values_list("id", flat=True)))
     active_ids_now = {
         info.session_id
         for info in get_agent_manager_registry().get_active_agents()

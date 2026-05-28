@@ -108,7 +108,7 @@ If the user explicitly asks for any of these operations, perform them without as
 - Web Awesome 3 native browser events are unprefixed, such as `@click`, `@focus`, and `@input`.
 - Web Awesome custom events keep the `wa-` prefix, such as `@wa-show`, `@wa-hide`, and `@wa-after-show`.
 - Use `slot="start"` and `slot="end"` for icons inside buttons. For `wa-dropdown-item`, use `slot="icon"`.
-- Local docs are available at `frontend/node_modules/@awesome.me/webawesome/dist/llms.txt` and under `frontend/node_modules/@awesome.me/webawesome/dist/skills/`.
+- Local docs are available at `frontend/node_modules/@awesome.me/webawesome/dist/llms.txt` and under `frontend/node_modules/@awesome.me/webawesome/dist/skills/webawesome/`.
 
 ## Dialog Forms
 
