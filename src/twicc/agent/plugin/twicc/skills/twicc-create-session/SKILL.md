@@ -58,7 +58,7 @@ Each value is optional — omit to let the preset / synced default apply.
 
 | Flag | Claude Code                                                                                                  | Codex                                               |
 |------|--------------------------------------------------------------------------------------------------------------|-----------------------------------------------------|
-| `--model VALUE` | `opus`, `sonnet`, `opus-4.6`, `opus-4.5`, `sonnet-4.5`                                                       | `gpt`, `gpt-mini`, `gpt-5.4`                        |
+| `--model VALUE` | `opus`, `sonnet`, `opus-4.7`, `opus-4.6`, `opus-4.5`, `sonnet-4.5`                                           | `gpt`, `gpt-mini`, `gpt-5.4`                        |
 | `--effort VALUE` | `low`, `medium`, `high`, `xhigh`, `max` (xhigh / max are silently demoted if the model doesn't support them) | `low`, `medium`, `high`, `xhigh`                    |
 | `--permission-mode VALUE` | `default`, `acceptEdits`, `plan`, `dontAsk`, `bypassPermissions`                                             | `read_only`, `strict`, `auto`, `autonomous`, `yolo` |
 | `--thinking / --no-thinking` | extended thinking on/off                                                                                     | not supported                                       |

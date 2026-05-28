@@ -100,9 +100,18 @@ AGENT_SETTINGS_FIELDS_MAPPING: dict[str, str] = {
 MODEL_VERSIONS: list[ModelVersion] = [
     ModelVersion(
         provider=Provider.CLAUDE_CODE,
-        model="opus", version="4.7", full_name="claude-opus-4-7",
+        model="opus", version="4.8", full_name="claude-opus-4-8",
         retirement_date=None,
         latest=True,
+        provider_extra=ClaudeCodeModelExtra(
+            supports_1m=True, supports_effort_xhigh=True, supports_effort_max=True,
+        ),
+    ),
+    ModelVersion(
+        provider=Provider.CLAUDE_CODE,
+        model="opus", version="4.7", full_name="claude-opus-4-7",
+        retirement_date=date(2027, 4, 16),
+        latest=False,
         provider_extra=ClaudeCodeModelExtra(
             supports_1m=True, supports_effort_xhigh=True, supports_effort_max=True,
         ),

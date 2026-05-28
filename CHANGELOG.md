@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- Added support for Claude Opus 4.8, now the latest Opus model (Opus 4.7 remains selectable).
+
 ### Changed
 
 - Sidebar filter now supports exact substring matching: prefix the query with `"` or `'`.
