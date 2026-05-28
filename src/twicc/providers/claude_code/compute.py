@@ -1079,14 +1079,26 @@ class ClaudeCodeSessionCompute(BaseSessionCompute):
         if not usage:
             return
 
+        # Skip entries whose ``usage`` payload sums to zero tokens. The CLI
+        # writes these for SDK-emitted ``<synthetic>`` messages (closes
+        # orphan assistant turns on ``--resume`` after a kill),
+        # ``No response requested.`` markers, and ``api_error`` retries.
+        # They don't reflect real context usage; treating them as
+        # ``context_usage = 0`` would clobber the session's last real
+        # value through the watcher's "last non-null context_usage wins"
+        # rule and make the header ring briefly drop to 0% until the
+        # next real assistant message lands.
+        token_usage = to_token_usage(usage)
+        context_usage = calculate_line_context_usage(token_usage)
+        if context_usage == 0:
+            return
+
         # Extract and store message_id for deduplication tracking
         msg_id = message.get("id")
         if msg_id:
             item.message_id = msg_id
 
-        # Context usage: always computed when usage data is present
-        token_usage = to_token_usage(usage)
-        item.context_usage = calculate_line_context_usage(token_usage)
+        item.context_usage = context_usage
 
         # Cost: only computed if message_id not already seen (deduplication;
         # Claude Code writes multiple JSONL lines per API call when streaming).
