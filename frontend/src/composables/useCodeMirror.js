@@ -260,6 +260,28 @@ export function toggleSearchPanel(view) {
     else openSearchPanel(view)
 }
 
+/**
+ * Toggle the search panel of the CodeMirror editor currently holding focus.
+ * Resolves the editor via `document.activeElement.closest('.cm-editor')`.
+ *
+ * Used by the global Ctrl+F handler so a second press can close the panel
+ * and fall through to the browser's native Find bar.
+ *
+ * @returns {'opened'|'closed'|null} 'opened' / 'closed' after the toggle, or null when no CodeMirror is focused.
+ */
+export function toggleSearchInActiveCodeMirror() {
+    const el = document.activeElement?.closest?.('.cm-editor')
+    if (!el) return null
+    const view = EditorView.findFromDOM(el)
+    if (!view) return null
+    if (searchPanelOpen(view.state)) {
+        closeSearchPanel(view)
+        return 'closed'
+    }
+    openSearchPanel(view)
+    return 'opened'
+}
+
 // ─── f) Indent detection ────────────────────────────────────────────────────
 
 /**

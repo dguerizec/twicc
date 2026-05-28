@@ -27,6 +27,7 @@ import {
 } from './composables/useStopSessionProcess'
 import { canStealFocus, hasBlockingOverlay } from './utils/focusGuard'
 import { focusChatPrimary } from './utils/focusChat'
+import { toggleSearchInActiveCodeMirror } from './composables/useCodeMirror'
 
 const route = useRoute()
 const router = useRouter()
@@ -174,22 +175,31 @@ function handleGlobalKeydown(e) {
         e.stopPropagation()
         searchOverlayRef.value?.open()
     }
-    // Ctrl+F (without Shift): in-session search when on a session's chat tab.
-    // First press opens the custom search bar (and blocks native browser Find).
-    // Second press (bar already open) closes it and lets the native Find through.
+    // Ctrl+F (without Shift):
+    // 1. If focus is inside a CodeMirror editor (Files, Git, embedded chat
+    //    viewers…), own the shortcut: first press opens the editor's search
+    //    panel (prefilled with the selection), second press closes it and
+    //    falls through to the browser's native Find bar.
+    // 2. Otherwise, on a session's chat tab, toggle the in-session search bar
+    //    with the same first-open / second-close-and-fall-through pattern.
     if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key === 'f') {
+        const cmAction = toggleSearchInActiveCodeMirror()
+        if (cmAction) {
+            // stopPropagation prevents CodeMirror's own searchKeymap from
+            // re-toggling the panel after us (we run in capture phase).
+            e.stopPropagation()
+            if (cmAction === 'opened') {
+                e.preventDefault()  // block browser Find — CM panel just opened
+            }
+            // 'closed' → leave default so browser Find opens
+            return
+        }
         if (SESSION_CHAT_ROUTES.has(route.name)) {
-            // If focus is inside a CodeMirror editor (e.g. an embedded diff/code
-            // viewer in the chat), let its native searchKeymap handle Ctrl+F
-            // (opens its own panel, prefilled with the current selection).
-            const inCodeMirror = document.activeElement?.closest?.('.cm-editor')
-            if (!inCodeMirror) {
-                const detail = { handled: false }
-                window.dispatchEvent(new CustomEvent('twicc:toggle-session-search', { detail }))
-                if (detail.handled) {
-                    e.preventDefault()
-                    e.stopPropagation()
-                }
+            const detail = { handled: false }
+            window.dispatchEvent(new CustomEvent('twicc:toggle-session-search', { detail }))
+            if (detail.handled) {
+                e.preventDefault()
+                e.stopPropagation()
             }
         }
     }
