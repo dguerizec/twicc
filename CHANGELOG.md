@@ -14,6 +14,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - Sidebar filter now supports exact substring matching: prefix the query with `"` or `'`.
 - Bulk archive now respects the sidebar text filter, with an option to include sessions from archived projects.
+- Bump `claude-agent-sdk` from 0.2.82 to 0.2.87 (bundled Claude Code CLI: 2.1.142 → 2.1.150)
 
 ### Fixed
 
