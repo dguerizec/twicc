@@ -207,6 +207,15 @@ export function useTerminal(contextKey, terminalIndex = 0, { sessionId = null, p
     const dataStore = useDataStore()
     const containerRef = ref(null)
     const isConnected = ref(false)
+    /**
+     * True once the backend has signaled that the PTY → (tmux) → shell chain
+     * is fully wired and has produced its first output (the prompt). Auto-
+     * injected commands (provider auth "Launch in terminal", snippets opened
+     * in a new tab) must wait for this — `isConnected` flips on
+     * `websocket.accept`, which can be up to ~2s before tmux has attached the
+     * pane and the shell has rendered its prompt, leading to dropped input.
+     */
+    const isReady = ref(false)
     const started = ref(false)
     /** True when the backend signals the PTY process exited (vs network disconnect). */
     const ptyExited = ref(false)
@@ -338,6 +347,7 @@ export function useTerminal(contextKey, terminalIndex = 0, { sessionId = null, p
         }
 
         ptyExited.value = false
+        isReady.value = false
         ws = new WebSocket(getWsUrl())
 
         ws.onopen = () => {
@@ -366,6 +376,12 @@ export function useTerminal(contextKey, terminalIndex = 0, { sessionId = null, p
             if (data.charAt(0) === '{') {
                 try {
                     const msg = JSON.parse(data)
+                    if (msg.type === 'ready') {
+                        // Backend has fully wired the PTY chain and the shell
+                        // has produced its first output. Safe to inject input.
+                        isReady.value = true
+                        return
+                    }
                     if (msg.type === 'pty_exited') {
                         // Backend signals the PTY process died (shell exited).
                         // Set flag before WS close so the frontend can distinguish
@@ -1764,6 +1780,7 @@ export function useTerminal(contextKey, terminalIndex = 0, { sessionId = null, p
 
         fitAddon = null
         isConnected.value = false
+        isReady.value = false
     }
 
     // Watch containerRef in case it's set after start() (v-if scenarios)
@@ -1825,7 +1842,7 @@ export function useTerminal(contextKey, terminalIndex = 0, { sessionId = null, p
     }
 
     return {
-        containerRef, isConnected, started, ptyExited, start, reconnect, disconnect, focus,
+        containerRef, isConnected, isReady, started, ptyExited, start, reconnect, disconnect, focus,
         // Touch mode (mobile)
         touchMode, hasSelection, copySelection, getSelectionText,
         // Scroll state

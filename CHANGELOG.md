@@ -14,6 +14,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Fixed
 
 - In a non-tmux terminal, the Escape key is now properly forwarded to programs like vim, less, or htop.
+- Commands launched into a freshly-opened terminal tab (login command, snippets opened in a new tab) no longer occasionally fail to run.
 - The context usage ring on Claude Code sessions no longer briefly drops to 0% when resuming a session.
 
 ## [1.6.1] - 2026-05-20

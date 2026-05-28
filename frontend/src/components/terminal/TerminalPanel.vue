@@ -352,11 +352,14 @@ function handleSnippetSendTo(snippet, target) {
             term.label = label
         }
 
-        // Once connected: send the snippet and persist the label to tmux
+        // Once the PTY chain is fully wired and the shell prompt has rendered:
+        // send the snippet and persist the label to tmux. We wait on `isReady`
+        // (not `isConnected`) because the latter fires on `websocket.accept`,
+        // before tmux has attached the pane — input sent that early gets eaten.
         const stopWatch = watch(
-            () => terminalApis.get(newIndex)?.isConnected,
-            (connected) => {
-                if (connected) {
+            () => terminalApis.get(newIndex)?.isReady,
+            (ready) => {
+                if (ready) {
                     stopWatch()
                     terminalApis.get(newIndex)?.handleSnippetPress?.(snippet)
                     if (usesTmux.value && label) {
@@ -399,10 +402,13 @@ watch(
         const targetIndex = nextIndex.value
         createTerminal()
 
+        // Wait on `isReady` (full PTY/tmux/shell chain alive) rather than
+        // `isConnected` (WS accepted) so the command doesn't land before the
+        // tmux pane is wired or the shell has rendered its prompt.
         const stopWatch = watch(
-            () => terminalApis.get(targetIndex)?.isConnected,
-            (connected) => {
-                if (!connected) return
+            () => terminalApis.get(targetIndex)?.isReady,
+            (ready) => {
+                if (!ready) return
                 stopWatch()
                 terminalApis.get(targetIndex)?.handleSnippetPress?.({
                     snippet: entry.snippet,

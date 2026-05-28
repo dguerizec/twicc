@@ -793,7 +793,17 @@ async def terminal_application(scope, receive, send):
     loop.add_reader(master_fd, on_pty_output)
 
     async def pty_output_sender():
-        """Drains output_queue and sends to WebSocket."""
+        """Drains output_queue and sends to WebSocket.
+
+        After the first non-empty PTY output is forwarded, emits a
+        ``{"type": "ready"}`` control frame exactly once per PTY lifecycle.
+        Auto-injection flows on the frontend (provider auth "Launch in
+        terminal", snippets opened in a new tab) wait for this signal
+        before writing their command, so that the shell prompt has been
+        rendered and the PTY → (tmux) → shell chain is fully wired before
+        any input is sent.
+        """
+        ready_sent = False
         try:
             while True:
                 data = await output_queue.get()
@@ -803,6 +813,12 @@ async def terminal_application(scope, receive, send):
                     return
                 text = data.decode(errors="replace")
                 await send({"type": "websocket.send", "text": text})
+                if not ready_sent:
+                    await send({
+                        "type": "websocket.send",
+                        "text": json.dumps({"type": "ready"}),
+                    })
+                    ready_sent = True
         except Exception:
             # WebSocket might be closed already
             return

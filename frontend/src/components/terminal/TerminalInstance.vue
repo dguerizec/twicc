@@ -32,7 +32,7 @@ const props = defineProps({
 })
 
 const {
-    containerRef, isConnected, started, ptyExited, start, reconnect, disconnect, focus,
+    containerRef, isConnected, isReady, started, ptyExited, start, reconnect, disconnect, focus,
     touchMode, hasSelection, copySelection, getSelectionText,
     paneAlternate,
     canScrollUp, canScrollDown,
@@ -61,6 +61,7 @@ const terminalApi = {
     handleSnippetPress,
     // Toolbar state (refs)
     isConnected,
+    isReady,
     started,
     canScrollUp,
     canScrollDown,
