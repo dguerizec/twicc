@@ -26,7 +26,9 @@ from twicc.core.serializers import (
     serialize_session_item_metadata,
 )
 from twicc.paths import path_to_project_id
-from twicc.projects import register_project_sync
+from twicc.projects import register_project
+from twicc.providers.db_writer import run_under_db_write_lock
+from twicc.providers.sessions_watcher import mark_session_search_version_current
 from twicc.providers.state import ProviderDisabledError, ensure_provider_running
 from twicc.providers.helpers import get_provider_helpers, get_provider_helpers_registry
 from twicc.terminal import kill_all_tmux_terminals
@@ -248,15 +250,19 @@ async def _create_project(request):
     # broadcast and workspace auto-add. IntegrityError can still fire on a
     # ``name`` collision (the ``id`` collision path goes through the early
     # exists-check at step 3 and the get_or_create race window below).
-    # TODO Phase 3: route through ``register_project`` (async) under
-    # ``run_under_db_write_lock``; for now wrap the sync helper via
-    # ``sync_to_async`` so the view itself is fully async.
+    # ``register_project`` itself does the DB write, plus the channel-layer
+    # broadcast and the workspace auto-add (which can also broadcast). The
+    # whole call runs under the DB write lock; the broadcasts inside cost
+    # nothing (in-process Channels) and keeping them under the lock
+    # preserves the single-acquire shape of the existing helper.
     try:
-        project, created = await sync_to_async(register_project_sync)(
-            project_id,
-            directory=resolved,
-            name=name,
-            color=color or None,
+        project, created = await run_under_db_write_lock(
+            lambda: register_project(
+                project_id,
+                directory=resolved,
+                name=name,
+                color=color or None,
+            )
         )
     except IntegrityError:
         return JsonResponse({"error": "A project already exists for this directory"}, status=409)
@@ -302,11 +308,12 @@ async def project_detail(request, project_id):
                 return JsonResponse({"error": "archived must be a boolean"}, status=400)
             project.archived = archived
 
-        # TODO Phase 3: wrap save() under ``run_under_db_write_lock``.
         update_fields = ["name", "color", "archived"]
-        await project.asave(update_fields=update_fields)
+        await run_under_db_write_lock(
+            lambda: project.asave(update_fields=update_fields)
+        )
 
-        # Broadcast project_updated via WebSocket
+        # Broadcast project_updated via WebSocket (out of the DB lock).
         channel_layer = get_channel_layer()
         await channel_layer.group_send(
             "updates",
@@ -330,8 +337,9 @@ async def project_detail(request, project_id):
             if not isinstance(archived, bool):
                 return JsonResponse({"error": "archived must be a boolean"}, status=400)
             project.archived = archived
-            # TODO Phase 3: wrap save() under ``run_under_db_write_lock``.
-            await project.asave(update_fields=["archived"])
+            await run_under_db_write_lock(
+                lambda: project.asave(update_fields=["archived"])
+            )
 
             # Broadcast project_updated via WebSocket
             channel_layer = get_channel_layer()
@@ -534,10 +542,11 @@ async def session_detail(request, project_id, session_id, parent_session_id=None
                 return JsonResponse({"error": validation.error}, status=400)
             title = validation.title
 
-            # 1. Update DB immediately
-            # TODO Phase 3: wrap save() under ``run_under_db_write_lock``.
+            # 1. Update DB immediately, under the shared DB write lock.
             session.title = title
-            await session.asave(update_fields=["title"])
+            await run_under_db_write_lock(
+                lambda: session.asave(update_fields=["title"])
+            )
 
             # 2. Re-index for full-text search (title is a searchable document)
             if search.is_initialized():
@@ -561,8 +570,9 @@ async def session_detail(request, project_id, session_id, parent_session_id=None
             if not isinstance(archived, bool):
                 return JsonResponse({"error": "archived must be a boolean"}, status=400)
             session.archived = archived
-            # TODO Phase 3: wrap save() under ``run_under_db_write_lock``.
-            await session.asave(update_fields=["archived"])
+            await run_under_db_write_lock(
+                lambda: session.asave(update_fields=["archived"])
+            )
             needs_broadcast = True
 
             # Re-index for full-text search (archived flag is denormalized in every document)
@@ -586,8 +596,9 @@ async def session_detail(request, project_id, session_id, parent_session_id=None
                     status=400,
                 )
             session.pinned = pinned
-            # TODO Phase 3: wrap save() under ``run_under_db_write_lock``.
-            await session.asave(update_fields=["pinned"])
+            await run_under_db_write_lock(
+                lambda: session.asave(update_fields=["pinned"])
+            )
             needs_broadcast = True
 
         # Broadcast session_updated for archived/pinned changes.
@@ -694,9 +705,16 @@ async def bulk_archive_sessions(request):
     }
     ids -= active_ids_now
 
-    # TODO Phase 3: wrap update() under ``run_under_db_write_lock`` and
-    # switch to the search_version=0 / detached-task reindex strategy.
-    await Session.objects.filter(id__in=ids).aupdate(archived=True)
+    # Atomic update under the DB write lock: flip ``archived`` AND reset
+    # ``search_version`` to 0 in the same query. The reset guarantees that
+    # any session whose Tantivy re-index is interrupted by shutdown (the
+    # detached task below) will be picked up by the next-boot search
+    # indexing sweep (which selects rows with ``search_version != CURRENT``).
+    await run_under_db_write_lock(
+        lambda: Session.objects.filter(id__in=ids).aupdate(
+            archived=True, search_version=0,
+        )
+    )
 
     if ids:
         channel_layer = get_channel_layer()
@@ -715,6 +733,13 @@ async def bulk_archive_sessions(request):
                 try:
                     if search.is_initialized():
                         await asyncio.to_thread(search.reindex_session, sid)
+                        # Bump ``search_version`` back to CURRENT only once
+                        # the Tantivy write has landed — shutdown between
+                        # the reindex and this mark leaves the session at
+                        # search_version=0 for the next-boot sweep to fix.
+                        await run_under_db_write_lock(
+                            lambda sid=sid: mark_session_search_version_current(sid)
+                        )
                 except Exception:
                     logger.exception("bulk archive: reindex failed for session %s", sid)
                 try:
