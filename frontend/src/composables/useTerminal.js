@@ -1455,8 +1455,12 @@ export function useTerminal(contextKey, terminalIndex = 0, { sessionId = null, p
                     event.preventDefault()
                     return false
                 }
-                // No selection: also scroll to bottom if scrolled up
-                if (canScrollDown.value) {
+                // No selection: also scroll to bottom if scrolled up — but
+                // only in normal (scrollback) mode. When an alternate-screen
+                // app is active (vim, less, htop…), Escape belongs to that app
+                // and must reach the PTY, so it must not be swallowed here.
+                const isNormal = !paneAlternate.value && !shouldUseTmux() && !isAlternateScreen()
+                if (isNormal && canScrollDown.value) {
                     scrollToEdge('bottom')
                     event.preventDefault()
                     return false
