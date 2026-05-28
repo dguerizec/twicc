@@ -95,6 +95,7 @@ function onChildMenuSelect(event, proj) {
 .tree-node {
     display: flex;
     flex-direction: column;
+    gap: var(--wa-space-m);
 }
 
 .folder-header {
