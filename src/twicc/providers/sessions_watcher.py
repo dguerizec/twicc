@@ -179,6 +179,23 @@ def refresh_session(session: Session) -> Session:
 
 
 @sync_to_async
+def mark_session_search_version_current(session_id: str) -> None:
+    """Mark ``Session.search_version = CURRENT_SEARCH_VERSION`` for the row.
+
+    Called from the watcher AFTER a successful Tantivy indexing pass
+    (under a separate short DB write lock acquire). An ``asyncio``
+    cancellation between the indexing call and this mark skips it,
+    so the startup search-indexing sweep can retry the session on
+    the next boot — matching the previous behaviour where mark and
+    indexing were both inside the same lock and a cancel skipped both.
+    """
+    from django.conf import settings
+    Session.objects.filter(id=session_id).update(
+        search_version=settings.CURRENT_SEARCH_VERSION,
+    )
+
+
+@sync_to_async
 def refresh_project(project: Project) -> Project:
     """Refresh project from database."""
     project.refresh_from_db()
@@ -642,20 +659,21 @@ class BaseSessionsWatcher:
                         })
 
                 # Full-text search indexing (sessions only, not subagents):
-                # mark ``search_version`` under the lock, but the Tantivy
-                # I/O itself runs OUTSIDE the lock — the caller will pick
-                # up the returned ``IndexingRequest`` and dispatch the
-                # actual indexing pass after releasing the lock. Tantivy
-                # writes touch the search-index directory, NOT the
-                # SQLite DB the lock protects, so holding it across the
-                # indexing call would block every other DB writer for
-                # nothing (a full ``reindex_session`` on a long session
-                # can take several hundred ms).
+                # build the indexing request — the actual Tantivy I/O AND
+                # the ``search_version`` mark run OUTSIDE this lock, after
+                # the caller has dispatched the indexing pass and observed
+                # its outcome. Tantivy writes touch the search-index
+                # directory, NOT the SQLite DB the lock protects, so
+                # holding it across the indexing call would block every
+                # other DB writer for nothing (a full ``reindex_session``
+                # on a long session can take several hundred ms).
+                #
+                # The mark is moved out of this lock (and out of this
+                # method entirely) so that a cancellation between the
+                # mark and the Tantivy call cannot leave the row marked
+                # current while Tantivy never ran — which would prevent
+                # the startup sweep from retrying on the next boot.
                 if not is_subagent:
-                    from django.conf import settings
-                    if session.search_version != settings.CURRENT_SEARCH_VERSION:
-                        session.search_version = settings.CURRENT_SEARCH_VERSION
-                        await sync_to_async(session.save)(update_fields=["search_version"])
                     indexing_request = IndexingRequest(
                         session_id=session.id,
                         new_line_nums=list(new_line_nums),
@@ -796,10 +814,17 @@ class BaseSessionsWatcher:
                     # runs OUTSIDE the lock — it's a non-TwiCC-DB I/O call
                     # and holding the write lock across it would block every
                     # other DB writer for nothing. Only meaningful for
-                    # brand-new sessions; we keep the existence check
-                    # read-only so it can run lock-free too. If the session
-                    # already exists, the title on its row is authoritative.
-                    if parsed.title is None and await get_session_by_id(parsed.session_id) is None:
+                    # brand-new top-level sessions; the precondition gates
+                    # match the early-returns inside ``sync_and_broadcast``
+                    # so a failure in the hook for a deleted-file event,
+                    # an orphan subagent, or an empty file doesn't turn a
+                    # previously-silent no-op into a logged watcher error.
+                    if (
+                        change_type != Change.deleted
+                        and parsed.type == SessionType.SESSION
+                        and parsed.title is None
+                        and await get_session_by_id(parsed.session_id) is None
+                    ):
                         parsed.title = await self._fetch_initial_title(parsed)
 
                     # Sync and broadcast (works for both sessions and
@@ -843,6 +868,28 @@ class BaseSessionsWatcher:
                                 "Error indexing session for search "
                                 "(session=%s, title_changed=%s)",
                                 indexing.session_id, indexing.title_changed,
+                            )
+
+                        # Mark ``search_version`` current AFTER the Tantivy
+                        # attempt, via a separate short DB write lock
+                        # acquire. Cancellation between the indexing call
+                        # and this mark (or during this acquire) skips
+                        # the mark, so the next-boot search-indexing
+                        # sweep can retry the session. Non-cancellation
+                        # Tantivy failures (already logged above) still
+                        # mark — matches the previous in-lock semantics
+                        # where the mark sat outside the try/except.
+                        try:
+                            await run_under_db_write_lock(
+                                lambda sid=indexing.session_id:
+                                    mark_session_search_version_current(sid)
+                            )
+                        except asyncio.CancelledError:
+                            raise
+                        except Exception:
+                            logger.exception(
+                                "Error marking session %s as search-indexed",
+                                indexing.session_id,
                             )
                 except Exception:
                     logger.exception("Error processing watcher change %s on %s", change_type, path_str)
