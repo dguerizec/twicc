@@ -1,17 +1,17 @@
 """API views and SPA catch-all for serving the frontend."""
 
+import asyncio
 import logging
 import os
-import threading
 from bisect import bisect_left
 from datetime import datetime, timedelta
 
 from django.conf import settings
-from django.db import IntegrityError, close_old_connections
+from django.db import IntegrityError
 from django.http import Http404, HttpResponse, HttpResponseNotAllowed, JsonResponse
 from django.utils import timezone
 
-from asgiref.sync import async_to_sync
+from asgiref.sync import sync_to_async
 from channels.layers import get_channel_layer
 import orjson
 
@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 SESSIONS_PAGE_SIZE = 1000
 
 
-def _get_sessions_page(
+async def _get_sessions_page(
     project_id: str | None,
     before_mtime: str | None,
     project_id_list: list[str] | None = None,
@@ -92,7 +92,9 @@ def _get_sessions_page(
         sessions = sessions.filter(mtime__lt=float(before_mtime))
 
     # Fetch one extra to detect if there are more
-    sessions = list(sessions.order_by("-mtime")[: SESSIONS_PAGE_SIZE + 1])
+    sessions = await sync_to_async(list)(
+        sessions.order_by("-mtime")[: SESSIONS_PAGE_SIZE + 1]
+    )
 
     has_more = len(sessions) > SESSIONS_PAGE_SIZE
     sessions = sessions[:SESSIONS_PAGE_SIZE]
@@ -103,7 +105,7 @@ def _get_sessions_page(
     }
 
 
-def all_sessions(request):
+async def all_sessions(request):
     """GET /api/sessions/ - All sessions from all projects (paginated).
 
     Returns only regular sessions (not subagents).
@@ -133,7 +135,7 @@ def all_sessions(request):
         from twicc.agent.registry import get_agent_manager_registry
         active_session_ids = [info.session_id for info in get_agent_manager_registry().get_active_agents()]
 
-    return JsonResponse(_get_sessions_page(
+    return JsonResponse(await _get_sessions_page(
         None,
         before_mtime,
         project_id_list=project_id_list,
@@ -143,7 +145,7 @@ def all_sessions(request):
     ))
 
 
-def session_by_id(request, session_id):
+async def session_by_id(request, session_id):
     """GET /api/sessions/<session_id>/ - Fetch a single regular session by ID.
 
     Resolves a session when the caller does not know (or cannot trust) its
@@ -156,7 +158,7 @@ def session_by_id(request, session_id):
     must be accessed via their parent's subagent route).
     """
     try:
-        session = Session.objects.get(id=session_id)
+        session = await Session.objects.aget(id=session_id)
     except Session.DoesNotExist:
         raise Http404("Session not found")
 
@@ -166,19 +168,19 @@ def session_by_id(request, session_id):
     return JsonResponse(serialize_session(session))
 
 
-def project_list(request):
+async def project_list(request):
     """GET /api/projects/ - List all projects.
     POST /api/projects/ - Create a new project from a directory path.
     """
     if request.method == "POST":
-        return _create_project(request)
+        return await _create_project(request)
 
-    projects = Project.objects.all()
+    projects = await sync_to_async(list)(Project.objects.all())
     data = [serialize_project(p) for p in projects]
     return JsonResponse(data, safe=False)
 
 
-def _create_project(request):
+async def _create_project(request):
     """Create a new project from a directory path.
 
     Body: { "directory": "/absolute/path", "name": "optional", "color": "optional" }
@@ -216,7 +218,7 @@ def _create_project(request):
     project_id = path_to_project_id(resolved)
 
     # 3. Check project doesn't already exist
-    if Project.objects.filter(id=project_id).exists():
+    if await Project.objects.filter(id=project_id).aexists():
         return JsonResponse({"error": "A project already exists for this directory"}, status=409)
 
     # 4. Validate optional name
@@ -227,7 +229,7 @@ def _create_project(request):
             name = None
         elif len(name) > 25:
             return JsonResponse({"error": "Name must be 25 characters or less"}, status=400)
-        elif Project.objects.filter(name=name).exists():
+        elif await Project.objects.filter(name=name).aexists():
             return JsonResponse({"error": "A project with this name already exists"}, status=400)
 
     # 5. Validate optional color
@@ -239,8 +241,11 @@ def _create_project(request):
     # broadcast and workspace auto-add. IntegrityError can still fire on a
     # ``name`` collision (the ``id`` collision path goes through the early
     # exists-check at step 3 and the get_or_create race window below).
+    # TODO Phase 3: route through ``register_project`` (async) under
+    # ``run_under_db_write_lock``; for now wrap the sync helper via
+    # ``sync_to_async`` so the view itself is fully async.
     try:
-        project, created = register_project_sync(
+        project, created = await sync_to_async(register_project_sync)(
             project_id,
             directory=resolved,
             name=name,
@@ -256,10 +261,10 @@ def _create_project(request):
     return JsonResponse(serialize_project(project), status=201)
 
 
-def project_detail(request, project_id):
+async def project_detail(request, project_id):
     """GET/PUT/PATCH /api/projects/<id>/ - Detail of a project, update name/color, or archive."""
     try:
-        project = Project.objects.get(id=project_id)
+        project = await Project.objects.aget(id=project_id)
     except Project.DoesNotExist:
         raise Http404("Project not found")
 
@@ -279,7 +284,7 @@ def project_detail(request, project_id):
                     name = None
                 elif len(name) > 25:
                     return JsonResponse({"error": "Name must be 25 characters or less"}, status=400)
-                elif Project.objects.filter(name=name).exclude(id=project_id).exists():
+                elif await Project.objects.filter(name=name).exclude(id=project_id).aexists():
                     return JsonResponse({"error": "A project with this name already exists"}, status=400)
             project.name = name
         if "color" in data:
@@ -290,14 +295,13 @@ def project_detail(request, project_id):
                 return JsonResponse({"error": "archived must be a boolean"}, status=400)
             project.archived = archived
 
+        # TODO Phase 3: wrap save() under ``run_under_db_write_lock``.
         update_fields = ["name", "color", "archived"]
-        project.save(update_fields=update_fields)
+        await project.asave(update_fields=update_fields)
 
         # Broadcast project_updated via WebSocket
-        from asgiref.sync import async_to_sync
-        from channels.layers import get_channel_layer
         channel_layer = get_channel_layer()
-        async_to_sync(channel_layer.group_send)(
+        await channel_layer.group_send(
             "updates",
             {
                 "type": "broadcast",
@@ -319,13 +323,12 @@ def project_detail(request, project_id):
             if not isinstance(archived, bool):
                 return JsonResponse({"error": "archived must be a boolean"}, status=400)
             project.archived = archived
-            project.save(update_fields=["archived"])
+            # TODO Phase 3: wrap save() under ``run_under_db_write_lock``.
+            await project.asave(update_fields=["archived"])
 
             # Broadcast project_updated via WebSocket
-            from asgiref.sync import async_to_sync
-            from channels.layers import get_channel_layer
             channel_layer = get_channel_layer()
-            async_to_sync(channel_layer.group_send)(
+            await channel_layer.group_send(
                 "updates",
                 {
                     "type": "broadcast",
@@ -339,7 +342,7 @@ def project_detail(request, project_id):
     return JsonResponse(serialize_project(project))
 
 
-def commands(request, project_id):
+async def commands(request, project_id):
     """GET /api/projects/<id>/commands/?provider=<key>&activation_char=<char> — commands for a project.
 
     Returns global commands (``project=NULL``) and project-specific
@@ -350,9 +353,7 @@ def commands(request, project_id):
     Codex uses both ``/`` and ``$``), so there is no implicit default
     for either.
     """
-    try:
-        Project.objects.get(id=project_id)
-    except Project.DoesNotExist:
+    if not await Project.objects.filter(id=project_id).aexists():
         raise Http404("Project not found")
 
     provider_str = request.GET.get("provider")
@@ -381,6 +382,7 @@ def commands(request, project_id):
         .order_by("name")
         .values("name", "plugin_name", "description", "argument_hint", "is_builtin", "project_id")
     )
+    cmds = await sync_to_async(list)(qs)
 
     return JsonResponse({
         "commands": [
@@ -392,23 +394,23 @@ def commands(request, project_id):
                 "is_builtin": cmd["is_builtin"],
                 "is_global": cmd["project_id"] is None,
             }
-            for cmd in qs
+            for cmd in cmds
         ]
     })
 
 
-def user_messages(request, project_id, session_id):
+async def user_messages(request, project_id, session_id):
     """GET /api/projects/<id>/sessions/<session_id>/user-messages/ - User messages of a session.
 
     Returns all user messages for the given session, in chronological order (oldest first).
     Each entry includes line_num, timestamp, and the extracted text content.
     """
     try:
-        session = Session.objects.get(id=session_id, project_id=project_id)
+        session = await Session.objects.aget(id=session_id, project_id=project_id)
     except Session.DoesNotExist:
         raise Http404("Session not found")
 
-    items = (
+    items = await sync_to_async(list)(
         SessionItem.objects
         .filter(session=session, kind=ItemKind.USER_MESSAGE)
         .order_by("line_num")
@@ -425,7 +427,7 @@ def user_messages(request, project_id, session_id):
     return JsonResponse({"messages": messages})
 
 
-def project_sessions(request, project_id):
+async def project_sessions(request, project_id):
     """GET /api/projects/<id>/sessions/ - Sessions of a project (paginated).
 
     Returns only regular sessions (not subagents).
@@ -434,16 +436,14 @@ def project_sessions(request, project_id):
     Query params (optional):
         before_mtime: Cursor for pagination - only return sessions older than this mtime.
     """
-    try:
-        Project.objects.get(id=project_id)
-    except Project.DoesNotExist:
+    if not await Project.objects.filter(id=project_id).aexists():
         raise Http404("Project not found")
 
     before_mtime = request.GET.get("before_mtime")
-    return JsonResponse(_get_sessions_page(project_id, before_mtime))
+    return JsonResponse(await _get_sessions_page(project_id, before_mtime))
 
 
-def _resolve_session_or_404(session_id, project_id, parent_session_id):
+async def _resolve_session_or_404(session_id, project_id, parent_session_id):
     """Fetch the session for a session/subagent route, or raise Http404.
 
     Session route (``parent_session_id`` is None): the session must belong
@@ -462,7 +462,7 @@ def _resolve_session_or_404(session_id, project_id, parent_session_id):
     """
     if parent_session_id is None:
         try:
-            session = Session.objects.get(id=session_id, project_id=project_id)
+            session = await Session.objects.aget(id=session_id, project_id=project_id)
         except Session.DoesNotExist:
             raise Http404("Session not found")
         if session.parent_session_id is not None:
@@ -470,14 +470,14 @@ def _resolve_session_or_404(session_id, project_id, parent_session_id):
         return session
 
     # Subagent route: the parent must be a top-level session of project_id.
-    if not Session.objects.filter(
+    if not await Session.objects.filter(
         id=parent_session_id,
         project_id=project_id,
         parent_session_id__isnull=True,
-    ).exists():
+    ).aexists():
         raise Http404("Session not found")
     try:
-        session = Session.objects.get(id=session_id)
+        session = await Session.objects.aget(id=session_id)
     except Session.DoesNotExist:
         raise Http404("Subagent not found for this parent session")
     if session.parent_session_id != parent_session_id:
@@ -485,7 +485,7 @@ def _resolve_session_or_404(session_id, project_id, parent_session_id):
     return session
 
 
-def session_detail(request, project_id, session_id, parent_session_id=None):
+async def session_detail(request, project_id, session_id, parent_session_id=None):
     """GET/PATCH /api/projects/<id>/sessions/<session_id>/ - Detail or rename session.
 
     Also handles subagent route:
@@ -500,7 +500,7 @@ def session_detail(request, project_id, session_id, parent_session_id=None):
         - Max 200 characters
         - Writes custom-title entry to JSONL file (deferred if process is busy)
     """
-    session = _resolve_session_or_404(session_id, project_id, parent_session_id)
+    session = await _resolve_session_or_404(session_id, project_id, parent_session_id)
 
     if request.method == "PATCH":
         # Reject subagents (cannot be modified)
@@ -528,20 +528,22 @@ def session_detail(request, project_id, session_id, parent_session_id=None):
             title = validation.title
 
             # 1. Update DB immediately
+            # TODO Phase 3: wrap save() under ``run_under_db_write_lock``.
             session.title = title
-            session.save(update_fields=["title"])
+            await session.asave(update_fields=["title"])
 
             # 2. Re-index for full-text search (title is a searchable document)
             if search.is_initialized():
                 try:
-                    search.reindex_session(session_id)
+                    await asyncio.to_thread(search.reindex_session, session_id)
                 except Exception:
                     pass  # Non-critical: search will catch up on next startup
 
             # 3. Persist into the provider's session storage (also wires
             #    up any provider-specific anti-stale-write protection).
+            # TODO Phase 4: replace with an async provider helper.
             try:
-                provider_helpers.rename_session(session_id, title)
+                await sync_to_async(provider_helpers.rename_session)(session_id, title)
             except Exception:
                 pass  # Non-critical: DB is already updated, watcher will sync
 
@@ -552,24 +554,21 @@ def session_detail(request, project_id, session_id, parent_session_id=None):
             if not isinstance(archived, bool):
                 return JsonResponse({"error": "archived must be a boolean"}, status=400)
             session.archived = archived
-            session.save(update_fields=["archived"])
+            # TODO Phase 3: wrap save() under ``run_under_db_write_lock``.
+            await session.asave(update_fields=["archived"])
             needs_broadcast = True
 
             # Re-index for full-text search (archived flag is denormalized in every document)
             if search.is_initialized():
                 try:
-                    search.reindex_session(session_id)
+                    await asyncio.to_thread(search.reindex_session, session_id)
                 except Exception:
                     pass  # Non-critical: search will catch up on next startup
 
             # Stop process and clean up tmux session if archiving
             if archived:
-                from asgiref.sync import async_to_sync
-                from twicc.agent.registry import get_agent_manager_registry
-                async_to_sync(get_agent_manager_registry().kill_agent)(session_id, reason="archived")
-
-                from twicc.terminal import kill_all_tmux_terminals
-                kill_all_tmux_terminals(f"s:{session_id}")
+                await get_agent_manager_registry().kill_agent(session_id, reason="archived")
+                await asyncio.to_thread(kill_all_tmux_terminals, f"s:{session_id}")
 
         # Handle pinned update: NULL (unpinned) or one of PinMode.values.
         if "pinned" in data:
@@ -580,17 +579,16 @@ def session_detail(request, project_id, session_id, parent_session_id=None):
                     status=400,
                 )
             session.pinned = pinned
-            session.save(update_fields=["pinned"])
+            # TODO Phase 3: wrap save() under ``run_under_db_write_lock``.
+            await session.asave(update_fields=["pinned"])
             needs_broadcast = True
 
         # Broadcast session_updated for archived/pinned changes.
         # Title changes don't need this: writing to JSONL triggers the
         # file watcher which broadcasts session_updated automatically.
         if needs_broadcast:
-            from asgiref.sync import async_to_sync
-            from channels.layers import get_channel_layer
             channel_layer = get_channel_layer()
-            async_to_sync(channel_layer.group_send)(
+            await channel_layer.group_send(
                 "updates",
                 {
                     "type": "broadcast",
@@ -604,7 +602,7 @@ def session_detail(request, project_id, session_id, parent_session_id=None):
     return JsonResponse(serialize_session(session))
 
 
-def bulk_archive_sessions(request):
+async def bulk_archive_sessions(request):
     """POST /api/sessions/bulk-archive/ - Archive multiple sessions in one shot.
 
     Body:
@@ -678,22 +676,24 @@ def bulk_archive_sessions(request):
     # scope_type == "all": no additional filter
 
     if dry_run:
-        return JsonResponse({"count": qs.count()})
+        return JsonResponse({"count": await qs.acount()})
 
     # Capture IDs before UPDATE (queryset becomes empty after).
     # Re-check active_ids just before UPDATE to close the TOCTOU window.
-    ids = set(qs.values_list("id", flat=True))
+    ids = set(await sync_to_async(list)(qs.values_list("id", flat=True)))
     active_ids_now = {
         info.session_id
         for info in get_agent_manager_registry().get_active_agents()
     }
     ids -= active_ids_now
 
-    Session.objects.filter(id__in=ids).update(archived=True)
+    # TODO Phase 3: wrap update() under ``run_under_db_write_lock`` and
+    # switch to the search_version=0 / detached-task reindex strategy.
+    await Session.objects.filter(id__in=ids).aupdate(archived=True)
 
     if ids:
         channel_layer = get_channel_layer()
-        async_to_sync(channel_layer.group_send)("updates", {
+        await channel_layer.group_send("updates", {
             "type": "broadcast",
             "data": {
                 "type": "sessions_bulk_archived",
@@ -703,25 +703,24 @@ def bulk_archive_sessions(request):
 
         ids_snapshot = list(ids)
 
-        def post_archive_work():
+        async def post_archive_work():
             for sid in ids_snapshot:
                 try:
                     if search.is_initialized():
-                        search.reindex_session(sid)
+                        await asyncio.to_thread(search.reindex_session, sid)
                 except Exception:
                     logger.exception("bulk archive: reindex failed for session %s", sid)
                 try:
-                    kill_all_tmux_terminals(f"s:{sid}")
+                    await asyncio.to_thread(kill_all_tmux_terminals, f"s:{sid}")
                 except Exception:
                     logger.exception("bulk archive: tmux cleanup failed for session %s", sid)
-            close_old_connections()
 
-        threading.Thread(target=post_archive_work, daemon=True, name="bulk-archive-cleanup").start()
+        asyncio.create_task(post_archive_work(), name="bulk-archive-cleanup")
 
     return JsonResponse({"count": len(ids)})
 
 
-def session_items(request, project_id, session_id, parent_session_id=None):
+async def session_items(request, project_id, session_id, parent_session_id=None):
     """GET /api/projects/<id>/sessions/<session_id>/items/ - Items of a session.
 
     Also handles subagent route:
@@ -744,7 +743,7 @@ def session_items(request, project_id, session_id, parent_session_id=None):
         ?range=:10              -> all lines up to 10
         ?range=0:10&range=20:30&range=50:  -> multiple ranges combined
     """
-    session = _resolve_session_or_404(session_id, project_id, parent_session_id)
+    session = await _resolve_session_or_404(session_id, project_id, parent_session_id)
 
     # Filter by line_num ranges (required — refusing to serve the whole session).
     ranges = request.GET.getlist("range")
@@ -789,12 +788,12 @@ def session_items(request, project_id, session_id, parent_session_id=None):
             status=400,
         )
 
-    items = session.items.filter(q_filter)
+    items = await sync_to_async(list)(session.items.filter(q_filter))
     data = [serialize_session_item(item) for item in items]
     return JsonResponse(data, safe=False)
 
 
-def session_items_metadata(request, project_id, session_id, parent_session_id=None):
+async def session_items_metadata(request, project_id, session_id, parent_session_id=None):
     """GET /api/projects/<id>/sessions/<session_id>/items/metadata/ - Metadata of all items.
 
     Also handles subagent route:
@@ -805,14 +804,16 @@ def session_items_metadata(request, project_id, session_id, parent_session_id=No
     Returns all items with metadata fields but WITHOUT content.
     Used for initial session load to build the visual items list.
     """
-    session = _resolve_session_or_404(session_id, project_id, parent_session_id)
+    session = await _resolve_session_or_404(session_id, project_id, parent_session_id)
 
-    items = session.items.all().defer('content')  # Already ordered by line_num (see Meta.ordering)
+    items = await sync_to_async(list)(
+        session.items.all().defer('content')  # Already ordered by line_num (see Meta.ordering)
+    )
     data = [serialize_session_item_metadata(item) for item in items]
     return JsonResponse(data, safe=False)
 
 
-def tool_results(request, project_id, session_id, line_num, tool_id, parent_session_id=None):
+async def tool_results(request, project_id, session_id, line_num, tool_id, parent_session_id=None):
     """GET /api/projects/<id>/sessions/<session_id>/items/<line_num>/tool-results/<tool_id>/
 
     Also handles subagent route:
@@ -821,49 +822,55 @@ def tool_results(request, project_id, session_id, line_num, tool_id, parent_sess
     Returns the tool_result content(s) for a specific tool_use.
     Uses ToolResultLink to find related tool_result items.
     """
-    session = _resolve_session_or_404(session_id, project_id, parent_session_id)
+    session = await _resolve_session_or_404(session_id, project_id, parent_session_id)
 
-    link_lines = ToolResultLink.objects.filter(
-        session=session,
-        tool_use_line_num=line_num,
-        tool_use_id=tool_id,
-    ).values_list("tool_result_line_num", flat=True)
+    link_lines = await sync_to_async(list)(
+        ToolResultLink.objects.filter(
+            session=session,
+            tool_use_line_num=line_num,
+            tool_use_id=tool_id,
+        ).values_list("tool_result_line_num", flat=True)
+    )
 
     if not link_lines:
         return JsonResponse({"results": []})
 
-    items = SessionItem.objects.filter(
-        session=session,
-        line_num__in=link_lines,
-    ).order_by("line_num")
+    items = await sync_to_async(list)(
+        SessionItem.objects.filter(
+            session=session,
+            line_num__in=link_lines,
+        ).order_by("line_num")
+    )
 
     results = get_provider_helpers(session.provider).get_tool_results(items, tool_id)
     return JsonResponse({"results": results})
 
 
-def subagents_state(request, project_id, session_id):
+async def subagents_state(request, project_id, session_id):
     """GET /api/projects/<id>/sessions/<session_id>/subagents/
 
     Returns the agent links for a session: tool_use_id → agent_id mappings.
     """
     try:
-        session = Session.objects.get(id=session_id, project_id=project_id)
+        session = await Session.objects.aget(id=session_id, project_id=project_id)
     except Session.DoesNotExist:
         raise Http404("Session not found")
 
     if session.parent_session_id is not None:
         raise Http404("Session not found")
 
-    links = list(AgentLink.objects.filter(session=session).order_by("id"))
+    links = await sync_to_async(list)(
+        AgentLink.objects.filter(session=session).order_by("id")
+    )
     # Resolve every spawned subagent's slug (Codex's ``agent_nickname``)
     # in a single query so the frontend can label tool cards / tabs
     # without separately hydrating subagent Session rows. ``None`` when
     # the subagent file hasn't been parsed yet (race) or when the
     # provider doesn't carry a slug.
-    slugs_by_id = dict(
+    slugs_by_id = dict(await sync_to_async(list)(
         Session.objects.filter(id__in=[link.agent_id for link in links])
         .values_list("id", "slug")
-    )
+    ))
     result = [
         {
             "agent_id": link.agent_id,
@@ -878,7 +885,7 @@ def subagents_state(request, project_id, session_id):
     return JsonResponse(result, safe=False)
 
 
-def tool_states(request, project_id, session_id):
+async def tool_states(request, project_id, session_id):
     """GET /api/projects/<id>/sessions/<session_id>/tool-states/
 
     Returns the completion state of all tool_use calls in the session:
@@ -887,13 +894,13 @@ def tool_states(request, project_id, session_id):
     Response: {"tools": {"toolu_xxx": {"result_count": 2, "completed_at": "...", "error": null, "extra": "..."}, ...}}
     """
     try:
-        session = Session.objects.get(id=session_id, project_id=project_id)
+        session = await Session.objects.aget(id=session_id, project_id=project_id)
     except Session.DoesNotExist:
         raise Http404("Session not found")
 
     from django.db.models import Count, Max
 
-    links = (
+    links = await sync_to_async(list)(
         ToolResultLink.objects.filter(session=session)
         .values('tool_use_id')
         .annotate(
@@ -912,7 +919,7 @@ def tool_states(request, project_id, session_id):
     # chunk rebound to the same tool_use_id) at non-adjacent line
     # numbers, and helpers need to walk the chain directly.
     line_nums_by_tool: dict[str, list[int]] = {}
-    for tool_use_id, line_num in (
+    for tool_use_id, line_num in await sync_to_async(list)(
         ToolResultLink.objects.filter(session=session)
         .order_by('tool_result_line_num')
         .values_list('tool_use_id', 'tool_result_line_num')
@@ -933,7 +940,7 @@ def tool_states(request, project_id, session_id):
     return JsonResponse({"tools": tools})
 
 
-def directory_tree(request, project_id, session_id=None):
+async def directory_tree(request, project_id, session_id=None):
     """GET directory tree listing.
 
     Works at project level (/api/projects/<id>/directory-tree/)
@@ -941,7 +948,7 @@ def directory_tree(request, project_id, session_id=None):
     """
     from twicc.file_tree import get_directory_tree, validate_path
 
-    session, dir_path, error = validate_path(
+    session, dir_path, error = await sync_to_async(validate_path)(
         project_id, request.GET.get("path"), session_id=session_id
     )
     if error:
@@ -954,7 +961,7 @@ def directory_tree(request, project_id, session_id=None):
     return JsonResponse(tree)
 
 
-def file_search(request, project_id, session_id=None):
+async def file_search(request, project_id, session_id=None):
     """GET fuzzy file search.
 
     Works at project level (/api/projects/<id>/file-search/)
@@ -962,7 +969,7 @@ def file_search(request, project_id, session_id=None):
     """
     from twicc.file_tree import search_files, validate_path
 
-    session, dir_path, error = validate_path(
+    session, dir_path, error = await sync_to_async(validate_path)(
         project_id, request.GET.get("path"), session_id=session_id
     )
     if error:
@@ -998,7 +1005,7 @@ def validate_standalone_root(path, root):
     return None
 
 
-def standalone_directory_tree(request):
+async def standalone_directory_tree(request):
     """GET directory tree listing for any absolute directory path.
 
     Unlike the project-scoped directory-tree endpoint, this does not require
@@ -1043,12 +1050,12 @@ def standalone_directory_tree(request):
     return JsonResponse(tree)
 
 
-def home_directory(request):
+async def home_directory(request):
     """GET the current user's home directory path."""
     return JsonResponse({"path": os.path.expanduser("~")})
 
 
-def standalone_file_search(request):
+async def standalone_file_search(request):
     """GET file search for any absolute directory path.
 
     Unlike the project-scoped file-search endpoint, this does not require
@@ -1094,7 +1101,7 @@ def standalone_file_search(request):
     return JsonResponse(tree)
 
 
-def standalone_file_content(request):
+async def standalone_file_content(request):
     """GET/PUT file content for any absolute file path.
 
     Unlike the project-scoped file-content endpoint, this does not require
@@ -1168,7 +1175,7 @@ def standalone_file_content(request):
     return JsonResponse(result)
 
 
-def _standalone_file_modify(request, action):
+async def _standalone_file_modify(request, action):
     """Shared logic for standalone file rename, delete, move and create operations."""
     from twicc.file_content import create_path, delete_path, move_path, rename_path
 
@@ -1234,27 +1241,27 @@ def _standalone_file_modify(request, action):
     return JsonResponse(result)
 
 
-def standalone_file_rename(request):
+async def standalone_file_rename(request):
     """POST: rename a file or directory (standalone)."""
-    return _standalone_file_modify(request, "rename")
+    return await _standalone_file_modify(request, "rename")
 
 
-def standalone_file_delete(request):
+async def standalone_file_delete(request):
     """POST: delete a file or directory (standalone)."""
-    return _standalone_file_modify(request, "delete")
+    return await _standalone_file_modify(request, "delete")
 
 
-def standalone_file_move(request):
+async def standalone_file_move(request):
     """POST: move a file or directory (standalone)."""
-    return _standalone_file_modify(request, "move")
+    return await _standalone_file_modify(request, "move")
 
 
-def standalone_file_create(request):
+async def standalone_file_create(request):
     """POST: create a new file or directory (standalone)."""
-    return _standalone_file_modify(request, "create")
+    return await _standalone_file_modify(request, "create")
 
 
-def file_content(request, project_id, session_id=None):
+async def file_content(request, project_id, session_id=None):
     """GET/PUT file content.
 
     Works at project level (/api/projects/<id>/file-content/)
@@ -1283,7 +1290,7 @@ def file_content(request, project_id, session_id=None):
 
         # Validate that the file's directory is within allowed project/session paths
         dir_path = os.path.dirname(os.path.normpath(file_path))
-        session, dir_path, error = validate_path(
+        session, dir_path, error = await sync_to_async(validate_path)(
             project_id, dir_path, session_id=session_id
         )
         if error:
@@ -1308,7 +1315,7 @@ def file_content(request, project_id, session_id=None):
     # directory may be an allowed root whose parent is outside scope.
     if request.GET.get("meta_only"):
         check_dir = normalized if os.path.isdir(normalized) else os.path.dirname(normalized)
-        _session, _check_dir, error = validate_path(project_id, check_dir, session_id=session_id)
+        _session, _check_dir, error = await sync_to_async(validate_path)(project_id, check_dir, session_id=session_id)
         if error:
             return error
         result = get_file_meta(normalized)
@@ -1318,7 +1325,7 @@ def file_content(request, project_id, session_id=None):
 
     # Validate that the file's directory is within allowed project/session paths
     dir_path = os.path.dirname(normalized)
-    session, dir_path, error = validate_path(
+    session, dir_path, error = await sync_to_async(validate_path)(
         project_id, dir_path, session_id=session_id
     )
     if error:
@@ -1335,7 +1342,7 @@ def file_content(request, project_id, session_id=None):
     return JsonResponse(result)
 
 
-def _file_modify(request, project_id, session_id, action):
+async def _file_modify(request, project_id, session_id, action):
     """Shared logic for file rename, delete and move operations.
 
     Create is handled separately in file_create() because it validates the
@@ -1358,7 +1365,7 @@ def _file_modify(request, project_id, session_id, action):
 
     normalized = os.path.normpath(file_path)
     dir_path = os.path.dirname(normalized)
-    _session, dir_path, error = validate_path(project_id, dir_path, session_id=session_id)
+    _session, dir_path, error = await sync_to_async(validate_path)(project_id, dir_path, session_id=session_id)
     if error:
         return error
 
@@ -1372,7 +1379,7 @@ def _file_modify(request, project_id, session_id, action):
         if not destination_dir:
             return JsonResponse({"error": "Missing 'destination_dir' field"}, status=400)
         dest_normalized = os.path.normpath(destination_dir)
-        _session2, _dir_path2, error2 = validate_path(project_id, dest_normalized, session_id=session_id)
+        _session2, _dir_path2, error2 = await sync_to_async(validate_path)(project_id, dest_normalized, session_id=session_id)
         if error2:
             return error2
         result = move_path(normalized, dest_normalized)
@@ -1384,22 +1391,22 @@ def _file_modify(request, project_id, session_id, action):
     return JsonResponse(result)
 
 
-def file_rename(request, project_id, session_id=None):
+async def file_rename(request, project_id, session_id=None):
     """POST: rename a file or directory."""
-    return _file_modify(request, project_id, session_id, "rename")
+    return await _file_modify(request, project_id, session_id, "rename")
 
 
-def file_delete(request, project_id, session_id=None):
+async def file_delete(request, project_id, session_id=None):
     """POST: delete a file or directory."""
-    return _file_modify(request, project_id, session_id, "delete")
+    return await _file_modify(request, project_id, session_id, "delete")
 
 
-def file_move(request, project_id, session_id=None):
+async def file_move(request, project_id, session_id=None):
     """POST: move a file or directory to a different directory."""
-    return _file_modify(request, project_id, session_id, "move")
+    return await _file_modify(request, project_id, session_id, "move")
 
 
-def file_create(request, project_id, session_id=None):
+async def file_create(request, project_id, session_id=None):
     """POST: create a new file or directory."""
     from twicc.file_content import create_path
     from twicc.file_tree import validate_path
@@ -1425,7 +1432,7 @@ def file_create(request, project_id, session_id=None):
         return JsonResponse({"error": "Invalid 'kind' field"}, status=400)
 
     normalized = os.path.normpath(parent_dir)
-    _session, _dir_path, error = validate_path(project_id, normalized, session_id=session_id)
+    _session, _dir_path, error = await sync_to_async(validate_path)(project_id, normalized, session_id=session_id)
     if error:
         return error
 
@@ -1435,7 +1442,7 @@ def file_create(request, project_id, session_id=None):
     return JsonResponse(result)
 
 
-def git_log(request, project_id, session_id=None):
+async def git_log(request, project_id, session_id=None):
     """GET /api/projects/<id>/[sessions/<session_id>/]git-log/
 
     Returns git commit history for the session's git repository.
@@ -1472,7 +1479,7 @@ def git_log(request, project_id, session_id=None):
     # An optional ?git_dir= query param lets the frontend request a specific root.
     requested_git_dir = request.GET.get("git_dir")
     try:
-        git_directory = _resolve_session_git_directory(project_id, session_id, requested_git_dir=requested_git_dir)
+        git_directory = await _resolve_session_git_directory(project_id, session_id, requested_git_dir=requested_git_dir)
     except Http404:
         return JsonResponse({"error": "No git repository found"}, status=404)
 
@@ -1490,7 +1497,7 @@ def git_log(request, project_id, session_id=None):
     return JsonResponse(result)
 
 
-def _resolve_session_git_directory(project_id, session_id=None, *, requested_git_dir=None):
+async def _resolve_session_git_directory(project_id, session_id=None, *, requested_git_dir=None):
     """Resolve the git directory for a session or project.
 
     Resolution order:
@@ -1509,7 +1516,7 @@ def _resolve_session_git_directory(project_id, session_id=None, *, requested_git
 
     if session_id:
         try:
-            session = Session.objects.get(id=session_id, project_id=project_id)
+            session = await Session.objects.aget(id=session_id, project_id=project_id)
         except Session.DoesNotExist:
             raise Http404("Session not found")
 
@@ -1522,7 +1529,7 @@ def _resolve_session_git_directory(project_id, session_id=None, *, requested_git
 
     # Always fetch project (needed for requested_git_dir validation)
     try:
-        project = Project.objects.get(id=project_id)
+        project = await Project.objects.aget(id=project_id)
     except Project.DoesNotExist:
         raise Http404("Project not found")
 
@@ -1547,7 +1554,7 @@ def _resolve_session_git_directory(project_id, session_id=None, *, requested_git
     raise Http404("No git repository found")
 
 
-def git_index_files(request, project_id, session_id=None):
+async def git_index_files(request, project_id, session_id=None):
     """GET /api/projects/<id>/[sessions/<session_id>/]git-index-files/
 
     Returns stats and a file tree for uncommitted (index) changes.
@@ -1563,13 +1570,13 @@ def git_index_files(request, project_id, session_id=None):
     from twicc.git import get_index_files
 
     requested_git_dir = request.GET.get("git_dir")
-    git_directory = _resolve_session_git_directory(project_id, session_id, requested_git_dir=requested_git_dir)
+    git_directory = await _resolve_session_git_directory(project_id, session_id, requested_git_dir=requested_git_dir)
     result = get_index_files(git_directory)
 
     return JsonResponse(result, safe=False)
 
 
-def git_commit_detail(request, project_id, commit_hash, session_id=None):
+async def git_commit_detail(request, project_id, commit_hash, session_id=None):
     """GET /api/projects/<id>/[sessions/<session_id>/]git-commit-detail/<commit_hash>/
 
     Returns detailed metadata for a single commit (hash, message, body,
@@ -1578,7 +1585,7 @@ def git_commit_detail(request, project_id, commit_hash, session_id=None):
     from twicc.git import GitError, get_commit_detail
 
     requested_git_dir = request.GET.get("git_dir")
-    git_directory = _resolve_session_git_directory(project_id, session_id, requested_git_dir=requested_git_dir)
+    git_directory = await _resolve_session_git_directory(project_id, session_id, requested_git_dir=requested_git_dir)
 
     try:
         result = get_commit_detail(git_directory, commit_hash)
@@ -1588,7 +1595,7 @@ def git_commit_detail(request, project_id, commit_hash, session_id=None):
     return JsonResponse(result)
 
 
-def git_commit_files(request, project_id, commit_hash, session_id=None):
+async def git_commit_files(request, project_id, commit_hash, session_id=None):
     """GET /api/projects/<id>/[sessions/<session_id>/]git-commit-files/<commit_hash>/
 
     Returns stats and a file tree for the files changed by a single commit.
@@ -1607,7 +1614,7 @@ def git_commit_files(request, project_id, commit_hash, session_id=None):
     from twicc.git import GitError, get_commit_files
 
     requested_git_dir = request.GET.get("git_dir")
-    git_directory = _resolve_session_git_directory(project_id, session_id, requested_git_dir=requested_git_dir)
+    git_directory = await _resolve_session_git_directory(project_id, session_id, requested_git_dir=requested_git_dir)
 
     try:
         result = get_commit_files(git_directory, commit_hash)
@@ -1617,7 +1624,7 @@ def git_commit_files(request, project_id, commit_hash, session_id=None):
     return JsonResponse(result)
 
 
-def git_index_file_diff(request, project_id, session_id=None):
+async def git_index_file_diff(request, project_id, session_id=None):
     """GET /api/projects/<id>/[sessions/<session_id>/]git-index-file-diff/
 
     Returns the original (HEAD) and modified (working tree) content of a file
@@ -1641,7 +1648,7 @@ def git_index_file_diff(request, project_id, session_id=None):
         return JsonResponse({"error": "Missing 'path' query parameter"}, status=400)
 
     requested_git_dir = request.GET.get("git_dir")
-    git_directory = _resolve_session_git_directory(project_id, session_id, requested_git_dir=requested_git_dir)
+    git_directory = await _resolve_session_git_directory(project_id, session_id, requested_git_dir=requested_git_dir)
     result = get_index_file_diff(git_directory, file_path)
 
     if result.get("error"):
@@ -1650,7 +1657,7 @@ def git_index_file_diff(request, project_id, session_id=None):
     return JsonResponse(result)
 
 
-def git_commit_file_diff(request, project_id, commit_hash, session_id=None):
+async def git_commit_file_diff(request, project_id, commit_hash, session_id=None):
     """GET /api/projects/<id>/[sessions/<session_id>/]git-commit-file-diff/<commit_hash>/
 
     Returns the original (parent commit) and modified (commit) content of a file
@@ -1674,7 +1681,7 @@ def git_commit_file_diff(request, project_id, commit_hash, session_id=None):
         return JsonResponse({"error": "Missing 'path' query parameter"}, status=400)
 
     requested_git_dir = request.GET.get("git_dir")
-    git_directory = _resolve_session_git_directory(project_id, session_id, requested_git_dir=requested_git_dir)
+    git_directory = await _resolve_session_git_directory(project_id, session_id, requested_git_dir=requested_git_dir)
     result = get_commit_file_diff(git_directory, commit_hash, file_path)
 
     if result.get("error"):
@@ -1683,7 +1690,7 @@ def git_commit_file_diff(request, project_id, commit_hash, session_id=None):
     return JsonResponse(result)
 
 
-def _git_file_action(request, project_id, session_id, action):
+async def _git_file_action(request, project_id, session_id, action):
     """Shared logic for git stage/unstage/discard operations."""
     from twicc.git import GitError, git_discard, git_stage, git_unstage
 
@@ -1700,7 +1707,7 @@ def _git_file_action(request, project_id, session_id, action):
         return JsonResponse({"error": "Missing 'path' field"}, status=400)
 
     requested_git_dir = data.get("git_dir")
-    git_directory = _resolve_session_git_directory(project_id, session_id, requested_git_dir=requested_git_dir)
+    git_directory = await _resolve_session_git_directory(project_id, session_id, requested_git_dir=requested_git_dir)
 
     fn = {"stage": git_stage, "unstage": git_unstage, "discard": git_discard}[action]
 
@@ -1712,19 +1719,19 @@ def _git_file_action(request, project_id, session_id, action):
     return JsonResponse({"ok": True})
 
 
-def git_stage_file(request, project_id, session_id=None):
+async def git_stage_file(request, project_id, session_id=None):
     """POST: stage a file (git add)."""
-    return _git_file_action(request, project_id, session_id, "stage")
+    return await _git_file_action(request, project_id, session_id, "stage")
 
 
-def git_unstage_file(request, project_id, session_id=None):
+async def git_unstage_file(request, project_id, session_id=None):
     """POST: unstage a file (git restore --staged)."""
-    return _git_file_action(request, project_id, session_id, "unstage")
+    return await _git_file_action(request, project_id, session_id, "unstage")
 
 
-def git_discard_file(request, project_id, session_id=None):
+async def git_discard_file(request, project_id, session_id=None):
     """POST: discard unstaged changes (git restore)."""
-    return _git_file_action(request, project_id, session_id, "discard")
+    return await _git_file_action(request, project_id, session_id, "discard")
 
 
 _WEEKLY_ACTIVITY_MAX_WEEKS = 52
@@ -1788,7 +1795,7 @@ def _format_weekly_activity(rows, current_monday):
     return result
 
 
-def home_data(request):
+async def home_data(request):
     """GET /api/home/ - Home page data: projects with weekly activity.
 
     Activity is summed across every provider — the home page shows a
@@ -1809,12 +1816,12 @@ def home_data(request):
     current_monday = today - timedelta(days=today.weekday())
     cutoff = current_monday - timedelta(weeks=_WEEKLY_ACTIVITY_MAX_WEEKS - 1)
 
-    projects = Project.objects.all()
+    projects = await sync_to_async(list)(Project.objects.all())
 
     # Load all weekly activities in a single query (within the 52-week window).
     # Always aggregate per (project, date) so multi-provider rows collapse
     # into one entry per project/date.
-    all_activities = (
+    all_activities = await sync_to_async(list)(
         WeeklyActivity.objects
         .filter(date__gte=cutoff)
         .values("project_id", "date")
@@ -1853,7 +1860,7 @@ def home_data(request):
 _DAILY_ACTIVITY_MAX_DAYS = 365
 
 
-def daily_activity(request, project_id=None):
+async def daily_activity(request, project_id=None):
     """GET /api/daily-activity/ or /api/projects/<id>/daily-activity/
 
     Returns daily activity data for the contribution graph, plus all-time totals.
@@ -1903,14 +1910,16 @@ def daily_activity(request, project_id=None):
     # entry per day. With ``?provider=`` the sum runs over a single row
     # (still correct), or a single project's row in the per-project case.
     qs = DailyActivity.objects.filter(date__gte=cutoff, **project_filters, **provider_filter)
-    rows = qs.values("date").annotate(
-        user_message_count=Sum("user_message_count"),
-        session_count=Sum("session_count"),
-        cost=Sum("cost"),
-    ).order_by("date")
+    rows = await sync_to_async(list)(
+        qs.values("date").annotate(
+            user_message_count=Sum("user_message_count"),
+            session_count=Sum("session_count"),
+            cost=Sum("cost"),
+        ).order_by("date")
+    )
 
     # All-time totals (no date filter)
-    totals = DailyActivity.objects.filter(**project_filters, **provider_filter).aggregate(
+    totals = await DailyActivity.objects.filter(**project_filters, **provider_filter).aaggregate(
         total_user_message_count=Sum("user_message_count"),
         total_session_count=Sum("session_count"),
         total_cost=Sum("cost"),
@@ -1934,7 +1943,7 @@ def daily_activity(request, project_id=None):
     })
 
 
-def search_sessions(request):
+async def search_sessions(request):
     """GET /api/search/ - Full-text search across session messages."""
     if not search.is_initialized():
         return JsonResponse({"error": "Search index not ready"}, status=503)
@@ -1995,7 +2004,10 @@ def search_sessions(request):
     session_ids = [sr.session_id for sr in results.results]
     sessions_info = {}
     if session_ids:
-        for s in Session.objects.filter(id__in=session_ids).select_related("project"):
+        enriched_sessions = await sync_to_async(list)(
+            Session.objects.filter(id__in=session_ids).select_related("project")
+        )
+        for s in enriched_sessions:
             sessions_info[s.id] = {
                 "title": s.title or "",
                 "project_id": s.project_id or "",
@@ -2030,7 +2042,7 @@ def search_sessions(request):
     })
 
 
-def usage_history(request):
+async def usage_history(request):
     """GET /api/usage-history/?provider=<key>&range_days=30&bucket_minutes=60&before=...
 
     Returns historical usage snapshots for charting utilization and burn rate over time.
@@ -2085,7 +2097,7 @@ def usage_history(request):
 
     cutoff = end - timedelta(days=range_days)
 
-    snapshots = list(
+    snapshots = await sync_to_async(list)(
         UsageSnapshot.objects
         .filter(provider=provider.value)
         .filter(fetched_at__gte=cutoff, fetched_at__lte=end)
@@ -2235,7 +2247,7 @@ def usage_history(request):
     return JsonResponse({"snapshots": data})
 
 
-def bootstrap(request):
+async def bootstrap(request):
     """GET /api/bootstrap/ - All data needed before the app can mount.
 
     Returns synced settings (with defaults and categories), workspaces,
@@ -2278,7 +2290,7 @@ def bootstrap(request):
     })
 
 
-def changelog(request):
+async def changelog(request):
     """GET /api/changelog/ - Serve the local CHANGELOG.md (dev mode only)."""
     if not settings.DEV_MODE:
         raise Http404
@@ -2288,7 +2300,7 @@ def changelog(request):
     return HttpResponse(changelog_path.read_bytes(), content_type="text/plain; charset=utf-8")
 
 
-def spa_index(request):
+async def spa_index(request):
     """Catch-all for Vue Router - serves index.html."""
     index_path = settings.FRONTEND_DIST_DIR / "index.html"
     if not index_path.exists():
