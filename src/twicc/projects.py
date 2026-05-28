@@ -162,9 +162,9 @@ def ensure_project_git_root(project_id: str, directory: str | None = None) -> No
 # ``parse_session_file`` and ``sync_session_items_from_file``, and the
 # claude_code initial sync where the cwd is in the JSONL body), pass
 # ``directory=None`` here and call :func:`auto_add_project_to_workspaces`
-# (or its sync sibling) once the directory has been resolved. That second
-# call is idempotent — a workspace that already lists the project is left
-# untouched and no broadcast fires.
+# once the directory has been resolved. That second call is idempotent —
+# a workspace that already lists the project is left untouched and no
+# broadcast fires.
 
 
 def _create_or_get_project(
