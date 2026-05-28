@@ -1063,6 +1063,20 @@ function handleSearchTerms(terms) {
 }
 
 /**
+ * Check whether the current selection lives inside the session items area
+ * (the virtual scroller) and outside any CodeMirror editor — used to decide
+ * whether to prefill the in-session search bar with the selected text.
+ */
+function isSelectionInSessionContent(selection) {
+    const anchor = selection?.anchorNode
+    if (!anchor) return false
+    const scrollerEl = scrollerRef.value?.$el
+    if (!scrollerEl?.contains(anchor)) return false
+    if (anchor.closest?.('.cm-editor') || anchor.parentElement?.closest('.cm-editor')) return false
+    return true
+}
+
+/**
  * Toggle the in-session search bar.
  * Only responds when this is a main session (not subagent) and is currently active.
  *
