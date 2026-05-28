@@ -39,6 +39,13 @@ logger = logging.getLogger(__name__)
 # enabling instant client-side search/filtering without pagination complexity
 SESSIONS_PAGE_SIZE = 1000
 
+# Strong references to fire-and-forget tasks. asyncio.create_task only
+# keeps a weak reference internally, so without holding the Task here the
+# garbage collector can drop a still-running cleanup mid-flight. Tasks
+# are added on creation and removed via ``discard`` from the
+# ``add_done_callback`` so the set stays bounded.
+_DETACHED_TASKS: set[asyncio.Task] = set()
+
 
 async def _get_sessions_page(
     project_id: str | None,
@@ -665,7 +672,7 @@ async def bulk_archive_sessions(request):
     if scope_type == "project":
         qs = qs.filter(project_id=project_id)
     elif scope_type == "workspace":
-        ws_data = read_workspaces()
+        ws_data = await asyncio.to_thread(read_workspaces)
         ws = next(
             (w for w in ws_data.get("workspaces", []) if w["id"] == workspace_id),
             None,
@@ -715,7 +722,12 @@ async def bulk_archive_sessions(request):
                 except Exception:
                     logger.exception("bulk archive: tmux cleanup failed for session %s", sid)
 
-        asyncio.create_task(post_archive_work(), name="bulk-archive-cleanup")
+        # Strong-reference the task in ``_DETACHED_TASKS`` so the GC can't
+        # drop it mid-flight (asyncio only weakly references running tasks).
+        # The done callback removes it once finished.
+        cleanup_task = asyncio.create_task(post_archive_work(), name="bulk-archive-cleanup")
+        _DETACHED_TASKS.add(cleanup_task)
+        cleanup_task.add_done_callback(_DETACHED_TASKS.discard)
 
     return JsonResponse({"count": len(ids)})
 
@@ -957,7 +969,9 @@ async def directory_tree(request, project_id, session_id=None):
     show_hidden = request.GET.get("show_hidden") == "1"
     show_ignored = request.GET.get("show_ignored") == "1"
 
-    tree = get_directory_tree(dir_path, show_hidden=show_hidden, show_ignored=show_ignored)
+    tree = await asyncio.to_thread(
+        get_directory_tree, dir_path, show_hidden=show_hidden, show_ignored=show_ignored
+    )
     return JsonResponse(tree)
 
 
@@ -985,7 +999,8 @@ async def file_search(request, project_id, session_id=None):
     except (ValueError, TypeError):
         max_results = 50
 
-    tree = search_files(
+    tree = await asyncio.to_thread(
+        search_files,
         dir_path, query,
         max_results=max_results,
         show_hidden=show_hidden,
@@ -1044,7 +1059,8 @@ async def standalone_directory_tree(request):
     show_ignored = request.GET.get("show_ignored") != "0" if "show_ignored" in request.GET else True
     directories_only = request.GET.get("directories_only") == "1"
 
-    tree = get_directory_tree(
+    tree = await asyncio.to_thread(
+        get_directory_tree,
         dir_path, show_hidden=show_hidden, show_ignored=show_ignored, directories_only=directories_only,
     )
     return JsonResponse(tree)
@@ -1092,7 +1108,8 @@ async def standalone_file_search(request):
     except (ValueError, TypeError):
         max_results = 50
 
-    tree = search_files(
+    tree = await asyncio.to_thread(
+        search_files,
         dir_path, query,
         max_results=max_results,
         show_hidden=show_hidden,
@@ -1138,7 +1155,7 @@ async def standalone_file_content(request):
         if not os.path.isdir(parent_dir):
             return JsonResponse({"error": "Parent directory not found"}, status=404)
 
-        result = write_file_content(file_path, content)
+        result = await asyncio.to_thread(write_file_content, file_path, content)
         if result.get("error"):
             return JsonResponse(result, status=400)
 
@@ -1160,7 +1177,7 @@ async def standalone_file_content(request):
         return error
 
     if request.GET.get("meta_only"):
-        result = get_file_meta(file_path)
+        result = await asyncio.to_thread(get_file_meta, file_path)
         if result.get("error"):
             return JsonResponse(result, status=404)
         return JsonResponse(result)
@@ -1168,7 +1185,7 @@ async def standalone_file_content(request):
     if not os.path.isfile(file_path):
         return JsonResponse({"error": "File not found"}, status=404)
 
-    result = get_file_content(file_path)
+    result = await asyncio.to_thread(get_file_content, file_path)
     if result.get("error"):
         return JsonResponse(result, status=400)
 
@@ -1205,7 +1222,7 @@ async def _standalone_file_modify(request, action):
         kind = data.get("kind", "file")
         if kind not in ("file", "directory"):
             return JsonResponse({"error": "Invalid 'kind' field"}, status=400)
-        result = create_path(parent_dir, name, kind)
+        result = await asyncio.to_thread(create_path, parent_dir, name, kind)
     else:
         file_path = (data.get("path") or "").strip()
         if not file_path:
@@ -1221,7 +1238,7 @@ async def _standalone_file_modify(request, action):
             new_name = (data.get("new_name") or "").strip()
             if not new_name:
                 return JsonResponse({"error": "Missing 'new_name' field"}, status=400)
-            result = rename_path(file_path, new_name)
+            result = await asyncio.to_thread(rename_path, file_path, new_name)
         elif action == "move":
             destination_dir = (data.get("destination_dir") or "").strip()
             if not destination_dir:
@@ -1232,9 +1249,9 @@ async def _standalone_file_modify(request, action):
             error = validate_standalone_root(destination_dir, root)
             if error:
                 return error
-            result = move_path(file_path, destination_dir)
+            result = await asyncio.to_thread(move_path, file_path, destination_dir)
         else:
-            result = delete_path(file_path)
+            result = await asyncio.to_thread(delete_path, file_path)
 
     if result.get("error"):
         return JsonResponse(result, status=400)
@@ -1297,7 +1314,7 @@ async def file_content(request, project_id, session_id=None):
             return error
 
         normalized = os.path.normpath(file_path)
-        result = write_file_content(normalized, content)
+        result = await asyncio.to_thread(write_file_content, normalized, content)
         if result.get("error"):
             return JsonResponse(result, status=400)
 
@@ -1318,7 +1335,7 @@ async def file_content(request, project_id, session_id=None):
         _session, _check_dir, error = await sync_to_async(validate_path)(project_id, check_dir, session_id=session_id)
         if error:
             return error
-        result = get_file_meta(normalized)
+        result = await asyncio.to_thread(get_file_meta, normalized)
         if result.get("error"):
             return JsonResponse(result, status=404)
         return JsonResponse(result)
@@ -1335,7 +1352,7 @@ async def file_content(request, project_id, session_id=None):
     if not os.path.isfile(normalized):
         return JsonResponse({"error": "File not found"}, status=404)
 
-    result = get_file_content(normalized)
+    result = await asyncio.to_thread(get_file_content, normalized)
     if result.get("error"):
         return JsonResponse(result, status=400)
 
@@ -1373,7 +1390,7 @@ async def _file_modify(request, project_id, session_id, action):
         new_name = (data.get("new_name") or "").strip()
         if not new_name:
             return JsonResponse({"error": "Missing 'new_name' field"}, status=400)
-        result = rename_path(normalized, new_name)
+        result = await asyncio.to_thread(rename_path, normalized, new_name)
     elif action == "move":
         destination_dir = (data.get("destination_dir") or "").strip()
         if not destination_dir:
@@ -1382,9 +1399,9 @@ async def _file_modify(request, project_id, session_id, action):
         _session2, _dir_path2, error2 = await sync_to_async(validate_path)(project_id, dest_normalized, session_id=session_id)
         if error2:
             return error2
-        result = move_path(normalized, dest_normalized)
+        result = await asyncio.to_thread(move_path, normalized, dest_normalized)
     else:
-        result = delete_path(normalized)
+        result = await asyncio.to_thread(delete_path, normalized)
 
     if result.get("error"):
         return JsonResponse(result, status=400)
@@ -1436,7 +1453,7 @@ async def file_create(request, project_id, session_id=None):
     if error:
         return error
 
-    result = create_path(normalized, name, kind)
+    result = await asyncio.to_thread(create_path, normalized, name, kind)
     if result.get("error"):
         return JsonResponse(result, status=400)
     return JsonResponse(result)
@@ -1485,10 +1502,10 @@ async def git_log(request, project_id, session_id=None):
 
     # Always resolve branch dynamically from the git directory at request time,
     # so the branch selector reflects the actual state (handles worktrees too).
-    current_branch = get_current_branch(git_directory)
+    current_branch = await asyncio.to_thread(get_current_branch, git_directory)
 
     try:
-        result = get_git_log(git_directory, branch=branch_filter or None)
+        result = await asyncio.to_thread(get_git_log, git_directory, branch=branch_filter or None)
     except GitError as e:
         return JsonResponse({"error": str(e)}, status=500)
 
@@ -1571,7 +1588,7 @@ async def git_index_files(request, project_id, session_id=None):
 
     requested_git_dir = request.GET.get("git_dir")
     git_directory = await _resolve_session_git_directory(project_id, session_id, requested_git_dir=requested_git_dir)
-    result = get_index_files(git_directory)
+    result = await asyncio.to_thread(get_index_files, git_directory)
 
     return JsonResponse(result, safe=False)
 
@@ -1588,7 +1605,7 @@ async def git_commit_detail(request, project_id, commit_hash, session_id=None):
     git_directory = await _resolve_session_git_directory(project_id, session_id, requested_git_dir=requested_git_dir)
 
     try:
-        result = get_commit_detail(git_directory, commit_hash)
+        result = await asyncio.to_thread(get_commit_detail, git_directory, commit_hash)
     except GitError as e:
         return JsonResponse({"error": str(e)}, status=500)
 
@@ -1617,7 +1634,7 @@ async def git_commit_files(request, project_id, commit_hash, session_id=None):
     git_directory = await _resolve_session_git_directory(project_id, session_id, requested_git_dir=requested_git_dir)
 
     try:
-        result = get_commit_files(git_directory, commit_hash)
+        result = await asyncio.to_thread(get_commit_files, git_directory, commit_hash)
     except GitError as e:
         return JsonResponse({"error": str(e)}, status=500)
 
@@ -1649,7 +1666,7 @@ async def git_index_file_diff(request, project_id, session_id=None):
 
     requested_git_dir = request.GET.get("git_dir")
     git_directory = await _resolve_session_git_directory(project_id, session_id, requested_git_dir=requested_git_dir)
-    result = get_index_file_diff(git_directory, file_path)
+    result = await asyncio.to_thread(get_index_file_diff, git_directory, file_path)
 
     if result.get("error"):
         return JsonResponse(result, status=500)
@@ -1682,7 +1699,7 @@ async def git_commit_file_diff(request, project_id, commit_hash, session_id=None
 
     requested_git_dir = request.GET.get("git_dir")
     git_directory = await _resolve_session_git_directory(project_id, session_id, requested_git_dir=requested_git_dir)
-    result = get_commit_file_diff(git_directory, commit_hash, file_path)
+    result = await asyncio.to_thread(get_commit_file_diff, git_directory, commit_hash, file_path)
 
     if result.get("error"):
         return JsonResponse(result, status=500)
@@ -1712,7 +1729,7 @@ async def _git_file_action(request, project_id, session_id, action):
     fn = {"stage": git_stage, "unstage": git_unstage, "discard": git_discard}[action]
 
     try:
-        fn(git_directory, file_path)
+        await asyncio.to_thread(fn, git_directory, file_path)
     except GitError as e:
         return JsonResponse({"error": str(e)}, status=400)
 
@@ -1985,7 +2002,8 @@ async def search_sessions(request):
         offset = 0
 
     try:
-        results = search.search(
+        results = await asyncio.to_thread(
+            search.search,
             q,
             project_id=project_id,
             project_ids=project_ids or None,
@@ -2261,13 +2279,20 @@ async def bootstrap(request):
     from twicc.tips_manifest import manifest_to_dict
     from twicc.workspaces import read_workspaces
 
-    raw_settings = read_synced_settings()
+    # Bootstrap reads several user config / settings JSON files plus
+    # workspace state — none of it is hot, but file I/O on the event loop
+    # would still block ASGI. Hop into a worker thread for the lot.
+    raw_settings = await asyncio.to_thread(read_synced_settings)
     clean_settings, version = prepare_settings_for_client(raw_settings)
     disabled_providers_present = "disabledProviders" in raw_settings
     disabled_providers = (raw_settings.get("disabledProviders") or []) if disabled_providers_present else []
     from twicc.providers.state import get_all_provider_states
     provider_states = get_all_provider_states()
-    workspaces_data = read_workspaces()
+    workspaces_data = await asyncio.to_thread(read_workspaces)
+    terminal_config = await asyncio.to_thread(read_terminal_config)
+    message_snippets = await asyncio.to_thread(read_message_snippets_config)
+    seen_tips = await asyncio.to_thread(read_seen_tips)
+    tips_manifest = await asyncio.to_thread(manifest_to_dict)
     return JsonResponse({
         "settings": clean_settings,
         "settings_version": version,
@@ -2276,10 +2301,10 @@ async def bootstrap(request):
         "uvx_mode": settings.UVX_MODE,
         "twicc_launch_prefix": settings.TWICC_LAUNCH_PREFIX,
         "workspaces": workspaces_data.get("workspaces", []),
-        "terminal_config": read_terminal_config(),
-        "message_snippets": read_message_snippets_config(),
-        "seen_tips": read_seen_tips(),
-        "tips_manifest": manifest_to_dict(),
+        "terminal_config": terminal_config,
+        "message_snippets": message_snippets,
+        "seen_tips": seen_tips,
+        "tips_manifest": tips_manifest,
         "providers": {
             provider.value: helpers.get_bootstrap_data()
             for provider, helpers in get_provider_helpers_registry().items()
