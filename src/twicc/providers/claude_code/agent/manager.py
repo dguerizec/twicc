@@ -695,8 +695,10 @@ class ClaudeCodeAgentManager(BaseAgentManager):
 
                 # Delete expired crons from DB (they're already dead in the CLI)
                 expired_ids = [c.pk for c in expired]
-                await asyncio.to_thread(
-                    lambda: SessionCron.objects.filter(pk__in=expired_ids).delete()
+                await run_under_db_write_lock(
+                    lambda: asyncio.to_thread(
+                        lambda: SessionCron.objects.filter(pk__in=expired_ids).delete()
+                    )
                 )
                 logger.info(
                     "Deleted %d expired cron(s) from DB for session %s",
@@ -803,17 +805,19 @@ class ClaudeCodeAgentManager(BaseAgentManager):
         agent = self._agents.get(session_id)
         process_run = agent.process_run if agent else None
 
-        await asyncio.to_thread(
-            lambda: SessionCron.objects.create(
-                provider=Provider.CLAUDE_CODE.value,
-                cron_id=cron_id,
-                session_id=session_id,
-                process_run=process_run,
-                cron_expr=cron_expr,
-                recurring=recurring,
-                prompt=prompt,
-                created_at=created_at,
-                next_fire=next_fire,
+        await run_under_db_write_lock(
+            lambda: asyncio.to_thread(
+                lambda: SessionCron.objects.create(
+                    provider=Provider.CLAUDE_CODE.value,
+                    cron_id=cron_id,
+                    session_id=session_id,
+                    process_run=process_run,
+                    cron_expr=cron_expr,
+                    recurring=recurring,
+                    prompt=prompt,
+                    created_at=created_at,
+                    next_fire=next_fire,
+                )
             )
         )
         logger.info(
@@ -826,8 +830,10 @@ class ClaudeCodeAgentManager(BaseAgentManager):
         """Delete a cron job from the database and broadcast the update."""
         from twicc.core.models import SessionCron
 
-        deleted, _ = await asyncio.to_thread(
-            lambda: SessionCron.objects.filter(cron_id=cron_id).delete()
+        deleted, _ = await run_under_db_write_lock(
+            lambda: asyncio.to_thread(
+                lambda: SessionCron.objects.filter(cron_id=cron_id).delete()
+            )
         )
         if deleted:
             logger.info("Deleted cron %s for session %s", cron_id, session_id)
