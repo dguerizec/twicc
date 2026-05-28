@@ -585,16 +585,20 @@ class ClaudeCodeHelpers(BaseProviderHelpers):
 
         return await _generate_title(prompt, system_prompt)
 
-    def rename_session(self, session_id: str, title: str) -> None:
+    async def rename_session(self, session_id: str, title: str) -> None:
         """Append the title to the JSONL and mark it protected against CLI stale re-appends.
 
         ``protect_title`` runs in a ``finally`` so the protection is
         registered even when the JSONL write fails — the DB row already
         holds the new title and we still want to block any out-of-date
-        title the CLI might re-append.
+        title the CLI might re-append. ``rename_session_in_jsonl`` does
+        FS I/O (SDK kernel-level atomic append), so it hops to a worker
+        thread; ``protect_title`` is a dict mutation, safe inline.
         """
+        import asyncio
+
         try:
-            rename_session_in_jsonl(session_id, title)
+            await asyncio.to_thread(rename_session_in_jsonl, session_id, title)
         finally:
             protect_title(session_id, title)
 

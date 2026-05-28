@@ -557,9 +557,8 @@ async def session_detail(request, project_id, session_id, parent_session_id=None
 
             # 3. Persist into the provider's session storage (also wires
             #    up any provider-specific anti-stale-write protection).
-            # TODO Phase 4: replace with an async provider helper.
             try:
-                await sync_to_async(provider_helpers.rename_session)(session_id, title)
+                await provider_helpers.rename_session(session_id, title)
             except Exception:
                 pass  # Non-critical: DB is already updated, watcher will sync
 

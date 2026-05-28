@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 import os
 
-from asgiref.sync import async_to_sync, sync_to_async
+from asgiref.sync import sync_to_async
 from channels.layers import get_channel_layer
 from django.db import transaction
 
@@ -153,11 +153,10 @@ def ensure_project_git_root(project_id: str, directory: str | None = None) -> No
 # Project creation — single entry point
 # =============================================================================
 #
-# Every code path that creates a ``Project`` row goes through one of the two
-# helpers below (``register_project`` async, ``register_project_sync`` sync).
-# They wrap ``Project.objects.get_or_create`` and run the after-creation
-# hooks atomically: WS broadcast of ``project_added`` and workspace
-# auto-add (when the directory is already known).
+# Every code path that creates a ``Project`` row goes through ``register_project``
+# (async). It wraps ``Project.objects.get_or_create`` and runs the
+# after-creation hooks atomically: WS broadcast of ``project_added`` and
+# workspace auto-add (when the directory is already known).
 #
 # For callers that learn the directory only later (the watcher between
 # ``parse_session_file`` and ``sync_session_items_from_file``, and the
@@ -179,8 +178,8 @@ def _create_or_get_project(
     """Pure DB operation: get-or-create a Project row.
 
     Returns ``(project, was_just_created)``. No broadcasts, no auto-add —
-    callers should go through ``register_project`` /
-    ``register_project_sync`` instead, which run the post-creation hooks.
+    callers should go through ``register_project`` (async) instead, which
+    runs the post-creation hooks.
     """
     defaults: dict = {}
     if directory:
@@ -283,10 +282,8 @@ async def register_project(
     :func:`twicc.workspaces.auto_add_project_to_workspaces` once the
     directory has been set.
 
-    Sync callers use :data:`register_project_sync` (an
-    ``async_to_sync(register_project)`` alias). Broadcasts targeting a
-    channel layer with no subscribers (e.g. initial sync before any WS
-    client is connected) are silent no-ops.
+    Broadcasts targeting a channel layer with no subscribers (e.g.
+    initial sync before any WS client is connected) are silent no-ops.
     """
     project, created, adopted = await sync_to_async(register_project_db_only)(
         project_id,
@@ -298,9 +295,6 @@ async def register_project(
         await auto_add_project_to_workspaces(project.id, project.directory)
 
     return project, created
-
-
-register_project_sync = async_to_sync(register_project)
 
 
 def update_project_total_cost(project_id: str) -> None:

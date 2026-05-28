@@ -532,7 +532,7 @@ class BaseProviderHelpers:
             )
         return TitleValidationResult(title=title, error=None)
 
-    def rename_session(self, session_id: str, title: str) -> None:
+    async def rename_session(self, session_id: str, title: str) -> None:
         """Persist a new title in the provider's session storage.
 
         Writes to the provider-specific backing store (e.g. JSONL for

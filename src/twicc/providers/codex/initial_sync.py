@@ -172,7 +172,7 @@ def _build_create_payload(
     bumps ``stats['items_added']`` and ``stats['sessions_created']``.
 
     Codex stores the cwd on the first JSONL line, so every payload carries
-    ``new_project_directory``: the DB writer's ``register_project_sync`` is
+    ``new_project_directory``: the DB writer's ``register_project`` is
     idempotent (no-op when the project already exists), and a cross-project
     subagent may be the first session the DB writer ever sees for its own
     project.
