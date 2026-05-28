@@ -8,6 +8,7 @@ When TWICC_PASSWORD_HASH is empty/unset, all requests pass through (no protectio
 
 import logging
 
+from asgiref.sync import markcoroutinefunction
 from django.conf import settings
 from django.http import JsonResponse
 
@@ -34,43 +35,52 @@ class PasswordAuthMiddleware:
     SPA requests (frontend handles redirect to login).
     """
 
+    async_capable = True
+    sync_capable = False
+
     def __init__(self, get_response):
         self.get_response = get_response
         self.password_required = bool(settings.TWICC_PASSWORD_HASH)
+        # Django/asgiref detect coroutine middleware via iscoroutinefunction
+        # on the *instance*, not on cls.__call__. A class with ``async def
+        # __call__`` is not enough — mark the instance explicitly.
+        markcoroutinefunction(self)
         if self.password_required:
             logger.info("Password protection enabled")
         else:
             logger.info("Password protection disabled (TWICC_PASSWORD_HASH not set)")
 
-    def __call__(self, request):
+    async def __call__(self, request):
         # No password configured = no protection
         if not self.password_required:
-            return self.get_response(request)
+            return await self.get_response(request)
 
         # Allow public paths
         if any(request.path.startswith(p) for p in PUBLIC_PATHS):
-            return self.get_response(request)
+            return await self.get_response(request)
 
         # Allow non-API paths (SPA catch-all serves index.html which contains
         # no sensitive data; Vue Router handles the login redirect client-side)
         if not request.path.startswith("/api/"):
-            return self.get_response(request)
+            return await self.get_response(request)
 
         # Check session authentication for API requests. A session that was
         # logged in against an older password hash (rotated since) is treated
         # as unauthenticated, and its server-side row is dropped so it can't
         # be re-used by a parallel request.
         session = request.session
+        auth_value = await session.aget(SESSION_AUTH_KEY)
+        fingerprint = await session.aget(SESSION_FINGERPRINT_KEY)
         if not is_session_authenticated(
-            session.get(SESSION_AUTH_KEY),
-            session.get(SESSION_FINGERPRINT_KEY),
+            auth_value,
+            fingerprint,
             settings.TWICC_PASSWORD_HASH,
         ):
-            if session.get(SESSION_AUTH_KEY):
-                session.flush()
+            if auth_value:
+                await session.aflush()
             return JsonResponse(
                 {"error": "Authentication required"},
                 status=401,
             )
 
-        return self.get_response(request)
+        return await self.get_response(request)

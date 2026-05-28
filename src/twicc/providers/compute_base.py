@@ -36,7 +36,8 @@ from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple
 
 import orjson
 from django.core.exceptions import MultipleObjectsReturned
-from django.db.models import Count, Max, QuerySet
+from django.db import transaction
+from django.db.models import Count, F, Max, QuerySet
 
 from twicc.core.enums import ItemDisplayLevel, ItemKind, Provider
 from twicc.core.models import AgentLink, Session, SessionItem, SessionType, ToolResultLink
@@ -1553,7 +1554,7 @@ class BaseSessionCompute:
     # Batch orchestration — concrete in later steps
     # ------------------------------------------------------------------
 
-    def compute_session_metadata(self, session_id: str, result_queue) -> None:
+    def compute_session_metadata(self, session_id: str, result_queue, run_id: int) -> None:
         """
         Compute metadata for every item in a session and push the result on ``result_queue``.
 
@@ -1585,6 +1586,8 @@ class BaseSessionCompute:
             logger.error(f"Session {session_id} not found for metadata computation")
             result_queue.put(orjson.dumps({
                 'type': 'error',
+                'provider': self.provider.value,
+                'run_id': run_id,
                 'session_id': session_id,
                 'error': 'Session not found',
             }))
@@ -1939,8 +1942,15 @@ class BaseSessionCompute:
 
         result_queue.put(orjson.dumps({
             'type': 'session_complete',
+            'provider': self.provider.value,
+            'run_id': run_id,
             'session_id': session_id,
             'project_id': session.project_id,
+            # Revision marker — the session's last_offset as this worker saw
+            # it. apply_session_complete skips the apply if the row's
+            # last_offset has since advanced (watcher live-computed newer
+            # lines), so a stale worker result can't clobber fresher data.
+            'observed_last_offset': session.last_offset,
             'item_updates': all_item_updates,
             'item_fields': [
                 'display_level', 'group_head', 'group_tail', 'kind', 'message_id',
@@ -1992,7 +2002,9 @@ class BaseSessionCompute:
 
         connection.close()
 
-    def apply_session_complete(self, msg: dict) -> None:
+    @staticmethod
+    @transaction.atomic
+    def apply_session_complete(msg: dict) -> None:
         """
         Apply a ``session_complete`` payload produced by :meth:`compute_session_metadata`.
 
@@ -2000,8 +2012,43 @@ class BaseSessionCompute:
         bulk_updates, link create/update/delete diffs, session field
         updates, cost recalculation, title persistence, and project
         metadata refresh.
+
+        Wrapped in ``transaction.atomic`` so the dozen-ish SQL statements
+        below run as a single transaction: one write-lock acquisition and
+        one fsync per session instead of one per statement.
         """
         session_id = msg['session_id']
+
+        # Revision guard. The worker computed this result against the session
+        # as it was when it read the row (observed_last_offset). If the watcher
+        # has since appended new JSONL lines and live-computed them, the row's
+        # last_offset has advanced past what the worker saw — the worker's
+        # result is stale. Applying it would overwrite the watcher's fresher
+        # metadata and still bump compute_version to current, which would also
+        # stop a later recompute pass from correcting it.
+        #
+        # The check is a conditional no-op UPDATE, not a SELECT, so it is the
+        # transaction's first statement and takes the write lock up front. A
+        # SELECT-then-write guard would open a read snapshot a concurrent
+        # watcher commit could invalidate, turning the whole apply into a
+        # SQLITE_BUSY_SNAPSHOT / "database is locked" failure instead of a
+        # clean skip. 0 rows matched => last_offset advanced past the observed
+        # value (or the row is gone) => skip. compute's session_fields never
+        # include last_offset, so only the watcher advances it — a reliable
+        # monotonic revision marker.
+        observed_last_offset = msg.get('observed_last_offset')
+        if observed_last_offset is not None:
+            rows = Session.objects.filter(
+                id=session_id, last_offset__lte=observed_last_offset,
+            ).update(last_offset=F('last_offset'))
+            if rows == 0:
+                logger.info(
+                    "apply_session_complete: skipping stale compute result for "
+                    "session %s — last_offset advanced past the worker's observed "
+                    "value %s (watcher live-computed newer lines, or the row is gone)",
+                    session_id, observed_last_offset,
+                )
+                return
 
         # 1. Apply item updates (only items that changed)
         item_updates = msg.get('item_updates', [])
@@ -2014,7 +2061,7 @@ class BaseSessionCompute:
                 })
                 for upd in item_updates
             ]
-            SessionItem.objects.bulk_update(items, item_fields, 50)
+            SessionItem.objects.bulk_update(items, item_fields, batch_size=50)
 
         # 2. Apply content overrides (rare: provider-specific transformations applied at compute time)
         content_overrides = msg.get('content_overrides', [])
@@ -2023,7 +2070,7 @@ class BaseSessionCompute:
                 SessionItem(id=ovr['id'], content=ovr['content'])
                 for ovr in content_overrides
             ]
-            SessionItem.objects.bulk_update(items, ['content'], 50)
+            SessionItem.objects.bulk_update(items, ['content'], batch_size=50)
 
         # 3. Sync tool result links (diff-based: create/update/delete)
         trl_to_create = msg.get('tool_result_links_to_create', [])
@@ -2041,7 +2088,7 @@ class BaseSessionCompute:
                 )
                 for d in trl_to_create
             ]
-            ToolResultLink.objects.bulk_create(links, ignore_conflicts=True)
+            ToolResultLink.objects.bulk_create(links, ignore_conflicts=True, batch_size=50)
 
         trl_to_update = msg.get('tool_result_links_to_update', [])
         if trl_to_update:
@@ -2060,7 +2107,7 @@ class BaseSessionCompute:
                 )
                 for d in trl_to_update
             ]
-            ToolResultLink.objects.bulk_update(links, trl_update_fields, 50)
+            ToolResultLink.objects.bulk_update(links, trl_update_fields, batch_size=50)
 
         trl_to_delete = msg.get('tool_result_links_to_delete', [])
         if trl_to_delete:
@@ -2080,7 +2127,7 @@ class BaseSessionCompute:
                 )
                 for d in agent_links_to_create
             ]
-            AgentLink.objects.bulk_create(links, ignore_conflicts=True)
+            AgentLink.objects.bulk_create(links, ignore_conflicts=True, batch_size=50)
 
         agent_links_to_update = msg.get('agent_links_to_update', [])
         if agent_links_to_update:
@@ -2097,7 +2144,7 @@ class BaseSessionCompute:
                 )
                 for d in agent_links_to_update
             ]
-            AgentLink.objects.bulk_update(links, agent_link_fields, 50)
+            AgentLink.objects.bulk_update(links, agent_link_fields, batch_size=50)
 
         agent_links_to_delete = msg.get('agent_links_to_delete', [])
         if agent_links_to_delete:
@@ -2143,7 +2190,13 @@ class BaseSessionCompute:
         # 10. Resolve project git_root if session has git info but project doesn't
         session_git_dir = session_fields.get('git_directory') if session_fields else None
         if session_git_dir and project_id and get_project_git_root(project_id) is None:
-            ensure_project_git_root(project_id)
+            # Pass project_directory explicitly. Step 9's ensure_project_directory
+            # defers its directory-cache write to on_commit, so a bare
+            # ensure_project_git_root(project_id) would fall back to the
+            # pre-step-9 cached directory and resolve git_root from the wrong
+            # path. When project_directory is None, step 9 did not run and the
+            # cache fallback is reliable, so passing None is also correct.
+            ensure_project_git_root(project_id, project_directory)
 
         # 11. Update last_stopped_at for subagents that finished naturally
         agent_stopped = msg.get('agent_stopped')
@@ -2405,7 +2458,7 @@ class BaseSessionCompute:
 
         # Bulk create all items
         items_only = [item for item, _ in items_to_create]
-        SessionItem.objects.bulk_create(items_only, ignore_conflicts=True)
+        SessionItem.objects.bulk_create(items_only, ignore_conflicts=True, batch_size=50)
 
         # Track line_nums of new and updated items
         new_line_nums: set[int] = {item.line_num for item in items_only}

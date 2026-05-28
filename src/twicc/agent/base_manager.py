@@ -15,6 +15,8 @@ import time
 from collections.abc import Callable, Coroutine
 from typing import TYPE_CHECKING, Any
 
+from twicc.providers.db_writer import run_under_db_write_lock
+
 from .base_agent import BaseAgent
 from .states import AgentInfo, AgentState
 
@@ -167,17 +169,50 @@ class BaseAgentManager:
             if self._agents:
                 logger.info("Shutting down %d active agent(s)", len(self._agents))
 
+                agents_snapshot = list(self._agents.values())
                 shutdown_tasks = [
                     asyncio.create_task(
                         agent.interrupt_or_kill(reason="shutdown"),
-                        name=f"shutdown-{session_id}",
+                        name=f"shutdown-{agent.session_id}",
                     )
-                    for session_id, agent in self._agents.items()
+                    for agent in agents_snapshot
                 ]
                 if shutdown_tasks:
                     _, pending = await asyncio.wait(shutdown_tasks, timeout=timeout)
                     for task in pending:
                         task.cancel()
+
+                # Belt-and-suspenders: an ``interrupt_or_kill`` override is
+                # free to return as soon as the agent has reached the DEAD
+                # state, but the DEAD state-change callback may still be in
+                # flight afterwards — and that callback is where the
+                # lifecycle DB writes happen, under ``run_under_db_write_lock``.
+                # ``wait_for_dead`` blocks on both ``_dead_event`` and
+                # ``_dead_callback_done_event``, so this gather guarantees
+                # every callback's lock-protected writes have committed
+                # before we let the caller proceed to ``stop_db_writer()``.
+                wait_results = await asyncio.gather(
+                    *[agent.wait_for_dead(timeout=timeout) for agent in agents_snapshot],
+                    return_exceptions=True,
+                )
+                # Surface anything that timed out or raised — the caller
+                # (``run_server``) is about to call ``stop_db_writer()``,
+                # and a False/exception here means a DEAD callback's
+                # lock-protected writes may not have committed. We can't
+                # block forever (the user pressed Ctrl-C), but a log line
+                # is what makes the silent drop debuggable after the fact.
+                for agent, result in zip(agents_snapshot, wait_results):
+                    if isinstance(result, BaseException):
+                        logger.error(
+                            "Waiting for DEAD callback of session %s raised during shutdown: %s",
+                            agent.session_id, result, exc_info=result,
+                        )
+                    elif result is False:
+                        logger.warning(
+                            "DEAD callback for session %s did not finish within %.1fs "
+                            "during shutdown — its lifecycle DB writes may have been dropped",
+                            agent.session_id, timeout,
+                        )
 
                 self._agents.clear()
                 logger.info("All agents shut down")
@@ -311,32 +346,38 @@ class BaseAgentManager:
         provider-side id (the draft → canonical resolution, if any, happens
         earlier in ``_start_agent``). Everything below operates on that id.
         """
-        from django.utils import timezone as dj_timezone
+        from django.utils import timezone
 
-        from twicc.core.models import ProcessRun as ProcessRunModel, Session
+        from twicc.core.models import ProcessRun, Session
 
         session_id = agent.session_id
         self._agents[session_id] = agent
 
-        now = dj_timezone.now()
+        now = timezone.now()
 
-        # session_id is a plain CharField on ProcessRun, so this works even
-        # when no Session row exists yet (the watcher creates the Session
-        # when the JSONL file appears).
-        process_run = await asyncio.to_thread(
-            lambda: ProcessRunModel.objects.create(
-                provider=agent.provider.value,
-                session_id=session_id,
-                started_at=now,
+        # Persist both DB writes (ProcessRun create + Session start-timestamps
+        # update) under a single DB write lock acquire. The broadcasts that
+        # follow stay outside the lock — they target the in-process Channels
+        # layer and have no DB dependency. ``session_id`` is a plain
+        # CharField on ProcessRun, so the create works even when no Session
+        # row exists yet (the watcher creates the Session when the JSONL
+        # file appears).
+        async def _persist_run_and_start_timestamps() -> None:
+            pr = await asyncio.to_thread(
+                lambda: ProcessRun.objects.create(
+                    provider=agent.provider.value,
+                    session_id=session_id,
+                    started_at=now,
+                )
             )
-        )
-        agent.process_run = process_run
+            agent.process_run = pr
+            await asyncio.to_thread(
+                lambda: Session.objects.filter(id=session_id).update(
+                    last_started_at=now, last_updated_at=now,
+                )
+            )
 
-        await asyncio.to_thread(
-            lambda: Session.objects.filter(id=session_id).update(
-                last_started_at=now, last_updated_at=now,
-            )
-        )
+        await run_under_db_write_lock(_persist_run_and_start_timestamps)
         await self._broadcast_session_updated(session_id)
 
         # Initial STARTING broadcast (state was set to STARTING in __init__).
@@ -374,17 +415,21 @@ class BaseAgentManager:
 
     async def _update_session_stopped_at(self, agent: BaseAgent) -> None:
         """Update ``Session.last_stopped_at`` and broadcast ``session_updated``."""
-        from django.utils import timezone as dj_timezone
+        from django.utils import timezone
 
         from twicc.core.models import Session
 
         try:
-            now = dj_timezone.now()
-            await asyncio.to_thread(
-                lambda: Session.objects.filter(id=agent.session_id).update(
-                    last_stopped_at=now, last_updated_at=now,
+            now = timezone.now()
+
+            async def _persist_stopped() -> None:
+                await asyncio.to_thread(
+                    lambda: Session.objects.filter(id=agent.session_id).update(
+                        last_stopped_at=now, last_updated_at=now,
+                    )
                 )
-            )
+
+            await run_under_db_write_lock(_persist_stopped)
             await self._broadcast_session_updated(agent.session_id)
         except Exception as e:
             logger.error(

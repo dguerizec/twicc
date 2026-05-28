@@ -7,6 +7,7 @@ provider helpers registry.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterable
 from decimal import Decimal
 from pathlib import Path
@@ -33,6 +34,9 @@ from .constants import (
 )
 from .pricing import extract_model_info
 from .streaming_registry import get_streamed_item_registry
+
+logger = logging.getLogger(__name__)
+
 
 # Wrapper-level types and their tool-result payload sub-types. Mirrors
 # the discovery rules in ``codex.compute``; kept inline to avoid a
@@ -289,25 +293,21 @@ class CodexHelpers(BaseProviderHelpers):
 
     async def generate_title(self, prompt: str, system_prompt: str) -> str | None:
         """Run a short gpt-5.4-mini SDK query to suggest a title for ``prompt``."""
-        from .title_suggest import generate_title as _generate
+        from .title_suggest import generate_title as _generate_title
 
-        return await _generate(prompt, system_prompt)
+        return await _generate_title(prompt, system_prompt)
 
-    def rename_session(self, session_id: str, title: str) -> None:
+    async def rename_session(self, session_id: str, title: str) -> None:
         """Persist the new title in Codex's state DB via ``thread/name/set``.
 
-        The Codex SDK is async-first; we hop into an event loop with
-        ``async_to_sync`` so the sync REST handler in ``views.py``
-        keeps its current signature. No JSONL append and no
-        ``protect_title`` machinery: the Codex thread name lives in
-        its own state DB, the rollout JSONL never carries it, and no
-        side actor can re-append a stale value.
+        The Codex SDK is async-first; we await it directly. No JSONL
+        append and no ``protect_title`` machinery: the Codex thread name
+        lives in its own state DB, the rollout JSONL never carries it,
+        and no side actor can re-append a stale value.
         """
-        from asgiref.sync import async_to_sync
-
         from .titles import rename_thread_via_sdk
 
-        async_to_sync(rename_thread_via_sdk)(session_id, title)
+        await rename_thread_via_sdk(session_id, title)
 
     # ------------------------------------------------------------------
     # Full-text search indexing
@@ -488,3 +488,41 @@ class CodexHelpers(BaseProviderHelpers):
             stream_uuid = registry.pop_next(session_id)
             if stream_uuid is not None:
                 item["stream_uuid"] = stream_uuid
+
+    async def try_handle_async_job(self, job, settle_async_job) -> bool:
+        """Route Codex-specific async-queue jobs to their handler.
+
+        Currently :class:`SyncSessionTitlesJob` only (boot-time bulk title
+        import from ``thread_list``). Defined alongside the type, the sync
+        apply, and the post-apply broadcast in :mod:`.titles`.
+
+        Pattern: delegate the sync apply to ``settle_async_job`` (which
+        runs it in ``transaction.atomic`` on a worker thread and resolves
+        ``job.future`` with the result or exception), then read the
+        result off ``job.future`` and run the async broadcast as a
+        post-apply side effect. Skip the broadcast if the future carries
+        an exception — it will propagate to the producer through
+        ``submit_async_job``'s ``await asyncio.shield(job.future)``.
+        """
+        from .titles import (
+            SyncSessionTitlesJob,
+            _apply_sync_session_titles_job,
+            _broadcast_changed_titles,
+        )
+
+        if isinstance(job, SyncSessionTitlesJob):
+            await settle_async_job(
+                job, _apply_sync_session_titles_job, "title sync",
+            )
+            if not job.future.cancelled() and job.future.exception() is None:
+                changed = job.future.result()
+                if changed:
+                    try:
+                        await _broadcast_changed_titles(changed)
+                    except Exception as e:
+                        logger.error(
+                            "Title sync broadcast failed: %s", e, exc_info=True,
+                        )
+                    logger.info("DB writer: %d title(s) applied", len(changed))
+            return True
+        return False

@@ -1,7 +1,10 @@
 """
 Codex title management.
 
-Async helpers for reading and setting Codex thread names via the Codex SDK.
+Async helpers for reading and setting Codex thread names via the Codex SDK,
+plus the DB writer async-queue job that imports a freshly-read catalogue
+into the local ``Session`` rows.
+
 Unlike Claude Code, Codex stores thread metadata in its own state DB
 (single source of truth), so there is no anti-stale-write protection
 (no ``protect_title`` machinery) — the matching JSONL rollout file never
@@ -10,13 +13,91 @@ carries the title in the first place.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from typing import NamedTuple
 
 from codex_app_server import AppServerConfig, AsyncCodex
+from django.db import transaction
+
+from twicc.core.enums import Provider
 
 from .bin import resolve_bundled_binary
 
 logger = logging.getLogger(__name__)
+
+
+class SyncSessionTitlesJob(NamedTuple):
+    """Async-queue job: bulk title import for Codex sessions.
+
+    Codex-specific (routed through :meth:`CodexHelpers.try_handle_async_job`).
+    Pushed onto :attr:`db_writer._async_queue` via :func:`submit_async_job`
+    by the orchestrator's boot-time title sync, after the initial-sync
+    drain has completed (the orchestrator awaits the initial-sync done
+    future before submitting this).
+
+    ``provider`` is fixed (this job is Codex-only) but kept so the job
+    follows the same convention as every other async-queue job — the DB
+    writer reads it for log tagging.
+
+    ``future`` resolves to the list of serialized sessions whose title
+    actually changed (``list[dict]`` from ``serialize_session``). The
+    helper that handles the job runs the sync apply via
+    ``_settle_async_job``, then broadcasts ``session_updated`` for each
+    changed session as a post-apply async side effect.
+    """
+
+    titles: dict[str, str]
+    future: asyncio.Future  # → list[dict]
+    provider: Provider = Provider.CODEX
+
+
+def _apply_sync_session_titles_job(job: SyncSessionTitlesJob) -> list[dict]:
+    """Apply the title map; return the serialized sessions whose title changed.
+
+    Sync — runs inside ``transaction.atomic`` on a worker thread via
+    ``sync_to_async`` inside :func:`db_writer._settle_async_job`. Reads
+    the Codex sessions named in the map, updates the rows whose title
+    actually differs in a single ``bulk_update``, and returns them
+    serialised so the helper can broadcast ``session_updated`` for each.
+    """
+    from twicc.core.models import Session
+    from twicc.core.serializers import serialize_session
+
+    with transaction.atomic():
+        sessions = list(Session.objects.filter(
+            provider=job.provider, id__in=list(job.titles.keys()),
+        ))
+        changed: list = []
+        for session in sessions:
+            new_title = job.titles.get(session.id)
+            if new_title and session.title != new_title:
+                session.title = new_title
+                changed.append(session)
+        if changed:
+            Session.objects.bulk_update(changed, ["title"], batch_size=50)
+    return [serialize_session(s) for s in changed]
+
+
+async def _broadcast_changed_titles(changed: list[dict]) -> None:
+    """Broadcast ``session_updated`` for each changed session.
+
+    Async post-apply side effect: runs after :func:`_apply_sync_session_titles_job`
+    has committed and the DB writer's future has been settled with the
+    list of changed sessions. One WS broadcast per session — could be
+    batched later if the volume ever becomes a problem.
+    """
+    from channels.layers import get_channel_layer
+
+    channel_layer = get_channel_layer()
+    for session_data in changed:
+        await channel_layer.group_send(
+            "updates",
+            {"type": "broadcast", "data": {
+                "type": "session_updated",
+                "session": session_data,
+            }},
+        )
 
 
 async def rename_thread_via_sdk(thread_id: str, title: str) -> None:

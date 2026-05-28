@@ -163,7 +163,7 @@ class TestRecomputePreservesToolResultLinkError:
         #    returns None → error=None in computed result).
         compute = get_compute()
         result_q = queue.Queue()
-        compute.compute_session_metadata(session.id, result_q)
+        compute.compute_session_metadata(session.id, result_q, run_id=0)
         _apply_compute_results(result_q, compute)
 
         # 4. The ToolResultLink row must still carry the original values.
@@ -205,7 +205,7 @@ class TestRecomputePreservesToolResultLinkError:
 
         compute = get_compute()
         result_q = queue.Queue()
-        compute.compute_session_metadata(session.id, result_q)
+        compute.compute_session_metadata(session.id, result_q, run_id=0)
         _apply_compute_results(result_q, compute)
 
         link = ToolResultLink.objects.filter(

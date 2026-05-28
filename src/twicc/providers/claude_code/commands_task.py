@@ -39,14 +39,19 @@ def stop_commands_task() -> None:
         _stop_event.set()
 
 
-def _sync_to_database() -> dict[str, int]:
-    """Discover all commands and sync them to the database.
+def _build_desired_commands() -> dict[tuple[str | None, str], dict]:
+    """Discover commands from disk and return the producer-side desired state.
 
-    Returns a dict with keys: created, updated, deleted, unchanged.
+    Pure read-side work — scans the filesystem and reads the (non-stale)
+    ``Project`` rows — so the DB-writer-routed apply only does the DB diff +
+    writes. Returns the ``(project_id_or_None, name) -> fields`` map the
+    DB writer's :class:`_ApplyDesiredCommandsJob` expects.
+
+    Claude Code's hardcoded CLI built-ins live in the frontend
+    ``BUILTIN_COMMANDS`` constant and never reach this table, so every row
+    this task writes is non-builtin by design.
     """
-    from twicc.core.enums import Provider
     from twicc.core.models import Project
-    from twicc.providers.commands_sync import apply_desired_commands
     from .commands import (
         DiscoveredCommand,
         PluginEntry,
@@ -54,14 +59,9 @@ def _sync_to_database() -> dict[str, int]:
         discover_project_commands,
         read_plugin_entries,
     )
-
-    cc_provider = Provider.CLAUDE_CODE.value
-
-    plugin_entries = read_plugin_entries()
-
-    # Add the TwiCC built-in plugin (ships with the package)
     from twicc.agent.plugin import get_plugin_dir
 
+    plugin_entries = read_plugin_entries()
     plugin_entries.append(PluginEntry(
         plugin_name="twicc",
         install_path=get_plugin_dir(),
@@ -73,7 +73,6 @@ def _sync_to_database() -> dict[str, int]:
     global_commands = discover_global_commands(plugin_entries=plugin_entries)
 
     # --- 2. Discover per-project commands ---
-    # project_id -> list of discovered commands
     project_commands: dict[str, list[DiscoveredCommand]] = {}
     scanned_dirs: set[Path] = set()
 
@@ -92,9 +91,6 @@ def _sync_to_database() -> dict[str, int]:
             project_commands[project_id] = cmds
 
     # --- 3. Build the desired state: (project_id_or_None, name) -> fields ---
-    # Claude Code's hardcoded CLI built-ins live in the frontend
-    # ``BUILTIN_COMMANDS`` constant and never reach this table, so every
-    # row this task writes is non-builtin by design.
     desired: dict[tuple[str | None, str], dict] = {}
 
     for cmd in global_commands:
@@ -119,12 +115,32 @@ def _sync_to_database() -> dict[str, int]:
                     "is_builtin": False,
                 }
 
-    # --- 4. Reconcile against the database ---
-    return apply_desired_commands(
-        provider=cc_provider,
+    return desired
+
+
+async def _sync_to_database() -> dict[str, int]:
+    """Discover commands (in a worker thread) and submit the diff/apply job.
+
+    The blocking filesystem + DB-read work is isolated in
+    :func:`_build_desired_commands` and run in a worker thread; the actual
+    DB writes go through the DB writer via
+    :class:`_ApplyDesiredCommandsJob`, so this task never races the DB writer
+    on the SQLite write lock.
+
+    Returns the stats dict the DB writer's apply produced.
+    """
+    from twicc.core.enums import Provider
+    from twicc.providers.db_writer import _ApplyDesiredCommandsJob, submit_async_job
+
+    desired = await asyncio.to_thread(_build_desired_commands)
+
+    future = asyncio.get_running_loop().create_future()
+    return await submit_async_job(_ApplyDesiredCommandsJob(
+        provider=Provider.CLAUDE_CODE,
         activation_char=ACTIVATION_CHAR,
         desired=desired,
-    )
+        future=future,
+    ))
 
 
 async def start_commands_task() -> None:
@@ -143,7 +159,7 @@ async def start_commands_task() -> None:
 
     while not stop_event.is_set():
         try:
-            stats = await asyncio.to_thread(_sync_to_database)
+            stats = await _sync_to_database()
             if stats["created"] or stats["updated"] or stats["deleted"]:
                 logger.info(
                     "Commands sync: %d created, %d updated, %d deleted, %d unchanged",

@@ -1,15 +1,20 @@
 """
 Synchronization logic for JSONL files from Claude Code projects.
 
-Scans :attr:`ClaudeCodeHelpers.PROJECTS_DIR` for projects and sessions,
-synchronizes them with the database, and reads new lines from modified
-JSONL files.
+Scans :attr:`ClaudeCodeHelpers.PROJECTS_DIR` for projects and sessions and
+pushes initial-sync payloads onto the DB writer queue (which performs
+every DB write inside a single serialised coroutine). Producers in this
+module are strictly read-only on the DB side: they parse JSONL files, run
+their existence/diff checks via ``Session.objects.filter`` reads, and emit
+``CreateSessionPayload`` / ``UpdateSessionPayload`` / ``MarkSessionsStalePayload``
+/ ``UpdateProjectMetadataPayload`` instances for the DB writer to apply.
 """
 
 from __future__ import annotations
 
 import logging
 import os
+import queue
 import re
 import sys
 import threading
@@ -17,11 +22,17 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from twicc.projects import ensure_project_git_root, register_project_sync, update_project_total_cost
-from twicc.sync_helpers import check_file_has_content, sync_session_items
-from .helpers import ClaudeCodeHelpers
 from twicc.core.enums import Provider
 from twicc.core.models import Project, Session, SessionType
+from twicc.providers.db_writer import (
+    CreateSessionPayload,
+    MarkSessionsStalePayload,
+    ResolveProjectGitRootsPayload,
+    UpdateProjectMetadataPayload,
+    UpdateSessionPayload,
+)
+from twicc.sync_helpers import BackpressureSyncQueue, check_file_has_content, read_session_items_from_file
+from .helpers import ClaudeCodeHelpers
 
 logger = logging.getLogger(__name__)
 
@@ -98,18 +109,18 @@ def _sync_session_subagents(
     project: Project,
     session: Session,
     stats: dict[str, int],
+    sync_queue: BackpressureSyncQueue,
 ) -> None:
-    """
-    Synchronize subagents for a given session.
+    """Push initial-sync payloads for a session's subagents.
 
-    Scans the session's subagents folder and syncs each subagent file.
-    Updates stats in place.
+    Producer-side: reads filesystem + DB but performs no writes. Every write
+    is delegated to the DB writer via :class:`CreateSessionPayload`,
+    :class:`UpdateSessionPayload`, and :class:`MarkSessionsStalePayload`.
     """
     subagent_files = scan_subagents(project.id, session.id)
     if not subagent_files:
         return
 
-    # Get existing subagents from database for this session
     db_subagents = {
         s.agent_id: s
         for s in Session.objects.filter(
@@ -121,56 +132,91 @@ def _sync_session_subagents(
 
     for agent_id, file_path in subagent_files.items():
         if agent_id in db_subagents:
-            # Subagent exists in DB, sync items (raw insert only)
+            # Subagent already in DB — push an update payload if items changed.
             subagent = db_subagents[agent_id]
-            new_line_nums = sync_session_items(subagent, file_path)
-            stats["items_added"] += len(new_line_nums)
-
-            # If new items were added, reset compute_version to trigger background recompute
-            if new_line_nums and subagent.compute_version is not None:
-                subagent.compute_version = None
-                subagent.save(update_fields=["compute_version"])
+            to_insert = read_session_items_from_file(subagent, file_path)
+            if to_insert is None:
+                continue
+            stats["items_added"] += to_insert.actually_new_count
+            sync_queue.put(UpdateSessionPayload(
+                provider=Provider.CLAUDE_CODE,
+                session=subagent,
+                items=to_insert.items,
+                last_offset=to_insert.last_offset,
+                last_line=to_insert.last_line,
+                mtime=to_insert.mtime,
+                reset_compute_version=(
+                    to_insert.actually_new_count > 0
+                    and subagent.compute_version is not None
+                ),
+                # Subagent stale is deliberately left set: the stale-clear fix
+                # targets top-level sessions only. read_session_items_from_file
+                # may now return an empty result for a stale subagent whose
+                # file is back unchanged; with clear_stale=False that payload
+                # is a harmless DB writer-side no-op.
+                clear_stale=False,
+            ))
         else:
-            # New subagent - check if file has content
+            # New subagent.
             if not check_file_has_content(file_path):
                 continue
 
-            # Create subagent entry (use agent_id as the primary key)
             subagent = Session(
                 id=agent_id,
-                project=project,
+                project_id=project.id,  # FK by id — DB writer ensures project exists first
                 provider=Provider.CLAUDE_CODE,
                 file_path=str(file_path.relative_to(ClaudeCodeHelpers.PROJECTS_DIR)),
                 type=SessionType.SUBAGENT,
-                parent_session=session,
+                parent_session_id=session.id,
                 agent_id=agent_id,
             )
-            subagent.save()
+            to_insert = read_session_items_from_file(subagent, file_path)
+            if to_insert is None:
+                # File vanished between scan and read.
+                continue
+            stats["items_added"] += to_insert.actually_new_count
             stats["sessions_created"] += 1
+            sync_queue.put(CreateSessionPayload(
+                provider=Provider.CLAUDE_CODE,
+                project_id=project.id,
+                # Subagents never carry a new directory; the parent session's
+                # CreateSessionPayload already handled project creation when
+                # needed.
+                new_project_directory=None,
+                new_project_stale=False,
+                session=subagent,
+                items=to_insert.items,
+                last_offset=to_insert.last_offset,
+                last_line=to_insert.last_line,
+                mtime=to_insert.mtime,
+            ))
 
-            # Sync items (raw insert only, compute_version is already NULL for new sessions)
-            new_line_nums = sync_session_items(subagent, file_path)
-            stats["items_added"] += len(new_line_nums)
-
-    # Mark stale subagents (exist in DB but not on disk)
+    # Mark stale subagents (exist in DB but not on disk).
     disk_agent_ids = set(subagent_files.keys())
-    for agent_id, subagent in db_subagents.items():
-        if agent_id not in disk_agent_ids and not subagent.stale:
-            subagent.stale = True
-            subagent.save(update_fields=["stale"])
-            stats["sessions_stale"] += 1
+    stale_subagent_ids = [
+        s.id for agent_id, s in db_subagents.items()
+        if agent_id not in disk_agent_ids and not s.stale
+    ]
+    if stale_subagent_ids:
+        sync_queue.put(MarkSessionsStalePayload(
+            provider=Provider.CLAUDE_CODE,
+            session_ids=stale_subagent_ids,
+        ))
+        stats["sessions_stale"] += len(stale_subagent_ids)
 
 
 def sync_project(
     project_id: str,
+    sync_queue: BackpressureSyncQueue,
     on_session_progress: Callable[[str, int, int], None] | None = None,
     stop_event: threading.Event | None = None,
 ) -> dict[str, int]:
     """
-    Synchronize a single project, its sessions, and their subagents.
+    Synchronize a single project by pushing payloads to the DB writer.
 
     Args:
         project_id: The project folder name.
+        sync_queue: The queue connected to the DB writer for this provider.
         on_session_progress: Optional callback called after each session sync
             with (session_id, current_index, total_sessions).
         stop_event: Optional threading event; when set, sync stops early.
@@ -179,6 +225,7 @@ def sync_project(
         - sessions_created: number of new sessions (including subagents)
         - sessions_stale: number of sessions marked as stale (including subagents)
         - items_added: total number of new session items (including subagent items)
+        - project_created (optional): 1 if the project row will be created by the DB writer
     """
     project_start = time.monotonic()
 
@@ -188,17 +235,15 @@ def sync_project(
         "items_added": 0,
     }
 
-    # Try to get existing project (don't create yet — defer until first session with content)
+    # Try to get existing project (read-only).
     try:
         project = Project.objects.get(id=project_id)
     except Project.DoesNotExist:
         project = None
 
-    # Scan session files on disk
     session_files = scan_sessions(project_id)
     disk_session_ids = set(session_files.keys())
 
-    # Get existing sessions from database (only main sessions, not subagents)
     if project is not None:
         db_sessions = {
             s.id: s
@@ -212,125 +257,149 @@ def sync_project(
         db_sessions = {}
     db_session_ids = set(db_sessions.keys())
 
-    # Process sessions that exist on disk
     sessions_to_sync = list(disk_session_ids)
     total_sessions = len(sessions_to_sync)
-    max_mtime = 0.0
+    project_will_be_created = False
 
     logger.info(f"  Syncing project {project_id} ({total_sessions} sessions)")
 
     for idx, session_id in enumerate(sessions_to_sync, start=1):
         if stop_event is not None and stop_event.is_set():
-            logger.info("  Sync interrupted for project %s (after %d/%d sessions)", project_id, idx - 1, total_sessions)
+            logger.info(
+                "  Sync interrupted for project %s (after %d/%d sessions)",
+                project_id, idx - 1, total_sessions,
+            )
             return stats
 
         file_path = session_files[session_id]
 
-        # Check if session exists in DB
         if session_id in db_session_ids:
+            # Existing session — push an update payload if items changed.
             session = db_sessions[session_id]
-        else:
-            # Create session only if file has content
-            if not check_file_has_content(file_path):
-                # Empty file (0 lines) - skip creating session
-                if on_session_progress:
-                    on_session_progress(session_id, idx, total_sessions)
-                continue
+            to_insert = read_session_items_from_file(session, file_path)
 
-            # File has content — ensure project exists before creating
-            # session. We can't pass the directory here (Claude Code stores
-            # it in the JSONL body, not the project folder name); it gets
-            # filled in later by the background compute path, which also
-            # re-runs workspace auto-add at that point. The ``project_added``
-            # broadcast is a no-op when no WS client is connected yet
-            # (typical at startup).
-            if project is None:
-                project, _ = register_project_sync(project_id)
-                stats["project_created"] = 1
+            if to_insert is not None:
+                stats["items_added"] += to_insert.actually_new_count
 
-            session = Session(
-                id=session_id,
-                project=project,
-                provider=Provider.CLAUDE_CODE,
-                file_path=str(file_path.relative_to(ClaudeCodeHelpers.PROJECTS_DIR)),
-                type=SessionType.SESSION,
-            )
-            session.save()
-            stats["sessions_created"] += 1
+                sync_queue.put(UpdateSessionPayload(
+                    provider=Provider.CLAUDE_CODE,
+                    session=session,
+                    items=to_insert.items,
+                    last_offset=to_insert.last_offset,
+                    last_line=to_insert.last_line,
+                    mtime=to_insert.mtime,
+                    reset_compute_version=(
+                        to_insert.actually_new_count > 0
+                        and session.compute_version is not None
+                    ),
+                    clear_stale=session.stale,
+                ))
 
-            # Sync items (raw insert only, compute_version is already NULL for new sessions)
-            new_line_nums = sync_session_items(session, file_path)
-
-            stats["items_added"] += len(new_line_nums)
-
-            # Track max mtime for project
-            if session.mtime > max_mtime:
-                max_mtime = session.mtime
-
-            # Sync subagents for this session
-            _sync_session_subagents(project, session, stats)
+            _sync_session_subagents(project, session, stats, sync_queue)
 
             if on_session_progress:
                 on_session_progress(session_id, idx, total_sessions)
             continue
 
-        # Session exists in DB, sync items (raw insert only)
-        new_line_nums = sync_session_items(session, file_path)
-        stats["items_added"] += len(new_line_nums)
+        # New session.
+        if not check_file_has_content(file_path):
+            # Empty file (0 lines) — skip creating session.
+            if on_session_progress:
+                on_session_progress(session_id, idx, total_sessions)
+            continue
 
-        update_fields: list[str] = []
-        # The file is on disk (we just read it), so the session is not stale.
-        if session.stale:
-            session.stale = False
-            update_fields.append("stale")
-        # If new items were added, reset compute_version to trigger background recompute
-        if new_line_nums and session.compute_version is not None:
-            session.compute_version = None
-            update_fields.append("compute_version")
-        if update_fields:
-            session.save(update_fields=update_fields)
+        # File has content. Build the unsaved Session row (the DB writer will
+        # ensure the project exists and then ``session.save()`` it). Claude
+        # Code stores cwd inside the JSONL body, so initial sync cannot
+        # provide a directory here; it gets filled in later by background
+        # compute, which also re-runs workspace auto-add at that point.
+        session = Session(
+            id=session_id,
+            project_id=project_id,
+            provider=Provider.CLAUDE_CODE,
+            file_path=str(file_path.relative_to(ClaudeCodeHelpers.PROJECTS_DIR)),
+            type=SessionType.SESSION,
+        )
+        to_insert = read_session_items_from_file(session, file_path)
+        if to_insert is None:
+            # File vanished between scan and read.
+            if on_session_progress:
+                on_session_progress(session_id, idx, total_sessions)
+            continue
 
-        if session.last_line > 0:
-            if session.mtime > max_mtime:
-                max_mtime = session.mtime
+        stats["items_added"] += to_insert.actually_new_count
+        stats["sessions_created"] += 1
 
-        # Sync subagents for this session
-        _sync_session_subagents(project, session, stats)
+        if project is None and not project_will_be_created:
+            project_will_be_created = True
+            stats["project_created"] = 1
+
+        sync_queue.put(CreateSessionPayload(
+            provider=Provider.CLAUDE_CODE,
+            project_id=project_id,
+            new_project_directory=None,
+            new_project_stale=False,
+            session=session,
+            items=to_insert.items,
+            last_offset=to_insert.last_offset,
+            last_line=to_insert.last_line,
+            mtime=to_insert.mtime,
+        ))
+
+        # Subagent sync also needs a project reference for its filter on
+        # ``parent project``. If the project row is being created on the fly
+        # by the above payload, use a transient Project instance carrying
+        # just the id — ``_sync_session_subagents`` only reads ``project.id``,
+        # never anything else from the object.
+        _sync_session_subagents(
+            project if project is not None else Project(id=project_id),
+            session, stats, sync_queue,
+        )
 
         if on_session_progress:
             on_session_progress(session_id, idx, total_sessions)
 
-    # Skip remaining steps if project was never created (no sessions with content)
-    if project is None:
+    # Skip end-of-project metadata if no session was ever created/found.
+    if project is None and not project_will_be_created:
         elapsed = time.monotonic() - project_start
-        logger.info(f"  ⊘ Project {project_id} skipped in {elapsed:.1f}s — no sessions with content")
+        logger.info(
+            f"  ⊘ Project {project_id} skipped in {elapsed:.1f}s — no sessions with content"
+        )
         return stats
 
-    # Mark stale sessions (exist in DB but not on disk)
-    stale_session_ids = db_session_ids - disk_session_ids
+    # Mark stale sessions (DB but not on disk).
+    stale_session_ids = list(db_session_ids - disk_session_ids)
     if stale_session_ids:
-        Session.objects.filter(id__in=stale_session_ids, stale=False).update(
-            stale=True
-        )
+        sync_queue.put(MarkSessionsStalePayload(
+            provider=Provider.CLAUDE_CODE,
+            session_ids=stale_session_ids,
+        ))
         stats["sessions_stale"] += len(stale_session_ids)
 
-    # Update project metadata (count visible sessions: with created_at and at least one user message)
-    project.sessions_count = Session.objects.filter(
-        project=project,
-        type=SessionType.SESSION,
-        created_at__isnull=False,
-        user_message_count__gt=0,
-    ).count()
-    project.mtime = max_mtime
-    # Project folder exists (we're syncing it), but working directory may have been removed
-    if project.directory is not None:
-        project.stale = not os.path.isdir(project.directory)
-    elif project.stale:
-        project.stale = False
-    project.save(update_fields=["sessions_count", "mtime", "stale"])
+    # Decide new_stale:
+    # - existing project with directory → recompute from os.path.isdir
+    # - existing project without directory but stale=True → clear stale (legacy)
+    # - newly created project → leave alone (DB writer's default stale=False)
+    new_stale: bool | None
+    if project is not None and project.directory is not None:
+        new_stale = not os.path.isdir(project.directory)
+    elif project is not None and project.stale:
+        new_stale = False
+    else:
+        new_stale = None
 
-    # Update project total_cost
-    update_project_total_cost(project.id)
+    sync_queue.put(UpdateProjectMetadataPayload(
+        provider=Provider.CLAUDE_CODE,
+        project_id=project_id,
+        recalc_sessions_count=True,
+        recalc_mtime=True,
+        new_stale=new_stale,
+        recalc_total_cost=True,
+        # git_root is resolved at the end of ``sync_all`` once every project
+        # has settled (the DB writer drains all per-project payloads first).
+        resolve_git_root=False,
+        git_root_directory=None,
+    ))
 
     elapsed = time.monotonic() - project_start
     logger.info(
@@ -342,6 +411,7 @@ def sync_project(
 
 
 def sync_all(
+    sync_queue: queue.Queue,
     on_project_start: Callable[[str, int, int], None] | None = None,
     on_project_done: Callable[[str, dict[str, int]], None] | None = None,
     on_session_progress: Callable[[str, int, int], None] | None = None,
@@ -350,7 +420,12 @@ def sync_all(
     """
     Synchronize all projects from :attr:`ClaudeCodeHelpers.PROJECTS_DIR`.
 
+    Pushes payloads onto ``sync_queue`` (the DB writer drains them).
+    Producer-side reads are safe under WAL even while the DB writer is
+    writing earlier payloads.
+
     Args:
+        sync_queue: The queue connected to the DB writer for this provider.
         on_project_start: Callback called before syncing a project
             with (project_id, current_index, total_projects).
         on_project_done: Callback called after syncing a project
@@ -362,6 +437,10 @@ def sync_all(
     """
     sync_start = time.monotonic()
 
+    # Throttle the producer to the DB writer's write rate: a full bounded
+    # queue blocks .put() instead of letting the backlog grow unbounded.
+    sync_queue = BackpressureSyncQueue(sync_queue, stop_event)
+
     stats = {
         "projects_created": 0,
         "projects_stale": 0,
@@ -370,25 +449,35 @@ def sync_all(
         "items_added": 0,
     }
 
-    # Scan project folders on disk
     disk_project_ids = scan_projects()
 
-    # Update stale flag for all projects: stale = working directory no longer exists on disk.
-    # (directory=None means not yet resolved from session data → not stale)
+    # Recompute project.stale based on disk presence. Reads-only here;
+    # writes are pushed as ``UpdateProjectMetadataPayload`` so they apply
+    # inside an atomic block on the DB writer side.
     for project in Project.objects.only("id", "directory", "stale"):
-        should_be_stale = project.directory is not None and not os.path.isdir(project.directory)
+        should_be_stale = (
+            project.directory is not None
+            and not os.path.isdir(project.directory)
+        )
         if project.stale != should_be_stale:
-            project.stale = should_be_stale
-            project.save(update_fields=["stale"])
+            sync_queue.put(UpdateProjectMetadataPayload(
+                provider=Provider.CLAUDE_CODE,
+                project_id=project.id,
+                recalc_sessions_count=False,
+                recalc_mtime=False,
+                new_stale=should_be_stale,
+                recalc_total_cost=False,
+                resolve_git_root=False,
+                git_root_directory=None,
+            ))
         if should_be_stale:
             stats["projects_stale"] += 1
 
     # Note: projects are NOT created eagerly here. They are created lazily
-    # inside sync_project() only when they contain at least one session with content.
-    # This avoids polluting the project list with empty project folders
-    # (e.g. folders left behind after Claude sublimates old sessions).
+    # by ``sync_project`` only when they contain at least one session with
+    # content. This avoids polluting the project list with empty project
+    # folders (e.g. folders left behind after Claude sublimates old sessions).
 
-    # Sync each project on disk
     projects_to_sync = sorted(disk_project_ids)
     total_projects = len(projects_to_sync)
 
@@ -402,9 +491,13 @@ def sync_all(
         if on_project_start:
             on_project_start(project_id, idx, total_projects)
 
-        project_stats = sync_project(project_id, on_session_progress=on_session_progress, stop_event=stop_event)
+        project_stats = sync_project(
+            project_id,
+            sync_queue,
+            on_session_progress=on_session_progress,
+            stop_event=stop_event,
+        )
 
-        # Aggregate stats
         stats["projects_created"] += project_stats.get("project_created", 0)
         stats["sessions_created"] += project_stats["sessions_created"]
         stats["sessions_stale"] += project_stats["sessions_stale"]
@@ -415,10 +508,14 @@ def sync_all(
 
     interrupted = stop_event is not None and stop_event.is_set()
 
-    # Resolve git_root for all projects with a directory (skip if interrupted)
+    # Resolve git_root for every project with a directory. Enqueued as a
+    # single marker, not a producer-side query + one payload per project:
+    # the DB writer runs the Project query when it drains the marker, after
+    # every prior FIFO project payload of this run has committed — so a
+    # project being un-staled earlier in the same sync is not wrongly
+    # skipped by a stale=False filter evaluated against a pre-commit view.
     if not interrupted:
-        for project in Project.objects.filter(directory__isnull=False, stale=False):
-            ensure_project_git_root(project.id, project.directory)
+        sync_queue.put(ResolveProjectGitRootsPayload(provider=Provider.CLAUDE_CODE))
 
     elapsed = time.monotonic() - sync_start
     if interrupted:
@@ -526,6 +623,7 @@ class ProgressDisplay:
 
 
 def sync_all_with_progress(
+    sync_queue: queue.Queue,
     stream=None,
     stop_event: threading.Event | None = None,
 ) -> dict[str, int]:
@@ -537,6 +635,7 @@ def sync_all_with_progress(
     display = ProgressDisplay(stream)
 
     stats = sync_all(
+        sync_queue,
         on_project_start=display.on_project_start,
         on_project_done=display.on_project_done,
         on_session_progress=display.on_session_progress,

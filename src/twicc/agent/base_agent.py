@@ -77,6 +77,14 @@ class BaseAgent:
         self.kill_reason: str | None = None
 
         self._dead_event = asyncio.Event()
+        # Set by ``_transition_to_dead`` after the DEAD state-change callback
+        # finishes (success or exception). ``wait_for_dead`` blocks on this
+        # event in addition to ``_dead_event`` so callers that need a
+        # fully-stopped agent — most importantly ``BaseAgentManager.shutdown``,
+        # which runs immediately before ``stop_db_writer()`` in the server
+        # shutdown sequence — only proceed once any DB writes performed in
+        # the DEAD callback under ``run_under_db_write_lock`` have committed.
+        self._dead_callback_done_event = asyncio.Event()
         self._state_change_callback: StateChangeCallback | None = None
 
         # Pending requests waiting on a user click (tool approval, ask user
@@ -122,13 +130,190 @@ class BaseAgent:
                 self.session_id, e, exc_info=True,
             )
 
-    async def wait_for_dead(self, timeout: float = 30.0) -> bool:
-        """Wait until the agent reaches the DEAD state.
+    async def _transition_to_dead(self) -> None:
+        """Atomically transition into DEAD: set state, notify, then signal done.
 
-        Returns ``True`` if it died within ``timeout``, ``False`` otherwise.
+        Callers must set the agent-side attributes that reflect the final
+        state (``kill_reason``, ``error``, ``last_activity``, provider-specific
+        events like ``_first_turn_done_event``) BEFORE invoking this helper —
+        those must be visible to the state-change callback. The helper owns
+        the three steps that must not be split: ``_set_state(DEAD)``, the
+        awaited ``_notify_state_change``, and the
+        ``_dead_callback_done_event`` signal that releases ``wait_for_dead``.
+
+        Keeping these three steps in one helper is what closes the shutdown
+        race exposed by the agent-lifecycle wiring: ``BaseAgentManager.shutdown``
+        gathers ``wait_for_dead`` on every agent before returning, so
+        ``stop_db_writer`` cannot fire while a DEAD callback's
+        ``run_under_db_write_lock`` acquire is still queued. The same
+        guarantee protects every non-shutdown caller that polls
+        ``wait_for_dead`` (cron restart, settings-triggered restart).
+
+        Cancellation safety: the notify runs on a separate task we
+        shield-loop on. Without the shield, an outer cancel (e.g.
+        ``BaseAgentManager.shutdown`` cancelling a pending
+        ``interrupt_or_kill`` Task on timeout, or ``kill()`` cancelling the
+        message loop that is mid-``_transition_to_dead``) would propagate
+        through ``await self._notify_state_change()`` BEFORE the callback's
+        ``run_under_db_write_lock`` acquire actually applies its DB writes —
+        and the ``finally`` would still fire the done event, unblocking
+        ``wait_for_dead`` while the writes were never queued. The shield-loop
+        holds the done-event signal back until the notify task is genuinely
+        finished; any outer cancellation we caught is re-raised once the
+        callback has run to completion.
         """
+        self._set_state(AgentState.DEAD)
+        notify_task = asyncio.create_task(
+            self._notify_state_change(),
+            name=f"dead-notify-{self.session_id}",
+        )
+        captured_outer_cancel: asyncio.CancelledError | None = None
+        current = asyncio.current_task()
+        # Watermark of pending outer cancellations observed so far.
+        # ``Task.cancelling()`` is sticky (only ``uncancel()`` decrements
+        # it), so a level check ``cancelling() > 0`` would keep matching
+        # forever once any outer cancel arrived — including for a later
+        # inner self-cancel propagating through the shield. The
+        # watermark lets us identify a NEW outer cancel (count went up)
+        # vs the same one we already saw (count unchanged).
+        cancelling_watermark = current.cancelling() if current is not None else 0
+        try:
+            while not notify_task.done():
+                try:
+                    await asyncio.shield(notify_task)
+                except asyncio.CancelledError as exc:
+                    # ``asyncio.shield`` raises ``CancelledError`` for two
+                    # distinct sources:
+                    #   * OUR task was cancelled (outer cancel).
+                    #   * ``notify_task`` itself was cancelled (inner
+                    #     self-cancel — e.g. someone called
+                    #     ``notify_task.cancel()`` directly, or the
+                    #     callback awaited an already-cancelled future).
+                    # Discriminate via two complementary signals:
+                    #   (a) ``cancelling()`` advanced past the watermark —
+                    #       a new outer cancel was injected at this await.
+                    #   (b) ``notify_task`` is still NOT done — the shield
+                    #       only raises ``CancelledError`` while the inner
+                    #       is alive when the source is an outer cancel.
+                    #       Catches the pre-entry-pending edge: caller had
+                    #       ``cancel()`` requested but no await had
+                    #       consumed it yet, so ``cancelling()`` started
+                    #       above zero and didn't move when the delivery
+                    #       finally happened at our first shield await.
+                    # Either signal classifies the catch as outer; we keep
+                    # the FIRST outer cancel so multi-outer-cancel doesn't
+                    # overwrite the original message/cause/traceback.
+                    # Inner cancellations surface via the drain below as
+                    # the authoritative ones.
+                    is_outer = False
+                    if current is not None:
+                        latest = current.cancelling()
+                        if latest > cancelling_watermark:
+                            cancelling_watermark = latest
+                            is_outer = True
+                    if not is_outer and not notify_task.done():
+                        is_outer = True
+                    if is_outer and captured_outer_cancel is None:
+                        captured_outer_cancel = exc
+                    continue
+                except Exception:
+                    # Inner raised — ``notify_task.done()`` is True so the
+                    # next iteration exits the loop. The drain block below
+                    # surfaces the exception under the precedence rule.
+                    pass
+        finally:
+            # ``notify_task.done()`` is now True — either via the while
+            # loop or because an eager task factory (Python 3.12+) ran
+            # the coro synchronously at ``create_task`` and the very
+            # first check saw the task already done. Signal
+            # ``wait_for_dead()`` only after the inner is genuinely
+            # terminal.
+            self._dead_callback_done_event.set()
+        # If we entered the helper with an outer cancel already pending
+        # (``cancelling() > 0`` at entry) AND the eager task factory
+        # short-circuited the shield-loop (``notify_task`` was done
+        # before the first ``done()`` check), the pending outer cancel
+        # was never delivered to an await — so neither the watermark
+        # nor the ``notify_task.done()`` discriminator above could
+        # capture it. Force a delivery via a zero-delay yield: asyncio
+        # injects the pending ``CancelledError`` on the next await,
+        # which is our ``sleep(0)``. Without this, the drain below
+        # would propagate the inner cancellation (or return normally),
+        # silently losing the outer cancel that should take precedence.
+        if (
+            captured_outer_cancel is None
+            and current is not None
+            and current.cancelling() > 0
+        ):
+            try:
+                await asyncio.sleep(0)
+            except asyncio.CancelledError as exc:
+                captured_outer_cancel = exc
+        # Drain ``notify_task``'s outcome. The shield-loop above exits as
+        # soon as ``notify_task.done()`` is True, but two edge cases let
+        # it exit without anyone reading the inner outcome:
+        #   * Eager task factory (Python 3.12+): the coro may run to
+        #     completion synchronously at ``create_task``, so the very
+        #     first ``done()`` check passes and the loop body never
+        #     awaits. Without this drain, both a synchronous exception
+        #     AND a synchronous ``CancelledError`` from the inner would
+        #     be silently swallowed.
+        #   * Same-tick race: an outer cancel arriving on the same tick
+        #     as inner completion exits the loop via ``done()`` without
+        #     re-awaiting, missing the inner exception.
+        # ``task.result()`` raises whatever the inner produced
+        # (``CancelledError`` for a cancelled task, the actual exception
+        # for a failed one) and returns the value otherwise; that's the
+        # cleanest way to consume both kinds of outcome.
+        # Precedence rule:
+        #   * Outer cancellation always wins (the caller's tear-down
+        #     contract is "this is being torn down"). Inner exceptions
+        #     are logged for observability; an inner cancellation is
+        #     suppressed silently (no signal in a redundant cancel).
+        #   * Without an outer cancel, the inner result is propagated
+        #     verbatim — including a synchronous ``CancelledError`` from
+        #     the eager-task-factory path, which would otherwise be
+        #     lost.
+        try:
+            notify_task.result()
+        except asyncio.CancelledError:
+            if captured_outer_cancel is None:
+                # Inner cancelled with no outer cancel — propagate the
+                # inner cancellation, preserving its message/cause via a
+                # bare ``raise``.
+                raise
+            # Outer cancel takes precedence; inner cancel is redundant.
+        except Exception as inner_exc:
+            if captured_outer_cancel is not None:
+                logger.error(
+                    "DEAD callback for session %s raised while the "
+                    "transition was being cancelled; suppressing inner: %s",
+                    self.session_id, inner_exc, exc_info=inner_exc,
+                )
+            else:
+                raise
+        if captured_outer_cancel is not None:
+            raise captured_outer_cancel
+
+    async def wait_for_dead(self, timeout: float = 30.0) -> bool:
+        """Wait until the agent is fully torn down: DEAD state AND callback done.
+
+        Returns ``True`` when both events fire within ``timeout``, ``False``
+        on timeout. ``timeout`` covers the whole wait, not each stage. The
+        two-stage wait is what makes the manager shutdown safe against the
+        DB writer being stopped before a DEAD callback's lock-protected
+        writes commit; see :meth:`_transition_to_dead` for the rationale.
+        """
+        deadline = asyncio.get_event_loop().time() + timeout
         try:
             await asyncio.wait_for(self._dead_event.wait(), timeout)
+        except asyncio.TimeoutError:
+            return False
+        remaining = max(0.0, deadline - asyncio.get_event_loop().time())
+        try:
+            await asyncio.wait_for(
+                self._dead_callback_done_event.wait(), remaining,
+            )
             return True
         except asyncio.TimeoutError:
             return False
@@ -169,8 +354,19 @@ class BaseAgent:
             # Drop the entry whether we resolved or were cancelled.
             self._pending_requests.pop(request.request_id, None)
             self._pending_futures.pop(request.request_id, None)
-            # Broadcast the cleared state to refresh the frontend.
-            await self._notify_state_change()
+            # If the agent has already transitioned to DEAD (typically because
+            # ``interrupt_or_kill`` cancelled this pending future as part of
+            # its cleanup), the DEAD state-change callback has already fired
+            # — or is in flight — via ``_transition_to_dead``. Re-invoking
+            # ``_notify_state_change`` here would run an untracked second
+            # copy of the DEAD callback whose DB writes are NOT covered by
+            # ``_dead_callback_done_event``, so ``BaseAgentManager.shutdown``'s
+            # ``wait_for_dead`` drain would not block on them and
+            # ``stop_db_writer`` could race the queued lock acquire. Skip
+            # the cleanup broadcast in that case — the DEAD broadcast
+            # already announced the final state to the frontend.
+            if self.state != AgentState.DEAD:
+                await self._notify_state_change()
 
     def _cancel_all_pending_futures(self) -> None:
         """Cancel every in-flight pending Future.

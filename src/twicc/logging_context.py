@@ -3,7 +3,7 @@ Per-task provider tagging for log records.
 
 The TwiCC backend runs code from several providers concurrently (Claude
 Code, Codex, ...). Most of the long-lived modules under
-``twicc.providers.`` (background_task, sessions_watcher, compute_base)
+``twicc.providers.`` (background_compute_task, sessions_watcher, compute_base)
 are provider-agnostic by design, so their logger names alone do not say
 which provider a given log line belongs to.
 
@@ -35,7 +35,12 @@ ContextVar semantics:
 from __future__ import annotations
 
 import logging
+from contextlib import contextmanager
 from contextvars import ContextVar
+from typing import TYPE_CHECKING, Iterator
+
+if TYPE_CHECKING:
+    from twicc.core.enums import Provider
 
 # ``"global"`` is also used by :class:`ProviderFilter` when the variable
 # is unset; keep the default in sync with the filter so call sites that
@@ -56,3 +61,36 @@ class ProviderFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:  # noqa: A003
         record.provider = current_provider.get() or _PROVIDER_UNSET
         return True
+
+
+@contextmanager
+def provider_log_context(provider: "Provider | None") -> Iterator[None]:
+    """Temporarily tag every log record emitted in the body with ``provider``.
+
+    Used by cross-provider services that process per-provider messages
+    one at a time (notably :mod:`twicc.providers.db_writer`, whose task
+    is launched at the global level with no provider context but whose
+    individual applies belong to a specific provider). ``None`` falls
+    back to the ``"global"`` tag like an unset context.
+
+    Defensive against malformed inputs: only :class:`Provider` enum
+    members produce a tag — anything else (a stray string, a wrong
+    type, ``None``) falls back to ``None`` / ``"global"``. This matters
+    because callers typically pass ``getattr(obj, "provider", None)``
+    without pre-validating; a typed-attribute-mismatch here would
+    raise an ``AttributeError`` at ``__enter__`` time, before the
+    wrapped body runs — which would strand any future that body was
+    meant to settle.
+
+    Uses :class:`contextvars.ContextVar` ``set`` / ``reset`` so the
+    scope is strictly limited to the ``with`` block — sibling tasks
+    are unaffected.
+    """
+    from twicc.core.enums import Provider  # local: avoid an import-time cycle
+
+    value = provider.value if isinstance(provider, Provider) else None
+    token = current_provider.set(value)
+    try:
+        yield
+    finally:
+        current_provider.reset(token)

@@ -113,10 +113,10 @@ def apply_compute_results(result_queue) -> None:
             affected_days = msg.get('affected_days')
             project_id = msg.get('project_id')
             if project_id and affected_days:
-                from datetime import date as date_cls
+                from datetime import date
                 from twicc.core.enums import Provider
                 from twicc.core.models import PeriodicActivity
-                days = {date_cls.fromisoformat(d) for d in affected_days}
+                days = {date.fromisoformat(d) for d in affected_days}
                 PeriodicActivity.recalculate_for_days(
                     project_id, days, provider=Provider.CLAUDE_CODE,
                 )
@@ -157,7 +157,9 @@ def get_item_state(item: SessionItem) -> tuple[int | None, int | None]:
 def run_batch(session_id: str):
     """Run batch processing."""
     result_queue = queue.Queue()
-    get_compute().compute_session_metadata(session_id, result_queue)
+    # run_id only tags messages for the DB writer's run routing; this
+    # test applies results directly via apply_compute_results, so 0 is fine.
+    get_compute().compute_session_metadata(session_id, result_queue, run_id=0)
     apply_compute_results(result_queue)
 
 

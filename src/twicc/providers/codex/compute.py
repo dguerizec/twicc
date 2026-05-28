@@ -145,7 +145,7 @@ from twicc.providers.compute_base import (
     parse_timestamp_to_datetime,
 )
 
-from .agent.original_files_cache import pop_original_files as _pop_cached_original_files
+from .agent.original_files_cache import pop_original_files
 from .pricing import extract_model_info, to_token_usage
 
 logger = logging.getLogger(__name__)
@@ -2168,7 +2168,7 @@ class CodexSessionCompute(BaseSessionCompute):
             return None
 
         # Always pop from the cache (consume the entry whether we use it or not).
-        cached = _pop_cached_original_files(session_id, call_id)
+        cached = pop_original_files(session_id, call_id)
         if not cached:
             return None
 

@@ -151,7 +151,13 @@ def _build_desired_from_response(resp, cwd_to_project_id: dict[str, str]) -> dic
 async def _sync_to_database() -> dict[str, int]:
     """Run one discovery + reconcile cycle.
 
-    Returns a dict with keys: created, updated, deleted, unchanged.
+    Producer side: read the (non-stale) Codex projects, ask the app-server
+    for its current skill catalogue, translate skills into the desired-state
+    map. The DB write (diff + delete + create + update) goes through the
+    DB writer via :class:`_ApplyDesiredCommandsJob`, so this task
+    never races the DB writer on the SQLite write lock.
+
+    Returns the stats dict the DB writer's apply produced.
     """
     # Local imports keep the module importable without Django apps
     # being ready (the task is scheduled by the orchestrator after
@@ -165,9 +171,7 @@ async def _sync_to_database() -> dict[str, int]:
     from twicc.core.enums import Provider
     from twicc.core.models import Project
     from twicc.providers.codex.bin import resolve_bundled_binary
-    from twicc.providers.commands_sync import apply_desired_commands
-
-    codex_provider = Provider.CODEX.value
+    from twicc.providers.db_writer import _ApplyDesiredCommandsJob, submit_async_job
 
     # --- 1. Pick every Codex project we can scan ---
     projects = await sync_to_async(list)(
@@ -207,12 +211,14 @@ async def _sync_to_database() -> dict[str, int]:
     # --- 3. Translate the response into the desired state ---
     desired = _build_desired_from_response(resp, cwd_to_project_id)
 
-    # --- 4. Reconcile against the database ---
-    return await sync_to_async(apply_desired_commands)(
-        provider=codex_provider,
+    # --- 4. Reconcile against the database (via the DB writer) ---
+    future = asyncio.get_running_loop().create_future()
+    return await submit_async_job(_ApplyDesiredCommandsJob(
+        provider=Provider.CODEX,
         activation_char=ACTIVATION_CHAR,
         desired=desired,
-    )
+        future=future,
+    ))
 
 
 async def start_commands_task() -> None:

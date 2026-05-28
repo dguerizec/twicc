@@ -20,13 +20,14 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
+from contextlib import suppress
 
 from asgiref.sync import sync_to_async
 from django.conf import settings
 
 from twicc.core.enums import Provider
 from twicc.orchestrator import BaseOrchestrator
-from twicc.providers.background_task import (
+from twicc.providers.background_compute_task import (
     ComputeContext,
     start_background_compute_task,
     stop_background_task,
@@ -70,6 +71,11 @@ async def _cancel_task(task: asyncio.Task, name: str) -> None:
         await task
     except asyncio.CancelledError:
         pass
+    except Exception:
+        # The task had already finished with an error before we cancelled it.
+        # shutdown() must not be derailed by it — log and carry on so the rest
+        # of the teardown (notably the initial-sync drain marker) still runs.
+        logger.exception("%s ended with an exception during shutdown", name)
     logger.info("%s stopped", name)
 
 
@@ -128,6 +134,10 @@ class ClaudeCodeOrchestrator(BaseOrchestrator):
 
         # Tasks started immediately
         self._sync_task: asyncio.Task | None = None
+        # Future of the initial-sync producer thread (asyncio.to_thread).
+        # shutdown() awaits it so the thread is really finished, not just
+        # the wrapping coroutine cancelled.
+        self._sync_thread_future: asyncio.Future | None = None
         self._orch_task: asyncio.Task | None = None
         self._usage_sync_task: asyncio.Task | None = None
         self._auth_check_task: asyncio.Task | None = None
@@ -194,11 +204,52 @@ class ClaudeCodeOrchestrator(BaseOrchestrator):
         self.initial_sync_done.set()
         self.compute_done.set()
 
+        # Cancel the dependency orchestrator first, before any await below.
+        # ``initial_sync_done.set()`` just unblocked _dependency_orchestrator's
+        # ``await self.initial_sync_done.wait()``; awaiting anything else first
+        # would let it resume and start the background compute and the watcher
+        # *while the provider is shutting down*. ``_cancel_task`` runs
+        # ``.cancel()`` synchronously — before this coroutine yields — so the
+        # orchestrator is killed at its wait() and never runs its body.
+        if self._orch_task is not None:
+            await _cancel_task(self._orch_task, "Orchestrator task")
+
         # Cancel startup tasks (may already be done)
         if self._sync_task is not None:
             await _cancel_task(self._sync_task, "Initial sync task")
-        if self._orch_task is not None:
-            await _cancel_task(self._orch_task, "Orchestrator task")
+        # asyncio.to_thread does not kill the producer thread on cancel —
+        # only awaiting its future proves the thread actually stopped (it
+        # cooperates via _sync_stop_event, set above). Block here so the
+        # provider does not reach the "stopped" phase with a live thread
+        # still pushing onto the shared queue.
+        if self._sync_thread_future is not None and not self._sync_thread_future.done():
+            with suppress(Exception):
+                await asyncio.shield(self._sync_thread_future)
+            self._sync_thread_future = None
+        # The producer thread is now stopped, so every initial-sync payload
+        # it produced (CreateSession, UpdateSession, MarkSessionsStale, ...)
+        # is enqueued. But a cancelled _initial_sync_task never pushed its
+        # completion marker, so nothing yet proves those payloads have been
+        # drained. Push the marker ourselves and await it: the queue is FIFO,
+        # so the marker's done future resolving proves every payload of this
+        # run has been applied. Without this, a queued payload could be
+        # applied after the provider reaches the "stopped" phase and race the
+        # next hot-start's producer (duplicate-row IntegrityError, or a stale
+        # staleness write landing after the new producer read the DB). A
+        # harmless no-op when _initial_sync_task ran to completion and already
+        # drained its own marker. Pushed with no stop_event — _sync_stop_event
+        # is set, but this marker is the drain proof and must not be dropped.
+        if self._sync_task is not None:
+            from twicc.providers.db_writer import (
+                InitialSyncDoneMarker,
+                put_thread_message,
+            )
+            with suppress(Exception):
+                done_future = asyncio.get_running_loop().create_future()
+                await put_thread_message(
+                    InitialSyncDoneMarker(provider=self.provider, done_future=done_future)
+                )
+                await done_future
 
         # Watcher (may not have started yet)
         if self._watcher_task is not None:
@@ -211,7 +262,15 @@ class ClaudeCodeOrchestrator(BaseOrchestrator):
         # Background compute (may not have started yet)
         if self._compute_task is not None:
             logger.info("Stopping background compute task...")
-            stop_background_task(self._compute_ctx)
+            # Abandon the compute run before stopping the worker: from here on,
+            # every still-queued or still-incoming session_complete for this
+            # run is skipped by the DB writer (untracked run), so a
+            # shut-down provider's partial compute results never apply — not
+            # during this teardown, and not racing the next hot-start. The
+            # run's sessions are recomputed on the next start.
+            from twicc.providers.db_writer import abandon_compute_run
+            await abandon_compute_run(self._compute_ctx.run_id, self.provider)
+            await stop_background_task(self._compute_ctx)
             await _cancel_task(self._compute_task, "Background compute task")
         else:
             logger.info("Background compute was not started, skipping")
@@ -265,7 +324,44 @@ class ClaudeCodeOrchestrator(BaseOrchestrator):
     # ------------------------------------------------------------------
 
     async def _initial_sync_task(self) -> None:
-        """Run sync_all() in a thread with progress broadcasting."""
+        """Exception-safe wrapper around :meth:`_run_initial_sync`.
+
+        ``_run_initial_sync`` can raise — e.g. ``sync_all`` hitting an
+        unexpected error. On any non-cancellation exception, log it and still
+        set ``initial_sync_done`` in the ``finally``: otherwise
+        ``_dependency_orchestrator`` (which awaits that event) would hang
+        forever and the provider would never start its compute/watcher. The
+        provider then runs degraded on whatever was synced before the failure,
+        recovered on the next restart.
+        """
+        try:
+            await self._run_initial_sync()
+        except Exception:
+            logger.exception("Initial sync task for %s failed", self.provider.value)
+        finally:
+            self.initial_sync_done.set()
+
+    async def _run_initial_sync(self) -> None:
+        """Run sync_all() in a thread, pushing payloads onto the shared queue.
+
+        The producer thread does not write to DB directly: it pushes
+        initial-sync payloads onto the process-wide shared queue, drained by
+        the DB writer (:mod:`twicc.providers.db_writer`).
+
+        A producer thread that keeps pushing after a cancel pushes onto a
+        still-drained queue — no lost writes; the zombie-thread / overlap
+        concern is handled by ``shutdown()`` blocking on
+        ``_sync_thread_future``. Releasing ``initial_sync_done`` is handled by
+        the :meth:`_initial_sync_task` wrapper; this method first pushes and
+        drains the run's completion marker — even when the producer crashes —
+        so ``initial_sync_done`` is never released mid-drain.
+        """
+        from twicc.providers.db_writer import (
+            InitialSyncDoneMarker,
+            get_thread_queue,
+            put_thread_message,
+        )
+
         loop = asyncio.get_running_loop()
         provider_value = self.provider.value
 
@@ -287,12 +383,72 @@ class ClaudeCodeOrchestrator(BaseOrchestrator):
                 loop,
             )
 
+        sync_queue = get_thread_queue()
         logger.info("Starting data synchronization...")
-        await asyncio.to_thread(
-            sync_all,
-            on_session_progress=on_session_progress,
-            stop_event=self._sync_stop_event,
+
+        # Keep an explicit reference to the producer thread future so
+        # shutdown() can wait for the *real* thread end, not just this
+        # coroutine being cancelled.
+        self._sync_thread_future = asyncio.ensure_future(
+            asyncio.to_thread(
+                sync_all,
+                sync_queue,
+                on_session_progress=on_session_progress,
+                stop_event=self._sync_stop_event,
+            )
         )
+        # Wait for the producer thread, capturing a crash rather than letting
+        # it propagate yet: the thread has ended either way, so the marker
+        # pushed below still sits last in this run and the DB writer's FIFO
+        # drain of it still proves every payload applied. That proof must
+        # complete before initial_sync_done is released (by the
+        # _initial_sync_task wrapper) -- on the crash path too, or the compute
+        # phase could start while the DB writer is still applying this run's
+        # payloads.
+        #
+        # The await is shielded: shutdown() cancels _sync_task, and a bare
+        # await would propagate that cancel to _sync_thread_future, mark it
+        # done() and make shutdown()'s `not done()` guard skip the wait,
+        # leaving the producer thread alive after shutdown. The shield keeps
+        # the thread future uncancelled so shutdown() can await it. A
+        # CancelledError (this coroutine cancelled) still propagates;
+        # shutdown() then pushes its own drain marker.
+        sync_error: Exception | None = None
+        try:
+            await asyncio.shield(self._sync_thread_future)
+        except Exception as exc:
+            sync_error = exc
+
+        # Producer thread finished (cleanly or by crashing) — close the run
+        # with the marker. It carries a Future the writer resolves with the
+        # run's failure count once it has drained every payload this run
+        # produced.
+        done_future = loop.create_future()
+        if not await put_thread_message(
+            InitialSyncDoneMarker(provider=self.provider, done_future=done_future),
+            self._sync_stop_event,
+        ):
+            # shutdown signalled — marker dropped (shutdown() pushes its own).
+            if sync_error is not None:
+                logger.error(
+                    "Initial sync for %s crashed during shutdown",
+                    provider_value, exc_info=sync_error,
+                )
+            return
+        failed_payloads = await done_future
+
+        if sync_error is not None:
+            # Producer crashed; its payloads are now fully drained, so
+            # initial_sync_done is safe to release — re-raise for the
+            # _initial_sync_task wrapper to log.
+            raise sync_error
+
+        if failed_payloads:
+            logger.error(
+                "Initial sync for %s completed with %d payload(s) that failed "
+                "to apply — affected sessions will be re-synced on the next start",
+                provider_value, failed_payloads,
+            )
 
         await broadcast_startup_progress(
             "initial_sync", total_sessions, total_sessions,
@@ -320,8 +476,6 @@ class ClaudeCodeOrchestrator(BaseOrchestrator):
             sessions_count,
             subagents_count,
         )
-
-        self.initial_sync_done.set()
 
     async def _dependency_orchestrator(self) -> None:
         """Wait for the initial sync, then start compute + cron restart + watcher.

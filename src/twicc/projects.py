@@ -16,8 +16,9 @@ from __future__ import annotations
 import logging
 import os
 
-from asgiref.sync import async_to_sync, sync_to_async
+from asgiref.sync import sync_to_async
 from channels.layers import get_channel_layer
+from django.db import transaction
 
 from twicc.core.models import Project, Session, SessionType
 from twicc.core.serializers import serialize_project
@@ -96,10 +97,15 @@ def ensure_project_directory(project_id: str, cwd: str) -> None:
     if _project_directories[project_id] == cwd:
         return
 
-    # Update DB and cache, and set stale based on directory existence
+    # Update DB now; refresh the cache only once the surrounding transaction
+    # commits. apply_session_complete and the DB writer call this
+    # inside transaction.atomic — a rollback there would otherwise leave the
+    # cache ahead of the DB, and the `== cwd` check above would then suppress
+    # the corrective write forever. on_commit runs immediately when there is
+    # no active transaction, so non-transactional callers are unaffected.
     should_be_stale = not os.path.isdir(cwd)
     Project.objects.filter(id=project_id).update(directory=cwd, stale=should_be_stale)
-    _project_directories[project_id] = cwd
+    transaction.on_commit(lambda: _project_directories.update({project_id: cwd}))
 
     # Re-resolve git_root when directory changes
     ensure_project_git_root(project_id, cwd)
@@ -135,28 +141,30 @@ def ensure_project_git_root(project_id: str, directory: str | None = None) -> No
     if _project_git_roots.get(project_id) == git_root:
         return
 
-    # Update DB and cache
+    # Update DB now; refresh the cache only once the surrounding transaction
+    # commits, so a rollback never leaves the cache ahead of the DB (the
+    # `== git_root` check above would otherwise suppress the corrective
+    # write). on_commit runs immediately when there is no active transaction.
     Project.objects.filter(id=project_id).update(git_root=git_root)
-    _project_git_roots[project_id] = git_root
+    transaction.on_commit(lambda: _project_git_roots.update({project_id: git_root}))
 
 
 # =============================================================================
 # Project creation — single entry point
 # =============================================================================
 #
-# Every code path that creates a ``Project`` row goes through one of the two
-# helpers below (``register_project`` async, ``register_project_sync`` sync).
-# They wrap ``Project.objects.get_or_create`` and run the after-creation
-# hooks atomically: WS broadcast of ``project_added`` and workspace
-# auto-add (when the directory is already known).
+# Every code path that creates a ``Project`` row goes through ``register_project``
+# (async). It wraps ``Project.objects.get_or_create`` and runs the
+# after-creation hooks atomically: WS broadcast of ``project_added`` and
+# workspace auto-add (when the directory is already known).
 #
 # For callers that learn the directory only later (the watcher between
 # ``parse_session_file`` and ``sync_session_items_from_file``, and the
 # claude_code initial sync where the cwd is in the JSONL body), pass
 # ``directory=None`` here and call :func:`auto_add_project_to_workspaces`
-# (or its sync sibling) once the directory has been resolved. That second
-# call is idempotent — a workspace that already lists the project is left
-# untouched and no broadcast fires.
+# once the directory has been resolved. That second call is idempotent —
+# a workspace that already lists the project is left untouched and no
+# broadcast fires.
 
 
 def _create_or_get_project(
@@ -170,8 +178,8 @@ def _create_or_get_project(
     """Pure DB operation: get-or-create a Project row.
 
     Returns ``(project, was_just_created)``. No broadcasts, no auto-add —
-    callers should go through ``register_project`` /
-    ``register_project_sync`` instead, which run the post-creation hooks.
+    callers should go through ``register_project`` (async) instead, which
+    runs the post-creation hooks.
     """
     defaults: dict = {}
     if directory:
@@ -185,8 +193,10 @@ def _create_or_get_project(
     project, created = Project.objects.get_or_create(id=project_id, defaults=defaults)
     if created and directory:
         # Mirror the cache update that ``ensure_project_directory`` would do
-        # so subsequent reads don't have to round-trip the DB.
-        _project_directories[project_id] = directory
+        # so subsequent reads don't have to round-trip the DB. Deferred to
+        # post-commit so a rolled-back transaction never leaves the cache
+        # ahead of the DB (on_commit runs immediately outside a transaction).
+        transaction.on_commit(lambda: _project_directories.update({project_id: directory}))
     return project, created
 
 
@@ -200,10 +210,49 @@ async def _broadcast_project_added(project: Project) -> None:
 
 def _adopt_directory_sync(project: Project, directory: str) -> None:
     """Patch ``project.directory`` in DB + cache (sync). Caller checks that
-    the project actually lacks a directory before invoking."""
+    the project actually lacks a directory before invoking. The cache refresh
+    is deferred to post-commit so a rolled-back transaction never leaves the
+    cache ahead of the DB (on_commit runs immediately outside a transaction)."""
     project.directory = directory
     project.save(update_fields=["directory"])
-    _project_directories[project.id] = directory
+    project_id = project.id
+    transaction.on_commit(lambda: _project_directories.update({project_id: directory}))
+
+
+def register_project_db_only(
+    project_id: str,
+    *,
+    directory: str | None = None,
+    name: str | None = None,
+    color: str | None = None,
+    stale: bool | None = None,
+) -> tuple[Project, bool, bool]:
+    """DB-only half of project registration: get-or-create + directory adoption.
+
+    Returns ``(project, was_just_created, adopted_directory)`` and runs **no**
+    side effects — no ``project_added`` broadcast, no workspace auto-add — so
+    it is safe to call from inside a ``transaction.atomic()`` block.
+
+    Callers that need the side effects must run them themselves once the
+    surrounding transaction has committed: broadcast ``project_added`` when
+    ``created`` is true, and call
+    :func:`twicc.workspaces.auto_add_project_to_workspaces` only when the
+    project was just created or just adopted a directory
+    (``created or adopted_directory``) — never on every call, since an
+    existing project's workspace membership cannot change just because another
+    of its sessions was synced. :func:`register_project` is the async wrapper
+    that does exactly that; the DB writer
+    (:mod:`twicc.providers.db_writer`) calls this directly so a project is
+    never announced from inside — or despite a rollback of — its transaction.
+    """
+    project, created = _create_or_get_project(
+        project_id, directory=directory, name=name, color=color, stale=stale,
+    )
+    adopted = False
+    if not created and directory and not project.directory:
+        _adopt_directory_sync(project, directory)
+        adopted = True
+    return project, created, adopted
 
 
 async def register_project(
@@ -233,26 +282,19 @@ async def register_project(
     :func:`twicc.workspaces.auto_add_project_to_workspaces` once the
     directory has been set.
 
-    Sync callers use :data:`register_project_sync` (an
-    ``async_to_sync(register_project)`` alias). Broadcasts targeting a
-    channel layer with no subscribers (e.g. initial sync before any WS
-    client is connected) are silent no-ops.
+    Broadcasts targeting a channel layer with no subscribers (e.g.
+    initial sync before any WS client is connected) are silent no-ops.
     """
-    project, created = await sync_to_async(_create_or_get_project)(
+    project, created, adopted = await sync_to_async(register_project_db_only)(
         project_id,
         directory=directory, name=name, color=color, stale=stale,
     )
     if created:
         await _broadcast_project_added(project)
-    elif directory and not project.directory:
-        await sync_to_async(_adopt_directory_sync)(project, directory)
-    if project.directory:
+    if (created or adopted) and project.directory:
         await auto_add_project_to_workspaces(project.id, project.directory)
 
     return project, created
-
-
-register_project_sync = async_to_sync(register_project)
 
 
 def update_project_total_cost(project_id: str) -> None:
@@ -280,7 +322,15 @@ def update_project_metadata(project_id: str) -> None:
         project=project, type=SessionType.SESSION, created_at__isnull=False, user_message_count__gt=0
     )
     project.sessions_count = sessions.count()
-    max_mtime = sessions.order_by("-mtime").values_list("mtime", flat=True).first()
+    # mtime excludes stale sessions (JSONL gone from disk): a stale session
+    # must not keep the project's mtime -- and thus its sort position -- high.
+    # sessions_count above intentionally keeps stale sessions (matching
+    # recalc_sessions_count in the DB writer); only this mtime
+    # aggregate filters them out. Keep this filter aligned with
+    # _compute_project_mtime() in twicc.providers.db_writer.
+    max_mtime = (
+        sessions.filter(stale=False).order_by("-mtime").values_list("mtime", flat=True).first()
+    )
     project.mtime = max_mtime or 0
     project.save(update_fields=["sessions_count", "mtime"])
 

@@ -221,10 +221,9 @@ class ClaudeCodeAgent(BaseAgent):
             recurring = tool_response.get("recurring", True)
             prompt = tool_input.get("prompt", "")
 
-            from datetime import datetime as dt, timezone as tz
             from twicc.core.models import cron_occurrences
 
-            created_at = dt.now(tz=tz.utc)
+            created_at = datetime.now(tz=timezone.utc)
 
             # Compute next fire time from the cron expression (always required)
             try:
@@ -1098,10 +1097,9 @@ class ClaudeCodeAgent(BaseAgent):
         await self._shutdown_sdk_client()
 
         # Update state
-        self._set_state(AgentState.DEAD)
         self.last_activity = time.time()
         self._first_turn_done_event.set()  # Unblock any waiters (cron restart)
-        await self._notify_state_change()
+        await self._transition_to_dead()
 
     async def _run_message_loop(self) -> None:
         """Background task that consumes messages and tracks state.
@@ -1295,11 +1293,10 @@ class ClaudeCodeAgent(BaseAgent):
                         self.session_id,
                     )
                     self._cancel_all_pending_futures()
-                    self._set_state(AgentState.DEAD)
                     self.kill_reason = "auth_required"
                     self.last_activity = time.time()
                     self._first_turn_done_event.set()
-                    await self._notify_state_change()
+                    await self._transition_to_dead()
                     # Flip the global auth state immediately. The credentials file
                     # may still exist on disk, but the SDK has just told us the
                     # token is no longer accepted — that's the authoritative signal.
@@ -1321,10 +1318,9 @@ class ClaudeCodeAgent(BaseAgent):
                                 msg.subtype,
                             )
                             self._cancel_all_pending_futures()
-                            self._set_state(AgentState.DEAD)
                             self.last_activity = time.time()
                             self._first_turn_done_event.set()
-                            await self._notify_state_change()
+                            await self._transition_to_dead()
                             await self._shutdown_sdk_client()
                             return
 
@@ -1403,13 +1399,12 @@ class ClaudeCodeAgent(BaseAgent):
         # Cancel any pending request Future to avoid asyncio warnings
         self._cancel_all_pending_futures()
 
-        self._set_state(AgentState.DEAD)
         self.error = error_message
         self.kill_reason = "error"
         self.last_activity = time.time()
         self._first_turn_done_event.set()  # Unblock any waiters (cron restart)
 
-        await self._notify_state_change()
+        await self._transition_to_dead()
 
         await self._shutdown_sdk_client()
 

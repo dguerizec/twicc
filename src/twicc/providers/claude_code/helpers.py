@@ -448,8 +448,7 @@ class ClaudeCodeHelpers(BaseProviderHelpers):
         """
         if not model:
             return None
-        from datetime import date as _date
-        today = _date.today()
+        today = date.today()
         entry = next(
             (mv for mv in self.MODEL_VERSIONS
              if self.selected_model_value(mv) == model),
@@ -582,20 +581,24 @@ class ClaudeCodeHelpers(BaseProviderHelpers):
 
     async def generate_title(self, prompt: str, system_prompt: str) -> str | None:
         """Run a short Haiku SDK query to suggest a title for ``prompt``."""
-        from .title_suggest import generate_title as _generate
+        from .title_suggest import generate_title as _generate_title
 
-        return await _generate(prompt, system_prompt)
+        return await _generate_title(prompt, system_prompt)
 
-    def rename_session(self, session_id: str, title: str) -> None:
+    async def rename_session(self, session_id: str, title: str) -> None:
         """Append the title to the JSONL and mark it protected against CLI stale re-appends.
 
         ``protect_title`` runs in a ``finally`` so the protection is
         registered even when the JSONL write fails — the DB row already
         holds the new title and we still want to block any out-of-date
-        title the CLI might re-append.
+        title the CLI might re-append. ``rename_session_in_jsonl`` does
+        FS I/O (SDK kernel-level atomic append), so it hops to a worker
+        thread; ``protect_title`` is a dict mutation, safe inline.
         """
+        import asyncio
+
         try:
-            rename_session_in_jsonl(session_id, title)
+            await asyncio.to_thread(rename_session_in_jsonl, session_id, title)
         finally:
             protect_title(session_id, title)
 
@@ -636,3 +639,20 @@ class ClaudeCodeHelpers(BaseProviderHelpers):
         )()
         if crons:
             message["active_crons"] = crons
+
+    async def try_handle_async_job(self, job, settle_async_job) -> bool:
+        """Route Claude Code-specific async-queue jobs to their handler.
+
+        Currently :class:`PrepareCronRestartsJob` only (the boot-time
+        ProcessRun / SessionCron cleanup, see :mod:`.cron_restart`). Lives
+        here rather than in db_writer.py so the job type, its sync handler,
+        and the producer all stay co-located in this provider's subpackage.
+        """
+        from .cron_restart import PrepareCronRestartsJob, _apply_prepare_cron_restarts_job
+
+        if isinstance(job, PrepareCronRestartsJob):
+            await settle_async_job(
+                job, _apply_prepare_cron_restarts_job, "cron restart prepare",
+            )
+            return True
+        return False

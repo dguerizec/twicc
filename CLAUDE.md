@@ -197,6 +197,7 @@ Key models in `src/twicc/core/models.py`:
 
 - **Immutable data containers:** Always use `NamedTuple` for simple immutable data structures (return values, decisions, configs). Works with all field types including lists. Prefer over `@dataclass` when mutability is not needed.
 - **JSON parsing:** Use `orjson` instead of the standard `json` module for all JSON operations in the backend. It's ~6x faster and handles the high-volume JSONL file parsing efficiently.
+- **Aliased imports (`from X import Y as Z`):** Use sparingly, only when strictly necessary. Two acceptable reasons: (1) **name collision** — the imported symbol would shadow another name in scope, or two imports would shadow each other (e.g. multiple `main` modules → `as foo_main`, `as bar_main`); (2) **disambiguating intent at the call site** for a noticeably less generic verb (e.g. `from .sdk_logger import patch_client as patch_client_for_logging`). Avoid the cosmetic prefix/suffix style (`as _foo`, `as django_settings`, `as ProcessRunModel`) when the bare name doesn't actually conflict — it adds noise and makes it harder to grep for the canonical symbol.
 
 ## Frontend Patterns
 

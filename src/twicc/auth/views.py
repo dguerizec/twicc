@@ -11,6 +11,8 @@ import logging
 import time
 from collections import defaultdict
 
+import asyncio
+
 import orjson
 from django.conf import settings
 from django.http import JsonResponse
@@ -95,7 +97,7 @@ def _get_client_ip(request) -> str:
     return request.META.get("REMOTE_ADDR", "unknown")
 
 
-def auth_check(request):
+async def auth_check(request):
     """GET /api/auth/check/ - Check if user is authenticated.
 
     Returns:
@@ -108,14 +110,16 @@ def auth_check(request):
         return JsonResponse({"authenticated": True, "password_required": False})
 
     session = request.session
+    auth_value = await session.aget(SESSION_AUTH_KEY)
+    fingerprint = await session.aget(SESSION_FINGERPRINT_KEY)
     authenticated = is_session_authenticated(
-        session.get(SESSION_AUTH_KEY),
-        session.get(SESSION_FINGERPRINT_KEY),
+        auth_value,
+        fingerprint,
         stored_hash,
     )
     # Drop a stale session so the next request doesn't keep retrying it.
-    if not authenticated and session.get(SESSION_AUTH_KEY):
-        session.flush()
+    if not authenticated and auth_value:
+        await session.aflush()
 
     return JsonResponse({
         "authenticated": authenticated,
@@ -123,7 +127,7 @@ def auth_check(request):
     })
 
 
-def login(request):
+async def login(request):
     """POST /api/auth/login/ - Authenticate with password.
 
     Body: {"password": "the_password"}
@@ -159,7 +163,20 @@ def login(request):
 
     password = data.get("password", "")
 
-    if verify_password(password, settings.TWICC_PASSWORD_HASH):
+    # PBKDF2 verification is intentionally CPU-heavy — running it on the
+    # event loop would stall unrelated async work for the entire request.
+    # ``asyncio.to_thread`` ships it to a fresh worker thread; using
+    # ``sync_to_async(...)`` here would default to ``thread_sensitive=True``
+    # which routes through asgiref's single shared executor, serialising
+    # all PBKDF2 verifications back-to-back.
+    if await asyncio.to_thread(verify_password, password, settings.TWICC_PASSWORD_HASH):
+        # ``bind_session`` mutates the session dict (``session[key] = ...``)
+        # synchronously. Touching the session for the first time would
+        # otherwise trigger a sync ORM load — async-pre-load it via
+        # ``aget`` so the dict writes that follow are pure in-memory.
+        # SessionMiddleware persists the modified session at response time
+        # (SESSION_SAVE_EVERY_REQUEST=True).
+        await request.session.aget(SESSION_AUTH_KEY)
         bind_session(request.session, settings.TWICC_PASSWORD_HASH)
         # Clear failed attempts on success
         _login_attempts.pop(ip, None)
@@ -172,7 +189,7 @@ def login(request):
         return JsonResponse({"error": "Invalid password"}, status=401)
 
 
-def logout(request):
+async def logout(request):
     """POST /api/auth/logout/ - Clear authentication.
 
     Flushes the session entirely.
@@ -180,5 +197,5 @@ def logout(request):
     if request.method != "POST":
         return JsonResponse({"error": "Method not allowed"}, status=405)
 
-    request.session.flush()
+    await request.session.aflush()
     return JsonResponse({"authenticated": False})

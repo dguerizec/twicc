@@ -70,6 +70,172 @@ _indexing_tasks: list[asyncio.Task] = []
 
 
 # ---------------------------------------------------------------------------
+# Search-version mark batching
+# ---------------------------------------------------------------------------
+
+
+class _MarkIndexedBuffer:
+    """Batch ``Session.search_version`` updates of just-indexed sessions.
+
+    The indexing sweep used to do one ``session.save(update_fields=[...])``
+    per session, which was the last high-frequency direct DB writer left in
+    the runtime loop (every other big producer goes through the DB writer
+    now). This buffer accumulates the session ids and submits one
+    :class:`_MarkSessionsIndexedJob` per batch — either when ``MAX_SIZE``
+    is reached, or after ``MAX_AGE_SECONDS`` of inactivity for the tail
+    that may not fill an entire batch.
+
+    **Fire-and-forget batching.** The submission goes through
+    :func:`enqueue_async_job`, the synchronous enqueue-only sibling of
+    :func:`submit_async_job`: ``_flush_now`` returns as soon as the job
+    lands on the DB writer's async queue, without awaiting the apply.
+    Without this, the buffer would still reduce N UPDATEs to ceil(N /
+    MAX_SIZE), but the indexer would stall on every size-triggered flush
+    waiting for the DB writer to settle the Future — i.e. the apply time
+    becomes a per-batch latency multiplier and we lose the "indexer keeps
+    going while previous batch is committing" property the batching is
+    supposed to buy.
+
+    To keep :meth:`drain` honest the Future is recorded on
+    :attr:`_pending_futures` BEFORE the enqueue, so even an unlikely
+    ``enqueue_async_job`` failure (writer stopping / not started, which
+    we then settle the Future with AND log) is observed by the drain.
+    Both the happy path end of :func:`_run_indexing` and the cancellation
+    ``finally`` route through :meth:`drain` so nothing that already hit
+    Tantivy stays ``search_version=NULL`` in DB just because the loop
+    stopped between ``_index_session`` and the next implicit flush.
+
+    **Widened Tantivy↔DB window — explicit trade-off.** A crash between
+    a Tantivy ``commit`` and the corresponding DB mark re-indexes the
+    affected session at next boot (idempotent — same baseline migration
+    ``0066_backfill_search_version`` already covers). Because the
+    enqueue is fire-and-forget, the window is no longer bounded by a
+    single in-flight batch: every batch sitting on the DB writer's
+    async queue AND every batch already dispatched but not yet
+    settled counts. In practice the DB writer applies each
+    ``_MarkSessionsIndexedJob`` in a couple of ms (one
+    ``UPDATE ... WHERE id IN (...)``) so the indexer outpacing it by
+    more than a few batches is a degenerate case (DB writer blocked on
+    another long apply, slow disk). The worst case is bounded only by
+    "indexer throughput vs writer throughput during the lifetime of one
+    sweep"; the recovery cost is the next-boot re-index of those
+    sessions, which is the same cost as a crash mid-``_index_session``
+    in the pre-R19 layout.
+    """
+
+    MAX_SIZE = 50
+    MAX_AGE_SECONDS = 2.0
+
+    def __init__(self) -> None:
+        self._items: list[str] = []
+        self._flush_task: asyncio.Task | None = None
+        self._pending_futures: list[asyncio.Future] = []
+
+    async def add(self, session_id: str) -> None:
+        """Queue a session id for the next mark batch."""
+        self._items.append(session_id)
+        if len(self._items) >= self.MAX_SIZE:
+            await self._flush_now()
+        elif self._flush_task is None or self._flush_task.done():
+            self._flush_task = asyncio.create_task(self._delayed_flush())
+
+    async def _delayed_flush(self) -> None:
+        """Flush the buffer after ``MAX_AGE_SECONDS`` of inactivity."""
+        try:
+            await asyncio.sleep(self.MAX_AGE_SECONDS)
+        except asyncio.CancelledError:
+            return
+        if self._items:
+            await self._flush_now()
+
+    async def _flush_now(self) -> None:
+        """Submit the current batch as one :class:`_MarkSessionsIndexedJob`.
+
+        Two callers: the size-triggered path inside :meth:`add` (sibling of
+        the timer), and the timer task itself reaching this method through
+        :meth:`_delayed_flush`. In the second case ``self._flush_task is
+        asyncio.current_task()``, so we must NOT cancel it — that would
+        inject ``CancelledError`` into our own continuation and (depending on
+        which await fires first) bypass the bookkeeping that keeps
+        :meth:`drain` honest about which apply Futures are still in flight.
+
+        Everything past the ``_items`` swap is synchronous (the enqueue is
+        sync, the Future is appended before the enqueue) so the entire
+        critical section is atomic with respect to the event loop: no
+        cancellation point can sneak between "swap the items" and
+        "record the Future".
+        """
+        # Cancel the inactivity timer only when it is a SIBLING task. If we
+        # are the timer task ourselves, just clear the slot — Python lets
+        # us cancel ``current_task`` but doing so silently dropped the
+        # ``_pending_futures.append`` below in the original implementation.
+        if (
+            self._flush_task is not None
+            and not self._flush_task.done()
+            and self._flush_task is not asyncio.current_task()
+        ):
+            self._flush_task.cancel()
+        self._flush_task = None
+        if not self._items:
+            return
+        batch = self._items
+        self._items = []
+        # Lazy import: avoids a top-level dependency on ``db_writer`` (which
+        # imports Django models) at module import time.
+        from twicc.providers.db_writer import _MarkSessionsIndexedJob, enqueue_async_job
+
+        future: asyncio.Future = asyncio.get_running_loop().create_future()
+        # Track the Future BEFORE submitting so :meth:`drain` always sees it,
+        # even on an unlikely ``enqueue_async_job`` failure path. If the
+        # enqueue raises (writer stopping / not started), settle the Future
+        # ourselves so the eventual :meth:`drain` ``gather`` doesn't hang
+        # waiting for a result the DB writer will never produce.
+        self._pending_futures.append(future)
+        try:
+            enqueue_async_job(_MarkSessionsIndexedJob(
+                session_ids=batch,
+                future=future,
+                provider=None,
+            ))
+        except Exception as exc:
+            # Log here, NOT in :meth:`drain`. ``drain`` uses
+            # ``gather(return_exceptions=True)`` to survive a single bad
+            # apply settling the rest; the apply path is already covered
+            # by :func:`_settle_async_job` on the DB writer side, so
+            # ``drain`` discards what comes back. Enqueue failures have
+            # nobody else logging them, so without this line a "DB writer
+            # stopping" race would silently leave ``len(batch)`` sessions
+            # marked in Tantivy but unapplied in DB.
+            logger.error(
+                "Search index: enqueue of %d-session mark batch failed: %s",
+                len(batch), exc, exc_info=True,
+            )
+            if not future.done():
+                future.set_exception(exc)
+
+    async def drain(self) -> None:
+        """Flush the buffer and await every in-flight mark apply.
+
+        Called by :func:`_run_indexing` on its happy path (after the
+        loop completes) AND from its ``finally`` block on
+        :class:`asyncio.CancelledError` raised by the CLI shutdown path
+        (``run.py:_run_until_signal`` cancels every active indexing task
+        through :func:`get_active_indexing_tasks`). Either way the goal
+        is the same: nothing that already hit Tantivy should stay marked
+        ``search_version=NULL`` in DB just because the loop stopped
+        between ``_index_session`` and the next implicit flush.
+
+        ``return_exceptions=True`` so a single apply failure on the last
+        batch doesn't strand the others — failures are already logged
+        by :func:`_settle_async_job` on the DB writer side.
+        """
+        await self._flush_now()
+        if self._pending_futures:
+            await asyncio.gather(*self._pending_futures, return_exceptions=True)
+            self._pending_futures.clear()
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -169,47 +335,67 @@ async def _run_indexing():
     start_time = time.monotonic()
     indexed_count = 0
     last_logged_count = 0
+    buffer = _MarkIndexedBuffer()
 
-    for session_id in sessions_to_index:
-        # Check stop signal between sessions
-        if _stop_event is not None and _stop_event.is_set():
-            logger.info("Search index task: stop signal received, aborting after %d/%d sessions", indexed_count, total)
-            break
+    try:
+        for session_id in sessions_to_index:
+            # Check stop signal between sessions
+            if _stop_event is not None and _stop_event.is_set():
+                logger.info("Search index task: stop signal received, aborting after %d/%d sessions", indexed_count, total)
+                break
 
+            try:
+                await _index_session(session_id, buffer)
+                indexed_count += 1
+
+                # Broadcast progress and log every 50 sessions
+                await broadcast_startup_progress("search_index", indexed_count, total)
+
+                if indexed_count - last_logged_count >= 50:
+                    elapsed = time.monotonic() - start_time
+                    logger.info(
+                        "Search index progress: %d/%d sessions (%.1fs elapsed)",
+                        indexed_count,
+                        total,
+                        elapsed,
+                    )
+                    last_logged_count = indexed_count
+
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Search index: error indexing session %s, skipping", session_id)
+    finally:
+        # Happy path and cancellation both route through here so the tail
+        # batch (the < MAX_SIZE sessions queued after the last size-triggered
+        # flush) hits the DB before the sweep is declared done. If the CLI
+        # shutdown cancels us mid-drain we accept the loss — those sessions
+        # remain ``search_version=NULL`` and get re-indexed at next boot,
+        # the same baseline the batching widens by at most MAX_SIZE rows.
         try:
-            await _index_session(session_id)
-            indexed_count += 1
-
-            # Broadcast progress and log every 50 sessions
-            await broadcast_startup_progress("search_index", indexed_count, total)
-
-            if indexed_count - last_logged_count >= 50:
-                elapsed = time.monotonic() - start_time
-                logger.info(
-                    "Search index progress: %d/%d sessions (%.1fs elapsed)",
-                    indexed_count,
-                    total,
-                    elapsed,
-                )
-                last_logged_count = indexed_count
-
+            await buffer.drain()
         except asyncio.CancelledError:
             raise
         except Exception:
-            logger.exception("Search index: error indexing session %s, skipping", session_id)
+            logger.exception("Search index: failed to drain mark buffer")
 
     elapsed = time.monotonic() - start_time
     logger.info("Search index task completed: %d/%d sessions indexed in %.1fs", indexed_count, total, elapsed)
     await broadcast_startup_progress("search_index", indexed_count, total, completed=True)
 
 
-async def _index_session(session_id: str):
+async def _index_session(session_id: str, buffer: _MarkIndexedBuffer):
     """Index the session title plus every indexable message via the owning provider.
 
     The text extraction (parsing ``item.content``, picking out role and
     body) is provider-specific and lives in
     ``BaseProviderHelpers.get_indexable_messages``. This function only
     wires Tantivy I/O around it.
+
+    The post-indexing ``search_version`` mark is appended to ``buffer``
+    rather than written through a direct ``session.save()`` so the entire
+    sweep collapses into ``ceil(N / MAX_SIZE)`` batched DB writes routed
+    via the DB writer instead of one direct write per session.
     """
     session = await sync_to_async(Session.objects.get)(id=session_id)
 
@@ -255,9 +441,8 @@ async def _index_session(session_id: str):
     # Commit after each session
     await asyncio.to_thread(search.commit)
 
-    # Update session search_version
-    session.search_version = settings.CURRENT_SEARCH_VERSION
-    await sync_to_async(session.save)(update_fields=["search_version"])
+    # Mark the session as indexed via the DB writer (batched).
+    await buffer.add(session.id)
 
 
 def stop_search_index_task():

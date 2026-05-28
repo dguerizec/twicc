@@ -157,10 +157,24 @@ async def run_server(port: int):
     # Set up signal handlers to ensure clean shutdown
     shutdown_event = asyncio.Event()
 
+    # Start the DB writer FIRST, before any producer that writes to
+    # the DB. Every periodic task that lands a write — initial price sync
+    # below, commands_task / usage_task / model_retirement_task spawned by
+    # the orchestrators, and the per-provider initial sync + compute they
+    # drive — routes its writes through this DB writer's queues. Standing it
+    # up before any of them guarantees the DB writer always exists by the
+    # time a producer tries to submit. ``stop_db_writer`` is used at
+    # the very end of this function's shutdown path, after every producer
+    # has shut down.
+    from twicc.providers.db_writer import start_db_writer, stop_db_writer
+    start_db_writer()
+
     # Cross-provider initial price sync runs *before* per-provider orchestrators
     # so they can rely on prices being in DB by the time their compute paths run.
     # A single OpenRouter fetch covers every provider that has declared an
-    # ``OPENROUTER_MODEL_PREFIX``; failure here is logged and non-fatal.
+    # ``OPENROUTER_MODEL_PREFIX``; failure here is logged and non-fatal. The
+    # actual ``ModelPrice`` inserts flow through the DB writer started
+    # just above.
     await sync_all_providers()
     init_manifest()
 
@@ -181,6 +195,7 @@ async def run_server(port: int):
     # Per-provider orchestrators (started in parallel; each one is
     # responsible for its own task graph and dependency ordering).
     orchestrators = get_orchestrator_registry()
+
     await orchestrators.start_all(shutdown_event, search_index_ready)
 
     # Configure uvicorn
@@ -290,6 +305,12 @@ async def run_server(port: int):
         # Then let every provider tear down its own tasks (in parallel).
         await orchestrators.shutdown_all()
 
+        # Stop the DB writer. Done after every orchestrator has shut
+        # down — their blocking shutdown() guarantees no producer thread or
+        # subprocess is still alive, so nothing is left pushing onto the
+        # shared queues.
+        await stop_db_writer()
+
         # Finally tear down the search index itself. Done after the
         # providers' watchers are stopped so no late write races us.
         logger.info("Shutting down search index...")
@@ -315,8 +336,8 @@ def main():
         logger.info("TWICC starting...")
         logger.info("Environment loaded")
 
-        from django.conf import settings as django_settings
-        logger.info("TwiCC launch prefix: %s", django_settings.TWICC_LAUNCH_PREFIX)
+        from django.conf import settings
+        logger.info("TwiCC launch prefix: %s", settings.TWICC_LAUNCH_PREFIX)
 
         # Migrations auto
         call_command("migrate", verbosity=0)

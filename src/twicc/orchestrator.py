@@ -26,6 +26,8 @@ from twicc.providers.state import (
     ProviderState,
     force_disable_after_failed_start,
     get_enabled_providers,
+    is_provider_enabled,
+    is_provider_running,
     set_provider_state,
 )
 
@@ -187,6 +189,14 @@ class OrchestratorRegistry:
         # on hot-toggle without the caller having to thread them through.
         self._shutdown_event: asyncio.Event | None = None
         self._search_index_ready: asyncio.Event | None = None
+
+        # In-flight fire-and-forget hot-toggle tasks (finish_start /
+        # finish_shutdown). Tracked so shutdown_all() can await them before
+        # the caller stops the DB writer: a hot-toggled provider's
+        # producer (initial-sync thread / compute worker) is alive until its
+        # finish_shutdown completes, and the writer must outlive every
+        # producer. Each task removes itself via a done-callback.
+        self._inflight_hot_toggle_tasks: set[asyncio.Task[None]] = set()
 
     def get(self, provider: Provider) -> BaseOrchestrator:
         """Return the orchestrator for ``provider``."""
@@ -375,6 +385,7 @@ class OrchestratorRegistry:
             self.finish_start(provider),
             context=self._provider_context(provider),
         )
+        self._track_hot_toggle_task(task)
         task.add_done_callback(self._log_failure_done_callback(provider, "start"))
         if trigger_search_reindex:
             def _kick_on_success(t: asyncio.Task[None]) -> None:
@@ -383,6 +394,14 @@ class OrchestratorRegistry:
                 # above already retrieved it (so no asyncio warning will
                 # fire), and a second call just returns the cached value.
                 if t.cancelled() or t.exception() is not None:
+                    return
+                # Global shutdown began while finish_start was in flight
+                # (round-3 #3 makes shutdown_all() await such in-flight
+                # tasks, so this callback can fire during shutdown_all()).
+                # run.py cancels the active search-indexing tasks just
+                # before shutdown_all(), so scheduling a fresh kick now
+                # would race the search index teardown — skip it.
+                if self._shutdown_event is not None and self._shutdown_event.is_set():
                     return
                 asyncio.create_task(
                     self._kick_search_after_compute(provider),
@@ -454,6 +473,7 @@ class OrchestratorRegistry:
             self.finish_shutdown(provider),
             context=self._provider_context(provider),
         )
+        self._track_hot_toggle_task(task)
         task.add_done_callback(self._log_failure_done_callback(provider, "shut down cleanly"))
         return task
 
@@ -467,6 +487,18 @@ class OrchestratorRegistry:
         """
         await self.begin_shutdown(provider)
         await self.finish_shutdown(provider)
+
+    def _track_hot_toggle_task(self, task: asyncio.Task[None]) -> None:
+        """Register a fire-and-forget hot-toggle task so :meth:`shutdown_all`
+        can await it before the caller stops the DB writer.
+
+        A hot-toggled provider's producer (initial-sync thread / compute
+        worker) is alive until its ``finish_start`` / ``finish_shutdown`` task
+        completes; the writer must outlive every producer. The task removes
+        itself from the set on completion.
+        """
+        self._inflight_hot_toggle_tasks.add(task)
+        task.add_done_callback(self._inflight_hot_toggle_tasks.discard)
 
     @staticmethod
     def _log_failure_done_callback(provider: Provider, action: str):
@@ -568,6 +600,26 @@ class OrchestratorRegistry:
         if orch is None:
             return
         await orch.compute_done.wait()
+        # compute_done is also set idempotently by shutdown() during
+        # teardown, so reaching here does not mean compute really finished.
+        # If the global shutdown began while we were waiting, skip the
+        # re-index: run.py has already cancelled the active search-indexing
+        # tasks and a fresh kick now would race the search index teardown.
+        if self._shutdown_event is not None and self._shutdown_event.is_set():
+            return
+        # A provider hot-toggle off also sets compute_done — shutdown() sets
+        # it idempotently to release waiters — without touching the global
+        # shutdown event the guard above checks. If this provider is no longer
+        # running-and-enabled, the wait was unblocked by its teardown, not by
+        # compute finishing: skip the re-index. The mark writes themselves go
+        # through the DB writer now (R19's _MarkSessionsIndexedJob), so this
+        # is no longer about SQLite write contention; the concern is that
+        # kicking off a fresh sweep right as a provider is tearing down would
+        # index a partial / inconsistent slice of its sessions and add an
+        # asyncio task to the indexer pool that the teardown path then has
+        # to chase down through ``get_active_indexing_tasks``.
+        if not is_provider_running(provider) or not is_provider_enabled(provider):
+            return
         # Lazy import to avoid pulling search_indexing_task at module
         # import time (it would in turn import Django models). The
         # orchestrator registry is imported very early in the CLI boot
@@ -611,6 +663,11 @@ class OrchestratorRegistry:
     async def shutdown_all(self) -> None:
         """Stop every enabled provider's tasks in parallel.
 
+        First awaits any in-flight fire-and-forget hot-toggle task
+        (``finish_start`` / ``finish_shutdown``) — see the body — so a
+        provider mid hot-toggle is not missed by the per-enabled teardown
+        below while its producer is still alive.
+
         Filters on the **currently enabled** providers (i.e. the present
         value of :func:`get_enabled_providers`). Under normal operation this
         is the right set: a provider's ``start()`` was either invoked by
@@ -631,6 +688,19 @@ class OrchestratorRegistry:
         processes, ...). ``return_exceptions=True`` ensures a single
         failing provider doesn't leave the others' tasks dangling.
         """
+        # A hot-toggled provider is brought up / torn down by a fire-and-forget
+        # finish_start / finish_shutdown task and may not be in the current
+        # enabled set, so the per-enabled teardown below would miss it — yet
+        # its producer (initial-sync thread / compute worker) is alive until
+        # that task completes, and the caller stops the DB writer
+        # right after this returns. Await the in-flight ones first.
+        inflight = list(self._inflight_hot_toggle_tasks)
+        if inflight:
+            logger.info(
+                "shutdown_all: awaiting %d in-flight hot-toggle task(s)", len(inflight),
+            )
+            await asyncio.gather(*inflight, return_exceptions=True)
+
         enabled = get_enabled_providers()
         if not enabled:
             return
