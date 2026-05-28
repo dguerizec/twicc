@@ -15,20 +15,17 @@ const isVisible = computed(() => {
            (searchIndexingProgress.value && !searchIndexingProgress.value.completed)
 })
 
-// Sync is done: either explicitly completed, or absent (cleared by backend after completion).
-// The latter happens when the page is loaded mid-compute — sync state is already gone.
-const isSyncDone = computed(() =>
-    syncProgress.value?.completed === true || !syncProgress.value
-)
-
 // Sync is actively running (not yet completed)
 const isSyncActive = computed(() =>
     syncProgress.value && !syncProgress.value.completed
 )
 
-// Show compute counter and hint only once sync is done and compute is actively running
+// Compute is actively running for at least one provider. Decoupled from
+// initial-sync completion: each provider's compute starts as soon as its
+// own initial sync finishes, so the hint surfaces while another provider
+// is still syncing.
 const isComputeActive = computed(() =>
-    isSyncDone.value && computeProgress.value && !computeProgress.value.completed
+    computeProgress.value && !computeProgress.value.completed
 )
 
 // Search is actively running (not yet completed)
