@@ -814,16 +814,21 @@ class BaseSessionsWatcher:
                     # runs OUTSIDE the lock — it's a non-TwiCC-DB I/O call
                     # and holding the write lock across it would block every
                     # other DB writer for nothing. Only meaningful for
-                    # brand-new top-level sessions; the precondition gates
-                    # match the early-returns inside ``sync_and_broadcast``
-                    # so a failure in the hook for a deleted-file event,
-                    # an orphan subagent, or an empty file doesn't turn a
-                    # previously-silent no-op into a logged watcher error.
+                    # brand-new top-level sessions with content; the
+                    # precondition gates match the early-returns inside
+                    # ``sync_and_broadcast`` so a failure in the hook for a
+                    # deleted-file event, an orphan subagent, or an empty
+                    # file doesn't turn a previously-silent no-op into a
+                    # logged watcher error. The empty-file check duplicates
+                    # the read that ``sync_and_broadcast`` will do anyway,
+                    # but it's a single FS open + stat — far cheaper than
+                    # an SDK call to a state DB on the wrong event type.
                     if (
                         change_type != Change.deleted
                         and parsed.type == SessionType.SESSION
                         and parsed.title is None
                         and await get_session_by_id(parsed.session_id) is None
+                        and await check_file_has_content_async(path)
                     ):
                         parsed.title = await self._fetch_initial_title(parsed)
 
