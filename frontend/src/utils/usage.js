@@ -283,6 +283,40 @@ export function formatRecentDelta(deltaMs, roundToHour) {
 }
 
 /**
+ * Detect whether extra usage was consumed in the last ~hour.
+ *
+ * Returns true when the current snapshot shows more consumption than the
+ * 1h-ago reference: ``utilization`` rising for Anthropic-style providers,
+ * ``remaining_credits`` falling for Codex-style providers. Used by the
+ * sidebar "only when needed" gate to surface the panel during mid-period
+ * activity (e.g. fast mode burning extra credits before the 5h/7d quotas
+ * saturate). Conservative when the reference is missing: returns false
+ * rather than risk a false-positive.
+ *
+ * @param {object} raw - The current snapshot (serialized UsageSnapshot).
+ * @param {object|null|undefined} ref - The 1h-ago reference snapshot.
+ * @returns {boolean}
+ */
+function computeExtraUsageRecentlyActive(raw, ref) {
+    if (!ref) return false
+
+    // Anthropic-style: utilization (or used_credits) goes up with consumption.
+    // ``?? 0`` covers the case where the reference is null and the current is
+    // positive — that's still an increase, the user asked us to flag it.
+    const curUtil = raw.extra_usage_utilization
+    if (curUtil != null && curUtil > (ref.extra_usage_utilization ?? 0)) return true
+
+    // Codex-style: balance goes down with consumption. Require both sides
+    // present — if the reference balance is null we can't tell if anything
+    // was consumed, so we don't claim activity.
+    const curRem = raw.extra_usage_remaining_credits
+    const refRem = ref.extra_usage_remaining_credits
+    if (curRem != null && refRem != null && curRem < refRem) return true
+
+    return false
+}
+
+/**
  * Compute all derived usage data from a raw usage snapshot.
  *
  * @param {object|null} raw - Raw usage data from WebSocket (serialized UsageSnapshot)
@@ -357,12 +391,17 @@ export function computeUsageData(raw) {
         //   utilization (percent ring). remainingCredits is null.
         // - Remaining-only (Codex): only remainingCredits is set
         //   (absolute counter), the three Anthropic-style fields are null.
+        // recentlyActive flags consumption in the last ~hour and is used
+        // by the sidebar gate to keep the panel visible even when the
+        // 5h / 7d quotas aren't saturated (e.g. fast mode burning credits
+        // mid-period).
         extraUsage: {
             isEnabled: raw.extra_usage_is_enabled ?? false,
             monthlyLimit: raw.extra_usage_monthly_limit,
             usedCredits: raw.extra_usage_used_credits,
             utilization: raw.extra_usage_utilization,
             remainingCredits: raw.extra_usage_remaining_credits,
+            recentlyActive: computeExtraUsageRecentlyActive(raw, refs.extra_usage_one_hour),
         },
 
         // Period cost estimates

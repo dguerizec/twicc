@@ -173,15 +173,17 @@ const quotaFiveHour = computed(() => quotaComputed.value?.fiveHour ?? null)
 const quotaSevenDay = computed(() => quotaComputed.value?.sevenDay ?? null)
 
 const quotaExtraUsage = computed(() => {
-    // "Only when needed" mode: show only if 5h or 7d quota is at 100%
+    const extra = quotaComputed.value?.extraUsage
+    if (!extra || !extra.isEnabled) return null
+    // "Only when needed" mode: show if a standard quota is saturated, OR if
+    // extra usage was consumed in the last ~hour (fast mode can burn extra
+    // credits mid-period before the 5h / 7d quotas reach 100%).
     if (settingsStore.isExtraUsageOnlyWhenNeeded) {
         const fh = quotaFiveHour.value
         const sd = quotaSevenDay.value
-        const needed = (fh && fh.utilization >= 100) || (sd && sd.utilization >= 100)
-        if (!needed) return null
+        const saturated = (fh && fh.utilization >= 100) || (sd && sd.utilization >= 100)
+        if (!saturated && !extra.recentlyActive) return null
     }
-    const extra = quotaComputed.value?.extraUsage
-    if (!extra || !extra.isEnabled) return null
     return extra
 })
 

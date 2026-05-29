@@ -105,6 +105,19 @@ def _build_reference_snapshots(snapshot: UsageSnapshot) -> dict | None:
                 "seven_day_utilization": ref.seven_day_utilization,
             }
 
+    def _serialize_extra_usage_ref(key: str, ref: UsageSnapshot | None) -> None:
+        # Used by the frontend to detect "recent activity" on the extra-usage
+        # block (e.g. fast mode consuming extra credits even before the
+        # standard quotas saturate). Unconstrained by quota windows: extra
+        # usage resets on a different (monthly) cadence than 5h/7d.
+        if ref:
+            refs[key] = {
+                "fetched_at": _fmt_dt(ref.fetched_at),
+                "extra_usage_utilization": ref.extra_usage_utilization,
+                "extra_usage_used_credits": ref.extra_usage_used_credits,
+                "extra_usage_remaining_credits": ref.extra_usage_remaining_credits,
+            }
+
     # References for 5h window: 1h and 30min lookbacks
     _serialize_fh_ref("one_hour", _find_ref(timedelta(hours=1), fh_window_start))
     _serialize_fh_ref("thirty_min", _find_ref(timedelta(minutes=30), fh_window_start))
@@ -112,6 +125,10 @@ def _build_reference_snapshots(snapshot: UsageSnapshot) -> dict | None:
     # References for 7d windows: 24h and 12h lookbacks
     _serialize_sd_ref("one_day", _find_ref(timedelta(hours=24), sd_window_start))
     _serialize_sd_ref("twelve_hour", _find_ref(timedelta(hours=12), sd_window_start))
+
+    # Reference for the extra-usage recent-activity gate (1h lookback, not
+    # tied to a quota window since extra usage resets on a different cadence).
+    _serialize_extra_usage_ref("extra_usage_one_hour", _find_ref(timedelta(hours=1), None))
 
     # Cross-period references: when the current window is younger than the lookback,
     # we look into the previous period to compute a meaningful recent burn rate.
