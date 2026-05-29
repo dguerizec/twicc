@@ -563,21 +563,11 @@ class ClaudeCodeAgentManager(BaseAgentManager):
             except Exception as e:
                 logger.error("Error applying pending settings for session %s: %s", agent.session_id, e)
 
-        # Flush pending title for draft→real sessions.
-        # On ASSISTANT_TURN, the CLI has created the JSONL file, so we can
-        # now write the title that was stored when the draft was sent.
-        if state == AgentState.ASSISTANT_TURN:
-            from twicc.pending_titles import get_pending_title, pop_pending_title
-            from twicc.providers.claude_code.titles import protect_title, rename_session_in_jsonl
-
-            pending = get_pending_title(agent.session_id)
-            if pending:
-                try:
-                    await asyncio.to_thread(rename_session_in_jsonl, agent.session_id, pending)
-                    pop_pending_title(agent.session_id)
-                    protect_title(agent.session_id, pending)
-                except Exception as e:
-                    logger.error("Error flushing pending title for session %s: %s", agent.session_id, e)
+        # Pending-title flush on ASSISTANT_TURN is handled by
+        # :meth:`BaseAgentManager._flush_pending_title` (provider-agnostic;
+        # delegates the provider-specific write to
+        # :meth:`ClaudeCodeHelpers.rename_session`, which appends the
+        # custom-title JSONL entry and registers ``protect_title``).
 
         # Post-DEAD provider hooks: title protection rewrite + cron auto-restart.
         if state == AgentState.DEAD:

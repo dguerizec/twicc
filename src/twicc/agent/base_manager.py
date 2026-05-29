@@ -16,12 +16,15 @@ import time
 from collections.abc import Callable, Coroutine
 from typing import TYPE_CHECKING, Any
 
+from asgiref.sync import sync_to_async
+
 from twicc.providers.db_writer import run_under_db_write_lock
 
 from .base_agent import BaseAgent
 from .states import AgentInfo, AgentState
 
 if TYPE_CHECKING:
+    from twicc.core.enums import Provider
     from twicc.providers.helpers import AgentSettings
 
 logger = logging.getLogger(__name__)
@@ -49,6 +52,12 @@ class BaseAgentManager:
         self._broadcast_callback: BroadcastCallback | None = None
         self._timeout_monitor_task: asyncio.Task[None] | None = None
         self._stop_event: asyncio.Event | None = None
+        # Background retry tasks for pending title flushes (one per session).
+        # Each task converges the provider's own store (Claude Code JSONL,
+        # Codex thread name) toward the user-set title after a transient
+        # failure on the first ASSISTANT_TURN attempt. See
+        # :meth:`_flush_pending_title`.
+        self._pending_title_retry_tasks: dict[str, asyncio.Task[None]] = {}
 
     # ------------------------------------------------------------------
     # Public API — generic for every provider
@@ -162,6 +171,13 @@ class BaseAgentManager:
             except asyncio.CancelledError:
                 pass
             self._timeout_monitor_task = None
+
+        # Drop any background pending-title retries — fire-and-forget cancel,
+        # we don't await them. The DB row already holds the user's title,
+        # so the worst case is a missing custom-title entry in the provider's
+        # own store (the watcher's next resync may or may not recover it,
+        # but the user-visible title is preserved).
+        self._cancel_all_pending_title_retries()
 
         await self._stop_extra_monitors()
         await self._pre_shutdown_extra()
@@ -419,13 +435,179 @@ class BaseAgentManager:
         Code with crons attached) or DELETEd (default for every other case);
         ``agent.process_run`` is cleared on delete so override post-DEAD
         logic can detect "row was kept" via ``agent.process_run is not None``.
+
+        On ``ASSISTANT_TURN``, :meth:`_flush_pending_title` runs to push any
+        title the CLI / WS stored for a draft session into the DB and the
+        provider's own store. Provider-agnostic — both Claude Code and Codex
+        share the same draft-title bridge (:mod:`twicc.pending_titles`).
         """
         info = agent.get_info()
         await self._persist_process_run_transition(agent, info.state)
         await self._broadcast_info(info)
         if info.state == AgentState.DEAD:
+            # Cancel the background pending-title retry, if any: once the
+            # agent is gone there's nothing left to converge on the provider
+            # side; ``Session.title`` already holds the value.
+            self._cancel_pending_title_retry(agent.session_id)
             await self._update_session_stopped_at(agent)
             self._cleanup_dead(agent)
+        elif info.state == AgentState.ASSISTANT_TURN:
+            await self._flush_pending_title(agent)
+
+    async def _flush_pending_title(self, agent: BaseAgent) -> None:
+        """Persist any pending session title once the agent reaches ASSISTANT_TURN.
+
+        Draft sessions (CLI ``--title`` or WS ``send_message`` with a custom
+        title) stash the chosen title in :mod:`twicc.pending_titles` because
+        the provider's backing store does not exist yet at draft time. The
+        first ``ASSISTANT_TURN`` is the contractual moment to drain it: the
+        agent has signalled first activity, the WS clients have already seen
+        ``serialize_session`` resolve the pending title for the frontend, and
+        we now want the title to live in two stores at rest.
+
+        Two-step flush:
+
+        1. ``Session.title`` in the DB — what
+           :func:`twicc.core.serializers.serialize_session` falls back to once
+           the pending entry is gone, and what ``twicc session <id>`` reads
+           on the CLI. The mirror lands first because the user-facing
+           consistency only depends on this row; if it fails we bail out
+           (next ``ASSISTANT_TURN`` retries — pending entry is left in place).
+        2. The provider's own store via
+           :meth:`BaseProviderHelpers.rename_session` — for Claude Code, a
+           ``custom-title`` JSONL entry plus :func:`protect_title` against
+           CLI re-appends; for Codex, a ``thread/name/set`` call to the app
+           server. **This step can fail transiently**: the Claude Code SDK
+           may not have written the JSONL yet at the moment we hit
+           ``ASSISTANT_TURN`` (the SDK signals the state transition on
+           connection-ready, before the file is created), or the Codex app
+           server may be momentarily unreachable.
+
+        When step 2 fails on the inline attempt, we schedule a background
+        task (:meth:`_retry_provider_rename_session`) that keeps retrying
+        with exponential backoff until success or cancellation (DEAD /
+        shutdown). The pending entry is popped only when one of the
+        provider attempts (inline or background) succeeds, so the
+        write is converged-eventually instead of dropped on transient
+        failure. ``protect_title`` is also kept honest:
+        :meth:`ClaudeCodeHelpers.rename_session` registers it in a
+        ``finally``, so every retry call leaves the in-memory protection
+        in place even when the JSONL append still raises.
+
+        Idempotency: if a background retry is already in flight for this
+        session, the method is a no-op (the running loop owns the pop).
+        """
+        from twicc.core.models import Session
+        from twicc.pending_titles import get_pending_title, pop_pending_title
+        from twicc.providers.helpers import get_provider_helpers
+
+        pending = get_pending_title(agent.session_id)
+        if not pending:
+            return
+
+        session_id = agent.session_id
+
+        # A background loop is already converging the provider store —
+        # don't fire a parallel attempt.
+        if session_id in self._pending_title_retry_tasks:
+            return
+
+        try:
+            async def _persist_session_title() -> None:
+                await sync_to_async(
+                    Session.objects.filter(id=session_id).update
+                )(title=pending)
+            await run_under_db_write_lock(_persist_session_title)
+        except Exception as e:
+            logger.error(
+                "Pending title flush — DB update failed for session %s: %s",
+                session_id, e,
+            )
+            return
+
+        helpers = get_provider_helpers(agent.provider)
+        try:
+            await helpers.rename_session(session_id, pending)
+        except Exception as e:
+            logger.warning(
+                "Pending title flush — provider rename_session failed for session %s: %s "
+                "(scheduling background retry; DB title is already up-to-date)",
+                session_id, e,
+            )
+            task = asyncio.create_task(
+                self._retry_provider_rename_session(agent.provider, session_id, pending),
+                name=f"pending-title-retry-{session_id}",
+            )
+            self._pending_title_retry_tasks[session_id] = task
+            return
+
+        pop_pending_title(session_id)
+
+    async def _retry_provider_rename_session(
+        self, provider: "Provider", session_id: str, pending: str,
+    ) -> None:
+        """Background retry of :meth:`BaseProviderHelpers.rename_session` with backoff.
+
+        Sleeps ``backoff`` seconds, attempts the provider's rename, repeats
+        on failure with ``backoff = min(backoff * 2, 30)``. Pops the pending
+        entry on success and exits. On cancellation (DEAD / shutdown), exits
+        without popping — by then the agent is gone and there is nothing left
+        to converge to; ``Session.title`` (written upstream by
+        :meth:`_flush_pending_title`) remains the source of truth.
+
+        Retry attempts are logged at DEBUG to avoid spamming a long-running
+        loop; success is logged at INFO so it shows up in normal logs.
+
+        Self-clean-up: removes itself from ``_pending_title_retry_tasks`` on
+        every exit path via a ``finally``. The :meth:`_cancel_pending_title_retry`
+        helper also pops eagerly so the dict never references a cancelled task.
+        """
+        from twicc.pending_titles import pop_pending_title
+        from twicc.providers.helpers import get_provider_helpers
+
+        backoff = 1.0
+        max_backoff = 30.0
+        # The inline attempt in _flush_pending_title was attempt #1.
+        attempt = 1
+
+        try:
+            while True:
+                await asyncio.sleep(backoff)
+                attempt += 1
+                try:
+                    helpers = get_provider_helpers(provider)
+                    await helpers.rename_session(session_id, pending)
+                    pop_pending_title(session_id)
+                    logger.info(
+                        "Pending title flush retry succeeded for session %s on attempt %d",
+                        session_id, attempt,
+                    )
+                    return
+                except Exception as e:
+                    logger.debug(
+                        "Pending title retry attempt %d failed for session %s: %s",
+                        attempt, session_id, e,
+                    )
+                backoff = min(backoff * 2, max_backoff)
+        finally:
+            self._pending_title_retry_tasks.pop(session_id, None)
+
+    def _cancel_pending_title_retry(self, session_id: str) -> None:
+        """Cancel a single session's background pending-title retry, if any."""
+        task = self._pending_title_retry_tasks.pop(session_id, None)
+        if task is not None and not task.done():
+            task.cancel()
+
+    def _cancel_all_pending_title_retries(self) -> None:
+        """Cancel every running pending-title retry. Used on manager shutdown."""
+        if not self._pending_title_retry_tasks:
+            return
+        logger.info(
+            "Cancelling %d pending-title retry task(s)",
+            len(self._pending_title_retry_tasks),
+        )
+        for session_id in list(self._pending_title_retry_tasks):
+            self._cancel_pending_title_retry(session_id)
 
     async def _broadcast_info(self, info: AgentInfo) -> None:
         """Push an ``AgentInfo`` snapshot through the broadcast callback."""

@@ -16,7 +16,6 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from asgiref.sync import sync_to_async
 from codex_app_server import (
     AppServerConfig,
     AsyncCodex,
@@ -24,7 +23,6 @@ from codex_app_server import (
 
 from twicc.agent import AgentState, BaseAgent, BaseAgentManager
 from twicc.core.enums import Provider
-from twicc.providers.db_writer import run_under_db_write_lock
 from twicc.providers.helpers import AgentSettings, get_provider_helpers
 
 from ..bin import resolve_bundled_binary
@@ -53,58 +51,11 @@ class CodexAgentManager(BaseAgentManager):
         await manager.create_session(draft_id, project_id, cwd, "Hi", settings=...)
     """
 
-    # ------------------------------------------------------------------
-    # State-change hook
-    # ------------------------------------------------------------------
-
-    async def _on_state_change(self, agent: BaseAgent) -> None:
-        """Forward base behaviour, then flush any pending title on ASSISTANT_TURN.
-
-        The base handles the DEAD lifecycle (last_stopped_at, registry cleanup)
-        and the state-change broadcast; we keep all of that by calling super()
-        first.  The pending-title flush mirrors the one in
-        ClaudeCodeAgentManager._on_state_change (see :480-495 of that file)
-        but is simpler: Codex has no protect_title mechanism and no settings
-        hot-reload concern.
-
-        Uses the standalone ``rename_thread_via_sdk`` helper (spawns an
-        ephemeral AsyncCodex) rather than the agent's open SDK transport to
-        avoid colliding with the active turn's _active_turn_consumer guard.
-        """
-        # Keep all base behaviour (DEAD cleanup, broadcast, etc.).
-        await super()._on_state_change(agent)
-
-        state = agent.state
-        if state == AgentState.ASSISTANT_TURN:
-            from twicc.core.models import Session
-            from twicc.pending_titles import get_pending_title, pop_pending_title
-            from twicc.providers.codex.titles import rename_thread_via_sdk
-
-            pending = get_pending_title(agent.session_id)
-            if pending:
-                try:
-                    # Push to Codex state DB. Use the standalone helper rather
-                    # than agent._thread so we don't reach into private state.
-                    # The SDK call stays out of the DB write lock — it's a
-                    # network call to the Codex app server.
-                    await rename_thread_via_sdk(agent.session_id, pending)
-                    # Mirror into Session.title (the watcher would catch it
-                    # eventually but no need to wait).
-                    async def _persist_session_title() -> None:
-                        await sync_to_async(
-                            Session.objects.filter(id=agent.session_id).update
-                        )(title=pending)
-
-                    await run_under_db_write_lock(_persist_session_title)
-                    # Pop only after both writes succeed, so the next
-                    # ASSISTANT_TURN retries the whole flush (idempotent) if
-                    # the DB update raised.
-                    pop_pending_title(agent.session_id)
-                except Exception as e:
-                    logger.error(
-                        "Codex pending title flush failed for %s: %s",
-                        agent.session_id, e,
-                    )
+    # No ``_on_state_change`` override: the pending-title flush is handled
+    # by :meth:`BaseAgentManager._flush_pending_title`, which delegates to
+    # :meth:`CodexHelpers.rename_session` for the Codex-specific
+    # ``thread/name/set`` SDK call. Nothing else needed at state-change
+    # time on this provider.
 
     # ------------------------------------------------------------------
     # Public API (Codex-specific signatures)
