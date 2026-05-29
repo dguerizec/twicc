@@ -418,12 +418,18 @@ export function sendChangelogSeen(version) {
     })
 }
 
-// Pending resolve callbacks for path validation request-response round-trips
-let _usageDumpPathValidateResolve = null
-let _tmuxConfigPathValidateResolve = null
+// Pending resolve callbacks for path validation request-response round-trips.
+// Kept on __hmrState so a Vite HMR reload of this module doesn't strand the
+// WebSocket onMessage handler (captured in the old useWebSocket() closure)
+// looking at a freshly-nulled resolver while sendValidate*() in the new
+// module instance just wrote to a different one — the symptom is an Apply
+// button stuck on its spinner because the response is dispatched but the
+// matching Promise never resolves.
+if (!('usageDumpPathValidateResolve' in __hmrState)) __hmrState.usageDumpPathValidateResolve = null
+if (!('tmuxConfigPathValidateResolve' in __hmrState)) __hmrState.tmuxConfigPathValidateResolve = null
 // Usage *file* (read mode) validation can run concurrently for several
 // providers, so the resolver is keyed by provider rather than singular.
-const _usageFileValidateResolvers = new Map()
+if (!('usageFileValidateResolvers' in __hmrState)) __hmrState.usageFileValidateResolvers = new Map()
 
 /**
  * Validate a usage dump file path (write mode) on the backend.
@@ -432,10 +438,10 @@ const _usageFileValidateResolvers = new Map()
  */
 export function sendValidateUsageDumpPath(filePath) {
     return new Promise((resolve) => {
-        _usageDumpPathValidateResolve = resolve
+        __hmrState.usageDumpPathValidateResolve = resolve
         const sent = sendWsMessage({ type: 'validate_usage_dump_path', file_path: filePath })
         if (!sent) {
-            _usageDumpPathValidateResolve = null
+            __hmrState.usageDumpPathValidateResolve = null
             resolve({ valid: false, message: 'Not connected' })
         }
     })
@@ -451,10 +457,10 @@ export function sendValidateUsageDumpPath(filePath) {
  */
 export function sendValidateUsageFile(provider, filePath) {
     return new Promise((resolve) => {
-        _usageFileValidateResolvers.set(provider, resolve)
+        __hmrState.usageFileValidateResolvers.set(provider, resolve)
         const sent = sendWsMessage({ type: 'validate_usage_file', provider, file_path: filePath })
         if (!sent) {
-            _usageFileValidateResolvers.delete(provider)
+            __hmrState.usageFileValidateResolvers.delete(provider)
             resolve({ valid: false, message: 'Not connected' })
         }
     })
@@ -467,10 +473,10 @@ export function sendValidateUsageFile(provider, filePath) {
  */
 export function sendValidateTmuxConfigPath(filePath) {
     return new Promise((resolve) => {
-        _tmuxConfigPathValidateResolve = resolve
+        __hmrState.tmuxConfigPathValidateResolve = resolve
         const sent = sendWsMessage({ type: 'validate_tmux_config_path', file_path: filePath })
         if (!sent) {
-            _tmuxConfigPathValidateResolve = null
+            __hmrState.tmuxConfigPathValidateResolve = null
             resolve({ valid: false, message: 'Not connected' })
         }
     })
@@ -948,9 +954,9 @@ export function useWebSocket() {
                 // a dump just writes the raw payload back, so the check has no
                 // provider-specific content to verify. Do not move under a provider
                 // handler.
-                if (_usageDumpPathValidateResolve) {
-                    _usageDumpPathValidateResolve({ valid: msg.valid, message: msg.message })
-                    _usageDumpPathValidateResolve = null
+                if (__hmrState.usageDumpPathValidateResolve) {
+                    __hmrState.usageDumpPathValidateResolve({ valid: msg.valid, message: msg.message })
+                    __hmrState.usageDumpPathValidateResolve = null
                 }
                 break
             case 'usage_file_validated': {
@@ -960,17 +966,17 @@ export function useWebSocket() {
                 // simultaneous validations for different providers coexist.
                 const provider = msg.provider
                 if (!provider) break
-                const resolver = _usageFileValidateResolvers.get(provider)
+                const resolver = __hmrState.usageFileValidateResolvers.get(provider)
                 if (resolver) {
-                    _usageFileValidateResolvers.delete(provider)
+                    __hmrState.usageFileValidateResolvers.delete(provider)
                     resolver({ valid: msg.valid, message: msg.message })
                 }
                 break
             }
             case 'tmux_config_path_validated':
-                if (_tmuxConfigPathValidateResolve) {
-                    _tmuxConfigPathValidateResolve({ valid: msg.valid, message: msg.message })
-                    _tmuxConfigPathValidateResolve = null
+                if (__hmrState.tmuxConfigPathValidateResolve) {
+                    __hmrState.tmuxConfigPathValidateResolve({ valid: msg.valid, message: msg.message })
+                    __hmrState.tmuxConfigPathValidateResolve = null
                 }
                 break
             case 'synced_settings_updated':
