@@ -119,10 +119,20 @@ TWICC_PASSWORD_HASH = os.environ.get("TWICC_PASSWORD_HASH", "")
 # Session settings
 SESSION_COOKIE_NAME = os.environ.get("TWICC_SESSION_COOKIE", "sessionid")
 SESSION_ENGINE = "django.contrib.sessions.backends.db"
-SESSION_COOKIE_AGE = 60 * 60 * 24 * 30  # 30 days
+# Effectively no server-side expiry: TwiCC is self-hosted, the real protection
+# is the password (PBKDF2) plus the fingerprint that invalidates every session
+# the moment TWICC_PASSWORD_HASH changes (see auth.session_auth). Sliding expiry
+# adds no meaningful security here. Browsers cap Set-Cookie Max-Age at ~400 days
+# regardless, so users may need to re-login about once a year — that's the
+# floor we can't push past from the server side.
+SESSION_COOKIE_AGE = 60 * 60 * 24 * 365 * 100  # 100 years (browsers cap ~400d)
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = "Lax"
-SESSION_SAVE_EVERY_REQUEST = True  # Refresh expiry on each request
+# SessionMiddleware would otherwise emit an UPDATE django_session on every
+# authenticated request to refresh expire_date — concurrent with our DB writer
+# / watcher writes since it runs outside run_under_db_write_lock. With
+# SESSION_COOKIE_AGE at 100 years there is nothing useful to refresh anyway.
+SESSION_SAVE_EVERY_REQUEST = False
 
 ROOT_URLCONF = "twicc.urls"
 
