@@ -138,6 +138,7 @@ def serialize_usage_snapshot(snapshot, period_costs=None, references=None):
         "extra_usage_monthly_limit": snapshot.extra_usage_monthly_limit,
         "extra_usage_used_credits": snapshot.extra_usage_used_credits,
         "extra_usage_utilization": snapshot.extra_usage_utilization,
+        "extra_usage_remaining_credits": snapshot.extra_usage_remaining_credits,
     }
 
     # Period cost data (spent, estimated_period, estimated_monthly)

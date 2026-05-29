@@ -785,11 +785,23 @@ class UsageSnapshot(models.Model):
     seven_day_utilization = models.FloatField(null=True, blank=True)
     seven_day_resets_at = models.DateTimeField(null=True, blank=True)
 
-    # Extra usage (default False if the block is absent)
+    # Extra usage (default False if the block is absent).
+    #
+    # Two display modes coexist on the same columns, selected by which fields
+    # the producing provider populates:
+    #
+    # - Claude Code (Anthropic) reports a "credits used over a monthly limit"
+    #   block: ``monthly_limit`` + ``used_credits`` + ``utilization`` (0-100)
+    #   are set, ``remaining_credits`` stays null. The UI renders a percent ring.
+    #
+    # - Codex (ChatGPT) only reports a remaining balance with no enclosing
+    #   limit, so ``remaining_credits`` is set and the three Anthropic-shape
+    #   fields stay null. The UI renders an absolute "X credits" counter.
     extra_usage_is_enabled = models.BooleanField(default=False)
     extra_usage_monthly_limit = models.IntegerField(null=True, blank=True)
     extra_usage_used_credits = models.FloatField(null=True, blank=True)
     extra_usage_utilization = models.FloatField(null=True, blank=True)
+    extra_usage_remaining_credits = models.FloatField(null=True, blank=True)
 
     class Meta:
         ordering = ["-fetched_at"]

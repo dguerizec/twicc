@@ -192,10 +192,30 @@ const quotaFiveHourRingColor = computed(() => getUsageRingColor(quotaFiveHour.va
 const quotaSevenDayRingColor = computed(() => getUsageRingColor(quotaSevenDay.value))
 const quotaExtraUsageRingColor = computed(() => {
     const extra = quotaExtraUsage.value
-    if (!extra || extra.utilization == null) return 'var(--wa-color-neutral)'
+    if (!extra) return 'var(--wa-color-neutral)'
+    // Remaining-only mode (Codex): no utilization to tier on — color reflects
+    // whether there's any balance left, not how much of a limit was consumed.
+    if (extra.utilization == null && extra.remainingCredits != null) {
+        return extra.remainingCredits > 0 ? 'var(--wa-color-success)' : 'var(--wa-color-danger)'
+    }
+    if (extra.utilization == null) return 'var(--wa-color-neutral)'
     if (extra.utilization >= 75) return 'var(--wa-color-danger)'
     if (extra.utilization >= 50) return 'var(--wa-color-warning)'
     return 'var(--wa-color-success)'
+})
+
+const quotaExtraUsageRingValue = computed(() => {
+    const extra = quotaExtraUsage.value
+    if (!extra || extra.utilization == null) return 0
+    return Math.min(extra.utilization, 100)
+})
+
+const quotaExtraUsageRingLabel = computed(() => {
+    const extra = quotaExtraUsage.value
+    if (!extra) return ''
+    if (extra.utilization != null) return `${Math.round(extra.utilization)}%`
+    if (extra.remainingCredits != null) return String(Math.round(extra.remainingCredits))
+    return ''
 })
 
 function resetsAtToDate(resetsAt) {
@@ -1702,19 +1722,24 @@ function updateSidebarClosedClass(closed) {
                     <div id="quota-extra-usage" class="usage-quota" v-if="quotaExtraUsage">
                         <wa-progress-ring
                             class="usage-ring"
-                            :value="Math.min(quotaExtraUsage.utilization ?? 0, 100)"
+                            :value="quotaExtraUsageRingValue"
                             :style="{ '--indicator-color': quotaExtraUsageRingColor }"
-                        ><span class="wa-font-weight-bold">{{ Math.round(quotaExtraUsage.utilization ?? 0) }}%</span></wa-progress-ring>
+                        ><span class="wa-font-weight-bold">{{ quotaExtraUsageRingLabel }}</span></wa-progress-ring>
                         <div class="usage-quota-info">
                             <span class="usage-quota-label">Extra usage</span>
-                            <wa-relative-time class="usage-quota-reset" :date.prop="extraUsageResetDate()" format="narrow" numeric="always" sync></wa-relative-time>
+                            <wa-relative-time v-if="quotaExtraUsage.utilization != null" class="usage-quota-reset" :date.prop="extraUsageResetDate()" format="narrow" numeric="always" sync></wa-relative-time>
                         </div>
                     </div>
                     <AppTooltip v-if="quotaExtraUsage" for="quota-extra-usage" hoist force>
                         <div class="quota-tooltip">
-                            <div class="quota-tooltip-row"><span class="quota-tooltip-label">Used</span><span>{{ quotaExtraUsage.usedCredits ?? 0 }} credits</span></div>
-                            <div class="quota-tooltip-row"><span class="quota-tooltip-label">Monthly limit</span><span>{{ quotaExtraUsage.monthlyLimit ?? '?' }} credits</span></div>
-                            <div class="quota-tooltip-row"><span class="quota-tooltip-label">Reset</span><span>{{ formatResetTime(extraUsageResetDate()) }}</span></div>
+                            <template v-if="quotaExtraUsage.utilization != null">
+                                <div class="quota-tooltip-row"><span class="quota-tooltip-label">Used</span><span>{{ quotaExtraUsage.usedCredits ?? 0 }} credits</span></div>
+                                <div class="quota-tooltip-row"><span class="quota-tooltip-label">Monthly limit</span><span>{{ quotaExtraUsage.monthlyLimit ?? '?' }} credits</span></div>
+                            </template>
+                            <template v-else-if="quotaExtraUsage.remainingCredits != null">
+                                <div class="quota-tooltip-row"><span class="quota-tooltip-label">Remaining</span><span>{{ Math.round(quotaExtraUsage.remainingCredits) }} credits</span></div>
+                            </template>
+                            <div v-if="quotaExtraUsage.utilization != null" class="quota-tooltip-row"><span class="quota-tooltip-label">Reset</span><span>{{ formatResetTime(extraUsageResetDate()) }}</span></div>
                             <div class="quota-tooltip-buttons wa-light">
                                <wa-button v-if="usageExternalLink" size="small" variant="brand" :appearance="quotaButtonAppearance" :href="usageExternalLink.url" target="_blank" rel="noopener" class="quota-stale-button"><wa-icon slot="start" name="up-right-from-square"></wa-icon>{{ usageExternalLink.label }}</wa-button>
                             </div>

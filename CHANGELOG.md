@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - Added support for Claude Opus 4.8, now the latest Opus model (Opus 4.7 remains selectable).
 - Added a fast mode toggle for Claude Code Opus models, for faster responses (billed against extra usage credits).
+- The sidebar usage panel now shows your remaining Codex extra-usage credits.
 
 ### Changed
 

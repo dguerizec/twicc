@@ -351,11 +351,18 @@ export function computeUsageData(raw) {
             _sdCross(refs.cross_sd_short, 'seven_day_utilization'),
         ),
 
+        // Extra usage. Two display modes coexist on the same object,
+        // selected by which fields the backend populates:
+        // - Anthropic-style (Claude Code): monthlyLimit + usedCredits +
+        //   utilization (percent ring). remainingCredits is null.
+        // - Remaining-only (Codex): only remainingCredits is set
+        //   (absolute counter), the three Anthropic-style fields are null.
         extraUsage: {
             isEnabled: raw.extra_usage_is_enabled ?? false,
             monthlyLimit: raw.extra_usage_monthly_limit,
             usedCredits: raw.extra_usage_used_credits,
             utilization: raw.extra_usage_utilization,
+            remainingCredits: raw.extra_usage_remaining_credits,
         },
 
         // Period cost estimates

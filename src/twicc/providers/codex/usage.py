@@ -126,19 +126,53 @@ def _extract_window_fields(window: dict | None, prefix: str) -> dict:
     }
 
 
+def _extract_credits_fields(credits: dict | None) -> dict:
+    """Translate a Codex ``credits`` block into ``UsageSnapshot.extra_usage_*`` columns.
+
+    Codex's extra usage shape is intentionally lossier than Anthropic's: only a
+    remaining balance is published, with no monthly limit and therefore no
+    derivable utilization percentage. We populate ``extra_usage_is_enabled``
+    from ``has_credits`` and ``extra_usage_remaining_credits`` from
+    ``balance`` (parsed from string), leaving the three Anthropic-shape
+    columns (``monthly_limit``, ``used_credits``, ``utilization``) at null
+    so the front-end can detect the remaining-only mode and render an
+    absolute counter instead of a percent ring.
+    """
+    if credits is None:
+        return {
+            "extra_usage_is_enabled": False,
+            "extra_usage_remaining_credits": None,
+        }
+
+    remaining = None
+    balance = credits.get("balance")
+    if balance is not None:
+        try:
+            remaining = float(balance)
+        except (TypeError, ValueError):
+            logger.warning("Failed to parse Codex credits.balance as float: %r", balance)
+
+    return {
+        "extra_usage_is_enabled": bool(credits.get("has_credits", False)),
+        "extra_usage_remaining_credits": remaining,
+    }
+
+
 def _build_usage_snapshot_fields(raw: dict) -> dict:
     """Translate a raw Codex usage response into ``UsageSnapshot`` columns.
 
     Pure — no DB access. The raw payload is preserved verbatim in
-    ``raw_response`` so we can surface anything Codex-specific (``credits``,
-    ``plan_type``, ``email``, …) from the wire snapshot later without a
+    ``raw_response`` so we can surface anything Codex-specific (``plan_type``,
+    ``email``, ``unlimited``, …) from the wire snapshot later without a
     backfill. Quota windows are mapped onto the cross-provider columns so the
     front-end consumes the same shape as Claude Code's snapshots.
 
-    Codex has no equivalent of Anthropic's ``extra_usage`` block (the
-    semantics of ``credits.balance`` are *remaining* credits, not *used*
-    ones, and would mislead the existing UI), so the ``extra_usage_*``
-    columns stay at their default zero/null values.
+    The ``credits`` block is mapped onto the shared ``extra_usage_*`` columns
+    via :func:`_extract_credits_fields`. Because Codex publishes only a
+    remaining balance (no monthly limit, no utilization), we populate the
+    dedicated ``extra_usage_remaining_credits`` column rather than try to
+    fit a remaining count into the Anthropic-shape ``used_credits`` /
+    ``monthly_limit`` / ``utilization`` triple.
 
     The actual ``UsageSnapshot.objects.create`` happens on the DB writer's
     single-writer path, via :class:`_CreateUsageSnapshotJob`.
@@ -154,6 +188,7 @@ def _build_usage_snapshot_fields(raw: dict) -> dict:
     }
     fields.update(_extract_window_fields(rate_limit.get("primary_window"), "five_hour"))
     fields.update(_extract_window_fields(rate_limit.get("secondary_window"), "seven_day"))
+    fields.update(_extract_credits_fields(raw.get("credits")))
 
     return fields
 
