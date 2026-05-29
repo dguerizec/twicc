@@ -136,11 +136,16 @@ def get_session_by_id(session_id: str) -> Session | None:
 
 @sync_to_async
 def check_file_has_content_async(file_path: Path) -> bool:
-    """Check if a JSONL file has any valid lines (async wrapper)."""
+    """Check if a JSONL file has any valid lines (async wrapper).
+
+    Decoded with ``errors="replace"`` so invalid UTF-8 can't raise
+    ``UnicodeDecodeError`` (a ``ValueError``, not an ``OSError``); mirrors
+    :func:`twicc.sync_helpers.check_file_has_content`.
+    """
     if not file_path.exists():
         return False
 
-    with open(file_path, "r", encoding="utf-8") as f:
+    with open(file_path, "r", encoding="utf-8", errors="replace") as f:
         for line in f:
             if line.strip():
                 return True

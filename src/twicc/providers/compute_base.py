@@ -2256,19 +2256,33 @@ class BaseSessionCompute:
         if session.mtime == file_mtime and session.last_offset >= stat.st_size:
             return [], [], [], [], []
 
-        with open(file_path, "r", encoding="utf-8") as f:
+        # Read raw bytes, then decode leniently — see
+        # read_session_items_from_file in sync_helpers.py for the full
+        # rationale. The watcher's global try/except would catch a strict-decode
+        # UnicodeDecodeError, but the session's offset would never advance, so a
+        # durably-corrupt file would re-fail on every watcher event and block
+        # all further live updates for that session. Replacing invalid bytes
+        # with U+FFFD confines the damage to its own line; reading in binary
+        # keeps last_offset an exact byte count.
+        with open(file_path, "rb") as f:
             f.seek(session.last_offset)
-            new_content = f.read()
-            if not new_content:
-                # Update mtime even if no new content (file may have been touched)
-                session.mtime = file_mtime
-                session.save(update_fields=["mtime"])
-                return [], [], [], [], []
-
-            lines = [line for line in new_content.split("\n") if line.strip()]
-
-            # Capture file position and save offset+mtime immediately to release the file
+            raw = f.read()
+            # Capture file position immediately to release the file.
             new_offset = f.tell()
+
+        try:
+            new_content = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            logger.warning("Invalid UTF-8 in %s — decoding with replacement", file_path)
+            new_content = raw.decode("utf-8", errors="replace")
+
+        if not new_content:
+            # Update mtime even if no new content (file may have been touched)
+            session.mtime = file_mtime
+            session.save(update_fields=["mtime"])
+            return [], [], [], [], []
+
+        lines = [line for line in new_content.split("\n") if line.strip()]
 
         session.last_offset = new_offset
         session.mtime = file_mtime

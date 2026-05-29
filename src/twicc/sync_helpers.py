@@ -92,9 +92,15 @@ def check_file_has_content(file_path: Path) -> bool:
     often ``FileNotFoundError`` from the file vanishing between a scan and
     this call) is treated as "no content". A pre-flight ``exists()`` check
     would only reintroduce a TOCTOU race.
+
+    Decoded with ``errors="replace"`` so invalid UTF-8 (a line cut
+    mid-multibyte-character, or on-disk corruption) can't raise
+    ``UnicodeDecodeError`` — a ``ValueError``, not an ``OSError``, so it would
+    slip past the guard above and abort the caller's unguarded initial-sync
+    loop. :func:`read_session_items_from_file` logs such files.
     """
     try:
-        with open(file_path, "r", encoding="utf-8") as f:
+        with open(file_path, "r", encoding="utf-8", errors="replace") as f:
             for line in f:
                 if line.strip():
                     return True
@@ -152,13 +158,29 @@ def read_session_items_from_file(
             )
         return None
 
+    # Read raw bytes, then decode leniently. A provider CLI can flush a line
+    # cut mid-multibyte-character, or a file can be corrupted on disk; a strict
+    # UTF-8 decode raises UnicodeDecodeError — a ValueError, not an OSError, so
+    # it slips past the guards here and propagates through sync_project /
+    # sync_all (neither guards its loop), aborting the whole provider's initial
+    # sync. Replacing invalid bytes with U+FFFD confines the damage to its own
+    # line (the per-line JSON parse downstream already tolerates it), so one
+    # bad byte never blocks the rest of the file or the sync. Reading in binary
+    # also keeps last_offset an unambiguous byte count, matching the
+    # last_offset/st_size check above.
     try:
-        with open(file_path, "r", encoding="utf-8") as f:
+        with open(file_path, "rb") as f:
             f.seek(session.last_offset)
-            new_content = f.read()
+            raw = f.read()
             last_offset = f.tell()
     except OSError:
         return None
+
+    try:
+        new_content = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        logger.warning("Invalid UTF-8 in %s — decoding with replacement", file_path)
+        new_content = raw.decode("utf-8", errors="replace")
 
     if not new_content:
         # File was touched but no new content — caller still needs to persist
