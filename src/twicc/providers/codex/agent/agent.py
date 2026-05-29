@@ -598,6 +598,34 @@ class CodexAgent(BaseAgent):
         await self._transition_to_dead()
 
     # ------------------------------------------------------------------
+    # Process introspection
+    # ------------------------------------------------------------------
+
+    def get_pid(self) -> int | None:
+        """Get the PID of the underlying Codex CLI subprocess.
+
+        ``AsyncCodex._client._sync._proc`` is the :class:`subprocess.Popen`
+        wrapping the bundled Rust ``codex app-server`` binary. ``None``
+        before ``codex.start()`` runs and again once ``close()`` clears it.
+
+        PRIVATE SDK API — see memory ``reference_codex_sdk_update_procedure.md``
+        for the upgrade checklist (this attribute path must hold).
+        """
+        try:
+            client = getattr(self._codex, "_client", None)
+            if client is None:
+                return None
+            sync_client = getattr(client, "_sync", None)
+            if sync_client is None:
+                return None
+            proc = getattr(sync_client, "_proc", None)
+            if proc is None:
+                return None
+            return getattr(proc, "pid", None)
+        except Exception:
+            return None
+
+    # ------------------------------------------------------------------
     # Stream event handling
     # ------------------------------------------------------------------
 
