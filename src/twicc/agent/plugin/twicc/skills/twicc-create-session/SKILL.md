@@ -228,7 +228,7 @@ Use `--tail N` for more turns when needed.
 
 ### Continue the conversation
 
-Once `twicc process` reports `user_turn` (or returns exit 1 because the run already wrapped up cleanly), you can post a follow-up to the same session via `twicc send-message <SESSION_ID> '<TEXT>'` — see the `twicc-send-message` skill. Together they form the natural loop: `create-session` to start, `process` to know when the agent is done (or blocked), `send-message` to reply, then `process` again, and so on. `send-message` preserves the session's stored agent settings; it can't change model / effort / permission mode (that's reserved for a future `update-session` command).
+Once `twicc process` reports `user_turn` (or returns exit 1 because the run already wrapped up cleanly), you can post a follow-up to the same session via `twicc send-message <SESSION_ID> '<TEXT>'` — see the `twicc-send-message` skill. Together they form the natural loop: `create-session` to start, `process` to know when the agent is done (or blocked), `send-message` to reply, then `process` again, and so on. `send-message` preserves the session's stored agent settings; to change model / effort / permission mode / etc. for a session that's already running, use `twicc update-session <SESSION_ID> settings ...` (see the `twicc-update-session` skill). Both commands refuse to operate on subagents — target the parent session if you need to act on the surrounding conversation.
 
 If `process` reports `awaiting_user_input`, do NOT call `send-message` — the server rejects with exit 3 / `awaiting_user_input` because a CLI message cannot resolve a pending UI dialog. Tell the user to click in the TwiCC UI first, then retry.
 
@@ -238,6 +238,7 @@ If `process` reports `awaiting_user_input`, do NOT call `send-message` — the s
 - **Check the live agent's state:** `twicc process <session_id>` — is the agent still working, blocked on a user click, or done? Cheaper than polling `messages` and the only reliable way to detect the "awaiting user input" case (see "Following up" above)
 - **List all live processes:** `twicc processes` — useful when you fired several `create-session` calls and want to see which are still running, which need attention, etc. Supports `--state awaiting_user_input` to filter to those waiting for the user
 - **Reply to the created session:** `twicc send-message <session_id> '<text>'` — post a follow-up message into the same session once the agent is back to `user_turn`. Same drop-file mechanics as this command; settings are preserved
+- **Change the session's settings:** `twicc update-session <session_id> settings ...` — see the `twicc-update-session` skill. Only the agent settings (model, effort, permission mode, etc.) for now; title / archive / pin will plug in later
 - **Read the agent's reply (uniform shape):** `twicc session <session_id> messages --tail 1` — the latest user/assistant message (see "Following up" above)
 - **Read raw session content:** `twicc session <session_id> content <line_or_range>` — see every item (tool calls, reasoning, system) in the provider's native JSONL shape
 - **List sessions:** `twicc sessions --project <project_id>` — to see other recent sessions in the same project

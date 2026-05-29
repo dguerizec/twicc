@@ -1,7 +1,8 @@
 """Resolve ``--preset`` lookup and the merge with CLI overrides.
 
-The preset file uses the historical keys ``model`` and ``thinking`` which
-map to ``selected_model`` and ``thinking_enabled`` on ``AgentSettings``.
+Shared by ``twicc create-session`` and ``twicc update-session settings``. The
+preset file uses the historical keys ``model`` and ``thinking`` which map to
+``selected_model`` and ``thinking_enabled`` on ``AgentSettings``.
 """
 
 from __future__ import annotations
@@ -29,13 +30,15 @@ def apply_preset_and_overrides(
     preset_name: str | None,
     presets: list[dict],
     overrides: dict[str, object | None],
+    unset: list[str] | None = None,
 ) -> AgentSettings:
-    """Build the final ``AgentSettings`` from preset + per-flag overrides.
+    """Build the final ``AgentSettings`` from preset + per-flag overrides + unset list.
 
     Order:
       1. Start with all-None.
       2. If a preset is named, merge its values (after key remapping).
       3. Each non-None override replaces the corresponding field.
+      4. Each field in ``unset`` is forced to ``None`` (wins over preset).
 
     A field that is neither in the preset nor in the overrides stays
     ``None`` and the back will fall back to the synced default.
@@ -61,5 +64,10 @@ def apply_preset_and_overrides(
             continue
         if field in fields:
             fields[field] = value
+
+    if unset:
+        for field in unset:
+            if field in fields:
+                fields[field] = None
 
     return AgentSettings(**fields)

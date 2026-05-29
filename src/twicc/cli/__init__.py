@@ -284,6 +284,13 @@ from twicc.cli.send_message.command import send_message_cmd  # noqa: E402
 app.command(name="send-message")(send_message_cmd)
 
 
+# ``update-session`` is a Typer sub-app: ``twicc update-session <ID>
+# <subcommand>`` (only ``settings`` for now; ``title``, ``archive``,
+# ``pin``, ``stop`` will plug into the same sub-app later).
+from twicc.cli.update_session.command import update_session_app  # noqa: E402
+app.add_typer(update_session_app)
+
+
 # ``password`` is a Typer sub-app (set/clear/status). The module is lightweight
 # (no Django setup) so importing it at module load is cheap.
 from twicc.cli.password import app as password_app  # noqa: E402

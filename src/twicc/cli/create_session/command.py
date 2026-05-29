@@ -4,135 +4,20 @@ from __future__ import annotations
 
 import typer
 
-from twicc.cli.create_session.help_context import load_help_context
+from twicc.cli._session_request.help_context import load_help_context
+from twicc.cli._session_request.help_strings import (
+    context_max_help,
+    default_suffix,
+    model_help,
+    parse_context_max,
+    preset_help,
+    provider_help,
+)
 
 # Load the user's current providers + presets at module import time so the
 # Typer ``help=`` strings can mention them. Cheap (~30 ms, pure file I/O,
 # no Django) and degrades to "no extra info" on missing / malformed files.
 _HELP_CTX = load_help_context()
-
-
-_PROVIDER_LABELS = {
-    "claude_code": "Claude Code",
-    "codex": "Codex",
-}
-
-
-def _provider_label(name: str) -> str:
-    return _PROVIDER_LABELS.get(name, name)
-
-
-def _provider_help() -> str:
-    base = (
-        "Provider to use: 'claude_code' or 'codex'. Falls back to the default "
-        "provider from settings when omitted."
-    )
-    if _HELP_CTX.providers:
-        items = []
-        for name in _HELP_CTX.providers:
-            if name == _HELP_CTX.default_provider:
-                items.append(f"'{name}' (default)")
-            else:
-                items.append(f"'{name}'")
-        base += f" Currently enabled: {', '.join(items)}."
-    return base
-
-
-def _preset_help() -> str:
-    base = (
-        "Name of a saved settings preset for the chosen provider. "
-        "Per-flag options below override preset values; unset fields fall "
-        "back to the defaults from settings."
-    )
-    if _HELP_CTX.presets:
-        lines = []
-        for provider_name, names in _HELP_CTX.presets.items():
-            if names:
-                lines.append(f"{_PROVIDER_LABELS[provider_name]}: {', '.join(f"'{name}'" for name in names)}")
-            else:
-                lines.append(f"{_PROVIDER_LABELS[provider_name]}: (none)")
-        base += " Currently saved: " + " | ".join(lines) + "."
-    return base
-
-
-def _format_tokens(value) -> str:
-    """Render a token count compactly: 1_000_000 → 1m, 200_000 → 200k."""
-    if isinstance(value, int):
-        if value % 1_000_000 == 0:
-            value = f"{value // 1_000_000}m"
-        elif value % 1_000 == 0:
-            value = f"{value // 1_000}k"
-    return repr(str(value))
-
-
-def _default_suffix(field: str, formatter=repr) -> str:
-    """Render ``Current default: provider=value, ...`` for a field.
-
-    Returns an empty string when no provider declares a default for the
-    field (e.g. the field is provider-disabled or the data dir is empty).
-    ``formatter`` re-formats each value (e.g. tokens rendered as 200k/1m).
-    """
-    per_provider = _HELP_CTX.field_defaults.get(field)
-    if not per_provider:
-        return ""
-    parts = [
-        f"{_PROVIDER_LABELS[provider]}: {formatter(value)}"
-        for provider, value in per_provider.items()
-    ]
-    return " Current default: " + " | ".join(parts) + "."
-
-
-def _model_help() -> str:
-    base = "Model alias (provider-specific)."
-    chunks = []
-    for provider_name, aliases in _HELP_CTX.model_aliases.items():
-        if not aliases:
-            continue
-        rendered = []
-        for ma in aliases:
-            if ma.is_latest:
-                rendered.append(f"'{ma.alias}' (latest: {ma.version})")
-            else:
-                rendered.append(f"'{ma.alias}'")
-        chunks.append(f"{_provider_label(provider_name)}: {', '.join(rendered)}")
-    if chunks:
-        base += " " + ". ".join(chunks) + "."
-    base += _default_suffix("selected_model")
-    return base
-
-
-def _context_max_help() -> str:
-    base = (
-        "Max context window (accepted forms: '200k', '1m', '272k'). "
-        "Claude Code: '200k' or '1m' (1m requires a 1m-capable model; "
-        "otherwise silently capped to 200k) | Codex: '272k'."
-    )
-    base += _default_suffix("context_max", formatter=_format_tokens)
-    return base
-
-
-def _parse_context_max(value: str | None) -> int | None:
-    """Parse ``--context-max`` accepting ``1m``/``200k``/``272k``/plain int."""
-    if value is None:
-        return None
-    s = value.strip().lower()
-    if not s:
-        return None
-    multiplier = 1
-    if s.endswith("m"):
-        multiplier = 1_000_000
-        s = s[:-1]
-    elif s.endswith("k"):
-        multiplier = 1_000
-        s = s[:-1]
-    try:
-        n = int(s)
-    except ValueError:
-        raise ValueError(
-            f"invalid --context-max {value!r}; expected forms like 200k, 1m, "
-            f"or a plain integer."
-        )
-    return n * multiplier
 
 
 def create_session_cmd(
@@ -153,17 +38,17 @@ def create_session_cmd(
     provider: str | None = typer.Option(
         None,
         "--provider",
-        help=_provider_help(),
+        help=provider_help(_HELP_CTX),
     ),
     preset: str | None = typer.Option(
         None,
         "--preset",
-        help=_preset_help(),
+        help=preset_help(_HELP_CTX),
     ),
     model: str | None = typer.Option(
         None,
         "--model",
-        help=_model_help(),
+        help=model_help(_HELP_CTX),
     ),
     effort: str | None = typer.Option(
         None,
@@ -172,7 +57,7 @@ def create_session_cmd(
             "Reasoning effort. Claude Code: 'low', 'medium', 'high', 'xhigh', 'max' "
             "(xhigh/max require a capable model; otherwise silently demoted). "
             "Codex: 'low', 'medium', 'high', 'xhigh'."
-            + _default_suffix("effort")
+            + default_suffix(_HELP_CTX,"effort")
         ),
     ),
     permission_mode: str | None = typer.Option(
@@ -182,7 +67,7 @@ def create_session_cmd(
             "Tool permission policy. Claude Code: 'default', 'acceptEdits', 'plan', "
             "'dontAsk', 'bypassPermissions'. Codex: 'read_only', 'strict', 'auto', "
             "'autonomous', 'yolo'."
-            + _default_suffix("permission_mode")
+            + default_suffix(_HELP_CTX,"permission_mode")
         ),
     ),
     thinking: bool | None = typer.Option(
@@ -191,7 +76,7 @@ def create_session_cmd(
         help=(
             "Claude Code only. Enable extended thinking. Omit to keep the "
             "preset's value (or the default from settings)."
-            + _default_suffix("thinking_enabled")
+            + default_suffix(_HELP_CTX,"thinking_enabled")
         ),
     ),
     claude_in_chrome: bool | None = typer.Option(
@@ -200,7 +85,7 @@ def create_session_cmd(
         help=(
             "Claude Code only. Enable the Chrome MCP integration. Omit to "
             "keep the preset's value (or the default from settings)."
-            + _default_suffix("claude_in_chrome")
+            + default_suffix(_HELP_CTX,"claude_in_chrome")
         ),
     ),
     fast_mode: bool | None = typer.Option(
@@ -210,7 +95,7 @@ def create_session_cmd(
             "Claude Code Opus models only. Enable fast mode (higher token throughput, "
             "billed against extra usage credits). Omit to keep the preset's value "
             "(or the default from settings)."
-            + _default_suffix("fast_mode")
+            + default_suffix(_HELP_CTX,"fast_mode")
         ),
     ),
     question_widget: bool | None = typer.Option(
@@ -224,13 +109,13 @@ def create_session_cmd(
             "Honored by providers that map this flag to a widget tool; currently "
             "Claude Code (maps to AskUserQuestion). Omit to use the default "
             "(widget enabled)."
-            + _default_suffix("question_widget")
+            + default_suffix(_HELP_CTX,"question_widget")
         ),
     ),
     context_max: str | None = typer.Option(
         None,
         "--context-max",
-        help=_context_max_help(),
+        help=context_max_help(_HELP_CTX),
     ),
     title: str | None = typer.Option(
         None,
@@ -301,8 +186,8 @@ def create_session_cmd(
     from twicc.cli._session_request.polling import poll_status
     from twicc.cli._session_request.prompt import resolve_prompt, PromptError
     from twicc.cli.create_session.project import resolve_project, ProjectError
-    from twicc.cli.create_session.presets import apply_preset_and_overrides, PresetError
-    from twicc.cli.create_session.validation import (
+    from twicc.cli._session_request.presets import apply_preset_and_overrides, PresetError
+    from twicc.cli._session_request.validation import (
         ValidationError,
         validate_provider,
         validate_settings,
@@ -345,7 +230,7 @@ def create_session_cmd(
 
     # Parse --context-max early so other validation can see the int form.
     try:
-        context_max_int = _parse_context_max(context_max)
+        context_max_int = parse_context_max(context_max)
     except ValueError as e:
         emit_validation_errors(
             [ValidationError("--context-max", "invalid_format", str(e))],

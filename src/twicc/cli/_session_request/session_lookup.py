@@ -1,10 +1,11 @@
-"""Local DB lookup of an existing session for the ``send-message`` CLI.
+"""Local DB lookup of an existing session.
 
-The CLI side does this pre-check before dropping the request so the user gets
-an immediate, locally diagnosable error for the common cases (session id
-unknown, session stale because its JSONL was deleted, project without
-directory). The watcher-side service re-validates the same conditions in
-case the DB state changed between this lookup and the actual send.
+Shared by ``twicc send-message`` and ``twicc update-session``. The CLI side
+does this pre-check before dropping the request so the user gets an immediate,
+locally diagnosable error for the common cases (session id unknown, session
+stale because its JSONL was deleted, project without directory, subagent).
+The watcher-side service re-validates the same conditions in case the DB
+state changed between this lookup and the actual operation.
 """
 
 from __future__ import annotations
@@ -15,10 +16,10 @@ from typing import NamedTuple
 class SessionLookupError(Exception):
     """Raised when the local pre-check for an existing session fails.
 
-    ``code`` is the same vocabulary the backend service uses
+    ``code`` is the same vocabulary the backend services use
     (``session_not_found``, ``session_stale``, ``project_no_directory``,
-    ``unknown_provider``) so the output layer can render a uniform message
-    regardless of where the failure was detected.
+    ``unknown_provider``, ``is_subagent``) so the output layer can render a
+    uniform message regardless of where the failure was detected.
     """
 
     def __init__(self, code: str, message: str) -> None:
@@ -35,14 +36,14 @@ class ResolvedSession(NamedTuple):
 
 
 def lookup_session(session_id: str) -> ResolvedSession:
-    """Read the session row and validate it can be the target of a send.
+    """Read the session row and validate it can be the target of a send or update.
 
     Raises :class:`SessionLookupError` on any failed precondition; otherwise
     returns a :class:`ResolvedSession` with the fields the caller needs to
     keep going (notably ``provider`` to pick the right attachment caps).
     """
     from twicc.core.enums import Provider
-    from twicc.core.models import Session
+    from twicc.core.models import Session, SessionType
 
     session = (
         Session.objects.select_related("project").filter(id=session_id).first()
@@ -51,6 +52,12 @@ def lookup_session(session_id: str) -> ResolvedSession:
         raise SessionLookupError(
             "session_not_found",
             f"Session {session_id!r} not found",
+        )
+    if session.type == SessionType.SUBAGENT:
+        raise SessionLookupError(
+            "is_subagent",
+            f"Session {session_id!r} is a subagent; subagents cannot be "
+            "messaged or updated directly. Target the parent session instead.",
         )
     if session.stale:
         raise SessionLookupError(

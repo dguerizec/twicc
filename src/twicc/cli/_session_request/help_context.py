@@ -1,9 +1,9 @@
-"""Django-free help-string context for ``twicc create-session``.
+"""Django-free help-string context for the CLI commands.
 
-Loaded at module import time of :mod:`twicc.cli.create_session.command` to
-enrich the ``--help`` output with the user's current providers, presets,
-per-field defaults, and model aliases — without paying for
-``django.setup()``.
+Loaded at module import time of :mod:`twicc.cli.create_session.command` and
+:mod:`twicc.cli.update_session.settings_command` to enrich the ``--help``
+output with the user's current providers, presets, per-field defaults, and
+model aliases — without paying for ``django.setup()``.
 
 Pure file I/O + ``Provider`` enum + per-provider ``constants.py``
 (themselves Django-free by design). ~30 ms cold. Designed to never raise:

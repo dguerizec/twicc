@@ -14,7 +14,7 @@ Send a message to an existing agent session by dropping a request file the live 
 - A script needs to programmatically queue follow-up work into an existing session (use `--json` for machine-parseable output)
 - The user wants to attach files (images, PDFs, text) to an ongoing conversation
 
-**Out of scope:** changing the session's settings (model, effort, permission mode, …), renaming, or archiving. The session keeps its currently stored settings. A future `twicc update-session` will handle those — refuse if asked here.
+**Out of scope:** changing the session's settings (model, effort, permission mode, …), renaming, or archiving. The session keeps its currently stored settings. Use `twicc update-session <id> settings ...` for settings changes (see the `twicc-update-session` skill); renaming / archiving / pinning will plug into the same sub-app later — refuse if asked here.
 
 ## How to invoke
 
@@ -58,7 +58,7 @@ $TWICC send-message [OPTIONS] '<SESSION_ID>' '<PROMPT>'
 
 ### What is NOT here
 
-By design, `send-message` exposes no flags to change the session's `--model`, `--effort`, `--permission-mode`, `--thinking`, `--claude-in-chrome`, `--fast-mode`, `--context-max`, `--title`, or `--archive`. The session keeps every value it had before the call. This is intentional — those updates belong to a separate (future) `twicc update-session` command and should not be silently piggy-backed onto a message send.
+By design, `send-message` exposes no flags to change the session's `--model`, `--effort`, `--permission-mode`, `--thinking`, `--claude-in-chrome`, `--fast-mode`, `--context-max`, `--title`, or `--archive`. The session keeps every value it had before the call. This is intentional — settings updates go through `twicc update-session <id> settings` (see the `twicc-update-session` skill) and should not be silently piggy-backed onto a message send.
 
 ## Examples
 
@@ -141,6 +141,7 @@ The message is queued on the server; the agent will pick it up on its next turn.
 When the server rejects (exit 3), parse `errors[].code` from JSON mode to give a precise diagnosis:
 
 - **`awaiting_user_input`** → The session has a pending dialog open in the TwiCC UI (tool approval or `AskUserQuestion`). **A CLI message will not unblock it** — the user has to click in the UI first. Tell them exactly that. You can fetch the pending question's text via `twicc session <id> messages --tail 1` to surface what's being asked.
+- **`is_subagent`** → The id points to a subagent. **Subagents cannot be messaged directly** — the parent session is the right target. Use `twicc session <id>` to inspect the row and find the parent (`parent_session` field).
 - **`provider_disabled`** → The owning provider was disabled in settings; suggest enabling it from the UI.
 - **`session_not_found`** → The id doesn't match any session in DB (typo or already deleted).
 - **`session_stale`** → The session's JSONL file is gone from disk; the session can't be resumed.
@@ -150,6 +151,7 @@ When the server rejects (exit 3), parse `errors[].code` from JSON mode to give a
 ## Related commands
 
 - **Create a new session instead:** `twicc create-session` — full options for picking provider, model, settings, project, etc.
+- **Change the session's settings:** `twicc update-session <session_id> settings ...` — see the `twicc-update-session` skill. Settings-only path; the session is otherwise untouched.
 - **Check the live agent's state:** `twicc process <session_id>` — is the agent still working, blocked on a user click, or done? The only reliable way to detect `awaiting_user_input` before sending
 - **List all live processes:** `twicc processes --state awaiting_user_input` — to see which sessions are blocked on a user click
 - **Read the agent's reply (uniform shape):** `twicc session <session_id> messages --tail 1`

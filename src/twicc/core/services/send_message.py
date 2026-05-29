@@ -52,6 +52,8 @@ async def send_message_to_session_from_payload(payload: dict) -> SendMessageResu
 
     Business-rule rejections (returned as ``success=False``):
     - ``session_not_found``: no row in DB for that id.
+    - ``is_subagent``: the row exists but is a subagent. Subagents cannot be
+      messaged directly; the parent session is the right target.
     - ``session_stale``: ``Session.stale=True`` (file gone from disk).
     - ``project_no_directory``: the owning project has no directory set.
     - ``provider_disabled``: the owning provider was disabled in settings.
@@ -74,7 +76,7 @@ async def send_message_to_session_from_payload(payload: dict) -> SendMessageResu
         return SendMessageResult(False, None, None, None, errors)
 
     # --- session lookup -------------------------------------------------
-    from twicc.core.models import ProcessRun, Session
+    from twicc.core.models import ProcessRun, Session, SessionType
     session = await sync_to_async(
         lambda: Session.objects.select_related("project").filter(id=session_id).first()
     )()
@@ -82,6 +84,13 @@ async def send_message_to_session_from_payload(payload: dict) -> SendMessageResu
         return SendMessageResult(False, None, None, None, [
             SendMessageError("session_id", "session_not_found",
                              f"Session {session_id!r} not found"),
+        ])
+    if session.type == SessionType.SUBAGENT:
+        return SendMessageResult(False, None, None, None, [
+            SendMessageError("session_id", "is_subagent",
+                             f"Session {session_id!r} is a subagent; "
+                             "subagents cannot be messaged directly. "
+                             "Target the parent session instead."),
         ])
     if session.stale:
         return SendMessageResult(False, None, None, None, [

@@ -49,8 +49,8 @@ def send_message_cmd(
     """Send a message to an existing session.
 
     The session keeps its currently stored agent settings (model, effort,
-    permission mode, ...). To change settings, use a future ``update-session``
-    command (not implemented yet) — or the UI.
+    permission mode, ...). To change settings, use
+    ``twicc update-session <ID> settings`` — or the UI.
     """
     # Lazy imports to keep --help fast (no Django setup until we need it).
     import os
@@ -77,17 +77,12 @@ def send_message_cmd(
     )
     from twicc.cli._session_request.polling import poll_status
     from twicc.cli._session_request.prompt import resolve_prompt, PromptError
-    from twicc.cli.send_message.session_lookup import (
+    from twicc.cli._session_request.session_lookup import (
         SessionLookupError,
         lookup_session,
     )
+    from twicc.cli._session_request.validation import ValidationError
     from twicc.providers.helpers import get_provider_helpers
-
-    # ValidationError lives in the create_session sub-package; reused here
-    # because the wire format expected by emit_validation_errors is the same
-    # ``NamedTuple(field, code, message)`` tuple. No behavioral coupling —
-    # only the shared error shape.
-    from twicc.cli.create_session.validation import ValidationError
 
     try:
         age = check_heartbeat()

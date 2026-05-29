@@ -135,6 +135,12 @@ class PendingSessionsWatcher:
                 )
                 service = send_message_to_session_from_payload
                 success_status = "sent"
+            elif kind == "update_settings":
+                from twicc.core.services.session_update import (
+                    update_session_settings_from_payload,
+                )
+                service = update_session_settings_from_payload
+                success_status = "updated"
             else:
                 logger.warning("[PendingSessionsWatcher] unknown kind for %s: %r",
                                request_uuid, kind)
@@ -189,6 +195,8 @@ class PendingSessionsWatcher:
             data.setdefault("created_at", _iso_now())
         elif data["status"] == "sent":
             data.setdefault("sent_at", _iso_now())
+        elif data["status"] == "updated":
+            data.setdefault("updated_at", _iso_now())
         elif data["status"] == "rejected":
             data.setdefault("rejected_at", _iso_now())
         elif data["status"] == "failed":
