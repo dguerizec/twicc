@@ -922,6 +922,15 @@ class ProcessRun(models.Model):
     # process and filters rows accordingly.
     twicc_pid = models.IntegerField(null=True, blank=True)
     agent_pid = models.IntegerField(null=True, blank=True)
+    # ``True`` while the agent is blocked on a user click (tool approval,
+    # AskUserQuestion, Codex approval). Orthogonal to ``state`` because the
+    # runtime stays in ``ASSISTANT_TURN`` while waiting: the SDK's
+    # ``can_use_tool`` callback simply blocks until the user resolves the
+    # request, so an external observer reading just ``state`` cannot tell
+    # "currently generating" from "blocked on user click". This column
+    # disambiguates. Maintained by :meth:`BaseAgentManager._persist_process_run_transition`
+    # via ``bool(agent.pending_requests)``, forced to ``False`` on ``DEAD``.
+    awaiting_user_input = models.BooleanField(default=False)
 
     class Meta:
         indexes = [

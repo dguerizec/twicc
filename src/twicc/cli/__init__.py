@@ -198,13 +198,27 @@ def usage() -> None:
 @app.command()
 def processes(
     provider: str = typer.Option(None, "--provider", help="Filter by backend provider (e.g. 'claude_code', 'codex')."),
+    state: str = typer.Option(
+        None,
+        "--state",
+        help=(
+            "Filter by state: 'starting', 'assistant_turn' (actively generating), "
+            "'awaiting_user_input' (blocked on a user click), or 'user_turn' "
+            "(turn finished, awaiting next user message). 'dead' is never returned."
+        ),
+    ),
     limit: int = typer.Option(20, help="Max number of processes to return."),
     offset: int = typer.Option(0, help="Skip first N processes."),
 ) -> None:
     """List currently running processes of the live TwiCC instance as JSON."""
     from twicc.cli.processes import main as processes_main
 
-    processes_main(provider=provider, limit=limit, offset=offset)
+    processes_main(
+        provider=provider,
+        state=state,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @app.command()

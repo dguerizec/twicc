@@ -60,7 +60,7 @@ Returns a single JSON object:
   "session_id": "abc123-def456",
   "session_title": "Implement user authentication",
   "project_id": "-home-twidi-dev-myproject",
-  "state": "assistant_turn",
+  "state": "awaiting_user_input",
   "started_at": "2026-05-29T15:30:00+00:00",
   "last_state_change_at": "2026-05-29T15:45:12+00:00",
   "pid": 81287
@@ -74,9 +74,13 @@ Returns a single JSON object:
 - **`session_id`** — the TwiCC session the process is bound to
 - **`session_title`** — title of the bound session, or `null` if the session row has not been created yet by the file watcher (brand-new session, no JSONL line yet)
 - **`project_id`** — the session's project
-- **`state`** — runtime state, one of `"starting"`, `"assistant_turn"`, `"user_turn"`. Never `"dead"` here by construction
+- **`state`** — one of four disjoint values:
+  - `"starting"` — booting up
+  - `"assistant_turn"` — actively generating
+  - `"awaiting_user_input"` — blocked on a user click (tool approval, `AskUserQuestion`, Codex approval); the UI shows a pending dialog
+  - `"user_turn"` — turn finished, awaiting the next user message
 - **`started_at`** — when the row was created (= when the process was registered with the manager)
-- **`last_state_change_at`** — last time the state column was updated. Subtract from now to know how long the process has been in its current state
+- **`last_state_change_at`** — last time the underlying state column was updated. Subtract from now to know how long the process has been in its current state
 - **`pid`** — PID of the underlying provider subprocess (Claude Code SDK or Codex app-server). `null` only for the very brief window between row creation and the first state transition out of `starting`
 
 ## Related commands
@@ -87,7 +91,11 @@ Returns a single JSON object:
 
 ## How to present results
 
-1. Lead with the session title and the current state ("`user_turn` — waiting for the next user message" / "`assistant_turn` — currently working")
+1. Lead with the session title and a human label for `state`:
+   - `starting` — "spinning up"
+   - `assistant_turn` — "currently working"
+   - `awaiting_user_input` — "blocked waiting for your approval / answer" (the user has a pending dialog in the UI)
+   - `user_turn` — "waiting for the next user message"
 2. If `last_state_change_at` is more than a few minutes old and the state is `assistant_turn`, flag it: the process may be hung or slowly streaming a long response
 3. Surface `pid` when the user asked about OS-level details (debugging, attaching tools)
 4. You are in TwiCC, so you can link to the session using a relative Markdown link: `[link text](/project/{project_id}/session/{session_id})`

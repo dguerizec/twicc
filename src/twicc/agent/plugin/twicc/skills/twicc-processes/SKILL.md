@@ -14,8 +14,10 @@ worker the backend still has in memory.
 
 - The user asks what's currently running in TwiCC
 - The user wants to know which sessions are busy (`assistant_turn`) vs idle (`user_turn`)
+- The user wants to know which sessions need their attention right now (tool approval pending, `AskUserQuestion` open) — use `--state awaiting_user_input`
 - The user needs an OS PID for external inspection
   (`ps`, `top`, attaching a debugger, reading `/proc/<pid>/…`)
+- The user wants to wire an external notifier (desktop pop-up, Slack ping, …) that polls TwiCC for pending approvals — see "Polling for notifications" below
 
 ## How to invoke
 
@@ -44,16 +46,39 @@ has died), the command exits with an error.
 ### Options
 
 - `--provider PROV` — keep only processes from one backend (`claude_code`, `codex`)
+- `--state STATE` — keep only processes in one state. Valid:
+  - `starting` — booting up
+  - `assistant_turn` — actively generating, NOT blocked
+  - `awaiting_user_input` — blocked on a user click (tool approval, `AskUserQuestion`, Codex approval)
+  - `user_turn` — turn finished, awaiting next user message
+
+  `dead` is rejected (never returned anyway). The four values are **disjoint** — a row matches exactly one
 - `--limit N` — max number of processes to return (default: 20)
 - `--offset N` — skip first N processes for pagination (default: 0)
 
 ### Examples
 
 ```bash
-$TWICC processes                              # All live processes (most recent first)
-$TWICC processes --provider codex             # Only Codex processes
-$TWICC processes --provider claude_code       # Only Claude Code processes
-$TWICC processes --limit 50 --offset 20       # Paginate
+$TWICC processes                                    # All live processes (most recent first)
+$TWICC processes --provider codex                   # Only Codex processes
+$TWICC processes --provider claude_code             # Only Claude Code processes
+$TWICC processes --state assistant_turn             # Actively generating (not blocked)
+$TWICC processes --state awaiting_user_input        # Only processes that need a user click NOW
+$TWICC processes --state user_turn                  # Turn finished, awaiting next user message
+$TWICC processes --limit 50 --offset 20             # Paginate
+```
+
+### Polling for notifications
+
+`--state awaiting_user_input` returns an array that is empty when nothing
+needs the user's attention and non-empty otherwise — useful as the source
+for an OS-level notification daemon:
+
+```bash
+# Run every N seconds, fire a notification when any process needs a click.
+PENDING=$($TWICC processes --state awaiting_user_input)
+COUNT=$(echo "$PENDING" | jq 'length')
+[ "$COUNT" -gt 0 ] && notify-send "TwiCC" "$COUNT process(es) awaiting your input"
 ```
 
 ## Output format
@@ -69,7 +94,7 @@ The command outputs a JSON array of process objects, ordered by `started_at`
     "session_id": "abc123-def456",
     "session_title": "Implement user authentication",
     "project_id": "-home-twidi-dev-myproject",
-    "state": "assistant_turn",
+    "state": "awaiting_user_input",
     "started_at": "2026-05-29T15:30:00+00:00",
     "last_state_change_at": "2026-05-29T15:45:12+00:00",
     "pid": 81287
@@ -84,9 +109,15 @@ The command outputs a JSON array of process objects, ordered by `started_at`
 - **`session_id`** — the TwiCC session the process is bound to (pass to `twicc process <session_id>` for a focused view, or `twicc session <session_id>` for the session metadata)
 - **`session_title`** — title of the bound session, or `null` if the session row has not been created yet by the file watcher (brand-new session, no JSONL line yet)
 - **`project_id`** — the session's project
-- **`state`** — runtime state, one of `"starting"`, `"assistant_turn"`, `"user_turn"`. Never `"dead"` here by construction
+- **`state`** — one of four disjoint values:
+  - `"starting"` — booting up
+  - `"assistant_turn"` — actively generating
+  - `"awaiting_user_input"` — blocked on a user click (tool approval, `AskUserQuestion`, Codex approval); the UI shows a pending dialog
+  - `"user_turn"` — turn finished, awaiting the next user message
+
+  Internally, `awaiting_user_input` is a separate boolean on top of `assistant_turn`; the CLI flattens it into a single field because the four buckets are mutually exclusive in practice
 - **`started_at`** — when the row was created (= when the process was registered with the manager)
-- **`last_state_change_at`** — last time the state column was updated
+- **`last_state_change_at`** — last time the underlying state column was updated
 - **`pid`** — PID of the underlying provider subprocess (Claude Code SDK or Codex app-server). `null` only for the very brief window between row creation and the first state transition out of `starting`
 
 ## Related commands
@@ -99,6 +130,11 @@ The command outputs a JSON array of process objects, ordered by `started_at`
 
 1. Group by `provider` if multiple backends are running; one section per provider
 2. For each process: show the session title (or session_id if title is null), the state, and how long ago `last_state_change_at` was
-3. Include `pid` when the user asked about OS-level details (debugging, attaching tools)
-4. You are in TwiCC, so you can link to a session using a relative Markdown link so the user can click it: `[link text](/project/{project_id}/session/{session_id})`
-5. If the list is empty, say "no processes are currently running in the live TwiCC backend" rather than implying TwiCC itself is down
+3. Map `state` to a human label when rendering:
+   - `starting` → "spinning up"
+   - `assistant_turn` → "currently working"
+   - `awaiting_user_input` → "waiting for your approval / answer" (the user has a pending dialog in the UI)
+   - `user_turn` → "idle — awaiting next user message"
+4. Include `pid` when the user asked about OS-level details (debugging, attaching tools)
+5. You are in TwiCC, so you can link to a session using a relative Markdown link so the user can click it: `[link text](/project/{project_id}/session/{session_id})`
+6. If the list is empty, say "no processes are currently running in the live TwiCC backend" rather than implying TwiCC itself is down

@@ -457,6 +457,17 @@ class BaseAgentManager:
         subprocess is gone again, so ``get_pid()`` flips back to ``None``
         and the column reflects that.
 
+        ``awaiting_user_input`` mirrors ``bool(agent.pending_requests)``,
+        forced to ``False`` on ``DEAD`` (a dead agent is not awaiting
+        anything, even if its pending-requests dict still has entries that
+        will be drained in the cancellation cleanup). The column is the
+        persistable view of "blocked on user click", since the runtime
+        ``state`` stays in ``ASSISTANT_TURN`` while the SDK's
+        ``can_use_tool`` callback blocks. This persist site fires both on
+        explicit state transitions and on pending-request add/remove,
+        because :meth:`BaseAgent._await_pending_request` invokes
+        ``_notify_state_change`` at both moments.
+
         The helper read + write are grouped under a single
         ``run_under_db_write_lock`` acquire so no other writer can race
         between the keep/delete decision and the DB mutation (mirrors the
@@ -481,6 +492,14 @@ class BaseAgentManager:
         pr_pk = agent.process_run.pk
         state_value = state.value
         agent_pid = agent.get_pid()
+        # ``awaiting_user_input`` is the persistable counterpart of
+        # ``agent.pending_requests``. Force ``False`` on DEAD: the pending
+        # requests dict may still hold entries at the moment the DEAD
+        # callback runs (cleanup happens in the ``finally`` of
+        # ``_await_pending_request`` AFTER the future is cancelled), but a
+        # dead agent is not actually awaiting anything — the column reflects
+        # the operational truth.
+        awaiting = False if state == AgentState.DEAD else bool(agent.pending_requests)
 
         with provider_log_context(agent.provider):
             if state != AgentState.DEAD:
@@ -490,12 +509,14 @@ class BaseAgentManager:
                             state=state_value,
                             last_state_change_at=now,
                             agent_pid=agent_pid,
+                            awaiting_user_input=awaiting,
                         )
                     )
                     if agent.process_run is not None:
                         agent.process_run.state = state_value
                         agent.process_run.last_state_change_at = now
                         agent.process_run.agent_pid = agent_pid
+                        agent.process_run.awaiting_user_input = awaiting
 
                 try:
                     await run_under_db_write_lock(_persist_update)
@@ -522,12 +543,14 @@ class BaseAgentManager:
                             state=state_value,
                             last_state_change_at=now,
                             agent_pid=agent_pid,
+                            awaiting_user_input=awaiting,
                         )
                     )
                     if agent.process_run is not None:
                         agent.process_run.state = state_value
                         agent.process_run.last_state_change_at = now
                         agent.process_run.agent_pid = agent_pid
+                        agent.process_run.awaiting_user_input = awaiting
                 else:
                     await asyncio.to_thread(lambda: agent.process_run.delete())
                     agent.process_run = None

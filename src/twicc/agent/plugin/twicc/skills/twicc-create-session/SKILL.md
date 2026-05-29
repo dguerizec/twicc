@@ -173,20 +173,38 @@ A single JSON object, one of:
 
 ## Following up
 
-Creation returns immediately; the agent keeps working in the background. **Only if the user asks** for the reply, fetch it with:
+Creation returns immediately; the agent keeps working in the background. Two complementary ways to check where the session has landed — pick the one that matches the user's question.
+
+### Is the assistant done? Is it stuck waiting on me?
+
+`twicc process <SESSION_ID>` is the cheap one-shot answer. It reports the live `state` of the process attached to the session (see the `twicc-process` skill for the full vocabulary). Map the result like this:
+
+- `assistant_turn` → still working, no reply yet — wait and retry.
+- `awaiting_user_input` → the agent is **blocked** on a tool approval / `AskUserQuestion` in the TwiCC UI. **The user has to click in the UI to unblock it — a `--tail 1` poll loop will never make progress.** That said, `--tail 1` is still useful here: the last assistant message often spells out *what* is being asked (the tool input, the question's body) so you can tell the user what's on the pending dialog before they switch back to TwiCC.
+- `user_turn` → the turn is finished; the latest assistant message is the reply (fetch it via the messages command below).
+- `starting` → still spinning up, retry shortly.
+- Exit 1 ("no running process for session …") → **not necessarily an error**: TwiCC doesn't keep finished processes around indefinitely, so a missing row most often means the agent already wrapped up and was cleaned up. Two real cases to disambiguate by fetching `--tail 1`:
+  - The last message is from the **assistant** → the turn completed normally; that message is the reply.
+  - The last message is still from the **user** (the initial prompt) and nothing followed → the agent failed to produce any output (early startup failure, kill, crash). Surface this to the user as "the session didn't produce a reply".
+
+### Fetch the reply itself
+
+**Only if the user asks** for the reply text:
 
 ```bash
 $TWICC session <SESSION_ID> messages --tail 1
 ```
 
 - `role: "assistant"` → that's the reply.
-- `role: "user"` → no text reply yet (still working, or only tool calls so far) — wait and retry.
+- `role: "user"` → no text reply yet (still working, or only tool calls so far) — combine with `twicc process` above to know whether to wait or to act.
 
 Use `--tail N` for more turns when needed.
 
 ## Related commands
 
 - **Inspect the created session:** `twicc session <session_id>` — full metadata for the new session
+- **Check the live agent's state:** `twicc process <session_id>` — is the agent still working, blocked on a user click, or done? Cheaper than polling `messages` and the only reliable way to detect the "awaiting user input" case (see "Following up" above)
+- **List all live processes:** `twicc processes` — useful when you fired several `create-session` calls and want to see which are still running, which need attention, etc. Supports `--state awaiting_user_input` to filter to those waiting for the user
 - **Read the agent's reply (uniform shape):** `twicc session <session_id> messages --tail 1` — the latest user/assistant message (see "Following up" above)
 - **Read raw session content:** `twicc session <session_id> content <line_or_range>` — see every item (tool calls, reasoning, system) in the provider's native JSONL shape
 - **List sessions:** `twicc sessions --project <project_id>` — to see other recent sessions in the same project
