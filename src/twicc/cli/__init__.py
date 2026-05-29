@@ -195,6 +195,28 @@ def usage() -> None:
     usage_main()
 
 
+@app.command()
+def processes(
+    provider: str = typer.Option(None, "--provider", help="Filter by backend provider (e.g. 'claude_code', 'codex')."),
+    limit: int = typer.Option(20, help="Max number of processes to return."),
+    offset: int = typer.Option(0, help="Skip first N processes."),
+) -> None:
+    """List currently running processes of the live TwiCC instance as JSON."""
+    from twicc.cli.processes import main as processes_main
+
+    processes_main(provider=provider, limit=limit, offset=offset)
+
+
+@app.command()
+def process(
+    session_id: str = typer.Argument(help="The session ID of the running process."),
+) -> None:
+    """Show the currently running process for a session as JSON."""
+    from twicc.cli.process import main as process_main
+
+    process_main(session_id)
+
+
 @app.command(
     context_settings={"allow_extra_args": True, "allow_interspersed_args": False, "ignore_unknown_options": True, "help_option_names": []},
 )

@@ -205,6 +205,7 @@ Returns a JSON array of session objects (same format as `twicc sessions` output)
 ## Related commands
 
 - **Find session IDs:** `twicc sessions` — list sessions (optionally filtered by project)
+- **Inspect the live process:** `twicc process <session_id>` — current state and OS PID of the running process attached to this session (errors out when the session has no live process)
 - **Get project details:** `twicc project <project_id>` — get full details for the session's project
 - **Find project IDs:** `twicc projects` — list all projects
 - **Search for content:** `twicc search "<query>"` — full-text search returns `session_id` and `line_num`, which can be used with `twicc session <id> content <line_num>` to read the full item
