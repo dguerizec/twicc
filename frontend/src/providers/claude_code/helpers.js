@@ -515,14 +515,17 @@ export class ClaudeCodeHelpers extends BaseProviderHelpers {
         const modelForced = (sel.selected_model !== null && sel.selected_model !== undefined && sel.selected_model !== def.selected_model)
             || (sel.context_max !== null && sel.context_max !== undefined && sel.context_max !== def.context_max)
 
-        return [
+        const parts = [
             { text: modelDisplay, forced: modelForced },
             { text: this.getChoiceDisplayLabel('effort', effectiveEffort) ?? this.getChoiceLabel('effort', effectiveEffort) ?? '', forced: sel.effort !== null && sel.effort !== undefined && sel.effort !== def.effort },
             { text: this.getChoiceDisplayLabel('thinking_enabled', effectiveThinking) ?? this.getChoiceLabel('thinking_enabled', effectiveThinking) ?? '', forced: sel.thinking_enabled !== null && sel.thinking_enabled !== undefined && sel.thinking_enabled !== def.thinking_enabled },
             { text: this.getChoiceLabel('permission_mode', effectivePermission) ?? '', forced: sel.permission_mode !== null && sel.permission_mode !== undefined && sel.permission_mode !== def.permission_mode },
             { text: this.getChoiceDisplayLabel('claude_in_chrome', effectiveChrome) ?? this.getChoiceLabel('claude_in_chrome', effectiveChrome) ?? '', forced: sel.claude_in_chrome !== null && sel.claude_in_chrome !== undefined && sel.claude_in_chrome !== def.claude_in_chrome },
-            { text: this.getChoiceDisplayLabel('fast_mode', effectiveFastMode) ?? this.getChoiceLabel('fast_mode', effectiveFastMode) ?? '', forced: sel.fast_mode !== null && sel.fast_mode !== undefined && sel.fast_mode !== def.fast_mode },
         ]
+        if (effectiveFastMode) {
+            parts.push({ text: 'Fast', forced: sel.fast_mode !== null && sel.fast_mode !== undefined && sel.fast_mode !== def.fast_mode })
+        }
+        return parts
     }
 
     getModelSelectGroups(registry) {
