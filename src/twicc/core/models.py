@@ -912,6 +912,16 @@ class ProcessRun(models.Model):
         default=AgentState.STARTING.value,
     )
     last_state_change_at = models.DateTimeField()
+    # OS PIDs captured at row creation, for external introspection. Both are
+    # nullable: ``twicc_pid`` is unknown for rows imported from older schemas;
+    # ``agent_pid`` is also unset when the provider's subprocess has not been
+    # started yet (the typical state at ``ProcessRun.objects.create`` time —
+    # ``agent.start()`` runs right after). No write site updates either field
+    # past creation today; external tooling that needs to match a PID against
+    # the live TwiCC instance reads ``twicc.info.json`` to find the current
+    # process and filters rows accordingly.
+    twicc_pid = models.IntegerField(null=True, blank=True)
+    agent_pid = models.IntegerField(null=True, blank=True)
 
     class Meta:
         indexes = [

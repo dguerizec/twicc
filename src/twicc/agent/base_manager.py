@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from collections.abc import Callable, Coroutine
 from typing import TYPE_CHECKING, Any
@@ -364,6 +365,14 @@ class BaseAgentManager:
         # file appears). The row is created with the model's default
         # ``state=STARTING`` and ``last_state_change_at=now``;
         # :meth:`_on_state_change` keeps both columns in sync from there.
+        # ``twicc_pid`` always carries our own PID (stable for the lifetime
+        # of this TwiCC process); ``agent_pid`` is whatever the provider can
+        # surface right now via :meth:`BaseAgent.get_pid` — typically
+        # ``None`` because ``agent.start()`` (the call that actually spawns
+        # the subprocess) runs after this block.
+        twicc_pid = os.getpid()
+        agent_pid = agent.get_pid()
+
         async def _persist_run_and_start_timestamps() -> None:
             pr = await asyncio.to_thread(
                 lambda: ProcessRun.objects.create(
@@ -371,6 +380,8 @@ class BaseAgentManager:
                     session_id=session_id,
                     started_at=now,
                     last_state_change_at=now,
+                    twicc_pid=twicc_pid,
+                    agent_pid=agent_pid,
                 )
             )
             agent.process_run = pr
@@ -430,11 +441,21 @@ class BaseAgentManager:
     ) -> None:
         """Mirror a runtime state transition onto the agent's ProcessRun row.
 
-        For non-``DEAD`` transitions: UPDATE ``state`` and
-        ``last_state_change_at``. For ``DEAD``: consult the provider helper —
-        if it returns ``True``, UPDATE the row to ``state=DEAD``; otherwise
-        DELETE the row (and clear ``agent.process_run`` so override-level
-        post-DEAD logic can branch on whether the row was kept).
+        For non-``DEAD`` transitions: UPDATE ``state``,
+        ``last_state_change_at`` and ``agent_pid``. For ``DEAD``: consult
+        the provider helper — if it returns ``True``, UPDATE the row to
+        ``state=DEAD`` (same triplet); otherwise DELETE the row (and clear
+        ``agent.process_run`` so override-level post-DEAD logic can branch
+        on whether the row was kept).
+
+        ``agent_pid`` is refreshed on every UPDATE because
+        :meth:`BaseAgent.get_pid` returns ``None`` until the provider has
+        actually spawned its subprocess — which only happens inside
+        ``agent.start()``, after ``ProcessRun.objects.create`` has already
+        run. The first transition out of ``STARTING`` is therefore the
+        earliest moment we can persist a usable value. On ``DEAD`` the
+        subprocess is gone again, so ``get_pid()`` flips back to ``None``
+        and the column reflects that.
 
         The helper read + write are grouped under a single
         ``run_under_db_write_lock`` acquire so no other writer can race
@@ -459,6 +480,7 @@ class BaseAgentManager:
         now = timezone.now()
         pr_pk = agent.process_run.pk
         state_value = state.value
+        agent_pid = agent.get_pid()
 
         with provider_log_context(agent.provider):
             if state != AgentState.DEAD:
@@ -467,11 +489,13 @@ class BaseAgentManager:
                         lambda: ProcessRun.objects.filter(pk=pr_pk).update(
                             state=state_value,
                             last_state_change_at=now,
+                            agent_pid=agent_pid,
                         )
                     )
                     if agent.process_run is not None:
                         agent.process_run.state = state_value
                         agent.process_run.last_state_change_at = now
+                        agent.process_run.agent_pid = agent_pid
 
                 try:
                     await run_under_db_write_lock(_persist_update)
@@ -497,11 +521,13 @@ class BaseAgentManager:
                         lambda: ProcessRun.objects.filter(pk=pr_pk).update(
                             state=state_value,
                             last_state_change_at=now,
+                            agent_pid=agent_pid,
                         )
                     )
                     if agent.process_run is not None:
                         agent.process_run.state = state_value
                         agent.process_run.last_state_change_at = now
+                        agent.process_run.agent_pid = agent_pid
                 else:
                     await asyncio.to_thread(lambda: agent.process_run.delete())
                     agent.process_run = None
