@@ -1470,6 +1470,20 @@ export const useDataStore = defineStore('data', {
                 state.sessionsFetched = true
                 state.hasMoreSessions = data.has_more
 
+                // Cascade: when fetching a workspace scope, mark each member project
+                // as fetched too. Without this, the `areProjectSessionsFetched` guard
+                // in useWebSocket.js `session_updated` would drop new sessions for
+                // projects the user has never opened individually, even though we
+                // just loaded them collectively via the workspace endpoint.
+                if (isWorkspaceProjectId(projectId)) {
+                    const wsId = extractWorkspaceId(projectId)
+                    const { useWorkspacesStore } = await import('./workspaces')
+                    const wsStore = useWorkspacesStore()
+                    for (const realProjectId of wsStore.getVisibleProjectIds(wsId)) {
+                        this._ensureProjectLocalState(realProjectId).sessionsFetched = true
+                    }
+                }
+
                 // Update cursor (oldest mtime received)
                 if (data.sessions.length > 0) {
                     const oldestReceived = Math.min(...data.sessions.map(s => s.mtime))

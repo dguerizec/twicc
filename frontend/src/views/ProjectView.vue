@@ -495,6 +495,23 @@ watch(effectiveProjectId, async (newProjectId) => {
     store.loadStickySessions()
 }, { immediate: true })
 
+// When the user is browsing a workspace and the workspace's project set
+// changes (project added/removed via WorkspaceManageDialog, archived flag
+// toggled, project auto-added by the backend after a JSONL appears), the
+// effectiveProjectId stays the same so the loader above doesn't refire.
+// Re-fetch sessions so the sidebar reflects pre-existing sessions of any
+// newly-included project. Key is the sorted id list, so set-equal recomputes
+// (which are frequent on workspace store mutations) don't trigger a refetch.
+watch(
+    () => isWorkspaceMode.value
+        ? workspaceVisibleProjectIds.value.slice().sort().join(',')
+        : null,
+    (newKey, oldKey) => {
+        if (newKey == null || oldKey == null || newKey === oldKey) return
+        store.loadSessions(effectiveProjectId.value, { force: true })
+    },
+)
+
 // Retry loading sessions
 async function handleRetry() {
     if (effectiveProjectId.value) {

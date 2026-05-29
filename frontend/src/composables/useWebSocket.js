@@ -12,6 +12,7 @@ import { useSettingsStore } from '../stores/settings'
 import { getProviderHelpers, getProviderLabel, getProviderWsHandler, getProviderStore } from '../providers'
 import { playNotificationSound, sendBrowserNotification, isPageActive } from '../utils/notificationSounds'
 import { truncateTitle } from '../utils/truncate'
+import { toWorkspaceProjectId } from '../utils/workspaceIds'
 
 // WebSocket close code sent by backend when authentication fails
 const WS_CLOSE_AUTH_FAILURE = 4001
@@ -58,6 +59,35 @@ if (!('currentRouteSessionId' in __hmrState)) __hmrState.currentRouteSessionId =
 // Previous active-state of the page, for detecting transitions in the
 // visibility listener. Initialised to the current state on first module load.
 if (!('lastVisibilityActive' in __hmrState)) __hmrState.lastVisibilityActive = isPageActive()
+
+// Lazy-cached reference to the workspaces store factory. The static import is
+// avoided to prevent a useWebSocket.js ↔ workspaces.js circular dependency
+// (workspaces.js → data.js, and other modules in that subgraph end up needing
+// this composable). Used synchronously by the `session_updated` permissive
+// guard once resolved; until then the guard simply falls back to the existing
+// project/all-projects checks.
+let _useWorkspacesStoreRef = null
+import('../stores/workspaces')
+    .then(({ useWorkspacesStore }) => { _useWorkspacesStoreRef = useWorkspacesStore })
+    .catch(err => console.warn('Failed to preload workspaces store reference', err))
+
+// Permissive guard: `true` if `projectId` belongs to any workspace whose
+// sessions have been fetched (the workspace scope `ws:<id>` is in
+// `localState.projects` with `sessionsFetched=true`). Returns `false` until
+// the lazy reference above resolves — in that window the existing
+// `areProjectSessionsFetched` / `areAllProjectsSessionsFetched` checks still
+// apply, so the fallback is consistent with prior behavior.
+function isProjectInFetchedWorkspace(projectId, dataStore) {
+    if (!_useWorkspacesStoreRef) return false
+    const wsStore = _useWorkspacesStoreRef()
+    for (const ws of wsStore.workspaces) {
+        if (!ws.projectIds.includes(projectId)) continue
+        if (dataStore.areProjectSessionsFetched(toWorkspaceProjectId(ws.id))) {
+            return true
+        }
+    }
+    return false
+}
 
 // Install the visibility/focus listener once at module load. HMR-safe: the
 // flag survives reloads via __hmrState, so we never attach duplicates.
@@ -768,10 +798,16 @@ export function useWebSocket() {
                 } else if (existingSession) {
                     store.updateSession(msg.session)
 
-                } else if (store.areProjectSessionsFetched(msg.session.project_id) ||
-                    store.areAllProjectsSessionsFetched) {
+                } else if (
+                    store.areProjectSessionsFetched(msg.session.project_id)
+                    || store.areAllProjectsSessionsFetched
+                    || isProjectInFetchedWorkspace(msg.session.project_id, store)
+                ) {
                     // Session not yet in store but sessions for this project have been
-                    // fetched — add it (new session or missed earlier update).
+                    // fetched — add it (new session or missed earlier update). The
+                    // workspace check covers the case where the user is browsing a
+                    // workspace and the cascade in loadSessions hasn't yet marked the
+                    // session's project (e.g. project auto-added after the load).
                     store.addSession(msg.session)
                 }
                 break
@@ -823,6 +859,16 @@ export function useWebSocket() {
                     session_title: msg.session_title,
                     project_name: msg.project_name,
                 })
+                // Ensure the session is present in data.sessions so the cross-filter
+                // active block (sessions with a running process) can surface it
+                // regardless of the current scope or whether its project has been
+                // fetched. loadSessionById is a no-op when the session is already
+                // loaded, so this is cheap on repeated process_state messages.
+                if (!store.getSession(msg.session_id)) {
+                    store.loadSessionById(msg.session_id).catch(err => {
+                        console.warn(`Failed to hydrate session ${msg.session_id} from process_state`, err)
+                    })
+                }
                 // Show toast + sound + browser notifications for process state changes
                 notifyProcessStateChange(msg, previousProcessState, route)
                 break
