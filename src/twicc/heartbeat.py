@@ -1,6 +1,6 @@
 """Heartbeat file written by the live server.
 
-The CLI reads ``<data_dir>/.server-heartbeat`` to fail-fast when no server
+The CLI reads ``<data_dir>/twicc.heartbeat`` to fail-fast when no server
 is running (or the server is still starting up before the heartbeat task
 has launched). The file is empty; only its mtime matters.
 
@@ -20,11 +20,11 @@ logger = logging.getLogger(__name__)
 
 HEARTBEAT_PERIOD_SECONDS = 5
 HEARTBEAT_STALE_AFTER_SECONDS = 15  # 3x the period — absorbs GC pauses and load spikes
-HEARTBEAT_FILENAME = ".server-heartbeat"
+HEARTBEAT_FILENAME = "twicc.heartbeat"
 
 
 async def heartbeat_loop() -> None:
-    """Touch ``<data_dir>/.server-heartbeat`` forever.
+    """Touch ``<data_dir>/twicc.heartbeat`` forever.
 
     Designed to be launched as an asyncio background task once the boot
     sequence (in particular ``migrate``) has completed.

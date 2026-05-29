@@ -28,7 +28,7 @@ Then run any subcommand via `$TWICC <args>` — **do NOT quote `$TWICC`** (use `
 
 ## Prerequisite: the server must be running
 
-The command communicates with the live TwiCC server through the data directory (no network, no auth). It checks `<data_dir>/.server-heartbeat` first and fails fast (exit code 2) if it's missing or stale (> 15 s old). If the user gets that error, ask them to start the server (`twicc` in another terminal) and retry.
+The command communicates with the live TwiCC server through the data directory (no network, no auth). It checks `<data_dir>/twicc.heartbeat` first and fails fast (exit code 2) if it's missing or stale (> 15 s old). If the user gets that error, ask them to start the server (`twicc` in another terminal) and retry.
 
 ## How to create a session
 

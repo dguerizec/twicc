@@ -12,7 +12,7 @@ def main() -> None:
     """Report the live TwiCC backend's status as JSON, exit 0 only when fully running.
 
     Inspects the two sidecar files written by the live backend
-    (``twicc.info.json`` + ``.server-heartbeat``) plus the kernel process
+    (``twicc.info.json`` + ``twicc.heartbeat``) plus the kernel process
     table to classify the state into one of five values: ``running``,
     ``starting``, ``stale``, ``dead_pid``, ``not_running``. Pure read —
     no Django setup, no lock acquisition — so it is safe to call

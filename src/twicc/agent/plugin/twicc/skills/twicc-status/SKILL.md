@@ -6,7 +6,7 @@ description: Report the live TwiCC backend's status (running / starting / stale 
 # TwiCC Status
 
 Inspect the two sidecar files written by the live TwiCC backend
-(`twicc.info.json` + `.server-heartbeat`) and the kernel process table
+(`twicc.info.json` + `twicc.heartbeat`) and the kernel process table
 to classify the backend into one of five distinct states. No Django,
 no lock acquisition — pure file reads, safe to call concurrently with
 a live TwiCC.
@@ -46,7 +46,7 @@ No options. The command always prints a JSON object to stdout — even on failur
   "data_dir": "/home/twidi/.twicc",
   "lock_path": "/home/twidi/.twicc/twicc.lock",
   "info_path": "/home/twidi/.twicc/twicc.info.json",
-  "heartbeat_path": "/home/twidi/.twicc/.server-heartbeat",
+  "heartbeat_path": "/home/twidi/.twicc/twicc.heartbeat",
   "pid": 12345,
   "port": 3500,
   "started_at": "2026-05-29T15:30:00+00:00",

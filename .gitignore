@@ -237,12 +237,12 @@ logs/
 .devctl/
 
 # CLI session-create runtime files (live in <data_dir>):
-#   - .server-heartbeat: touched every 5s by the live server, read by the CLI
+#   - twicc.heartbeat: touched every 5s by the live server, read by the CLI
 #     to fail-fast when the server is down (see src/twicc/heartbeat.py).
 #   - sessions-pending/: drop-files written by `twicc create-session` and
 #     status files written back by PendingSessionsWatcher
 #     (see src/twicc/pending_sessions_watcher.py).
-.server-heartbeat
+twicc.heartbeat
 sessions-pending/
 
 # Git worktrees — anchored to repo root only. An un-anchored `.worktrees/`
