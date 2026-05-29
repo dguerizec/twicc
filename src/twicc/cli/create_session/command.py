@@ -271,21 +271,21 @@ def create_session_cmd(
     import django
     django.setup()
 
-    from twicc.cli.create_session.attachments import (
+    from twicc.cli._session_request.attachments import (
         AttachmentResizeError,
         validate_and_encode,
     )
-    from twicc.cli.create_session.bootstrap_local import load_local_bootstrap
-    from twicc.cli.create_session.discovery import ServerDownError, check_heartbeat, get_data_dir
-    from twicc.cli.create_session.drop_file import write_drop_file
-    from twicc.cli.create_session.output import (
+    from twicc.cli._session_request.bootstrap_local import load_local_bootstrap
+    from twicc.cli._session_request.discovery import ServerDownError, check_heartbeat, get_data_dir
+    from twicc.cli._session_request.drop_file import write_drop_file
+    from twicc.cli._session_request.output import (
         emit_attachment_summary,
         emit_final,
         emit_progress,
         emit_validation_errors,
     )
-    from twicc.cli.create_session.polling import poll_status
-    from twicc.cli.create_session.prompt import resolve_prompt, PromptError
+    from twicc.cli._session_request.polling import poll_status
+    from twicc.cli._session_request.prompt import resolve_prompt, PromptError
     from twicc.cli.create_session.project import resolve_project, ProjectError
     from twicc.cli.create_session.presets import apply_preset_and_overrides, PresetError
     from twicc.cli.create_session.validation import (

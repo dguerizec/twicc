@@ -70,18 +70,21 @@ def emit_validation_errors(errors, *, json_output: bool) -> None:
 
 
 def emit_final(outcome, *, request_uuid: str, json_output: bool, timeout: int) -> None:
-    if outcome.status == "created":
+    if outcome.status in ("created", "sent"):
         d = outcome.data
         if json_output:
             sys.stdout.write(orjson.dumps({
-                "status": "created",
+                "status": outcome.status,
                 "session_id": d.get("session_id"),
                 "provider": d.get("provider"),
                 "project_id": d.get("project_id"),
                 "request_uuid": request_uuid,
             }).decode() + "\n")
         else:
-            typer.echo(f"✓ Session created: {d.get('session_id')}")
+            if outcome.status == "created":
+                typer.echo(f"✓ Session created: {d.get('session_id')}")
+            else:
+                typer.echo(f"✓ Message sent to session: {d.get('session_id')}")
     elif outcome.status == "rejected":
         d = outcome.data
         if json_output:

@@ -278,6 +278,12 @@ from twicc.cli.create_session.command import create_session_cmd  # noqa: E402
 app.command(name="create-session")(create_session_cmd)
 
 
+# ``send-message`` follows the same pattern: lazy Django setup inside the
+# function body keeps ``--help`` fast.
+from twicc.cli.send_message.command import send_message_cmd  # noqa: E402
+app.command(name="send-message")(send_message_cmd)
+
+
 # ``password`` is a Typer sub-app (set/clear/status). The module is lightweight
 # (no Django setup) so importing it at module load is cheap.
 from twicc.cli.password import app as password_app  # noqa: E402

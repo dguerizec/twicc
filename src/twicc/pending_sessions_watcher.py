@@ -123,9 +123,29 @@ class PendingSessionsWatcher:
             await self._write_status(request_uuid, {"status": "received"})
             logger.info("[PendingSessionsWatcher] received %s", request_uuid)
 
+            payload = data.get("payload") or {}
+            kind = payload.get("kind", "create")  # BC: pre-kind payloads = create
+
+            if kind == "create":
+                service = create_session_from_payload
+                success_status = "created"
+            elif kind == "send":
+                from twicc.core.services.send_message import (
+                    send_message_to_session_from_payload,
+                )
+                service = send_message_to_session_from_payload
+                success_status = "sent"
+            else:
+                logger.warning("[PendingSessionsWatcher] unknown kind for %s: %r",
+                               request_uuid, kind)
+                await self._write_status(request_uuid, {
+                    "status": "failed",
+                    "error": f"Unknown payload kind: {kind!r}",
+                })
+                return  # CLI will delete both drop + status files
+
             try:
-                payload = data.get("payload") or {}
-                result = await create_session_from_payload(payload)
+                result = await service(payload)
             except Exception as e:
                 logger.exception("[PendingSessionsWatcher] service raised for %s", request_uuid)
                 await self._write_status(request_uuid, {
@@ -135,10 +155,10 @@ class PendingSessionsWatcher:
                 return  # CLI will delete both drop + status files
 
             if result.success:
-                logger.info("[PendingSessionsWatcher] created %s -> %s",
-                            request_uuid, result.session_id)
+                logger.info("[PendingSessionsWatcher] %s %s -> %s",
+                            success_status, request_uuid, result.session_id)
                 await self._write_status(request_uuid, {
-                    "status": "created",
+                    "status": success_status,
                     "session_id": result.session_id,
                     "provider": result.provider,
                     "project_id": result.project_id,
@@ -167,6 +187,8 @@ class PendingSessionsWatcher:
             data.setdefault("received_at", _iso_now())
         elif data["status"] == "created":
             data.setdefault("created_at", _iso_now())
+        elif data["status"] == "sent":
+            data.setdefault("sent_at", _iso_now())
         elif data["status"] == "rejected":
             data.setdefault("rejected_at", _iso_now())
         elif data["status"] == "failed":

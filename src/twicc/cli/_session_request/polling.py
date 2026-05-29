@@ -36,7 +36,7 @@ def poll_status(status_path: Path, timeout_seconds: int) -> PollOutcome:
             last_data = data
             if status == "received":
                 received_seen = True
-            elif status in ("created", "rejected", "failed"):
+            elif status in ("created", "sent", "rejected", "failed"):
                 return PollOutcome(status=status, data=data,
                                    received_seen=received_seen)
         time.sleep(POLL_INTERVAL_SECONDS)
