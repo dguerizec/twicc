@@ -16,6 +16,7 @@ const emit = defineEmits(['submit'])
 const denyButtonId = useId()
 const cancelTurnButtonId = useId()
 const approveButtonId = useId()
+const approveMenuId = useId()
 const approveOnceId = useId()
 const approveForSessionId = useId()
 const approveAddAllowRuleId = useId()
@@ -23,8 +24,9 @@ const approveAllowNetworkId = useId()
 const approvePermsTurnId = useId()
 const approvePermsSessionId = useId()
 
-// Template ref for the Approve dropdown trigger (auto-focused when the approval block appears).
-// Codex has no ask_user_question variant, so every pending request gets the focus.
+// Template ref for the Approve main button of the split button (auto-focused
+// when the approval block appears). Codex has no ask_user_question variant,
+// so every pending request gets the focus.
 const approveButtonRef = ref(null)
 
 // Gated by canStealFocus(): we don't yank focus if the user is typing in
@@ -377,68 +379,79 @@ onBeforeUnmount(() => {
                 Cancel turn
             </wa-button>
             <AppTooltip v-if="supportsCancelTurn" :for="cancelTurnButtonId">End this turn. Codex returns control to you. Different from Stop (which kills the agent).</AppTooltip>
-            <wa-dropdown placement="top-end">
+            <wa-button-group label="Approve">
                 <wa-button
                     :id="approveButtonId"
                     ref="approveButtonRef"
                     class="auto-focused"
-                    slot="trigger"
                     variant="brand"
                     size="small"
                     :disabled="isResponding"
+                    @click="emitApprove('once')"
                 >
                     <wa-icon slot="start" name="check" variant="classic"></wa-icon>
                     Approve
-                    <wa-icon slot="end" name="chevron-up" variant="classic"></wa-icon>
                 </wa-button>
                 <AppTooltip :for="approveButtonId">Approve this action.</AppTooltip>
-
-                <!-- command / file menu -->
-                <template v-if="toolName === 'commandExecution' || toolName === 'fileChange'">
-                    <wa-dropdown-item :id="approveOnceId" @click="emitApprove('once')">
-                        <wa-icon slot="icon" name="check" variant="classic"></wa-icon>
-                        Once
-                    </wa-dropdown-item>
-                    <AppTooltip placement="left" :for="approveOnceId">Approve only this action.</AppTooltip>
-                    <wa-dropdown-item :id="approveForSessionId" @click="emitApprove('forSession')">
-                        <wa-icon slot="icon" name="rotate" variant="classic"></wa-icon>
-                        For this session
-                    </wa-dropdown-item>
-                    <AppTooltip placement="left" :for="approveForSessionId">Approve and remember this decision for the rest of the session.</AppTooltip>
-                    <wa-dropdown-item
-                        v-if="toolName === 'commandExecution' && proposedExecpolicyAmendment"
-                        :id="approveAddAllowRuleId"
-                        @click="emitApprove('addAllowRule')"
+                <wa-dropdown placement="top-end">
+                    <wa-button
+                        :id="approveMenuId"
+                        slot="trigger"
+                        variant="brand"
+                        size="small"
+                        :disabled="isResponding"
                     >
-                        <wa-icon slot="icon" name="plus" variant="classic"></wa-icon>
-                        Add allow rule
-                    </wa-dropdown-item>
-                    <AppTooltip v-if="toolName === 'commandExecution' && proposedExecpolicyAmendment" placement="left" :for="approveAddAllowRuleId">Approve and add this command to the persistent allow list.</AppTooltip>
-                    <wa-dropdown-item
-                        v-if="toolName === 'commandExecution' && proposedNetworkPolicyAmendments"
-                        :id="approveAllowNetworkId"
-                        @click="emitApprove('allowNetwork')"
-                    >
-                        <wa-icon slot="icon" name="globe" variant="classic"></wa-icon>
-                        Allow network access
-                    </wa-dropdown-item>
-                    <AppTooltip v-if="toolName === 'commandExecution' && proposedNetworkPolicyAmendments" placement="left" :for="approveAllowNetworkId">Approve and persist the network policy amendment.</AppTooltip>
-                </template>
+                        <wa-icon name="chevron-up" label="More approve options" variant="classic"></wa-icon>
+                    </wa-button>
+                    <AppTooltip :for="approveMenuId">More approve options.</AppTooltip>
 
-                <!-- permissions menu -->
-                <template v-else-if="toolName === 'permissions'">
-                    <wa-dropdown-item :id="approvePermsTurnId" @click="emitApprove('turn')">
-                        <wa-icon slot="icon" name="clock" variant="classic"></wa-icon>
-                        For this turn
-                    </wa-dropdown-item>
-                    <AppTooltip placement="left" :for="approvePermsTurnId">Grant the requested permissions for the current turn only.</AppTooltip>
-                    <wa-dropdown-item :id="approvePermsSessionId" @click="emitApprove('session')">
-                        <wa-icon slot="icon" name="rotate" variant="classic"></wa-icon>
-                        For this session
-                    </wa-dropdown-item>
-                    <AppTooltip placement="left" :for="approvePermsSessionId">Grant the requested permissions for the full session.</AppTooltip>
-                </template>
-            </wa-dropdown>
+                    <!-- command / file menu -->
+                    <template v-if="toolName === 'commandExecution' || toolName === 'fileChange'">
+                        <wa-dropdown-item :id="approveOnceId" @click="emitApprove('once')">
+                            <wa-icon slot="icon" name="check" variant="classic"></wa-icon>
+                            Once
+                        </wa-dropdown-item>
+                        <AppTooltip placement="left" :for="approveOnceId">Approve only this action.</AppTooltip>
+                        <wa-dropdown-item :id="approveForSessionId" @click="emitApprove('forSession')">
+                            <wa-icon slot="icon" name="rotate" variant="classic"></wa-icon>
+                            For this session
+                        </wa-dropdown-item>
+                        <AppTooltip placement="left" :for="approveForSessionId">Approve and remember this decision for the rest of the session.</AppTooltip>
+                        <wa-dropdown-item
+                            v-if="toolName === 'commandExecution' && proposedExecpolicyAmendment"
+                            :id="approveAddAllowRuleId"
+                            @click="emitApprove('addAllowRule')"
+                        >
+                            <wa-icon slot="icon" name="plus" variant="classic"></wa-icon>
+                            Add allow rule
+                        </wa-dropdown-item>
+                        <AppTooltip v-if="toolName === 'commandExecution' && proposedExecpolicyAmendment" placement="left" :for="approveAddAllowRuleId">Approve and add this command to the persistent allow list.</AppTooltip>
+                        <wa-dropdown-item
+                            v-if="toolName === 'commandExecution' && proposedNetworkPolicyAmendments"
+                            :id="approveAllowNetworkId"
+                            @click="emitApprove('allowNetwork')"
+                        >
+                            <wa-icon slot="icon" name="globe" variant="classic"></wa-icon>
+                            Allow network access
+                        </wa-dropdown-item>
+                        <AppTooltip v-if="toolName === 'commandExecution' && proposedNetworkPolicyAmendments" placement="left" :for="approveAllowNetworkId">Approve and persist the network policy amendment.</AppTooltip>
+                    </template>
+
+                    <!-- permissions menu -->
+                    <template v-else-if="toolName === 'permissions'">
+                        <wa-dropdown-item :id="approvePermsTurnId" @click="emitApprove('turn')">
+                            <wa-icon slot="icon" name="clock" variant="classic"></wa-icon>
+                            For this turn
+                        </wa-dropdown-item>
+                        <AppTooltip placement="left" :for="approvePermsTurnId">Grant the requested permissions for the current turn only.</AppTooltip>
+                        <wa-dropdown-item :id="approvePermsSessionId" @click="emitApprove('session')">
+                            <wa-icon slot="icon" name="rotate" variant="classic"></wa-icon>
+                            For this session
+                        </wa-dropdown-item>
+                        <AppTooltip placement="left" :for="approvePermsSessionId">Grant the requested permissions for the full session.</AppTooltip>
+                    </template>
+                </wa-dropdown>
+            </wa-button-group>
         </div>
     </div>
 </template>
@@ -587,9 +600,9 @@ onBeforeUnmount(() => {
     gap: var(--wa-space-s);
 }
 
-/* Always show the focus outline on the Approve dropdown trigger. Default
-   :focus-visible would skip mouse and programmatic focus, which hides the
-   indicator we want for this primary action.
+/* Always show the focus outline on the Approve main button of the split
+   button. Default :focus-visible would skip mouse and programmatic focus,
+   which hides the indicator we want for this primary action.
    We use :focus-within (not :focus) because wa-button delegates focus to an
    inner element in its shadow DOM; the host doesn't carry :focus, but the
    browser keeps :focus-within accurate via activeElement. */
