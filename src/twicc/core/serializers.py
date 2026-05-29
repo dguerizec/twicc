@@ -97,6 +97,8 @@ def serialize_session(session):
         "thinking_enabled": session.thinking_enabled,
         # Claude in Chrome MCP
         "claude_in_chrome": session.claude_in_chrome,
+        # Fast mode (Claude Code, supported Opus only; premium pricing on extra usage credits)
+        "fast_mode": session.fast_mode,
         # Maximum context window size in tokens (200K or 1M)
         "context_max": session.context_max,
         # Whether the session has been compacted at least once

@@ -72,6 +72,7 @@ Returns the full session metadata as JSON. Works for both regular sessions and s
   "effort": null,
   "thinking_enabled": null,
   "claude_in_chrome": false,
+  "fast_mode": false,
   "context_max": 200000,
   "compacted": false
 }

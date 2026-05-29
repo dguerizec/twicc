@@ -18,6 +18,7 @@ const PRESET_SUMMARY_FIELDS = [
     { presetKey: 'thinking',         wireField: 'thinking_enabled', summaryLabel: 'thinking',  formatValue: (v, h) => h.getChoiceLabel('thinking_enabled', v) ?? v },
     { presetKey: 'permission_mode',  wireField: 'permission_mode', summaryLabel: 'permission', formatValue: (v, h) => h.getChoiceLabel('permission_mode', v) ?? v },
     { presetKey: 'claude_in_chrome', wireField: 'claude_in_chrome', summaryLabel: 'chrome',    formatValue: (v, h) => h.getChoiceLabel('claude_in_chrome', v) ?? v },
+    { presetKey: 'fast_mode',        wireField: 'fast_mode',       summaryLabel: 'fast',      formatValue: (v, h) => h.getChoiceLabel('fast_mode', v) ?? v },
 ]
 
 /**

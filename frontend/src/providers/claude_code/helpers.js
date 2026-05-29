@@ -59,6 +59,7 @@ const FIELD_TO_DEFAULT_STORE_BINDING = {
     permission_mode:  { getter: 'defaultPermissionMode',  setter: 'setDefaultPermissionMode' },
     context_max:      { getter: 'defaultContextMax',      setter: 'setDefaultContextMax' },
     claude_in_chrome: { getter: 'defaultClaudeInChrome',  setter: 'setDefaultClaudeInChrome' },
+    fast_mode:        { getter: 'defaultFastMode',        setter: 'setDefaultFastMode' },
 }
 
 // Map of synced setting keys (the wire/storage names) → store action that
@@ -71,6 +72,7 @@ const SYNCED_SETTING_KEYS_TO_STORE = {
     claudeCodeDefaultEffort:         { setter: 'setDefaultEffort',         getter: 'defaultEffort' },
     claudeCodeDefaultThinking:       { setter: 'setDefaultThinking',       getter: 'defaultThinking' },
     claudeCodeDefaultClaudeInChrome: { setter: 'setDefaultClaudeInChrome', getter: 'defaultClaudeInChrome' },
+    claudeCodeDefaultFastMode:       { setter: 'setDefaultFastMode',       getter: 'defaultFastMode' },
     claudeCodeUsageReadFileEnabled:  { setter: 'setUsageReadFileEnabled',  getter: 'usageReadFileEnabled' },
     claudeCodeUsageReadFilePath:     { setter: 'setUsageReadFilePath',     getter: 'usageReadFilePath' },
     claudeCodeUsageDumpFileEnabled:  { setter: 'setUsageDumpFileEnabled',  getter: 'usageDumpFileEnabled' },
@@ -141,6 +143,10 @@ const AGENT_SETTINGS_CHOICES = {
     claude_in_chrome: [
         { value: true,  label: 'Enabled',  display_label: 'Chrome MCP' },
         { value: false, label: 'Disabled', display_label: 'No Chrome MCP' },
+    ],
+    fast_mode: [
+        { value: true,  label: 'Enabled',  display_label: 'Fast mode' },
+        { value: false, label: 'Disabled', display_label: 'No fast mode' },
     ],
     context_max: [
         { value: CONTEXT_MAX.DEFAULT,  label: '200K' },
@@ -355,6 +361,11 @@ export class ClaudeCodeHelpers extends BaseProviderHelpers {
         return entry ? entry.provider_extra.supports_effort_max : false
     }
 
+    modelSupportsFast(selectedModel) {
+        const entry = this._resolveRegistryEntry(selectedModel)
+        return entry ? entry.provider_extra.supports_fast : false
+    }
+
     /**
      * Pipeline mirroring the backend ``ClaudeCodeHelpers.enforce_agent_settings_consistency``:
      *
@@ -363,6 +374,8 @@ export class ClaudeCodeHelpers extends BaseProviderHelpers {
      *    doesn't support 1M context.
      * 3. Demote ``effort``: ``MAX`` → ``X_HIGH`` (or ``HIGH`` if xhigh is
      *    also unsupported), then ``X_HIGH`` → ``HIGH`` when unsupported.
+     * 4. Clear ``fastMode`` when the (post-upgrade) model doesn't support it
+     *    (only supported on Opus 4.6+).
      *
      * Fields not in the input are left absent in the output. ``thinkingEnabled``,
      * ``claudeInChrome`` and ``permissionMode`` are passed through.
@@ -385,6 +398,10 @@ export class ClaudeCodeHelpers extends BaseProviderHelpers {
         }
         if (result.effort === EFFORT.X_HIGH && !this.modelSupportsEffortXhigh(model)) {
             result.effort = EFFORT.HIGH
+        }
+
+        if (result.fastMode && !this.modelSupportsFast(model)) {
+            result.fastMode = false
         }
 
         return result
@@ -449,6 +466,10 @@ export class ClaudeCodeHelpers extends BaseProviderHelpers {
             if (!this.modelSupports1m(context?.effectiveModel)) return true
             return false
         }
+        if (field === 'fast_mode') {
+            if (!this.modelSupportsFast(context?.effectiveModel)) return true
+            return false
+        }
         return super.isFieldDisabled(field, context)
     }
 
@@ -457,6 +478,14 @@ export class ClaudeCodeHelpers extends BaseProviderHelpers {
             if (context?.isContextMaxForced) return 'Forced to 1M: context usage exceeds 85% of 200K.'
             if (!this.modelSupports1m(context?.effectiveModel)) return '1M not available for this model version.'
             return null
+        }
+        if (field === 'fast_mode') {
+            if (!this.modelSupportsFast(context?.effectiveModel)) return 'Fast mode is only available on supported Opus versions.'
+            // Surface the cost note whenever the toggle is available — both in the
+            // session popover and in the per-provider settings panel (the session-
+            // level value here covers the popover; the provider panel synthesises
+            // its own context with the default model).
+            return 'Fast mode is billed separately from your subscription (extra usage credits).'
         }
         return null
     }
@@ -476,6 +505,7 @@ export class ClaudeCodeHelpers extends BaseProviderHelpers {
         const effectiveEffort = sel.effort ?? def.effort
         const effectiveThinking = sel.thinking_enabled ?? def.thinking_enabled
         const effectiveChrome = sel.claude_in_chrome ?? def.claude_in_chrome
+        const effectiveFastMode = sel.fast_mode ?? def.fast_mode
         const effectivePermission = sel.permission_mode ?? def.permission_mode
 
         const modelLabel = this.getModelLabel(effectiveModel)
@@ -491,6 +521,7 @@ export class ClaudeCodeHelpers extends BaseProviderHelpers {
             { text: this.getChoiceDisplayLabel('thinking_enabled', effectiveThinking) ?? this.getChoiceLabel('thinking_enabled', effectiveThinking) ?? '', forced: sel.thinking_enabled !== null && sel.thinking_enabled !== undefined && sel.thinking_enabled !== def.thinking_enabled },
             { text: this.getChoiceLabel('permission_mode', effectivePermission) ?? '', forced: sel.permission_mode !== null && sel.permission_mode !== undefined && sel.permission_mode !== def.permission_mode },
             { text: this.getChoiceDisplayLabel('claude_in_chrome', effectiveChrome) ?? this.getChoiceLabel('claude_in_chrome', effectiveChrome) ?? '', forced: sel.claude_in_chrome !== null && sel.claude_in_chrome !== undefined && sel.claude_in_chrome !== def.claude_in_chrome },
+            { text: this.getChoiceDisplayLabel('fast_mode', effectiveFastMode) ?? this.getChoiceLabel('fast_mode', effectiveFastMode) ?? '', forced: sel.fast_mode !== null && sel.fast_mode !== undefined && sel.fast_mode !== def.fast_mode },
         ]
     }
 

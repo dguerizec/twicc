@@ -356,6 +356,12 @@ class Session(models.Model):
     # provider's ``AGENT_SETTINGS_CATEGORIES`` / ``AGENT_SETTINGS_FIELDS_MAPPING``,
     # and let the others ignore it.
     claude_in_chrome = models.BooleanField(null=True, default=None)
+    # Whether Claude Code's fast mode is enabled for this session. NULL = use
+    # global default, explicit value = forced for this session. Only valid on
+    # supported Opus models; the helpers clamp it to ``False`` for any other
+    # model. Claude Code-specific like ``claude_in_chrome``; see the comment
+    # above for the closed-bundle rationale.
+    fast_mode = models.BooleanField(null=True, default=None)
     # Maximum context window size in tokens (200_000 = default 200K, 1_000_000 = extended 1M)
     # NULL = use global default, explicit value = forced for this session
     context_max = models.PositiveIntegerField(null=True, default=None)

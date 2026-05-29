@@ -203,6 +203,16 @@ def create_session_cmd(
             + _default_suffix("claude_in_chrome")
         ),
     ),
+    fast_mode: bool | None = typer.Option(
+        None,
+        "--fast-mode/--no-fast-mode",
+        help=(
+            "Claude Code Opus models only. Enable fast mode (higher token throughput, "
+            "billed against extra usage credits). Omit to keep the preset's value "
+            "(or the default from settings)."
+            + _default_suffix("fast_mode")
+        ),
+    ),
     context_max: str | None = typer.Option(
         None,
         "--context-max",
@@ -338,6 +348,7 @@ def create_session_cmd(
             "permission_mode": permission_mode,
             "thinking_enabled": thinking,
             "claude_in_chrome": claude_in_chrome,
+            "fast_mode": fast_mode,
             "context_max": context_max_int,
         }
         preset_list = bootstrap.providers[provider].presets if provider in bootstrap.providers else []

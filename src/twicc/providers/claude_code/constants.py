@@ -26,6 +26,7 @@ class ClaudeCodeModelExtra(NamedTuple):
     supports_1m: bool
     supports_effort_xhigh: bool
     supports_effort_max: bool
+    supports_fast: bool
 
 
 SYNCED_SETTINGS_DEFAULTS: dict = {
@@ -34,6 +35,7 @@ SYNCED_SETTINGS_DEFAULTS: dict = {
     "claudeCodeDefaultEffort": "medium",
     "claudeCodeDefaultThinking": True,
     "claudeCodeDefaultClaudeInChrome": True,
+    "claudeCodeDefaultFastMode": False,
     "claudeCodeDefaultContextMax": 200_000,
     "claudeCodeUsageReadFileEnabled": False,
     "claudeCodeUsageReadFilePath": "",
@@ -69,7 +71,7 @@ OBSOLETE_SYNCED_SETTINGS_KEYS: tuple[str, ...] = (
 AGENT_SETTINGS_CATEGORIES: dict[AgentSettingCategory, list[str]] = {
     AgentSettingCategory.LIVE: ["permission_mode"],
     AgentSettingCategory.IDLE: ["selected_model", "context_max"],
-    AgentSettingCategory.STARTUP: ["effort", "thinking_enabled", "claude_in_chrome"],
+    AgentSettingCategory.STARTUP: ["effort", "thinking_enabled", "claude_in_chrome", "fast_mode"],
 }
 
 
@@ -79,6 +81,7 @@ AGENT_SETTINGS_FIELDS_MAPPING: dict[str, str] = {
     "effort": "claudeCodeDefaultEffort",
     "thinking_enabled": "claudeCodeDefaultThinking",
     "claude_in_chrome": "claudeCodeDefaultClaudeInChrome",
+    "fast_mode": "claudeCodeDefaultFastMode",
     "context_max": "claudeCodeDefaultContextMax",
 }
 
@@ -105,6 +108,7 @@ MODEL_VERSIONS: list[ModelVersion] = [
         latest=True,
         provider_extra=ClaudeCodeModelExtra(
             supports_1m=True, supports_effort_xhigh=True, supports_effort_max=True,
+            supports_fast=True,
         ),
     ),
     ModelVersion(
@@ -114,6 +118,7 @@ MODEL_VERSIONS: list[ModelVersion] = [
         latest=False,
         provider_extra=ClaudeCodeModelExtra(
             supports_1m=True, supports_effort_xhigh=True, supports_effort_max=True,
+            supports_fast=True,
         ),
     ),
     ModelVersion(
@@ -123,6 +128,7 @@ MODEL_VERSIONS: list[ModelVersion] = [
         latest=False,
         provider_extra=ClaudeCodeModelExtra(
             supports_1m=True, supports_effort_xhigh=False, supports_effort_max=True,
+            supports_fast=True,
         ),
     ),
     ModelVersion(
@@ -132,6 +138,7 @@ MODEL_VERSIONS: list[ModelVersion] = [
         latest=False,
         provider_extra=ClaudeCodeModelExtra(
             supports_1m=False, supports_effort_xhigh=False, supports_effort_max=False,
+            supports_fast=False,
         ),
     ),
     ModelVersion(
@@ -141,6 +148,7 @@ MODEL_VERSIONS: list[ModelVersion] = [
         latest=True,
         provider_extra=ClaudeCodeModelExtra(
             supports_1m=True, supports_effort_xhigh=False, supports_effort_max=True,
+            supports_fast=False,
         ),
     ),
     ModelVersion(
@@ -150,6 +158,7 @@ MODEL_VERSIONS: list[ModelVersion] = [
         latest=False,
         provider_extra=ClaudeCodeModelExtra(
             supports_1m=False, supports_effort_xhigh=False, supports_effort_max=False,
+            supports_fast=False,
         ),
     ),
 ]

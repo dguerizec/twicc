@@ -63,6 +63,7 @@ Each value is optional — omit to let the preset / synced default apply.
 | `--permission-mode VALUE` | `default`, `acceptEdits`, `plan`, `dontAsk`, `bypassPermissions`                                             | `read_only`, `strict`, `auto`, `autonomous`, `yolo` |
 | `--thinking / --no-thinking` | extended thinking on/off                                                                                     | not supported                                       |
 | `--claude-in-chrome / --no-claude-in-chrome` | Chrome MCP integration on/off                                                                                | not supported                                       |
+| `--fast-mode / --no-fast-mode` | fast mode on/off (only on Opus; billed against extra usage credits; silently off on Sonnet)                  | not supported                                       |
 | `--context-max VALUE` | `200k` or `1m` (1m (million) silently capped to 200K on unsupported models)                                  | `272k`                                              |
 
 The exact model list can shift over time — `twicc create-session --help` always reflects the current state. If a flag isn't supported by the chosen provider, the CLI rejects with an explicit `unsupported_field` validation error before sending anything.

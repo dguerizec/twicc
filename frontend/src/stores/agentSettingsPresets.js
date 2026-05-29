@@ -20,6 +20,7 @@ const PRESET_FIELDS = [
     'thinking',
     'permission_mode',
     'claude_in_chrome',
+    'fast_mode',
 ]
 
 function normalizePreset(raw) {

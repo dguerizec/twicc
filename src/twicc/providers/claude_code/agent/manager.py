@@ -114,7 +114,7 @@ class ClaudeCodeAgentManager(BaseAgentManager):
         Settings are classified into categories:
         - live (permission_mode): applied immediately in any state
         - idle (selected_model, context_max): applied during USER_TURN via set_model()
-        - startup (effort, thinking_enabled, claude_in_chrome): require agent stop
+        - startup (effort, thinking_enabled, claude_in_chrome, fast_mode): require agent stop
 
         When startup settings change during USER_TURN, the agent is killed
         (reason="apply-settings") and restarted. During ASSISTANT_TURN, the

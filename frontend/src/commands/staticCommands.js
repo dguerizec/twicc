@@ -34,6 +34,7 @@ const PROVIDER_DEFAULTS_SIMPLE_FIELDS = [
     { field: 'thinking_enabled', idSuffix: 'thinking',   label: 'Change Default Thinking…',                icon: 'brain' },
     { field: 'context_max',      idSuffix: 'context',    label: 'Change Default Context Size…',            icon: 'window-maximize' },
     { field: 'claude_in_chrome', idSuffix: 'chrome',     label: 'Change Default Claude in Chrome MCP…',    icon: 'globe' },
+    { field: 'fast_mode',        idSuffix: 'fast-mode',  label: 'Change Default Fast Mode…',               icon: 'gauge-high' },
 ]
 
 /**

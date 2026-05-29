@@ -1036,6 +1036,11 @@ function buildSessionSettingsCommands() {
             label: 'Change Session Claude in Chrome MCP…',
             icon: 'globe',
         }),
+        ...buildSimpleCommand('fast_mode', {
+            id: 'session.fast-mode',
+            label: 'Change Session Fast Mode…',
+            icon: 'gauge-high',
+        }),
     ]
 }
 

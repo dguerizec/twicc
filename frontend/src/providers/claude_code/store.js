@@ -52,6 +52,7 @@ export const useClaudeCodeStore = defineStore('claudeCode', () => {
     const defaultEffort = ref(null)
     const defaultThinking = ref(null)
     const defaultClaudeInChrome = ref(null)
+    const defaultFastMode = ref(null)
 
     function setDefaultPermissionMode(value) {
         if (Object.values(PERMISSION_MODE).includes(value)) defaultPermissionMode.value = value
@@ -70,6 +71,9 @@ export const useClaudeCodeStore = defineStore('claudeCode', () => {
     }
     function setDefaultClaudeInChrome(value) {
         if (typeof value === 'boolean') defaultClaudeInChrome.value = value
+    }
+    function setDefaultFastMode(value) {
+        if (typeof value === 'boolean') defaultFastMode.value = value
     }
 
     // ─── Usage file source (read / dump) ────────────────────────────────
@@ -152,12 +156,14 @@ export const useClaudeCodeStore = defineStore('claudeCode', () => {
         defaultEffort,
         defaultThinking,
         defaultClaudeInChrome,
+        defaultFastMode,
         setDefaultPermissionMode,
         setDefaultModel,
         setDefaultContextMax,
         setDefaultEffort,
         setDefaultThinking,
         setDefaultClaudeInChrome,
+        setDefaultFastMode,
         usageReadFileEnabled,
         usageReadFilePath,
         usageDumpFileEnabled,

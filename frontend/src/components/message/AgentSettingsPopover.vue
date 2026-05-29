@@ -143,7 +143,7 @@ async function removeBlockingDocuments() {
 
 // Order of the rows below the model row. ``supportsAgentSetting`` filters
 // each entry per-provider so a field nobody declares is silently skipped.
-const SIMPLE_FIELDS = ['context_max', 'effort', 'thinking_enabled', 'permission_mode', 'claude_in_chrome']
+const SIMPLE_FIELDS = ['context_max', 'effort', 'thinking_enabled', 'permission_mode', 'claude_in_chrome', 'fast_mode']
 
 const defaults = computed(() => summaryState.value.defaults)
 

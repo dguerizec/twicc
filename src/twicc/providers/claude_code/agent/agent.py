@@ -26,6 +26,7 @@ from claude_agent_sdk import (
 
 from channels.layers import get_channel_layer
 import json_repair
+import orjson
 
 from twicc.agent import AgentInfo, AgentState, BaseAgent, PendingRequest, StateChangeCallback
 from twicc.core.enums import Provider
@@ -742,6 +743,16 @@ class ClaudeCodeAgent(BaseAgent):
                 ("chrome" if self.agent_settings.claude_in_chrome else "no-chrome"): None
             }
 
+            # Always pass ``fastMode`` explicitly (true or false) via the
+            # flag-settings layer so the per-session choice overrides any
+            # ``/fast`` toggle persisted in the user's ``~/.claude/settings.json``.
+            # Inline JSON is accepted by the SDK transport when the string
+            # starts with ``{`` (see ``_build_settings_value`` in the SDK's
+            # ``subprocess_cli``).
+            fast_mode_settings = orjson.dumps(
+                {"fastMode": bool(self.agent_settings.fast_mode)}
+            ).decode()
+
             options = ClaudeAgentOptions(
                 system_prompt={
                     "type": "preset",
@@ -753,6 +764,7 @@ class ClaudeCodeAgent(BaseAgent):
                 effort=self.agent_settings.effort,
                 thinking=thinking_config,
                 setting_sources=["user", "project", "local"],
+                settings=fast_mode_settings,
                 plugins=[{"type": "local", "path": str(get_plugin_dir())}],
                 can_use_tool=self._handle_pending_request,
                 hooks={

@@ -312,7 +312,8 @@ export class BaseProviderHelpers {
     //
     // The agent settings bundle is a CLOSED set of fields shared by every
     // provider: ``selected_model``, ``effort``, ``thinking_enabled``,
-    // ``permission_mode``, ``context_max``, ``claude_in_chrome``. The
+    // ``permission_mode``, ``context_max``, ``claude_in_chrome``,
+    // ``fast_mode``. The
     // bundle — and the matching ``Session`` row, the WS payload, and the
     // localStorage synced settings — has the same shape regardless of
     // which provider owns the running session. Each provider declares
@@ -500,6 +501,7 @@ export class BaseProviderHelpers {
             effort: 'Effort',
             thinking_enabled: 'Thinking',
             claude_in_chrome: 'Claude built-in Chrome MCP',
+            fast_mode: 'Fast mode',
             context_max: 'Context',
         }
         return defaults[field] ?? field
@@ -579,7 +581,7 @@ export class BaseProviderHelpers {
         const parts = []
         const sel = state?.selected ?? {}
         const def = state?.defaults ?? {}
-        const fieldOrder = ['selected_model', 'effort', 'thinking_enabled', 'permission_mode', 'claude_in_chrome', 'context_max']
+        const fieldOrder = ['selected_model', 'effort', 'thinking_enabled', 'permission_mode', 'claude_in_chrome', 'fast_mode', 'context_max']
         for (const field of fieldOrder) {
             if (!this.supportsAgentSetting(field)) continue
             const selected = sel[field] ?? null

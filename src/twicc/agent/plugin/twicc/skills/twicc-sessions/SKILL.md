@@ -90,6 +90,7 @@ The command outputs a JSON array of session objects:
     "effort": null,
     "thinking_enabled": null,
     "claude_in_chrome": false,
+    "fast_mode": false,
     "context_max": 200000,
     "compacted": false
   }

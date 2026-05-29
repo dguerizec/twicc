@@ -7,7 +7,7 @@ import { getProviderHelpers, getProviderStore } from '../providers'
 // default" choice. When set, the corresponding selected ref is null.
 export const DEFAULT_SENTINEL = '__default__'
 
-const SESSION_SETTING_FIELDS = ['permission_mode', 'selected_model', 'effort', 'thinking_enabled', 'claude_in_chrome', 'context_max']
+const SESSION_SETTING_FIELDS = ['permission_mode', 'selected_model', 'effort', 'thinking_enabled', 'claude_in_chrome', 'fast_mode', 'context_max']
 
 /**
  * Per-session agent settings state — provider-agnostic.
@@ -46,6 +46,7 @@ export function useSessionAgentSettings(sessionIdSource) {
     const selectedEffort = ref(null)
     const selectedThinking = ref(null)
     const selectedClaudeInChrome = ref(null)
+    const selectedFastMode = ref(null)
     const selectedContextMax = ref(null)
 
     const activePermissionMode = ref(null)
@@ -53,6 +54,7 @@ export function useSessionAgentSettings(sessionIdSource) {
     const activeEffort = ref(null)
     const activeThinking = ref(null)
     const activeClaudeInChrome = ref(null)
+    const activeFastMode = ref(null)
     const activeContextMax = ref(null)
 
     const SELECTED_REFS = {
@@ -61,6 +63,7 @@ export function useSessionAgentSettings(sessionIdSource) {
         effort: selectedEffort,
         thinking_enabled: selectedThinking,
         claude_in_chrome: selectedClaudeInChrome,
+        fast_mode: selectedFastMode,
         context_max: selectedContextMax,
     }
     const ACTIVE_REFS = {
@@ -69,6 +72,7 @@ export function useSessionAgentSettings(sessionIdSource) {
         effort: activeEffort,
         thinking_enabled: activeThinking,
         claude_in_chrome: activeClaudeInChrome,
+        fast_mode: activeFastMode,
         context_max: activeContextMax,
     }
 
@@ -100,6 +104,7 @@ export function useSessionAgentSettings(sessionIdSource) {
         selectedEffort.value !== null ||
         selectedThinking.value !== null ||
         selectedClaudeInChrome.value !== null ||
+        selectedFastMode.value !== null ||
         selectedContextMax.value !== null
     )
 
@@ -109,6 +114,7 @@ export function useSessionAgentSettings(sessionIdSource) {
         selectedEffort.value !== activeEffort.value ||
         selectedThinking.value !== activeThinking.value ||
         selectedClaudeInChrome.value !== activeClaudeInChrome.value ||
+        selectedFastMode.value !== activeFastMode.value ||
         selectedContextMax.value !== activeContextMax.value
     )
 
@@ -126,6 +132,7 @@ export function useSessionAgentSettings(sessionIdSource) {
                 effort: selectedEffort.value,
                 thinking_enabled: selectedThinking.value,
                 claude_in_chrome: selectedClaudeInChrome.value,
+                fast_mode: selectedFastMode.value,
                 context_max: selectedContextMax.value,
             },
             defaults: {
@@ -134,6 +141,7 @@ export function useSessionAgentSettings(sessionIdSource) {
                 effort: pStore?.defaultEffort,
                 thinking_enabled: pStore?.defaultThinking,
                 claude_in_chrome: pStore?.defaultClaudeInChrome,
+                fast_mode: pStore?.defaultFastMode,
                 context_max: pStore?.defaultContextMax,
             },
         }
@@ -171,6 +179,7 @@ export function useSessionAgentSettings(sessionIdSource) {
         selectedThinking.value = preset.thinking
         selectedPermissionMode.value = preset.permission_mode
         selectedClaudeInChrome.value = preset.claude_in_chrome
+        selectedFastMode.value = preset.fast_mode
     }
 
     function resetAllToDefaults() {
@@ -179,6 +188,7 @@ export function useSessionAgentSettings(sessionIdSource) {
         selectedEffort.value = null
         selectedThinking.value = null
         selectedClaudeInChrome.value = null
+        selectedFastMode.value = null
         selectedContextMax.value = null
     }
 
@@ -188,6 +198,7 @@ export function useSessionAgentSettings(sessionIdSource) {
         selectedEffort.value = activeEffort.value
         selectedThinking.value = activeThinking.value
         selectedClaudeInChrome.value = activeClaudeInChrome.value
+        selectedFastMode.value = activeFastMode.value
         selectedContextMax.value = activeContextMax.value
     }
 
@@ -201,6 +212,7 @@ export function useSessionAgentSettings(sessionIdSource) {
             effort: settings.effort ?? pStore?.defaultEffort,
             thinking_enabled: settings.thinking_enabled ?? pStore?.defaultThinking,
             claude_in_chrome: settings.claude_in_chrome ?? pStore?.defaultClaudeInChrome,
+            fast_mode: settings.fast_mode ?? pStore?.defaultFastMode,
             context_max: settings.context_max ?? pStore?.defaultContextMax,
         }
     }
@@ -219,6 +231,7 @@ export function useSessionAgentSettings(sessionIdSource) {
             effort: activeEffort.value,
             thinking_enabled: activeThinking.value,
             claude_in_chrome: activeClaudeInChrome.value,
+            fast_mode: activeFastMode.value,
             context_max: activeContextMax.value,
         })
         const requested = resolveSettingsDefaults({
@@ -227,6 +240,7 @@ export function useSessionAgentSettings(sessionIdSource) {
             effort: selectedEffort.value,
             thinking_enabled: selectedThinking.value,
             claude_in_chrome: selectedClaudeInChrome.value,
+            fast_mode: selectedFastMode.value,
             context_max: selectedContextMax.value,
         })
         const changes = providerHelpers.value?.classifyAgentSettingsChanges(current, requested)
@@ -243,12 +257,14 @@ export function useSessionAgentSettings(sessionIdSource) {
         selectedEffort.value = sess?.effort ?? null
         selectedThinking.value = sess?.thinking_enabled ?? null
         selectedClaudeInChrome.value = sess?.claude_in_chrome ?? null
+        selectedFastMode.value = sess?.fast_mode ?? null
         selectedContextMax.value = sess?.context_max ?? null
         activePermissionMode.value = selectedPermissionMode.value
         activeModel.value = selectedModel.value
         activeEffort.value = selectedEffort.value
         activeThinking.value = selectedThinking.value
         activeClaudeInChrome.value = selectedClaudeInChrome.value
+        activeFastMode.value = selectedFastMode.value
         activeContextMax.value = selectedContextMax.value
     }, { immediate: true })
 
@@ -268,16 +284,17 @@ export function useSessionAgentSettings(sessionIdSource) {
         )
     }
 
-    // Keep the (selectedModel, contextMax, effort) triple consistent against
-    // the provider's rules. The helper enforces retired-model upgrade, then
-    // contextMax / effort demotion against the model's capabilities. Fires
-    // immediately so a session loading with stale settings gets corrected on
-    // mount.
+    // Keep the (selectedModel, contextMax, effort, fastMode) tuple consistent
+    // against the provider's rules. The helper enforces retired-model upgrade,
+    // then contextMax / effort demotion and fast-mode clearing against the
+    // model's capabilities. Fires immediately so a session loading with stale
+    // settings gets corrected on mount.
     watch(
         () => ({
             selectedModel: selectedModel.value ?? providerStore.value?.defaultModel,
             contextMax: selectedContextMax.value ?? providerStore.value?.defaultContextMax,
             effort: selectedEffort.value ?? providerStore.value?.defaultEffort,
+            fastMode: selectedFastMode.value ?? providerStore.value?.defaultFastMode,
         }),
         (current) => {
             const helpers = providerHelpers.value
@@ -294,6 +311,10 @@ export function useSessionAgentSettings(sessionIdSource) {
             if (adjusted.effort !== current.effort) {
                 selectedEffort.value = adjusted.effort
                 activeEffort.value = adjusted.effort
+            }
+            if (adjusted.fastMode !== current.fastMode) {
+                selectedFastMode.value = adjusted.fastMode
+                activeFastMode.value = adjusted.fastMode
             }
         },
         { immediate: true }
@@ -314,12 +335,14 @@ export function useSessionAgentSettings(sessionIdSource) {
         selectedEffort,
         selectedThinking,
         selectedClaudeInChrome,
+        selectedFastMode,
         selectedContextMax,
         activePermissionMode,
         activeModel,
         activeEffort,
         activeThinking,
         activeClaudeInChrome,
+        activeFastMode,
         activeContextMax,
         SELECTED_REFS,
         ACTIVE_REFS,

@@ -100,7 +100,7 @@ If the user explicitly asks for any of these operations, perform them without as
   - `setParsedContent(item, parsed)`
   - `clearParsedContent(item)`
   - `hasContent(item)`
-- Agent settings are a closed cross-provider bundle: `selected_model`, `effort`, `thinking_enabled`, `permission_mode`, `context_max`, `claude_in_chrome`. New provider-specific session flags should follow the same shared-session-row pattern unless the user asks otherwise.
+- Agent settings are a closed cross-provider bundle: `selected_model`, `effort`, `thinking_enabled`, `permission_mode`, `context_max`, `claude_in_chrome`, `fast_mode`. New provider-specific session flags should follow the same shared-session-row pattern unless the user asks otherwise.
 
 ## Web Awesome
 

@@ -103,6 +103,7 @@ class AgentSettings(NamedTuple):
     effort: str | None = None
     thinking_enabled: bool | None = None
     claude_in_chrome: bool | None = None
+    fast_mode: bool | None = None
     context_max: int | None = None
 
     @classmethod
@@ -118,6 +119,7 @@ class AgentSettings(NamedTuple):
             effort=session.effort,
             thinking_enabled=session.thinking_enabled,
             claude_in_chrome=session.claude_in_chrome,
+            fast_mode=session.fast_mode,
             context_max=session.context_max,
         )
 

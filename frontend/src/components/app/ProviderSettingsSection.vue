@@ -35,6 +35,7 @@ const FIELD_ORDER = [
     'effort',
     'thinking_enabled',
     'claude_in_chrome',
+    'fast_mode',
 ]
 
 // Section-specific labels — distinct from the generic ``getFieldLabel`` so
@@ -47,6 +48,7 @@ const FIELD_DEFAULT_LABELS = {
     effort: 'Default effort',
     thinking_enabled: 'Default thinking',
     claude_in_chrome: 'Default Chrome MCP',
+    fast_mode: 'Default fast mode',
 }
 
 const supportedFields = computed(() => FIELD_ORDER.filter(field => helpers.value.supportsAgentSetting(field)))
@@ -70,11 +72,11 @@ function onSelectChange(field, event) {
 }
 
 // wa-select returns the raw string value of the chosen option. Choice
-// catalogues mix booleans (thinking_enabled, claude_in_chrome) and
-// integers (context_max) with strings — coerce here to keep the store
+// catalogues mix booleans (thinking_enabled, claude_in_chrome, fast_mode)
+// and integers (context_max) with strings — coerce here to keep the store
 // validators happy.
 function parseValue(field, raw) {
-    if (field === 'thinking_enabled' || field === 'claude_in_chrome') {
+    if (field === 'thinking_enabled' || field === 'claude_in_chrome' || field === 'fast_mode') {
         return raw === 'true'
     }
     if (field === 'context_max') {
@@ -158,6 +160,9 @@ function openPresetsDialog() {
                     <span v-if="option.description" class="option-description">{{ option.description }}</span>
                 </wa-option>
             </wa-select>
+            <span v-if="helpers.getFieldHelpText(field, fieldContext)" class="setting-group-hint">
+                {{ helpers.getFieldHelpText(field, fieldContext) }}
+            </span>
         </div>
 
         <div class="setting-group">

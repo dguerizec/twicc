@@ -88,6 +88,7 @@ AGENT_SETTINGS_CHOICES: dict[str, list] = {
     "thinking_enabled": [True, False],
     "context_max": [200_000, 1_000_000],
     "claude_in_chrome": [True, False],
+    "fast_mode": [True, False],
 }
 
 
@@ -331,6 +332,13 @@ class ClaudeCodeHelpers(BaseProviderHelpers):
             mv = self._resolve_to_default_model_version()
         return bool(mv and mv.provider_extra.supports_effort_max)
 
+    def selected_model_supports_fast(self, selected_model: str | None) -> bool:
+        """Return ``True`` if the model (or default fallback) supports fast mode."""
+        mv = self.find_model(selected_model) if selected_model else None
+        if mv is None:
+            mv = self._resolve_to_default_model_version()
+        return bool(mv and mv.provider_extra.supports_fast)
+
     def enforce_synced_settings_consistency(self, synced: dict, changes: dict) -> None:
         """Normalise ``claudeCodeDefault*`` keys when the default model changed.
 
@@ -354,6 +362,9 @@ class ClaudeCodeHelpers(BaseProviderHelpers):
                 "claudeCodeDefaultContextMax", self.SYNCED_SETTINGS_DEFAULTS["claudeCodeDefaultContextMax"],
             ),
             effort=synced.get("claudeCodeDefaultEffort"),
+            fast_mode=synced.get(
+                "claudeCodeDefaultFastMode", self.SYNCED_SETTINGS_DEFAULTS["claudeCodeDefaultFastMode"],
+            ),
         )
         adjusted = self.enforce_agent_settings_consistency(candidate)
         if (
@@ -371,6 +382,11 @@ class ClaudeCodeHelpers(BaseProviderHelpers):
             and adjusted.effort != candidate.effort
         ):
             synced["claudeCodeDefaultEffort"] = adjusted.effort
+        if (
+            "claudeCodeDefaultFastMode" in changes
+            and adjusted.fast_mode != candidate.fast_mode
+        ):
+            synced["claudeCodeDefaultFastMode"] = adjusted.fast_mode
 
     def enforce_agent_settings_consistency(self, settings: AgentSettings) -> AgentSettings:
         """Auto-upgrade retired model, then normalise capability rules.
@@ -383,12 +399,15 @@ class ClaudeCodeHelpers(BaseProviderHelpers):
         3. Demotes ``effort == "max"`` to ``"xhigh"`` (or ``"high"`` if
            xhigh is also unsupported), then ``effort == "xhigh"`` to
            ``"high"`` when unsupported.
+        4. Clears ``fast_mode`` when the model doesn't support it
+           (fast mode is only available on supported Opus versions).
         """
         settings = super().enforce_agent_settings_consistency(settings)
 
         model = settings.selected_model
         context_max = settings.context_max
         effort = settings.effort
+        fast_mode = settings.fast_mode
 
         if context_max == 1_000_000 and not self.selected_model_supports_1m(model):
             context_max = 200_000
@@ -398,9 +417,16 @@ class ClaudeCodeHelpers(BaseProviderHelpers):
         if effort == "xhigh" and not self.selected_model_supports_effort_xhigh(model):
             effort = "high"
 
-        if context_max == settings.context_max and effort == settings.effort:
+        if fast_mode and not self.selected_model_supports_fast(model):
+            fast_mode = False
+
+        if (
+            context_max == settings.context_max
+            and effort == settings.effort
+            and fast_mode == settings.fast_mode
+        ):
             return settings
-        return settings._replace(context_max=context_max, effort=effort)
+        return settings._replace(context_max=context_max, effort=effort, fast_mode=fast_mode)
 
     def get_agent_settings_choices(self) -> dict[str, list]:
         return AGENT_SETTINGS_CHOICES

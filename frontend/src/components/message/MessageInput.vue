@@ -58,12 +58,14 @@ const {
     selectedEffort,
     selectedThinking,
     selectedClaudeInChrome,
+    selectedFastMode,
     selectedContextMax,
     activeModel,
     activePermissionMode,
     activeEffort,
     activeThinking,
     activeClaudeInChrome,
+    activeFastMode,
     activeContextMax,
     isStarting,
     processState,
@@ -1069,6 +1071,7 @@ async function handleSend() {
         effort: selectedEffort.value,
         thinking_enabled: selectedThinking.value,
         claude_in_chrome: selectedClaudeInChrome.value,
+        fast_mode: selectedFastMode.value,
         context_max: isContextMaxForced.value
             ? store.getEffectiveContextMax(props.sessionId, selectedModel.value ?? settings.providerStore.value?.defaultModel)
             : selectedContextMax.value,
@@ -1129,6 +1132,7 @@ async function handleSend() {
         activeEffort.value = selectedEffort.value
         activeThinking.value = selectedThinking.value
         activeClaudeInChrome.value = selectedClaudeInChrome.value
+        activeFastMode.value = selectedFastMode.value
         activeContextMax.value = selectedContextMax.value
 
         // For settings-only updates, nothing else to clean up
