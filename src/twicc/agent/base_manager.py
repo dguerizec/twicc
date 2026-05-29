@@ -361,13 +361,16 @@ class BaseAgentManager:
         # layer and have no DB dependency. ``session_id`` is a plain
         # CharField on ProcessRun, so the create works even when no Session
         # row exists yet (the watcher creates the Session when the JSONL
-        # file appears).
+        # file appears). The row is created with the model's default
+        # ``state=STARTING`` and ``last_state_change_at=now``;
+        # :meth:`_on_state_change` keeps both columns in sync from there.
         async def _persist_run_and_start_timestamps() -> None:
             pr = await asyncio.to_thread(
                 lambda: ProcessRun.objects.create(
                     provider=agent.provider.value,
                     session_id=session_id,
                     started_at=now,
+                    last_state_change_at=now,
                 )
             )
             agent.process_run = pr
@@ -392,13 +395,22 @@ class BaseAgentManager:
     # ------------------------------------------------------------------
 
     async def _on_state_change(self, agent: BaseAgent) -> None:
-        """Default skeleton: broadcast → DB lifecycle on DEAD → registry cleanup.
+        """Default skeleton: persist ProcessRun state → broadcast → DB lifecycle → registry cleanup.
 
         Subclasses typically override this to insert provider-specific work
         before/after broadcast (titles, settings hot-reload, ...) while still
         delegating the generic bits to the helpers below.
+
+        The ProcessRun transition is persisted **before** the broadcast: clients
+        that consult the DB right after receiving a state-change message
+        observe a row already in the new state. On ``DEAD``, the row is
+        either UPDATEd (when the provider helper says to keep it — Claude
+        Code with crons attached) or DELETEd (default for every other case);
+        ``agent.process_run`` is cleared on delete so override post-DEAD
+        logic can detect "row was kept" via ``agent.process_run is not None``.
         """
         info = agent.get_info()
+        await self._persist_process_run_transition(agent, info.state)
         await self._broadcast_info(info)
         if info.state == AgentState.DEAD:
             await self._update_session_stopped_at(agent)
@@ -412,6 +424,99 @@ class BaseAgentManager:
             await self._broadcast_callback(info)
         except Exception as e:
             logger.error("Error broadcasting state change: %s", e)
+
+    async def _persist_process_run_transition(
+        self, agent: BaseAgent, state: AgentState,
+    ) -> None:
+        """Mirror a runtime state transition onto the agent's ProcessRun row.
+
+        For non-``DEAD`` transitions: UPDATE ``state`` and
+        ``last_state_change_at``. For ``DEAD``: consult the provider helper —
+        if it returns ``True``, UPDATE the row to ``state=DEAD``; otherwise
+        DELETE the row (and clear ``agent.process_run`` so override-level
+        post-DEAD logic can branch on whether the row was kept).
+
+        The helper read + write are grouped under a single
+        ``run_under_db_write_lock`` acquire so no other writer can race
+        between the keep/delete decision and the DB mutation (mirrors the
+        pattern previously used in Claude Code's ``_on_state_change``).
+        Every log emission goes through :func:`provider_log_context` so
+        records carry the agent's provider tag — agent message loops do
+        not set the context themselves, so wrapping it here is the
+        canonical attribution point. No-op when the agent has no
+        process_run attached (early failure before ``_register_and_start``
+        completed).
+        """
+        if agent.process_run is None:
+            return
+
+        from django.utils import timezone
+
+        from twicc.core.models import ProcessRun
+        from twicc.logging_context import provider_log_context
+        from twicc.providers.helpers import get_provider_helpers
+
+        now = timezone.now()
+        pr_pk = agent.process_run.pk
+        state_value = state.value
+
+        with provider_log_context(agent.provider):
+            if state != AgentState.DEAD:
+                async def _persist_update() -> None:
+                    await asyncio.to_thread(
+                        lambda: ProcessRun.objects.filter(pk=pr_pk).update(
+                            state=state_value,
+                            last_state_change_at=now,
+                        )
+                    )
+                    if agent.process_run is not None:
+                        agent.process_run.state = state_value
+                        agent.process_run.last_state_change_at = now
+
+                try:
+                    await run_under_db_write_lock(_persist_update)
+                except Exception as e:
+                    logger.error(
+                        "Error persisting state %s on process run %s for session %s: %s",
+                        state_value, pr_pk, agent.session_id, e,
+                    )
+                return
+
+            # DEAD: helper decides keep vs delete. Helper is sync (typically
+            # a DB read); wrapped in ``to_thread`` so the event loop stays free.
+            helper = get_provider_helpers(agent.provider)
+
+            async def _settle_dead() -> None:
+                keep = await asyncio.to_thread(
+                    lambda: helper.should_keep_dead_process_run(
+                        agent.process_run, agent=agent,
+                    )
+                )
+                if keep:
+                    await asyncio.to_thread(
+                        lambda: ProcessRun.objects.filter(pk=pr_pk).update(
+                            state=state_value,
+                            last_state_change_at=now,
+                        )
+                    )
+                    if agent.process_run is not None:
+                        agent.process_run.state = state_value
+                        agent.process_run.last_state_change_at = now
+                else:
+                    await asyncio.to_thread(lambda: agent.process_run.delete())
+                    agent.process_run = None
+                    logger.info(
+                        "Deleted process run %s for session %s on death",
+                        pr_pk, agent.session_id,
+                    )
+
+            try:
+                await run_under_db_write_lock(_settle_dead)
+            except Exception as e:
+                logger.error(
+                    "Error settling DEAD process run %s for session %s: %s",
+                    pr_pk, agent.session_id, e,
+                )
 
     async def _update_session_stopped_at(self, agent: BaseAgent) -> None:
         """Update ``Session.last_stopped_at`` and broadcast ``session_updated``."""

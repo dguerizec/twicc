@@ -4,12 +4,18 @@ Cron restart: re-launch Claude Code sessions that had active cron jobs.
 Called at TwiCC startup (restart_all_session_crons) and at runtime when a
 process with active crons dies from a non-manual cause (_restart_crons_for_session
 in ClaudeCodeAgentManager). Both paths use the same restart_session_crons() function.
+
+The cross-provider boot cleanup of stale :class:`ProcessRun` rows lives in
+:mod:`twicc.agent.process_run_cleanup` and runs *before* this module is
+invoked; by the time :func:`_prepare_restarts` reads the table, the only
+surviving Claude Code rows are those whose
+:meth:`ClaudeCodeHelpers.should_keep_dead_process_run` returned ``True``
+(= rows that still have :class:`SessionCron` rows attached).
 """
 
 import asyncio
 import logging
 import os
-from collections import defaultdict
 from collections.abc import Iterator
 from typing import NamedTuple
 
@@ -30,11 +36,10 @@ class PrepareCronRestartsJob(NamedTuple):
     :meth:`ClaudeCodeHelpers.try_handle_async_job`). Pushed onto
     :attr:`db_writer._async_queue` via :func:`submit_async_job`.
 
-    ``_prepare_restarts`` is read+write entrelaced (orphan / duplicate
-    ``ProcessRun`` cleanup), but it is entirely DB-bound — no HTTP, no FS.
-    The whole block runs on the DB writer's single-writer path, in one
-    ``transaction.atomic``, so the cleanup commits atomically and never
-    contends with the DB writer on the SQLite write lock.
+    Today :func:`_prepare_restarts` is a near-pure read (it only deletes
+    rows whose :class:`Session` was removed since the boot cleanup ran),
+    but it remains routed through the DB writer to keep its read+delete
+    pass serialised with every other writer.
 
     ``provider`` is fixed (this job is CC-only) but kept so the job
     follows the same convention as every other async-queue job — the DB
@@ -51,10 +56,10 @@ def _apply_prepare_cron_restarts_job(job: PrepareCronRestartsJob) -> list[str]:
     """Run :func:`_prepare_restarts` inside ``transaction.atomic``.
 
     Sync — runs in a worker thread via ``sync_to_async`` inside
-    :func:`db_writer._settle_async_job`. Wrapping the whole call in a single
-    atomic guarantees the three cleanup steps (orphan delete, duplicate
-    keep-oldest, expired/missing-session delete) commit together and stay
-    serialized with every other DB writer write.
+    :func:`db_writer._settle_async_job`. The atomic block keeps the
+    Session-existence DELETE pass serialised with every other DB writer
+    write, even though most of the cross-provider consolidation has
+    already happened in :mod:`twicc.agent.process_run_cleanup` at boot.
     """
     with transaction.atomic():
         return _prepare_restarts()
@@ -167,59 +172,44 @@ async def restart_all_session_crons(stop_event: asyncio.Event) -> None:
 
 
 def _prepare_restarts() -> list[str]:
-    """Synchronous DB work: cleanup orphan/stale process runs, return session IDs to restart.
+    """Return session IDs for Claude Code ProcessRuns eligible for cron restart.
 
-    Called in asyncio.to_thread from restart_all_session_crons(). Scoped
-    to Claude Code rows only — other providers run their own equivalent.
+    Called in asyncio.to_thread from restart_all_session_crons(). By the
+    time this runs, the cross-provider boot cleanup in
+    :mod:`twicc.agent.process_run_cleanup` has already consolidated the
+    :class:`ProcessRun` table — orphan rows are gone, per-session duplicates
+    are collapsed to a single oldest row, and only rows the Claude Code
+    helper deemed worth keeping (= rows that still have :class:`SessionCron`
+    rows attached) survive on the CC slice.
+
+    The single remaining concern here is sessions whose JSONL was deleted
+    on disk between TwiCC instances. The boot cleanup keeps them because
+    their cron rows still exist; the per-session initial sync removes the
+    matching :class:`Session` row but doesn't know about ProcessRun, so we
+    catch that case here and delete the now-pointless :class:`ProcessRun`
+    (cascading its crons) before returning the surviving session ids.
     """
-    from django.db.models import Count
-
+    from twicc.agent.states import AgentState
     from twicc.core.enums import Provider
-    from twicc.core.models import ProcessRun, Session, SessionCron
+    from twicc.core.models import ProcessRun, Session
 
     cc_provider = Provider.CLAUDE_CODE.value
 
-    # 1. Delete orphan process runs (no crons attached)
-    orphan_count, _ = (
+    session_ids: list[str] = []
+    for process_run in (
         ProcessRun.objects
-        .filter(provider=cc_provider)
-        .annotate(cron_count=Count("crons"))
-        .filter(cron_count=0)
-        .delete()
-    )
-    if orphan_count:
-        logger.info("Cleaned up %d orphan process run(s)", orphan_count)
-
-    # 2. For sessions with multiple process runs, keep only the oldest
-    runs_by_session: dict[str, list[ProcessRun]] = defaultdict(list)
-    for process_run in ProcessRun.objects.filter(provider=cc_provider).order_by("started_at"):
-        runs_by_session[process_run.session_id].append(process_run)
-
-    for session_id, runs in runs_by_session.items():
-        if len(runs) > 1:
-            # Keep the oldest (index 0), delete all others (cascade deletes their crons)
-            stale_pks = [r.pk for r in runs[1:]]
-            deleted_count, _ = ProcessRun.objects.filter(pk__in=stale_pks).delete()
-            logger.info(
-                "Session %s had %d process runs, kept oldest, deleted %d newer one(s)",
-                session_id, len(runs), deleted_count,
-            )
-            runs_by_session[session_id] = [runs[0]]
-
-    # 3. Filter to sessions with active crons, clean up the rest
-    session_ids = []
-    for session_id, runs in runs_by_session.items():
-        process_run = runs[0]
-
-        if not SessionCron.active_for_session(session_id, Provider.CLAUDE_CODE).filter(process_run=process_run).exists():
-            process_run.delete()
-            logger.info("Session %s: all crons expired, deleted process run %s", session_id, process_run.pk)
-            continue
+        .filter(provider=cc_provider, state=AgentState.DEAD.value)
+        .order_by("started_at")
+    ):
+        session_id = process_run.session_id
 
         # Validate session exists (clean up if JSONL was deleted)
         if not Session.objects.filter(id=session_id).exists():
             process_run.delete()
-            logger.warning("Session %s: not found in DB, deleted process run %s", session_id, process_run.pk)
+            logger.warning(
+                "Session %s: not found in DB, deleted process run %s",
+                session_id, process_run.pk,
+            )
             continue
 
         session_ids.append(session_id)

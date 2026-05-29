@@ -666,6 +666,35 @@ class ClaudeCodeHelpers(BaseProviderHelpers):
         if crons:
             message["active_crons"] = crons
 
+    def should_keep_dead_process_run(
+        self,
+        process_run,
+        *,
+        agent=None,
+    ) -> bool:
+        """Keep a DEAD :class:`ProcessRun` only if it still has attached crons.
+
+        Runtime shortcuts override the cron check when an explicit ``agent``
+        context is supplied:
+
+        - ``kill_reason == "manual"`` — the user explicitly stopped the
+          session, we discard the row even if crons exist (no auto-restart
+          intended).
+        - ``not _first_user_turn_reached`` — the agent died before reaching
+          USER_TURN (failed cron restart, early crash), so its crons are
+          partial or absent; we discard the row to clear any partial state
+          and let an earlier surviving row drive a retry.
+
+        Boot cleanup calls without ``agent`` and only the cron-existence
+        check runs.
+        """
+        if agent is not None:
+            if getattr(agent, "kill_reason", None) == "manual":
+                return False
+            if not getattr(agent, "_first_user_turn_reached", False):
+                return False
+        return process_run.crons.exists()
+
     async def try_handle_async_job(self, job, settle_async_job) -> bool:
         """Route Claude Code-specific async-queue jobs to their handler.
 

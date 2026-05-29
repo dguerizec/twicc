@@ -186,6 +186,19 @@ async def run_server(port: int):
     from twicc.providers.state import apply_auto_enable_providers_bootstrap
     apply_auto_enable_providers_bootstrap()
 
+    # Cross-provider boot cleanup of stale ProcessRun rows from a previous
+    # TwiCC instance. Runs after the DB writer is up but before any
+    # provider orchestrator starts, so no live agent's freshly-created
+    # row can be misclassified as stale and rewritten to DEAD. The
+    # cleanup is idempotent (a re-run after a clean shutdown is a no-op).
+    from twicc.agent.process_run_cleanup import cleanup_stale_process_runs
+    try:
+        await cleanup_stale_process_runs()
+    except Exception as exc:
+        logger.error(
+            "Boot ProcessRun cleanup failed: %s", exc, exc_info=True,
+        )
+
     # Cross-provider search lifecycle event: set once ``init_search_index()``
     # has returned, so provider watchers know they can write into the
     # index. Created here, owned by ``_orchestrate_global_search``,

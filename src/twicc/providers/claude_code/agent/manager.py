@@ -414,6 +414,65 @@ class ClaudeCodeAgentManager(BaseAgentManager):
 
         return self._state_based_timeout(agent, current_time)
 
+    async def _update_session_stopped_at(self, agent: BaseAgent) -> None:
+        """Override: also propagate ``last_stopped_at`` to subagents from this run.
+
+        Replaces the base's plain ``Session.objects.update`` with a closure
+        that, under a single DB write lock acquire, updates the agent's own
+        ``last_stopped_at`` and then mirrors it onto every subagent that was
+        started within the current run window (``last_started_at >=
+        previous_cutoff``). The broadcasts run after the lock, one per
+        updated session id. Every log emission goes through
+        :func:`provider_log_context` so records carry the Claude Code
+        provider tag (agent message loops do not set it themselves).
+        """
+        from django.utils import timezone
+
+        from twicc.core.models import Session
+        from twicc.logging_context import provider_log_context
+
+        with provider_log_context(agent.provider):
+            try:
+                now = timezone.now()
+
+                async def _persist_session_stopped_and_propagate() -> list[str]:
+                    # Snapshot cutoff BEFORE updating so we can find subagents started in this run.
+                    session = await asyncio.to_thread(Session.objects.filter(id=agent.session_id).first)
+                    previous_cutoff = session.cutoff if session else None
+
+                    await asyncio.to_thread(
+                        lambda: Session.objects.filter(id=agent.session_id).update(
+                            last_stopped_at=now, last_updated_at=now,
+                        )
+                    )
+
+                    if session is None:
+                        return []
+
+                    subagent_filter = Session.objects.filter(parent_session_id=agent.session_id)
+                    if previous_cutoff is not None:
+                        subagent_filter = subagent_filter.filter(last_started_at__gte=previous_cutoff)
+                    subagent_ids = await asyncio.to_thread(
+                        lambda: list(subagent_filter.values_list('id', flat=True))
+                    )
+                    if subagent_ids:
+                        await asyncio.to_thread(
+                            lambda: Session.objects.filter(id__in=subagent_ids).update(
+                                last_stopped_at=now, last_updated_at=now,
+                            )
+                        )
+                    return subagent_ids
+
+                subagent_ids = await run_under_db_write_lock(_persist_session_stopped_and_propagate)
+                await self._broadcast_session_updated(agent.session_id)
+                for subagent_id in subagent_ids:
+                    await self._broadcast_session_updated(subagent_id)
+            except Exception as e:
+                logger.error(
+                    "Error updating last_stopped_at for session %s: %s",
+                    agent.session_id, e,
+                )
+
     async def _on_state_change(self, agent: BaseAgent) -> None:
         """Handle state changes: titles, settings hot-reload, cron lifecycle.
 
@@ -429,6 +488,20 @@ class ClaudeCodeAgentManager(BaseAgentManager):
         - In context 2, the cleanup is effectively atomic in asyncio (no await between
           the check and delete operations, so no preemption)
         - The identity check (is agent) ensures we only delete the exact instance
+
+        Flow: this override sandwiches :meth:`BaseAgentManager._on_state_change`
+        between pre-broadcast cron-specific work (old run dedup) and
+        post-broadcast / post-DEAD provider hooks (settings hot-reload, title
+        flush, title protection rewrite, cron auto-restart). The base call
+        handles persisting ``state`` + ``last_state_change_at`` on the
+        :class:`ProcessRun` row, broadcasting the state change, running
+        :meth:`_update_session_stopped_at` on DEAD (overridden above to
+        propagate to subagents), invoking the helper's
+        ``should_keep_dead_process_run`` to keep-or-delete the row, and
+        cleaning up the agent from the registry. The auto-restart branch
+        below reads ``agent.process_run is not None`` as the canonical
+        "helper kept the row" signal — equivalent to "agent died with crons
+        attached and is eligible for cron restart".
         """
         # Snapshot the state at entry. This is critical because _apply_pending_settings
         # may kill() the agent (changing agent.state to DEAD) while we're handling
@@ -448,6 +521,10 @@ class ClaudeCodeAgentManager(BaseAgentManager):
         # Uses _old_runs_purged flag because _first_user_turn_reached is already True at this point
         # (set in _run_message_loop before _notify_state_change is called).
         # Systematic for all agents — no-op if no old process runs exist (DELETE affects 0 rows).
+        # Specific to Claude Code: ghost ProcessRuns only exist when a previous TwiCC instance
+        # kept a row alive past death because it had crons attached, and the boot-time cron
+        # restart then created a new ProcessRun for the relaunched session. The other provider
+        # (Codex) has no cron concept and so can never accumulate ghost rows for the same id.
         if (
             state == AgentState.USER_TURN
             and not agent._old_runs_purged
@@ -472,8 +549,9 @@ class ClaudeCodeAgentManager(BaseAgentManager):
             except Exception as e:
                 logger.error("Error purging old process runs for session %s: %s", agent.session_id, e)
 
-        # Broadcast state change (base helper handles missing callback)
-        await self._broadcast_info(info)
+        # Base: persist ProcessRun state → broadcast → on DEAD: update_session_stopped_at
+        # (overridden above) + helper-driven keep-or-delete + _cleanup_dead.
+        await super()._on_state_change(agent)
 
         # --- Check for pending settings changes on USER_TURN transition ---
         # When settings are changed during ASSISTANT_TURN, they are saved to DB
@@ -501,7 +579,7 @@ class ClaudeCodeAgentManager(BaseAgentManager):
                 except Exception as e:
                     logger.error("Error flushing pending title for session %s: %s", agent.session_id, e)
 
-        # Update last_stopped_at when agent dies, and propagate to recent subagents
+        # Post-DEAD provider hooks: title protection rewrite + cron auto-restart.
         if state == AgentState.DEAD:
             from twicc.providers.claude_code.titles import clear_protected_title, get_protected_title, rename_session_in_jsonl
 
@@ -516,111 +594,29 @@ class ClaudeCodeAgentManager(BaseAgentManager):
 
             clear_protected_title(agent.session_id)
 
-            try:
-                from django.utils import timezone
-                from twicc.core.models import Session
-                now = timezone.now()
-
-                # Persist the agent's own last_stopped_at and propagate to subagents
-                # started in this run, all under a single DB write lock acquire.
-                # Broadcasts stay outside the lock — the closure returns the
-                # subagent ids it updated so we can broadcast each one after.
-                async def _persist_session_stopped_and_propagate() -> list[str]:
-                    # Get the previous cutoff BEFORE updating, to find subagents started in this run
-                    session = await asyncio.to_thread(Session.objects.filter(id=agent.session_id).first)
-                    previous_cutoff = session.cutoff if session else None
-
-                    await asyncio.to_thread(
-                        lambda: Session.objects.filter(id=agent.session_id).update(
-                            last_stopped_at=now, last_updated_at=now
-                        )
-                    )
-
-                    if session is None:
-                        return []
-
-                    subagent_filter = Session.objects.filter(parent_session_id=agent.session_id)
-                    if previous_cutoff is not None:
-                        subagent_filter = subagent_filter.filter(last_started_at__gte=previous_cutoff)
-                    subagent_ids = await asyncio.to_thread(
-                        lambda: list(subagent_filter.values_list('id', flat=True))
-                    )
-                    if subagent_ids:
-                        await asyncio.to_thread(
-                            lambda: Session.objects.filter(id__in=subagent_ids).update(
-                                last_stopped_at=now, last_updated_at=now
-                            )
-                        )
-                    return subagent_ids
-
-                subagent_ids = await run_under_db_write_lock(_persist_session_stopped_and_propagate)
-                await self._broadcast_session_updated(agent.session_id)
-                for subagent_id in subagent_ids:
-                    await self._broadcast_session_updated(subagent_id)
-
-            except Exception as e:
-                logger.error("Error updating last_stopped_at for session %s: %s", agent.session_id, e)
-
-            # ProcessRun lifecycle cleanup on agent death.
-            # The decision read (has_crons) and the delete are grouped under a
-            # single DB write lock acquire; the closure returns the decision so
-            # the auto-restart branch below can consume it. ``should_delete_run``
-            # stays at False when the agent has no process run (skip block).
-            should_delete_run = False
-            if agent.process_run is not None:
-                async def _maybe_delete_process_run() -> bool:
-                    if agent.kill_reason == "manual":
-                        # User explicitly stopped → delete process run (cascade deletes crons)
-                        decision = True
-                    elif not agent._first_user_turn_reached:
-                        # Died before first USER_TURN (failed cron restart, early crash, etc.)
-                        # Delete current process run to discard partial crons, keep old runs for retry
-                        decision = True
-                    else:
-                        # Died after USER_TURN (old runs already purged). Keep only if it has crons.
-                        has_crons = await asyncio.to_thread(lambda: agent.process_run.crons.exists())
-                        decision = not has_crons
-
-                    if decision:
-                        try:
-                            run_pk = agent.process_run.pk
-                            await asyncio.to_thread(lambda: agent.process_run.delete())
-                            agent.process_run = None
-                            logger.info(
-                                "Deleted process run %s for session %s (kill_reason=%s, user_turn_reached=%s)",
-                                run_pk, agent.session_id, agent.kill_reason, agent._first_user_turn_reached,
-                            )
-                        except Exception as e:
-                            logger.error("Error deleting process run for session %s: %s", agent.session_id, e)
-
-                    return decision
-
-                should_delete_run = await run_under_db_write_lock(_maybe_delete_process_run)
-
-                # --- Auto-restart crons for non-manual, non-shutdown deaths ---
-                # should_delete_run is False ⟹ agent had active crons and died
-                # after USER_TURN. Launch a background restart task.
-                if (
-                    not should_delete_run
-                    and agent.kill_reason not in ("manual", "shutdown")
-                    and settings.CRON_AUTO_RESTART
-                    and agent.session_id not in self._cron_restart_tasks
-                    and self._stop_event is not None
-                    and not self._stop_event.is_set()
-                ):
-                    task = asyncio.create_task(
-                        self._restart_crons_for_session(agent.session_id),
-                        name=f"cron-restart-{agent.session_id}",
-                    )
-                    self._cron_restart_tasks[agent.session_id] = task
-                    logger.info(
-                        "Launched runtime cron restart task for session %s (kill_reason=%s)",
-                        agent.session_id, agent.kill_reason,
-                    )
-
-        # Clean up dead agent from registry. No lock needed - see docstring for concurrency model.
-        if state == AgentState.DEAD:
-            self._cleanup_dead(agent)
+            # Auto-restart crons for non-manual, non-shutdown deaths.
+            # ``agent.process_run is not None`` ⟹ the helper kept the row,
+            # which for Claude Code means "this run still has active crons
+            # to honour". Anything else (kept-then-deleted, manual stop,
+            # early death before USER_TURN) clears the attribute via the
+            # base's :meth:`_persist_process_run_transition`.
+            if (
+                agent.process_run is not None
+                and agent.kill_reason not in ("manual", "shutdown")
+                and settings.CRON_AUTO_RESTART
+                and agent.session_id not in self._cron_restart_tasks
+                and self._stop_event is not None
+                and not self._stop_event.is_set()
+            ):
+                task = asyncio.create_task(
+                    self._restart_crons_for_session(agent.session_id),
+                    name=f"cron-restart-{agent.session_id}",
+                )
+                self._cron_restart_tasks[agent.session_id] = task
+                logger.info(
+                    "Launched runtime cron restart task for session %s (kill_reason=%s)",
+                    agent.session_id, agent.kill_reason,
+                )
 
     # ------------------------------------------------------------------
     # Cron expiry monitor

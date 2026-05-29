@@ -574,6 +574,36 @@ class BaseProviderHelpers:
         """
         return None
 
+    def should_keep_dead_process_run(
+        self,
+        process_run: Any,
+        *,
+        agent: Any = None,
+    ) -> bool:
+        """Decide whether a ``DEAD`` :class:`ProcessRun` row should survive cleanup.
+
+        Synchronous because the typical implementation reads from the DB
+        (e.g. ``process_run.crons.exists()``) — async callers wrap it in
+        :func:`asyncio.to_thread`. Called from two sites:
+
+        - **Runtime**, from :meth:`BaseAgentManager._on_state_change` when an
+          agent transitions to ``DEAD`` (``agent`` is provided).
+        - **Boot cleanup**, from :mod:`twicc.agent.process_run_cleanup`
+          to consolidate stale rows from a previous TwiCC instance
+          (``agent`` is ``None`` — only the row is available).
+
+        The default returns ``False`` (always delete on death). Providers
+        that want some rows to survive (Claude Code keeps DEAD rows that
+        still have :class:`SessionCron` rows attached so the boot cron
+        restart can pick them up) override to encode their rule.
+
+        ``agent`` is typed ``Any`` so this signature does not pull
+        :mod:`twicc.agent` into this module's import graph; providers that
+        need to look at agent attributes (``kill_reason``,
+        ``_first_user_turn_reached``, ...) cast or duck-type as needed.
+        """
+        return False
+
     async def try_handle_async_job(self, job, settle_async_job) -> bool:
         """Provider hook to handle a provider-specific async-queue job.
 

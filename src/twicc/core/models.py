@@ -9,7 +9,17 @@ import logging
 
 from django.db.models import Q
 
+from twicc.agent.states import AgentState
 from twicc.core.enums import ItemKind, Provider
+
+# Django ``choices`` derived from :class:`AgentState` so the runtime enum and
+# the DB column stay in lockstep without redeclaring the values here. Labels
+# match what Django's :class:`models.TextChoices` would auto-generate ("STARTING"
+# → "Starting", "ASSISTANT_TURN" → "Assistant Turn", ...).
+_AGENT_STATE_CHOICES = [
+    (state.value, state.name.replace('_', ' ').title())
+    for state in AgentState
+]
 
 logger = logging.getLogger(__name__)
 
@@ -872,20 +882,36 @@ class UsageSnapshot(models.Model):
 
 
 class ProcessRun(models.Model):
-    """Tracks a Claude process execution for cron lifecycle management.
+    """Persistent record of an agent run, used to surface live/recent state.
 
-    Each Process gets a ProcessRun row when created. SessionCron rows
-    reference their ProcessRun via CASCADE — deleting a process run deletes its crons.
-    Orphan process runs (from crashed TwiCC instances) are detected and handled at startup.
+    A row is created when an agent is registered with its manager and updated
+    on every state transition (:attr:`state` + :attr:`last_state_change_at`).
+    Rows with a non-``DEAD`` :attr:`state` represent an agent the in-memory
+    registry currently considers alive; ``DEAD`` rows survive only when a
+    provider explicitly chooses to keep them post-mortem (see
+    ``BaseProviderHelpers.should_keep_dead_process_run``) — e.g. Claude Code
+    keeps DEAD rows that still have :class:`SessionCron` rows attached so the
+    boot-time cron restart can pick them up.
 
-    Uses a plain CharField for session_id (not a FK) because new sessions may not
-    exist in the Session table yet when the process starts — the Session row is created
-    asynchronously by the file watcher when the JSONL file appears.
+    The :attr:`state` column reuses :class:`twicc.agent.states.AgentState`'s
+    values directly (no DB-side duplicate enum); see ``_AGENT_STATE_CHOICES``
+    above for the derived ``choices`` list.
+
+    Uses a plain CharField for session_id (not a FK) because new sessions may
+    not exist in the Session table yet when the process starts — the Session
+    row is created asynchronously by the file watcher when the JSONL file
+    appears.
     """
 
     provider = models.CharField(max_length=50)  # Backend provider (see Provider enum)
     session_id = models.CharField(max_length=200)
     started_at = models.DateTimeField()
+    state = models.CharField(
+        max_length=20,
+        choices=_AGENT_STATE_CHOICES,
+        default=AgentState.STARTING.value,
+    )
+    last_state_change_at = models.DateTimeField()
 
     class Meta:
         indexes = [
