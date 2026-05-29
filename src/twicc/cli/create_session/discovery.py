@@ -5,8 +5,7 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
-HEARTBEAT_FILENAME = ".server-heartbeat"
-HEARTBEAT_STALE_AFTER_SECONDS = 15
+from twicc.heartbeat import HEARTBEAT_FILENAME, HEARTBEAT_STALE_AFTER_SECONDS
 
 
 class ServerDownError(Exception):

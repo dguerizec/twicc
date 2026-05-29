@@ -217,6 +217,14 @@ def process(
     process_main(session_id)
 
 
+@app.command()
+def status() -> None:
+    """Report the live TwiCC backend's status as JSON (exit 0 only when running)."""
+    from twicc.cli.status import main as status_main
+
+    status_main()
+
+
 @app.command(
     context_settings={"allow_extra_args": True, "allow_interspersed_args": False, "ignore_unknown_options": True, "help_option_names": []},
 )

@@ -30,6 +30,9 @@ import orjson
 
 logger = logging.getLogger(__name__)
 
+LOCK_FILENAME = "twicc.lock"
+INFO_FILENAME = "twicc.info.json"
+
 
 if sys.platform == "win32":
     import msvcrt
@@ -107,8 +110,8 @@ class InstanceLock:
 
     def __init__(self, data_dir: Path) -> None:
         self._data_dir = data_dir
-        self._lock_path = data_dir / "twicc.lock"
-        self._info_path = data_dir / "twicc.info.json"
+        self._lock_path = data_dir / LOCK_FILENAME
+        self._info_path = data_dir / INFO_FILENAME
         self._fd: int | None = None
 
     def __enter__(self) -> "InstanceLock":

@@ -19,6 +19,7 @@ from twicc.paths import get_data_dir
 logger = logging.getLogger(__name__)
 
 HEARTBEAT_PERIOD_SECONDS = 5
+HEARTBEAT_STALE_AFTER_SECONDS = 15  # 3x the period — absorbs GC pauses and load spikes
 HEARTBEAT_FILENAME = ".server-heartbeat"
 
 
