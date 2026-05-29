@@ -31,6 +31,7 @@ from twicc.providers.claude_code.auth import (
     get_auth_message_for_connection,
 )
 from twicc.providers.claude_code.statuspage_task import get_statuspage_message_for_connection
+from twicc.providers.db_writer import run_under_db_write_lock
 from twicc.providers.state import ProviderDisabledError, ensure_provider_running
 from twicc.usage_task import get_usage_message_for_connection
 
@@ -82,9 +83,11 @@ async def update_session_permission_mode(session_id: str, permission_mode: str) 
     from twicc.core.models import Session
     from twicc.core.serializers import serialize_session
 
-    rows = await sync_to_async(
-        Session.objects.filter(id=session_id).exclude(permission_mode=permission_mode).update
-    )(permission_mode=permission_mode)
+    rows = await run_under_db_write_lock(
+        lambda: Session.objects.filter(id=session_id)
+            .exclude(permission_mode=permission_mode)
+            .aupdate(permission_mode=permission_mode)
+    )
     if not rows:
         return
 
