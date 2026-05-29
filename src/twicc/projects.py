@@ -312,6 +312,7 @@ def update_project_total_cost(project_id: str) -> None:
     project.save(update_fields=["total_cost"])
 
 
+@transaction.atomic
 def update_project_metadata(project_id: str) -> None:
     """Update project sessions_count, mtime, and total_cost from its sessions."""
     try:

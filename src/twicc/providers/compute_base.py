@@ -2215,6 +2215,7 @@ class BaseSessionCompute:
     # Watcher orchestration — concrete in later steps
     # ------------------------------------------------------------------
 
+    @transaction.atomic
     def sync_session_items_from_file(
         self,
         session: Session,

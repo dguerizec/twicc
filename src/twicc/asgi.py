@@ -33,6 +33,7 @@ from twicc.core.enums import Provider
 from twicc.core.services.session_creation import create_session_from_payload
 from twicc.providers.claude_code.ws import ClaudeCodeWSHandler
 from twicc.providers.codex.ws import CodexWSHandler
+from twicc.providers.db_writer import run_under_db_write_lock
 from twicc.providers.state import ProviderDisabledError, ensure_provider_running, is_provider_enabled
 from twicc.providers.helpers import AgentSettings, get_provider_helpers, get_provider_helpers_registry
 from twicc.synced_settings import _settings_lock, prepare_settings_for_client, read_synced_settings, write_synced_settings
@@ -761,9 +762,11 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
                 # Values are null (use global default) or explicit (forced).
                 from twicc.core.models import Session
                 from twicc.core.serializers import serialize_session
-                await sync_to_async(
-                    Session.objects.filter(id=session_id).update
-                )(**agent_settings._asdict())
+                await run_under_db_write_lock(
+                    lambda: Session.objects.filter(id=session_id).aupdate(
+                        **agent_settings._asdict()
+                    )
+                )
                 # Broadcast session update so all clients see the new settings
                 session_obj = await sync_to_async(Session.objects.filter(id=session_id).first)()
                 if session_obj:
@@ -1509,9 +1512,9 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
 
         now = timezone.now()
 
-        rows = await sync_to_async(
-            Session.objects.filter(id=session_id).update
-        )(last_viewed_at=now)
+        rows = await run_under_db_write_lock(
+            lambda: Session.objects.filter(id=session_id).aupdate(last_viewed_at=now)
+        )
         if not rows:
             return
 
@@ -1558,19 +1561,19 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
         now = timezone.now()
         if unread:
             # Clear last_viewed_at; only set last_new_content_at if it was null
-            rows = await sync_to_async(
-                Session.objects.filter(id=session_id).update
-            )(
-                last_viewed_at=None,
-                last_new_content_at=Case(
-                    When(last_new_content_at__isnull=True, then=Value(now)),
-                    default=F('last_new_content_at'),
-                ),
+            rows = await run_under_db_write_lock(
+                lambda: Session.objects.filter(id=session_id).aupdate(
+                    last_viewed_at=None,
+                    last_new_content_at=Case(
+                        When(last_new_content_at__isnull=True, then=Value(now)),
+                        default=F('last_new_content_at'),
+                    ),
+                )
             )
         else:
-            rows = await sync_to_async(
-                Session.objects.filter(id=session_id).update
-            )(last_viewed_at=now)
+            rows = await run_under_db_write_lock(
+                lambda: Session.objects.filter(id=session_id).aupdate(last_viewed_at=now)
+            )
         if not rows:
             return
 
