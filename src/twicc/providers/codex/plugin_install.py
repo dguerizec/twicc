@@ -52,9 +52,9 @@ async def ensure_twicc_plugin_installed() -> None:
         )
         return
 
-    from codex_app_server import AppServerConfig
-    from codex_app_server.async_client import AsyncAppServerClient
-    from codex_app_server.generated.v2_all import (
+    from openai_codex import AppServerConfig
+    from openai_codex.async_client import AsyncAppServerClient
+    from openai_codex.generated.v2_all import (
         MarketplaceAddResponse,
         PluginInstallResponse,
     )

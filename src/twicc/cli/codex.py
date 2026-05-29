@@ -1,4 +1,4 @@
-"""Proxy to the Codex CLI bundled in codex_app_server."""
+"""Proxy to the Codex CLI provided by openai-codex-cli-bin."""
 
 import os
 import sys

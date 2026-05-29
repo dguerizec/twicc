@@ -164,9 +164,9 @@ async def _sync_to_database() -> dict[str, int]:
     # startup, but the module itself may be imported earlier).
     from asgiref.sync import sync_to_async
 
-    from codex_app_server import AppServerConfig
-    from codex_app_server.async_client import AsyncAppServerClient
-    from codex_app_server.generated.v2_all import SkillsListResponse
+    from openai_codex import AppServerConfig
+    from openai_codex.async_client import AsyncAppServerClient
+    from openai_codex.generated.v2_all import SkillsListResponse
 
     from twicc.core.enums import Provider
     from twicc.core.models import Project

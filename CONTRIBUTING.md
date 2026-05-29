@@ -59,18 +59,18 @@ uv run run.py
 
 ## Codex SDK — vendored
 
-The Codex CLI binary is shipped inside the wheel because its PyPI distribution does not provide manylinux wheels. The SDK source (`codex_app_server`) is vendored from the `openai/codex` repository.
+The Codex CLI binary is a regular PyPI dependency (`openai-codex-cli-bin`, manylinux/macOS/Windows wheels). The SDK source (`openai_codex`) is vendored from the `openai/codex` repository.
 
 See [`docs/codex-vendoring.md`](docs/codex-vendoring.md) for the layout, update procedure, and exit condition.
 
 ## Building and publishing
 
 ```bash
-./scripts/build-release.sh     # builds sdist + one wheel per platform → dist/
-uv publish dist/*.whl          # publishes the wheels to PyPI (the sdist is kept around but not published, see below)
+./scripts/build-release.sh     # builds sdist + one py3-none-any wheel → dist/
+uv publish dist/*              # publishes both the sdist and the wheel to PyPI
 ```
 
-The release script runs `npm ci` + `npm run build` in `frontend/`, then iterates over the supported target platforms (`manylinux_2_17_x86_64`, `macosx_11_0_arm64`, `macosx_10_9_x86_64`, `win_amd64`) and produces one platform-tagged wheel each, plus a single platform-agnostic sdist. See [`docs/codex-vendoring.md`](docs/codex-vendoring.md) for why the wheel is not `py3-none-any`. The sdist is intentionally not published to PyPI: it does not embed the Codex binary nor the built frontend assets (both are produced by `hatch_build.py` at wheel-build time), so anyone installing from the sdist would trigger a full local build (npm + network fetch of the upstream Codex binary).
+The release script runs `npm ci` + `npm run build` in `frontend/`, then produces a single platform-agnostic `py3-none-any` wheel plus the matching sdist. The Codex CLI binary comes from `openai-codex-cli-bin` on PyPI (manylinux/macOS/Windows wheels), so TwiCC itself does not need to ship per-platform wheels. The sdist embeds the pre-built frontend assets, so `pip install` from source needs neither npm nor an extra fetch.
 
 ## Release process
 

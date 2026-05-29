@@ -33,10 +33,11 @@ dependencies = [
     "httpx~=0.28.1",
     "json-repair~=0.59.5",
     "keyring~=25.7.0; sys_platform == 'darwin'",
+    "openai-codex-cli-bin==0.135.0",
     "orjson~=3.11.8",
     "pillow>=12.2.0",
     "psutil~=7.2.2",
-    "pydantic>=2.12", # required by the vendored codex_app_server SDK
+    "pydantic>=2.12", # required by the vendored openai_codex SDK
     "python-dotenv~=1.2.2",
     "pyyaml>=6.0",
     "tantivy~=0.25.1",
@@ -64,26 +65,30 @@ twicc = "twicc:main"
 
 [tool.hatch.build.targets.wheel]
 # Two top-level packages ship inside the wheel: the TwiCC app itself, and the
-# vendored Codex Python SDK (extracted from openai/codex tag
-# rust-v0.131.0-alpha.4 — see hatch_build.py). The SDK is vendored rather than
-# pulled from PyPI because its companion runtime `openai-codex-cli-bin` does
-# not publish a manylinux wheel (only musllinux), which `uv` refuses to install
-# on glibc systems even though the binary itself runs everywhere. We bundle the
-# binary directly into our wheel and stamp a regular `linux_*` platform tag.
-packages = ["src/twicc", "src/codex_app_server"]
-# Gitignored, hook-produced artifact (built frontend). The codex binary that
-# lives in src/codex_app_server/_bundled/ is added to the wheel by the build
-# hook via build_data["force_include"], precisely targeting the binary for the
-# platform currently being built — listing the dir as a glob here would drag
-# in stale binaries from previous cross-builds.
+# vendored Codex Python SDK (extracted from openai/codex tag rust-v0.135.0 —
+# see hatch_build.py). The SDK is vendored rather than pulled from PyPI
+# because the PyPI release `openai-codex` pins an older runtime version and
+# we want to ride a known-good combination with the matching upstream tag.
+# The Codex CLI binary itself comes from `openai-codex-cli-bin` on PyPI,
+# which now publishes manylinux wheels — so TwiCC ships as a single
+# platform-agnostic `py3-none-any` wheel again.
+packages = ["src/twicc", "src/openai_codex"]
 artifacts = [
     "src/twicc/static/frontend/**",
 ]
 
-# Build hook (hatch_build.py) runs npm ci + npm run build before packaging,
-# fetches the matching Codex binary for the target platform, and stamps the
-# wheel as platform-specific. Applied globally so both sdist and wheel pick up
-# the frontend assets; the binary fetch only fires on wheel targets.
+[tool.hatch.build.targets.sdist]
+# Ship the built frontend assets inside the sdist too, so `pip install` from
+# the source distribution does not require npm on the installer's machine.
+# The build hook builds them once when producing the sdist; subsequent
+# invocations (e.g. building the wheel from the extracted sdist) early-return
+# because index.html already exists.
+artifacts = [
+    "src/twicc/static/frontend/**",
+]
+
+# Build hook (hatch_build.py) runs npm ci + npm run build before packaging so
+# the wheel and sdist both pick up the built frontend assets.
 [tool.hatch.build.hooks.custom]
 
 [tool.pytest.ini_options]

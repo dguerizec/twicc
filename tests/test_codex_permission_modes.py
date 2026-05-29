@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import pytest
 
-from codex_app_server import AskForApproval, SandboxMode, SandboxPolicy
-from codex_app_server.generated.v2_all import (
+from openai_codex.generated.v2_all import (
+    AskForApproval,
     DangerFullAccessSandboxPolicy,
     ReadOnlySandboxPolicy,
+    SandboxMode,
+    SandboxPolicy,
     WorkspaceWriteSandboxPolicy,
 )
 

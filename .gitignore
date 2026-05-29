@@ -273,6 +273,3 @@ AGENTS.local.md
 /.claude/
 .superpowers/
 .codex
-
-# Bundled Codex binary — fetched at build time by hatch_build.py
-src/codex_app_server/_bundled/

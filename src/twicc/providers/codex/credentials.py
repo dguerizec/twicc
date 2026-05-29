@@ -31,16 +31,11 @@ from pathlib import Path
 from typing import NamedTuple
 
 import orjson
-from codex_app_server import (
-    AppServerConfig,
-    AskForApproval,
-    AsyncCodex,
-    ReasoningEffort,
-    SandboxMode,
-    TextInput,
-)
+from openai_codex import AppServerConfig, TextInput
+from openai_codex.generated.v2_all import AskForApproval, ReasoningEffort, SandboxMode
 
 from .bin import resolve_bundled_binary
+from .sdk_wrappers import TwiccAsyncCodex
 
 logger = logging.getLogger(__name__)
 
@@ -292,14 +287,14 @@ async def _codex_sdk_throwaway_call() -> None:
     """
     bundled_bin = resolve_bundled_binary()
     config = AppServerConfig(codex_bin=str(bundled_bin))
-    async with AsyncCodex(config=config) as codex:
-        thread = await codex.thread_start(
+    async with TwiccAsyncCodex(config=config) as codex:
+        thread = await codex.thread_start_with_policy(
             model=_REFRESH_MODEL,
             ephemeral=True,
             sandbox=SandboxMode.danger_full_access,
             approval_policy=AskForApproval.model_validate("never"),
         )
-        turn_handle = await thread.turn(
+        turn_handle = await thread.turn_with_policy(
             TextInput(_REFRESH_PROMPT),
             effort=ReasoningEffort.low,
         )

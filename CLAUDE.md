@@ -19,7 +19,7 @@
 | WebSocket        | Django Channels + InMemoryChannelLayer                       |
 | Database         | SQLite (WAL mode)                                            |
 | File Watching    | watchfiles                                                   |
-| Agent SDKs       | claude-agent-sdk for Claude Code; codex_app_server for Codex |
+| Agent SDKs       | claude-agent-sdk for Claude Code; openai_codex for Codex     |
 | Frontend         | Vue.js 3 (SFC, Composition API) + Vite 7                     |
 | State Management | Pinia + VueUse                                               |
 | UI Components    | Web Awesome 3+ (wa-* elements)                               |
@@ -280,17 +280,16 @@ When the user asks to make a new release, follow these steps in order:
 
 3. **Update CHANGELOG.md:** Set the version number on the `[Unreleased]` section (if not already done) and add the release date (`YYYY-MM-DD`).
 
-4. **Build:** Run `./scripts/build-release.sh` (~3-5 min). This produces:
-   - `dist/twicc-{version}.tar.gz` (single sdist, platform-agnostic — kept around for reference but **not published to PyPI**, see step 11)
-   - One wheel per supported platform: `dist/twicc-{version}-py3-none-{platform}.whl` for `manylinux_2_17_x86_64`, `macosx_11_0_arm64`, `macosx_10_9_x86_64`, `win_amd64`
+4. **Build:** Run `./scripts/build-release.sh` (~1-2 min). This produces:
+   - `dist/twicc-{version}.tar.gz` (sdist, platform-agnostic — both this and the wheel get published to PyPI in step 11)
+   - `dist/twicc-{version}-py3-none-any.whl` (single platform-agnostic wheel)
 
-   The script downloads the matching Codex CLI binary for each platform and bundles it into the wheel — that's why we ship N wheels instead of a single `py3-none-any` like before. On Linux the binary is upstream-tagged musllinux but we restamp it manylinux_2_17 because PyPI rejects the plain `linux_*` tag, and the static-pie binary is ABI-compatible with any glibc ≥ 2.17 system anyway. See `hatch_build.py` for the gory details.
+   The Codex CLI binary comes from `openai-codex-cli-bin` on PyPI (manylinux/macOS/Windows wheels since 0.133.0), so TwiCC itself does not need per-platform wheels anymore. The sdist embeds the pre-built frontend assets so `pip install` from source does not need npm. See `hatch_build.py` and `docs/codex-vendoring.md`.
 
-5. **User testing (mandatory):** Ask the user to test the build before continuing. Provide the command for the user's local platform (typically `manylinux_2_17_x86_64` on the dev machine):
+5. **User testing (mandatory):** Ask the user to test the build before continuing:
    ```
-   uvx --from dist/twicc-{version}-py3-none-manylinux_2_17_x86_64.whl twicc
+   uvx --from dist/twicc-{version}-py3-none-any.whl twicc
    ```
-   (Swap the platform tag if testing from macOS, Windows, etc.)
    Remind them to stop any running TwiCC instance first, then visit `http://localhost:3500` to test. **Do not run `uvx` yourself** — this requires user interaction.
 
 6. **Wait for user confirmation.** Only proceed if they say it's OK.
@@ -315,11 +314,11 @@ When the user asks to make a new release, follow these steps in order:
     gh release create v{version} --title "v{version}" --notes "{changelog content}"
     ```
 
-11. **Publish to PyPI (user action):** Give the user the command to publish:
+11. **Publish to PyPI (user action):** Give the user the command to publish both the wheel and the sdist:
     ```
-    uvx uv-publish /home/twidi/dev/twicc-poc/dist/twicc-{version}*.whl
+    uvx uv-publish /home/twidi/dev/twicc-poc/dist/twicc-{version}*
     ```
-    The glob picks up only the per-platform wheels. **The sdist is intentionally not published**: it does not embed the Codex binary nor the pre-built frontend assets (both are produced by `hatch_build.py` at wheel-build time), so anyone installing from the sdist would have to run a full local build — npm + network fetch of the matching `openai-codex-cli-bin` wheel from GitHub — which is fragile and not what we want users to hit on `pip install twicc`. **Do not run `uv-publish` yourself** unless the user explicitly asks you to.
+    The glob picks up both `twicc-{version}-py3-none-any.whl` and `twicc-{version}.tar.gz`. The sdist is now safe to publish — it embeds the pre-built frontend assets, and the Codex CLI binary comes from the `openai-codex-cli-bin` PyPI dependency, so `pip install` from source needs no npm and no extra fetch. **Do not run `uv-publish` yourself** unless the user explicitly asks you to.
 
 ## Dialog Forms Pattern
 

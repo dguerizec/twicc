@@ -136,4 +136,4 @@ When the user asks for a release:
 8. Create an annotated tag with the changelog content. Convert relative changelog image URLs to `https://raw.githubusercontent.com/twidi/twicc/main/...` in the tag message only.
 9. Push commit and tag.
 10. Create the GitHub Release with the same changelog content.
-11. Give the user the `uvx uv-publish /home/twidi/dev/twicc-poc/dist/twicc-{version}*.whl` command. Do not publish unless explicitly asked. The sdist is intentionally not published (it does not embed the Codex binary nor the built frontend assets — `pip install` from the sdist would trigger a fragile local build).
+11. Give the user the `uvx uv-publish /home/twidi/dev/twicc-poc/dist/twicc-{version}*` command (the glob covers both the wheel and the sdist). Do not publish unless explicitly asked. The sdist is now publishable — it embeds the pre-built frontend assets and the Codex CLI binary comes from the `openai-codex-cli-bin` PyPI dependency, so `pip install` from source needs neither npm nor an extra fetch.

@@ -16,10 +16,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from codex_app_server import (
-    AppServerConfig,
-    AsyncCodex,
-)
+from openai_codex import AppServerConfig
 
 from twicc.agent import AgentState, BaseAgent, BaseAgentManager
 from twicc.core.enums import Provider
@@ -27,6 +24,7 @@ from twicc.providers.helpers import AgentSettings, get_provider_helpers
 
 from ..bin import resolve_bundled_binary
 from ..permission_modes import resolve_codex_policy
+from ..sdk_wrappers import TwiccAsyncCodex
 from .agent import CodexAgent
 
 logger = logging.getLogger(__name__)
@@ -295,7 +293,7 @@ class CodexAgentManager(BaseAgentManager):
         """
         bundled_bin = resolve_bundled_binary()
         config = AppServerConfig(codex_bin=str(bundled_bin), cwd=cwd)
-        codex = AsyncCodex(config=config)
+        codex = TwiccAsyncCodex(config=config)
 
         # ``thread_start`` / ``thread_resume`` lazy-init the transport via
         # ``_ensure_initialized`` on first call — no need to start it
@@ -335,7 +333,7 @@ class CodexAgentManager(BaseAgentManager):
                 # unset so the resumed thread keeps whatever model it was started
                 # with. Sandbox / approval are re-asserted because the SDK
                 # contract requires resume to be self-contained.
-                thread = await codex.thread_resume(
+                thread = await codex.thread_resume_with_policy(
                     session_id,
                     sandbox=sandbox,
                     approval_policy=approval_policy,
@@ -349,7 +347,7 @@ class CodexAgentManager(BaseAgentManager):
                 # picks its own default.
                 helpers = get_provider_helpers(Provider.CODEX)
                 sdk_model = helpers.resolve_sdk_model(settings.selected_model)
-                thread = await codex.thread_start(
+                thread = await codex.thread_start_with_policy(
                     model=sdk_model,
                     sandbox=sandbox,
                     approval_policy=approval_policy,

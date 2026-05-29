@@ -21,16 +21,11 @@ which provider it talked to.
 import asyncio
 import logging
 
-from codex_app_server import (
-    AppServerConfig,
-    AskForApproval,
-    AsyncCodex,
-    ReasoningEffort,
-    SandboxMode,
-    TextInput,
-)
+from openai_codex import AppServerConfig, TextInput
+from openai_codex.generated.v2_all import AskForApproval, ReasoningEffort, SandboxMode
 
 from .bin import resolve_bundled_binary
+from .sdk_wrappers import TwiccAsyncCodex
 
 logger = logging.getLogger(__name__)
 
@@ -129,7 +124,7 @@ async def _call_codex(
 
     bundled_bin = resolve_bundled_binary()
     config = AppServerConfig(codex_bin=str(bundled_bin))
-    codex = AsyncCodex(config=config)
+    codex = TwiccAsyncCodex(config=config)
 
     async def _execute() -> str:
         """Open an ephemeral thread, stream a single turn, collect the assistant text.
@@ -145,13 +140,13 @@ async def _call_codex(
         and ``turn/completed`` signals the end of the stream (the SDK
         breaks the iterator there).
         """
-        thread = await codex.thread_start(
+        thread = await codex.thread_start_with_policy(
             model=TITLE_MODEL,
             ephemeral=True,
             sandbox=SandboxMode.danger_full_access,
             approval_policy=AskForApproval.model_validate("never"),
         )
-        turn_handle = await thread.turn(
+        turn_handle = await thread.turn_with_policy(
             TextInput(full_prompt),
             effort=ReasoningEffort.low,
         )

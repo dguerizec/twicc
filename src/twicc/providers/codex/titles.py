@@ -17,7 +17,7 @@ import asyncio
 import logging
 from typing import NamedTuple
 
-from codex_app_server import AppServerConfig, AsyncCodex
+from openai_codex import AppServerConfig, AsyncCodex
 from django.db import transaction
 
 from twicc.core.enums import Provider
@@ -107,7 +107,7 @@ async def rename_thread_via_sdk(thread_id: str, title: str) -> None:
     ``thread/resume`` + one ``thread/name/set`` RPC). Cannot piggy-back
     on an existing ``AsyncCodex`` because the SDK only allows one
     streamed turn consumer at a time across the whole client (see the
-    ``_active_turn_consumer`` guard in ``codex_app_server.client``):
+    ``_active_turn_consumer`` guard in ``openai_codex.client``):
     sharing it with an active agent would either starve the agent or
     fail-fast on a name update.
 
@@ -140,7 +140,7 @@ async def read_title_from_codex(thread_id: str) -> str | None:
             # ``AsyncCodex`` exposes no top-level ``thread_read``; like
             # ``rename_thread_via_sdk`` we go through ``thread_resume``
             # to get an ``AsyncThread`` handle and call ``.read()`` on
-            # it (defined at ``codex_app_server/api.py:649-653``).
+            # it (defined in ``openai_codex/api.py``).
             thread = await codex.thread_resume(thread_id)
             response = await thread.read(include_turns=False)
             name = response.thread.name

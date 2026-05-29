@@ -26,20 +26,18 @@ from typing import Any, ClassVar
 
 from channels.layers import get_channel_layer
 
-from codex_app_server import (
-    AsyncCodex,
-    AsyncThread,
+from openai_codex import (
     AsyncTurnHandle,
     ImageInput,
     InputItem,
-    ReasoningEffort,
     TextInput,
     TransportClosedError,
 )
-from codex_app_server.generated.v2_all import (
+from openai_codex.generated.v2_all import (
     CodexErrorInfoValue,
     ErrorNotification,
     HttpConnectionFailedCodexErrorInfo,
+    ReasoningEffort,
     ResponseStreamConnectionFailedCodexErrorInfo,
 )
 
@@ -48,6 +46,7 @@ from twicc.core.enums import Provider
 from twicc.providers.helpers import AgentSettings, get_provider_helpers
 
 from ..permission_modes import resolve_codex_turn_overrides
+from ..sdk_wrappers import TwiccAsyncCodex, TwiccAsyncThread
 from ..streaming_registry import get_streamed_item_registry
 from .approvals import (
     default_response_for,
@@ -167,8 +166,8 @@ class CodexAgent(BaseAgent):
         project_id: str,
         cwd: str,
         settings: AgentSettings,
-        codex: AsyncCodex,
-        thread: AsyncThread,
+        codex: TwiccAsyncCodex,
+        thread: TwiccAsyncThread,
     ) -> None:
         super().__init__(session_id, project_id, cwd, agent_settings=settings)
         self._codex = codex
@@ -218,7 +217,7 @@ class CodexAgent(BaseAgent):
         # Capture the SDK's *default* sync approval handler BEFORE we
         # monkey-patch our own in. The default auto-accepts the 2 methods
         # it recognises and returns ``{}`` for others (see vendored
-        # ``codex_app_server/client.py:480-485``). We delegate to it for
+        # ``openai_codex/client.py``). We delegate to it for
         # server requests we don't own (item/tool/call,
         # account/chatgptAuthTokens/refresh, …) — see spec §1.6, §7-Q9.
         # PRIVATE SDK API — see memory ``reference_codex_sdk_update_procedure.md``
@@ -430,7 +429,7 @@ class CodexAgent(BaseAgent):
         )
         turn_input = self._build_turn_input(text, images)
         try:
-            turn_handle = await self._thread.turn(
+            turn_handle = await self._thread.turn_with_policy(
                 turn_input,
                 model=sdk_model,
                 effort=effort,
