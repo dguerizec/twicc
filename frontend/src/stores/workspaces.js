@@ -34,6 +34,19 @@ export const useWorkspacesStore = defineStore('workspaces', {
             }
         },
 
+        /**
+         * All project IDs of a workspace, regardless of archived state.
+         * Use for analytics views (heatmaps, sparklines) that must reflect
+         * the full workspace history, not just what is currently visible in
+         * lists.
+         */
+        getAllProjectIds() {
+            return (workspaceId) => {
+                const ws = this.getWorkspaceById(workspaceId)
+                return ws ? ws.projectIds : []
+            }
+        },
+
         /** Whether a workspace is activable (has at least one visible project). */
         isActivable() {
             return (workspaceId) => this.getVisibleProjectIds(workspaceId).length > 0

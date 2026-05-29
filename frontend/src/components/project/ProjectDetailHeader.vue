@@ -86,6 +86,11 @@ const workspace = computed(() => workspaceId.value ? workspacesStore.getWorkspac
 const workspaceProjectIds = computed(() =>
     workspaceId.value ? workspacesStore.getVisibleProjectIds(workspaceId.value) : []
 )
+// Stats (sparkline) include archived projects so the workspace history
+// reflects the full activity, not just what is currently visible.
+const workspaceStatsProjectIds = computed(() =>
+    workspaceId.value ? workspacesStore.getAllProjectIds(workspaceId.value) : []
+)
 const workspaceProjects = computed(() =>
     workspaceProjectIds.value.map(pid => store.getProject(pid)).filter(Boolean)
 )
@@ -137,7 +142,7 @@ const mtime = computed(() => {
 const weeklyActivity = computed(() => {
     if (isAllProjectsMode.value) return store.weeklyActivity._global || []
     if (isWorkspaceMode.value) {
-        return aggregateWeeklyActivity(workspaceProjectIds.value, store.weeklyActivity)
+        return aggregateWeeklyActivity(workspaceStatsProjectIds.value, store.weeklyActivity)
     }
     return store.weeklyActivity[props.projectId] || []
 })

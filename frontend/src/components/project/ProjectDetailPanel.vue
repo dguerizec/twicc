@@ -59,6 +59,11 @@ const workspaceId = computed(() => isWorkspaceMode.value ? extractWorkspaceId(pr
 const workspaceProjectIds = computed(() =>
     workspaceId.value ? workspacesStore.getVisibleProjectIds(workspaceId.value) : null
 )
+// Stats (heatmap/sparkline) include archived projects so the history reflects
+// the workspace as a whole, not just what is currently shown in lists.
+const workspaceStatsProjectIds = computed(() =>
+    workspaceId.value ? workspacesStore.getAllProjectIds(workspaceId.value) : null
+)
 
 const terminalContextKey = computed(() => {
     if (props.projectId === ALL_PROJECTS_ID) {
@@ -468,7 +473,7 @@ onBeforeUnmount(() => {
             <wa-tab-panel name="stats">
                 <ProjectDetailNavList :project-id="projectId" class="stats-nav-list" />
                 <wa-divider class="stats-nav-list-divider"></wa-divider>
-                <ContributionGraphs :project-id="projectId" :project-ids="workspaceProjectIds" />
+                <ContributionGraphs :project-id="projectId" :project-ids="workspaceStatsProjectIds" />
             </wa-tab-panel>
 
             <wa-tab-panel name="files">

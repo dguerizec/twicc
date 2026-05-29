@@ -38,6 +38,11 @@ const workspacesStore = useWorkspacesStore()
 const visibleProjectIds = computed(() =>
     workspacesStore.getVisibleProjectIds(props.workspace.id)
 )
+// Stats (sparkline) include archived projects so the workspace history
+// reflects the full activity, not just what is currently visible.
+const statsProjectIds = computed(() =>
+    workspacesStore.getAllProjectIds(props.workspace.id)
+)
 
 const isActivable = computed(() =>
     workspacesStore.isActivable(props.workspace.id)
@@ -59,7 +64,7 @@ const totalCost = computed(() =>
 const showCosts = computed(() => settingsStore.areCostsShown)
 
 const workspaceWeeklyActivity = computed(() =>
-    aggregateWeeklyActivity(visibleProjectIds.value, dataStore.weeklyActivity)
+    aggregateWeeklyActivity(statsProjectIds.value, dataStore.weeklyActivity)
 )
 
 /** Most recent mtime across visible projects (Unix seconds), or null. */
