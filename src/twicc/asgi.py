@@ -35,7 +35,13 @@ from twicc.providers.claude_code.ws import ClaudeCodeWSHandler
 from twicc.providers.codex.ws import CodexWSHandler
 from twicc.providers.db_writer import run_under_db_write_lock
 from twicc.providers.state import ProviderDisabledError, ensure_provider_running, is_provider_enabled
-from twicc.providers.helpers import AgentSettings, get_provider_helpers, get_provider_helpers_registry
+from twicc.providers.helpers import (
+    AGENT_SETTINGS_HIDDEN_FROM_FRONTEND,
+    AgentSettings,
+    agent_settings_kwargs_from_frontend_payload,
+    get_provider_helpers,
+    get_provider_helpers_registry,
+)
 from twicc.synced_settings import _settings_lock, prepare_settings_for_client, read_synced_settings, write_synced_settings
 from twicc.workspaces import read_workspaces, write_workspaces
 from twicc.message_snippets import read_message_snippets_config, write_message_snippets_config
@@ -753,9 +759,9 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
         # Per-session settings: ``None`` means "use global default", any
         # explicit value means "forced for this session". The bundle of
         # field names is the cross-provider :class:`AgentSettings`.
-        agent_settings = AgentSettings(**{
-            field: content.get(field) for field in AgentSettings._fields
-        })
+        # Fields listed in ``AGENT_SETTINGS_HIDDEN_FROM_FRONTEND`` are dropped
+        # here (defense in depth — the frontend does not know they exist).
+        agent_settings = AgentSettings(**agent_settings_kwargs_from_frontend_payload(content))
         try:
             if exists:
                 # Save all session settings to DB in one query.
@@ -805,6 +811,9 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
             else:
                 # New session: delegate to the shared service so the WS path
                 # and the CLI watcher path stay byte-for-byte aligned.
+                # Hidden agent-settings fields are stripped here so they
+                # cannot enter the create-session payload from a frontend
+                # source. The CLI path bypasses this filter on purpose.
                 payload = {
                     "session_id": session_id,
                     "project_id": project_id,
@@ -813,7 +822,7 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
                     "title": content.get("title"),
                     "images": content.get("images") or [],
                     "documents": content.get("documents") or [],
-                    **{field: content.get(field) for field in AgentSettings._fields},
+                    **agent_settings_kwargs_from_frontend_payload(content),
                 }
 
                 result = await create_session_from_payload(payload)
@@ -1443,6 +1452,18 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
         except ValueError:
             logger.warning("update_agent_settings_presets: unknown provider %r", provider_value)
             return
+
+        # Defense in depth: strip hidden agent-settings fields from each preset
+        # so they cannot be persisted via a frontend-authored payload. The
+        # frontend does not know these fields exist (filtered from bootstrap),
+        # but a stale or misbehaving client could still emit them. Stripping
+        # them after persistence would let the rebroadcast leak them.
+        presets = config.get("presets")
+        if isinstance(presets, list):
+            for preset in presets:
+                if isinstance(preset, dict):
+                    for hidden in AGENT_SETTINGS_HIDDEN_FROM_FRONTEND:
+                        preset.pop(hidden, None)
 
         await sync_to_async(write_agent_settings_presets)(provider, config)
 

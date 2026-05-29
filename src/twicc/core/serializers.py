@@ -7,7 +7,7 @@ safe to call from async contexts without sync_to_async wrapping, as long as
 the model instance was already fetched from the database.
 """
 
-from twicc.providers.helpers import get_provider_helpers
+from twicc.providers.helpers import AGENT_SETTINGS_HIDDEN_FROM_FRONTEND, AgentSettings, get_provider_helpers
 
 
 def serialize_project(project):
@@ -87,20 +87,14 @@ def serialize_session(session):
         # User-controlled fields
         "archived": session.archived,  # Whether the session is archived
         "pinned": session.pinned,  # Whether the session is pinned
-        # Permission mode
-        "permission_mode": session.permission_mode,
-        # User-selected model
-        "selected_model": session.selected_model,
-        # Effort level
-        "effort": session.effort,
-        # Thinking enabled
-        "thinking_enabled": session.thinking_enabled,
-        # Claude in Chrome MCP
-        "claude_in_chrome": session.claude_in_chrome,
-        # Fast mode (Claude Code, supported Opus only; premium pricing on extra usage credits)
-        "fast_mode": session.fast_mode,
-        # Maximum context window size in tokens (200K or 1M)
-        "context_max": session.context_max,
+        # Closed AgentSettings bundle (cross-provider). Fields listed in
+        # ``AGENT_SETTINGS_HIDDEN_FROM_FRONTEND`` are filtered out so they
+        # never leak to the frontend.
+        **{
+            field: getattr(session, field)
+            for field in AgentSettings._fields
+            if field not in AGENT_SETTINGS_HIDDEN_FROM_FRONTEND
+        },
         # Whether the session has been compacted at least once
         "compacted": session.compacted,
     }

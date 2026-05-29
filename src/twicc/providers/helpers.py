@@ -105,6 +105,7 @@ class AgentSettings(NamedTuple):
     claude_in_chrome: bool | None = None
     fast_mode: bool | None = None
     context_max: int | None = None
+    question_widget: bool | None = None
 
     @classmethod
     def from_session(cls, session: "Session") -> "AgentSettings":
@@ -121,7 +122,52 @@ class AgentSettings(NamedTuple):
             claude_in_chrome=session.claude_in_chrome,
             fast_mode=session.fast_mode,
             context_max=session.context_max,
+            question_widget=session.question_widget,
         )
+
+
+# Agent settings fields that must never be exposed to the frontend, regardless
+# of provider. Fields listed here are:
+# - filtered out of the per-provider ``agent_settings_categories`` map in the
+#   HTTP bootstrap response — see :func:`twicc.views.bootstrap` (so the frontend
+#   never knows the field exists);
+# - omitted from the serialized session payload — see
+#   :func:`twicc.core.serializers.serialize_session` (so existing values do
+#   not leak via REST or WebSocket broadcasts);
+# - stripped from inbound WebSocket payloads — see
+#   :func:`agent_settings_kwargs_from_frontend_payload` and the preset
+#   handler in :mod:`twicc.asgi` (so the frontend cannot write them even by
+#   accident; defense in depth).
+#
+# Such fields remain part of the closed ``AgentSettings`` bundle and can still
+# be classified in a provider's ``AGENT_SETTINGS_CATEGORIES`` (so the backend
+# treats them consistently with other settings of the same category). The
+# in-process bootstrap (used by the CLI via ``load_local_bootstrap``) does
+# NOT filter them — the CLI is a backend-side entry point and must be able
+# to set hidden fields via its own flags. Filtering happens only at the
+# backend → frontend boundary (HTTP bootstrap response, session serializer,
+# inbound WS message handlers).
+AGENT_SETTINGS_HIDDEN_FROM_FRONTEND: frozenset[str] = frozenset({"question_widget"})
+
+
+def agent_settings_kwargs_from_frontend_payload(payload: dict) -> dict[str, Any]:
+    """Read AgentSettings field values from a frontend-authored payload, dropping hidden fields.
+
+    Use this for any payload coming from a WebSocket message the frontend
+    can author — it filters out fields listed in
+    :data:`AGENT_SETTINGS_HIDDEN_FROM_FRONTEND` so the frontend cannot
+    write them even by accident. Returns a kwargs dict suitable for
+    ``AgentSettings(**...)`` or for ``**`` spreading into a larger payload.
+
+    Do NOT use for CLI drop-file payloads (see
+    :func:`twicc.core.services.session_creation.create_session_from_payload`) —
+    the CLI is a backend-side entry point and can legitimately set hidden fields.
+    """
+    return {
+        field: payload.get(field)
+        for field in AgentSettings._fields
+        if field not in AGENT_SETTINGS_HIDDEN_FROM_FRONTEND
+    }
 
 
 class ModelVersion(NamedTuple):

@@ -2403,6 +2403,20 @@ async def bootstrap(request):
             for provider, helpers in get_provider_helpers_registry().items()
         }
     )
+    # Filter out agent-settings fields hidden from the frontend. ``get_bootstrap_data``
+    # itself returns the full classification (so in-process consumers — notably the
+    # CLI via ``load_local_bootstrap`` — can still see hidden fields as supported and
+    # accept them as overrides); the trim happens here on the HTTP boundary, the only
+    # path that ships ``agent_settings_categories`` to the frontend.
+    from twicc.providers.helpers import AGENT_SETTINGS_HIDDEN_FROM_FRONTEND
+    for provider_data in providers_data.values():
+        categories = provider_data.get("agent_settings_categories")
+        if not categories:
+            continue
+        provider_data["agent_settings_categories"] = {
+            category: [k for k in keys if k not in AGENT_SETTINGS_HIDDEN_FROM_FRONTEND]
+            for category, keys in categories.items()
+        }
     return JsonResponse({
         "settings": clean_settings,
         "settings_version": version,

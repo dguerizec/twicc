@@ -375,6 +375,21 @@ class Session(models.Model):
     # Maximum context window size in tokens (200_000 = default 200K, 1_000_000 = extended 1M)
     # NULL = use global default, explicit value = forced for this session
     context_max = models.PositiveIntegerField(null=True, default=None)
+    # Whether interactive question widgets (e.g. AskUserQuestion for Claude
+    # Code) are enabled for this session. When True (or NULL = use default),
+    # the agent may use those UI tools to prompt the user; when False, the
+    # corresponding tool names are added to ``disallowed_tools`` at process
+    # start, forcing the agent to ask questions as plain text instead.
+    # Useful for CLI workflows where the user wants to read and answer
+    # questions textually without going through the TwiCC UI.
+    #
+    # Intentionally generic by name (not tied to a specific provider tool)
+    # so any future provider with a similar widget can opt in by mapping
+    # ``question_widget=False`` to its own widget tool. Hidden from the
+    # frontend via the global ``AGENT_SETTINGS_HIDDEN_FROM_FRONTEND`` set;
+    # settable only via the CLI flag ``--no-question-widget``. See the
+    # ``claude_in_chrome`` comment above for the closed-bundle rationale.
+    question_widget = models.BooleanField(null=True, default=None)
 
     # Whether the session's context has been compacted at least once
     compacted = models.BooleanField(default=False)

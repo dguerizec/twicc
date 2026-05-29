@@ -65,8 +65,26 @@ Each value is optional — omit to let the preset / synced default apply.
 | `--claude-in-chrome / --no-claude-in-chrome` | Chrome MCP integration on/off                                                                                | not supported                                       |
 | `--fast-mode / --no-fast-mode` | fast mode on/off (only on Opus; billed against extra usage credits; silently off on Sonnet)                  | not supported                                       |
 | `--context-max VALUE` | `200k` or `1m` (1m (million) silently capped to 200K on unsupported models)                                  | `272k`                                              |
+| `--question-widget / --no-question-widget` | interactive question widget on/off — see ["When to pass `--no-question-widget`"](#when-to-pass---no-question-widget) below | not supported                                       |
 
 The exact model list can shift over time — `twicc create-session --help` always reflects the current state. If a flag isn't supported by the chosen provider, the CLI rejects with an explicit `unsupported_field` validation error before sending anything.
+
+### When to pass `--no-question-widget`
+
+By default, when the agent needs to ask the user a question, it uses an interactive UI widget (Claude Code's `AskUserQuestion` tool) — the user picks an answer in the TwiCC web UI before the agent can continue.
+
+For workflows driven entirely from a script or terminal, that's a dead end: the agent ends up in `awaiting_user_input` state (see ["Following up"](#following-up)) and a poll loop can never unblock it without the user opening TwiCC.
+
+`--no-question-widget` strips the widget tool from what the agent can call. The model then has no choice but to ask its questions as plain text in the conversation, which you can read via `twicc session <ID> messages` and answer with `twicc send-message <ID> '<answer>'`. The whole interaction stays in the CLI.
+
+Pass it when:
+
+- The user is driving the workflow purely from a terminal / script and does not want to switch to the TwiCC web UI to answer questions.
+- You are scaffolding an automated loop (`create-session` → poll → `send-message`) and need every agent question to surface as text the loop can read.
+
+Leave it at the default (widget enabled) for any interactive use where the user already has the TwiCC UI open.
+
+Claude Code only — Codex does not currently use a UI widget for questions, so the flag is a no-op there (and rejected with `unsupported_field`).
 
 ### Attachments
 
@@ -121,6 +139,14 @@ $TWICC create-session --json \
     --provider claude_code \
     'Hello'
 # → {"status":"created","session_id":"...","provider":"claude_code","project_id":"...","request_uuid":"..."}
+
+# CLI-driven workflow: force the agent to ask any question as plain text
+# instead of through the TwiCC UI widget, so a script can read and answer
+# without anyone touching the web UI.
+$TWICC create-session \
+    --provider claude_code \
+    --no-question-widget \
+    'Resize all images in ./assets to 1024px wide — ask me before overwriting'
 ```
 
 ## Output format
@@ -180,7 +206,7 @@ Creation returns immediately; the agent keeps working in the background. Two com
 `twicc process <SESSION_ID>` is the cheap one-shot answer. It reports the live `state` of the process attached to the session (see the `twicc-process` skill for the full vocabulary). Map the result like this:
 
 - `assistant_turn` → still working, no reply yet — wait and retry.
-- `awaiting_user_input` → the agent is **blocked** on a tool approval / `AskUserQuestion` in the TwiCC UI. **The user has to click in the UI to unblock it — a `--tail 1` poll loop will never make progress.** That said, `--tail 1` is still useful here: the last assistant message often spells out *what* is being asked (the tool input, the question's body) so you can tell the user what's on the pending dialog before they switch back to TwiCC.
+- `awaiting_user_input` → the agent is **blocked** on a tool approval / `AskUserQuestion` in the TwiCC UI. **The user has to click in the UI to unblock it — a `--tail 1` poll loop will never make progress.** That said, `--tail 1` is still useful here: the last assistant message often spells out *what* is being asked (the tool input, the question's body) so you can tell the user what's on the pending dialog before they switch back to TwiCC. (If the session was created with [`--no-question-widget`](#when-to-pass---no-question-widget), the `AskUserQuestion` branch is impossible — the agent will have posted its question as plain text and stayed in `assistant_turn` then `user_turn`, never landing here.)
 - `user_turn` → the turn is finished; the latest assistant message is the reply (fetch it via the messages command below).
 - `starting` → still spinning up, retry shortly.
 - Exit 1 ("no running process for session …") → **not necessarily an error**: TwiCC doesn't keep finished processes around indefinitely, so a missing row most often means the agent already wrapped up and was cleaned up. Two real cases to disambiguate by fetching `--tail 1`:

@@ -71,7 +71,13 @@ OBSOLETE_SYNCED_SETTINGS_KEYS: tuple[str, ...] = (
 AGENT_SETTINGS_CATEGORIES: dict[AgentSettingCategory, list[str]] = {
     AgentSettingCategory.LIVE: ["permission_mode"],
     AgentSettingCategory.IDLE: ["selected_model", "context_max"],
-    AgentSettingCategory.STARTUP: ["effort", "thinking_enabled", "claude_in_chrome", "fast_mode"],
+    AgentSettingCategory.STARTUP: [
+        "effort",
+        "thinking_enabled",
+        "claude_in_chrome",
+        "fast_mode",
+        "question_widget",
+    ],
 }
 
 

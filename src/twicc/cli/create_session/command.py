@@ -213,6 +213,20 @@ def create_session_cmd(
             + _default_suffix("fast_mode")
         ),
     ),
+    question_widget: bool | None = typer.Option(
+        None,
+        "--question-widget/--no-question-widget",
+        help=(
+            "Enable interactive question widgets. Pass --no-question-widget to "
+            "force the agent to ask its questions as plain text instead of using "
+            "a UI widget (useful for CLI workflows where you want to read and "
+            "answer questions textually, without going through the TwiCC UI). "
+            "Honored by providers that map this flag to a widget tool; currently "
+            "Claude Code (maps to AskUserQuestion). Omit to use the default "
+            "(widget enabled)."
+            + _default_suffix("question_widget")
+        ),
+    ),
     context_max: str | None = typer.Option(
         None,
         "--context-max",
@@ -350,6 +364,7 @@ def create_session_cmd(
             "claude_in_chrome": claude_in_chrome,
             "fast_mode": fast_mode,
             "context_max": context_max_int,
+            "question_widget": question_widget,
         }
         preset_list = bootstrap.providers[provider].presets if provider in bootstrap.providers else []
         settings = apply_preset_and_overrides(preset, preset_list, overrides)

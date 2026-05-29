@@ -753,6 +753,16 @@ class ClaudeCodeAgent(BaseAgent):
                 {"fastMode": bool(self.agent_settings.fast_mode)}
             ).decode()
 
+            # ``question_widget=False`` → the agent must ask its questions as
+            # plain text. We strip ``AskUserQuestion`` from the tools the SDK
+            # exposes so the model cannot reach for the UI widget at all.
+            # ``None`` / ``True`` leave the tool in place (default behaviour).
+            disallowed_tools = (
+                ["AskUserQuestion"]
+                if self.agent_settings.question_widget is False
+                else []
+            )
+
             options = ClaudeAgentOptions(
                 system_prompt={
                     "type": "preset",
@@ -767,6 +777,7 @@ class ClaudeCodeAgent(BaseAgent):
                 settings=fast_mode_settings,
                 plugins=[{"type": "local", "path": str(get_plugin_dir())}],
                 can_use_tool=self._handle_pending_request,
+                disallowed_tools=disallowed_tools,
                 hooks={
                     "PreToolUse": [HookMatcher(matcher=None, hooks=[_pre_tool_use])],
                     "PostToolUse": [

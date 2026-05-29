@@ -152,6 +152,12 @@ async def create_session_from_payload(payload: dict) -> SessionCreationResult:
         ])
 
     # --- build agent settings from the closed bundle --------------
+    # NOTE: this reads every AgentSettings field — including those listed in
+    # ``AGENT_SETTINGS_HIDDEN_FROM_FRONTEND`` — because this service is also
+    # the CLI drop-file entry point, and the CLI is a legitimate backend-side
+    # source that can set hidden fields (e.g. ``--no-question-widget``). The
+    # WS path strips hidden fields upstream via
+    # ``agent_settings_kwargs_from_frontend_payload`` before calling here.
     agent_settings = AgentSettings(**{
         field: payload.get(field) for field in AgentSettings._fields
     })
