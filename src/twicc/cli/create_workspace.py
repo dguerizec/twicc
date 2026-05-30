@@ -43,7 +43,10 @@ def create_workspace_cmd(
         "--add-project",
         help=(
             "Add a project to the workspace. Repeat for multiple projects. "
-            "Each project id must exist in TwiCC (use `twicc projects` to "
+            "Each value is a project ID (with or without leading dash) or a "
+            "directory path (absolute or relative); paths are resolved via "
+            "realpath and converted to their canonical id. The resolved "
+            "project must already exist in TwiCC (use `twicc projects` to "
             "list)."
         ),
     ),
@@ -86,6 +89,13 @@ def create_workspace_cmd(
     ),
 ) -> None:
     """Create a new workspace."""
+    from twicc.cli._drop_request.project import derive_project_id
+
+    # Accept paths or ids for each --add-project — derive the canonical
+    # project_id once, before any DB lookup or validation downstream. The
+    # derivation is pure (no DB), the existence check happens below.
+    add_projects = [derive_project_id(value)[0] for value in add_projects]
+
     # Lazy imports to keep --help fast (no Django setup until we need it).
     import os
     os.environ.setdefault("DJANGO_SETTINGS_MODULE", "twicc.settings")

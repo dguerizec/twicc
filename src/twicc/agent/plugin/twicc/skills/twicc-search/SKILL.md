@@ -101,8 +101,8 @@ The command outputs JSON with this structure:
 
 - **Read the full item:** `twicc session <session_id> content <line_num>` — use `session_id` and `line_num` from search results to fetch the complete content
 - **Inspect the session:** `twicc session <session_id>` — get full session metadata (title, cost, model, branch, etc.)
-- **List sessions for a project:** `twicc sessions --project <project_id>` — browse other sessions in the same project (omit the leading dash from the project ID)
-- **Get project info:** `twicc project <project_id>` — get project details from the `project_id` in search results (omit the leading dash)
+- **List sessions for a project:** `twicc sessions --project <project_path_or_id>` — browse other sessions in the same project. Pass a directory path, or the `project_id` from search results — but **drop the leading dash on the CLI** (bash would otherwise parse `-home-...` as a flag)
+- **Get project info:** `twicc project <project_path_or_id>` — get project details. Same path-or-id rule (drop the leading dash on ids)
 
 ## How to present results
 

@@ -1,7 +1,7 @@
 ---
 name: twicc-update-project
 description: Update an existing TwiCC project — rename, change color, archive/unarchive. The directory is immutable (the project id is derived from it). There is no delete-project counterpart by design (projects are archived, never deleted). Use when the user wants to tweak a project's metadata from the CLI.
-argument-hint: <PROJECT_ID> [--name X|--unset-name] [--color X|--unset-color] [--archive|--unarchive]
+argument-hint: <PROJECT> [--name X|--unset-name] [--color X|--unset-color] [--archive|--unarchive]
 ---
 
 # TwiCC Update Project
@@ -35,12 +35,12 @@ Heartbeat check fails fast (exit 2) if the server is down.
 ## Basic shape
 
 ```bash
-$TWICC update-project '<PROJECT_ID>' [OPTIONS]
+$TWICC update-project '<PROJECT>' [OPTIONS]
 ```
 
 ### Required argument
 
-- **`PROJECT_ID`** — id of the existing project (slug form, with leading dash). Get one from `twicc projects` (the `id` field is exactly the value to pass here, leading dash included).
+- **`PROJECT`** — the project to update. Either a directory path (absolute or relative; resolved via `realpath` and converted to the canonical id) or a project ID (slug form — get one from `twicc projects`). **When passing an id on the command line, drop the leading dash** (bash would otherwise parse `-home-...` as a flag and the call would fail); the CLI re-adds the dash internally. Prefer the path — that's what the user usually knows; ids are mostly useful when chaining commands.
 
 ### Patch flags (combinable, all optional, at least one required)
 
@@ -69,7 +69,7 @@ Every flag passed is applied in the **same** `save()` under the DB write lock �
 
 - `conflicting_flags` — `--name` and `--unset-name` together, or `--color` and `--unset-color` together, or `--archive` and `--unarchive` together.
 - `no_op` — no patch flag was passed (nothing to update).
-- `project_not_found` — the PROJECT_ID doesn't exist.
+- `project_not_found` — the PROJECT value doesn't resolve to an existing project (typo on the id, or a path that no known project points to).
 - `invalid_name` — `--name` > 25 characters after trim.
 - `duplicate_name` — `--name` value is already used by another project.
 - `invalid_color` — `--color` value is not a valid hex color.
@@ -114,26 +114,32 @@ Same vocabulary. The server re-runs every check under the DB write lock, so a `d
 ## Examples
 
 ```bash
-# Rename only.
-$TWICC update-project -home-twidi-dev-myproj --name 'My Project'
+# Rename only (using the current directory).
+$TWICC update-project . --name 'My Project'
+
+# Rename only (by absolute directory path).
+$TWICC update-project /home/twidi/dev/myproj --name 'My Project'
+
+# Rename only (by id — handy when chaining commands; dash dropped).
+$TWICC update-project home-twidi-dev-myproj --name 'My Project'
 
 # Clear the name (back to basename).
-$TWICC update-project -home-twidi-dev-myproj --unset-name
+$TWICC update-project /home/twidi/dev/myproj --unset-name
 
 # Recolor only.
-$TWICC update-project -home-twidi-dev-myproj --color '#ff9900'
+$TWICC update-project /home/twidi/dev/myproj --color '#ff9900'
 
 # Clear the color.
-$TWICC update-project -home-twidi-dev-myproj --unset-color
+$TWICC update-project /home/twidi/dev/myproj --unset-color
 
 # Archive a project — hides it from default listings.
-$TWICC update-project -home-twidi-dev-legacy --archive
+$TWICC update-project /home/twidi/dev/legacy --archive
 
 # Bring it back + recolor in one atomic write.
-$TWICC update-project -home-twidi-dev-legacy --unarchive --color '#4a90d9'
+$TWICC update-project /home/twidi/dev/legacy --unarchive --color '#4a90d9'
 
 # Machine-parseable output for scripts.
-$TWICC update-project --json -home-twidi-dev-myproj --name 'Renamed'
+$TWICC update-project --json /home/twidi/dev/myproj --name 'Renamed'
 # → {"status":"updated","project_id":"-home-twidi-dev-myproj","request_uuid":"..."}
 ```
 
@@ -141,7 +147,7 @@ $TWICC update-project --json -home-twidi-dev-myproj --name 'Renamed'
 
 - **Create a project:** `twicc create-project <DIRECTORY>` (the `directory` argument is the only way to mint a new project — the id cannot be set directly).
 - **Inspect / list projects:** `twicc project <ID>` / `twicc projects` (with `--include-archived`).
-- **Add to / remove from a workspace:** `twicc update-workspace <WS_ID> --add-project <PROJECT_ID>` / `--remove-project <PROJECT_ID>`.
+- **Add to / remove from a workspace:** `twicc update-workspace <WS_ID> --add-project <PROJECT>` / `--remove-project <PROJECT>` (both accept directory paths or ids — prefer paths).
 - **No `delete-project`** — see the design note above. Use `--archive` instead.
 
 ## How to present results

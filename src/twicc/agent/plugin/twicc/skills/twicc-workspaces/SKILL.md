@@ -142,16 +142,16 @@ The command outputs a JSON array of workspace objects (in their stored order):
 - **`name`** — user-facing workspace name (mutable, the source of the original slug)
 - **`archived`** — whether the workspace is archived (defaults to `false`; excluded from default listing)
 - **`color`** — optional CSS color value (may be `null`)
-- **`projectIds`** — list of project IDs that belong to this workspace. These are the same IDs returned by `twicc projects` (with their leading dash). To pass them to other commands like `twicc project` or `twicc sessions --project`, **omit the leading dash** — it is added automatically.
+- **`projectIds`** — list of project IDs that belong to this workspace. These are the same IDs returned by `twicc projects` (with their leading dash). **Drop the leading dash when passing them on the command line** (bash would otherwise parse `-home-...` as a flag and reject the call); the CLI re-adds the dash internally. For `twicc project`, `twicc sessions --project`, `twicc update-project`, and `--add-project` / `--remove-project` on workspace commands, you can also pass a directory path directly — usually simpler than chasing the id.
 - **`autoProjectPatterns`** — optional list of directory patterns (with `*` wildcards) used to auto-add newly detected projects to the workspace. A pattern without `*` is treated as a directory prefix.
 
 ## Related commands
 
 - **Inspect a single workspace (errors out if missing):** `twicc workspace <workspace_id>` — get full details for one workspace, exit 1 if not found. Use when "workspace not found" should be a hard failure. For batch lookup that tolerates missing ids, see `workspaces get` above
-- **List projects in a workspace:** for each `projectIds` entry, use `twicc sessions --project <project_id>` (omit the leading dash) or `twicc project <project_id>` for details
+- **List projects in a workspace:** for each `projectIds` entry, use `twicc sessions --project <project_path_or_id>` or `twicc project <project_path_or_id>` for details — both accept a directory path; if you pass the id, drop the leading dash
 - **List all projects (with workspace memberships):** `twicc projects` — each project's `workspaces` field lists the workspace IDs it belongs to
-- **Create a new workspace:** `twicc create-workspace <NAME> [--color X] [--add-project PID]... [--add-pattern P]...`
-- **Update a workspace:** `twicc update-workspace <ID> [--name X] [--color X|--unset-color] [--add-project PID]... [--remove-project PID]... [--add-pattern P]... [--remove-pattern P]... [--archive|--unarchive]`
+- **Create a new workspace:** `twicc create-workspace <NAME> [--color X] [--add-project PROJECT]... [--add-pattern P]...` — `--add-project` accepts a directory path or an id (drop the leading dash on ids)
+- **Update a workspace:** `twicc update-workspace <ID> [--name X] [--color X|--unset-color] [--add-project PROJECT]... [--remove-project PROJECT]... [--add-pattern P]... [--remove-pattern P]... [--archive|--unarchive]` — `--add-project` / `--remove-project` accept a directory path or an id (drop the leading dash on ids)
 - **Delete a workspace:** `twicc delete-workspace <ID>`
 
 ## How to present results

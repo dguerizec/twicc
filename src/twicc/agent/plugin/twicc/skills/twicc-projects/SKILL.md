@@ -1,6 +1,6 @@
 ---
 name: twicc-projects
-description: List all projects tracked by TwiCC, or batch-look up specific project_ids (with a `known: false` placeholder for any id that doesn't exist). Use when the user wants to see their projects, find a project ID, batch-fetch metadata for known ids, or get an overview of project activity and costs.
+description: List all projects tracked by TwiCC, or batch-look up specific projects by directory path or id (with a `known: false` placeholder for any value that doesn't resolve to a known project). Use when the user wants to see their projects, find a project ID, batch-fetch metadata for known projects, or get an overview of project activity and costs.
 ---
 
 # TwiCC Projects
@@ -12,7 +12,7 @@ List all projects tracked by TwiCC, ordered by most recently active. A project c
 - The user asks to list or browse their projects
 - The user needs to find a project ID for use with other commands
 - The user wants an overview of project activity or costs
-- The user (or a script) has a list of known project_ids and wants to batch-fetch their metadata — use `projects get <ID>...` (one entry per id, placeholder when missing; archived projects are returned too since you named them explicitly)
+- The user (or a script) has a list of known projects (directory paths or ids — prefer paths when you have them) and wants to batch-fetch their metadata — use `projects get <PROJECT>...` (one entry per value, placeholder when missing; archived projects are returned too since you named them explicitly)
 
 ## How to invoke
 
@@ -50,29 +50,39 @@ $TWICC projects --include-archived # Include archived projects
 $TWICC projects --workspace backend # Only projects in the "backend" workspace
 ```
 
-## How to look up specific project_ids
+## How to look up specific projects
 
 When you already know which projects you care about, use the `get`
-sub-command instead of listing + post-filtering. Each requested
-project_id produces exactly one entry in the output, in the order you
-passed them (duplicates collapsed, first occurrence wins):
+sub-command instead of listing + post-filtering. Each requested value
+produces exactly one entry in the output, in the order you passed them
+(duplicates collapsed by canonical id, first occurrence wins):
 
 ```bash
-$TWICC projects get <PROJECT_ID> [<PROJECT_ID>...]
+$TWICC projects get <PROJECT> [<PROJECT>...]
 ```
+
+Each `<PROJECT>` is either a **directory path** (absolute or relative;
+resolved via `realpath` and converted to the canonical id) or a
+**project ID** — **drop the leading dash when passing it on the
+command line** (bash would otherwise parse `-home-...` as a flag and
+the call would fail); the CLI re-adds the dash internally. Prefer
+paths — they're what you usually have on hand; ids are mostly useful
+when chaining `twicc` commands that emit ids.
 
 Examples:
 
 ```bash
-$TWICC projects get home-twidi-dev-myproj            # Single project (leading dash auto-prepended)
-$TWICC projects get -home-twidi-dev-myproj           # Also accepted (leading dash explicit)
-$TWICC projects get home-twidi-dev-a home-twidi-dev-b  # Batch
+$TWICC projects get .                                # By current directory
+$TWICC projects get /home/twidi/dev/myproj           # By absolute path
+$TWICC projects get /home/twidi/dev/a /home/twidi/dev/b  # Batch of paths
+$TWICC projects get /home/twidi/dev/a home-twidi-dev-b   # Mixed batch (path first, id second — dash dropped)
+$TWICC projects get home-twidi-dev-myproj            # By id (dash dropped, CLI re-adds it)
 ```
 
 Unlike `twicc projects`, `get` accepts **no filter flags** — when you
 name the projects you care about, the archived-by-default filter
 doesn't apply: archived projects are returned just like active ones
-(mirrors the singular `twicc project <ID>` scope).
+(mirrors the singular `twicc project <PROJECT>` scope).
 
 ### Output
 
@@ -107,7 +117,9 @@ it with the input list with no re-mapping:
 
 ```python
 import json, subprocess
-ids = ["-foo", "-bar", "-baz"]
+# Strip the leading dash before invoking the CLI — argv parsing would
+# otherwise treat "-home-..." as an unknown flag and reject the call.
+ids = ["foo", "bar", "baz"]  # canonical ids "-foo", "-bar", "-baz" with dash dropped
 out = json.loads(subprocess.check_output([twicc, "projects", "get", *ids]))
 for pid, entry in zip(ids, out):
     if not entry["known"]:
@@ -140,7 +152,7 @@ The command outputs a JSON array of project objects:
 
 ### Fields
 
-- **`id`** — project identifier (derived from the project's working directory path, with every non-alphanumeric character replaced by a dash; therefore starts with a dash for absolute paths). When passing this ID to other commands (`twicc project`, `twicc sessions --project`), **omit the leading dash** — it is added automatically
+- **`id`** — project identifier (derived from the project's working directory path, with every non-alphanumeric character replaced by a dash; therefore starts with a dash for absolute paths). When passing this ID on the command line, **drop the leading dash** (bash would otherwise parse `-home-...` as a flag and reject the call); the CLI re-adds the dash internally. Most CLI commands that take a project also accept a directory path directly — usually simpler than chasing the id
 - **`directory`** — filesystem path of the project
 - **`git_root`** — resolved git root directory
 - **`sessions_count`** — total number of sessions in this project
@@ -154,14 +166,14 @@ The command outputs a JSON array of project objects:
 
 ## Related commands
 
-- **Inspect a single project (errors out if missing):** `twicc project <project_id>` — get full details for one project (omit the leading dash from the project ID), exit 1 if not found. Use when "project not found" should be a hard failure. For batch lookup that tolerates missing ids, see `projects get` above
-- **List sessions for a project:** `twicc sessions --project <project_id>` — use the `id` field from the output (omit the leading dash from the project ID)
+- **Inspect a single project (errors out if missing):** `twicc project <project_path_or_id>` — get full details for one project (pass a directory path, or the id from the listing; omit the leading dash if you use the id), exit 1 if not found. Use when "project not found" should be a hard failure. For batch lookup that tolerates missing values, see `projects get` above
+- **List sessions for a project:** `twicc sessions --project <project_path_or_id>` — pass a directory path, or use the `id` field from the output (omit the leading dash if you use the id)
 - **Inspect a specific session:** `twicc session <session_id>` — get full details for one session
 - **Inspect a workspace:** `twicc workspace <workspace_id>` — use any value from the `workspaces` field to see the workspace's name, color, and full project list
 - **List all workspaces:** `twicc workspaces` — find workspace IDs
 - **Search across sessions:** `twicc search "<query>"` — full-text search, can filter by project with `project_id:<id>` in the query
 - **Create a new project:** `twicc create-project <DIRECTORY> [--name X] [--color X] [--create-directory]`
-- **Update a project:** `twicc update-project <ID> [--name X|--unset-name] [--color X|--unset-color] [--archive|--unarchive]`
+- **Update a project:** `twicc update-project <PROJECT> [--name X|--unset-name] [--color X|--unset-color] [--archive|--unarchive]` — `<PROJECT>` accepts a directory path or an id
 
 ## How to present results
 

@@ -20,11 +20,12 @@ import typer
 def update_project_cmd(
     project_id: str = typer.Argument(
         ...,
-        metavar="PROJECT_ID",
+        metavar="PROJECT",
         help=(
-            "Id of the project to update (slug form, leading dash optional — "
-            "auto-prepended if missing; same format as `twicc projects` "
-            "output without the dash)."
+            "Project to update. Either a project ID (slug form, with or "
+            "without leading dash — same format as `twicc projects` output) "
+            "or a directory path (absolute or relative); paths are resolved "
+            "via realpath and converted to their canonical id."
         ),
     ),
     new_name: str | None = typer.Option(
@@ -98,11 +99,11 @@ def update_project_cmd(
     ),
 ) -> None:
     """Update an existing project's name, color, and/or archived state."""
-    # Auto-prepend the leading dash so callers can drop it (the convention
-    # used by every other CLI command that takes a project_id, since the
-    # raw form would otherwise be parsed as a flag by Typer).
-    if not project_id.startswith("-"):
-        project_id = f"-{project_id}"
+    from twicc.cli._drop_request.project import derive_project_id
+
+    # Accept a path or an id — derive the canonical project_id once,
+    # before any DB lookup or validation downstream.
+    project_id = derive_project_id(project_id)[0]
 
     # Lazy imports to keep --help fast (no Django setup until we need it).
     import os
@@ -162,7 +163,7 @@ def update_project_cmd(
     # Project existence + per-field validation.
     if not Project.objects.filter(id=project_id).exists():
         emit_validation_errors(
-            [ValidationError("PROJECT_ID", "project_not_found",
+            [ValidationError("PROJECT", "project_not_found",
                               f"Project {project_id!r} not found.")],
             json_output=json_output,
         )

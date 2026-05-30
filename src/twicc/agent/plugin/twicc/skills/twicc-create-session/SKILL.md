@@ -46,7 +46,7 @@ $TWICC create-session [OPTIONS] '<PROMPT>'
 
 All options are optional. Omitted values fall back to the synced defaults.
 
-- `--project ID-OR-PATH` — project id (with or without leading dash) or directory (absolute / relative). New directories are auto-created as projects after `realpath` resolution. Defaults to the current working directory.
+- `--project PATH-OR-ID` — directory (absolute / relative; resolved via `realpath`) or project id. **When passing an id on the command line, drop the leading dash** (bash would otherwise parse `-home-...` as a flag and the call would fail); the CLI re-adds the dash internally. Prefer passing a path — that's what the user usually knows; an id is only convenient when you got it back from another `twicc` command. New directories are auto-created as projects. Defaults to the current working directory.
 - `--provider claude_code|codex` — provider to use. Falls back to the synced `defaultProvider` when omitted.
 - `--preset NAME` — name of a saved agent-settings preset for the chosen provider. Per-flag options below override preset values; unset fields fall back to the synced defaults.
 - `--title TEXT` — **you MUST always pass this.** A concise 5–7 word title — not necessarily a grammatical sentence, but specific enough that the user can find the session later in a long list. Derive it from the prompt; don't fall back on the auto-derived title (it's rarely as good).
@@ -129,7 +129,7 @@ $TWICC create-session \
 
 # Prompt from a file, with a saved preset
 $TWICC create-session \
-    --project home-twidi-dev-myproj \
+    --project /home/twidi/dev/myproj \
     --preset 'deep think' \
     /home/twidi/prompts/security-audit.md
 
@@ -257,8 +257,8 @@ If `process` reports `awaiting_user_input`, do NOT call `send-message` — the s
 - **Stop the live agent attached to the session:** `twicc process <session_id> stop` — see the `twicc-process` skill. Idempotent; does not touch the row (use `update-session archive` if you also want to mark it archived)
 - **Read the agent's reply (uniform shape):** `twicc session <session_id> messages --tail 1` — the latest user/assistant message (see "Following up" above)
 - **Read raw session content:** `twicc session <session_id> content <line_or_range>` — see every item (tool calls, reasoning, system) in the provider's native JSONL shape
-- **List sessions:** `twicc sessions --project <project_id>` — to see other recent sessions in the same project
-- **Find a project id:** `twicc projects` — useful to resolve `--project` if you'd rather pass the canonical id
+- **List sessions:** `twicc sessions --project <project_path_or_id>` — to see other recent sessions in the same project (path preferred; id works too)
+- **Find a project id:** `twicc projects` — only needed when you want the canonical id; otherwise pass the directory path directly to `--project`
 
 ## How to present results
 

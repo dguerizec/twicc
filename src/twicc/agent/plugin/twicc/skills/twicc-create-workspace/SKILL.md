@@ -1,7 +1,7 @@
 ---
 name: twicc-create-workspace
 description: Create a new TwiCC workspace — a user-defined group of projects, optionally with a color, auto-add directory patterns, and an initial project list. Use when the user wants to spawn a new workspace from the CLI or from a script, or organise existing projects into a new group.
-argument-hint: <NAME> [--color X] [--add-project PID]... [--add-pattern P]... [--archived]
+argument-hint: <NAME> [--color X] [--add-project PROJECT]... [--add-pattern P]... [--archived]
 ---
 
 # TwiCC Create Workspace
@@ -43,7 +43,7 @@ $TWICC create-workspace '<NAME>' [OPTIONS]
 | Flag | |
 |------|---|
 | `--color VALUE` | Optional CSS hex color (`#rgb`, `#rrggbb`, or `#rrggbbaa`). Other CSS forms (named colors, `rgb(...)`, etc.) are rejected from the CLI for simplicity. |
-| `--add-project PID` (repeatable) | Add a project to the workspace. The project id must exist in TwiCC (run `twicc projects` to list — drop the leading dash when passing to other commands, but here keep it as-is, e.g. `-home-twidi-dev-foo`). Duplicates are silently deduplicated. |
+| `--add-project PROJECT` (repeatable) | Add a project to the workspace. The value is either a directory path (absolute or relative; resolved via `realpath` and converted to the canonical id) or a project ID. **When passing an id, drop the leading dash** (bash would otherwise parse `-home-...` as a flag and the call would fail); the CLI re-adds the dash internally. Prefer paths — that's what you usually know; ids are mostly useful when chaining with another `twicc` command's output. The resolved project must already exist in TwiCC (run `twicc projects` to list). Duplicates are silently deduplicated. |
 | `--add-pattern PATTERN` (repeatable) | Add a directory auto-add pattern (using `*` as wildcard). Newly detected projects whose directory matches a pattern are added to the workspace automatically (see the matching rule in `twicc-workspace`). |
 | `--archived` | Create the workspace already in the archived state (excluded from default listings). |
 | `--timeout SECONDS` | Seconds to wait for the server's final status (default 30). |
@@ -56,7 +56,7 @@ $TWICC create-workspace '<NAME>' [OPTIONS]
 - `duplicate_name` — another workspace already uses this name (case-insensitive).
 - `invalid_color` — `--color` value isn't a valid hex color (`#rgb`, `#rrggbb`, `#rrggbbaa`).
 - `invalid_pattern` — an `--add-pattern` value is empty after trim.
-- `project_not_found` — an `--add-project` id doesn't exist in TwiCC's DB. One error per missing project is emitted (the user sees the full list of bad ids at once).
+- `project_not_found` — an `--add-project` value doesn't resolve to an existing project (typo on the id, or a path that no known project points to). One error per missing project is emitted (the user sees the full list of bad values at once).
 
 ## Rejections from the server (exit 3)
 
@@ -103,10 +103,11 @@ A single JSON object, one of:
 # Minimal: just a name.
 $TWICC create-workspace 'Backend'
 
-# Pre-populate with projects + a color.
+# Pre-populate with projects + a color (paths first, id only when chaining).
 $TWICC create-workspace 'Frontend' --color '#4a90d9' \
-    --add-project '-home-twidi-dev-app-front' \
-    --add-project '-home-twidi-dev-design-system'
+    --add-project /home/twidi/dev/app-front \
+    --add-project /home/twidi/dev/design-system \
+    --add-project 'home-twidi-dev-shared'   # by id (dash dropped), e.g. piped from another command
 
 # Auto-grow pattern: any project under /home/twidi/dev/sparkup/* will be added
 # automatically the next time it's detected by the watcher.
@@ -123,7 +124,7 @@ $TWICC --json create-workspace 'Scratch' --archived
 - **Update an existing workspace:** `twicc update-workspace <ID>` — rename, recolor, add/remove projects, add/remove patterns, archive/unarchive.
 - **Delete a workspace:** `twicc delete-workspace <ID>`.
 - **List workspaces / inspect one:** `twicc workspaces` and `twicc workspace <ID>`.
-- **List projects (to find ids):** `twicc projects` — the id you pass to `--add-project` is the one returned here, leading dash included.
+- **List projects (only needed when you want to look up an id):** `twicc projects` — `--add-project` accepts the path directly (e.g. `--add-project .`), so you only need to list when you're chasing a specific id.
 
 ## How to present results
 

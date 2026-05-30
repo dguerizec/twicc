@@ -67,15 +67,15 @@ The command outputs a single JSON workspace object:
 - **`name`** — user-facing workspace name (mutable)
 - **`archived`** — whether the workspace is archived
 - **`color`** — optional CSS color value (may be `null`)
-- **`projectIds`** — list of project IDs that belong to this workspace. These match what `twicc projects` returns (leading dash included). **Omit the leading dash** when passing them to `twicc project <id>` or `twicc sessions --project <id>` — it is added automatically.
+- **`projectIds`** — list of project IDs that belong to this workspace. These match what `twicc projects` returns (leading dash included). **Drop the leading dash when passing them on the command line** (bash would otherwise parse `-home-...` as a flag and reject the call); the CLI re-adds the dash internally. For `twicc project`, `twicc sessions --project`, `twicc update-project`, and `--add-project` / `--remove-project` on workspace commands, you can also pass a directory path directly — usually simpler than chasing the id.
 - **`autoProjectPatterns`** — optional list of directory patterns (with `*` wildcards) used to auto-add newly detected projects. A pattern without `*` is treated as a directory prefix.
 
 ## Related commands
 
 - **List all workspaces:** `twicc workspaces` — find workspace IDs
-- **Inspect a project in the workspace:** `twicc project <project_id>` — use any entry from `projectIds` (omit the leading dash)
-- **List sessions for a project in the workspace:** `twicc sessions --project <project_id>` (omit the leading dash)
-- **Update this workspace:** `twicc update-workspace <ID> [--name X] [--color X|--unset-color] [--add-project PID]... [--remove-project PID]... [--add-pattern P]... [--remove-pattern P]... [--archive|--unarchive]`
+- **Inspect a project in the workspace:** `twicc project <project_path_or_id>` — use any entry from `projectIds` (drop the leading dash on the CLI) or the project's directory path
+- **List sessions for a project in the workspace:** `twicc sessions --project <project_path_or_id>` — same path-or-id rule (drop the leading dash on ids)
+- **Update this workspace:** `twicc update-workspace <ID> [--name X] [--color X|--unset-color] [--add-project PROJECT]... [--remove-project PROJECT]... [--add-pattern P]... [--remove-pattern P]... [--archive|--unarchive]` — `--add-project` / `--remove-project` accept a directory path or an id (drop the leading dash on ids)
 - **Delete this workspace:** `twicc delete-workspace <ID>` — non-destructive for the underlying projects
 - **Create a new workspace:** `twicc create-workspace <NAME> [...]`
 

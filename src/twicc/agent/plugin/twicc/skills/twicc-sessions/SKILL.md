@@ -36,7 +36,7 @@ $TWICC sessions
 
 ### Options
 
-- `--project ID` — filter by project ID, omit the leading dash (default: all projects)
+- `--project <PROJECT>` — filter by project. Either a directory path (absolute or relative; resolved via `realpath` and converted to the canonical id) or a project ID. **When passing an id on the command line, drop the leading dash** (bash would otherwise parse `-home-...` as a flag and the call would fail); the CLI re-adds the dash internally. Prefer paths — that's what the user usually knows; ids are mostly useful when chaining commands. When the value resolves to a project that doesn't exist, the result is empty (no error). Default: all projects.
 - `--workspace ID` — filter to sessions of projects belonging to the given workspace. Fails if the workspace does not exist. Can be combined with `--project` (intersection: the project must be inside the workspace, otherwise the result is empty).
 - `--limit N` — max number of sessions to return (default: 20)
 - `--offset N` — skip first N sessions for pagination (default: 0)
@@ -49,7 +49,9 @@ $TWICC sessions
 
 ```bash
 $TWICC sessions                                    # List the 20 most recent sessions
-$TWICC sessions --project 'home-twidi-dev-myproj'  # Sessions for a specific project
+$TWICC sessions --project .                        # Sessions for the current directory
+$TWICC sessions --project /home/twidi/dev/myproj   # Sessions for a specific project (by path)
+$TWICC sessions --project 'home-twidi-dev-myproj'  # Sessions for a specific project (by id)
 $TWICC sessions --workspace backend                # Sessions across every project in the "backend" workspace
 $TWICC sessions --include-archived                 # Include archived sessions
 $TWICC sessions --include-hidden                   # Include hidden sessions alongside visible ones
@@ -190,8 +192,8 @@ The command outputs a JSON array of session objects:
 
 ## Related commands
 
-- **Get project details:** `twicc project <project_id>` — get full details for one project
-- **Find project IDs:** `twicc projects` — list all projects to find IDs for `--project`
+- **Get project details:** `twicc project <project_path_or_id>` — get full details for one project (path preferred; id works too)
+- **Find project IDs:** `twicc projects` — list all projects (only needed when you want a canonical id; otherwise pass the directory path directly to `--project`)
 - **Inspect a single session (errors out if missing):** `twicc session <session_id>` — get full metadata for one session, exit 1 if not found. Use when "session not found" should be a hard failure. For batch lookup that tolerates missing ids, see `sessions get` above
 - **Read session content:** `twicc session <session_id> content <line_or_range>` — read the actual conversation items
 - **List subagents:** `twicc session <session_id> agents` — see subagents spawned by a session

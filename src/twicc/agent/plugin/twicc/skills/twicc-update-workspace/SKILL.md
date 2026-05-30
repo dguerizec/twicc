@@ -1,7 +1,7 @@
 ---
 name: twicc-update-workspace
 description: Update an existing TwiCC workspace — rename, change color, add/remove projects, add/remove auto-add patterns, archive/unarchive. Flags are combinable: every operation is applied atomically in a single write. Use when the user wants to tweak a workspace from the CLI without going through the UI.
-argument-hint: <WORKSPACE_ID> [--name X] [--color X|--unset-color] [--add-project PID]... [--remove-project PID]... [--add-pattern P]... [--remove-pattern P]... [--archive|--unarchive]
+argument-hint: <WORKSPACE_ID> [--name X] [--color X|--unset-color] [--add-project PROJECT]... [--remove-project PROJECT]... [--add-pattern P]... [--remove-pattern P]... [--archive|--unarchive]
 ---
 
 # TwiCC Update Workspace
@@ -47,8 +47,8 @@ $TWICC update-workspace '<WORKSPACE_ID>' [OPTIONS]
 | `--name NEW_NAME` | Rename the display name. Trimmed; non-empty; ≤ 20 characters; unique (case-insensitive) across other workspaces. The id stays unchanged. |
 | `--color VALUE` | Set a CSS hex color (`#rgb`, `#rrggbb`, or `#rrggbbaa`). Mutually exclusive with `--unset-color`. |
 | `--unset-color` | Clear the color (back to none). Mutually exclusive with `--color`. |
-| `--add-project PID` (repeatable) | Add a project. Idempotent — silently skips if the project is already in the workspace. The project id must exist in TwiCC. |
-| `--remove-project PID` (repeatable) | Remove a project. Idempotent — silently skips if the project isn't in the workspace. No DB check on the id (you can safely pass a stale id). |
+| `--add-project PROJECT` (repeatable) | Add a project. The value is either a directory path (absolute or relative; resolved via `realpath` and converted to the canonical id) or a project ID. **When passing an id, drop the leading dash** (bash would otherwise parse `-home-...` as a flag and the call would fail); the CLI re-adds the dash internally. Prefer paths — that's what you usually know; ids are mostly useful when chaining with another `twicc` command's output. Idempotent — silently skips if already in the workspace. The resolved project must exist in TwiCC. |
+| `--remove-project PROJECT` (repeatable) | Remove a project. Same path-or-id resolution as `--add-project` (path preferred; drop the leading dash on ids). Idempotent — silently skips if the project isn't in the workspace. No DB check on the value (you can safely pass a stale id or a path no project points to). |
 | `--add-pattern PATTERN` (repeatable) | Add an auto-add directory pattern (using `*` as wildcard). Idempotent. |
 | `--remove-pattern PATTERN` (repeatable) | Remove a pattern. Idempotent. |
 | `--archive` | Mark as archived (excluded from default listings). Mutually exclusive with `--unarchive`. |
@@ -77,7 +77,7 @@ Reordering of projects / patterns is **not** supported in the CLI (use the UI). 
 - `duplicate_name` — `--name` collides (case-insensitive) with another workspace.
 - `invalid_color` — `--color` value isn't a valid hex color.
 - `invalid_pattern` — an `--add-pattern` value is empty after trim.
-- `project_not_found` — an `--add-project` id doesn't exist in TwiCC's DB.
+- `project_not_found` — an `--add-project` value doesn't resolve to an existing project (typo on the id, or a path that no known project points to).
 
 ## Rejections from the server (exit 3)
 
@@ -130,15 +130,23 @@ $TWICC update-workspace backend --color '#ff9900'
 # Clear the color.
 $TWICC update-workspace backend --unset-color
 
-# Add two projects at once.
+# Add two projects at once (by path).
 $TWICC update-workspace backend \
-    --add-project '-home-twidi-dev-api' \
-    --add-project '-home-twidi-dev-workers'
+    --add-project /home/twidi/dev/api \
+    --add-project /home/twidi/dev/workers
+
+# Add the current directory as a project.
+$TWICC update-workspace backend --add-project .
+
+# Mix: path first, id second (id only when you got it from another command; dash dropped).
+$TWICC update-workspace backend \
+    --add-project /home/twidi/dev/api \
+    --add-project 'home-twidi-dev-shared'
 
 # Replace one project with another (atomic).
 $TWICC update-workspace backend \
-    --remove-project '-home-twidi-dev-old-api' \
-    --add-project '-home-twidi-dev-new-api'
+    --remove-project /home/twidi/dev/old-api \
+    --add-project /home/twidi/dev/new-api
 
 # Add an auto-add pattern + archive in one shot.
 $TWICC update-workspace scratch \
@@ -158,7 +166,7 @@ $TWICC --json update-workspace backend --name 'BE'
 - **Create a new workspace:** `twicc create-workspace <NAME>`.
 - **Delete a workspace:** `twicc delete-workspace <ID>`.
 - **Inspect / list workspaces:** `twicc workspace <ID>` / `twicc workspaces`.
-- **List projects (to find ids to add):** `twicc projects` — id format matches what you pass to `--add-project` (leading dash included).
+- **List projects (only needed when you want to look up an id):** `twicc projects` — `--add-project` accepts the path directly (e.g. `--add-project .`), so you only need to list when you're chasing a specific id.
 
 ## How to present results
 

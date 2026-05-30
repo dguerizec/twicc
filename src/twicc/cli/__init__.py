@@ -9,6 +9,7 @@ import os
 
 import typer
 
+from twicc.cli._drop_request.project import derive_project_id
 from twicc.version import get_version
 
 # Ensure Django settings are discoverable for all subcommands that call django.setup().
@@ -16,13 +17,6 @@ from twicc.version import get_version
 # This prevents a stray DJANGO_SETTINGS_MODULE from another project from breaking twicc.
 if not os.environ.get("DJANGO_SETTINGS_MODULE", "").startswith("twicc.settings"):
     os.environ["DJANGO_SETTINGS_MODULE"] = "twicc.settings"
-
-
-def _normalize_project_id(project_id: str) -> str:
-    """Ensure the project ID starts with a dash (auto-prepend if missing)."""
-    if not project_id.startswith("-"):
-        project_id = f"-{project_id}"
-    return project_id
 
 
 app = typer.Typer(
@@ -90,19 +84,23 @@ def _projects_default(
 def _projects_get(
     project_ids: list[str] = typer.Argument(
         ...,
-        metavar="PROJECT_ID...",
+        metavar="PROJECT...",
         help=(
-            "One or more project IDs to look up (leading dash is optional, "
-            "auto-prepended). The output mirrors the input order (duplicates "
-            "collapsed, first occurrence wins). Each entry is either the "
-            "full project metadata or a placeholder with `known: false` "
-            "when no Project row exists for that id. Archived projects are "
-            "returned just like active ones — the listing filter doesn't "
-            "apply when you name explicit ids."
+            "One or more projects to look up. Each value is a project ID "
+            "(with or without leading dash) or a directory path (absolute or "
+            "relative); paths are resolved via realpath and converted to "
+            "their canonical id. The output mirrors the input order "
+            "(duplicates collapsed by canonical id, first occurrence wins). "
+            "Each entry is either the full project metadata or a placeholder "
+            "with `known: false` when no Project row exists for that id "
+            "(applies the same way to a path that doesn't match any known "
+            "project). Archived projects are returned just like active "
+            "ones — the listing filter doesn't apply when you name explicit "
+            "projects."
         ),
     ),
 ) -> None:
-    """Look up projects by id (placeholder for missing, includes archived).
+    """Look up projects by id or path (placeholder for missing, includes archived).
 
     Unlike ``twicc projects``, ``get`` takes no filter flags: when the
     caller names the projects it cares about, the archived-by-default
@@ -110,17 +108,22 @@ def _projects_get(
     """
     from twicc.cli.projects_get import main as projects_get_main
 
-    projects_get_main([_normalize_project_id(pid) for pid in project_ids])
+    projects_get_main([derive_project_id(pid)[0] for pid in project_ids])
 
 
 @app.command()
 def project(
-    project_id: str = typer.Argument(help="The project ID (leading dash is optional)."),
+    project_id: str = typer.Argument(
+        help=(
+            "Project ID (with or without leading dash) or directory path "
+            "(absolute or relative)."
+        ),
+    ),
 ) -> None:
     """Show a single project as JSON."""
     from twicc.cli.project import main as project_main
 
-    project_main(_normalize_project_id(project_id))
+    project_main(derive_project_id(project_id)[0])
 
 
 workspaces_app = typer.Typer(
@@ -195,7 +198,13 @@ app.add_typer(sessions_app)
 @sessions_app.callback(invoke_without_command=True)
 def _sessions_default(
     ctx: typer.Context,
-    project: str = typer.Option(None, help="Filter by project ID (leading dash is optional)."),
+    project: str = typer.Option(
+        None,
+        help=(
+            "Filter by project: either a project ID (with or without "
+            "leading dash) or a directory path (absolute or relative)."
+        ),
+    ),
     workspace: str = typer.Option(None, "--workspace", help="Filter by workspace ID (only sessions of projects in that workspace). Can be combined with --project."),
     limit: int = typer.Option(20, help="Max number of sessions to return."),
     offset: int = typer.Option(0, help="Skip first N sessions."),
@@ -225,7 +234,7 @@ def _sessions_default(
     from twicc.cli.sessions import main as sessions_main
 
     sessions_main(
-        project=_normalize_project_id(project) if project is not None else None,
+        project=derive_project_id(project)[0] if project is not None else None,
         workspace=workspace,
         limit=limit,
         offset=offset,

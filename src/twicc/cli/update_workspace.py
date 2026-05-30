@@ -56,7 +56,10 @@ def update_workspace_cmd(
         "--add-project",
         help=(
             "Add a project to the workspace (idempotent). Repeat for "
-            "multiple projects. Each project id must exist in TwiCC."
+            "multiple projects. Each value is a project ID (with or without "
+            "leading dash) or a directory path (absolute or relative); paths "
+            "are resolved via realpath and converted to their canonical id. "
+            "The resolved project must already exist in TwiCC."
         ),
     ),
     remove_projects: list[str] = typer.Option(
@@ -64,7 +67,10 @@ def update_workspace_cmd(
         "--remove-project",
         help=(
             "Remove a project from the workspace (idempotent — silently "
-            "skips projects already absent). Repeat for multiple projects."
+            "skips projects already absent). Repeat for multiple projects. "
+            "Each value is a project ID (with or without leading dash) or "
+            "a directory path (absolute or relative); paths are resolved "
+            "via realpath and converted to their canonical id."
         ),
     ),
     add_patterns: list[str] = typer.Option(
@@ -123,6 +129,15 @@ def update_workspace_cmd(
     ),
 ) -> None:
     """Update an existing workspace."""
+    from twicc.cli._drop_request.project import derive_project_id
+
+    # Accept paths or ids for each --add-project / --remove-project — derive
+    # the canonical project_id once, before any DB lookup or validation
+    # downstream. The derivation is pure (no DB); existence is enforced
+    # later for additions only (removals stay idempotent on missing ids).
+    add_projects = [derive_project_id(value)[0] for value in add_projects]
+    remove_projects = [derive_project_id(value)[0] for value in remove_projects]
+
     # Lazy imports to keep --help fast (no Django setup until we need it).
     import os
     os.environ.setdefault("DJANGO_SETTINGS_MODULE", "twicc.settings")

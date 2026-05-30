@@ -196,7 +196,7 @@ def create_session_cmd(
     )
     from twicc.cli._drop_request.polling import poll_status
     from twicc.cli._drop_request.prompt import resolve_prompt, PromptError
-    from twicc.cli.create_session.project import resolve_project, ProjectError
+    from twicc.cli._drop_request.project import resolve_project
     from twicc.cli._drop_request.presets import apply_preset_and_overrides, PresetError
     from twicc.cli._drop_request.validation import (
         ValidationError,
@@ -268,17 +268,29 @@ def create_session_cmd(
     except PromptError as e:
         emit_validation_errors([ValidationError("prompt", "invalid_prompt", str(e))], json_output=json_output)
         raise typer.Exit(1)
-    except ProjectError as e:
-        emit_validation_errors([ValidationError("--project", "invalid_project", str(e))], json_output=json_output)
-        raise typer.Exit(1)
     except PresetError as e:
         emit_validation_errors([ValidationError("--preset", "invalid_preset", str(e))], json_output=json_output)
+        raise typer.Exit(1)
+
+    # ``resolve_project`` never raises: when the input is an id with no
+    # matching Project row and no on-disk directory backing it, it returns
+    # ``directory=None``. ``create-session`` needs the directory (to seed
+    # the project server-side), so reject here with the same UX as before.
+    if resolved_project.directory is None:
+        emit_validation_errors(
+            [ValidationError(
+                "--project", "invalid_project",
+                f"--project: {project!r} is neither an existing directory "
+                f"nor a known project_id (tried also with leading '-').",
+            )],
+            json_output=json_output,
+        )
         raise typer.Exit(1)
 
     emit_progress(f"✓ Prompt resolved ({len(text)} chars)", json_output=json_output)
     emit_progress(
         f"✓ Project {resolved_project.project_id!r} "
-        f"({'existing' if resolved_project.existed else 'new'})",
+        f"({'existing' if resolved_project.exists else 'new'})",
         json_output=json_output,
     )
 

@@ -1,7 +1,7 @@
 ---
 name: twicc-project
-description: Show details of a single project by ID. Use when the user wants to inspect a specific project's metadata, cost, or directory.
-argument-hint: <project_id>
+description: Show details of a single project by directory path or by ID. Use when the user wants to inspect a specific project's metadata, cost, or directory.
+argument-hint: <project_path_or_id>
 ---
 
 # TwiCC Project
@@ -10,8 +10,8 @@ Show the details of a single project by its ID.
 
 ## When to use
 
-- The user wants details about a specific project
-- The user has a project ID (from `twicc projects` or `twicc sessions` output) and wants to see its metadata
+- The user wants details about a specific project (most often by directory path — e.g. the current working directory)
+- The user has a project ID (from `twicc projects` or `twicc sessions` output) and wants to see its metadata — useful when chaining commands; for any other case, prefer passing the path
 
 ## How to invoke
 
@@ -29,15 +29,20 @@ Then run any subcommand via `$TWICC <args>` — **do NOT quote `$TWICC`** (use `
 Run the `twicc project` CLI command via the Bash tool:
 
 ```bash
-$TWICC project <PROJECT_ID>
+$TWICC project <PROJECT>
 ```
 
-**Note:** Project IDs start with a dash (e.g. `-home-twidi-dev-myproject`). The leading dash is automatically prepended if omitted, so **do not include it** when passing the ID on the command line.
+`<PROJECT>` is either a directory path or a project ID. Prefer the path — it's what the user usually knows; the id form is mostly useful when you're chaining `twicc` commands that emit ids.
+
+- **Directory path** — absolute or relative; resolved via `realpath` and converted to the canonical project ID.
+- **Project ID** — the canonical id starts with a dash (e.g. `-home-twidi-dev-myproject`), but **you must drop the leading dash when passing it on the command line** (bash would otherwise parse `-home-...` as a flag and the call would fail with `No such option`). The CLI re-adds the dash internally.
 
 ### Examples
 
 ```bash
-$TWICC project 'home-twidi-dev-myproject-abc123'
+$TWICC project .                                   # by current directory
+$TWICC project /home/twidi/dev/myproject           # by absolute path
+$TWICC project 'home-twidi-dev-myproject-abc123'   # by id (dash omitted)
 ```
 
 ## Output format
@@ -77,12 +82,12 @@ The command outputs a single JSON project object:
 ## Related commands
 
 - **Find project IDs:** `twicc projects` — list all projects
-- **List sessions for this project:** `twicc sessions --project <project_id>` — browse sessions in this project (omit the leading dash from the project ID)
+- **List sessions for this project:** `twicc sessions --project <project_path_or_id>` — browse sessions in this project (pass the directory path, or the project id if you already have it; omit the leading dash if you do use the id)
 - **Inspect a session:** `twicc session <session_id>` — get full details for one session
 - **Inspect a workspace:** `twicc workspace <workspace_id>` — use any value from the `workspaces` field to see the workspace's name, color, and full project list
 - **List all workspaces:** `twicc workspaces` — find workspace IDs
 - **Search within this project:** `twicc search "project_id:<project_id> AND <query>"` — full-text search filtered to this project
-- **Update this project:** `twicc update-project <ID> [--name X|--unset-name] [--color X|--unset-color] [--archive|--unarchive]` (no `delete-project` — projects are archived, never deleted)
+- **Update this project:** `twicc update-project <PROJECT> [--name X|--unset-name] [--color X|--unset-color] [--archive|--unarchive]` — `<PROJECT>` accepts a directory path or an id (no `delete-project` — projects are archived, never deleted)
 - **Create a new project:** `twicc create-project <DIRECTORY> [...]`
 
 ## How to present results
