@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import os
 import sys
 
+import orjson
 import typer
 
 
@@ -45,16 +45,12 @@ def whoami_cmd(
             "meaningful from inside an active agent session."
         )
         if json_output:
-            import orjson
-
             sys.stdout.buffer.write(orjson.dumps({"error": msg}))
-            sys.stdout.write("\n")
+            sys.stdout.buffer.write(b"\n")
         else:
             typer.echo(msg, err=True)
         raise typer.Exit(1)
 
     data = serialize_session(session)
-    import orjson
-
     sys.stdout.buffer.write(orjson.dumps(data, option=orjson.OPT_INDENT_2))
     sys.stdout.buffer.write(b"\n")
