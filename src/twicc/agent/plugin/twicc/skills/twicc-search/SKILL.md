@@ -37,6 +37,20 @@ $TWICC search '<query>'
 
 - `--limit N` — max number of hits (default: 20)
 - `--offset N` — skip first N hits for pagination (default: 0)
+- `--include-hidden` — include hits from hidden sessions (default: false, hidden sessions are excluded). The full-text index **does** index hidden sessions, so this flag genuinely finds content in them.
+- `--only-hidden` — return hits **only** from hidden sessions. Mutually exclusive with `--include-hidden`.
+- `--spawned-by <ID|self>` — filter hits to sessions whose `spawned_by` field matches the given ID. The special value `self` resolves to the current session's own ID via PID ancestry (equivalent to `twicc whoami`) — useful for an agent searching within the sub-sessions it spawned.
+
+### Examples
+
+```bash
+$TWICC search 'websocket'                              # Simple keyword search
+$TWICC search 'websocket' --include-hidden             # Also search within hidden sessions
+$TWICC search 'websocket' --only-hidden                # Search only within hidden sessions
+$TWICC search 'websocket' --spawned-by self            # Search only in child sessions spawned by this session
+$TWICC search 'websocket' --spawned-by abc123-def456   # Search only in children of a specific session
+$TWICC search 'websocket' --limit 50 --offset 20       # Paginate
+```
 
 ### Query syntax
 

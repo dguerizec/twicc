@@ -1,12 +1,12 @@
 ---
 name: twicc-update-session
-description: Update an existing TwiCC session. The `settings` sub-command updates the agent settings (model, effort, permission mode, thinking, chrome MCP, fast mode, context window, question widget), `title` renames the session, `archive` / `unarchive` flip the archived flag (archive also stops the live agent and unpins under the `autoUnpinOnArchive` setting), and `pin <MODE>` / `unpin` set or clear the pin scope (`project` / `workspace` / `all`). Use when the user wants to change a session's settings, title, archived, or pinned state without sending a new message. For stopping the live agent without touching the row, use `twicc process <ID> stop`.
-argument-hint: <session_id> {settings|title|archive|unarchive|pin|unpin} [ARGS / OPTIONS]
+description: Update an existing TwiCC session. The `settings` sub-command updates the agent settings (model, effort, permission mode, thinking, chrome MCP, fast mode, context window, question widget), `title` renames the session, `archive` / `unarchive` flip the archived flag (archive also stops the live agent and unpins under the `autoUnpinOnArchive` setting), `pin <MODE>` / `unpin` set or clear the pin scope (`project` / `workspace` / `all`), and `hide` / `unhide` flip the hidden flag (hide makes the session invisible in all user-facing listings and broadcasts). Use when the user wants to change a session's settings, title, archived, pinned, or hidden state without sending a new message. For stopping the live agent without touching the row, use `twicc process <ID> stop`.
+argument-hint: <session_id> {settings|title|archive|unarchive|pin|unpin|hide|unhide} [ARGS / OPTIONS]
 ---
 
 # TwiCC Update Session
 
-Update an existing agent session by dropping a request file the live TwiCC server picks up. Six sub-commands: `settings` (change the agent settings), `title` (rename the session), `archive` (mark archived + kill agent + optional unpin), `unarchive` (flip back), `pin <MODE>` (set the pin scope: project / workspace / all), `unpin` (clear the pin). To stop the live agent without changing the row, use `twicc process <SESSION_ID> stop` (see the `twicc-process` skill).
+Update an existing agent session by dropping a request file the live TwiCC server picks up. Eight sub-commands: `settings` (change the agent settings), `title` (rename the session), `archive` (mark archived + kill agent + optional unpin), `unarchive` (flip back), `pin <MODE>` (set the pin scope: project / workspace / all), `unpin` (clear the pin), `hide` (make the session invisible in all user-facing listings/broadcasts), `unhide` (flip back). To stop the live agent without changing the row, use `twicc process <SESSION_ID> stop` (see the `twicc-process` skill).
 
 ## When to use
 
@@ -16,6 +16,7 @@ Update an existing agent session by dropping a request file the live TwiCC serve
 - The user asks to "rename / re-title session X" or wants a script to set a better title after a few turns of conversation → `title`.
 - The user asks to "archive session X" (clean up the sidebar, also stops the live agent) or "unarchive session X" (bring it back to the active list) → `archive` / `unarchive`.
 - The user asks to "pin session X" (in this project / across the workspace / globally) or "unpin session X" → `pin <MODE>` / `unpin`.
+- The user asks to "hide session X" (make it invisible in listings and broadcasts) or "unhide session X" (bring it back) → `hide` / `unhide`.
 
 **Out of scope:** killing the live process while keeping the row otherwise untouched. That's a separate command — `twicc process <SESSION_ID> stop` (see the `twicc-process` skill) — so it doesn't live as an `update-session` sub-command. Direct any "stop / kill the agent" request there.
 
@@ -227,6 +228,58 @@ Switching scope is just another `pin`: passing a new mode overwrites the previou
 - `invalid_pinned` — defence-in-depth check on the watcher side; in practice unreachable from the CLI since `invalid_pin_mode` already fails locally.
 - Plus the standard race-detected guards (`session_not_found`, `session_stale`, ...).
 
+## How to hide / unhide
+
+Two boolean-flip sub-commands sharing the same plumbing — pick the right one for the direction the user wants:
+
+```bash
+$TWICC update-session '<SESSION_ID>' hide
+$TWICC update-session '<SESSION_ID>' unhide
+```
+
+### Required argument
+
+- **`SESSION_ID`** — id of the existing session to flip.
+
+### Options
+
+Only the standard output controls — neither sub-command takes any flag beyond `--timeout`, `--no-color`, and `--json`.
+
+| Flag | |
+|------|---|
+| `--timeout SECONDS` | seconds to wait for the server's final status (default 30) |
+| `--json` | emit a single JSON object on stdout (implies `--no-color`) |
+| `--no-color` | disable ANSI colors |
+
+### What `hide` does on the server side
+
+Sets `hidden = True` in DB. The session then disappears from every user-facing listing, search result, broadcast, and counter. Cost aggregation continues normally — the session is still counted in project/global totals.
+
+**Preconditions (the CLI rejects if not met):**
+
+- `permission_mode` must already be a non-interactive value:
+  - Claude Code: `bypassPermissions` or `dontAsk`
+  - Codex: `yolo` or `strict`
+- (Claude Code only) `question_widget` must be `False`.
+
+If the current settings don't satisfy these constraints, update them first via the `settings` sub-command, then retry `hide`.
+
+Connected UI clients receive a `session_removed` event (same as if the session had been deleted from their perspective).
+
+### What `unhide` does on the server side
+
+Sets `hidden = False`, re-indexes the search document, broadcasts a `session_added` event so connected UI clients pick the session back up. No preconditions — unhiding is always safe. Counters are re-synchronized automatically.
+
+### Rejections caught locally (exit 1)
+
+- `hidden_constraint_violation` — `hide` was called but `permission_mode` or `question_widget` do not satisfy the non-interactive requirements.
+- `is_subagent` — the SESSION_ID points to a subagent. **Subagents cannot be hidden directly**; target the parent session instead.
+- `session_not_found` / `session_stale` / `project_no_directory` / `provider_disabled` — same vocabulary as the other CLI commands.
+
+### Rejections from the server (exit 3)
+
+Same vocabulary as the other sub-commands (`provider_disabled`, `session_not_found`/`session_stale` race-detected, `is_subagent` race-detected, ...). There are no hide-specific server-side rejections beyond the locally pre-checked constraint violation.
+
 ## Examples
 
 ```bash
@@ -271,6 +324,16 @@ $TWICC update-session 4a8352fb-... pin all
 
 # Unpin.
 $TWICC update-session 4a8352fb-... unpin
+
+# Hide a session (must already have a non-interactive permission_mode + no question_widget).
+$TWICC update-session 4a8352fb-... hide
+
+# Unhide: bring it back to all listings and broadcasts.
+$TWICC update-session 4a8352fb-... unhide
+
+# Hide + JSON for scripts.
+$TWICC update-session --json 4a8352fb-... hide
+# → {"status":"updated","session_id":"...","provider":"claude_code","project_id":"...","request_uuid":"..."}
 ```
 
 ## Output format

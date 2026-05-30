@@ -69,6 +69,19 @@ Each value is optional — omit to let the preset / synced default apply.
 
 The exact model list can shift over time — `twicc create-session --help` always reflects the current state. If a flag isn't supported by the chosen provider, the CLI rejects with an explicit `unsupported_field` validation error before sending anything.
 
+### `--hidden`
+
+Creates the session as hidden — invisible in every user-facing listing, search, broadcast, and counter, while still counted in cost aggregates.
+
+**Constraints (the CLI rejects creation if these are not met):**
+
+- `--permission-mode` must be a non-interactive value:
+  - Claude Code: `bypassPermissions` or `dontAsk`
+  - Codex: `yolo` or `strict`
+- `--no-question-widget` must be set (Claude Code only — Codex ignores this flag).
+
+This ensures a hidden session can never land in an interactive state (`awaiting_user_input`) that requires a human to click in the TwiCC UI, since a hidden session is invisible and no one would know to click.
+
 ### When to pass `--no-question-widget`
 
 By default, when the agent needs to ask the user a question, it uses an interactive UI widget (Claude Code's `AskUserQuestion` tool) — the user picks an answer in the TwiCC web UI before the agent can continue.
@@ -234,6 +247,8 @@ If `process` reports `awaiting_user_input`, do NOT call `send-message` — the s
 
 ## Related commands
 
+- **List sessions spawned by this session:** `twicc sessions --spawned-by self` — list child sessions created by the current session (useful when the agent spawned hidden sub-tasks and wants to track them)
+- **Search within sessions spawned by this session:** `twicc search "<query>" --spawned-by self` — full-text search restricted to child sessions only
 - **Inspect the created session:** `twicc session <session_id>` — full metadata for the new session
 - **Check the live agent's state:** `twicc process <session_id>` — is the agent still working, blocked on a user click, or done? Cheaper than polling `messages` and the only reliable way to detect the "awaiting user input" case (see "Following up" above)
 - **List all live processes:** `twicc processes` — useful when you fired several `create-session` calls and want to see which are still running, which need attention, etc. Supports `--state awaiting_user_input` to filter to those waiting for the user

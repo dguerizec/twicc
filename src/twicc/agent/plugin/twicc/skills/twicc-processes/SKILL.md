@@ -55,6 +55,9 @@ has died), the command exits with an error.
   `dead` is rejected (never returned anyway). The four values are **disjoint** — a row matches exactly one
 - `--limit N` — max number of processes to return (default: 20)
 - `--offset N` — skip first N processes for pagination (default: 0)
+- `--include-hidden` — include processes whose bound session is hidden (default: false, hidden sessions' processes are excluded). Pass this flag to surface background processes running for hidden sessions.
+- `--only-hidden` — return **only** processes whose bound session is hidden. Mutually exclusive with `--include-hidden`.
+- `--spawned-by <ID|self>` — filter by spawner session ID. Only processes whose bound session has `spawned_by` set to the given ID are returned. The special value `self` resolves to the current session's own ID via PID ancestry (equivalent to `twicc whoami`) — useful for an agent tracking the background processes it spawned.
 
 ### Examples
 
@@ -65,6 +68,10 @@ $TWICC processes --provider claude_code             # Only Claude Code processes
 $TWICC processes --state assistant_turn             # Actively generating (not blocked)
 $TWICC processes --state awaiting_user_input        # Only processes that need a user click NOW
 $TWICC processes --state user_turn                  # Turn finished, awaiting next user message
+$TWICC processes --include-hidden                   # Include processes for hidden sessions alongside visible ones
+$TWICC processes --only-hidden                      # Only processes whose session is hidden
+$TWICC processes --spawned-by self                  # Processes for sessions spawned by the current session
+$TWICC processes --spawned-by abc123-def456         # Processes for sessions spawned by a specific session
 $TWICC processes --limit 50 --offset 20             # Paginate
 ```
 

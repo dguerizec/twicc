@@ -40,6 +40,9 @@ $TWICC sessions
 - `--limit N` — max number of sessions to return (default: 20)
 - `--offset N` — skip first N sessions for pagination (default: 0)
 - `--include-archived` — include archived sessions in the results (default: false, archived sessions are excluded)
+- `--include-hidden` — include hidden sessions in the results (default: false, hidden sessions are excluded). Hidden sessions are invisible in normal listings; pass this flag to surface them explicitly.
+- `--only-hidden` — return **only** hidden sessions. Mutually exclusive with `--include-hidden`.
+- `--spawned-by <ID|self>` — filter by spawner session ID. Only sessions whose `spawned_by` field matches the given ID are returned. The special value `self` resolves to the current session's own ID via PID ancestry (equivalent to `twicc whoami`) — useful for an agent that wants to list child sessions it spawned without knowing its own session ID.
 
 ### Examples
 
@@ -48,6 +51,10 @@ $TWICC sessions                                    # List the 20 most recent ses
 $TWICC sessions --project 'home-twidi-dev-myproj'  # Sessions for a specific project
 $TWICC sessions --workspace backend                # Sessions across every project in the "backend" workspace
 $TWICC sessions --include-archived                 # Include archived sessions
+$TWICC sessions --include-hidden                   # Include hidden sessions alongside visible ones
+$TWICC sessions --only-hidden                      # Only hidden sessions
+$TWICC sessions --spawned-by self                  # Sessions spawned by the current session (resolved via PID ancestry)
+$TWICC sessions --spawned-by abc123-def456         # Sessions spawned by a specific session ID
 $TWICC sessions --limit 50 --offset 20             # Paginate
 ```
 
