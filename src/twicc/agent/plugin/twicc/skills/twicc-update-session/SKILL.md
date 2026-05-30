@@ -1,20 +1,21 @@
 ---
 name: twicc-update-session
-description: Update an existing TwiCC session. For now only the agent settings (model, effort, permission mode, thinking, chrome MCP, fast mode, context window, question widget) can be updated via the `settings` sub-command; future sub-commands will cover title, archive, pin, and stop. Use when the user wants to change a session's settings without sending a new message.
-argument-hint: <session_id> settings [OPTIONS]
+description: Update an existing TwiCC session. Today the `settings` sub-command updates the agent settings (model, effort, permission mode, thinking, chrome MCP, fast mode, context window, question widget) and the `title` sub-command renames the session; future sub-commands will cover archive, pin, and stop. Use when the user wants to change a session's settings or title without sending a new message.
+argument-hint: <session_id> {settings|title} [ARGS / OPTIONS]
 ---
 
 # TwiCC Update Session
 
-Update an existing agent session by dropping a request file the live TwiCC server picks up. For now only the agent settings are updatable; `title`, `archive`, `pin`, and `stop` will plug into the same sub-app later.
+Update an existing agent session by dropping a request file the live TwiCC server picks up. Two sub-commands today: `settings` (change the agent settings) and `title` (rename the session). `archive`, `pin`, and `stop` will plug into the same sub-app later.
 
 ## When to use
 
-- The user asks to "change the model / effort / permission mode / etc. on session X"
-- A script needs to re-tune a session's settings between turns (e.g. drop to `low` effort for a quick follow-up, then bump back up)
-- The user wants to reset a setting back to the synced default (use `--unset <field>`)
+- The user asks to "change the model / effort / permission mode / etc. on session X" → `settings`.
+- A script needs to re-tune a session's settings between turns (e.g. drop to `low` effort for a quick follow-up, then bump back up) → `settings`.
+- The user wants to reset a setting back to the synced default (use `--unset <field>`) → `settings`.
+- The user asks to "rename / re-title session X" or wants a script to set a better title after a few turns of conversation → `title`.
 
-**Out of scope (today):** changing the session's title, archiving / unarchiving, pinning / unpinning, and killing the live process. These will become other sub-commands of `twicc update-session` (e.g. `twicc update-session <ID> title 'Better title'`) — refuse if asked here and tell the user the relevant operation isn't wired yet (the UI can still do it).
+**Out of scope (today):** archiving / unarchiving, pinning / unpinning, and killing the live process. These will become other sub-commands of `twicc update-session` — refuse if asked here and tell the user the relevant operation isn't wired yet (the UI can still do it).
 
 ## How to invoke
 
@@ -91,6 +92,48 @@ The exact model / effort lists can shift over time — `twicc update-session DUM
 - `is_subagent` — the SESSION_ID points to a subagent. **Subagents cannot be updated directly**; target the parent session instead.
 - `session_not_found` / `session_stale` / `project_no_directory` / `provider_disabled` — same vocabulary as the other CLI commands.
 
+## How to update the title
+
+Basic shape:
+
+```bash
+$TWICC update-session '<SESSION_ID>' title '<NEW_TITLE>'
+```
+
+### Required arguments
+
+- **`SESSION_ID`** — id of the existing session to rename.
+- **`NEW_TITLE`** — the new title. Trimmed before validation; must be non-empty and ≤ 200 characters (the provider may impose a stricter cap).
+
+### Options
+
+Only the standard output controls — title has no per-field options.
+
+| Flag | |
+|------|---|
+| `--timeout SECONDS` | seconds to wait for the server's final status (default 30) |
+| `--json` | emit a single JSON object on stdout (implies `--no-color`) |
+| `--no-color` | disable ANSI colors |
+
+### Rejections caught locally (exit 1)
+
+- `invalid_title` — title empty (or whitespace only) after trim.
+- `is_subagent` — the SESSION_ID points to a subagent. **Subagents cannot be renamed directly**; target the parent session instead.
+- `session_not_found` / `session_stale` / `project_no_directory` / `provider_disabled` — same vocabulary as the other CLI commands.
+
+### Rejections from the server (exit 3)
+
+- `invalid_title` — the provider's `validate_title` rejected the trimmed value (typically: too long; default cap is 200 characters).
+
+### What the rename does on the provider side
+
+After the DB write, the server asks the provider to persist the new title into its backing store. The agent does not need to be restarted:
+
+- **Claude Code** — appends a `custom-title` JSONL entry and registers the title as protected against any stale CLI re-appends.
+- **Codex** — calls the SDK's `thread/name/set`.
+
+Provider-side failures are non-critical and logged: the DB is already updated and every open UI client receives a `session_updated` broadcast with the new title regardless.
+
 ## Examples
 
 ```bash
@@ -108,6 +151,13 @@ $TWICC update-session 4a8352fb-... settings --preset 'deep think' --unset effort
 
 # Machine-parseable output for scripts.
 $TWICC update-session --json 4a8352fb-... settings --model opus
+# → {"status":"updated","session_id":"...","provider":"claude_code","project_id":"...","request_uuid":"..."}
+
+# Rename a session.
+$TWICC update-session 4a8352fb-... title 'Better title that survives a long listing'
+
+# Rename + JSON for scripts.
+$TWICC update-session --json 4a8352fb-... title 'Renamed'
 # → {"status":"updated","session_id":"...","provider":"claude_code","project_id":"...","request_uuid":"..."}
 ```
 
@@ -147,17 +197,17 @@ A single JSON object, one of:
 
 | Code | Meaning |
 |------|---------|
-| 0 | Settings updated |
-| 1 | CLI validation error (bad flag, unknown unset token, unset conflict, no-op, session lookup failed, etc.) |
+| 0 | Update applied (settings or title) |
+| 1 | CLI validation error (bad flag, unknown unset token, unset conflict, no-op, invalid title, session lookup failed, etc.) |
 | 2 | TwiCC server not running (heartbeat missing or stale) |
-| 3 | Server rejected the request — see `errors[].code` (`provider_disabled`, `session_not_found`/`session_stale` race-detected, `manager_busy`, ...) |
+| 3 | Server rejected the request — see `errors[].code` (`invalid_title`, `provider_disabled`, `session_not_found`/`session_stale` race-detected, `manager_busy`, ...) |
 | 4 | Server hit an unexpected error mid-flight |
 | 5 | Timeout waiting for the server's final status |
 | 64 | Bad CLI usage (handled by Typer) |
 
-## How the change reaches the live agent
+## How a settings change reaches the live agent
 
-If a live agent is attached to the session at the time of the update, the new settings are also propagated to the manager (`send_to_session` with an empty text). The manager applies the change according to each field's category:
+If a live agent is attached to the session at the time of a `settings` update, the new settings are also propagated to the manager (`send_to_session` with an empty text). The manager applies the change according to each field's category:
 
 - **Live** (`permission_mode` on Claude Code): applied immediately, whatever state the agent is in.
 - **Idle** (`selected_model`, `context_max` on Claude Code; `selected_model`, `effort`, `permission_mode`, `context_max` on Codex): applied during `USER_TURN`.
@@ -178,10 +228,11 @@ Same loop as `twicc-send-message` and `twicc-create-session`:
 When the server rejects (exit 3), parse `errors[].code` from JSON mode:
 
 - **`is_subagent`** → the session is a subagent. Subagents cannot be updated; target the parent. Fetch the parent via `twicc session <id>` if needed.
+- **`invalid_title`** → only on the `title` sub-command. Title was empty after trim or exceeded `MAX_TITLE_LENGTH` (200 by default). Shorten / fix and retry.
 - **`session_not_found`** / **`session_stale`** → race vs. the local pre-check (session deleted or JSONL removed between lookup and service). Retry once; if persistent, the session is really gone.
 - **`provider_disabled`** → the session's provider was disabled in settings; tell the user to re-enable it from the UI.
 - **`project_no_directory`** → the project lost its directory; the agent can't be re-started.
-- **`manager_busy`** → transient — another operation for the same session is in flight; retry.
+- **`manager_busy`** → transient — only relevant to the `settings` sub-command (when the live agent is busy applying the settings). Retry.
 
 ## Related commands
 

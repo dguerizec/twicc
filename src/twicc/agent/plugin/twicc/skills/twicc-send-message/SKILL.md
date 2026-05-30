@@ -14,7 +14,6 @@ Send a message to an existing agent session by dropping a request file the live 
 - A script needs to programmatically queue follow-up work into an existing session (use `--json` for machine-parseable output)
 - The user wants to attach files (images, PDFs, text) to an ongoing conversation
 
-**Out of scope:** changing the session's settings (model, effort, permission mode, …), renaming, or archiving. The session keeps its currently stored settings. Use `twicc update-session <id> settings ...` for settings changes (see the `twicc-update-session` skill); renaming / archiving / pinning will plug into the same sub-app later — refuse if asked here.
 
 ## How to invoke
 
@@ -151,7 +150,7 @@ When the server rejects (exit 3), parse `errors[].code` from JSON mode to give a
 ## Related commands
 
 - **Create a new session instead:** `twicc create-session` — full options for picking provider, model, settings, project, etc.
-- **Change the session's settings:** `twicc update-session <session_id> settings ...` — see the `twicc-update-session` skill. Settings-only path; the session is otherwise untouched.
+- **Change the session's settings or rename it:** `twicc update-session <session_id> settings ...` or `twicc update-session <session_id> title '<TEXT>'` — see the `twicc-update-session` skill. The session is otherwise untouched.
 - **Check the live agent's state:** `twicc process <session_id>` — is the agent still working, blocked on a user click, or done? The only reliable way to detect `awaiting_user_input` before sending
 - **List all live processes:** `twicc processes --state awaiting_user_input` — to see which sessions are blocked on a user click
 - **Read the agent's reply (uniform shape):** `twicc session <session_id> messages --tail 1`
