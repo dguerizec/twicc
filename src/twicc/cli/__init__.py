@@ -61,17 +61,56 @@ def run() -> None:
     run_main()
 
 
-@app.command()
-def projects(
+projects_app = typer.Typer(
+    name="projects",
+    help="List projects, or look up specific project_ids in batch.",
+    invoke_without_command=True,
+)
+app.add_typer(projects_app)
+
+
+@projects_app.callback(invoke_without_command=True)
+def _projects_default(
+    ctx: typer.Context,
     limit: int = typer.Option(20, help="Max number of projects to return."),
     offset: int = typer.Option(0, help="Skip first N projects."),
     include_archived: bool = typer.Option(False, "--include-archived", help="Include archived projects."),
     workspace: str = typer.Option(None, "--workspace", help="Filter by workspace ID (only projects belonging to that workspace)."),
 ) -> None:
-    """List all projects as JSON (ordered by most recently active)."""
+    """List all projects as JSON (ordered by most recently active, default action)."""
+    if ctx.invoked_subcommand is not None:
+        return
+
     from twicc.cli.projects import main as projects_main
 
     projects_main(limit=limit, offset=offset, archived=include_archived, workspace=workspace)
+
+
+@projects_app.command(name="get")
+def _projects_get(
+    project_ids: list[str] = typer.Argument(
+        ...,
+        metavar="PROJECT_ID...",
+        help=(
+            "One or more project IDs to look up (leading dash is optional, "
+            "auto-prepended). The output mirrors the input order (duplicates "
+            "collapsed, first occurrence wins). Each entry is either the "
+            "full project metadata or a placeholder with `known: false` "
+            "when no Project row exists for that id. Archived projects are "
+            "returned just like active ones — the listing filter doesn't "
+            "apply when you name explicit ids."
+        ),
+    ),
+) -> None:
+    """Look up projects by id (placeholder for missing, includes archived).
+
+    Unlike ``twicc projects``, ``get`` takes no filter flags: when the
+    caller names the projects it cares about, the archived-by-default
+    filter would only blur the meaning of the placeholder rows.
+    """
+    from twicc.cli.projects_get import main as projects_get_main
+
+    projects_get_main([_normalize_project_id(pid) for pid in project_ids])
 
 
 @app.command()
