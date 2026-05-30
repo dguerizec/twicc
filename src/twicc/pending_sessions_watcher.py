@@ -159,6 +159,12 @@ class PendingSessionsWatcher:
                 )
                 service = update_session_pinned_from_payload
                 success_status = "updated"
+            elif kind == "update_hidden":
+                from twicc.core.services.session_update import (
+                    update_session_hidden_from_payload,
+                )
+                service = update_session_hidden_from_payload
+                success_status = "updated"
             elif kind == "kill_process":
                 from twicc.core.services.process_kill import (
                     kill_session_process_from_payload,

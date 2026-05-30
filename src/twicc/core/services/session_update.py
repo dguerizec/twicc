@@ -579,3 +579,53 @@ async def update_session_pinned_from_payload(payload: dict) -> UpdateSessionResu
         project_id=session.project_id,
         errors=None,
     )
+
+
+async def update_session_hidden_from_payload(payload: dict):
+    """Drop-file glue for ``kind="update_hidden"``.
+
+    Looks up the session via the standard guards (not_found, subagent, stale,
+    no_directory, unknown_provider, provider_disabled), then delegates to
+    :func:`session_visibility.hide_session` or
+    :func:`session_visibility.unhide_session` based on the boolean in the
+    payload.
+
+    Returns either an :class:`UpdateSessionResult` (on lookup failure) or a
+    :class:`~twicc.core.services.session_visibility.SessionVisibilityResult`
+    (on the hide/unhide path). Both are compatible with the watcher's
+    attribute access pattern (``success``, ``session_id``, ``provider``,
+    ``project_id``, ``errors``).
+
+    Business-rule rejections (returned as ``success=False``):
+    - ``missing``: ``session_id`` is absent from the payload.
+    - ``invalid_hidden``: ``hidden`` is absent or not a bool.
+    - Plus the standard session-lookup guards shared by every
+      ``update_*`` service.
+    - ``not_top_level``: session is a subagent (re-checked in the
+      visibility service; consistent with the lookup guard above).
+    - ``permission_mode_not_allowed`` / ``question_widget_enabled``: the
+      session's current settings violate the hidden invariants (hide only).
+    """
+    session_id = payload.get("session_id")
+    hidden = payload.get("hidden")
+
+    errors: list[UpdateSessionError] = []
+    if not session_id:
+        errors.append(UpdateSessionError("session_id", "missing", "session_id is required"))
+    if not isinstance(hidden, bool):
+        errors.append(UpdateSessionError(
+            "hidden", "invalid_hidden",
+            "hidden must be a boolean (true / false)",
+        ))
+    if errors:
+        return UpdateSessionResult(False, None, None, None, errors)
+
+    session, project, provider, error = await _lookup_session_for_update(session_id)
+    if error is not None:
+        return error
+
+    from twicc.core.services.session_visibility import hide_session, unhide_session
+
+    if hidden:
+        return await hide_session(session)
+    return await unhide_session(session)

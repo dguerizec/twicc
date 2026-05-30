@@ -2,9 +2,9 @@
 
 The sub-app shape mirrors ``twicc session``: a parent ``SESSION_ID`` argument
 captured in ``ctx.obj`` and one sub-command per supported update. Currently
-``settings``, ``title``, ``archive``, ``unarchive``, ``pin``, and ``unpin``
-are implemented; future sub-commands (``stop``, ...) will register against
-this same app.
+``settings``, ``title``, ``archive``, ``unarchive``, ``pin``, ``unpin``,
+``hide``, and ``unhide`` are implemented; future sub-commands (``stop``, ...)
+will register against this same app.
 """
 
 from __future__ import annotations
@@ -14,6 +14,10 @@ import typer
 from twicc.cli.update_session.archived_command import (
     update_archive_cmd,
     update_unarchive_cmd,
+)
+from twicc.cli.update_session.hidden_command import (
+    update_hide_cmd,
+    update_unhide_cmd,
 )
 from twicc.cli.update_session.pinned_command import (
     update_pin_cmd,
@@ -51,3 +55,5 @@ update_session_app.command(name="archive")(update_archive_cmd)
 update_session_app.command(name="unarchive")(update_unarchive_cmd)
 update_session_app.command(name="pin")(update_pin_cmd)
 update_session_app.command(name="unpin")(update_unpin_cmd)
+update_session_app.command(name="hide")(update_hide_cmd)
+update_session_app.command(name="unhide")(update_unhide_cmd)
