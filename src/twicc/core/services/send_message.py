@@ -1,8 +1,9 @@
 """Send a message to an existing agent session from a generic payload.
 
-Called by :class:`PendingSessionsWatcher` when the CLI drops a request file
-with ``kind="send"``. The session is identified by ``session_id`` (already
-existing in DB); provider and project are looked up from it.
+Called by :class:`DropRequestsWatcher` when the CLI drops a request file
+with ``kind="session:send_message"``. The session is identified by
+``session_id`` (already existing in DB); provider and project are looked
+up from it.
 
 The function does NOT raise for business-rule errors (missing session, stale
 session, agent awaiting user input, etc.); it returns a

@@ -122,6 +122,13 @@ def get_workspaces_path() -> Path:
     return get_data_dir() / "workspaces.json"
 
 
+def get_drop_requests_dir() -> Path:
+    """Directory holding ``<request_uuid>.json`` drop-files written by the CLI
+    and picked up by :class:`twicc.drop_requests_watcher.DropRequestsWatcher`.
+    """
+    return get_data_dir() / "drop-requests"
+
+
 def get_seen_tips_path() -> Path:
     """Path to the synced seen-tips state file."""
     return get_data_dir() / "seen-tips.json"

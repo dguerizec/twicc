@@ -1,6 +1,6 @@
 """``twicc update-session <ID> title "<NEW_TITLE>"`` sub-command.
 
-Drops a ``kind="update_title"`` payload in ``<data_dir>/sessions-pending/``
+Drops a ``kind="session:update_title"`` payload in ``<data_dir>/drop-requests/``
 so the live TwiCC server applies the change via
 :func:`twicc.core.services.session_update.update_session_title_from_payload`
 — DB write under the lock, full-text search reindex, provider-specific
@@ -63,18 +63,18 @@ def update_title_cmd(
     import django
     django.setup()
 
-    from twicc.cli._session_request.discovery import (
-        ServerDownError, check_heartbeat, get_data_dir,
+    from twicc.cli._drop_request.discovery import (
+        ServerDownError, check_heartbeat,
     )
-    from twicc.cli._session_request.drop_file import write_drop_file
-    from twicc.cli._session_request.output import (
+    from twicc.cli._drop_request.drop_file import write_drop_file
+    from twicc.cli._drop_request.output import (
         emit_final, emit_progress, emit_validation_errors,
     )
-    from twicc.cli._session_request.polling import poll_status
-    from twicc.cli._session_request.session_lookup import (
+    from twicc.cli._drop_request.polling import poll_status
+    from twicc.cli._drop_request.session_lookup import (
         SessionLookupError, lookup_session,
     )
-    from twicc.cli._session_request.validation import ValidationError
+    from twicc.cli._drop_request.validation import ValidationError
 
     try:
         age = check_heartbeat()
@@ -125,7 +125,7 @@ def update_title_cmd(
         "title": new_title,
     }
 
-    drop = write_drop_file(get_data_dir(), payload, kind="update_title")
+    drop = write_drop_file(payload, kind="session:update_title")
     emit_progress(
         f"→ Request submitted (request_uuid: {drop.request_uuid[:8]}...)",
         json_output=json_output,

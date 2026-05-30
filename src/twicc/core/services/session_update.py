@@ -1,30 +1,33 @@
 """Apply updates to an existing agent session.
 
-Called by :class:`PendingSessionsWatcher` when the CLI drops a request file
+Called by :class:`DropRequestsWatcher` when the CLI drops a request file
 whose ``kind`` matches one of the supported update actions:
 
-- ``kind="update_settings"`` → :func:`update_session_settings_from_payload`.
+- ``kind="session:update_settings"`` → :func:`update_session_settings_from_payload`.
   Mirrors the settings-only branch of
   :meth:`twicc.asgi.WSConsumer._handle_send_message`: write the new values
   to the ``Session`` row under the DB write lock, broadcast
   ``session_updated`` out of the lock, and propagate to the live agent via
   ``manager.send_to_session(text="")`` when a process is attached.
-- ``kind="update_title"`` → :func:`update_session_title_from_payload`.
+- ``kind="session:update_title"`` → :func:`update_session_title_from_payload`.
   Mirrors the title branch of ``PATCH /api/projects/.../sessions/<id>/`` in
   :mod:`twicc.views`: validate via the provider's ``validate_title``, write
   under the DB write lock, re-index the full-text search document, ask the
   provider to persist into its backing store (JSONL custom-title entry for
   Claude Code, ``thread/name/set`` for Codex), then broadcast
   ``session_updated``.
-- ``kind="update_archived"`` → :func:`update_session_archived_from_payload`.
+- ``kind="session:update_archived"`` → :func:`update_session_archived_from_payload`.
   Wraps the same archive flow the HTTP ``PATCH`` endpoint runs (now
   factored into :func:`apply_session_archived_change`): persist the flag,
   optionally unpin under the ``autoUnpinOnArchive`` synced setting,
   re-index search, kill the live agent + tmux on archive, broadcast.
-- ``kind="update_pinned"`` → :func:`update_session_pinned_from_payload`.
+- ``kind="session:update_pinned"`` → :func:`update_session_pinned_from_payload`.
   Wraps the pin/unpin flow of the HTTP ``PATCH`` endpoint (now factored
   into :func:`apply_session_pinned_change`): write the new ``pinned``
   value (``NULL`` to unpin, or one of ``PinMode.values``) and broadcast.
+- ``kind="session:update_hidden"`` → :func:`update_session_hidden_from_payload`.
+  Looks up the session via the standard guards then delegates to
+  :func:`session_visibility.hide_session` / ``unhide_session``.
 
 The functions do NOT raise for business-rule errors (missing session,
 provider disabled, etc.); they return an :class:`UpdateSessionResult` with
@@ -191,7 +194,7 @@ async def update_session_settings_from_payload(payload: dict) -> UpdateSessionRe
     # drop file is a trust boundary — a direct write or a race condition
     # could bypass the CLI guard.
     if session.hidden:
-        from twicc.cli._session_request.validation import validate_hidden_constraints
+        from twicc.cli._drop_request.validation import validate_hidden_constraints
         # Build the merged settings: current DB values overlaid with the
         # incoming updates so the check reflects what would actually be written.
         merged_base = AgentSettings.from_session(session)._asdict()
@@ -605,7 +608,7 @@ async def update_session_pinned_from_payload(payload: dict) -> UpdateSessionResu
 
 
 async def update_session_hidden_from_payload(payload: dict):
-    """Drop-file glue for ``kind="update_hidden"``.
+    """Drop-file glue for ``kind="session:update_hidden"``.
 
     Looks up the session via the standard guards (not_found, subagent, stale,
     no_directory, unknown_provider, provider_disabled), then delegates to

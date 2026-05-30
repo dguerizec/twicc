@@ -1,6 +1,6 @@
 """``twicc update-session <ID> settings`` sub-command.
 
-Drops a ``kind="update_settings"`` payload in ``<data_dir>/sessions-pending/``
+Drops a ``kind="session:update_settings"`` payload in ``<data_dir>/drop-requests/``
 so the live TwiCC server applies the change via
 :func:`twicc.core.services.session_update.update_session_settings_from_payload`.
 
@@ -21,8 +21,8 @@ from __future__ import annotations
 
 import typer
 
-from twicc.cli._session_request.help_context import load_help_context
-from twicc.cli._session_request.help_strings import (
+from twicc.cli._drop_request.help_context import load_help_context
+from twicc.cli._drop_request.help_strings import (
     context_max_help,
     default_suffix,
     model_help,
@@ -190,22 +190,22 @@ def update_settings_cmd(
     import django
     django.setup()
 
-    from twicc.cli._session_request.bootstrap_local import load_local_bootstrap
-    from twicc.cli._session_request.discovery import (
-        ServerDownError, check_heartbeat, get_data_dir,
+    from twicc.cli._drop_request.bootstrap_local import load_local_bootstrap
+    from twicc.cli._drop_request.discovery import (
+        ServerDownError, check_heartbeat,
     )
-    from twicc.cli._session_request.drop_file import write_drop_file
-    from twicc.cli._session_request.output import (
+    from twicc.cli._drop_request.drop_file import write_drop_file
+    from twicc.cli._drop_request.output import (
         emit_final, emit_progress, emit_validation_errors,
     )
-    from twicc.cli._session_request.polling import poll_status
-    from twicc.cli._session_request.presets import (
+    from twicc.cli._drop_request.polling import poll_status
+    from twicc.cli._drop_request.presets import (
         apply_preset_and_overrides, PresetError,
     )
-    from twicc.cli._session_request.session_lookup import (
+    from twicc.cli._drop_request.session_lookup import (
         SessionLookupError, lookup_session,
     )
-    from twicc.cli._session_request.validation import (
+    from twicc.cli._drop_request.validation import (
         ValidationError,
         validate_hidden_constraints,
         validate_no_set_unset_conflict,
@@ -384,7 +384,7 @@ def update_settings_cmd(
         "replace_all": replace_all,
     }
 
-    drop = write_drop_file(get_data_dir(), payload, kind="update_settings")
+    drop = write_drop_file(payload, kind="session:update_settings")
     emit_progress(
         f"→ Request submitted (request_uuid: {drop.request_uuid[:8]}...)",
         json_output=json_output,

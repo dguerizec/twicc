@@ -58,30 +58,29 @@ def send_message_cmd(
     import django
     django.setup()
 
-    from twicc.cli._session_request.attachments import (
+    from twicc.cli._drop_request.attachments import (
         AttachmentResizeError,
         validate_and_encode,
     )
-    from twicc.cli._session_request.bootstrap_local import load_local_bootstrap
-    from twicc.cli._session_request.discovery import (
+    from twicc.cli._drop_request.bootstrap_local import load_local_bootstrap
+    from twicc.cli._drop_request.discovery import (
         ServerDownError,
         check_heartbeat,
-        get_data_dir,
     )
-    from twicc.cli._session_request.drop_file import write_drop_file
-    from twicc.cli._session_request.output import (
+    from twicc.cli._drop_request.drop_file import write_drop_file
+    from twicc.cli._drop_request.output import (
         emit_attachment_summary,
         emit_final,
         emit_progress,
         emit_validation_errors,
     )
-    from twicc.cli._session_request.polling import poll_status
-    from twicc.cli._session_request.prompt import resolve_prompt, PromptError
-    from twicc.cli._session_request.session_lookup import (
+    from twicc.cli._drop_request.polling import poll_status
+    from twicc.cli._drop_request.prompt import resolve_prompt, PromptError
+    from twicc.cli._drop_request.session_lookup import (
         SessionLookupError,
         lookup_session,
     )
-    from twicc.cli._session_request.validation import ValidationError
+    from twicc.cli._drop_request.validation import ValidationError
     from twicc.providers.helpers import get_provider_helpers
 
     try:
@@ -182,7 +181,7 @@ def send_message_cmd(
         "documents": attach_result.documents,
     }
 
-    drop = write_drop_file(get_data_dir(), payload, kind="send")
+    drop = write_drop_file(payload, kind="session:send_message")
     emit_progress(
         f"→ Request submitted (request_uuid: {drop.request_uuid[:8]}...)",
         json_output=json_output,

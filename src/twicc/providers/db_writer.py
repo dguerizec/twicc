@@ -804,7 +804,7 @@ def get_db_write_lock() -> asyncio.Lock:
     other main-process SQLite writer — current (the DB writer's own
     apply branches inside :func:`_drain_one`) AND future (the JSONL
     watcher, agent lifecycle hooks, the cron expiry monitor, the
-    Codex title flush, the ``PendingSessionsWatcher`` — every path
+    Codex title flush, the ``DropRequestsWatcher`` — every path
     R19 documented as still bypassing the writer queue). The point
     is to move contention from SQLite's ``busy_timeout`` (no
     fairness, gives up after 30 s, raises ``database is locked``)

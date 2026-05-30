@@ -1,9 +1,10 @@
 """Create a new agent session from a generic payload.
 
 Called by both ``WSConsumer._handle_send_message`` (when the front-end sends
-``send_message``) and ``PendingSessionsWatcher`` (when the CLI drops a
-request file). Centralises validation, project resolution, pending-settings
-stashing, and agent-manager invocation so both entry points stay in sync.
+``send_message``) and ``DropRequestsWatcher`` (when the CLI drops a
+request file with ``kind="session:create"``). Centralises validation,
+project resolution, pending-settings stashing, and agent-manager
+invocation so both entry points stay in sync.
 
 The function does NOT raise for business-rule errors (missing project,
 disabled provider, etc.); it returns a :class:`SessionCreationResult` with
@@ -215,7 +216,7 @@ async def create_session_from_payload(payload: dict) -> SessionCreationResult:
     # The CLI validates these before writing the drop-file; we re-validate
     # from the payload because the drop-file is a trust boundary (forged
     # or version-skewed callers can submit invalid combinations).
-    from twicc.cli._session_request.validation import validate_hidden_constraints
+    from twicc.cli._drop_request.validation import validate_hidden_constraints
     hidden_errors = validate_hidden_constraints(
         provider.value, effective, hidden=hidden,
     )

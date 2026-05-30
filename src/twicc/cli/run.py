@@ -255,12 +255,12 @@ async def run_server(port: int):
     # zero-cost coroutine in production.
     tips_watcher_task = asyncio.create_task(start_tips_watcher_task(shutdown_event))
 
-    # CLI session-create plumbing (cf. docs/superpowers/specs/2026-05-17-cli-session-create-design.md)
+    # CLI drop-request plumbing (cf. docs/superpowers/specs/2026-05-17-cli-session-create-design.md)
     from twicc.heartbeat import heartbeat_loop
-    from twicc.pending_sessions_watcher import get_pending_sessions_watcher
+    from twicc.drop_requests_watcher import get_drop_requests_watcher
 
     heartbeat_task = asyncio.create_task(heartbeat_loop())
-    pending_watcher_task = asyncio.create_task(get_pending_sessions_watcher().start())
+    drop_watcher_task = asyncio.create_task(get_drop_requests_watcher().start())
 
     def handle_signal(signum, frame):
         logger.info("Received signal %s, initiating shutdown...", signum)
@@ -293,8 +293,8 @@ async def run_server(port: int):
         logger.info("Stopping heartbeat task...")
         await _cancel_task(heartbeat_task, "Heartbeat task")
 
-        logger.info("Stopping pending-sessions watcher task...")
-        await _cancel_task(pending_watcher_task, "Pending-sessions watcher task")
+        logger.info("Stopping drop-requests watcher task...")
+        await _cancel_task(drop_watcher_task, "Drop-requests watcher task")
 
         # Stop the global search-indexing task(s) (if any ever started)
         # and the coordinator that gated them. Order matters: cancel the

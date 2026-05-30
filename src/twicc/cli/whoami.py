@@ -35,7 +35,7 @@ def whoami_cmd(
 
     django.setup()
 
-    from twicc.cli._session_request.whoami import resolve_current_session
+    from twicc.cli._drop_request.whoami import resolve_current_session
     from twicc.core.serializers import serialize_session
 
     session = resolve_current_session()

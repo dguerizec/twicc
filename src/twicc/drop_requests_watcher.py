@@ -1,16 +1,18 @@
-"""Watcher for CLI-dropped session-creation requests.
+"""Watcher for CLI-dropped request files.
 
-Watches ``<data_dir>/sessions-pending/`` for new ``<request_uuid>.json``
-files dropped by ``twicc create-session``. Calls
-:func:`create_session_from_payload` and writes a ``<request_uuid>.status.json``
-file the CLI polls. Cleanup is the CLI's responsibility in the nominal
-case; this watcher only handles dead-letter cleanup at boot (see
-spec §5.5).
+Watches ``<data_dir>/drop-requests/`` for new ``<request_uuid>.json`` files
+dropped by the TwiCC CLI (``create-session``, ``send-message``,
+``update-session``, ``process stop``, ...). Reads the ``payload.kind``,
+dispatches to the matching service in ``twicc.core.services.*``, and
+writes a ``<request_uuid>.status.json`` file the CLI polls. Cleanup of
+both files is the CLI's responsibility in the nominal case; this watcher
+only handles dead-letter cleanup at boot (see spec §5.5).
 """
 
 from __future__ import annotations
 
 import asyncio
+import importlib
 import logging
 import os
 from pathlib import Path
@@ -20,8 +22,7 @@ from datetime import datetime, timezone
 import orjson
 from watchfiles import Change, awatch
 
-from twicc.core.services.session_creation import create_session_from_payload
-from twicc.paths import get_data_dir
+from twicc.paths import get_drop_requests_dir
 
 
 def _iso_now() -> str:
@@ -29,15 +30,63 @@ def _iso_now() -> str:
 
 logger = logging.getLogger(__name__)
 
-DIRECTORY_NAME = "sessions-pending"
 DROP_SUFFIX = ".json"
 STATUS_SUFFIX = ".status.json"
 TMP_SUFFIX = ".tmp"
 
 
-class PendingSessionsWatcher:
+# kind → (module_path, attr_name, success_status)
+#
+# Lazy by design: the watcher boots before Django is fully wired, and
+# every service module pulls in Django models / channel layer. Importing
+# them inside the dispatch keeps startup fast and avoids cycles.
+_KIND_HANDLERS: dict[str, tuple[str, str, str]] = {
+    "session:create": (
+        "twicc.core.services.session_creation",
+        "create_session_from_payload",
+        "created",
+    ),
+    "session:send_message": (
+        "twicc.core.services.send_message",
+        "send_message_to_session_from_payload",
+        "sent",
+    ),
+    "session:update_settings": (
+        "twicc.core.services.session_update",
+        "update_session_settings_from_payload",
+        "updated",
+    ),
+    "session:update_title": (
+        "twicc.core.services.session_update",
+        "update_session_title_from_payload",
+        "updated",
+    ),
+    "session:update_archived": (
+        "twicc.core.services.session_update",
+        "update_session_archived_from_payload",
+        "updated",
+    ),
+    "session:update_pinned": (
+        "twicc.core.services.session_update",
+        "update_session_pinned_from_payload",
+        "updated",
+    ),
+    "session:update_hidden": (
+        "twicc.core.services.session_update",
+        "update_session_hidden_from_payload",
+        "updated",
+    ),
+    "process:stop": (
+        "twicc.core.services.process_kill",
+        "kill_session_process_from_payload",
+        "stopped",
+    ),
+}
+
+
+class DropRequestsWatcher:
     def __init__(self) -> None:
-        self.directory = get_data_dir() / DIRECTORY_NAME
+        self.directory = get_drop_requests_dir()
         self._in_flight: set[str] = set()
         self._stop = asyncio.Event()
 
@@ -83,15 +132,16 @@ class PendingSessionsWatcher:
                 continue
             status_path = self.directory / f"{p.stem}{STATUS_SUFFIX}"
             if status_path.exists():
-                # CLI crashed before deleting both files. Session already created
-                # / rejected / failed — just clean up.
-                logger.info("[PendingSessionsWatcher] boot cleanup drop+status %s", p.stem)
+                # CLI crashed before deleting both files. Request already
+                # processed (created / sent / updated / rejected / failed) —
+                # just clean up.
+                logger.info("[DropRequestsWatcher] boot cleanup drop+status %s", p.stem)
                 p.unlink(missing_ok=True)
                 status_path.unlink(missing_ok=True)
             else:
                 # Drop file orphaned by a server restart — process normally, no
                 # timing check (cf. spec §5.5).
-                logger.info("[PendingSessionsWatcher] boot processes drop %s", p.stem)
+                logger.info("[DropRequestsWatcher] boot processes drop %s", p.stem)
                 asyncio.ensure_future(self._process_file(p))
 
     async def _cleanup_orphan_status_files(self) -> None:
@@ -99,7 +149,7 @@ class PendingSessionsWatcher:
             request_uuid = p.name[:-len(STATUS_SUFFIX)]
             drop_path = self.directory / f"{request_uuid}{DROP_SUFFIX}"
             if not drop_path.exists():
-                logger.info("[PendingSessionsWatcher] boot cleanup orphan status %s", request_uuid)
+                logger.info("[DropRequestsWatcher] boot cleanup orphan status %s", request_uuid)
                 p.unlink(missing_ok=True)
 
     # ------------------------------------------------------------------
@@ -113,7 +163,7 @@ class PendingSessionsWatcher:
                 content = await asyncio.to_thread(path.read_bytes)
                 data = await asyncio.to_thread(orjson.loads, content)
             except Exception as e:
-                logger.exception("[PendingSessionsWatcher] parse failed for %s", request_uuid)
+                logger.exception("[DropRequestsWatcher] parse failed for %s", request_uuid)
                 await self._write_status(request_uuid, {
                     "status": "failed",
                     "error": f"Could not parse drop-file: {e}",
@@ -121,58 +171,14 @@ class PendingSessionsWatcher:
                 return  # CLI will delete both drop + status files
 
             await self._write_status(request_uuid, {"status": "received"})
-            logger.info("[PendingSessionsWatcher] received %s", request_uuid)
+            logger.info("[DropRequestsWatcher] received %s", request_uuid)
 
             payload = data.get("payload") or {}
-            kind = payload.get("kind", "create")  # BC: pre-kind payloads = create
+            kind = payload.get("kind")
 
-            if kind == "create":
-                service = create_session_from_payload
-                success_status = "created"
-            elif kind == "send":
-                from twicc.core.services.send_message import (
-                    send_message_to_session_from_payload,
-                )
-                service = send_message_to_session_from_payload
-                success_status = "sent"
-            elif kind == "update_settings":
-                from twicc.core.services.session_update import (
-                    update_session_settings_from_payload,
-                )
-                service = update_session_settings_from_payload
-                success_status = "updated"
-            elif kind == "update_title":
-                from twicc.core.services.session_update import (
-                    update_session_title_from_payload,
-                )
-                service = update_session_title_from_payload
-                success_status = "updated"
-            elif kind == "update_archived":
-                from twicc.core.services.session_update import (
-                    update_session_archived_from_payload,
-                )
-                service = update_session_archived_from_payload
-                success_status = "updated"
-            elif kind == "update_pinned":
-                from twicc.core.services.session_update import (
-                    update_session_pinned_from_payload,
-                )
-                service = update_session_pinned_from_payload
-                success_status = "updated"
-            elif kind == "update_hidden":
-                from twicc.core.services.session_update import (
-                    update_session_hidden_from_payload,
-                )
-                service = update_session_hidden_from_payload
-                success_status = "updated"
-            elif kind == "kill_process":
-                from twicc.core.services.process_kill import (
-                    kill_session_process_from_payload,
-                )
-                service = kill_session_process_from_payload
-                success_status = "stopped"
-            else:
-                logger.warning("[PendingSessionsWatcher] unknown kind for %s: %r",
+            handler = _KIND_HANDLERS.get(kind) if kind else None
+            if handler is None:
+                logger.warning("[DropRequestsWatcher] unknown kind for %s: %r",
                                request_uuid, kind)
                 await self._write_status(request_uuid, {
                     "status": "failed",
@@ -180,10 +186,13 @@ class PendingSessionsWatcher:
                 })
                 return  # CLI will delete both drop + status files
 
+            module_path, attr_name, success_status = handler
+            service = getattr(importlib.import_module(module_path), attr_name)
+
             try:
                 result = await service(payload)
             except Exception as e:
-                logger.exception("[PendingSessionsWatcher] service raised for %s", request_uuid)
+                logger.exception("[DropRequestsWatcher] service raised for %s", request_uuid)
                 await self._write_status(request_uuid, {
                     "status": "failed",
                     "error": f"{type(e).__name__}: {e}",
@@ -191,7 +200,7 @@ class PendingSessionsWatcher:
                 return  # CLI will delete both drop + status files
 
             if result.success:
-                logger.info("[PendingSessionsWatcher] %s %s -> %s",
+                logger.info("[DropRequestsWatcher] %s %s -> %s",
                             success_status, request_uuid, result.session_id)
                 await self._write_status(request_uuid, {
                     "status": success_status,
@@ -200,7 +209,7 @@ class PendingSessionsWatcher:
                     "project_id": result.project_id,
                 })
             else:
-                logger.warning("[PendingSessionsWatcher] rejected %s: %s",
+                logger.warning("[DropRequestsWatcher] rejected %s: %s",
                                request_uuid, result.errors)
                 await self._write_status(request_uuid, {
                     "status": "rejected",
@@ -244,11 +253,11 @@ class PendingSessionsWatcher:
             pass
 
 
-_watcher_instance: PendingSessionsWatcher | None = None
+_watcher_instance: DropRequestsWatcher | None = None
 
 
-def get_pending_sessions_watcher() -> PendingSessionsWatcher:
+def get_drop_requests_watcher() -> DropRequestsWatcher:
     global _watcher_instance
     if _watcher_instance is None:
-        _watcher_instance = PendingSessionsWatcher()
+        _watcher_instance = DropRequestsWatcher()
     return _watcher_instance

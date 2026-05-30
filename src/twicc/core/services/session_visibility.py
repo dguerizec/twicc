@@ -98,7 +98,7 @@ def _check_hidden_invariants(session) -> list[SessionVisibilityError]:
 
     We read the columns directly (the session is already saved, no preset to merge).
     """
-    from twicc.cli._session_request.validation import validate_hidden_constraints
+    from twicc.cli._drop_request.validation import validate_hidden_constraints
     from twicc.providers.helpers import AgentSettings
 
     settings = AgentSettings.from_session(session)

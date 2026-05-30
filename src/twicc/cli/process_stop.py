@@ -1,7 +1,7 @@
 """``twicc process <ID> stop`` sub-command.
 
-Drops a ``kind="kill_process"`` payload in ``<data_dir>/sessions-pending/``
-so the live TwiCC server asks the agent manager to kill the agent attached
+Drops a ``kind="process:stop"`` payload in ``<data_dir>/drop-requests/`` so
+the live TwiCC server asks the agent manager to kill the agent attached
 to the session via
 :func:`twicc.core.services.process_kill.kill_session_process_from_payload`,
 exactly as the UI's *Stop process* button does (with ``reason="manual"``).
@@ -24,25 +24,25 @@ def stop_cmd(
     no_color: bool,
     json_output: bool,
 ) -> None:
-    """Drop a ``kind="kill_process"`` request and wait for the status."""
+    """Drop a ``kind="process:stop"`` request and wait for the status."""
     # Lazy imports to keep --help fast (no Django setup until we need it).
     import os
     os.environ.setdefault("DJANGO_SETTINGS_MODULE", "twicc.settings")
     import django
     django.setup()
 
-    from twicc.cli._session_request.discovery import (
-        ServerDownError, check_heartbeat, get_data_dir,
+    from twicc.cli._drop_request.discovery import (
+        ServerDownError, check_heartbeat,
     )
-    from twicc.cli._session_request.drop_file import write_drop_file
-    from twicc.cli._session_request.output import (
+    from twicc.cli._drop_request.drop_file import write_drop_file
+    from twicc.cli._drop_request.output import (
         emit_final, emit_progress, emit_validation_errors,
     )
-    from twicc.cli._session_request.polling import poll_status
-    from twicc.cli._session_request.session_lookup import (
+    from twicc.cli._drop_request.polling import poll_status
+    from twicc.cli._drop_request.session_lookup import (
         SessionLookupError, lookup_session,
     )
-    from twicc.cli._session_request.validation import ValidationError
+    from twicc.cli._drop_request.validation import ValidationError
 
     try:
         age = check_heartbeat()
@@ -74,7 +74,7 @@ def stop_cmd(
 
     payload = {"session_id": resolved.session_id}
 
-    drop = write_drop_file(get_data_dir(), payload, kind="kill_process")
+    drop = write_drop_file(payload, kind="process:stop")
     emit_progress(
         f"→ Request submitted (request_uuid: {drop.request_uuid[:8]}...)",
         json_output=json_output,

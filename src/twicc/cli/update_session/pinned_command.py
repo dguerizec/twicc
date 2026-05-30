@@ -3,7 +3,7 @@
 Two boolean-ish flips sharing the same plumbing: ``pin`` takes a positional
 ``MODE`` argument (one of ``project`` / ``workspace`` / ``all``, mirroring
 ``PinMode``), ``unpin`` takes no argument. Both drop a
-``kind="update_pinned"`` payload that the server resolves into a write on
+``kind="session:update_pinned"`` payload that the server resolves into a write on
 ``Session.pinned`` (NULL for unpin, the mode string otherwise) and a
 ``session_updated`` broadcast.
 
@@ -31,25 +31,25 @@ def _run_pinned_update(
     no_color: bool,
     json_output: bool,
 ) -> None:
-    """Drop a ``kind="update_pinned"`` payload and wait for the status."""
+    """Drop a ``kind="session:update_pinned"`` payload and wait for the status."""
     # Lazy imports to keep --help fast (no Django setup until we need it).
     import os
     os.environ.setdefault("DJANGO_SETTINGS_MODULE", "twicc.settings")
     import django
     django.setup()
 
-    from twicc.cli._session_request.discovery import (
-        ServerDownError, check_heartbeat, get_data_dir,
+    from twicc.cli._drop_request.discovery import (
+        ServerDownError, check_heartbeat,
     )
-    from twicc.cli._session_request.drop_file import write_drop_file
-    from twicc.cli._session_request.output import (
+    from twicc.cli._drop_request.drop_file import write_drop_file
+    from twicc.cli._drop_request.output import (
         emit_final, emit_progress, emit_validation_errors,
     )
-    from twicc.cli._session_request.polling import poll_status
-    from twicc.cli._session_request.session_lookup import (
+    from twicc.cli._drop_request.polling import poll_status
+    from twicc.cli._drop_request.session_lookup import (
         SessionLookupError, lookup_session,
     )
-    from twicc.cli._session_request.validation import ValidationError
+    from twicc.cli._drop_request.validation import ValidationError
 
     try:
         age = check_heartbeat()
@@ -85,7 +85,7 @@ def _run_pinned_update(
         "pinned": pinned,
     }
 
-    drop = write_drop_file(get_data_dir(), payload, kind="update_pinned")
+    drop = write_drop_file(payload, kind="session:update_pinned")
     emit_progress(
         f"→ Request submitted (request_uuid: {drop.request_uuid[:8]}...)",
         json_output=json_output,
@@ -160,8 +160,8 @@ def update_pin_cmd(
     if mode not in _VALID_PIN_MODES:
         # Cheap fallback path: no Django, hand-roll the validation_error
         # envelope so the output shape matches every other CLI command.
-        from twicc.cli._session_request.output import emit_validation_errors
-        from twicc.cli._session_request.validation import ValidationError
+        from twicc.cli._drop_request.output import emit_validation_errors
+        from twicc.cli._drop_request.validation import ValidationError
         emit_validation_errors(
             [ValidationError(
                 "MODE", "invalid_pin_mode",

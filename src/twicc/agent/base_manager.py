@@ -538,7 +538,7 @@ class BaseAgentManager:
            the pending entry is gone, and what ``twicc session <id>`` reads
            on the CLI. The ``.update()`` return value is checked: ``0`` rows
            updated means the Session row does not exist yet (typical race for
-           Codex, whose ASSISTANT_TURN fires before the PendingSessionsWatcher
+           Codex, whose ASSISTANT_TURN fires before the DropRequestsWatcher
            has created the row) and is reported as failure.
         2. The provider's own store via
            :meth:`BaseProviderHelpers.rename_session` — for Claude Code, a

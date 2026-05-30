@@ -1,7 +1,7 @@
 """Kill an existing session's live agent.
 
-Called by :class:`PendingSessionsWatcher` when the CLI drops a request file
-with ``kind="kill_process"``. Mirrors the ``_handle_kill_process`` branch of
+Called by :class:`DropRequestsWatcher` when the CLI drops a request file
+with ``kind="process:stop"``. Mirrors the ``_handle_kill_process`` branch of
 :meth:`twicc.asgi.WSConsumer` (used when the user clicks the *Stop process*
 button in the UI): asks the registry to kill the agent attached to the
 session with ``reason="manual"`` and lets the manager's normal teardown

@@ -79,7 +79,7 @@ All persistent data (database, logs, configuration) lives in a **data directory*
 ├── db/
 │   └── data.sqlite (+shm, +wal)      # SQLite database
 ├── search-index/                     # Tantivy full-text search index
-├── sessions-pending/                 # Pending session payloads picked up by the watcher
+├── drop-requests/                    # CLI drop-files (create/send/update/process) picked up by the watcher
 └── logs/
     ├── backend.log                   # Backend application logs
     ├── frontend.log                  # Frontend (Vite) process output

@@ -236,14 +236,14 @@ logs/
 # Development process controller runtime data
 .devctl/
 
-# CLI session-create runtime files (live in <data_dir>):
+# CLI drop-request runtime files (live in <data_dir>):
 #   - twicc.heartbeat: touched every 5s by the live server, read by the CLI
 #     to fail-fast when the server is down (see src/twicc/heartbeat.py).
-#   - sessions-pending/: drop-files written by `twicc create-session` and
-#     status files written back by PendingSessionsWatcher
-#     (see src/twicc/pending_sessions_watcher.py).
+#   - drop-requests/: drop-files written by the TwiCC CLI commands and
+#     status files written back by DropRequestsWatcher
+#     (see src/twicc/drop_requests_watcher.py).
 twicc.heartbeat
-sessions-pending/
+drop-requests/
 
 # Git worktrees — anchored to repo root only. An un-anchored `.worktrees/`
 # would match any segment of the path, including the worktree's own root

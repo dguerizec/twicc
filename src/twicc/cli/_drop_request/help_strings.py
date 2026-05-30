@@ -15,7 +15,7 @@ shipping a tiny helper per flag.
 
 from __future__ import annotations
 
-from twicc.cli._session_request.help_context import HelpContext
+from twicc.cli._drop_request.help_context import HelpContext
 
 
 _PROVIDER_LABELS = {

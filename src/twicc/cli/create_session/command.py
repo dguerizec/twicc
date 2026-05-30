@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import typer
 
-from twicc.cli._session_request.help_context import load_help_context
-from twicc.cli._session_request.help_strings import (
+from twicc.cli._drop_request.help_context import load_help_context
+from twicc.cli._drop_request.help_strings import (
     context_max_help,
     default_suffix,
     model_help,
@@ -181,24 +181,24 @@ def create_session_cmd(
     import django
     django.setup()
 
-    from twicc.cli._session_request.attachments import (
+    from twicc.cli._drop_request.attachments import (
         AttachmentResizeError,
         validate_and_encode,
     )
-    from twicc.cli._session_request.bootstrap_local import load_local_bootstrap
-    from twicc.cli._session_request.discovery import ServerDownError, check_heartbeat, get_data_dir
-    from twicc.cli._session_request.drop_file import write_drop_file
-    from twicc.cli._session_request.output import (
+    from twicc.cli._drop_request.bootstrap_local import load_local_bootstrap
+    from twicc.cli._drop_request.discovery import ServerDownError, check_heartbeat
+    from twicc.cli._drop_request.drop_file import write_drop_file
+    from twicc.cli._drop_request.output import (
         emit_attachment_summary,
         emit_final,
         emit_progress,
         emit_validation_errors,
     )
-    from twicc.cli._session_request.polling import poll_status
-    from twicc.cli._session_request.prompt import resolve_prompt, PromptError
+    from twicc.cli._drop_request.polling import poll_status
+    from twicc.cli._drop_request.prompt import resolve_prompt, PromptError
     from twicc.cli.create_session.project import resolve_project, ProjectError
-    from twicc.cli._session_request.presets import apply_preset_and_overrides, PresetError
-    from twicc.cli._session_request.validation import (
+    from twicc.cli._drop_request.presets import apply_preset_and_overrides, PresetError
+    from twicc.cli._drop_request.validation import (
         ValidationError,
         validate_hidden_constraints,
         validate_provider,
@@ -341,14 +341,14 @@ def create_session_cmd(
     # Auto-fill spawned_by silently via PID ancestry. No CLI flag exposes
     # this — the agent never has to know its own session_id to call us.
     try:
-        from twicc.cli._session_request.whoami import resolve_current_session
+        from twicc.cli._drop_request.whoami import resolve_current_session
         current = resolve_current_session()
         spawned_by_session_id = current.id if current is not None else None
     except Exception:
         spawned_by_session_id = None
 
     # Build the WS-compatible payload. ``directory`` is passed alongside
-    # ``project_id`` so the server (PendingSessionsWatcher → service) can
+    # ``project_id`` so the server (DropRequestsWatcher → service) can
     # auto-create the Project from inside the main process — that's where
     # the WS broadcasts of ``project_added`` and ``workspaces_updated``
     # need to originate to reach connected UI clients live.
@@ -365,7 +365,7 @@ def create_session_cmd(
         **settings._asdict(),
     }
 
-    drop = write_drop_file(get_data_dir(), payload)
+    drop = write_drop_file(payload, kind="session:create")
     emit_progress(
         f"→ Request submitted (request_uuid: {drop.request_uuid[:8]}...)",
         json_output=json_output,

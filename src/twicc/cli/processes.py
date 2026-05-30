@@ -44,7 +44,7 @@ def main(
 
     django.setup()
 
-    from twicc.cli._session_request.whoami import resolve_spawned_by_filter
+    from twicc.cli._drop_request.whoami import resolve_spawned_by_filter
 
     try:
         spawned_by_id = resolve_spawned_by_filter(spawned_by)

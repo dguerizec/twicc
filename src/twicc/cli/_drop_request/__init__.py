@@ -1,6 +1,7 @@
 """Shared building blocks for CLI commands that talk to the live TwiCC server
-via the ``sessions-pending/`` drop-file protocol (``twicc create-session``,
-``twicc send-message``, ``twicc update-session``, ...).
+via the ``drop-requests/`` drop-file protocol (``twicc create-session``,
+``twicc send-message``, ``twicc update-session``, ``twicc process stop``,
+...).
 
 The modules in this sub-package are intentionally agnostic of the action
 performed on the server side: they handle discovery (heartbeat check),
