@@ -1,12 +1,12 @@
 ---
 name: twicc-update-session
-description: Update an existing TwiCC session. Today the `settings` sub-command updates the agent settings (model, effort, permission mode, thinking, chrome MCP, fast mode, context window, question widget), `title` renames the session, `archive` / `unarchive` flip the archived flag (archive also stops the live agent and unpins under the `autoUnpinOnArchive` setting), and `pin <MODE>` / `unpin` set or clear the pin scope (`project` / `workspace` / `all`). Future sub-commands will cover stop. Use when the user wants to change a session's settings, title, archived, or pinned state without sending a new message.
+description: Update an existing TwiCC session. The `settings` sub-command updates the agent settings (model, effort, permission mode, thinking, chrome MCP, fast mode, context window, question widget), `title` renames the session, `archive` / `unarchive` flip the archived flag (archive also stops the live agent and unpins under the `autoUnpinOnArchive` setting), and `pin <MODE>` / `unpin` set or clear the pin scope (`project` / `workspace` / `all`). Use when the user wants to change a session's settings, title, archived, or pinned state without sending a new message. For stopping the live agent without touching the row, use `twicc process <ID> stop`.
 argument-hint: <session_id> {settings|title|archive|unarchive|pin|unpin} [ARGS / OPTIONS]
 ---
 
 # TwiCC Update Session
 
-Update an existing agent session by dropping a request file the live TwiCC server picks up. Six sub-commands today: `settings` (change the agent settings), `title` (rename the session), `archive` (mark archived + kill agent + optional unpin), `unarchive` (flip back), `pin <MODE>` (set the pin scope: project / workspace / all), `unpin` (clear the pin). `stop` will plug into the same sub-app later.
+Update an existing agent session by dropping a request file the live TwiCC server picks up. Six sub-commands: `settings` (change the agent settings), `title` (rename the session), `archive` (mark archived + kill agent + optional unpin), `unarchive` (flip back), `pin <MODE>` (set the pin scope: project / workspace / all), `unpin` (clear the pin). To stop the live agent without changing the row, use `twicc process <SESSION_ID> stop` (see the `twicc-process` skill).
 
 ## When to use
 
@@ -17,7 +17,7 @@ Update an existing agent session by dropping a request file the live TwiCC serve
 - The user asks to "archive session X" (clean up the sidebar, also stops the live agent) or "unarchive session X" (bring it back to the active list) → `archive` / `unarchive`.
 - The user asks to "pin session X" (in this project / across the workspace / globally) or "unpin session X" → `pin <MODE>` / `unpin`.
 
-**Out of scope (today):** killing the live process while keeping the session active (without archiving it). This will become another sub-command of `twicc update-session` — refuse if asked here and tell the user the operation isn't wired yet (the UI can still do it).
+**Out of scope:** killing the live process while keeping the row otherwise untouched. That's a separate command — `twicc process <SESSION_ID> stop` (see the `twicc-process` skill) — so it doesn't live as an `update-session` sub-command. Direct any "stop / kill the agent" request there.
 
 ## How to invoke
 

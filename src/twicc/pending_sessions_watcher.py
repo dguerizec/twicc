@@ -159,6 +159,12 @@ class PendingSessionsWatcher:
                 )
                 service = update_session_pinned_from_payload
                 success_status = "updated"
+            elif kind == "kill_process":
+                from twicc.core.services.process_kill import (
+                    kill_session_process_from_payload,
+                )
+                service = kill_session_process_from_payload
+                success_status = "stopped"
             else:
                 logger.warning("[PendingSessionsWatcher] unknown kind for %s: %r",
                                request_uuid, kind)
@@ -215,6 +221,8 @@ class PendingSessionsWatcher:
             data.setdefault("sent_at", _iso_now())
         elif data["status"] == "updated":
             data.setdefault("updated_at", _iso_now())
+        elif data["status"] == "stopped":
+            data.setdefault("stopped_at", _iso_now())
         elif data["status"] == "rejected":
             data.setdefault("rejected_at", _iso_now())
         elif data["status"] == "failed":

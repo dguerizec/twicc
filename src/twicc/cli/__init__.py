@@ -221,14 +221,69 @@ def processes(
     )
 
 
-@app.command()
-def process(
+process_app = typer.Typer(
+    name="process",
+    help="Inspect or control a session's live process.",
+    invoke_without_command=True,
+)
+app.add_typer(process_app)
+
+
+@process_app.callback(invoke_without_command=True)
+def _process_default(
+    ctx: typer.Context,
     session_id: str = typer.Argument(help="The session ID of the running process."),
 ) -> None:
-    """Show the currently running process for a session as JSON."""
+    """Show the currently running process for a session as JSON (default action)."""
+    ctx.obj = session_id
+    if ctx.invoked_subcommand is not None:
+        return
+
     from twicc.cli.process import main as process_main
 
     process_main(session_id)
+
+
+@process_app.command(name="stop")
+def process_stop(
+    ctx: typer.Context,
+    timeout: int = typer.Option(
+        30,
+        "--timeout",
+        help=(
+            "Seconds to wait for the server's final status before giving up. "
+            "The request stays on disk; the kill may still apply on the "
+            "server side."
+        ),
+    ),
+    no_color: bool = typer.Option(
+        False,
+        "--no-color",
+        help="Disable ANSI colors in human-readable output.",
+    ),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help=(
+            "Emit a single JSON object on stdout instead of pretty text. "
+            "Implies --no-color."
+        ),
+    ),
+) -> None:
+    """Stop the live agent process attached to the session.
+
+    Equivalent to clicking the UI's *Stop process* button: asks the agent
+    manager to kill the agent with ``reason="manual"``. Idempotent — if no
+    live agent is currently attached, the command still exits 0.
+    """
+    from twicc.cli.process_stop import stop_cmd
+
+    stop_cmd(
+        ctx.obj,
+        timeout=timeout,
+        no_color=no_color,
+        json_output=json_output,
+    )
 
 
 @app.command()

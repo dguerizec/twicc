@@ -1,22 +1,22 @@
 ---
 name: twicc-process
-description: Inspect the currently running process of a single TwiCC session by session ID — its state and OS PID. Use when the user wants details on the live process of one session, or wants to find the OS PID attached to a session for external inspection (ps, attach a debugger, etc.).
-argument-hint: <session_id>
+description: Inspect or control the currently running process of a single TwiCC session by session ID. Default action shows the process state and OS PID; the `stop` sub-command kills the live agent attached to the session (equivalent to the UI's *Stop process* button). Use when the user wants details on the live process, an OS PID for external inspection (ps, debugger, etc.), or to stop a running agent.
+argument-hint: <session_id> [stop]
 ---
 
 # TwiCC Process
 
-Show the currently running process (live `ProcessRun`) for one session:
-its state, when it last transitioned, and the OS PID of the underlying
-provider subprocess. Returns nothing when the session has no live
-process (stopped, never started, or kept around only as a DEAD row for
-cron restart).
+Inspect or control the live process attached to one session. Two flavours:
+
+- `twicc process <SESSION_ID>` — shows the current `ProcessRun` row: state, last transition timestamp, OS PID. Default action.
+- `twicc process <SESSION_ID> stop` — stops the live agent (same effect as the UI's *Stop process* button: `kill_agent(reason="manual")`).
 
 ## When to use
 
-- The user has a session ID and wants to know whether (and where) its process is running
-- The user wants the OS PID of a specific session's subprocess to attach external tools (debugger, `ps`, `/proc/<pid>/…`)
-- The user is debugging a stuck session and wants to confirm the process is still alive
+- The user has a session ID and wants to know whether (and where) its process is running → default action.
+- The user wants the OS PID of a specific session's subprocess to attach external tools (debugger, `ps`, `/proc/<pid>/…`) → default action.
+- The user is debugging a stuck session and wants to confirm the process is still alive → default action.
+- The user asks to "stop / kill / interrupt the process for session X" (typically because it's stuck or runaway) → `stop` sub-command.
 
 ## How to invoke
 
@@ -47,6 +47,57 @@ when:
 
 ```bash
 $TWICC process abc123-def456
+```
+
+## How to stop a process
+
+```bash
+$TWICC process <SESSION_ID> stop [OPTIONS]
+```
+
+Drops a request the live TwiCC server picks up; on success, the same teardown the UI's *Stop process* button triggers happens — `kill_agent(reason="manual")` against the provider's manager. The session row itself is **not** modified (no archive, no settings change, no title change).
+
+### Required argument
+
+- **`SESSION_ID`** — the session whose live agent should be killed.
+
+### Options
+
+Same standard output controls as the other CLI commands:
+
+| Flag | |
+|------|---|
+| `--timeout SECONDS` | seconds to wait for the server's final status (default 30) |
+| `--json` | emit a single JSON object on stdout (implies `--no-color`) |
+| `--no-color` | disable ANSI colors |
+
+### Behaviour
+
+- **Idempotent.** Calling `stop` when no live agent is attached to the session still exits 0 with `status="stopped"`. The UI's *Stop process* button works the same way.
+- **No effect on the row.** `archived`, `pinned`, `title`, agent settings, and every other column on `Session` are untouched. If you want to archive as well (which also stops the agent), use `twicc update-session <ID> archive` instead.
+- **Subagent guard.** Subagents have no live process attached to the manager; `stop` rejects them locally with `is_subagent` (exit 1).
+
+### Exit codes
+
+| Code | Meaning |
+|------|---------|
+| 0 | Process stopped (or already not running) |
+| 1 | Local validation error (`is_subagent`, `session_not_found`, `session_stale`, `project_no_directory`, ...) |
+| 2 | TwiCC server not running (heartbeat missing or stale) |
+| 3 | Server rejected the request (`provider_disabled`, race-detected guards, ...) |
+| 4 | Server hit an unexpected error mid-flight |
+| 5 | Timeout waiting for the server's final status |
+| 64 | Bad CLI usage (handled by Typer) |
+
+### Examples
+
+```bash
+# Stop a stuck process.
+$TWICC process abc123-def456 stop
+
+# Stop + JSON for scripts.
+$TWICC process --json abc123-def456 stop
+# → {"status":"stopped","session_id":"...","provider":"claude_code","project_id":"...","request_uuid":"..."}
 ```
 
 ## Output format

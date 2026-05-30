@@ -1,0 +1,102 @@
+"""``twicc process <ID> stop`` sub-command.
+
+Drops a ``kind="kill_process"`` payload in ``<data_dir>/sessions-pending/``
+so the live TwiCC server asks the agent manager to kill the agent attached
+to the session via
+:func:`twicc.core.services.process_kill.kill_session_process_from_payload`,
+exactly as the UI's *Stop process* button does (with ``reason="manual"``).
+
+Idempotent — if no live agent is attached when the request lands, the
+status is still ``"stopped"``. The CLI exits 0 either way.
+
+No options beyond the standard output controls.
+"""
+
+from __future__ import annotations
+
+import typer
+
+
+def stop_cmd(
+    session_id: str,
+    *,
+    timeout: int,
+    no_color: bool,
+    json_output: bool,
+) -> None:
+    """Drop a ``kind="kill_process"`` request and wait for the status."""
+    # Lazy imports to keep --help fast (no Django setup until we need it).
+    import os
+    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "twicc.settings")
+    import django
+    django.setup()
+
+    from twicc.cli._session_request.discovery import (
+        ServerDownError, check_heartbeat, get_data_dir,
+    )
+    from twicc.cli._session_request.drop_file import write_drop_file
+    from twicc.cli._session_request.output import (
+        emit_final, emit_progress, emit_validation_errors,
+    )
+    from twicc.cli._session_request.polling import poll_status
+    from twicc.cli._session_request.session_lookup import (
+        SessionLookupError, lookup_session,
+    )
+    from twicc.cli._session_request.validation import ValidationError
+
+    try:
+        age = check_heartbeat()
+    except ServerDownError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(2)
+
+    emit_progress(f"✓ Heartbeat OK (last seen {age:.1f}s ago)", json_output=json_output)
+
+    # Local pre-check: session must exist, not be a subagent, not be stale,
+    # and have a project directory. Mirrors the guards every other CLI
+    # session-targeted command runs.
+    try:
+        resolved = lookup_session(session_id)
+    except SessionLookupError as e:
+        emit_validation_errors(
+            [ValidationError("SESSION_ID", e.code, e.message)],
+            json_output=json_output,
+        )
+        raise typer.Exit(1)
+
+    emit_progress(
+        f"✓ Session {resolved.session_id!r} resolved "
+        f"(provider: {resolved.provider}, project: {resolved.project_id})",
+        json_output=json_output,
+    )
+
+    emit_progress("✓ Stop request prepared", json_output=json_output)
+
+    payload = {"session_id": resolved.session_id}
+
+    drop = write_drop_file(get_data_dir(), payload, kind="kill_process")
+    emit_progress(
+        f"→ Request submitted (request_uuid: {drop.request_uuid[:8]}...)",
+        json_output=json_output,
+    )
+
+    status_path = drop.path.with_name(f"{drop.request_uuid}.status.json")
+    outcome = poll_status(status_path, timeout_seconds=timeout)
+
+    drop.path.unlink(missing_ok=True)
+    status_path.unlink(missing_ok=True)
+
+    emit_final(
+        outcome,
+        request_uuid=drop.request_uuid,
+        json_output=json_output,
+        timeout=timeout,
+    )
+
+    if outcome.status == "stopped":
+        raise typer.Exit(0)
+    if outcome.status == "rejected":
+        raise typer.Exit(3)
+    if outcome.status == "failed":
+        raise typer.Exit(4)
+    raise typer.Exit(5)  # timeout
