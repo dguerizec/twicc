@@ -24,6 +24,7 @@ def main(session_id: str) -> None:
     django.setup()
 
     from twicc.agent.states import AgentState
+    from twicc.cli._process_state import serialize_process_row
     from twicc.cli._twicc_info import resolve_live_twicc_or_exit
     from twicc.core.models import ProcessRun, Session
 
@@ -47,26 +48,7 @@ def main(session_id: str) -> None:
         Session.objects.filter(id=session_id).only("id", "title", "project_id").first()
     )
 
-    # Project the persisted ``state`` + ``awaiting_user_input`` columns onto
-    # the same 4-value vocabulary as ``twicc processes`` (see that module's
-    # ``main`` docstring for the rule). ``awaiting_user_input`` always implies
-    # ``state=ASSISTANT_TURN`` in DB, so the projection is lossless.
-    from twicc.cli.processes import VIRTUAL_AWAITING_STATE
-    virtual_state = VIRTUAL_AWAITING_STATE if row.awaiting_user_input else row.state
-
-    data = {
-        "id": row.pk,
-        "provider": row.provider,
-        "session_id": row.session_id,
-        "session_title": session.title if session is not None else None,
-        "project_id": session.project_id if session is not None else None,
-        "state": virtual_state,
-        "started_at": row.started_at.isoformat() if row.started_at else None,
-        "last_state_change_at": (
-            row.last_state_change_at.isoformat() if row.last_state_change_at else None
-        ),
-        "pid": row.agent_pid,
-    }
+    data = serialize_process_row(row, session)
 
     sys.stdout.buffer.write(orjson.dumps(data, option=orjson.OPT_INDENT_2))
     sys.stdout.buffer.write(b"\n")

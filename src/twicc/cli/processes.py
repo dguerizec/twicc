@@ -5,9 +5,6 @@ import sys
 import orjson
 
 
-VIRTUAL_AWAITING_STATE = "awaiting_user_input"
-
-
 def main(
     *,
     provider: str | None = None,
@@ -53,6 +50,11 @@ def main(
         sys.exit(1)
 
     from twicc.agent.states import AgentState
+    from twicc.cli._process_state import (
+        AWAITING_VIRTUAL_STATE,
+        LIVE_VIRTUAL_STATES,
+        serialize_process_row,
+    )
     from twicc.cli._twicc_info import resolve_live_twicc_or_exit
     from twicc.core.models import ProcessRun, Session
 
@@ -66,20 +68,14 @@ def main(
     )
 
     if state is not None:
-        virtual_states = {
-            AgentState.STARTING.value,
-            AgentState.ASSISTANT_TURN.value,
-            AgentState.USER_TURN.value,
-            VIRTUAL_AWAITING_STATE,
-        }
-        if state not in virtual_states:
+        if state not in LIVE_VIRTUAL_STATES:
             print(
                 f"Error: invalid --state '{state}'. Use one of: "
-                f"{', '.join(sorted(virtual_states))}.",
+                f"{', '.join(sorted(LIVE_VIRTUAL_STATES))}.",
                 file=sys.stderr,
             )
             sys.exit(1)
-        if state == VIRTUAL_AWAITING_STATE:
+        if state == AWAITING_VIRTUAL_STATE:
             # awaiting_user_input rows are necessarily in ASSISTANT_TURN; the
             # flag is the canonical filter so we don't combine with state.
             qs = qs.filter(awaiting_user_input=True)
@@ -135,23 +131,10 @@ def main(
         filtered.append(row)
     rows = filtered
 
-    data = [_serialize(row, sessions_by_id.get(row.session_id)) for row in rows]
+    data = [
+        serialize_process_row(row, sessions_by_id.get(row.session_id))
+        for row in rows
+    ]
 
     sys.stdout.buffer.write(orjson.dumps(data, option=orjson.OPT_INDENT_2))
     sys.stdout.buffer.write(b"\n")
-
-
-def _serialize(row, session) -> dict:
-    return {
-        "id": row.pk,
-        "provider": row.provider,
-        "session_id": row.session_id,
-        "session_title": session.title if session is not None else None,
-        "project_id": session.project_id if session is not None else None,
-        "state": VIRTUAL_AWAITING_STATE if row.awaiting_user_input else row.state,
-        "started_at": row.started_at.isoformat() if row.started_at else None,
-        "last_state_change_at": (
-            row.last_state_change_at.isoformat() if row.last_state_change_at else None
-        ),
-        "pid": row.agent_pid,
-    }

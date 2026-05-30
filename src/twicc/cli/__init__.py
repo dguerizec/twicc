@@ -324,6 +324,71 @@ def process_stop(
     )
 
 
+@process_app.command(name="wait")
+def process_wait(
+    ctx: typer.Context,
+    statuses: list[str] = typer.Argument(
+        ...,
+        metavar="STATUS...",
+        help=(
+            "One or more virtual states to wait for (any-of match). "
+            "Valid values: starting, assistant_turn, awaiting_user_input, "
+            "user_turn, dead. 'dead' matches when no live ProcessRun "
+            "exists for the session."
+        ),
+    ),
+    timeout: float = typer.Option(
+        ...,
+        "--timeout",
+        help=(
+            "Required. Seconds to wait for a matching state before giving "
+            "up (exit 5). Must be > 0. No default — pass --timeout=N "
+            "explicitly to bound the wait."
+        ),
+    ),
+    transition: bool = typer.Option(
+        False,
+        "--transition",
+        help=(
+            "Only evaluate the match after observing at least one state "
+            "transition since the initial snapshot. Useful to wait for the "
+            "next change rather than the current value. Note: 'wait dead "
+            "--transition' on an already-dead session can never match (the "
+            "row is frozen) and will always timeout."
+        ),
+    ),
+    no_color: bool = typer.Option(
+        False,
+        "--no-color",
+        help="Disable ANSI colors in human-readable output.",
+    ),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help=(
+            "Emit only the final JSON object on stdout (no progress lines). "
+            "Implies --no-color."
+        ),
+    ),
+) -> None:
+    """Block until the live process reaches any of the listed states.
+
+    Polls the DB locally every 250 ms; the live TwiCC writes process
+    transitions to the same row this command reads. Exits 0 on match,
+    5 on timeout, 2 if TwiCC is not running, 1 on validation errors.
+    """
+    from twicc.cli.process_wait import wait_cmd
+
+    wait_cmd(
+        ctx.obj,
+        statuses,
+        timeout=timeout,
+        transition=transition,
+        no_color=no_color,
+        json_output=json_output,
+    )
+
+
 @app.command()
 def status() -> None:
     """Report the live TwiCC backend's status as JSON (exit 0 only when running)."""
