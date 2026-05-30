@@ -284,17 +284,19 @@ export function useSessionAgentSettings(sessionIdSource) {
         )
     }
 
-    // Keep the (selectedModel, contextMax, effort, fastMode) tuple consistent
-    // against the provider's rules. The helper enforces retired-model upgrade,
-    // then contextMax / effort demotion and fast-mode clearing against the
-    // model's capabilities. Fires immediately so a session loading with stale
-    // settings gets corrected on mount.
+    // Keep the (selectedModel, contextMax, effort, fastMode, permissionMode)
+    // tuple consistent against the provider's rules. The helper enforces
+    // retired-model upgrade, then contextMax / effort demotion, fast-mode
+    // clearing and permissionMode demotion against the model's capabilities.
+    // Fires immediately so a session loading with stale settings gets
+    // corrected on mount.
     watch(
         () => ({
             selectedModel: selectedModel.value ?? providerStore.value?.defaultModel,
             contextMax: selectedContextMax.value ?? providerStore.value?.defaultContextMax,
             effort: selectedEffort.value ?? providerStore.value?.defaultEffort,
             fastMode: selectedFastMode.value ?? providerStore.value?.defaultFastMode,
+            permissionMode: selectedPermissionMode.value ?? providerStore.value?.defaultPermissionMode,
         }),
         (current) => {
             const helpers = providerHelpers.value
@@ -315,6 +317,10 @@ export function useSessionAgentSettings(sessionIdSource) {
             if (adjusted.fastMode !== current.fastMode) {
                 selectedFastMode.value = adjusted.fastMode
                 activeFastMode.value = adjusted.fastMode
+            }
+            if (adjusted.permissionMode !== current.permissionMode) {
+                selectedPermissionMode.value = adjusted.permissionMode
+                activePermissionMode.value = adjusted.permissionMode
             }
         },
         { immediate: true }
