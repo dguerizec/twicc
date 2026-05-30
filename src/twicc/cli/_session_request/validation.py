@@ -160,7 +160,7 @@ def validate_hidden_constraints(
     only apply to hidden sessions. When ``hidden`` is ``True``:
 
     - ``permission_mode`` must be in the provider helpers'
-      ``HIDDEN_PERMISSION_MODES`` (each provider declares which of its
+      ``NON_INTERACTIVE_PERMISSION_MODES`` (each provider declares which of its
       modes run without interactive approval);
     - ``question_widget`` must NOT be ``True`` for providers that use it
       (Claude Code). For other providers (Codex) the field is ignored.
@@ -174,12 +174,12 @@ def validate_hidden_constraints(
 
     # --- permission_mode whitelist -------------------------------
     # Each provider declares its non-interactive modes via
-    # ``HIDDEN_PERMISSION_MODES`` on its helpers class. An empty frozenset
+    # ``NON_INTERACTIVE_PERMISSION_MODES`` on its helpers class. An empty frozenset
     # means the provider does not support hidden sessions.
     from twicc.providers.helpers import get_provider_helpers
     try:
         helpers = get_provider_helpers(provider)
-        whitelist = helpers.HIDDEN_PERMISSION_MODES
+        whitelist = helpers.NON_INTERACTIVE_PERMISSION_MODES
     except KeyError:
         whitelist = frozenset()
     if not whitelist:

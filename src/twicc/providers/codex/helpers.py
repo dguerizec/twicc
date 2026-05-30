@@ -102,7 +102,7 @@ class CodexHelpers(BaseProviderHelpers):
     AGENT_SETTINGS_FIELDS_MAPPING: ClassVar[dict[str, str]] = _AGENT_SETTINGS_FIELDS_MAPPING
 
     # Codex permission modes that do not require interactive approval.
-    HIDDEN_PERMISSION_MODES: ClassVar[frozenset[str]] = frozenset({"yolo", "strict"})
+    NON_INTERACTIVE_PERMISSION_MODES: ClassVar[frozenset[str]] = frozenset({"yolo", "strict"})
 
     # Polled every 5 minutes by ``codex.usage_task`` against ChatGPT's
     # ``/backend-api/wham/usage`` endpoint (the same one the Codex CLI's

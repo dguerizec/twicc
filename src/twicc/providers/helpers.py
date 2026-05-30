@@ -257,7 +257,7 @@ class BaseProviderHelpers:
     # approval prompts, so the helper must declare which provider-specific
     # ``permission_mode`` values run without prompting. Empty default
     # means the provider does NOT support hidden sessions at all.
-    HIDDEN_PERMISSION_MODES: ClassVar[frozenset[str]] = frozenset()
+    NON_INTERACTIVE_PERMISSION_MODES: ClassVar[frozenset[str]] = frozenset()
 
     # ------------------------------------------------------------------
     # Compute version
