@@ -470,7 +470,7 @@ export const useDataStore = defineStore('data', {
                 pStates = state.processStates
             }
             return sessions
-                .filter(s => s.project_id === projectId && !s.parent_session_id)
+                .filter(s => s.project_id === projectId && !s.parent_session_id && !s.hidden)
                 .filter(s => oldestMtime == null || s.mtime >= oldestMtime)
                 .sort(sessionSortComparator(pStates))
         },
@@ -495,7 +495,7 @@ export const useDataStore = defineStore('data', {
                 pStates = state.processStates
             }
             return sessions
-                .filter(s => !s.parent_session_id)
+                .filter(s => !s.parent_session_id && !s.hidden)
                 .filter(s => oldestMtime == null || s.mtime >= oldestMtime)
                 .sort(sessionSortComparator(pStates))
         },
@@ -552,6 +552,7 @@ export const useDataStore = defineStore('data', {
             let count = 0
             for (const session of Object.values(state.sessions)) {
                 if (session.project_id !== projectId) continue
+                if (session.hidden) continue
                 if (session.draft || session.archived || session.parent_session_id) continue
                 if (!session.last_new_content_at) continue
                 if (session.last_viewed_at && session.last_new_content_at <= session.last_viewed_at) continue
@@ -622,6 +623,7 @@ export const useDataStore = defineStore('data', {
             if (hasActiveStartupPhase(state.startupProgress)) return 0
             let count = 0
             for (const session of Object.values(state.sessions)) {
+                if (session.hidden) continue
                 if (session.draft || session.archived || session.parent_session_id) continue
                 if (!session.last_new_content_at) continue
                 if (session.last_viewed_at && session.last_new_content_at <= session.last_viewed_at) continue
@@ -947,6 +949,17 @@ export const useDataStore = defineStore('data', {
             }
             this.$patch({ sessions: { [session.id]: session } })
             this.tryFinalizePendingBinding(session.id)
+        },
+        /**
+         * Remove a session from the store by id.
+         * Called when the backend emits ``session_removed`` (e.g. a session
+         * was hidden and the REST API no longer serves it). Reactive
+         * dependents (sidebar, counters, MRU) update automatically.
+         * @param {string} sessionId
+         */
+        removeSession(sessionId) {
+            delete this.sessions[sessionId]
+            this.removeMruSession(sessionId)
         },
         /**
          * Create a draft session for a project.
@@ -3171,6 +3184,7 @@ export const useDataStore = defineStore('data', {
                 // Entries with a session: check the session is still valid
                 const session = this.sessions[entry.sessionId]
                 if (!session) continue
+                if (session.hidden) continue
                 if (session.archived) continue
                 if (session.parent_session_id) continue
                 return entry.path

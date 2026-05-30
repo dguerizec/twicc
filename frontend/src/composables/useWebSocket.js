@@ -818,6 +818,9 @@ export function useWebSocket() {
                 }
                 break
             }
+            case 'session_removed':
+                store.removeSession(msg.session_id)
+                break
             case 'sessions_bulk_archived':
                 store.applyBulkArchiveFromBroadcast(msg.session_ids)
                 break
