@@ -1,12 +1,12 @@
 ---
 name: twicc-update-session
-description: Update an existing TwiCC session. Today the `settings` sub-command updates the agent settings (model, effort, permission mode, thinking, chrome MCP, fast mode, context window, question widget), `title` renames the session, and `archive` / `unarchive` flip the archived flag (archive also stops the live agent and unpins under the `autoUnpinOnArchive` setting). Future sub-commands will cover pin and stop. Use when the user wants to change a session's settings, title, or archived state without sending a new message.
-argument-hint: <session_id> {settings|title|archive|unarchive} [ARGS / OPTIONS]
+description: Update an existing TwiCC session. Today the `settings` sub-command updates the agent settings (model, effort, permission mode, thinking, chrome MCP, fast mode, context window, question widget), `title` renames the session, `archive` / `unarchive` flip the archived flag (archive also stops the live agent and unpins under the `autoUnpinOnArchive` setting), and `pin <MODE>` / `unpin` set or clear the pin scope (`project` / `workspace` / `all`). Future sub-commands will cover stop. Use when the user wants to change a session's settings, title, archived, or pinned state without sending a new message.
+argument-hint: <session_id> {settings|title|archive|unarchive|pin|unpin} [ARGS / OPTIONS]
 ---
 
 # TwiCC Update Session
 
-Update an existing agent session by dropping a request file the live TwiCC server picks up. Four sub-commands today: `settings` (change the agent settings), `title` (rename the session), `archive` (mark archived + kill agent + optional unpin), `unarchive` (flip back). `pin` and `stop` will plug into the same sub-app later.
+Update an existing agent session by dropping a request file the live TwiCC server picks up. Six sub-commands today: `settings` (change the agent settings), `title` (rename the session), `archive` (mark archived + kill agent + optional unpin), `unarchive` (flip back), `pin <MODE>` (set the pin scope: project / workspace / all), `unpin` (clear the pin). `stop` will plug into the same sub-app later.
 
 ## When to use
 
@@ -15,8 +15,9 @@ Update an existing agent session by dropping a request file the live TwiCC serve
 - The user wants to reset a setting back to the synced default (use `--unset <field>`) → `settings`.
 - The user asks to "rename / re-title session X" or wants a script to set a better title after a few turns of conversation → `title`.
 - The user asks to "archive session X" (clean up the sidebar, also stops the live agent) or "unarchive session X" (bring it back to the active list) → `archive` / `unarchive`.
+- The user asks to "pin session X" (in this project / across the workspace / globally) or "unpin session X" → `pin <MODE>` / `unpin`.
 
-**Out of scope (today):** pinning / unpinning and killing the live process while keeping the session active. These will become other sub-commands of `twicc update-session` — refuse if asked here and tell the user the relevant operation isn't wired yet (the UI can still do it).
+**Out of scope (today):** killing the live process while keeping the session active (without archiving it). This will become another sub-command of `twicc update-session` — refuse if asked here and tell the user the operation isn't wired yet (the UI can still do it).
 
 ## How to invoke
 
@@ -182,6 +183,50 @@ Flips `archived = False`, re-indexes the search document, broadcasts. No agent r
 
 Same vocabulary as the other sub-commands (`provider_disabled`, `session_not_found`/`session_stale` race-detected, `is_subagent` race-detected, ...). There are no archive-specific server-side rejections — once the local pre-check passes, the change is applied.
 
+## How to pin / unpin
+
+Two paired sub-commands using the same vocabulary the UI does — `pin` takes the scope, `unpin` does not:
+
+```bash
+$TWICC update-session '<SESSION_ID>' pin <MODE>
+$TWICC update-session '<SESSION_ID>' unpin
+```
+
+### Required arguments
+
+- **`SESSION_ID`** — id of the existing session.
+- **`MODE`** (for `pin` only) — pin scope. Accepted values:
+  - `project` — the session stays at the top of the sidebar only inside its own project.
+  - `workspace` — the session stays at the top inside every workspace its project belongs to.
+  - `all` — global pin: the session stays at the top in every project view.
+
+### Options
+
+Standard output controls only — no per-flag option on either sub-command.
+
+| Flag | |
+|------|---|
+| `--timeout SECONDS` | seconds to wait for the server's final status (default 30) |
+| `--json` | emit a single JSON object on stdout (implies `--no-color`) |
+| `--no-color` | disable ANSI colors |
+
+### What `pin` / `unpin` do on the server side
+
+A direct write on `Session.pinned` (the requested mode string, or NULL for `unpin`), followed by a `session_updated` broadcast. No other side effects: pinning does not touch the live agent, the search index, or any tmux terminal.
+
+Switching scope is just another `pin`: passing a new mode overwrites the previous one. The sub-command is idempotent — pinning to the same mode (or unpinning an already-unpinned session) is a no-op write and still emits a broadcast.
+
+### Rejections caught locally (exit 1)
+
+- `invalid_pin_mode` — `pin <MODE>` was called with a token outside `{project, workspace, all}`.
+- `is_subagent` — the SESSION_ID points to a subagent. **Subagents cannot be pinned directly**; target the parent session instead.
+- `session_not_found` / `session_stale` / `project_no_directory` / `provider_disabled` — same vocabulary as the other CLI commands.
+
+### Rejections from the server (exit 3)
+
+- `invalid_pinned` — defence-in-depth check on the watcher side; in practice unreachable from the CLI since `invalid_pin_mode` already fails locally.
+- Plus the standard race-detected guards (`session_not_found`, `session_stale`, ...).
+
 ## Examples
 
 ```bash
@@ -217,6 +262,15 @@ $TWICC update-session 4a8352fb-... unarchive
 # Archive + JSON for scripts.
 $TWICC update-session --json 4a8352fb-... archive
 # → {"status":"updated","session_id":"...","provider":"claude_code","project_id":"...","request_uuid":"..."}
+
+# Pin in this project only.
+$TWICC update-session 4a8352fb-... pin project
+
+# Switch the pin scope — overwrites the previous mode.
+$TWICC update-session 4a8352fb-... pin all
+
+# Unpin.
+$TWICC update-session 4a8352fb-... unpin
 ```
 
 ## Output format

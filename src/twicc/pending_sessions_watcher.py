@@ -153,6 +153,12 @@ class PendingSessionsWatcher:
                 )
                 service = update_session_archived_from_payload
                 success_status = "updated"
+            elif kind == "update_pinned":
+                from twicc.core.services.session_update import (
+                    update_session_pinned_from_payload,
+                )
+                service = update_session_pinned_from_payload
+                success_status = "updated"
             else:
                 logger.warning("[PendingSessionsWatcher] unknown kind for %s: %r",
                                request_uuid, kind)

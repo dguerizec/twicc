@@ -238,7 +238,7 @@ If `process` reports `awaiting_user_input`, do NOT call `send-message` — the s
 - **Check the live agent's state:** `twicc process <session_id>` — is the agent still working, blocked on a user click, or done? Cheaper than polling `messages` and the only reliable way to detect the "awaiting user input" case (see "Following up" above)
 - **List all live processes:** `twicc processes` — useful when you fired several `create-session` calls and want to see which are still running, which need attention, etc. Supports `--state awaiting_user_input` to filter to those waiting for the user
 - **Reply to the created session:** `twicc send-message <session_id> '<text>'` — post a follow-up message into the same session once the agent is back to `user_turn`. Same drop-file mechanics as this command; settings are preserved
-- **Change the session's settings, title, or archived state:** `twicc update-session <session_id> {settings|title|archive|unarchive} ...` — see the `twicc-update-session` skill. Pin / stop will plug into the same sub-app later
+- **Change the session's settings, title, archived state, or pin:** `twicc update-session <session_id> {settings|title|archive|unarchive|pin|unpin} ...` — see the `twicc-update-session` skill. `stop` will plug into the same sub-app later
 - **Read the agent's reply (uniform shape):** `twicc session <session_id> messages --tail 1` — the latest user/assistant message (see "Following up" above)
 - **Read raw session content:** `twicc session <session_id> content <line_or_range>` — see every item (tool calls, reasoning, system) in the provider's native JSONL shape
 - **List sessions:** `twicc sessions --project <project_id>` — to see other recent sessions in the same project

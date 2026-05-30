@@ -21,6 +21,10 @@ whose ``kind`` matches one of the supported update actions:
   factored into :func:`apply_session_archived_change`): persist the flag,
   optionally unpin under the ``autoUnpinOnArchive`` synced setting,
   re-index search, kill the live agent + tmux on archive, broadcast.
+- ``kind="update_pinned"`` → :func:`update_session_pinned_from_payload`.
+  Wraps the pin/unpin flow of the HTTP ``PATCH`` endpoint (now factored
+  into :func:`apply_session_pinned_change`): write the new ``pinned``
+  value (``NULL`` to unpin, or one of ``PinMode.values``) and broadcast.
 
 The functions do NOT raise for business-rule errors (missing session,
 provider disabled, etc.); they return an :class:`UpdateSessionResult` with
@@ -28,9 +32,10 @@ provider disabled, etc.); they return an :class:`UpdateSessionResult` with
 exceptions propagate normally and are the caller's responsibility to
 translate (e.g. to ``status: failed`` in the watcher).
 
-:func:`apply_session_archived_change` is a public helper, reused by the
-HTTP ``PATCH`` endpoint (:mod:`twicc.views`) so the single-session HTTP
-path and the CLI path stay byte-for-byte aligned.
+:func:`apply_session_archived_change` and :func:`apply_session_pinned_change`
+are public helpers, reused by the HTTP ``PATCH`` endpoint (:mod:`twicc.views`)
+so the single-session HTTP path and the CLI path stay byte-for-byte
+aligned.
 """
 
 from __future__ import annotations
@@ -473,6 +478,98 @@ async def update_session_archived_from_payload(payload: dict) -> UpdateSessionRe
     logger.info(
         "[update_session_archived] session=%s archived=%s also_unpin=%s",
         session_id, archived, also_unpin,
+    )
+
+    return UpdateSessionResult(
+        success=True,
+        session_id=session_id,
+        provider=provider.value,
+        project_id=session.project_id,
+        errors=None,
+    )
+
+
+async def apply_session_pinned_change(session, pinned) -> None:
+    """Persist a ``pinned`` change on a :class:`Session` row.
+
+    Single source of truth for the pin / unpin flow, shared by the HTTP
+    ``PATCH /api/projects/.../sessions/<id>/`` endpoint and the CLI
+    ``twicc update-session <ID> pin / unpin`` sub-commands.
+
+    ``pinned`` is ``None`` to unpin, or one of ``PinMode.values``
+    (``"project"`` / ``"workspace"`` / ``"all"``). The caller is
+    responsible for validating the value (the HTTP endpoint does it
+    inline; the CLI service does it before calling here).
+
+    Does NOT broadcast ``session_updated``; the caller emits the broadcast
+    so a payload combining several field updates (e.g. archived + pinned
+    set together by the UI's archive flow) only fires one frame.
+    """
+    session.pinned = pinned
+    await run_under_db_write_lock(
+        lambda: session.asave(update_fields=["pinned"])
+    )
+
+
+async def update_session_pinned_from_payload(payload: dict) -> UpdateSessionResult:
+    """Pin or unpin an existing session.
+
+    Expected keys in ``payload``:
+    - ``session_id`` (required).
+    - ``pinned``: ``None`` to unpin, or one of ``PinMode.values``
+      (``"project"`` / ``"workspace"`` / ``"all"``).
+
+    Business-rule rejections (returned as ``success=False``):
+    - ``invalid_pinned``: ``pinned`` is neither ``None`` nor a valid
+      ``PinMode`` value.
+    - Plus the standard session-lookup guards shared by every
+      ``update_*`` service.
+    """
+    from twicc.core.models import PinMode
+
+    session_id = payload.get("session_id")
+    pinned = payload.get("pinned", "<missing>")  # sentinel: missing key
+
+    errors: list[UpdateSessionError] = []
+    if not session_id:
+        errors.append(UpdateSessionError("session_id", "missing", "session_id is required"))
+    if pinned == "<missing>":
+        errors.append(UpdateSessionError(
+            "pinned", "missing",
+            "pinned is required (use null to unpin or one of "
+            f"{list(PinMode.values)})",
+        ))
+    elif pinned is not None and pinned not in PinMode.values:
+        errors.append(UpdateSessionError(
+            "pinned", "invalid_pinned",
+            f"pinned must be null or one of {list(PinMode.values)}; got {pinned!r}",
+        ))
+    if errors:
+        return UpdateSessionResult(False, None, None, None, errors)
+
+    session, project, provider, error = await _lookup_session_for_update(session_id)
+    if error is not None:
+        return error
+
+    await apply_session_pinned_change(session, pinned)
+
+    from twicc.core.serializers import serialize_session
+    channel_layer = get_channel_layer()
+    if channel_layer is not None:
+        await channel_layer.group_send(
+            "updates",
+            {
+                "type": "broadcast",
+                "data": {
+                    "type": "session_updated",
+                    "session": serialize_session(session),
+                },
+            },
+        )
+
+    logger.info(
+        "[update_session_pinned] session=%s pinned=%r",
+        session_id, pinned,
     )
 
     return UpdateSessionResult(

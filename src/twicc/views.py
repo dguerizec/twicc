@@ -587,10 +587,12 @@ async def session_detail(request, project_id, session_id, parent_session_id=None
                     {"error": f"pinned must be null or one of {list(PinMode.values)}"},
                     status=400,
                 )
-            session.pinned = pinned
-            await run_under_db_write_lock(
-                lambda: session.asave(update_fields=["pinned"])
-            )
+            # Share the pin/unpin flow with ``twicc update-session
+            # pin / unpin``: the helper owns the DB write so both surfaces
+            # stay aligned. The combined broadcast happens at the end of
+            # the handler.
+            from twicc.core.services.session_update import apply_session_pinned_change
+            await apply_session_pinned_change(session, pinned)
             needs_broadcast = True
 
         # Broadcast session_updated for archived/pinned changes.

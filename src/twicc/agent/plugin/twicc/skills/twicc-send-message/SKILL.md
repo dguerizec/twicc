@@ -146,7 +146,7 @@ When the server rejects (exit 3), parse `errors[].code` from JSON mode to give a
 ## Related commands
 
 - **Create a new session instead:** `twicc create-session` — full options for picking provider, model, settings, project, etc.
-- **Change the session's settings, rename, or archive it:** `twicc update-session <session_id> {settings|title|archive|unarchive} ...` — see the `twicc-update-session` skill. The session is otherwise untouched.
+- **Change the session's settings, rename, archive, or pin it:** `twicc update-session <session_id> {settings|title|archive|unarchive|pin|unpin} ...` — see the `twicc-update-session` skill. The session is otherwise untouched.
 - **Check the live agent's state:** `twicc process <session_id>` — is the agent still working, blocked on a user click, or done? The only reliable way to detect `awaiting_user_input` before sending
 - **List all live processes:** `twicc processes --state awaiting_user_input` — to see which sessions are blocked on a user click
 - **Read the agent's reply (uniform shape):** `twicc session <session_id> messages --tail 1`
