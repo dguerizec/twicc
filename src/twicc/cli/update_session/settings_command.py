@@ -207,12 +207,13 @@ def update_settings_cmd(
     )
     from twicc.cli._session_request.validation import (
         ValidationError,
+        validate_hidden_constraints,
         validate_no_set_unset_conflict,
         validate_provider,
         validate_settings,
         validate_unset_fields,
     )
-    from twicc.providers.helpers import AgentSettings
+    from twicc.providers.helpers import AgentSettings, get_provider_helpers
 
     try:
         age = check_heartbeat()
@@ -349,10 +350,23 @@ def update_settings_cmd(
 
     # 9. Hidden invariants: if the target session is currently hidden, the
     # resulting settings must not break the non-interactive whitelist.
+    # We must check the EFFECTIVE settings after the update, not the raw
+    # user overrides (which have None for untouched fields). Build them
+    # the same way the server does in session_update.py:
+    #   1. Start from the current row's AgentSettings (baseline).
+    #   2. Overlay ``updates`` (the actual dict that will be written, with
+    #      None meaning "reset to synced default" for --unset fields).
+    #   3. resolve + enforce_consistency.
+    #   4. Validate.
     if resolved.hidden:
-        from twicc.cli._session_request.validation import validate_hidden_constraints
+        merged_base = resolved.current_settings._asdict()
+        merged_base.update(updates)
+        merged_settings = AgentSettings(**merged_base)
+        helpers_obj = get_provider_helpers(resolved.provider)
+        effective_settings = helpers_obj.resolve_agent_settings(merged_settings)
+        effective_settings = helpers_obj.enforce_agent_settings_consistency(effective_settings)
         hidden_errors = validate_hidden_constraints(
-            resolved.provider, settings, hidden=True,
+            resolved.provider, effective_settings, hidden=True,
         )
         if hidden_errors:
             emit_validation_errors(hidden_errors, json_output=json_output)

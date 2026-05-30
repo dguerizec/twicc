@@ -10,7 +10,10 @@ state changed between this lookup and the actual operation.
 
 from __future__ import annotations
 
-from typing import NamedTuple
+from typing import TYPE_CHECKING, NamedTuple
+
+if TYPE_CHECKING:
+    from twicc.providers.helpers import AgentSettings
 
 
 class SessionLookupError(Exception):
@@ -34,6 +37,15 @@ class ResolvedSession(NamedTuple):
     project_id: str
     directory: str
     hidden: bool
+    current_settings: "AgentSettings"
+    """The session row's AgentSettings at lookup time (all fields, None = use synced default).
+
+    Populated via :meth:`AgentSettings.from_session`. Callers that need to
+    validate what the effective settings *would be after* a partial update
+    should overlay their changes on this baseline, then call
+    ``resolve_agent_settings`` + ``enforce_agent_settings_consistency`` before
+    any constraint check. This avoids an extra DB round-trip.
+    """
 
 
 def lookup_session(session_id: str) -> ResolvedSession:
@@ -41,10 +53,13 @@ def lookup_session(session_id: str) -> ResolvedSession:
 
     Raises :class:`SessionLookupError` on any failed precondition; otherwise
     returns a :class:`ResolvedSession` with the fields the caller needs to
-    keep going (notably ``provider`` to pick the right attachment caps).
+    keep going (notably ``provider`` to pick the right attachment caps, and
+    ``current_settings`` to build the effective post-update settings for
+    constraint validation).
     """
     from twicc.core.enums import Provider
     from twicc.core.models import Session, SessionType
+    from twicc.providers.helpers import AgentSettings
 
     session = (
         Session.objects.select_related("project").filter(id=session_id).first()
@@ -85,4 +100,5 @@ def lookup_session(session_id: str) -> ResolvedSession:
         project_id=session.project_id,
         directory=project.directory,
         hidden=bool(session.hidden),
+        current_settings=AgentSettings.from_session(session),
     )
