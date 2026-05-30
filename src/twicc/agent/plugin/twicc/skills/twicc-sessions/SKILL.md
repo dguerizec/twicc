@@ -1,6 +1,6 @@
 ---
 name: twicc-sessions
-description: List sessions tracked by TwiCC across every backend provider (Claude Code, Codex, ...). Use when the user wants to browse sessions, find a session ID, filter by project, or see session activity and costs.
+description: List sessions tracked by TwiCC across every backend provider (Claude Code, Codex, ...), or batch-look up specific session_ids (with a `known: false` placeholder for any id that doesn't exist). Use when the user wants to browse sessions, find a session ID, filter by project, batch-fetch metadata for a known set of ids, or see session activity and costs.
 ---
 
 # TwiCC Sessions
@@ -13,6 +13,7 @@ List sessions tracked by TwiCC, ordered by most recently active. Only returns va
 - The user needs to find a session ID
 - The user wants to see sessions for a specific project
 - The user wants to see archived sessions
+- The user (or a script) has a list of known session_ids and wants to batch-fetch their metadata — use `sessions get <ID>...` (one entry per id, placeholder when missing; returns subagents / archived / hidden too, since you named them explicitly)
 
 ## How to invoke
 
@@ -56,6 +57,72 @@ $TWICC sessions --only-hidden                      # Only hidden sessions
 $TWICC sessions --spawned-by self                  # Sessions spawned by the current session (resolved via PID ancestry)
 $TWICC sessions --spawned-by abc123-def456         # Sessions spawned by a specific session ID
 $TWICC sessions --limit 50 --offset 20             # Paginate
+```
+
+## How to look up specific session_ids
+
+When you already know which sessions you care about, use the `get`
+sub-command instead of listing + post-filtering. Each requested
+session_id produces exactly one entry in the output, in the order you
+passed them (duplicates collapsed, first occurrence wins):
+
+```bash
+$TWICC sessions get <SESSION_ID> [<SESSION_ID>...]
+```
+
+Examples:
+
+```bash
+$TWICC sessions get abc123-def456                       # Single session
+$TWICC sessions get abc123 def456 ghi789                # Batch lookup
+```
+
+Unlike `twicc sessions`, `get` accepts **no filter flags** — when you
+name the sessions you care about, the listing filters don't apply:
+subagents, archived sessions and hidden sessions are returned just
+like regular ones (the singular `twicc session <ID>` has the same
+permissive scope).
+
+### Output
+
+A JSON array, one entry per session_id, in the order you passed them
+(duplicates collapsed). All entries share the same shape — full
+session metadata when the id exists, the same shape with everything
+nulled out when it doesn't, plus a `known: bool` flag:
+
+```json
+[
+  {
+    "id": "abc123-def456",
+    "project_id": "-home-twidi-dev-myproject",
+    "provider": "claude_code",
+    "title": "Implement user authentication",
+    ... (every field from the listing) ...,
+    "known": true
+  },
+  {
+    "id": "typo-or-unknown",
+    "project_id": null,
+    "provider": null,
+    "title": null,
+    ... (all other fields: null) ...,
+    "known": false
+  }
+]
+```
+
+Because the output is 1-to-1 with the input order, callers can `zip`
+it with the input list with no re-mapping:
+
+```python
+import json, subprocess
+ids = ["abc...", "def...", "ghi..."]
+out = json.loads(subprocess.check_output([twicc, "sessions", "get", *ids]))
+for sid, entry in zip(ids, out):
+    if not entry["known"]:
+        print(f"  WARN: {sid} unknown to TwiCC")
+    else:
+        print(f"  {sid}: {entry['title']}")
 ```
 
 ## Output format
@@ -125,7 +192,7 @@ The command outputs a JSON array of session objects:
 
 - **Get project details:** `twicc project <project_id>` — get full details for one project
 - **Find project IDs:** `twicc projects` — list all projects to find IDs for `--project`
-- **Inspect a session:** `twicc session <session_id>` — get full metadata for one session
+- **Inspect a single session (errors out if missing):** `twicc session <session_id>` — get full metadata for one session, exit 1 if not found. Use when "session not found" should be a hard failure. For batch lookup that tolerates missing ids, see `sessions get` above
 - **Read session content:** `twicc session <session_id> content <line_or_range>` — read the actual conversation items
 - **List subagents:** `twicc session <session_id> agents` — see subagents spawned by a session
 - **Search across sessions:** `twicc search "<query>"` — full-text search across all sessions
@@ -137,3 +204,4 @@ The command outputs a JSON array of session objects:
 3. If there are more results than shown, offer to paginate with `--offset`
 4. You are in TwiCC, so you can link to a session using a relative Markdown link so the user can click it: `[link text](/project/{project_id}/session/{session_id})` or to a project : `[link text](/project/{project_id})`
 5. Only include cost and model information if the user explicitly asks for it
+6. For `sessions get` output: scan for `known: false` entries (surface as "session X is unknown to TwiCC — typo or already cleaned up"). Known entries render like the listing

@@ -1,0 +1,92 @@
+"""``twicc sessions get <SESSION_ID>...`` sub-command.
+
+Batch fetch sessions by id. Each input session_id produces exactly one
+output entry in input order (duplicates collapsed, first occurrence
+wins). Sessions are returned **regardless of archived / hidden /
+subagent status** — when the caller names an explicit id, layering the
+listing filters on top would only blur the meaning of placeholder
+entries.
+
+Unknown session_ids (no Session row in the DB) get a placeholder entry
+with ``known: false`` and every other field set to ``null`` so the
+output shape is uniform with ``known: true`` entries. Callers can then
+``zip(ids, output)`` and read any field directly, only checking
+``known`` when they need to disambiguate.
+"""
+
+from __future__ import annotations
+
+import sys
+
+import orjson
+
+
+# Cached null-filled template for the placeholder shape. We derive it
+# lazily from one real ``serialize_session`` output (rather than
+# hardcoding the field list) so the placeholder shape never drifts
+# from the canonical serializer.
+_PLACEHOLDER_TEMPLATE: dict | None = None
+
+
+def _build_placeholder_template() -> dict:
+    """Derive a {field: None} dict matching ``serialize_session`` output.
+
+    Uses any existing Session row as a template source. Falls back to a
+    minimal ``{"id": None}`` shape if the DB has no session yet (edge
+    case on a fresh install — the placeholder is still consistent within
+    a single command invocation).
+    """
+    from twicc.core.models import Session
+    from twicc.core.serializers import serialize_session
+
+    sample = Session.objects.first()
+    if sample is None:
+        return {"id": None}
+    return {k: None for k in serialize_session(sample).keys()}
+
+
+def main(session_ids: list[str]) -> None:
+    """Emit one JSON entry per session_id (placeholder when missing)."""
+    import django
+
+    django.setup()
+
+    from twicc.core.models import Session
+    from twicc.core.serializers import serialize_session
+
+    # Dedupe while preserving caller order: the output mirrors the input
+    # 1-to-1 so scripts can zip(ids, output) without re-mapping.
+    unique_ids: list[str] = []
+    seen: set[str] = set()
+    for sid in session_ids:
+        if sid in seen:
+            continue
+        seen.add(sid)
+        unique_ids.append(sid)
+
+    # Batch fetch by id only — no archived/hidden/subagent filter.
+    # Explicit ids bypass listing filters by design (mirrors
+    # ``twicc session <id>``, which has the same scope).
+    sessions_by_id = {
+        s.id: s
+        for s in Session.objects.filter(id__in=unique_ids)
+    }
+
+    global _PLACEHOLDER_TEMPLATE
+    if _PLACEHOLDER_TEMPLATE is None:
+        _PLACEHOLDER_TEMPLATE = _build_placeholder_template()
+
+    results = []
+    for sid in unique_ids:
+        session = sessions_by_id.get(sid)
+        if session is None:
+            entry = dict(_PLACEHOLDER_TEMPLATE)
+            entry["id"] = sid
+            entry["known"] = False
+        else:
+            entry = serialize_session(session)
+            entry["known"] = True
+        results.append(entry)
+
+    sys.stdout.buffer.write(orjson.dumps(results, option=orjson.OPT_INDENT_2))
+    sys.stdout.buffer.write(b"\n")

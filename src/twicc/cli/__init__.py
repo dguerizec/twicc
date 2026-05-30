@@ -106,8 +106,17 @@ def workspace(
     workspace_main(workspace_id)
 
 
-@app.command()
-def sessions(
+sessions_app = typer.Typer(
+    name="sessions",
+    help="List sessions, or look up specific session_ids in batch.",
+    invoke_without_command=True,
+)
+app.add_typer(sessions_app)
+
+
+@sessions_app.callback(invoke_without_command=True)
+def _sessions_default(
+    ctx: typer.Context,
     project: str = typer.Option(None, help="Filter by project ID (leading dash is optional)."),
     workspace: str = typer.Option(None, "--workspace", help="Filter by workspace ID (only sessions of projects in that workspace). Can be combined with --project."),
     limit: int = typer.Option(20, help="Max number of sessions to return."),
@@ -127,7 +136,10 @@ def sessions(
         ),
     ),
 ) -> None:
-    """List sessions as JSON (ordered by most recently active)."""
+    """List sessions as JSON (ordered by most recently active, default action)."""
+    if ctx.invoked_subcommand is not None:
+        return
+
     if include_hidden and only_hidden:
         typer.echo("Error: --include-hidden and --only-hidden are mutually exclusive.", err=True)
         raise typer.Exit(2)
@@ -144,6 +156,34 @@ def sessions(
         only_hidden=only_hidden,
         spawned_by=spawned_by,
     )
+
+
+@sessions_app.command(name="get")
+def _sessions_get(
+    session_ids: list[str] = typer.Argument(
+        ...,
+        metavar="SESSION_ID...",
+        help=(
+            "One or more session IDs to look up. The output mirrors the input "
+            "order (duplicates collapsed, first occurrence wins). Each entry "
+            "is either the full session metadata or a placeholder with "
+            "`known: false` when no Session row exists for that id. "
+            "Subagents, archived and hidden sessions are returned just like "
+            "regular ones — the listing filters don't apply when you name "
+            "explicit ids."
+        ),
+    ),
+) -> None:
+    """Look up sessions by id (placeholder for missing, includes subagents).
+
+    Unlike ``twicc sessions``, ``get`` takes no filter flags: when the
+    caller names the sessions it cares about, layering archived /
+    hidden / subagent filters on top would only blur the meaning of the
+    placeholder rows.
+    """
+    from twicc.cli.sessions_get import main as sessions_get_main
+
+    sessions_get_main(session_ids)
 
 
 session_app = typer.Typer(
