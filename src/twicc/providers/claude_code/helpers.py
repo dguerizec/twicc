@@ -141,6 +141,9 @@ class ClaudeCodeHelpers(BaseProviderHelpers):
     AGENT_SETTINGS_CATEGORIES: ClassVar[dict[AgentSettingCategory, list[str]]] = _AGENT_SETTINGS_CATEGORIES
     AGENT_SETTINGS_FIELDS_MAPPING: ClassVar[dict[str, str]] = _AGENT_SETTINGS_FIELDS_MAPPING
 
+    # Claude Code permission modes that do not require interactive approval.
+    HIDDEN_PERMISSION_MODES: ClassVar[frozenset[str]] = frozenset({"bypassPermissions", "dontAsk"})
+
     USAGE_SYNC_INTERVAL: ClassVar[int | None] = 5 * 60
 
     # Filesystem source for Claude Code session JSONL files. The CLI

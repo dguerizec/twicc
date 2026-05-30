@@ -14,15 +14,6 @@ _FIELD_TO_FLAG = {
     "thinking_enabled": "--thinking",
 }
 
-# Permission modes that do NOT require interactive approvals. Hidden
-# sessions must run with one of these because they have no UI surface
-# to render approval prompts. Whitelist is per provider — the resolved
-# permission_mode value is provider-specific.
-_PERMISSION_MODE_HIDDEN_WHITELIST = {
-    "claude_code": frozenset({"bypassPermissions", "dontAsk"}),
-    "codex": frozenset({"yolo", "strict"}),
-}
-
 
 def _field_to_flag(field: str) -> str:
     if field in _FIELD_TO_FLAG:
@@ -168,7 +159,9 @@ def validate_hidden_constraints(
     When ``hidden`` is ``False``, returns an empty list — the constraints
     only apply to hidden sessions. When ``hidden`` is ``True``:
 
-    - ``permission_mode`` must be in ``_PERMISSION_MODE_HIDDEN_WHITELIST[provider]``;
+    - ``permission_mode`` must be in the provider helpers'
+      ``HIDDEN_PERMISSION_MODES`` (each provider declares which of its
+      modes run without interactive approval);
     - ``question_widget`` must NOT be ``True`` for providers that use it
       (Claude Code). For other providers (Codex) the field is ignored.
 
@@ -180,7 +173,15 @@ def validate_hidden_constraints(
     errors: list[ValidationError] = []
 
     # --- permission_mode whitelist -------------------------------
-    whitelist = _PERMISSION_MODE_HIDDEN_WHITELIST.get(provider, frozenset())
+    # Each provider declares its non-interactive modes via
+    # ``HIDDEN_PERMISSION_MODES`` on its helpers class. An empty frozenset
+    # means the provider does not support hidden sessions.
+    from twicc.providers.helpers import get_provider_helpers
+    try:
+        helpers = get_provider_helpers(provider)
+        whitelist = helpers.HIDDEN_PERMISSION_MODES
+    except KeyError:
+        whitelist = frozenset()
     if not whitelist:
         errors.append(ValidationError(
             "--hidden", "hidden_unsupported_provider",

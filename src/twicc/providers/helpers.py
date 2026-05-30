@@ -252,6 +252,13 @@ class BaseProviderHelpers:
     # the same constant so client-side validation matches.
     MAX_TITLE_LENGTH: ClassVar[int] = 200
 
+    # ``permission_mode`` values acceptable for a hidden session. Hidden
+    # sessions cannot rely on the user clicking through interactive
+    # approval prompts, so the helper must declare which provider-specific
+    # ``permission_mode`` values run without prompting. Empty default
+    # means the provider does NOT support hidden sessions at all.
+    HIDDEN_PERMISSION_MODES: ClassVar[frozenset[str]] = frozenset()
+
     # ------------------------------------------------------------------
     # Compute version
     # ------------------------------------------------------------------
