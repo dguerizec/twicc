@@ -123,16 +123,55 @@ def project(
     project_main(_normalize_project_id(project_id))
 
 
-@app.command()
-def workspaces(
+workspaces_app = typer.Typer(
+    name="workspaces",
+    help="List workspaces, or look up specific workspace_ids in batch.",
+    invoke_without_command=True,
+)
+app.add_typer(workspaces_app)
+
+
+@workspaces_app.callback(invoke_without_command=True)
+def _workspaces_default(
+    ctx: typer.Context,
     limit: int = typer.Option(20, help="Max number of workspaces to return."),
     offset: int = typer.Option(0, help="Skip first N workspaces."),
     include_archived: bool = typer.Option(False, "--include-archived", help="Include archived workspaces."),
 ) -> None:
-    """List all workspaces as JSON (in their stored order)."""
+    """List all workspaces as JSON (in their stored order, default action)."""
+    if ctx.invoked_subcommand is not None:
+        return
+
     from twicc.cli.workspaces import main as workspaces_main
 
     workspaces_main(limit=limit, offset=offset, archived=include_archived)
+
+
+@workspaces_app.command(name="get")
+def _workspaces_get(
+    workspace_ids: list[str] = typer.Argument(
+        ...,
+        metavar="WORKSPACE_ID...",
+        help=(
+            "One or more workspace IDs to look up. The output mirrors the "
+            "input order (duplicates collapsed, first occurrence wins). "
+            "Each entry is either the full workspace definition or a "
+            "placeholder with `known: false` when no workspace exists for "
+            "that id. Archived workspaces are returned just like active "
+            "ones — the listing filter doesn't apply when you name "
+            "explicit ids."
+        ),
+    ),
+) -> None:
+    """Look up workspaces by id (placeholder for missing, includes archived).
+
+    Unlike ``twicc workspaces``, ``get`` takes no filter flags: when the
+    caller names the workspaces it cares about, the archived-by-default
+    filter would only blur the meaning of the placeholder rows.
+    """
+    from twicc.cli.workspaces_get import main as workspaces_get_main
+
+    workspaces_get_main(workspace_ids)
 
 
 @app.command()

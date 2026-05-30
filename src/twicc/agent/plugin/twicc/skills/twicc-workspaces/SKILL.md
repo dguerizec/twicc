@@ -1,6 +1,6 @@
 ---
 name: twicc-workspaces
-description: List all TwiCC workspaces — user-defined groups of projects. Use when the user wants to browse their workspaces, find a workspace ID, or see which workspaces a project belongs to.
+description: List all TwiCC workspaces — user-defined groups of projects — or batch-look up specific workspace_ids (with a `known: false` placeholder for any id that doesn't exist). Use when the user wants to browse their workspaces, find a workspace ID, batch-fetch metadata for known ids, or see which workspaces a project belongs to.
 ---
 
 # TwiCC Workspaces
@@ -12,6 +12,7 @@ List all workspaces tracked by TwiCC. A workspace is a user-defined group of pro
 - The user asks to list or browse their workspaces
 - The user needs to find a workspace ID for use with other commands
 - The user wants to see which projects are grouped into which workspaces
+- The user (or a script) has a list of known workspace_ids and wants to batch-fetch their definitions — use `workspaces get <ID>...` (one entry per id, placeholder when missing; archived workspaces are returned too)
 
 ## How to invoke
 
@@ -44,6 +45,73 @@ $TWICC workspaces
 $TWICC workspaces                    # List up to 20 non-archived workspaces
 $TWICC workspaces --limit 50         # List up to 50
 $TWICC workspaces --include-archived # Include archived workspaces
+```
+
+## How to look up specific workspace_ids
+
+When you already know which workspaces you care about, use the `get`
+sub-command instead of listing + post-filtering. Each requested
+workspace_id produces exactly one entry in the output, in the order
+you passed them (duplicates collapsed, first occurrence wins):
+
+```bash
+$TWICC workspaces get <WORKSPACE_ID> [<WORKSPACE_ID>...]
+```
+
+Examples:
+
+```bash
+$TWICC workspaces get backend                       # Single workspace
+$TWICC workspaces get backend frontend devops       # Batch lookup
+```
+
+Unlike `twicc workspaces`, `get` accepts **no filter flags** — when
+you name the workspaces you care about, the archived-by-default
+filter doesn't apply: archived workspaces are returned just like
+active ones (mirrors the singular `twicc workspace <ID>` scope).
+
+### Output
+
+A JSON array, one entry per workspace_id, in the order you passed
+them (duplicates collapsed). All entries share the same shape — full
+workspace definition when the id exists, the same shape with
+everything nulled out when it doesn't, plus a `known: bool` flag:
+
+```json
+[
+  {
+    "id": "backend",
+    "name": "Backend",
+    "archived": false,
+    "color": "#4a90d9",
+    "projectIds": ["-home-twidi-dev-api"],
+    "autoProjectPatterns": ["/home/twidi/dev/api*"],
+    "known": true
+  },
+  {
+    "id": "typo-or-unknown",
+    "name": null,
+    "archived": null,
+    "color": null,
+    "projectIds": null,
+    "autoProjectPatterns": null,
+    "known": false
+  }
+]
+```
+
+Because the output is 1-to-1 with the input order, callers can `zip`
+it with the input list with no re-mapping:
+
+```python
+import json, subprocess
+ids = ["backend", "frontend", "typo"]
+out = json.loads(subprocess.check_output([twicc, "workspaces", "get", *ids]))
+for wid, entry in zip(ids, out):
+    if not entry["known"]:
+        print(f"  WARN: {wid} unknown to TwiCC")
+    else:
+        print(f"  {wid}: {entry['name']}")
 ```
 
 ## Output format
@@ -79,7 +147,7 @@ The command outputs a JSON array of workspace objects (in their stored order):
 
 ## Related commands
 
-- **Inspect one workspace:** `twicc workspace <workspace_id>` — get full details for a specific workspace
+- **Inspect a single workspace (errors out if missing):** `twicc workspace <workspace_id>` — get full details for one workspace, exit 1 if not found. Use when "workspace not found" should be a hard failure. For batch lookup that tolerates missing ids, see `workspaces get` above
 - **List projects in a workspace:** for each `projectIds` entry, use `twicc sessions --project <project_id>` (omit the leading dash) or `twicc project <project_id>` for details
 - **List all projects (with workspace memberships):** `twicc projects` — each project's `workspaces` field lists the workspace IDs it belongs to
 - **Create a new workspace:** `twicc create-workspace <NAME> [--color X] [--add-project PID]... [--add-pattern P]...`
@@ -92,3 +160,4 @@ The command outputs a JSON array of workspace objects (in their stored order):
 2. If a workspace has `autoProjectPatterns`, mention it (it auto-grows when new matching projects appear)
 3. You are in TwiCC, so you can link to a workspace using a relative Markdown link so the user can click it: `[link text](/workspace/{workspace_id})`
 4. If there are more results than shown, offer to paginate with `--offset`
+5. For `workspaces get` output: scan for `known: false` entries (surface as "workspace X is unknown to TwiCC — typo or never existed"). Known entries render like the listing
