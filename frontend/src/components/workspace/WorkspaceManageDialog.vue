@@ -25,6 +25,7 @@ const view = ref('list') // 'list' or 'form'
 const errorMessage = ref('')
 const deleteConfirmId = ref(null) // workspace ID pending delete confirmation
 const localShowArchived = ref(false) // local toggle, independent from the global setting
+const localShowArchivedProjects = ref(false) // local toggle for the projects list inside the form view
 
 // -- Form data (buffered until Save) -----------------------------------------
 const formData = ref({
@@ -55,11 +56,24 @@ const visibleWorkspaces = computed(() => {
     return all.filter(w => !w.archived)
 })
 
-/** Projects available to add (not already in the form's projectIds, respecting archived setting). */
+/** Projects available to add (not already in the form's projectIds, respecting the local archived toggle). */
 const availableProjects = computed(() => {
     const inSet = new Set(formData.value.projectIds)
-    const showArchived = settingsStore.isShowArchivedProjects
+    const showArchived = localShowArchivedProjects.value
     return dataStore.getProjects.filter(p => !inSet.has(p.id) && (showArchived || !p.archived))
+})
+
+/** Project entries to render in the form's project list, paired with their source index in formData.projectIds.
+ *  Filtered by the local "show archived" toggle so archived projects can be hidden without being removed from the workspace. */
+const visibleProjectEntries = computed(() => {
+    const showArchived = localShowArchivedProjects.value
+    return formData.value.projectIds
+        .map((pid, index) => ({ pid, index }))
+        .filter(({ pid }) => {
+            if (showArchived) return true
+            const project = dataStore.getProject(pid)
+            return !project?.archived
+        })
 })
 
 // -- List view helpers --------------------------------------------------------
@@ -93,6 +107,7 @@ function openAddForm() {
     patternInput.value = ''
     scanFeedback.value = ''
     errorMessage.value = ''
+    localShowArchivedProjects.value = settingsStore.isShowArchivedProjects
     view.value = 'form'
     nextTick(() => syncFormState())
 }
@@ -109,6 +124,7 @@ function openEditForm(workspace) {
     patternInput.value = ''
     scanFeedback.value = ''
     errorMessage.value = ''
+    localShowArchivedProjects.value = settingsStore.isShowArchivedProjects
     view.value = 'form'
     nextTick(() => syncFormState())
 }
@@ -129,20 +145,31 @@ function addProject(event) {
     event.target.value = ''
 }
 
-function removeProject(index) {
-    formData.value.projectIds.splice(index, 1)
+function removeProject(visibleIndex) {
+    const entries = visibleProjectEntries.value
+    const realIdx = entries[visibleIndex]?.index
+    if (realIdx === undefined) return
+    formData.value.projectIds.splice(realIdx, 1)
 }
 
-function moveProjectUp(index) {
-    if (index <= 0) return
+/** Swap the two visible neighbors using their source indices, so hidden (archived) entries
+ *  in between keep their absolute position. */
+function moveProjectUp(visibleIndex) {
+    if (visibleIndex <= 0) return
+    const entries = visibleProjectEntries.value
+    const fromIdx = entries[visibleIndex].index
+    const toIdx = entries[visibleIndex - 1].index
     const ids = formData.value.projectIds
-    ;[ids[index - 1], ids[index]] = [ids[index], ids[index - 1]]
+    ;[ids[fromIdx], ids[toIdx]] = [ids[toIdx], ids[fromIdx]]
 }
 
-function moveProjectDown(index) {
+function moveProjectDown(visibleIndex) {
+    const entries = visibleProjectEntries.value
+    if (visibleIndex >= entries.length - 1) return
+    const fromIdx = entries[visibleIndex].index
+    const toIdx = entries[visibleIndex + 1].index
     const ids = formData.value.projectIds
-    if (index >= ids.length - 1) return
-    ;[ids[index], ids[index + 1]] = [ids[index + 1], ids[index]]
+    ;[ids[fromIdx], ids[toIdx]] = [ids[toIdx], ids[fromIdx]]
 }
 
 // -- Pattern list manipulation (form) -----------------------------------------
@@ -445,12 +472,21 @@ defineExpose({ open, close, openForWorkspace, openNew })
 
             <!-- Project list -->
             <div class="form-group">
-                <label class="form-label">Projects</label>
+                <div class="form-label-row">
+                    <label class="form-label">Projects</label>
+                    <wa-switch
+                        :checked="localShowArchivedProjects"
+                        @change="localShowArchivedProjects = $event.target.checked"
+                        size="small"
+                    >
+                        Show archived
+                    </wa-switch>
+                </div>
 
-                <div v-if="formData.projectIds.length > 0" class="project-list">
+                <div v-if="visibleProjectEntries.length > 0" class="project-list">
                     <div
-                        v-for="(pid, index) in formData.projectIds"
-                        :key="pid"
+                        v-for="(entry, visibleIndex) in visibleProjectEntries"
+                        :key="entry.pid"
                         class="project-row"
                     >
                         <!-- Reorder arrows -->
@@ -458,36 +494,40 @@ defineExpose({ open, close, openForWorkspace, openNew })
                             <button
                                 type="button"
                                 class="reorder-btn"
-                                :class="{ disabled: index === 0 }"
-                                :disabled="index === 0"
-                                @click="moveProjectUp(index)"
+                                :class="{ disabled: visibleIndex === 0 }"
+                                :disabled="visibleIndex === 0"
+                                @click="moveProjectUp(visibleIndex)"
                                 title="Move up"
                             ><wa-icon name="chevron-up" /></button>
                             <button
                                 type="button"
                                 class="reorder-btn"
-                                :class="{ disabled: index === formData.projectIds.length - 1 }"
-                                :disabled="index === formData.projectIds.length - 1"
-                                @click="moveProjectDown(index)"
+                                :class="{ disabled: visibleIndex === visibleProjectEntries.length - 1 }"
+                                :disabled="visibleIndex === visibleProjectEntries.length - 1"
+                                @click="moveProjectDown(visibleIndex)"
                                 title="Move down"
                             ><wa-icon name="chevron-down" /></button>
                         </div>
 
                         <!-- Project badge -->
                         <div class="project-row-badge">
-                            <ProjectBadge :project-id="pid" />
+                            <ProjectBadge :project-id="entry.pid" />
                         </div>
 
                         <!-- Remove button -->
                         <button
                             type="button"
                             class="action-btn action-btn-danger"
-                            @click="removeProject(index)"
+                            @click="removeProject(visibleIndex)"
                             title="Remove project"
                         >
                             <wa-icon name="xmark" />
                         </button>
                     </div>
+                </div>
+
+                <div v-else-if="formData.projectIds.length > 0" class="empty-projects-message">
+                    All projects in this workspace are archived (hidden).
                 </div>
 
                 <div v-else class="empty-projects-message">
@@ -770,6 +810,13 @@ defineExpose({ open, close, openForWorkspace, openNew })
 .form-label {
     font-size: var(--wa-font-size-s);
     font-weight: var(--wa-font-weight-semibold);
+}
+
+.form-label-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--wa-space-s);
 }
 
 /* -- Project list in form --------------------------------------------------- */
