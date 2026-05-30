@@ -339,6 +339,24 @@ class BaseAgentManager:
                     if pending_title is not None:
                         set_pending_title(agent.session_id, pending_title)
 
+                    # Same rationale for pending_session_attributes (hidden +
+                    # spawned_by): the create-session service stashed them
+                    # under the draft id, but the watcher pops them when it
+                    # creates the row keyed on the canonical id Codex writes
+                    # into the JSONL. Re-key here so the pop finds them.
+                    from twicc.pending_session_attributes import (
+                        pop_pending_session_attributes,
+                        set_pending_session_attributes,
+                    )
+
+                    pending_attrs = pop_pending_session_attributes(session_id)
+                    if pending_attrs is not None:
+                        set_pending_session_attributes(
+                            agent.session_id,
+                            hidden=pending_attrs.hidden,
+                            spawned_by_id=pending_attrs.spawned_by_id,
+                        )
+
                 await self.notify_session_bound(
                     draft_session_id=session_id,
                     session_id=agent.session_id,
