@@ -69,26 +69,34 @@ def emit_validation_errors(errors, *, json_output: bool) -> None:
             typer.echo(f"  - {e.field}: {e.message}", err=True)
 
 
+_SESSION_ID_FIELDS = ("session_id", "provider", "project_id")
+_WORKSPACE_ID_FIELDS = ("workspace_id",)
+
+
 def emit_final(outcome, *, request_uuid: str, json_output: bool, timeout: int) -> None:
-    if outcome.status in ("created", "sent", "updated", "stopped"):
+    if outcome.status in ("created", "sent", "updated", "stopped", "deleted"):
         d = outcome.data
+        is_workspace = "workspace_id" in d
+        id_fields = _WORKSPACE_ID_FIELDS if is_workspace else _SESSION_ID_FIELDS
+        subject = "Workspace" if is_workspace else "Session"
+        identifier = d.get("workspace_id") if is_workspace else d.get("session_id")
+
         if json_output:
-            sys.stdout.write(orjson.dumps({
-                "status": outcome.status,
-                "session_id": d.get("session_id"),
-                "provider": d.get("provider"),
-                "project_id": d.get("project_id"),
-                "request_uuid": request_uuid,
-            }).decode() + "\n")
+            payload = {"status": outcome.status, "request_uuid": request_uuid}
+            for field in id_fields:
+                payload[field] = d.get(field)
+            sys.stdout.write(orjson.dumps(payload).decode() + "\n")
         else:
             if outcome.status == "created":
-                typer.echo(f"✓ Session created: {d.get('session_id')}")
+                typer.echo(f"✓ {subject} created: {identifier}")
             elif outcome.status == "sent":
-                typer.echo(f"✓ Message sent to session: {d.get('session_id')}")
+                typer.echo(f"✓ Message sent to session: {identifier}")
             elif outcome.status == "updated":
-                typer.echo(f"✓ Session updated: {d.get('session_id')}")
-            else:
-                typer.echo(f"✓ Process stopped for session: {d.get('session_id')}")
+                typer.echo(f"✓ {subject} updated: {identifier}")
+            elif outcome.status == "deleted":
+                typer.echo(f"✓ {subject} deleted: {identifier}")
+            else:  # stopped
+                typer.echo(f"✓ Process stopped for session: {identifier}")
     elif outcome.status == "rejected":
         d = outcome.data
         if json_output:

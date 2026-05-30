@@ -75,6 +75,9 @@ The command outputs a single JSON workspace object:
 - **List all workspaces:** `twicc workspaces` — find workspace IDs
 - **Inspect a project in the workspace:** `twicc project <project_id>` — use any entry from `projectIds` (omit the leading dash)
 - **List sessions for a project in the workspace:** `twicc sessions --project <project_id>` (omit the leading dash)
+- **Update this workspace:** `twicc update-workspace <ID> [--name X] [--color X|--unset-color] [--add-project PID]... [--remove-project PID]... [--add-pattern P]... [--remove-pattern P]... [--archive|--unarchive]`
+- **Delete this workspace:** `twicc delete-workspace <ID>` — non-destructive for the underlying projects
+- **Create a new workspace:** `twicc create-workspace <NAME> [...]`
 
 ## How to present results
 

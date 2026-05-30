@@ -81,7 +81,35 @@ _KIND_HANDLERS: dict[str, tuple[str, str, str]] = {
         "kill_session_process_from_payload",
         "stopped",
     ),
+    "workspace:create": (
+        "twicc.core.services.workspace_mutation",
+        "create_workspace_from_payload",
+        "created",
+    ),
+    "workspace:update": (
+        "twicc.core.services.workspace_mutation",
+        "update_workspace_from_payload",
+        "updated",
+    ),
+    "workspace:delete": (
+        "twicc.core.services.workspace_mutation",
+        "delete_workspace_from_payload",
+        "deleted",
+    ),
 }
+
+
+# Identifier fields the watcher copies from a service Result onto the
+# status payload (when present and non-None). Session-flavoured results
+# expose ``session_id``/``provider``/``project_id``; workspace-flavoured
+# results expose ``workspace_id``. Adding a new entry is enough to
+# support a new family of services.
+_RESULT_ID_FIELDS: tuple[str, ...] = (
+    "session_id",
+    "provider",
+    "project_id",
+    "workspace_id",
+)
 
 
 class DropRequestsWatcher:
@@ -200,14 +228,19 @@ class DropRequestsWatcher:
                 return  # CLI will delete both drop + status files
 
             if result.success:
+                status_data: dict = {"status": success_status}
+                for attr in _RESULT_ID_FIELDS:
+                    value = getattr(result, attr, None)
+                    if value is not None:
+                        status_data[attr] = value
+                log_id = (
+                    getattr(result, "session_id", None)
+                    or getattr(result, "workspace_id", None)
+                    or "?"
+                )
                 logger.info("[DropRequestsWatcher] %s %s -> %s",
-                            success_status, request_uuid, result.session_id)
-                await self._write_status(request_uuid, {
-                    "status": success_status,
-                    "session_id": result.session_id,
-                    "provider": result.provider,
-                    "project_id": result.project_id,
-                })
+                            success_status, request_uuid, log_id)
+                await self._write_status(request_uuid, status_data)
             else:
                 logger.warning("[DropRequestsWatcher] rejected %s: %s",
                                request_uuid, result.errors)
@@ -238,6 +271,8 @@ class DropRequestsWatcher:
             data.setdefault("updated_at", _iso_now())
         elif data["status"] == "stopped":
             data.setdefault("stopped_at", _iso_now())
+        elif data["status"] == "deleted":
+            data.setdefault("deleted_at", _iso_now())
         elif data["status"] == "rejected":
             data.setdefault("rejected_at", _iso_now())
         elif data["status"] == "failed":

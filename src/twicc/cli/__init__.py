@@ -483,6 +483,20 @@ from twicc.cli.whoami import whoami_cmd  # noqa: E402
 app.command("whoami")(whoami_cmd)
 
 
+# ``create-workspace`` / ``update-workspace`` / ``delete-workspace`` write
+# to ``workspaces.json`` through the drop-request protocol. The functions
+# declare all their Typer options inline and perform lazy Django setup
+# inside their body, so importing them here stays cheap.
+from twicc.cli.create_workspace import create_workspace_cmd  # noqa: E402
+app.command(name="create-workspace")(create_workspace_cmd)
+
+from twicc.cli.update_workspace import update_workspace_cmd  # noqa: E402
+app.command(name="update-workspace")(update_workspace_cmd)
+
+from twicc.cli.delete_workspace import delete_workspace_cmd  # noqa: E402
+app.command(name="delete-workspace")(delete_workspace_cmd)
+
+
 def main() -> None:
     """Entry point for ``pyproject.toml`` scripts and ``__main__.py``."""
     app()
