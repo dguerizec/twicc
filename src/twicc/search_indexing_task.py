@@ -425,8 +425,8 @@ async def _index_session(session_id: str, buffer: _MarkIndexedBuffer):
             "title",
             session.created_at,
             session.archived,
-            session.hidden,
-            session.spawned_by_id,
+            hidden=session.hidden,
+            spawned_by_id=session.spawned_by_id,
         )
 
     # Provider extracts the text + role; we just pipe it into the index.
@@ -440,8 +440,8 @@ async def _index_session(session_id: str, buffer: _MarkIndexedBuffer):
             msg.from_role,
             msg.timestamp,
             session.archived,
-            session.hidden,
-            session.spawned_by_id,
+            hidden=session.hidden,
+            spawned_by_id=session.spawned_by_id,
         )
 
     # Commit after each session

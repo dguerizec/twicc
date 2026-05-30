@@ -135,14 +135,19 @@ def _register_tokenizer(index: tantivy.Index) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _ensure_search_dir(search_dir) -> None:
+def _ensure_search_dir(search_dir: Path) -> None:
     """Wipe and recreate the search directory if the on-disk schema version doesn't match.
 
     Tantivy refuses to open an index whose on-disk schema disagrees with the in-memory
-    schema. We guard against this by writing a ``.schema-version`` file to the search
-    directory whose content is ``CURRENT_SEARCH_VERSION`` (from Django settings). On
-    mismatch (or when the file is absent), the whole directory is removed and re-created
-    so Tantivy initializes a fresh empty index.
+    schema. We guard against this by comparing a ``.schema-version`` file in the search
+    directory against ``CURRENT_SEARCH_VERSION`` (from Django settings). On mismatch
+    (or when the file is absent), the whole directory is removed and re-created so
+    Tantivy initializes a fresh empty index.
+
+    The ``.schema-version`` file is written AFTER the writer is successfully acquired
+    (in ``init_search_index``), so it truthfully means "we fully booted with this schema
+    version". This function only handles the wipe-on-mismatch decision and ensures the
+    directory exists; it does NOT write the version file.
 
     The ``CURRENT_SEARCH_VERSION`` bump in settings.py drives both the Tantivy wipe
     (schema change) and the per-session re-index sweep (search content regeneration);
@@ -165,10 +170,12 @@ def _ensure_search_dir(search_dir) -> None:
                 on_disk_version,
                 current_version,
             )
-            shutil.rmtree(search_dir)
+            try:
+                shutil.rmtree(search_dir)
+            except OSError as e:
+                raise SearchIndexLockedError(search_dir) from e
 
     search_dir.mkdir(parents=True, exist_ok=True)
-    schema_version_file.write_text(current_version)
 
 
 def init_search_index() -> None:
@@ -201,6 +208,13 @@ def init_search_index() -> None:
             _schema = None
             raise SearchIndexLockedError(search_dir) from exc
         raise
+
+    # Write the version marker only after the writer has been successfully acquired.
+    # This means the marker truthfully reflects "we fully booted with this schema version";
+    # a half-baked index that crashed during init won't falsely claim to be up-to-date.
+    schema_version_file = search_dir / ".schema-version"
+    from django.conf import settings
+    schema_version_file.write_text(str(settings.CURRENT_SEARCH_VERSION))
 
     logger.info("Search index initialized at %s", search_dir)
 
@@ -287,7 +301,8 @@ def index_document(
     doc.add_date("timestamp", timestamp)
     doc.add_boolean("archived", archived)
     doc.add_boolean("hidden", hidden)
-    # Tantivy text fields cannot store NULL; use empty string when there is no spawner.
+    # Empty string keeps Query.term_query symmetric: documents with no
+    # spawner never accidentally match a spawned_by filter.
     doc.add_text("spawned_by", spawned_by_id or "")
 
     with _writer_lock:
