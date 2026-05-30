@@ -366,6 +366,8 @@ class BaseSessionsWatcher:
         ``compute_version`` are read from the compute singleton, so the
         owning provider stays in one place.
         """
+        from twicc.pending_session_attributes import pop_pending_session_attributes
+
         compute = self.get_compute()
         if parsed.type == SessionType.SUBAGENT:
             if parent_session is None:
@@ -393,6 +395,11 @@ class BaseSessionsWatcher:
             for field, value in agent_settings._asdict().items():
                 if value is not None:
                     kwargs[field] = value
+        pending = pop_pending_session_attributes(parsed.session_id)
+        if pending is not None:
+            kwargs["hidden"] = pending.hidden
+            if pending.spawned_by_id is not None:
+                kwargs["spawned_by_id"] = pending.spawned_by_id
         return Session.objects.create(**kwargs)
 
     # ------------------------------------------------------------------
@@ -435,6 +442,8 @@ class BaseSessionsWatcher:
                         "user" if item.kind == ItemKind.USER_MESSAGE else "assistant",
                         item.timestamp,
                         session.archived,
+                        session.hidden,
+                        session.spawned_by_id,
                     )
                     indexed_count += 1
 
@@ -496,10 +505,11 @@ class BaseSessionsWatcher:
             if session and not session.stale:
                 session.stale = True
                 await sync_to_async(session.save)(update_fields=["stale"])
-                await broadcast_message(channel_layer, {
-                    "type": "session_updated",
-                    "session": serialize_session(session),
-                })
+                if not session.hidden:
+                    await broadcast_message(channel_layer, {
+                        "type": "session_updated",
+                        "session": serialize_session(session),
+                    })
                 # Update project metadata (includes total_cost which changes for subagents too)
                 project = await get_project_by_id(parsed.project_id)
                 if project:
@@ -565,43 +575,46 @@ class BaseSessionsWatcher:
             # Exception: TwiCC-initiated sessions (identified by having had pending
             # settings) get an early session_updated so the frontend drops the draft
             # flag immediately, without waiting for the user message to appear in JSONL.
-            if session.user_message_count > 0 or pending_agent_settings is not None:
-                await broadcast_message(channel_layer, {
-                    "type": "session_updated",
-                    "session": serialize_session(session),
-                })
+            if not session.hidden:
+                if session.user_message_count > 0 or pending_agent_settings is not None:
+                    await broadcast_message(channel_layer, {
+                        "type": "session_updated",
+                        "session": serialize_session(session),
+                    })
 
             if session.user_message_count > 0:
-                # Broadcast new items (with updated metadata of pre-existing items if any)
-                new_items = await get_session_items(session, new_line_nums)
-                # Per-provider wire-only enrichment (e.g. Codex stamps
-                # ``stream_uuid`` so the frontend can retire its streaming
-                # placeholder). Default helper implementation is a no-op
-                # so this stays generic.
-                get_provider_helpers(self.get_compute().provider).enrich_live_items_payload(
-                    session.id, new_items,
-                )
-                if new_items:
-                    message = {
-                        "type": "session_items_added",
-                        "session_id": parsed.session_id,
-                        "project_id": parsed.project_id,
-                        "parent_session_id": parsed.parent_session_id,
-                        "items": new_items,
-                    }
-                    if modified_line_nums:
-                        updated_metadata = await get_items_metadata(session, modified_line_nums)
-                        if updated_metadata:
-                            message["updated_metadata"] = updated_metadata
-                    await broadcast_message(channel_layer, message)
+                if not session.hidden:
+                    # Broadcast new items (with updated metadata of pre-existing items if any)
+                    new_items = await get_session_items(session, new_line_nums)
+                    # Per-provider wire-only enrichment (e.g. Codex stamps
+                    # ``stream_uuid`` so the frontend can retire its streaming
+                    # placeholder). Default helper implementation is a no-op
+                    # so this stays generic.
+                    get_provider_helpers(self.get_compute().provider).enrich_live_items_payload(
+                        session.id, new_items,
+                    )
+                    if new_items:
+                        message = {
+                            "type": "session_items_added",
+                            "session_id": parsed.session_id,
+                            "project_id": parsed.project_id,
+                            "parent_session_id": parsed.parent_session_id,
+                            "items": new_items,
+                        }
+                        if modified_line_nums:
+                            updated_metadata = await get_items_metadata(session, modified_line_nums)
+                            if updated_metadata:
+                                message["updated_metadata"] = updated_metadata
+                        await broadcast_message(channel_layer, message)
 
                 # For subagents, broadcast parent session update (costs have changed)
                 if is_subagent and parent_session:
                     parent_session = await refresh_session(parent_session)
-                    await broadcast_message(channel_layer, {
-                        "type": "session_updated",
-                        "session": serialize_session(parent_session),
-                    })
+                    if not parent_session.hidden:
+                        await broadcast_message(channel_layer, {
+                            "type": "session_updated",
+                            "session": serialize_session(parent_session),
+                        })
 
                 # Update project metadata (includes total_cost which changes for subagents too)
                 await update_project_metadata(project)
@@ -657,7 +670,7 @@ class BaseSessionsWatcher:
                 # Broadcast session_updated for subagents that naturally finished
                 for stopped in agent_stopped_updates:
                     stopped_session = await get_session_by_id(stopped.agent_session_id)
-                    if stopped_session:
+                    if stopped_session and not stopped_session.hidden:
                         await broadcast_message(channel_layer, {
                             "type": "session_updated",
                             "session": serialize_session(stopped_session),
@@ -689,10 +702,11 @@ class BaseSessionsWatcher:
             # File reappeared - unstale
             session.stale = False
             await sync_to_async(session.save)(update_fields=["stale"])
-            await broadcast_message(channel_layer, {
-                "type": "session_updated",
-                "session": serialize_session(session),
-            })
+            if not session.hidden:
+                await broadcast_message(channel_layer, {
+                    "type": "session_updated",
+                    "session": serialize_session(session),
+                })
 
         # Auto-add newly created project to workspaces whose patterns match
         # its directory. Deferred to here (rather than into

@@ -394,7 +394,11 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
         # enriched with session titles, project names, and active crons.
         if self._should_send("active_processes"):
             processes = registry.get_active_agents()
-            serialized = [serialize_agent_info(p) for p in processes]
+            from twicc.core.models import Session
+            hidden_session_ids = await sync_to_async(
+                lambda: set(Session.objects.filter(hidden=True).values_list("id", flat=True))
+            )()
+            serialized = [serialize_agent_info(p) for p in processes if p.session_id not in hidden_session_ids]
             if serialized:
                 display_info = await get_bulk_session_and_project_display(serialized)
                 for proc in serialized:
@@ -775,7 +779,7 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
                 )
                 # Broadcast session update so all clients see the new settings
                 session_obj = await sync_to_async(Session.objects.filter(id=session_id).first)()
-                if session_obj:
+                if session_obj and not session_obj.hidden:
                     await self.channel_layer.group_send(
                         "updates",
                         {
@@ -1540,7 +1544,7 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
             return
 
         session = await sync_to_async(Session.objects.filter(id=session_id).first)()
-        if session:
+        if session and not session.hidden:
             await self.channel_layer.group_send(
                 "updates",
                 {
@@ -1599,7 +1603,7 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
             return
 
         session = await sync_to_async(Session.objects.filter(id=session_id).first)()
-        if session:
+        if session and not session.hidden:
             await self.channel_layer.group_send(
                 "updates",
                 {
