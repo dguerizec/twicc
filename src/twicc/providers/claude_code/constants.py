@@ -27,6 +27,7 @@ class ClaudeCodeModelExtra(NamedTuple):
     supports_effort_xhigh: bool
     supports_effort_max: bool
     supports_fast: bool
+    support_permission_auto: bool
 
 
 SYNCED_SETTINGS_DEFAULTS: dict = {
@@ -114,7 +115,7 @@ MODEL_VERSIONS: list[ModelVersion] = [
         latest=True,
         provider_extra=ClaudeCodeModelExtra(
             supports_1m=True, supports_effort_xhigh=True, supports_effort_max=True,
-            supports_fast=True,
+            supports_fast=True, support_permission_auto=True,
         ),
     ),
     ModelVersion(
@@ -124,7 +125,7 @@ MODEL_VERSIONS: list[ModelVersion] = [
         latest=False,
         provider_extra=ClaudeCodeModelExtra(
             supports_1m=True, supports_effort_xhigh=True, supports_effort_max=True,
-            supports_fast=True,
+            supports_fast=True, support_permission_auto=True,
         ),
     ),
     ModelVersion(
@@ -134,7 +135,7 @@ MODEL_VERSIONS: list[ModelVersion] = [
         latest=False,
         provider_extra=ClaudeCodeModelExtra(
             supports_1m=True, supports_effort_xhigh=False, supports_effort_max=True,
-            supports_fast=True,
+            supports_fast=True, support_permission_auto=True,
         ),
     ),
     ModelVersion(
@@ -144,7 +145,7 @@ MODEL_VERSIONS: list[ModelVersion] = [
         latest=False,
         provider_extra=ClaudeCodeModelExtra(
             supports_1m=False, supports_effort_xhigh=False, supports_effort_max=False,
-            supports_fast=False,
+            supports_fast=False, support_permission_auto=False,
         ),
     ),
     ModelVersion(
@@ -154,7 +155,7 @@ MODEL_VERSIONS: list[ModelVersion] = [
         latest=True,
         provider_extra=ClaudeCodeModelExtra(
             supports_1m=True, supports_effort_xhigh=False, supports_effort_max=True,
-            supports_fast=False,
+            supports_fast=False, support_permission_auto=True,
         ),
     ),
     ModelVersion(
@@ -164,7 +165,7 @@ MODEL_VERSIONS: list[ModelVersion] = [
         latest=False,
         provider_extra=ClaudeCodeModelExtra(
             supports_1m=False, supports_effort_xhigh=False, supports_effort_max=False,
-            supports_fast=False,
+            supports_fast=False, support_permission_auto=False,
         ),
     ),
 ]

@@ -522,10 +522,22 @@ class ClaudeCodeAgent(BaseAgent):
 
         # Inject a setMode suggestion so the user can switch the session's permission
         # mode directly from the approval screen. Skipped for ExitPlanMode, where the
-        # CLI handles the plan→default transition automatically on approval.
+        # CLI handles the plan→default transition automatically on approval. ``auto``
+        # is filtered out when the session's model does not support it (Opus 4.5,
+        # Sonnet 4.5, ...) — picking it would otherwise hit an SDK error.
         if tool_name != "ExitPlanMode":
+            from twicc.providers.helpers import get_provider_helpers
+
             current_mode = self.agent_settings.permission_mode
-            mode_options = [m for m in ("default", "acceptEdits", "bypassPermissions") if m != current_mode]
+            helpers = get_provider_helpers(Provider.CLAUDE_CODE)
+            supports_auto = helpers.selected_model_supports_permission_auto(
+                self.agent_settings.selected_model,
+            )
+            candidate_modes = ("default", "auto", "acceptEdits", "bypassPermissions")
+            mode_options = [
+                m for m in candidate_modes
+                if m != current_mode and (m != "auto" or supports_auto)
+            ]
             if mode_options:
                 result.append({
                     'type': 'setMode',

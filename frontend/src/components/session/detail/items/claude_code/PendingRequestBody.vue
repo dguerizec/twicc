@@ -84,6 +84,7 @@ const TOOL_PATH_KEYS = {
 // Human-readable labels for the permission_mode wire values.
 const MODE_LABELS = {
     default: 'Default',
+    auto: 'Auto',
     acceptEdits: 'Accept all edits',
     bypassPermissions: 'Bypass permissions',
     plan: 'Plan',

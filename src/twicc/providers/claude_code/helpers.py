@@ -84,7 +84,7 @@ def _extract_text_from_message_content(content: str | list | None) -> str:
 
 AGENT_SETTINGS_CHOICES: dict[str, list] = {
     "effort": ["low", "medium", "high", "xhigh", "max"],
-    "permission_mode": ["default", "acceptEdits", "plan", "dontAsk", "bypassPermissions"],
+    "permission_mode": ["default", "auto", "acceptEdits", "plan", "dontAsk", "bypassPermissions"],
     "thinking_enabled": [True, False],
     "context_max": [200_000, 1_000_000],
     "claude_in_chrome": [True, False],
@@ -339,6 +339,17 @@ class ClaudeCodeHelpers(BaseProviderHelpers):
             mv = self._resolve_to_default_model_version()
         return bool(mv and mv.provider_extra.supports_fast)
 
+    def selected_model_supports_permission_auto(self, selected_model: str | None) -> bool:
+        """Return ``True`` if the model (or default fallback) supports ``permission_mode="auto"``.
+
+        Anthropic gates auto mode on Opus 4.6+ and Sonnet 4.6+; older
+        versions reject the option at the SDK / CLI level.
+        """
+        mv = self.find_model(selected_model) if selected_model else None
+        if mv is None:
+            mv = self._resolve_to_default_model_version()
+        return bool(mv and mv.provider_extra.support_permission_auto)
+
     def enforce_synced_settings_consistency(self, synced: dict, changes: dict) -> None:
         """Normalise ``claudeCodeDefault*`` keys when the default model changed.
 
@@ -365,6 +376,10 @@ class ClaudeCodeHelpers(BaseProviderHelpers):
             fast_mode=synced.get(
                 "claudeCodeDefaultFastMode", self.SYNCED_SETTINGS_DEFAULTS["claudeCodeDefaultFastMode"],
             ),
+            permission_mode=synced.get(
+                "claudeCodeDefaultPermissionMode",
+                self.SYNCED_SETTINGS_DEFAULTS["claudeCodeDefaultPermissionMode"],
+            ),
         )
         adjusted = self.enforce_agent_settings_consistency(candidate)
         if (
@@ -387,6 +402,11 @@ class ClaudeCodeHelpers(BaseProviderHelpers):
             and adjusted.fast_mode != candidate.fast_mode
         ):
             synced["claudeCodeDefaultFastMode"] = adjusted.fast_mode
+        if (
+            "claudeCodeDefaultPermissionMode" in changes
+            and adjusted.permission_mode != candidate.permission_mode
+        ):
+            synced["claudeCodeDefaultPermissionMode"] = adjusted.permission_mode
 
     def enforce_agent_settings_consistency(self, settings: AgentSettings) -> AgentSettings:
         """Auto-upgrade retired model, then normalise capability rules.
@@ -401,6 +421,9 @@ class ClaudeCodeHelpers(BaseProviderHelpers):
            ``"high"`` when unsupported.
         4. Clears ``fast_mode`` when the model doesn't support it
            (fast mode is only available on supported Opus versions).
+        5. Demotes ``permission_mode == "auto"`` to ``"default"`` when
+           the model doesn't support auto (Opus 4.5 / Sonnet 4.5 and
+           earlier are rejected by the SDK / CLI).
         """
         settings = super().enforce_agent_settings_consistency(settings)
 
@@ -408,6 +431,7 @@ class ClaudeCodeHelpers(BaseProviderHelpers):
         context_max = settings.context_max
         effort = settings.effort
         fast_mode = settings.fast_mode
+        permission_mode = settings.permission_mode
 
         if context_max == 1_000_000 and not self.selected_model_supports_1m(model):
             context_max = 200_000
@@ -420,13 +444,22 @@ class ClaudeCodeHelpers(BaseProviderHelpers):
         if fast_mode and not self.selected_model_supports_fast(model):
             fast_mode = False
 
+        if permission_mode == "auto" and not self.selected_model_supports_permission_auto(model):
+            permission_mode = "default"
+
         if (
             context_max == settings.context_max
             and effort == settings.effort
             and fast_mode == settings.fast_mode
+            and permission_mode == settings.permission_mode
         ):
             return settings
-        return settings._replace(context_max=context_max, effort=effort, fast_mode=fast_mode)
+        return settings._replace(
+            context_max=context_max,
+            effort=effort,
+            fast_mode=fast_mode,
+            permission_mode=permission_mode,
+        )
 
     def get_agent_settings_choices(self) -> dict[str, list]:
         return AGENT_SETTINGS_CHOICES

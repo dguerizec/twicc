@@ -19,6 +19,7 @@ export const CONTEXT_MAX = {
  */
 export const PERMISSION_MODE = {
     DEFAULT: 'default',
+    AUTO: 'auto',
     ACCEPT_EDITS: 'acceptEdits',
     PLAN: 'plan',
     DONT_ASK: 'dontAsk',

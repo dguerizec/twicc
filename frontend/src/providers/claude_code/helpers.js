@@ -109,6 +109,11 @@ const AGENT_SETTINGS_CHOICES = {
             description: 'Prompts for permission on first use of each tool',
         },
         {
+            value: PERMISSION_MODE.AUTO,
+            label: 'Auto',
+            description: 'Auto-approves tools, with safety checks blocking risky actions',
+        },
+        {
             value: PERMISSION_MODE.ACCEPT_EDITS,
             label: 'Accept Edits',
             description: 'Auto-accepts file edit permissions',
@@ -267,16 +272,21 @@ export class ClaudeCodeHelpers extends BaseProviderHelpers {
         const store = useClaudeCodeStore()
         store[binding.setter](value)
         // Re-enforce cross-field consistency when the default model changes:
-        // the new model may not support the persisted context_max / effort,
-        // so they get rolled back to a value the model accepts.
+        // the new model may not support the persisted context_max / effort /
+        // fast_mode / permission_mode, so they get rolled back to values
+        // the model accepts.
         if (field === 'selected_model') {
             const adjusted = this.enforceAgentSettingsConsistency({
                 selectedModel: store.defaultModel,
                 contextMax: store.defaultContextMax,
                 effort: store.defaultEffort,
+                fastMode: store.defaultFastMode,
+                permissionMode: store.defaultPermissionMode,
             })
             if (adjusted.contextMax !== store.defaultContextMax) store.setDefaultContextMax(adjusted.contextMax)
             if (adjusted.effort !== store.defaultEffort) store.setDefaultEffort(adjusted.effort)
+            if (adjusted.fastMode !== store.defaultFastMode) store.setDefaultFastMode(adjusted.fastMode)
+            if (adjusted.permissionMode !== store.defaultPermissionMode) store.setDefaultPermissionMode(adjusted.permissionMode)
         }
     }
 
@@ -366,6 +376,11 @@ export class ClaudeCodeHelpers extends BaseProviderHelpers {
         return entry ? entry.provider_extra.supports_fast : false
     }
 
+    modelSupportsPermissionAuto(selectedModel) {
+        const entry = this._resolveRegistryEntry(selectedModel)
+        return entry ? entry.provider_extra.support_permission_auto : false
+    }
+
     /**
      * Pipeline mirroring the backend ``ClaudeCodeHelpers.enforce_agent_settings_consistency``:
      *
@@ -376,9 +391,12 @@ export class ClaudeCodeHelpers extends BaseProviderHelpers {
      *    also unsupported), then ``X_HIGH`` → ``HIGH`` when unsupported.
      * 4. Clear ``fastMode`` when the (post-upgrade) model doesn't support it
      *    (only supported on Opus 4.6+).
+     * 5. Demote ``permissionMode === AUTO`` to ``DEFAULT`` when the
+     *    (post-upgrade) model doesn't support auto (only Opus 4.6+ /
+     *    Sonnet 4.6+).
      *
-     * Fields not in the input are left absent in the output. ``thinkingEnabled``,
-     * ``claudeInChrome`` and ``permissionMode`` are passed through.
+     * Fields not in the input are left absent in the output. ``thinkingEnabled``
+     * and ``claudeInChrome`` are passed through.
      */
     enforceAgentSettingsConsistency(settings) {
         const result = { ...settings }
@@ -402,6 +420,10 @@ export class ClaudeCodeHelpers extends BaseProviderHelpers {
 
         if (result.fastMode && !this.modelSupportsFast(model)) {
             result.fastMode = false
+        }
+
+        if (result.permissionMode === PERMISSION_MODE.AUTO && !this.modelSupportsPermissionAuto(model)) {
+            result.permissionMode = PERMISSION_MODE.DEFAULT
         }
 
         return result
@@ -455,6 +477,9 @@ export class ClaudeCodeHelpers extends BaseProviderHelpers {
         if (field === 'effort') {
             if (choiceValue === EFFORT.X_HIGH) return !this.modelSupportsEffortXhigh(context?.effectiveModel)
             if (choiceValue === EFFORT.MAX) return !this.modelSupportsEffortMax(context?.effectiveModel)
+        }
+        if (field === 'permission_mode' && choiceValue === PERMISSION_MODE.AUTO) {
+            return !this.modelSupportsPermissionAuto(context?.effectiveModel)
         }
         return false
     }
