@@ -16,7 +16,7 @@ def main(
     offset: int = 0,
     include_hidden: bool = False,
     only_hidden: bool = False,
-    spawned_by_id: str | None = None,
+    spawned_by: str | None = None,
 ) -> None:
     """List currently running processes (live ProcessRuns) of the running TwiCC.
 
@@ -43,6 +43,14 @@ def main(
     import django
 
     django.setup()
+
+    from twicc.cli._session_request.whoami import resolve_spawned_by_filter
+
+    try:
+        spawned_by_id = resolve_spawned_by_filter(spawned_by)
+    except RuntimeError as e:
+        print(str(e), file=sys.stderr)
+        sys.exit(1)
 
     from twicc.agent.states import AgentState
     from twicc.cli._twicc_info import resolve_live_twicc_or_exit

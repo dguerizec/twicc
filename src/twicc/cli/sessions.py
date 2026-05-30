@@ -14,12 +14,25 @@ def main(
     archived: bool = False,
     include_hidden: bool = False,
     only_hidden: bool = False,
-    spawned_by_id: str | None = None,
+    spawned_by: str | None = None,
 ) -> None:
-    """List sessions as JSON to stdout."""
+    """List sessions as JSON to stdout.
+
+    ``spawned_by`` is the raw CLI value (``None``, a session_id, or the
+    literal ``"self"``) — it is resolved here, after ``django.setup()``,
+    so callers don't need to bootstrap Django themselves.
+    """
     import django
 
     django.setup()
+
+    from twicc.cli._session_request.whoami import resolve_spawned_by_filter
+
+    try:
+        spawned_by_id = resolve_spawned_by_filter(spawned_by)
+    except RuntimeError as e:
+        print(str(e), file=sys.stderr)
+        sys.exit(1)
 
     from twicc.core.models import Session
     from twicc.core.serializers import serialize_session

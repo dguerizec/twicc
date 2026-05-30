@@ -122,14 +122,6 @@ def sessions(
         typer.echo("Error: --include-hidden and --only-hidden are mutually exclusive.", err=True)
         raise typer.Exit(2)
 
-    from twicc.cli._session_request.whoami import resolve_spawned_by_filter
-
-    try:
-        spawned_by_id = resolve_spawned_by_filter(spawned_by)
-    except RuntimeError as e:
-        typer.echo(str(e), err=True)
-        raise typer.Exit(1)
-
     from twicc.cli.sessions import main as sessions_main
 
     sessions_main(
@@ -140,7 +132,7 @@ def sessions(
         archived=include_archived,
         include_hidden=include_hidden,
         only_hidden=only_hidden,
-        spawned_by_id=spawned_by_id,
+        spawned_by=spawned_by,
     )
 
 
@@ -236,14 +228,6 @@ def processes(
         typer.echo("Error: --include-hidden and --only-hidden are mutually exclusive.", err=True)
         raise typer.Exit(2)
 
-    from twicc.cli._session_request.whoami import resolve_spawned_by_filter
-
-    try:
-        spawned_by_id = resolve_spawned_by_filter(spawned_by)
-    except RuntimeError as e:
-        typer.echo(str(e), err=True)
-        raise typer.Exit(1)
-
     from twicc.cli.processes import main as processes_main
 
     processes_main(
@@ -253,7 +237,7 @@ def processes(
         offset=offset,
         include_hidden=include_hidden,
         only_hidden=only_hidden,
-        spawned_by_id=spawned_by_id,
+        spawned_by=spawned_by,
     )
 
 
@@ -364,14 +348,6 @@ def search(
         typer.echo("Error: --include-hidden and --only-hidden are mutually exclusive.", err=True)
         raise typer.Exit(2)
 
-    from twicc.cli._session_request.whoami import resolve_spawned_by_filter
-
-    try:
-        spawned_by_id = resolve_spawned_by_filter(spawned_by)
-    except RuntimeError as e:
-        typer.echo(str(e), err=True)
-        raise typer.Exit(1)
-
     from twicc.cli.search import main as search_main
 
     search_main(
@@ -380,7 +356,7 @@ def search(
         offset=offset,
         include_hidden=include_hidden,
         only_hidden=only_hidden,
-        spawned_by_id=spawned_by_id,
+        spawned_by=spawned_by,
     )
 
 

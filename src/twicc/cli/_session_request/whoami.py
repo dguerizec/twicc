@@ -53,15 +53,10 @@ def resolve_current_session():
     ancestor — typically the case for a human invoking ``twicc`` from
     a plain shell.
 
-    Bootstraps Django lazily so callers that have not yet run
-    ``django.setup()`` (e.g. the ``twicc sessions / processes / search``
-    typer wrappers that resolve ``--spawned-by self`` before delegating
-    to their inner ``main``) get it for free. ``django.setup()`` is
-    idempotent.
+    The caller must have run ``django.setup()`` before this — the
+    function does not bootstrap Django itself, to keep cold-start
+    paths optional.
     """
-    import django
-    django.setup()
-
     from twicc.agent.states import AgentState
     from twicc.core.models import ProcessRun, Session
 

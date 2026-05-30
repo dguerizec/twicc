@@ -10,9 +10,28 @@ def main(
     offset: int = 0,
     include_hidden: bool = False,
     only_hidden: bool = False,
-    spawned_by_id: str | None = None,
+    spawned_by: str | None = None,
 ) -> None:
-    """Execute a raw Tantivy search and print JSON results to stdout."""
+    """Execute a raw Tantivy search and print JSON results to stdout.
+
+    ``spawned_by`` is the raw CLI value (``None``, a session_id, or the
+    literal ``"self"``). When it is ``"self"`` the resolver needs DB
+    access; we ``django.setup()`` only in that case so an ordinary
+    full-text query stays Django-free.
+    """
+    if spawned_by == "self":
+        import django
+
+        django.setup()
+
+    from twicc.cli._session_request.whoami import resolve_spawned_by_filter
+
+    try:
+        spawned_by_id = resolve_spawned_by_filter(spawned_by)
+    except RuntimeError as e:
+        print(str(e), file=sys.stderr)
+        sys.exit(1)
+
     from twicc.search import raw_search
 
     try:
