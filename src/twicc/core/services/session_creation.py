@@ -20,6 +20,7 @@ from asgiref.sync import sync_to_async
 
 from twicc.core.enums import Provider
 from twicc.pending_agent_settings import set_pending_agent_settings
+from twicc.pending_session_attributes import set_pending_session_attributes
 from twicc.pending_titles import set_pending_title
 from twicc.projects import register_project
 from twicc.providers.db_writer import run_under_db_write_lock
@@ -75,6 +76,8 @@ async def create_session_from_payload(payload: dict) -> SessionCreationResult:
     title = payload.get("title")
     images = payload.get("images") or []
     documents = payload.get("documents") or []
+    hidden = bool(payload.get("hidden", False))
+    spawned_by_session_id = payload.get("spawned_by_session_id")  # str | None
 
     errors: list[SessionCreationError] = []
     if not session_id:
@@ -151,6 +154,23 @@ async def create_session_from_payload(payload: dict) -> SessionCreationResult:
                                   f"Project {project_id!r} has no directory set")
         ])
 
+    # --- spawned_by validation -----------------------------------
+    # A forged or stale ID would later raise IntegrityError on the FK
+    # constraint when the watcher creates the Session row. Fail loudly
+    # now with a clear error rather than a downstream stack trace.
+    if spawned_by_session_id is not None:
+        from twicc.core.models import Session
+        exists = await sync_to_async(
+            lambda: Session.objects.filter(pk=spawned_by_session_id).exists()
+        )()
+        if not exists:
+            return SessionCreationResult(False, None, None, None, [
+                SessionCreationError(
+                    "spawned_by_session_id", "invalid_spawned_by",
+                    f"spawned_by session {spawned_by_session_id!r} does not exist",
+                )
+            ])
+
     # --- build agent settings from the closed bundle --------------
     # NOTE: this reads every AgentSettings field — including those listed in
     # ``AGENT_SETTINGS_HIDDEN_FROM_FRONTEND`` — because this service is also
@@ -178,6 +198,11 @@ async def create_session_from_payload(payload: dict) -> SessionCreationResult:
     # --- stash agent settings (consumed by the watcher when it creates
     #     the Session row from the JSONL) ---------------------------
     set_pending_agent_settings(session_id, agent_settings)
+    set_pending_session_attributes(
+        session_id,
+        hidden=hidden,
+        spawned_by_id=spawned_by_session_id,
+    )
 
     # --- resolve to effective settings (None -> synced default) --
     effective = helpers.resolve_agent_settings(agent_settings)
@@ -185,6 +210,19 @@ async def create_session_from_payload(payload: dict) -> SessionCreationResult:
     # the same instance if no demotion was needed, or a fresh one via
     # _replace). Capture it.
     effective = helpers.enforce_agent_settings_consistency(effective)
+
+    # --- hidden constraints (defence in depth) -------------------
+    # The CLI validates these before writing the drop-file; we re-validate
+    # from the payload because the drop-file is a trust boundary (forged
+    # or version-skewed callers can submit invalid combinations).
+    from twicc.cli._session_request.validation import validate_hidden_constraints
+    hidden_errors = validate_hidden_constraints(
+        provider.value, effective, hidden=hidden,
+    )
+    if hidden_errors:
+        return SessionCreationResult(False, None, None, None, [
+            SessionCreationError(e.field, e.code, e.message) for e in hidden_errors
+        ])
 
     # --- invoke the agent manager --------------------------------
     from twicc.agent.registry import get_agent_manager_registry
