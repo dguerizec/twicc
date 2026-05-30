@@ -55,10 +55,6 @@ $TWICC send-message [OPTIONS] '<SESSION_ID>' '<PROMPT>'
 - `--json` — emit a single JSON object on stdout instead of pretty text (implies `--no-color`). Use this from scripts.
 - `--no-color` — disable ANSI colors. Always implied by `--json`.
 
-### What is NOT here
-
-By design, `send-message` exposes no flags to change the session's `--model`, `--effort`, `--permission-mode`, `--thinking`, `--claude-in-chrome`, `--fast-mode`, `--context-max`, `--title`, or `--archive`. The session keeps every value it had before the call. This is intentional — settings updates go through `twicc update-session <id> settings` (see the `twicc-update-session` skill) and should not be silently piggy-backed onto a message send.
-
 ## Examples
 
 ```bash
@@ -150,7 +146,7 @@ When the server rejects (exit 3), parse `errors[].code` from JSON mode to give a
 ## Related commands
 
 - **Create a new session instead:** `twicc create-session` — full options for picking provider, model, settings, project, etc.
-- **Change the session's settings or rename it:** `twicc update-session <session_id> settings ...` or `twicc update-session <session_id> title '<TEXT>'` — see the `twicc-update-session` skill. The session is otherwise untouched.
+- **Change the session's settings, rename, or archive it:** `twicc update-session <session_id> {settings|title|archive|unarchive} ...` — see the `twicc-update-session` skill. The session is otherwise untouched.
 - **Check the live agent's state:** `twicc process <session_id>` — is the agent still working, blocked on a user click, or done? The only reliable way to detect `awaiting_user_input` before sending
 - **List all live processes:** `twicc processes --state awaiting_user_input` — to see which sessions are blocked on a user click
 - **Read the agent's reply (uniform shape):** `twicc session <session_id> messages --tail 1`

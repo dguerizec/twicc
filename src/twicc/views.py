@@ -568,23 +568,16 @@ async def session_detail(request, project_id, session_id, parent_session_id=None
             archived = data["archived"]
             if not isinstance(archived, bool):
                 return JsonResponse({"error": "archived must be a boolean"}, status=400)
-            session.archived = archived
-            await run_under_db_write_lock(
-                lambda: session.asave(update_fields=["archived"])
-            )
+            # Share the archive flow with ``twicc update-session archive``:
+            # DB write + search reindex + agent/tmux teardown live in
+            # ``apply_session_archived_change``. ``also_unpin=False`` here
+            # because the auto-unpin decision is made by the frontend and
+            # arrives as a separate ``pinned`` key in the same PATCH body
+            # (handled by the dedicated ``pinned`` branch below). The
+            # combined broadcast happens at the end of the handler.
+            from twicc.core.services.session_update import apply_session_archived_change
+            await apply_session_archived_change(session, archived, also_unpin=False)
             needs_broadcast = True
-
-            # Re-index for full-text search (archived flag is denormalized in every document)
-            if search.is_initialized():
-                try:
-                    await asyncio.to_thread(search.reindex_session, session_id)
-                except Exception:
-                    pass  # Non-critical: search will catch up on next startup
-
-            # Stop process and clean up tmux session if archiving
-            if archived:
-                await get_agent_manager_registry().kill_agent(session_id, reason="archived")
-                await asyncio.to_thread(kill_all_tmux_terminals, f"s:{session_id}")
 
         # Handle pinned update: NULL (unpinned) or one of PinMode.values.
         if "pinned" in data:

@@ -16,12 +16,21 @@ whose ``kind`` matches one of the supported update actions:
   provider to persist into its backing store (JSONL custom-title entry for
   Claude Code, ``thread/name/set`` for Codex), then broadcast
   ``session_updated``.
+- ``kind="update_archived"`` → :func:`update_session_archived_from_payload`.
+  Wraps the same archive flow the HTTP ``PATCH`` endpoint runs (now
+  factored into :func:`apply_session_archived_change`): persist the flag,
+  optionally unpin under the ``autoUnpinOnArchive`` synced setting,
+  re-index search, kill the live agent + tmux on archive, broadcast.
 
 The functions do NOT raise for business-rule errors (missing session,
 provider disabled, etc.); they return an :class:`UpdateSessionResult` with
 ``success=False`` and a list of structured error tuples. Unexpected
 exceptions propagate normally and are the caller's responsibility to
 translate (e.g. to ``status: failed`` in the watcher).
+
+:func:`apply_session_archived_change` is a public helper, reused by the
+HTTP ``PATCH`` endpoint (:mod:`twicc.views`) so the single-session HTTP
+path and the CLI path stay byte-for-byte aligned.
 """
 
 from __future__ import annotations
@@ -331,6 +340,140 @@ async def update_session_title_from_payload(payload: dict) -> UpdateSessionResul
         )
 
     logger.info("[update_session_title] session=%s title=%r", session_id, title)
+
+    return UpdateSessionResult(
+        success=True,
+        session_id=session_id,
+        provider=provider.value,
+        project_id=session.project_id,
+        errors=None,
+    )
+
+
+async def apply_session_archived_change(
+    session,
+    archived: bool,
+    *,
+    also_unpin: bool = False,
+) -> None:
+    """Persist an ``archived`` change on a :class:`Session` row.
+
+    Single source of truth for the archive flow, shared by the HTTP
+    ``PATCH /api/projects/.../sessions/<id>/`` endpoint and the CLI
+    ``twicc update-session <ID> archive`` sub-command. Performs:
+
+    1. DB write under the lock — ``archived`` (and ``pinned=None`` when
+       ``also_unpin`` is set) saved via ``Session.asave``.
+    2. Full-text search reindex (non-critical; logged on failure since the
+       ``archived`` flag is denormalised into every indexed document).
+    3. When ``archived`` flips to ``True``: kill the live agent
+       (``reason="archived"``) and tear down any tmux terminal attached to
+       this session id.
+
+    Does NOT broadcast ``session_updated``; the caller is responsible so
+    a payload combining several field updates (e.g. archived + pinned at
+    once) only emits one broadcast carrying the final row state.
+
+    ``also_unpin`` is the decision the caller already made by checking
+    ``autoUnpinOnArchive`` against ``session.pinned``; the helper applies
+    it without re-checking — matching the way the frontend builds the
+    PATCH body for the HTTP endpoint.
+    """
+    from twicc import search
+    from twicc.agent.registry import get_agent_manager_registry
+    from twicc.terminal import kill_all_tmux_terminals
+
+    fields = ["archived"]
+    session.archived = archived
+    if also_unpin:
+        session.pinned = None
+        fields.append("pinned")
+
+    await run_under_db_write_lock(
+        lambda: session.asave(update_fields=fields)
+    )
+
+    # Search reindex — non-critical because the next full rebuild reconciles
+    # if this attempt fails. The ``archived`` flag is denormalised into every
+    # document, so we re-index the whole session.
+    if search.is_initialized():
+        try:
+            await asyncio.to_thread(search.reindex_session, session.id)
+        except Exception:
+            logger.warning(
+                "[apply_session_archived_change] search reindex failed for %s",
+                session.id, exc_info=True,
+            )
+
+    # Tear down anything tied to a "live" session when flipping to archived.
+    if archived:
+        await get_agent_manager_registry().kill_agent(session.id, reason="archived")
+        await asyncio.to_thread(kill_all_tmux_terminals, f"s:{session.id}")
+
+
+async def update_session_archived_from_payload(payload: dict) -> UpdateSessionResult:
+    """Archive or unarchive an existing session.
+
+    Expected keys in ``payload``:
+    - ``session_id`` (required).
+    - ``archived``: bool (required). ``True`` archives, ``False`` unarchives.
+
+    The auto-unpin decision is NOT in the payload — the service reads it
+    from the synced settings (``autoUnpinOnArchive``) so the CLI applies
+    the same rule the UI already respects, with no override flag.
+
+    Business-rule rejections (returned as ``success=False``):
+    - ``invalid_archived``: ``archived`` missing or not a bool.
+    - Plus the standard session-lookup guards shared by every
+      ``update_*`` service.
+    """
+    session_id = payload.get("session_id")
+    archived = payload.get("archived")
+
+    errors: list[UpdateSessionError] = []
+    if not session_id:
+        errors.append(UpdateSessionError("session_id", "missing", "session_id is required"))
+    if not isinstance(archived, bool):
+        errors.append(UpdateSessionError(
+            "archived", "invalid_archived",
+            "archived must be a boolean (true / false)",
+        ))
+    if errors:
+        return UpdateSessionResult(False, None, None, None, errors)
+
+    session, project, provider, error = await _lookup_session_for_update(session_id)
+    if error is not None:
+        return error
+
+    # Auto-unpin on archive: read the synced setting and combine with the
+    # session's current pin state, exactly like
+    # ``frontend/src/stores/data.js`` ``setSessionArchived``.
+    from twicc.synced_settings import read_synced_settings
+    synced = read_synced_settings()
+    auto_unpin_on_archive = bool(synced.get("autoUnpinOnArchive", True))
+    also_unpin = archived and bool(session.pinned) and auto_unpin_on_archive
+
+    await apply_session_archived_change(session, archived, also_unpin=also_unpin)
+
+    # Broadcast once, after the helper has applied every side effect.
+    from twicc.core.serializers import serialize_session
+    channel_layer = get_channel_layer()
+    if channel_layer is not None:
+        await channel_layer.group_send(
+            "updates",
+            {
+                "type": "broadcast",
+                "data": {
+                    "type": "session_updated",
+                    "session": serialize_session(session),
+                },
+            },
+        )
+
+    logger.info(
+        "[update_session_archived] session=%s archived=%s also_unpin=%s",
+        session_id, archived, also_unpin,
+    )
 
     return UpdateSessionResult(
         success=True,

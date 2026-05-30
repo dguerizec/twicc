@@ -1,12 +1,12 @@
 ---
 name: twicc-update-session
-description: Update an existing TwiCC session. Today the `settings` sub-command updates the agent settings (model, effort, permission mode, thinking, chrome MCP, fast mode, context window, question widget) and the `title` sub-command renames the session; future sub-commands will cover archive, pin, and stop. Use when the user wants to change a session's settings or title without sending a new message.
-argument-hint: <session_id> {settings|title} [ARGS / OPTIONS]
+description: Update an existing TwiCC session. Today the `settings` sub-command updates the agent settings (model, effort, permission mode, thinking, chrome MCP, fast mode, context window, question widget), `title` renames the session, and `archive` / `unarchive` flip the archived flag (archive also stops the live agent and unpins under the `autoUnpinOnArchive` setting). Future sub-commands will cover pin and stop. Use when the user wants to change a session's settings, title, or archived state without sending a new message.
+argument-hint: <session_id> {settings|title|archive|unarchive} [ARGS / OPTIONS]
 ---
 
 # TwiCC Update Session
 
-Update an existing agent session by dropping a request file the live TwiCC server picks up. Two sub-commands today: `settings` (change the agent settings) and `title` (rename the session). `archive`, `pin`, and `stop` will plug into the same sub-app later.
+Update an existing agent session by dropping a request file the live TwiCC server picks up. Four sub-commands today: `settings` (change the agent settings), `title` (rename the session), `archive` (mark archived + kill agent + optional unpin), `unarchive` (flip back). `pin` and `stop` will plug into the same sub-app later.
 
 ## When to use
 
@@ -14,8 +14,9 @@ Update an existing agent session by dropping a request file the live TwiCC serve
 - A script needs to re-tune a session's settings between turns (e.g. drop to `low` effort for a quick follow-up, then bump back up) → `settings`.
 - The user wants to reset a setting back to the synced default (use `--unset <field>`) → `settings`.
 - The user asks to "rename / re-title session X" or wants a script to set a better title after a few turns of conversation → `title`.
+- The user asks to "archive session X" (clean up the sidebar, also stops the live agent) or "unarchive session X" (bring it back to the active list) → `archive` / `unarchive`.
 
-**Out of scope (today):** archiving / unarchiving, pinning / unpinning, and killing the live process. These will become other sub-commands of `twicc update-session` — refuse if asked here and tell the user the relevant operation isn't wired yet (the UI can still do it).
+**Out of scope (today):** pinning / unpinning and killing the live process while keeping the session active. These will become other sub-commands of `twicc update-session` — refuse if asked here and tell the user the relevant operation isn't wired yet (the UI can still do it).
 
 ## How to invoke
 
@@ -134,6 +135,53 @@ After the DB write, the server asks the provider to persist the new title into i
 
 Provider-side failures are non-critical and logged: the DB is already updated and every open UI client receives a `session_updated` broadcast with the new title regardless.
 
+## How to archive / unarchive
+
+Two boolean-flip sub-commands sharing the same plumbing — pick the right one for the direction the user wants:
+
+```bash
+$TWICC update-session '<SESSION_ID>' archive
+$TWICC update-session '<SESSION_ID>' unarchive
+```
+
+### Required argument
+
+- **`SESSION_ID`** — id of the existing session to flip.
+
+### Options
+
+Only the standard output controls — neither sub-command takes any flag beyond `--timeout`, `--no-color`, and `--json`.
+
+| Flag | |
+|------|---|
+| `--timeout SECONDS` | seconds to wait for the server's final status (default 30) |
+| `--json` | emit a single JSON object on stdout (implies `--no-color`) |
+| `--no-color` | disable ANSI colors |
+
+### What `archive` does on the server side
+
+Beyond flipping `archived = True` in DB, the server runs the same side effects the UI's archive action triggers:
+
+- Re-indexes the full-text search document (the `archived` flag is denormalised into every indexed entry).
+- Kills the live agent attached to this session (`reason="archived"`) so background generation stops.
+- Tears down any tmux terminal in the `s:<session_id>` namespace.
+- When the synced setting `autoUnpinOnArchive` is enabled (default: on) AND the session is currently pinned, **also unpins it** — the synced setting drives the decision, there is no CLI override.
+
+A single `session_updated` broadcast carries the final row state (including the unpin when it applied).
+
+### What `unarchive` does on the server side
+
+Flips `archived = False`, re-indexes the search document, broadcasts. No agent restart is implied — the session stays cold until you explicitly send a message or update its settings to bring it back to life.
+
+### Rejections caught locally (exit 1)
+
+- `is_subagent` — the SESSION_ID points to a subagent. **Subagents cannot be archived directly**; archive the parent session instead.
+- `session_not_found` / `session_stale` / `project_no_directory` / `provider_disabled` — same vocabulary as the other CLI commands.
+
+### Rejections from the server (exit 3)
+
+Same vocabulary as the other sub-commands (`provider_disabled`, `session_not_found`/`session_stale` race-detected, `is_subagent` race-detected, ...). There are no archive-specific server-side rejections — once the local pre-check passes, the change is applied.
+
 ## Examples
 
 ```bash
@@ -158,6 +206,16 @@ $TWICC update-session 4a8352fb-... title 'Better title that survives a long list
 
 # Rename + JSON for scripts.
 $TWICC update-session --json 4a8352fb-... title 'Renamed'
+# → {"status":"updated","session_id":"...","provider":"claude_code","project_id":"...","request_uuid":"..."}
+
+# Archive a session (stops the live agent + auto-unpins under the synced setting).
+$TWICC update-session 4a8352fb-... archive
+
+# Unarchive: bring it back to the active list.
+$TWICC update-session 4a8352fb-... unarchive
+
+# Archive + JSON for scripts.
+$TWICC update-session --json 4a8352fb-... archive
 # → {"status":"updated","session_id":"...","provider":"claude_code","project_id":"...","request_uuid":"..."}
 ```
 
