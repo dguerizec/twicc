@@ -78,7 +78,7 @@ Creates the session as hidden — invisible in every user-facing listing, search
 - `--permission-mode` must be a non-interactive value:
   - Claude Code: `bypassPermissions` or `dontAsk`
   - Codex: `yolo` or `strict`
-- `--no-question-widget` must be set (Claude Code only — Codex ignores this flag).
+- `question_widget` is forced to `False` (Claude Code only — Codex ignores). You don't need to pass `--no-question-widget` — `--hidden` applies it automatically. But explicitly passing `--question-widget` alongside `--hidden` is rejected as a conflict.
 
 This ensures a hidden session can never land in an interactive state (`awaiting_user_input`) that requires a human to click in the TwiCC UI, since a hidden session is invisible and no one would know to click.
 

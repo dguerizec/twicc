@@ -287,6 +287,13 @@ def create_session_cmd(
     if not errors:  # only validate settings if the provider is OK
         errors.extend(validate_settings(provider, settings, bootstrap))
 
+    # --hidden auto-forces question_widget=False so the agent never lands
+    # in an interactive state nobody can see. Only error when the user
+    # explicitly contradicts that with --question-widget — the validator
+    # below catches that case once the effective bundle is built.
+    if hidden and settings.question_widget is not True:
+        settings = settings._replace(question_widget=False)
+
     # Resolve effective settings (None → synced default, then consistency
     # demotion) so we know the real model that will drive the resize cap.
     # The back-end service redoes this for the actual session creation;
