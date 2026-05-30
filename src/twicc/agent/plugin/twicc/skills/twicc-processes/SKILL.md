@@ -1,6 +1,6 @@
 ---
 name: twicc-processes
-description: List currently running processes of the live TwiCC backend, batch-look up the state of specific session_ids, or batch-stop their live agents (idempotent, tolerant). Use when the user wants to see what's running, batch-check session states, batch-kill several agents at once, find a busy session, or locate an OS PID for external inspection.
+description: List currently running processes of the live TwiCC backend, batch-look up the state of specific session_ids, batch-stop their live agents, or batch-wait until multiple session_ids reach a matching virtual state. Use when the user wants to see what's running, batch-check or wait on session states, batch-kill several agents at once, find a busy session, or locate an OS PID for external inspection.
 ---
 
 # TwiCC Processes
@@ -20,6 +20,7 @@ worker the backend still has in memory.
 - The user wants to wire an external notifier (desktop pop-up, Slack ping, …) that polls TwiCC for pending approvals — see "Polling for notifications" below
 - The user (or a script the agent runs) needs the state of one or more *specific* session_ids — typically sessions the agent just spawned and wants to track — use `processes get <ID>...` instead of listing+filtering
 - The user wants to stop the live agents of several sessions in one call — use `processes stop <ID>...` (idempotent: re-stopping a finished session still reports `stopped`; tolerant: unknown / subagent / stale IDs are reported with a per-id `skipped_*` status instead of failing the whole batch)
+- The user (or a script) needs to block until several sessions reach a given state — e.g. wait for a batch of spawned tasks to all reach `user_turn`, or stop as soon as the first one needs attention — use `processes wait <SESSION_ID>... <STATUS>... --timeout N [--all | --first] [--transition]`
 
 ## How to invoke
 
@@ -293,6 +294,116 @@ for sid, entry in zip(ids, out):
         print(f"  ✗ {sid}: {entry['status']} — {entry.get('error')}")
 ```
 
+## How to wait for multiple sessions to reach a state
+
+When you need to block until several sessions reach one of a set of
+virtual states (e.g. "wait for these three tasks to all finish, or stop
+as soon as one needs attention"), use the `wait` sub-command:
+
+```bash
+$TWICC processes wait <SESSION_ID> [<SESSION_ID>...] <STATUS> [<STATUS>...] \
+    --timeout N [--all | --first] [--transition]
+```
+
+The items are **a single positional list, auto-discriminated by value**:
+any item whose value is one of the five virtual states (`starting`,
+`assistant_turn`, `awaiting_user_input`, `user_turn`, `dead`) is treated
+as a status; everything else is a session_id. By convention pass
+session_ids first and statuses last — a typo in a session_id then falls
+through cleanly as a session_id (and becomes `skipped_unknown`) instead
+of being silently absorbed as a status.
+
+Flags:
+
+- `--all` (default) — wait until **every** active session_id has matched
+  at least one of the requested statuses.
+- `--first` — stop as soon as **one** active session_id has matched.
+- `--transition` — only evaluate a match after observing at least one
+  state transition per session_id since the initial snapshot. Useful to
+  wait for the NEXT change rather than the current value.
+- `--timeout N` (**required**) — wall-clock budget for the whole batch.
+  All session_ids are polled in parallel server-side, so this is not
+  `N × number_of_ids`. Exit 5 on timeout.
+
+Unknown session_ids (no `Session` row AND no `ProcessRun` for this
+TwiCC) are silently dropped from the wait pool with
+`wait_status="skipped_unknown"`. They do NOT participate in `--all` /
+`--first`. If every session_id is unknown the wait pool is empty and
+the command exits 0 immediately (vacuous truth — nothing to wait for).
+
+Examples:
+
+```bash
+# Wait until both sessions finish their current turn (or die)
+$TWICC processes wait abc123 def456 user_turn dead --timeout 300
+
+# Stop as soon as one of three needs the user's attention
+$TWICC processes wait abc123 def456 ghi789 awaiting_user_input --first --timeout 120
+
+# Wait for both to transition INTO user_turn — ignore current state
+$TWICC processes wait abc123 def456 user_turn --transition --timeout 600
+```
+
+### Output
+
+A JSON array, one entry per session_id, in input order (duplicates
+collapsed, first occurrence wins). All entries share the same shape:
+
+```json
+[
+  {
+    "session_id": "abc123-def456",
+    "session_known": true,
+    "wait_status": "matched",
+    "matched_state": "user_turn",
+    "current_state": "user_turn",
+    "provider": "claude_code",
+    "session_title": "Implement user authentication",
+    "project_id": "-home-twidi-dev-myproject"
+  },
+  {
+    "session_id": "def456-ghi789",
+    "session_known": true,
+    "wait_status": "pending",
+    "matched_state": null,
+    "current_state": "assistant_turn",
+    "provider": "claude_code",
+    "session_title": "Other ongoing work",
+    "project_id": "-home-twidi-dev-myproject"
+  },
+  {
+    "session_id": "typo-xyz",
+    "session_known": false,
+    "wait_status": "skipped_unknown",
+    "matched_state": null,
+    "current_state": "dead",
+    "provider": null,
+    "session_title": null,
+    "project_id": null
+  }
+]
+```
+
+#### Possible `wait_status` values
+
+| Value              | Meaning                                                                                                |
+|--------------------|--------------------------------------------------------------------------------------------------------|
+| `matched`          | This session_id reached one of the requested statuses (see `matched_state` for which one specifically) |
+| `pending`          | Did not reach any requested status before we stopped (timeout OR `--first` triggered on another id)    |
+| `skipped_unknown`  | No trace of this session_id in this TwiCC's view — typo, periodic cleanup, or never existed            |
+
+Note: with `--first`, once one active session matches we stop polling
+the others, so they keep their `wait_status="pending"` even though we
+did not really "fail" — we just didn't bother to wait further.
+
+#### Exit codes
+
+- `0` — condition satisfied (`--all` met, `--first` triggered, or wait pool was empty)
+- `1` — local CLI validation error (no statuses given, no session_ids given, `--timeout <= 0`)
+- `2` — TwiCC server is not running
+- `5` — timeout: at least one active session_id never matched (`--all`) or none matched (`--first`)
+- `64` — bad CLI usage (handled by Typer)
+
 ## Output format
 
 The command outputs a JSON array of process objects, ordered by `started_at`
@@ -335,7 +446,7 @@ The command outputs a JSON array of process objects, ordered by `started_at`
 ## Related commands
 
 - **Inspect a single running process (errors out if dead):** `twicc process <session_id>` — same data scoped to one session, with a clear error (exit 1) when the session has no live process. Use when "no process" should be treated as a failure.
-- **Wait for a process to reach a state:** `twicc process <session_id> wait <STATUS>... --timeout N` — block until the live process matches; see the `twicc-process` skill.
+- **Wait for a single process to reach a state:** `twicc process <session_id> wait <STATUS>... --timeout N` — block until the live process matches; see the `twicc-process` skill. For batch-waiting on multiple sessions in one call, see `processes wait` above.
 - **Stop a single live process:** `twicc process <session_id> stop` — kill the agent attached to one session, with a clear final status (no skipped_*). For batch-stopping multiple sessions in one call, see `processes stop` above.
 - **Read the session metadata:** `twicc session <session_id>` — title, costs, etc.
 - **Browse all sessions:** `twicc sessions` — also includes stopped sessions, broader scope than running processes
@@ -354,3 +465,4 @@ The command outputs a JSON array of process objects, ordered by `started_at`
 6. If the list is empty, say "no processes are currently running in the live TwiCC backend" rather than implying TwiCC itself is down
 7. For `processes get` output: scan for `session_known: false` entries (surface as "session X is unknown to TwiCC — typo or already cleaned up") and for `state: "dead"` with `session_known: true` (surface as "session X has no live process — it finished, was stopped, or crashed"). Live entries render like the listing
 8. For `processes stop` output: bucket entries by `status` and surface the counts (e.g. "3 stopped, 1 skipped (unknown), 1 timeout"). For non-`stopped` entries, include the `error` field when present. Don't render `error` for `stopped` entries — it's always null. If every entry is `stopped`, a single line is enough ("stopped 3 sessions")
+9. For `processes wait` output: surface (a) any `matched` entries with their `matched_state` (which status actually fired), (b) any `pending` entries with their `current_state` (so the user sees what they were stuck on), (c) any `skipped_unknown` entries grouped separately. If the command exited 5 (timeout), call that out explicitly; if exited 0 with all pending (only possible when `--first` triggered), explain which id triggered first

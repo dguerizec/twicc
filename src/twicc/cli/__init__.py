@@ -334,6 +334,65 @@ def _processes_stop(
     stop_cmd(session_ids, timeout=timeout)
 
 
+@processes_app.command(name="wait")
+def _processes_wait(
+    items: list[str] = typer.Argument(
+        ...,
+        metavar="ITEM...",
+        help=(
+            "A single list mixing session_ids and statuses, auto-discriminated "
+            "by value. Any item whose value is in (starting, assistant_turn, "
+            "awaiting_user_input, user_turn, dead) is a status; everything "
+            "else is a session_id. By convention pass session_ids first and "
+            "statuses last (so a typo doesn't accidentally classify as a "
+            "session_id); internally the order is irrelevant."
+        ),
+    ),
+    timeout: float = typer.Option(
+        ...,
+        "--timeout",
+        help=(
+            "Required. Seconds to wait before giving up (exit 5). Must be > 0. "
+            "Wall-clock budget for the entire batch (all session_ids are "
+            "polled in parallel)."
+        ),
+    ),
+    wait_all: bool = typer.Option(
+        True,
+        "--all/--first",
+        help=(
+            "--all (default): wait until EVERY active session_id has matched "
+            "at least one status. --first: stop as soon as one has matched. "
+            "Inactive (skipped_unknown) session_ids participate in neither."
+        ),
+    ),
+    transition: bool = typer.Option(
+        False,
+        "--transition",
+        help=(
+            "Only evaluate a match for a session_id after observing at least "
+            "one state transition since the initial snapshot. Applied "
+            "per-session — each id must transition before it can match."
+        ),
+    ),
+) -> None:
+    """Block until multiple session_ids reach matching virtual states.
+
+    Unknown session_ids (no Session row AND no ProcessRun for this TwiCC)
+    are skipped silently and do NOT participate in --all / --first.
+    If every session_id is skipped, exits 0 (vacuous truth — nothing to
+    wait for).
+    """
+    from twicc.cli.processes_wait import wait_cmd
+
+    wait_cmd(
+        items,
+        timeout=timeout,
+        wait_all=wait_all,
+        transition=transition,
+    )
+
+
 process_app = typer.Typer(
     name="process",
     help="Inspect or control a session's live process.",
