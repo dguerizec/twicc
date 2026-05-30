@@ -5,20 +5,18 @@ description: Return the details of the session that owns the calling process. Us
 
 # twicc-whoami
 
-Retrouve la session TwiCC dont **tu es** le processus. Utile quand un agent a
-besoin de son propre `session_id` mais ne l'a pas en contexte.
+Identify the TwiCC session **you** are running in. Useful when an agent needs
+its own `session_id` but does not already have it in context.
 
-## Mécanisme
+## Mechanism
 
-`twicc whoami` remonte la chaîne des PID parents depuis le processus courant
-jusqu'au PID 1, et cherche une correspondance parmi les `ProcessRun.agent_pid`
-des sessions vivantes. Si une correspondance est trouvée, la commande affiche
-les mêmes informations que `twicc session <ID>` — id, provider, titre,
-project_id, coûts, paramètres, cycle de vie, etc.
+`twicc whoami` walks the PID chain from the current process up to PID 1 and
+looks for a match against the `agent_pid` of live sessions tracked by TwiCC.
+On a match, it prints the same details `twicc session <ID>` would print — id,
+provider, title, project_id, costs, settings, lifecycle, etc.
 
-Si aucune correspondance n'est trouvée (tu l'as lancé depuis un terminal
-ordinaire, pas depuis le Bash tool d'un agent), la commande sort avec le code 1
-et un message clair.
+If no match is found (you ran it from a plain shell, not from an agent's Bash
+tool), the command exits 1 with a clear message.
 
 ## Invocation
 
@@ -32,27 +30,26 @@ TWICC=${TWICC_BIN:-$(command -v twicc 2>/dev/null)}
 Then run any subcommand via `$TWICC <args>` — **do NOT quote `$TWICC`** (use `$TWICC args`, never `"$TWICC" args`). The variable may expand to a multi-word command (e.g. `uv run --directory ... run.py`); Bash relies on word-splitting to parse it, and quoting it would treat the entire expansion as a single program name and fail with "No such file or directory".
 
 ```bash
-$TWICC whoami           # sortie lisible (JSON indenté)
-$TWICC whoami --json    # JSON compact, adapté au parsing
+$TWICC whoami           # human-readable (indented JSON)
+$TWICC whoami --json    # compact JSON, suitable for parsing
 ```
 
-## Codes de sortie
+## Exit codes
 
-| Code | Signification |
+| Code | Meaning |
 |---|---|
-| 0 | Session résolue ; détails affichés sur stdout |
-| 1 | Aucune session dans l'arbre PID (aussi : lancé depuis un shell ordinaire) |
+| 0 | Session resolved; details printed on stdout |
+| 1 | No session in the PID ancestry (also: invoked from a plain shell) |
 
-## Utilisation typique
+## Typical use
 
 ```bash
-# Je suis un agent ; quel est mon TwiCC session_id ?
+# I'm an agent; what's my TwiCC session_id?
 MY_SESSION_ID=$($TWICC whoami --json | jq -r .id)
 ```
 
-## Commandes associées
+## Related commands
 
-Pour lister ou filtrer les sessions que TU as créées, préfère le flag dédié
-`--spawned-by self` sur `twicc sessions`, `twicc processes` et `twicc search` —
-pas besoin d'appeler `whoami` au préalable, le flag résout lui-même la session
-courante sous le capot.
+To list or filter the sessions YOU created, prefer the dedicated `--spawned-by self`
+flag on `twicc sessions`, `twicc processes`, and `twicc search` — no need to call
+`whoami` first; the flag resolves the current session under the hood.
