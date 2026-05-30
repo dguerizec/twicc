@@ -113,8 +113,23 @@ def sessions(
     limit: int = typer.Option(20, help="Max number of sessions to return."),
     offset: int = typer.Option(0, help="Skip first N sessions."),
     include_archived: bool = typer.Option(False, "--include-archived", help="Include archived sessions."),
+    include_hidden: bool = typer.Option(False, "--include-hidden", help="Include hidden sessions in the listing."),
+    only_hidden: bool = typer.Option(False, "--only-hidden", help="Show ONLY hidden sessions (mutually exclusive with --include-hidden)."),
+    spawned_by: str = typer.Option(None, "--spawned-by", help="Filter to sessions spawned by the given session_id, or 'self' for the current session."),
 ) -> None:
     """List sessions as JSON (ordered by most recently active)."""
+    if include_hidden and only_hidden:
+        typer.echo("Error: --include-hidden and --only-hidden are mutually exclusive.", err=True)
+        raise typer.Exit(2)
+
+    from twicc.cli._session_request.whoami import resolve_spawned_by_filter
+
+    try:
+        spawned_by_id = resolve_spawned_by_filter(spawned_by)
+    except RuntimeError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(1)
+
     from twicc.cli.sessions import main as sessions_main
 
     sessions_main(
@@ -123,6 +138,9 @@ def sessions(
         limit=limit,
         offset=offset,
         archived=include_archived,
+        include_hidden=include_hidden,
+        only_hidden=only_hidden,
+        spawned_by_id=spawned_by_id,
     )
 
 
@@ -209,8 +227,23 @@ def processes(
     ),
     limit: int = typer.Option(20, help="Max number of processes to return."),
     offset: int = typer.Option(0, help="Skip first N processes."),
+    include_hidden: bool = typer.Option(False, "--include-hidden", help="Include processes of hidden sessions."),
+    only_hidden: bool = typer.Option(False, "--only-hidden", help="Show ONLY processes of hidden sessions (mutually exclusive with --include-hidden)."),
+    spawned_by: str = typer.Option(None, "--spawned-by", help="Filter to processes of sessions spawned by the given session_id, or 'self' for the current session."),
 ) -> None:
     """List currently running processes of the live TwiCC instance as JSON."""
+    if include_hidden and only_hidden:
+        typer.echo("Error: --include-hidden and --only-hidden are mutually exclusive.", err=True)
+        raise typer.Exit(2)
+
+    from twicc.cli._session_request.whoami import resolve_spawned_by_filter
+
+    try:
+        spawned_by_id = resolve_spawned_by_filter(spawned_by)
+    except RuntimeError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(1)
+
     from twicc.cli.processes import main as processes_main
 
     processes_main(
@@ -218,6 +251,9 @@ def processes(
         state=state,
         limit=limit,
         offset=offset,
+        include_hidden=include_hidden,
+        only_hidden=only_hidden,
+        spawned_by_id=spawned_by_id,
     )
 
 
@@ -317,13 +353,35 @@ def codex(ctx: typer.Context) -> None:
 @app.command()
 def search(
     query: str = typer.Argument(help="Tantivy query string (e.g. 'websocket', 'body:websocket AND from_role:user')"),
-    limit: int = typer.Option(20, help="Max number of hits."),
-    offset: int = typer.Option(0, help="Skip first N hits."),
+    limit: int = typer.Option(20, help="Max number of session groups to return."),
+    offset: int = typer.Option(0, help="Skip first N session groups."),
+    include_hidden: bool = typer.Option(False, "--include-hidden", help="Include hidden sessions in search results."),
+    only_hidden: bool = typer.Option(False, "--only-hidden", help="Search ONLY hidden sessions (mutually exclusive with --include-hidden)."),
+    spawned_by: str = typer.Option(None, "--spawned-by", help="Filter to sessions spawned by the given session_id, or 'self' for the current session."),
 ) -> None:
     """Query the TwiCC search index using raw Tantivy query syntax."""
+    if include_hidden and only_hidden:
+        typer.echo("Error: --include-hidden and --only-hidden are mutually exclusive.", err=True)
+        raise typer.Exit(2)
+
+    from twicc.cli._session_request.whoami import resolve_spawned_by_filter
+
+    try:
+        spawned_by_id = resolve_spawned_by_filter(spawned_by)
+    except RuntimeError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(1)
+
     from twicc.cli.search import main as search_main
 
-    search_main(query, limit=limit, offset=offset)
+    search_main(
+        query,
+        limit=limit,
+        offset=offset,
+        include_hidden=include_hidden,
+        only_hidden=only_hidden,
+        spawned_by_id=spawned_by_id,
+    )
 
 
 # ``create-session`` is registered directly from its module: the function

@@ -12,6 +12,9 @@ def main(
     limit: int = 20,
     offset: int = 0,
     archived: bool = False,
+    include_hidden: bool = False,
+    only_hidden: bool = False,
+    spawned_by_id: str | None = None,
 ) -> None:
     """List sessions as JSON to stdout."""
     import django
@@ -29,6 +32,14 @@ def main(
 
     if not archived:
         qs = qs.filter(archived=False)
+
+    if only_hidden:
+        qs = qs.filter(hidden=True)
+    elif not include_hidden:
+        qs = qs.filter(hidden=False)
+
+    if spawned_by_id is not None:
+        qs = qs.filter(spawned_by_id=spawned_by_id)
 
     if workspace is not None:
         from twicc.workspaces import read_workspaces

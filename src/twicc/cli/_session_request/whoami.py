@@ -121,3 +121,23 @@ def resolve_current_session():
         os.getpid(), len(pid_to_session_id),
     )
     return None
+
+
+def resolve_spawned_by_filter(value: str | None) -> str | None:
+    """Translate a ``--spawned-by`` CLI value into a session_id filter.
+
+    - ``None``  → ``None`` (no filter)
+    - ``"self"`` → resolve via whoami; raise if no session in ancestry
+    - any other string → use it verbatim as a session_id
+    """
+    if value is None:
+        return None
+    if value == "self":
+        session = resolve_current_session()
+        if session is None:
+            raise RuntimeError(
+                "--spawned-by self: no TwiCC session found in PID ancestry. "
+                "This flag is only meaningful from inside an active session.",
+            )
+        return session.id
+    return value

@@ -14,6 +14,9 @@ def main(
     state: str | None = None,
     limit: int = 20,
     offset: int = 0,
+    include_hidden: bool = False,
+    only_hidden: bool = False,
+    spawned_by_id: str | None = None,
 ) -> None:
     """List currently running processes (live ProcessRuns) of the running TwiCC.
 
@@ -83,15 +86,34 @@ def main(
 
     rows = list(qs[offset : offset + limit])
 
-    # Enrich with the matching Session's title and project_id when the
-    # session row has already been created by the watcher. Brand-new
-    # sessions that haven't reached their first JSONL line yet have no
-    # Session row, so those fields fall back to ``None``.
+    # Enrich with the matching Session's title, project_id, hidden, and spawned_by_id
+    # when the session row has already been created by the watcher. Brand-new sessions
+    # that haven't reached their first JSONL line yet have no Session row, so those
+    # fields fall back to ``None``.
     session_ids = [r.session_id for r in rows]
     sessions_by_id = {
         s.id: s
-        for s in Session.objects.filter(id__in=session_ids).only("id", "title", "project_id")
+        for s in Session.objects.filter(id__in=session_ids).only(
+            "id", "title", "project_id", "hidden", "spawned_by_id"
+        )
     }
+
+    # Apply hidden / spawned_by filters (post-enrichment, since these fields come
+    # from the Session row, not from ProcessRun itself).
+    if include_hidden or only_hidden or spawned_by_id is not None:
+        filtered = []
+        for row in rows:
+            session = sessions_by_id.get(row.session_id)
+            is_hidden = session.hidden if session is not None else False
+            if only_hidden and not is_hidden:
+                continue
+            if not include_hidden and not only_hidden and is_hidden:
+                continue
+            sb = session.spawned_by_id if session is not None else None
+            if spawned_by_id is not None and sb != spawned_by_id:
+                continue
+            filtered.append(row)
+        rows = filtered
 
     data = [_serialize(row, sessions_by_id.get(row.session_id)) for row in rows]
 
