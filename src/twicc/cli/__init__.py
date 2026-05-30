@@ -296,6 +296,44 @@ def _processes_get(
     processes_get_main(session_ids)
 
 
+@processes_app.command(name="stop")
+def _processes_stop(
+    session_ids: list[str] = typer.Argument(
+        ...,
+        metavar="SESSION_ID...",
+        help=(
+            "One or more session IDs whose live agent process should be "
+            "stopped. The output mirrors the input order (duplicates "
+            "collapsed, first occurrence wins). Each entry carries a "
+            "`status` (stopped/rejected/failed/timeout/skipped_*) plus the "
+            "same metadata (provider, title, project_id) as `get`."
+        ),
+    ),
+    timeout: int = typer.Option(
+        30,
+        "--timeout",
+        help=(
+            "Seconds to wait for the server's final status across the whole "
+            "batch (drops are processed in parallel server-side, so this is "
+            "a wall-clock budget, not N×30). Entries with no final status "
+            "by the deadline are reported with status=\"timeout\". Must be > 0."
+        ),
+    ),
+) -> None:
+    """Batch-stop live agent processes (idempotent, tolerant to skipped IDs).
+
+    Pre-checks each ``session_id`` locally before dropping the kill request.
+    Session_ids that fail the pre-check (unknown, subagent, stale, no
+    directory, unknown provider) get a ``skipped_*`` status with no drop
+    emitted; valid ones get a ``process:stop`` drop file and a poll for
+    the server's final answer. Exit 0 always when the command completes —
+    callers inspect each entry's ``status`` for the per-id outcome.
+    """
+    from twicc.cli.processes_stop import stop_cmd
+
+    stop_cmd(session_ids, timeout=timeout)
+
+
 process_app = typer.Typer(
     name="process",
     help="Inspect or control a session's live process.",

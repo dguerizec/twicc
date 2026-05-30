@@ -1,6 +1,6 @@
 ---
 name: twicc-processes
-description: List currently running processes of the live TwiCC backend, or batch-look up the state of specific session_ids (with a placeholder entry for any session whose process is dead). Use when the user wants to see what's running, batch-check session states, find a busy session, or locate an OS PID for external inspection.
+description: List currently running processes of the live TwiCC backend, batch-look up the state of specific session_ids, or batch-stop their live agents (idempotent, tolerant). Use when the user wants to see what's running, batch-check session states, batch-kill several agents at once, find a busy session, or locate an OS PID for external inspection.
 ---
 
 # TwiCC Processes
@@ -19,6 +19,7 @@ worker the backend still has in memory.
   (`ps`, `top`, attaching a debugger, reading `/proc/<pid>/…`)
 - The user wants to wire an external notifier (desktop pop-up, Slack ping, …) that polls TwiCC for pending approvals — see "Polling for notifications" below
 - The user (or a script the agent runs) needs the state of one or more *specific* session_ids — typically sessions the agent just spawned and wants to track — use `processes get <ID>...` instead of listing+filtering
+- The user wants to stop the live agents of several sessions in one call — use `processes stop <ID>...` (idempotent: re-stopping a finished session still reports `stopped`; tolerant: unknown / subagent / stale IDs are reported with a per-id `skipped_*` status instead of failing the whole batch)
 
 ## How to invoke
 
@@ -182,6 +183,116 @@ for sid, entry in zip(ids, out):
         print(f"  {sid}: {entry['state']}")
 ```
 
+## How to batch-stop sessions
+
+When you want to kill the live agent of several sessions in one call,
+use the `stop` sub-command:
+
+```bash
+$TWICC processes stop <SESSION_ID> [<SESSION_ID>...] [--timeout N]
+```
+
+Examples:
+
+```bash
+$TWICC processes stop abc123-def456                       # Stop one
+$TWICC processes stop abc123 def456 ghi789                # Stop several
+$TWICC processes stop abc123 def456 --timeout 60          # Custom global timeout
+```
+
+Each `session_id` becomes a `kind="process:stop"` drop request that the
+server dispatches to the same code path as `twicc process <ID> stop` and
+the UI's *Stop process* button (with `reason="manual"`), so the
+operation is **fully idempotent** — re-stopping a session whose process
+is already gone still reports `status="stopped"`.
+
+Each `session_id` is also **pre-checked locally** before being submitted.
+IDs that fail the pre-check (unknown, subagent, stale, no project
+directory, unknown provider) get a `skipped_*` status with no drop
+emitted — they don't consume any of the timeout budget. The server
+processes valid drops in parallel, so `--timeout` (default 30 s) is a
+wall-clock budget for the whole batch, not 30 s × N.
+
+### Output
+
+A JSON array, one entry per session_id, in the order you passed them
+(duplicates collapsed, first occurrence wins). All entries share the
+same shape:
+
+```json
+[
+  {
+    "session_id": "abc123-def456",
+    "session_known": true,
+    "status": "stopped",
+    "request_uuid": "4a8352fb-1674-41c0-8a85-0a5a3e4e623a",
+    "provider": "claude_code",
+    "session_title": "Implement user authentication",
+    "project_id": "-home-twidi-dev-myproject",
+    "error": null
+  },
+  {
+    "session_id": "typo-or-unknown",
+    "session_known": false,
+    "status": "skipped_unknown",
+    "request_uuid": null,
+    "provider": null,
+    "session_title": null,
+    "project_id": null,
+    "error": "Session 'typo-or-unknown' not found"
+  },
+  {
+    "session_id": "subagent-id",
+    "session_known": true,
+    "status": "skipped_subagent",
+    "request_uuid": null,
+    "provider": "claude_code",
+    "session_title": "child task",
+    "project_id": "-home-twidi-dev-myproject",
+    "error": "Session 'subagent-id' is a subagent; subagents cannot be messaged or updated directly. Target the parent session instead."
+  }
+]
+```
+
+#### Possible `status` values
+
+| Value                       | Meaning                                                                                              |
+|-----------------------------|------------------------------------------------------------------------------------------------------|
+| `stopped`                   | Server confirmed the kill (or no live process — idempotent)                                          |
+| `rejected`                  | Server refused the request — see `error` for the codes / messages joined                             |
+| `failed`                    | Server hit an unexpected error mid-flight — see `error`                                              |
+| `timeout`                   | No final status received within `--timeout` seconds                                                  |
+| `skipped_unknown`           | No `Session` row for this id — typo or never existed in this TwiCC's view                            |
+| `skipped_subagent`          | The session is a subagent; subagents cannot be stopped directly — target the parent                  |
+| `skipped_stale`             | The session's JSONL file is gone — stopping is meaningless                                           |
+| `skipped_no_directory`      | The session's project has no directory configured                                                    |
+| `skipped_unknown_provider`  | The session's provider value is no longer recognized                                                 |
+
+#### Exit codes
+
+- `0` — command ran to completion; inspect each entry's `status` for the per-id outcome
+- `1` — local CLI validation error (e.g. `--timeout <= 0`)
+- `2` — TwiCC server is not running
+- `64` — bad CLI usage (handled by Typer)
+
+#### Scripting
+
+Because the output is 1-to-1 with the input order, callers can `zip`
+the two and react per-id without re-mapping:
+
+```python
+import json, subprocess
+ids = ["abc...", "def...", "ghi..."]
+out = json.loads(subprocess.check_output([twicc, "processes", "stop", *ids]))
+for sid, entry in zip(ids, out):
+    if entry["status"] == "stopped":
+        print(f"  ✓ {sid} stopped")
+    elif entry["status"].startswith("skipped_"):
+        print(f"  - {sid} skipped: {entry['status']}")
+    else:
+        print(f"  ✗ {sid}: {entry['status']} — {entry.get('error')}")
+```
+
 ## Output format
 
 The command outputs a JSON array of process objects, ordered by `started_at`
@@ -225,7 +336,7 @@ The command outputs a JSON array of process objects, ordered by `started_at`
 
 - **Inspect a single running process (errors out if dead):** `twicc process <session_id>` — same data scoped to one session, with a clear error (exit 1) when the session has no live process. Use when "no process" should be treated as a failure.
 - **Wait for a process to reach a state:** `twicc process <session_id> wait <STATUS>... --timeout N` — block until the live process matches; see the `twicc-process` skill.
-- **Stop a live process:** `twicc process <session_id> stop` — send the kill request; see the `twicc-process` skill.
+- **Stop a single live process:** `twicc process <session_id> stop` — kill the agent attached to one session, with a clear final status (no skipped_*). For batch-stopping multiple sessions in one call, see `processes stop` above.
 - **Read the session metadata:** `twicc session <session_id>` — title, costs, etc.
 - **Browse all sessions:** `twicc sessions` — also includes stopped sessions, broader scope than running processes
 
@@ -242,3 +353,4 @@ The command outputs a JSON array of process objects, ordered by `started_at`
 5. You are in TwiCC, so you can link to a session using a relative Markdown link so the user can click it: `[link text](/project/{project_id}/session/{session_id})`
 6. If the list is empty, say "no processes are currently running in the live TwiCC backend" rather than implying TwiCC itself is down
 7. For `processes get` output: scan for `session_known: false` entries (surface as "session X is unknown to TwiCC — typo or already cleaned up") and for `state: "dead"` with `session_known: true` (surface as "session X has no live process — it finished, was stopped, or crashed"). Live entries render like the listing
+8. For `processes stop` output: bucket entries by `status` and surface the counts (e.g. "3 stopped, 1 skipped (unknown), 1 timeout"). For non-`stopped` entries, include the `error` field when present. Don't render `error` for `stopped` entries — it's always null. If every entry is `stopped`, a single line is enough ("stopped 3 sessions")
