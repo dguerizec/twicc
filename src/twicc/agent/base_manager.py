@@ -900,6 +900,8 @@ class BaseAgentManager:
             )
             if session is None:
                 return
+            if session.hidden:
+                return
             channel_layer = get_channel_layer()
             await channel_layer.group_send(
                 "updates",

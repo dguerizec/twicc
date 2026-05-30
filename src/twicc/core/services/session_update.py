@@ -222,7 +222,7 @@ async def update_session_settings_from_payload(payload: dict) -> UpdateSessionRe
     )()
 
     channel_layer = get_channel_layer()
-    if updated_session is not None and channel_layer is not None:
+    if updated_session is not None and channel_layer is not None and not updated_session.hidden:
         await channel_layer.group_send(
             "updates",
             {
@@ -355,7 +355,7 @@ async def update_session_title_from_payload(payload: dict) -> UpdateSessionResul
     # outcome and the broadcast is idempotent for UI consumers.
     from twicc.core.serializers import serialize_session
     channel_layer = get_channel_layer()
-    if channel_layer is not None:
+    if channel_layer is not None and not session.hidden:
         await channel_layer.group_send(
             "updates",
             {
@@ -486,7 +486,7 @@ async def update_session_archived_from_payload(payload: dict) -> UpdateSessionRe
     # Broadcast once, after the helper has applied every side effect.
     from twicc.core.serializers import serialize_session
     channel_layer = get_channel_layer()
-    if channel_layer is not None:
+    if channel_layer is not None and not session.hidden:
         await channel_layer.group_send(
             "updates",
             {
@@ -578,7 +578,7 @@ async def update_session_pinned_from_payload(payload: dict) -> UpdateSessionResu
 
     from twicc.core.serializers import serialize_session
     channel_layer = get_channel_layer()
-    if channel_layer is not None:
+    if channel_layer is not None and not session.hidden:
         await channel_layer.group_send(
             "updates",
             {

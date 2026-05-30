@@ -2109,6 +2109,8 @@ async def _handle_compute_done(session_id: str) -> None:
         session = await sync_to_async(Session.objects.get)(id=session_id)
         if session.user_message_count == 0 or session.type != SessionType.SESSION:
             return
+        if session.hidden:
+            return
         channel_layer = get_channel_layer()
         await channel_layer.group_send(
             "updates",

@@ -76,7 +76,7 @@ def _apply_sync_session_titles_job(job: SyncSessionTitlesJob) -> list[dict]:
                 changed.append(session)
         if changed:
             Session.objects.bulk_update(changed, ["title"], batch_size=50)
-    return [serialize_session(s) for s in changed]
+    return [serialize_session(s) for s in changed if not s.hidden]
 
 
 async def _broadcast_changed_titles(changed: list[dict]) -> None:

@@ -92,6 +92,8 @@ async def update_session_permission_mode(session_id: str, permission_mode: str) 
         return
 
     session = await sync_to_async(Session.objects.filter(id=session_id).first)()
+    if session is None or session.hidden:
+        return
     channel_layer = get_channel_layer()
     await channel_layer.group_send(
         "updates",
