@@ -590,6 +590,27 @@ class BaseProviderHelpers:
         """
         raise NotImplementedError
 
+    async def verify_session_title(self, session_id: str, expected_title: str) -> None:
+        """Confirm the provider's store still holds ``expected_title``; re-set if not.
+
+        Called by :meth:`BaseAgentManager._verify_pending_title_after_delay`
+        a few seconds after a successful :meth:`rename_session`, as a guard
+        against silent background overwrites by the provider's own process.
+
+        The default implementation is a no-op: most providers either
+        accept ``thread/name/set``-style writes atomically and never
+        revisit them, or have an in-process anti-stale mechanism (Claude
+        Code: :func:`protect_title` registered inside
+        :meth:`ClaudeCodeHelpers.rename_session`). Codex needs a real
+        implementation because its app-server can re-flush the
+        ``threads.title`` row from an in-memory value derived from
+        ``first_user_message`` shortly after our explicit set.
+
+        Implementations should be idempotent and side-effect-free when the
+        title is already correct.
+        """
+        return None
+
     def purge_env_vars(self, env: dict) -> None:
         """Strip provider-specific env vars from ``env`` in place.
 

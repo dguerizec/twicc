@@ -127,26 +127,46 @@ async def rename_thread_via_sdk(thread_id: str, title: str) -> None:
 
 
 async def read_title_from_codex(thread_id: str) -> str | None:
-    """Read the Codex thread's current display name from the state DB.
+    """Read the Codex thread's persisted display name from the state DB.
 
-    Returns ``None`` if the thread has no name set, or on any error
-    (logged at WARNING). Used by the watcher on first session
-    materialisation to import a title that was set via the Codex CLI.
+    Walks the same ``thread/list`` paginated endpoint as
+    :func:`bulk_sync_titles_from_codex` but stops as soon as the target
+    ``thread_id`` is found. ``use_state_db_only=True`` makes the binary
+    answer straight from the state DB without scanning JSONL rollouts
+    or returning the live in-memory thread name — important when we
+    want the *durable* value rather than what the active session has in
+    memory.
+
+    Why not ``thread_resume + thread.read``? That path returns the
+    in-memory thread state (which may still hold the value we set via
+    ``thread/name/set``), even when the Codex binary has already
+    re-flushed the row in the state DB from an in-memory candidate
+    derived from ``first_user_message``. The verify task uses this
+    function precisely to detect that divergence — it must see what
+    will survive a TwiCC restart (i.e. the state-DB value).
+
+    Returns ``None`` if the thread is not found, has no name, or on
+    any error (logged at WARNING).
     """
     bundled_bin = resolve_bundled_binary()
     config = AppServerConfig(codex_bin=str(bundled_bin))
     try:
         async with AsyncCodex(config=config) as codex:
-            # ``AsyncCodex`` exposes no top-level ``thread_read``; like
-            # ``rename_thread_via_sdk`` we go through ``thread_resume``
-            # to get an ``AsyncThread`` handle and call ``.read()`` on
-            # it (defined in ``openai_codex/api.py``).
-            thread = await codex.thread_resume(thread_id)
-            response = await thread.read(include_turns=False)
-            name = response.thread.name
-            return name if name else None
+            cursor: str | None = None
+            while True:
+                page = await codex.thread_list(
+                    use_state_db_only=True,
+                    cursor=cursor,
+                    limit=100,
+                )
+                for thread in page.data:
+                    if thread.id == thread_id:
+                        return thread.name if thread.name else None
+                if page.next_cursor is None:
+                    return None
+                cursor = page.next_cursor
     except Exception as e:
-        logger.warning("Codex thread/read failed for %s: %s", thread_id, e)
+        logger.warning("Codex thread/list failed while reading title for %s: %s", thread_id, e)
         return None
 
 

@@ -301,13 +301,49 @@ class CodexHelpers(BaseProviderHelpers):
         """Persist the new title in Codex's state DB via ``thread/name/set``.
 
         The Codex SDK is async-first; we await it directly. No JSONL
-        append and no ``protect_title`` machinery: the Codex thread name
-        lives in its own state DB, the rollout JSONL never carries it,
-        and no side actor can re-append a stale value.
+        append and no ``protect_title`` machinery — but **the Codex
+        app-server can silently re-flush the row** in the threads table
+        right after our explicit set (most often with a derived name
+        from ``first_user_message``). The post-write guard lives in
+        :meth:`verify_session_title`, called after a delay by
+        :meth:`BaseAgentManager._verify_pending_title_after_delay`.
         """
         from .titles import rename_thread_via_sdk
 
         await rename_thread_via_sdk(session_id, title)
+
+    async def verify_session_title(self, session_id: str, expected_title: str) -> None:
+        """Read ``threads.title`` back and re-issue ``thread/name/set`` on mismatch.
+
+        One-shot — if Codex re-overwrites again after our re-set, we
+        accept the loss (the DB row ``Session.title`` remains our value;
+        the only divergence is the Codex side of the world).
+
+        Errors during read or re-set are logged at WARNING and otherwise
+        swallowed — we don't want a verify failure to escalate above the
+        background task layer.
+        """
+        from .titles import read_title_from_codex, rename_thread_via_sdk
+
+        current = await read_title_from_codex(session_id)
+        if current == expected_title:
+            return
+
+        logger.warning(
+            "Codex title verify mismatch for session %s: stored=%r expected=%r — re-pushing",
+            session_id, current, expected_title,
+        )
+        try:
+            await rename_thread_via_sdk(session_id, expected_title)
+            logger.info(
+                "Codex title verify — re-pushed expected value for session %s",
+                session_id,
+            )
+        except Exception as e:
+            logger.warning(
+                "Codex title verify — re-push failed for session %s: %s",
+                session_id, e,
+            )
 
     # ------------------------------------------------------------------
     # Full-text search indexing
