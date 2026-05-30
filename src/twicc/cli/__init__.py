@@ -572,6 +572,17 @@ from twicc.cli.delete_workspace import delete_workspace_cmd  # noqa: E402
 app.command(name="delete-workspace")(delete_workspace_cmd)
 
 
+# ``create-project`` / ``update-project`` write to the ``Project`` table
+# through the drop-request protocol. No ``delete-project`` by design —
+# a Project row is bound to its sessions; projects are archived,
+# never deleted.
+from twicc.cli.create_project import create_project_cmd  # noqa: E402
+app.command(name="create-project")(create_project_cmd)
+
+from twicc.cli.update_project import update_project_cmd  # noqa: E402
+app.command(name="update-project")(update_project_cmd)
+
+
 def main() -> None:
     """Entry point for ``pyproject.toml`` scripts and ``__main__.py``."""
     app()

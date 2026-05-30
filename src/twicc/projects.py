@@ -15,10 +15,11 @@ from __future__ import annotations
 
 import logging
 import os
+from typing import NamedTuple
 
 from asgiref.sync import sync_to_async
 from channels.layers import get_channel_layer
-from django.db import transaction
+from django.db import IntegrityError, transaction
 
 from twicc.core.models import Project, Session, SessionType
 from twicc.core.serializers import serialize_project
@@ -26,6 +27,36 @@ from twicc.git import resolve_git_from_path
 from twicc.workspaces import auto_add_project_to_workspaces
 
 logger = logging.getLogger(__name__)
+
+
+# Mirrors ``Project.name``'s ``max_length=25`` (see core/models.py). Surfaced
+# here as a constant so the CLI / service / UI all use the same wording.
+MAX_PROJECT_NAME_LENGTH = 25
+
+
+# ---------------------------------------------------------------------------
+# Mutation result types (shared between the atomic ops and the service layer)
+# ---------------------------------------------------------------------------
+
+
+class ProjectMutationError(NamedTuple):
+    """One structured error returned by a project mutation."""
+    field: str
+    code: str
+    message: str
+
+
+class ProjectMutationResult(NamedTuple):
+    """Outcome of a project mutation (create / update).
+
+    On success: ``project_id`` is set; ``project`` is the final ``Project``
+    instance (useful so the watcher / caller can serialise it for the
+    status payload). On failure: ``errors`` is non-empty.
+    """
+    success: bool
+    project_id: str | None
+    project: Project | None
+    errors: list[ProjectMutationError] | None
 
 
 # =============================================================================
@@ -310,6 +341,130 @@ def update_project_total_cost(project_id: str) -> None:
         return
     project.recalculate_total_cost()
     project.save(update_fields=["total_cost"])
+
+
+# ---------------------------------------------------------------------------
+# Name validation (pure helpers shared by CLI pre-flight + service)
+# ---------------------------------------------------------------------------
+
+
+def validate_project_name_format(
+    name: str | None,
+    *,
+    field: str = "name",
+) -> list[ProjectMutationError]:
+    """Validate a project name's format: trim, ≤ MAX length.
+
+    ``None`` and empty (after trim) are both OK — the name field is
+    nullable and an empty string is normalised to None at write time.
+    Uniqueness is checked separately by callers that can do an async DB
+    query (the helper stays pure).
+    """
+    if name is None:
+        return []
+    trimmed = name.strip()
+    if not trimmed:
+        return []
+    if len(trimmed) > MAX_PROJECT_NAME_LENGTH:
+        return [ProjectMutationError(
+            field, "invalid_name",
+            f"Name must be ≤ {MAX_PROJECT_NAME_LENGTH} characters (got {len(trimmed)}).",
+        )]
+    return []
+
+
+# ---------------------------------------------------------------------------
+# Atomic update — read-modify-write under the DB write lock
+# ---------------------------------------------------------------------------
+
+
+async def update_project_atomic(
+    project_id: str,
+    *,
+    new_name: str | None = None,
+    unset_name: bool = False,
+    color: str | None = None,
+    unset_color: bool = False,
+    archived: bool | None = None,
+) -> ProjectMutationResult:
+    """Atomically apply a patch to an existing project.
+
+    Mutually-exclusive flags (``new_name`` vs ``unset_name``, ``color`` vs
+    ``unset_color``) must be enforced by the caller before invocation —
+    this function trusts its inputs (the ``unset`` wins if both are set).
+
+    Runs under :func:`run_under_db_write_lock` and broadcasts
+    ``project_updated`` out of the lock on success. On
+    ``Project.DoesNotExist`` returns a failed result with
+    ``project_not_found``; on a DB ``IntegrityError`` (name collision)
+    returns a failed result with ``duplicate_name``.
+    """
+    from twicc.providers.db_writer import run_under_db_write_lock
+
+    def _do_update() -> ProjectMutationResult:
+        with transaction.atomic():
+            try:
+                project = Project.objects.get(id=project_id)
+            except Project.DoesNotExist:
+                return ProjectMutationResult(False, None, None, [
+                    ProjectMutationError("PROJECT_ID", "project_not_found",
+                                          f"Project {project_id!r} not found."),
+                ])
+
+            update_fields: list[str] = []
+
+            if unset_name:
+                if project.name is not None:
+                    project.name = None
+                    update_fields.append("name")
+            elif new_name is not None:
+                trimmed = new_name.strip()
+                normalized = trimmed if trimmed else None
+                if project.name != normalized:
+                    project.name = normalized
+                    update_fields.append("name")
+
+            if unset_color:
+                if project.color is not None:
+                    project.color = None
+                    update_fields.append("color")
+            elif color is not None:
+                if project.color != color:
+                    project.color = color
+                    update_fields.append("color")
+
+            if archived is not None:
+                if project.archived != bool(archived):
+                    project.archived = bool(archived)
+                    update_fields.append("archived")
+
+            if not update_fields:
+                # No-op write: the row already matches the patch. Treat as
+                # success with the existing project — the CLI's no_op
+                # pre-check usually catches this, so the path is rare.
+                return ProjectMutationResult(True, project_id, project, None)
+
+            try:
+                project.save(update_fields=update_fields)
+            except IntegrityError:
+                return ProjectMutationResult(False, project_id, None, [
+                    ProjectMutationError("--name", "duplicate_name",
+                                          "Another project already uses this name."),
+                ])
+            return ProjectMutationResult(True, project_id, project, None)
+
+    result = await run_under_db_write_lock(lambda: sync_to_async(_do_update)())
+
+    if result.success and result.project is not None:
+        channel_layer = get_channel_layer()
+        await channel_layer.group_send("updates", {
+            "type": "broadcast",
+            "data": {
+                "type": "project_updated",
+                "project": serialize_project(result.project),
+            },
+        })
+    return result
 
 
 @transaction.atomic

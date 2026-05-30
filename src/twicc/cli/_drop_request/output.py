@@ -69,17 +69,33 @@ def emit_validation_errors(errors, *, json_output: bool) -> None:
             typer.echo(f"  - {e.field}: {e.message}", err=True)
 
 
+# Field projection per result kind. The watcher only writes an id field
+# when the underlying service Result populated it (see
+# ``_RESULT_ID_FIELDS`` in ``drop_requests_watcher.py``), so we
+# dispatch by the id field that actually appears in the status payload.
 _SESSION_ID_FIELDS = ("session_id", "provider", "project_id")
 _WORKSPACE_ID_FIELDS = ("workspace_id",)
+_PROJECT_ID_FIELDS = ("project_id",)
 
 
 def emit_final(outcome, *, request_uuid: str, json_output: bool, timeout: int) -> None:
     if outcome.status in ("created", "sent", "updated", "stopped", "deleted"):
         d = outcome.data
-        is_workspace = "workspace_id" in d
-        id_fields = _WORKSPACE_ID_FIELDS if is_workspace else _SESSION_ID_FIELDS
-        subject = "Workspace" if is_workspace else "Session"
-        identifier = d.get("workspace_id") if is_workspace else d.get("session_id")
+        # Dispatch by which id field is set. ``workspace_id`` is workspace-only;
+        # ``session_id`` is session-only; ``project_id`` alone (without
+        # ``session_id``) means the result describes a project mutation.
+        if "workspace_id" in d:
+            id_fields = _WORKSPACE_ID_FIELDS
+            subject = "Workspace"
+            identifier = d.get("workspace_id")
+        elif "session_id" in d:
+            id_fields = _SESSION_ID_FIELDS
+            subject = "Session"
+            identifier = d.get("session_id")
+        else:
+            id_fields = _PROJECT_ID_FIELDS
+            subject = "Project"
+            identifier = d.get("project_id")
 
         if json_output:
             payload = {"status": outcome.status, "request_uuid": request_uuid}

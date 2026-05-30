@@ -82,6 +82,8 @@ The command outputs a single JSON project object:
 - **Inspect a workspace:** `twicc workspace <workspace_id>` — use any value from the `workspaces` field to see the workspace's name, color, and full project list
 - **List all workspaces:** `twicc workspaces` — find workspace IDs
 - **Search within this project:** `twicc search "project_id:<project_id> AND <query>"` — full-text search filtered to this project
+- **Update this project:** `twicc update-project <ID> [--name X|--unset-name] [--color X|--unset-color] [--archive|--unarchive]` (no `delete-project` — projects are archived, never deleted)
+- **Create a new project:** `twicc create-project <DIRECTORY> [...]`
 
 ## How to present results
 

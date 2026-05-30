@@ -96,6 +96,16 @@ _KIND_HANDLERS: dict[str, tuple[str, str, str]] = {
         "delete_workspace_from_payload",
         "deleted",
     ),
+    "project:create": (
+        "twicc.core.services.project_mutation",
+        "create_project_from_payload",
+        "created",
+    ),
+    "project:update": (
+        "twicc.core.services.project_mutation",
+        "update_project_from_payload",
+        "updated",
+    ),
 }
 
 
