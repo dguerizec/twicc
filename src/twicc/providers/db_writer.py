@@ -2391,6 +2391,7 @@ def _apply_update_project_metadata_payload(payload: UpdateProjectMetadataPayload
                         type=SessionType.SESSION,
                         created_at__isnull=False,
                         user_message_count__gt=0,
+                        hidden=False,
                     ).count()
                     update_fields.append("sessions_count")
                 if payload.recalc_mtime:

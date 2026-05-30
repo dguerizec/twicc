@@ -424,7 +424,7 @@ class CodexOrchestrator(BaseOrchestrator):
 
         sessions_count = await sync_to_async(
             Session.objects.filter(
-                provider=Provider.CODEX, stale=False, type=SessionType.SESSION
+                provider=Provider.CODEX, stale=False, type=SessionType.SESSION, hidden=False,
             ).count
         )()
         logger.info("Codex data synchronized (%d sessions)", sessions_count)

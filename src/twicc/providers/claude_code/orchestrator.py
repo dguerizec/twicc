@@ -462,7 +462,7 @@ class ClaudeCodeOrchestrator(BaseOrchestrator):
         )()
         sessions_count = await sync_to_async(
             Session.objects.filter(
-                provider=Provider.CLAUDE_CODE, stale=False, type=SessionType.SESSION,
+                provider=Provider.CLAUDE_CODE, stale=False, type=SessionType.SESSION, hidden=False,
             ).count
         )()
         subagents_count = await sync_to_async(

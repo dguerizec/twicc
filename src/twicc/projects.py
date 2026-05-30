@@ -320,7 +320,7 @@ def update_project_metadata(project_id: str) -> None:
     except Project.DoesNotExist:
         return
     sessions = Session.objects.filter(
-        project=project, type=SessionType.SESSION, created_at__isnull=False, user_message_count__gt=0
+        project=project, type=SessionType.SESSION, created_at__isnull=False, user_message_count__gt=0, hidden=False
     )
     project.sessions_count = sessions.count()
     # mtime excludes stale sessions (JSONL gone from disk): a stale session

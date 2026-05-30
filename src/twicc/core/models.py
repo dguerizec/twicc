@@ -164,7 +164,7 @@ class PeriodicActivity(models.Model):
         item_project_filter = Q(session__project_id=project_id) if project_id is not None else Q()
         session_project_filter = Q(project_id=project_id) if project_id is not None else Q()
 
-        # user_message_count: only from type=SESSION sessions
+        # user_message_count: only from type=SESSION sessions, hidden excluded
         user_message_count = SessionItem.objects.filter(
             item_project_filter,
             session__provider=provider.value,
@@ -172,6 +172,7 @@ class PeriodicActivity(models.Model):
             timestamp__gte=date_start,
             timestamp__lt=date_end,
             session__type=SessionType.SESSION,
+            session__hidden=False,
         ).count()
 
         # cost: from ALL session types
@@ -183,7 +184,7 @@ class PeriodicActivity(models.Model):
             timestamp__lt=date_end,
         ).aggregate(total=Sum("cost"))["total"] or Decimal(0)
 
-        # session_count: only type=SESSION sessions with at least one user message
+        # session_count: only type=SESSION sessions with at least one user message, hidden excluded
         session_count = Session.objects.filter(
             session_project_filter,
             provider=provider.value,
@@ -191,6 +192,7 @@ class PeriodicActivity(models.Model):
             created_at__gte=date_start,
             created_at__lt=date_end,
             user_message_count__gt=0,
+            hidden=False,
         ).count()
 
         # If all values are zero, delete the row to keep the table clean
