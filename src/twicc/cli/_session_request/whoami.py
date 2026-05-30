@@ -24,8 +24,9 @@ from __future__ import annotations
 
 import logging
 import os
-import subprocess
 from collections.abc import Iterator
+
+import psutil
 
 logger = logging.getLogger(__name__)
 
@@ -33,52 +34,16 @@ logger = logging.getLogger(__name__)
 def _walk_ppids() -> Iterator[int]:
     """Yield successive parent PIDs starting at ``os.getpid()`` up to PID 1."""
     pid = os.getpid()
-    while pid is not None and pid > 1:
-        ppid = _get_ppid(pid)
+    while pid > 1:
+        try:
+            ppid = psutil.Process(pid).ppid()
+        except psutil.Error:
+            # Process gone / permission error: stop the walk.
+            return
         if ppid is None or ppid <= 0:
             return
         yield ppid
         pid = ppid
-
-
-def _get_ppid(pid: int) -> int | None:
-    """Return the parent PID of ``pid``, or ``None`` if unobtainable.
-
-    Prefer ``psutil`` when available; fall back to ``/proc/<pid>/status``
-    on Linux. ``ps -o ppid=`` is the last resort for macOS / BSD without
-    psutil.
-    """
-    try:
-        import psutil  # type: ignore[import-untyped]
-        return psutil.Process(pid).ppid()
-    except ImportError:
-        pass
-    except Exception:
-        # Process gone / permission error for this pid: fall through to
-        # /proc and ps for the same pid rather than aborting the walk.
-        pass
-
-    # Linux fallback
-    try:
-        with open(f"/proc/{pid}/status", "r") as f:
-            for line in f:
-                if line.startswith("PPid:"):
-                    return int(line.split()[1])
-    except (FileNotFoundError, PermissionError, OSError):
-        pass
-
-    # macOS fallback via `ps`
-    try:
-        out = subprocess.run(
-            ["ps", "-o", "ppid=", "-p", str(pid)],
-            capture_output=True, text=True, timeout=2.0, check=False,
-        )
-        if out.returncode == 0 and out.stdout.strip():
-            return int(out.stdout.strip())
-    except (subprocess.SubprocessError, ValueError, OSError):
-        pass
-
-    return None
 
 
 def resolve_current_session():
