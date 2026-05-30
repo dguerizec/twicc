@@ -46,9 +46,14 @@ def main(
     if not archived:
         qs = qs.filter(archived=False)
 
+    # When filtering by spawned_by, the caller is explicitly asking
+    # about filiation — show every matching child whatever its
+    # visibility. The hidden=False default only applies to unscoped
+    # listings, where it keeps the output aligned with what the UI
+    # displays. --only-hidden still narrows further if requested.
     if only_hidden:
         qs = qs.filter(hidden=True)
-    elif not include_hidden:
+    elif not include_hidden and spawned_by_id is None:
         qs = qs.filter(hidden=False)
 
     if spawned_by_id is not None:

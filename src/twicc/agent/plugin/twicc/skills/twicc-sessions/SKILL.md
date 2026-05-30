@@ -42,7 +42,7 @@ $TWICC sessions
 - `--include-archived` — include archived sessions in the results (default: false, archived sessions are excluded)
 - `--include-hidden` — include hidden sessions in the results (default: false, hidden sessions are excluded). Hidden sessions are invisible in normal listings; pass this flag to surface them explicitly.
 - `--only-hidden` — return **only** hidden sessions. Mutually exclusive with `--include-hidden`.
-- `--spawned-by <ID|self>` — filter by spawner session ID. Only sessions whose `spawned_by` field matches the given ID are returned. The special value `self` resolves to the current session's own ID via PID ancestry (equivalent to `twicc whoami`) — useful for an agent that wants to list child sessions it spawned without knowing its own session ID.
+- `--spawned-by <ID|self>` — filter by spawner session ID. Only sessions whose `spawned_by` field matches the given ID are returned. The special value `self` resolves to the current session's own ID via PID ancestry (equivalent to `twicc whoami`) — useful for an agent that wants to list child sessions it spawned without knowing its own session ID. **Implies `--include-hidden` by default**: a filiation query surfaces every matching child whatever its visibility (in practice spawned children are usually hidden). Combine with `--only-hidden` to narrow to hidden children, or post-filter the JSON output's `hidden` field for visible-only.
 
 ### Examples
 

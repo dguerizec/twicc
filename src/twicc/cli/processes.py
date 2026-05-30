@@ -107,21 +107,33 @@ def main(
     }
 
     # Apply hidden / spawned_by filters (post-enrichment, since these fields come
-    # from the Session row, not from ProcessRun itself).
-    if include_hidden or only_hidden or spawned_by_id is not None:
-        filtered = []
-        for row in rows:
-            session = sessions_by_id.get(row.session_id)
-            is_hidden = session.hidden if session is not None else False
-            if only_hidden and not is_hidden:
-                continue
-            if not include_hidden and not only_hidden and is_hidden:
-                continue
-            sb = session.spawned_by_id if session is not None else None
-            if spawned_by_id is not None and sb != spawned_by_id:
-                continue
-            filtered.append(row)
-        rows = filtered
+    # from the Session row, not from ProcessRun itself). Same semantics as
+    # ``twicc sessions``:
+    #
+    # - ``--only-hidden``: keep hidden=True only.
+    # - ``--include-hidden``: no implicit hidden filter (both kinds).
+    # - ``--spawned-by`` is set (without ``--include-hidden`` /
+    #   ``--only-hidden``): the caller is explicitly asking about filiation,
+    #   show every matching child whatever its visibility.
+    # - Default (no flag): keep hidden=False only — match what the UI sees.
+    filtered = []
+    for row in rows:
+        session = sessions_by_id.get(row.session_id)
+        is_hidden = session.hidden if session is not None else False
+        if only_hidden and not is_hidden:
+            continue
+        if (
+            not include_hidden
+            and not only_hidden
+            and spawned_by_id is None
+            and is_hidden
+        ):
+            continue
+        sb = session.spawned_by_id if session is not None else None
+        if spawned_by_id is not None and sb != spawned_by_id:
+            continue
+        filtered.append(row)
+    rows = filtered
 
     data = [_serialize(row, sessions_by_id.get(row.session_id)) for row in rows]
 

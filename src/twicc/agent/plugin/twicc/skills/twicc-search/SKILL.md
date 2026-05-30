@@ -39,7 +39,7 @@ $TWICC search '<query>'
 - `--offset N` — skip first N hits for pagination (default: 0)
 - `--include-hidden` — include hits from hidden sessions (default: false, hidden sessions are excluded). The full-text index **does** index hidden sessions, so this flag genuinely finds content in them.
 - `--only-hidden` — return hits **only** from hidden sessions. Mutually exclusive with `--include-hidden`.
-- `--spawned-by <ID|self>` — filter hits to sessions whose `spawned_by` field matches the given ID. The special value `self` resolves to the current session's own ID via PID ancestry (equivalent to `twicc whoami`) — useful for an agent searching within the sub-sessions it spawned.
+- `--spawned-by <ID|self>` — filter hits to sessions whose `spawned_by` field matches the given ID. The special value `self` resolves to the current session's own ID via PID ancestry (equivalent to `twicc whoami`) — useful for an agent searching within the sub-sessions it spawned. **Implies `--include-hidden` by default**: a filiation query matches every spawned child whatever its visibility (in practice spawned children are usually hidden). Combine with `--only-hidden` to narrow to hidden children.
 
 ### Examples
 

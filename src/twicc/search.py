@@ -484,11 +484,15 @@ def search(
     # Hidden-session filters:
     # - only_hidden: restrict to hidden=True
     # - include_hidden (else branch): no filter added, both hidden and visible are returned
+    # - spawned_by is set (without include_hidden / only_hidden): no implicit
+    #   hidden filter — when the caller asks about filiation, they want every
+    #   matching child whatever its visibility (the spawn target is almost
+    #   always a hidden session in practice)
     # - default: restrict to hidden=False (UI and CLI without --include-hidden see only
     #   visible sessions; hidden documents stay in the index for agent-owned searches)
     if only_hidden:
         clauses.append((Occur.Must, Query.term_query(_schema, "hidden", True)))
-    elif not include_hidden:
+    elif not include_hidden and spawned_by is None:
         clauses.append((Occur.Must, Query.term_query(_schema, "hidden", False)))
 
     if spawned_by is not None:
@@ -688,12 +692,15 @@ def raw_search(
             return orjson.dumps(result_dict, option=orjson.OPT_INDENT_2 | orjson.OPT_SORT_KEYS).decode()
         return result_dict
 
-    # Build filter clauses for hidden and spawned_by
+    # Build filter clauses for hidden and spawned_by.
+    # When spawned_by is set without include_hidden / only_hidden the
+    # implicit hidden=False filter is lifted: a filiation query is an
+    # explicit ask about every child whatever its visibility.
     clauses: list[tuple[Occur, Query]] = [(Occur.Must, text_query)]
 
     if only_hidden:
         clauses.append((Occur.Must, Query.term_query(schema, "hidden", True)))
-    elif not include_hidden:
+    elif not include_hidden and spawned_by is None:
         clauses.append((Occur.Must, Query.term_query(schema, "hidden", False)))
 
     if spawned_by is not None:

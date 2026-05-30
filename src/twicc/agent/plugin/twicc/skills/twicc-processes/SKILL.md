@@ -57,7 +57,7 @@ has died), the command exits with an error.
 - `--offset N` — skip first N processes for pagination (default: 0)
 - `--include-hidden` — include processes whose bound session is hidden (default: false, hidden sessions' processes are excluded). Pass this flag to surface background processes running for hidden sessions.
 - `--only-hidden` — return **only** processes whose bound session is hidden. Mutually exclusive with `--include-hidden`.
-- `--spawned-by <ID|self>` — filter by spawner session ID. Only processes whose bound session has `spawned_by` set to the given ID are returned. The special value `self` resolves to the current session's own ID via PID ancestry (equivalent to `twicc whoami`) — useful for an agent tracking the background processes it spawned.
+- `--spawned-by <ID|self>` — filter by spawner session ID. Only processes whose bound session has `spawned_by` set to the given ID are returned. The special value `self` resolves to the current session's own ID via PID ancestry (equivalent to `twicc whoami`) — useful for an agent tracking the background processes it spawned. **Implies `--include-hidden` by default**: a filiation query surfaces every matching child whatever its visibility (in practice spawned children are usually hidden). Combine with `--only-hidden` to narrow to hidden children.
 
 ### Examples
 

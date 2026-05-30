@@ -115,7 +115,17 @@ def sessions(
     include_archived: bool = typer.Option(False, "--include-archived", help="Include archived sessions."),
     include_hidden: bool = typer.Option(False, "--include-hidden", help="Include hidden sessions in the listing."),
     only_hidden: bool = typer.Option(False, "--only-hidden", help="Show ONLY hidden sessions (mutually exclusive with --include-hidden)."),
-    spawned_by: str = typer.Option(None, "--spawned-by", help="Filter to sessions spawned by the given session_id, or 'self' for the current session."),
+    spawned_by: str = typer.Option(
+        None,
+        "--spawned-by",
+        help=(
+            "Filter to sessions spawned by the given session_id, or 'self' for the "
+            "current session. Implies --include-hidden by default: a filiation query "
+            "shows every matching child whatever its visibility. Add --only-hidden to "
+            "narrow to hidden children, or pass an explicit ID and rely on the JSON "
+            "output's `hidden` field to filter further."
+        ),
+    ),
 ) -> None:
     """List sessions as JSON (ordered by most recently active)."""
     if include_hidden and only_hidden:
@@ -221,7 +231,15 @@ def processes(
     offset: int = typer.Option(0, help="Skip first N processes."),
     include_hidden: bool = typer.Option(False, "--include-hidden", help="Include processes of hidden sessions."),
     only_hidden: bool = typer.Option(False, "--only-hidden", help="Show ONLY processes of hidden sessions (mutually exclusive with --include-hidden)."),
-    spawned_by: str = typer.Option(None, "--spawned-by", help="Filter to processes of sessions spawned by the given session_id, or 'self' for the current session."),
+    spawned_by: str = typer.Option(
+        None,
+        "--spawned-by",
+        help=(
+            "Filter to processes of sessions spawned by the given session_id, or 'self' "
+            "for the current session. Implies --include-hidden by default: a filiation "
+            "query surfaces every matching child whatever its visibility."
+        ),
+    ),
 ) -> None:
     """List currently running processes of the live TwiCC instance as JSON."""
     if include_hidden and only_hidden:
@@ -341,7 +359,15 @@ def search(
     offset: int = typer.Option(0, help="Skip first N session groups."),
     include_hidden: bool = typer.Option(False, "--include-hidden", help="Include hidden sessions in search results."),
     only_hidden: bool = typer.Option(False, "--only-hidden", help="Search ONLY hidden sessions (mutually exclusive with --include-hidden)."),
-    spawned_by: str = typer.Option(None, "--spawned-by", help="Filter to sessions spawned by the given session_id, or 'self' for the current session."),
+    spawned_by: str = typer.Option(
+        None,
+        "--spawned-by",
+        help=(
+            "Filter to sessions spawned by the given session_id, or 'self' for the "
+            "current session. Implies --include-hidden by default: a filiation query "
+            "matches every spawned child whatever its visibility."
+        ),
+    ),
 ) -> None:
     """Query the TwiCC search index using raw Tantivy query syntax."""
     if include_hidden and only_hidden:
