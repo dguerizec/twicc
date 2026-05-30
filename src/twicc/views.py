@@ -78,7 +78,7 @@ async def _get_sessions_page(
     """
     from django.db.models import F, Q
 
-    sessions = Session.objects.filter(type=SessionType.SESSION, created_at__isnull=False, user_message_count__gt=0)
+    sessions = Session.objects.filter(type=SessionType.SESSION, created_at__isnull=False, user_message_count__gt=0, hidden=False)
 
     if project_id is not None:
         sessions = sessions.filter(project_id=project_id)
@@ -172,6 +172,9 @@ async def session_by_id(request, session_id):
         raise Http404("Session not found")
 
     if session.parent_session_id is not None:
+        raise Http404("Session not found")
+
+    if session.hidden:
         raise Http404("Session not found")
 
     return JsonResponse(serialize_session(session))
@@ -482,6 +485,8 @@ async def _resolve_session_or_404(session_id, project_id, parent_session_id):
             raise Http404("Session not found")
         if session.parent_session_id is not None:
             raise Http404("Session not found")
+        if session.hidden:
+            raise Http404("Session not found")
         return session
 
     # Subagent route: the parent must be a top-level session of project_id.
@@ -598,7 +603,8 @@ async def session_detail(request, project_id, session_id, parent_session_id=None
         # Broadcast session_updated for archived/pinned changes.
         # Title changes don't need this: writing to JSONL triggers the
         # file watcher which broadcasts session_updated automatically.
-        if needs_broadcast:
+        # Hidden sessions must not surface to the frontend via broadcast either.
+        if needs_broadcast and not session.hidden:
             channel_layer = get_channel_layer()
             await channel_layer.group_send(
                 "updates",
@@ -724,6 +730,7 @@ async def bulk_archive_sessions(request):
         created_at__isnull=False,
         archived=False,
         pinned__isnull=True,
+        hidden=False,
         mtime__lt=older_than_epoch,
     ).exclude(id__in=active_ids)
 
@@ -2120,7 +2127,7 @@ async def search_sessions(request):
     sessions_info = {}
     if session_ids:
         enriched_sessions = await sync_to_async(list)(
-            Session.objects.filter(id__in=session_ids).select_related("project")
+            Session.objects.filter(id__in=session_ids, hidden=False).select_related("project")
         )
         for s in enriched_sessions:
             sessions_info[s.id] = {
