@@ -641,6 +641,9 @@ def raw_search(
     limit: int = 20,
     offset: int = 0,
     to_json: bool = True,
+    include_hidden: bool = False,
+    only_hidden: bool = False,
+    spawned_by: str | None = None,
 ) -> dict | str:
     """Execute a raw Tantivy query and return JSON-serializable results.
 
@@ -655,6 +658,10 @@ def raw_search(
         limit: Maximum number of hits to return (default 20).
         offset: Number of hits to skip for pagination (default 0).
         to_json: If True (default), return a JSON string; if False, return a dict.
+        include_hidden: If True, include hits from hidden sessions (default False).
+        only_hidden: If True, restrict results to hidden sessions only. Mutually exclusive
+            with ``include_hidden`` (caller's responsibility to enforce).
+        spawned_by: If set, restrict results to sessions spawned by this session ID.
 
     Returns:
         If ``to_json`` is True: a JSON string (pretty-printed, sorted keys).
@@ -665,7 +672,7 @@ def raw_search(
     index, schema = _init_read_only()
 
     try:
-        parsed_query = index.parse_query(query_str, ["body"])
+        text_query = index.parse_query(query_str, ["body"])
     except ValueError as exc:
         result_dict = {
             "query": query_str,
@@ -681,6 +688,22 @@ def raw_search(
             return orjson.dumps(result_dict, option=orjson.OPT_INDENT_2 | orjson.OPT_SORT_KEYS).decode()
         return result_dict
 
+    # Build filter clauses for hidden and spawned_by
+    clauses: list[tuple[Occur, Query]] = [(Occur.Must, text_query)]
+
+    if only_hidden:
+        clauses.append((Occur.Must, Query.term_query(schema, "hidden", True)))
+    elif not include_hidden:
+        clauses.append((Occur.Must, Query.term_query(schema, "hidden", False)))
+
+    if spawned_by is not None:
+        clauses.append((Occur.Must, Query.term_query(schema, "spawned_by", spawned_by)))
+
+    if len(clauses) == 1:
+        parsed_query = clauses[0][1]
+    else:
+        parsed_query = Query.boolean_query(clauses)
+
     index.reload()
     searcher = index.searcher()
 
@@ -688,8 +711,9 @@ def raw_search(
     raw_limit = offset + limit
     result = searcher.search(parsed_query, limit=raw_limit)
 
-    # Generate snippets from the text query
-    snippet_generator = tantivy.SnippetGenerator.create(searcher, parsed_query, schema, "body")
+    # Generate snippets from the text query (use text_query, not the composite boolean query,
+    # so highlights reflect the user's search terms rather than filter clauses)
+    snippet_generator = tantivy.SnippetGenerator.create(searcher, text_query, schema, "body")
     snippet_generator.set_max_num_chars(200)
 
     hits = []
