@@ -339,6 +339,32 @@ class Session(models.Model):
     # User can pin sessions: NULL = not pinned, string = pin mode (scope/workspace/always).
     # Any truthy value means the session is pinned; mode controls cross-filter visibility.
     pinned = models.CharField(max_length=16, choices=PinMode.choices, null=True, blank=True, default=None)
+    # Hidden sessions are top-level (type=SESSION) sessions invisible to
+    # the user — they exist, consume API costs (counted in aggregates),
+    # but are absent from every list, search result, count, and broadcast.
+    # Set by the CLI `twicc create-session --hidden`; mutable through
+    # `twicc update-session <ID> hide / unhide`. Implies a non-interactive
+    # permission_mode (bypassPermissions/dontAsk for Claude Code; yolo/strict
+    # for Codex) and question_widget=False — both enforced at create / flip
+    # time by `validate_hidden_constraints`. Subagent sessions
+    # (`type=SUBAGENT`) ignore this flag entirely: they are already invisible
+    # everywhere via the `type=SESSION` filter.
+    hidden = models.BooleanField(default=False, db_index=True)
+    # Trace of the session that invoked the CLI to create this one
+    # (filiation). Set automatically by `twicc create-session` via PID
+    # ancestry (cf. `twicc whoami`); not exposed as a CLI flag. Independent
+    # of `hidden`: a visible session can also have spawned_by set. Immutable
+    # after creation (no UI / CLI mutates it). `on_delete=SET_NULL` so child
+    # sessions survive deletion of the parent (no cascade).
+    spawned_by = models.ForeignKey(
+        "self",
+        null=True,
+        blank=True,
+        default=None,
+        on_delete=models.SET_NULL,
+        related_name="spawned_sessions",
+        db_index=True,
+    )
 
     # Per-session permission mode. Values are provider-specific (e.g. "default",
     # "acceptEdits", "plan", "bypassPermissions" for Claude Code). NULL = use global default.
@@ -407,6 +433,7 @@ class Session(models.Model):
                     user_message_count__gt=0,
                     type="session",
                     created_at__isnull=False,
+                    hidden=False,
                 ),
             ),
         ]
