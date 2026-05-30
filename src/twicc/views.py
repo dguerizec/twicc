@@ -78,7 +78,12 @@ async def _get_sessions_page(
     """
     from django.db.models import F, Q
 
-    sessions = Session.objects.filter(type=SessionType.SESSION, created_at__isnull=False, user_message_count__gt=0, hidden=False)
+    sessions = Session.objects.filter(
+        type=SessionType.SESSION,
+        created_at__isnull=False,
+        user_message_count__gt=0,
+        hidden=False,
+    )
 
     if project_id is not None:
         sessions = sessions.filter(project_id=project_id)
