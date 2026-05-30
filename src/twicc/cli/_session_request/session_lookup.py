@@ -33,6 +33,7 @@ class ResolvedSession(NamedTuple):
     provider: str  # value (e.g. "claude_code"); validated against the Provider enum
     project_id: str
     directory: str
+    hidden: bool
 
 
 def lookup_session(session_id: str) -> ResolvedSession:
@@ -83,4 +84,5 @@ def lookup_session(session_id: str) -> ResolvedSession:
         provider=session.provider,
         project_id=session.project_id,
         directory=project.directory,
+        hidden=bool(session.hidden),
     )

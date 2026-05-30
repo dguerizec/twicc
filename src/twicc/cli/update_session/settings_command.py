@@ -347,6 +347,17 @@ def update_settings_cmd(
         emit_validation_errors(errors, json_output=json_output)
         raise typer.Exit(1)
 
+    # 9. Hidden invariants: if the target session is currently hidden, the
+    # resulting settings must not break the non-interactive whitelist.
+    if resolved.hidden:
+        from twicc.cli._session_request.validation import validate_hidden_constraints
+        hidden_errors = validate_hidden_constraints(
+            resolved.provider, settings, hidden=True,
+        )
+        if hidden_errors:
+            emit_validation_errors(hidden_errors, json_output=json_output)
+            raise typer.Exit(1)
+
     emit_progress(
         f"✓ Settings validated (replace_all={replace_all}, fields="
         f"{sorted(updates.keys())})",

@@ -186,6 +186,29 @@ async def update_session_settings_from_payload(payload: dict) -> UpdateSessionRe
     from twicc.core.models import Session
     from twicc.core.serializers import serialize_session
 
+    # --- Hidden invariants guard (defence in depth) --------------------
+    # The CLI pre-validates this too; the server re-checks because the
+    # drop file is a trust boundary — a direct write or a race condition
+    # could bypass the CLI guard.
+    if session.hidden:
+        from twicc.cli._session_request.validation import validate_hidden_constraints
+        # Build the merged settings: current DB values overlaid with the
+        # incoming updates so the check reflects what would actually be written.
+        merged_base = AgentSettings.from_session(session)._asdict()
+        merged_base.update(updates)
+        merged_settings = AgentSettings(**merged_base)
+        helpers_for_hidden = get_provider_helpers(provider)
+        resolved_for_hidden = helpers_for_hidden.resolve_agent_settings(merged_settings)
+        resolved_for_hidden = helpers_for_hidden.enforce_agent_settings_consistency(resolved_for_hidden)
+        hidden_errors = validate_hidden_constraints(
+            provider.value, resolved_for_hidden, hidden=True,
+        )
+        if hidden_errors:
+            return UpdateSessionResult(False, None, None, None, [
+                UpdateSessionError(e.field, e.code, e.message)
+                for e in hidden_errors
+            ])
+
     # --- DB write under the write lock ---------------------------------
     # Mirrors the path taken by ``WSConsumer._handle_send_message`` for the
     # settings-only update: aupdate under the lock; reload + broadcast
