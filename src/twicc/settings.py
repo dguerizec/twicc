@@ -216,7 +216,10 @@ CLAUDE_CODE_COMPUTE_VERSION = 96
 CODEX_COMPUTE_VERSION = 29
 
 # Search index version
-CURRENT_SEARCH_VERSION = 2  # Bump when search indexing logic changes to trigger reindexing
+# Bumped when the schema or document layout changes — forces a full
+# rebuild of the on-disk index at next startup.
+# v2 -> v3: added `hidden` and `spawned_by` fields (hidden-sessions feature).
+CURRENT_SEARCH_VERSION = 3
 
 # Process auto-stop timeouts (in seconds)
 # Processes are automatically stopped if they remain in a state for too long

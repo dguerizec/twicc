@@ -12,12 +12,15 @@ Schema fields:
     from_role  — message source: "user", "assistant", or "title" (exact match via raw tokenizer)
     timestamp  — message timestamp (date, for range filtering)
     archived   — whether the session is archived (boolean filter)
+    hidden     — whether the session is hidden from the user (boolean filter)
+    spawned_by — session_id of the session that spawned this one (exact match via raw tokenizer)
 """
 
 from __future__ import annotations
 
 import logging
 import math
+import shutil
 import threading
 from collections import defaultdict
 from datetime import datetime, timezone
@@ -103,6 +106,8 @@ def _build_schema() -> tantivy.Schema:
     builder.add_text_field("from_role", stored=True, tokenizer_name="raw")
     builder.add_date_field("timestamp", stored=True, indexed=True)
     builder.add_boolean_field("archived", stored=True, indexed=True)
+    builder.add_boolean_field("hidden", stored=True, indexed=True)
+    builder.add_text_field("spawned_by", stored=True, tokenizer_name="raw")
     return builder.build()
 
 
@@ -130,6 +135,42 @@ def _register_tokenizer(index: tantivy.Index) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _ensure_search_dir(search_dir) -> None:
+    """Wipe and recreate the search directory if the on-disk schema version doesn't match.
+
+    Tantivy refuses to open an index whose on-disk schema disagrees with the in-memory
+    schema. We guard against this by writing a ``.schema-version`` file to the search
+    directory whose content is ``CURRENT_SEARCH_VERSION`` (from Django settings). On
+    mismatch (or when the file is absent), the whole directory is removed and re-created
+    so Tantivy initializes a fresh empty index.
+
+    The ``CURRENT_SEARCH_VERSION`` bump in settings.py drives both the Tantivy wipe
+    (schema change) and the per-session re-index sweep (search content regeneration);
+    they share the same version counter so bumping once is sufficient for both.
+    """
+    from django.conf import settings
+
+    schema_version_file = search_dir / ".schema-version"
+    current_version = str(settings.CURRENT_SEARCH_VERSION)
+
+    if search_dir.exists():
+        try:
+            on_disk_version = schema_version_file.read_text().strip()
+        except FileNotFoundError:
+            on_disk_version = None
+
+        if on_disk_version != current_version:
+            logger.info(
+                "Search index schema version mismatch (on-disk: %s, current: %s) — wiping index directory",
+                on_disk_version,
+                current_version,
+            )
+            shutil.rmtree(search_dir)
+
+    search_dir.mkdir(parents=True, exist_ok=True)
+    schema_version_file.write_text(current_version)
+
+
 def init_search_index() -> None:
     """Initialize the search index, register the tokenizer, and create the writer.
 
@@ -141,7 +182,7 @@ def init_search_index() -> None:
 
     _schema = _build_schema()
     search_dir = get_search_dir()
-    search_dir.mkdir(parents=True, exist_ok=True)
+    _ensure_search_dir(search_dir)
 
     _index = tantivy.Index(_schema, path=str(search_dir))
     _register_tokenizer(_index)
@@ -213,6 +254,8 @@ def index_document(
     from_role: str,
     timestamp: datetime | None,
     archived: bool,
+    hidden: bool = False,
+    spawned_by_id: str | None = None,
 ) -> None:
     """Add a single document to the search index.
 
@@ -224,6 +267,8 @@ def index_document(
         from_role: "user" or "assistant".
         timestamp: Message timestamp. If None, defaults to now (UTC).
         archived: Whether the parent session is archived.
+        hidden: Whether the parent session is hidden from the user (default False).
+        spawned_by_id: session_id of the session that spawned this one, or None.
     """
     _check_writer()
 
@@ -241,6 +286,9 @@ def index_document(
     doc.add_text("from_role", from_role)
     doc.add_date("timestamp", timestamp)
     doc.add_boolean("archived", archived)
+    doc.add_boolean("hidden", hidden)
+    # Tantivy text fields cannot store NULL; use empty string when there is no spawner.
+    doc.add_text("spawned_by", spawned_by_id or "")
 
     with _writer_lock:
         _writer.add_document(doc)
@@ -295,6 +343,8 @@ def reindex_session(session_id: str) -> None:
         index_document(
             session_id, session.project_id, 0, session.title,
             "title", session.created_at, session.archived,
+            hidden=session.hidden,
+            spawned_by_id=session.spawned_by_id,
         )
 
     # Index all user/assistant messages
@@ -307,6 +357,8 @@ def reindex_session(session_id: str) -> None:
         index_document(
             session_id, session.project_id, msg.line_num, msg.text,
             msg.from_role, msg.timestamp, session.archived,
+            hidden=session.hidden,
+            spawned_by_id=session.spawned_by_id,
         )
 
     commit()
@@ -335,6 +387,9 @@ def search(
     after: datetime | None = None,
     before: datetime | None = None,
     include_archived: bool = False,
+    include_hidden: bool = False,
+    only_hidden: bool = False,
+    spawned_by: str | None = None,
     limit: int = 20,
     offset: int = 0,
 ) -> SearchResults:
@@ -352,6 +407,9 @@ def search(
         after: Only messages after this timestamp.
         before: Only messages before this timestamp.
         include_archived: Whether to include archived sessions (default False).
+        include_hidden: Whether to include hidden sessions alongside visible ones (default False).
+        only_hidden: Whether to return only hidden sessions (default False).
+        spawned_by: Filter to sessions spawned by this session_id (default None = no filter).
         limit: Max number of session groups to return (default 20).
         offset: Pagination offset for session groups (default 0).
 
@@ -388,6 +446,19 @@ def search(
 
     if not include_archived:
         clauses.append((Occur.Must, Query.term_query(_schema, "archived", False)))
+
+    # Hidden-session filters:
+    # - only_hidden: restrict to hidden=True
+    # - include_hidden (else branch): no filter added, both hidden and visible are returned
+    # - default: restrict to hidden=False (UI and CLI without --include-hidden see only
+    #   visible sessions; hidden documents stay in the index for agent-owned searches)
+    if only_hidden:
+        clauses.append((Occur.Must, Query.term_query(_schema, "hidden", True)))
+    elif not include_hidden:
+        clauses.append((Occur.Must, Query.term_query(_schema, "hidden", False)))
+
+    if spawned_by is not None:
+        clauses.append((Occur.Must, Query.term_query(_schema, "spawned_by", spawned_by)))
 
     # Date range filters via parsed query syntax (tantivy-py's range_query doesn't
     # accept datetime objects for date fields, but the query parser handles ISO dates)

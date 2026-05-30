@@ -322,9 +322,11 @@ async def _run_indexing():
 
     if total == 0:
         logger.info("Search index: no sessions to index")
-        # Report the total session count so the frontend can show "N/N" instead of "0/0"
+        # Report the total session count so the frontend can show "N/N" instead of "0/0".
+        # Filter hidden=False: the progress counter reflects what the UI considers as sessions
+        # (hidden sessions are indexed but not shown in listings, so they don't count here).
         total_sessions = await sync_to_async(
-            Session.objects.filter(type=SessionType.SESSION).count
+            Session.objects.filter(type=SessionType.SESSION, hidden=False).count
         )()
         await broadcast_startup_progress("search_index", total_sessions, total_sessions, completed=True)
         return
@@ -423,6 +425,8 @@ async def _index_session(session_id: str, buffer: _MarkIndexedBuffer):
             "title",
             session.created_at,
             session.archived,
+            session.hidden,
+            session.spawned_by_id,
         )
 
     # Provider extracts the text + role; we just pipe it into the index.
@@ -436,6 +440,8 @@ async def _index_session(session_id: str, buffer: _MarkIndexedBuffer):
             msg.from_role,
             msg.timestamp,
             session.archived,
+            session.hidden,
+            session.spawned_by_id,
         )
 
     # Commit after each session
