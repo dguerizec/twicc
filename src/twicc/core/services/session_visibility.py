@@ -83,7 +83,7 @@ async def unhide_session(session) -> SessionVisibilityResult:
 
 
 def _check_type_session(session) -> list[SessionVisibilityError]:
-    from twicc.core.enums import SessionType
+    from twicc.core.models import SessionType
     if session.type != SessionType.SESSION:
         return [SessionVisibilityError(
             "type", "not_top_level",
