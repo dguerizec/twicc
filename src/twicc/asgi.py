@@ -191,6 +191,19 @@ async def broadcast_process_state(info: AgentInfo) -> None:
     # if info.previous_state == AgentState.ASSISTANT_TURN and info.state != AgentState.ASSISTANT_TURN:
     #     await asyncio.sleep(1)
 
+    # Hidden sessions never produce a process_state event. This is the
+    # broadcast that drives toast / sound / browser notifications on the
+    # frontend (via notifyProcessStateChange) and hydrates the
+    # "active processes" cross-filter; a hidden session must produce
+    # none of those even mid-flight.
+    from twicc.core.models import Session
+    is_hidden = await sync_to_async(
+        lambda: Session.objects.filter(pk=info.session_id)
+        .values_list("hidden", flat=True).first()
+    )()
+    if is_hidden:
+        return
+
     channel_layer = get_channel_layer()
     message = serialize_agent_info(info)
     message["type"] = "process_state"

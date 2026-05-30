@@ -24,6 +24,7 @@ from claude_agent_sdk import (
     ToolPermissionContext, UserMessage,
 )
 
+from asgiref.sync import sync_to_async
 from channels.layers import get_channel_layer
 import json_repair
 import orjson
@@ -1609,8 +1610,26 @@ class ClaudeCodeAgent(BaseAgent):
             {"type": "broadcast", "data": data},
         )
 
+    async def _is_session_hidden(self) -> bool:
+        """Cheap DB lookup of ``Session.hidden`` for this agent's session.
+
+        Used as an early-return guard in the process_* broadcast emitters
+        so hidden sessions produce zero per-tool churn on the frontend.
+        Not cached: the lookup is a tight indexed pk read; the cost is
+        microseconds per broadcast.
+        """
+        from twicc.core.models import Session
+        return bool(
+            await sync_to_async(
+                lambda: Session.objects.filter(pk=self.session_id)
+                .values_list("hidden", flat=True).first()
+            )()
+        )
+
     async def _broadcast_process_label(self, label: str) -> None:
         """Broadcast a transient label override for the process status display."""
+        if await self._is_session_hidden():
+            return
         channel_layer = get_channel_layer()
         await channel_layer.group_send(
             "updates",
@@ -1623,6 +1642,8 @@ class ClaudeCodeAgent(BaseAgent):
 
     async def _broadcast_process_tools(self) -> None:
         """Broadcast the current list of in-progress tools for the status display."""
+        if await self._is_session_hidden():
+            return
         channel_layer = get_channel_layer()
         await channel_layer.group_send(
             "updates",
