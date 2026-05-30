@@ -112,6 +112,17 @@ def create_session_cmd(
             + default_suffix(_HELP_CTX,"question_widget")
         ),
     ),
+    hidden: bool = typer.Option(
+        False,
+        "--hidden",
+        help=(
+            "Create the session as hidden — invisible from every list, "
+            "search, broadcast, and counter shown to the user, while still "
+            "counted in cost aggregates. Requires a non-interactive "
+            "permission_mode (bypassPermissions/dontAsk for Claude Code; "
+            "yolo/strict for Codex) and question_widget=False."
+        ),
+    ),
     context_max: str | None = typer.Option(
         None,
         "--context-max",
@@ -189,6 +200,7 @@ def create_session_cmd(
     from twicc.cli._session_request.presets import apply_preset_and_overrides, PresetError
     from twicc.cli._session_request.validation import (
         ValidationError,
+        validate_hidden_constraints,
         validate_provider,
         validate_settings,
     )
@@ -289,6 +301,7 @@ def create_session_cmd(
             effective_settings
         )
         effective_model = effective_settings.selected_model
+        errors.extend(validate_hidden_constraints(provider, effective_settings, hidden=hidden))
 
     support = bootstrap.providers[provider].attachment_support if provider in bootstrap.providers else {}
     try:
@@ -318,6 +331,15 @@ def create_session_cmd(
     )
     emit_attachment_summary(attach_result.summary, json_output=json_output)
 
+    # Auto-fill spawned_by silently via PID ancestry. No CLI flag exposes
+    # this — the agent never has to know its own session_id to call us.
+    try:
+        from twicc.cli._session_request.whoami import resolve_current_session
+        current = resolve_current_session()
+        spawned_by_session_id = current.id if current is not None else None
+    except Exception:
+        spawned_by_session_id = None
+
     # Build the WS-compatible payload. ``directory`` is passed alongside
     # ``project_id`` so the server (PendingSessionsWatcher → service) can
     # auto-create the Project from inside the main process — that's where
@@ -331,6 +353,8 @@ def create_session_cmd(
         "title": title,
         "images": attach_result.images,
         "documents": attach_result.documents,
+        "hidden": hidden,
+        "spawned_by_session_id": spawned_by_session_id,
         **settings._asdict(),
     }
 
