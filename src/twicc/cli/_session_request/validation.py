@@ -14,6 +14,15 @@ _FIELD_TO_FLAG = {
     "thinking_enabled": "--thinking",
 }
 
+# Permission modes that do NOT require interactive approvals. Hidden
+# sessions must run with one of these because they have no UI surface
+# to render approval prompts. Whitelist is per provider — the resolved
+# permission_mode value is provider-specific.
+_PERMISSION_MODE_HIDDEN_WHITELIST = {
+    "claude_code": frozenset({"bypassPermissions", "dontAsk"}),
+    "codex": frozenset({"yolo", "strict"}),
+}
+
 
 def _field_to_flag(field: str) -> str:
     if field in _FIELD_TO_FLAG:
@@ -140,4 +149,64 @@ def validate_no_set_unset_conflict(
                 f"--unset {_field_to_unset_token(field)} conflicts with "
                 f"{_field_to_flag(field)} {value!r}; pick one.",
             ))
+    return errors
+
+
+def validate_hidden_constraints(
+    provider: str,
+    settings,
+    *,
+    hidden: bool,
+) -> list[ValidationError]:
+    """Enforce hidden-session invariants on the resolved AgentSettings bundle.
+
+    Called with the **post-resolution** settings (preset applied + CLI
+    overrides + ``enforce_agent_settings_consistency`` already run), so the
+    ``permission_mode`` and ``question_widget`` values reflect what the
+    session would actually be started with.
+
+    When ``hidden`` is ``False``, returns an empty list — the constraints
+    only apply to hidden sessions. When ``hidden`` is ``True``:
+
+    - ``permission_mode`` must be in ``_PERMISSION_MODE_HIDDEN_WHITELIST[provider]``;
+    - ``question_widget`` must NOT be ``True`` for providers that use it
+      (Claude Code). For other providers (Codex) the field is ignored.
+
+    Always returns a flat list of :class:`ValidationError` so the caller
+    can aggregate with the other validators.
+    """
+    if not hidden:
+        return []
+    errors: list[ValidationError] = []
+
+    # --- permission_mode whitelist -------------------------------
+    whitelist = _PERMISSION_MODE_HIDDEN_WHITELIST.get(provider, frozenset())
+    if not whitelist:
+        errors.append(ValidationError(
+            "--hidden", "hidden_unsupported_provider",
+            f"--hidden is not supported for provider {provider!r}. "
+            f"No non-interactive permission mode is configured for it.",
+        ))
+        return errors
+
+    mode = getattr(settings, "permission_mode", None)
+    if mode not in whitelist:
+        whitelist_str = ", ".join(sorted(whitelist))
+        errors.append(ValidationError(
+            "--permission-mode", "hidden_requires_non_interactive",
+            f"--hidden requires a non-interactive permission_mode. "
+            f"Provider {provider} accepts: {whitelist_str}. Got: {mode!r}.",
+        ))
+
+    # --- question_widget incompatibility (Claude Code only) -----
+    # Codex never uses question_widget; ignore the field entirely there.
+    if provider == "claude_code":
+        qw = getattr(settings, "question_widget", None)
+        if qw is True:
+            errors.append(ValidationError(
+                "--question-widget", "hidden_incompatible_with_question_widget",
+                "--hidden is incompatible with question_widget=True. "
+                "Pass --no-question-widget to override.",
+            ))
+
     return errors
