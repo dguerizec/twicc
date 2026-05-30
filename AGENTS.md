@@ -80,6 +80,14 @@ Do not do these on your own initiative:
 
 If the user explicitly asks for any of these operations, perform them without asking for another confirmation.
 
+## TwiCC Plugin (Agent Skills)
+
+The agent-facing skills live under `src/twicc/agent/plugin/twicc/skills/`, packaged as a versioned plugin declared in `src/twicc/agent/plugin/twicc/.claude-plugin/plugin.json`.
+
+Any change to the skill bundle — adding a new `SKILL.md`, editing the body of an existing one, renaming, or removing — REQUIRES bumping the `version` field in `plugin.json`. Without a bump, providers (Claude Code, Codex, ...) may keep an older copy cached and serve stale instructions to agents. The version is the signal "the bundle changed, refresh your local copy."
+
+Bump rule of thumb: any user-visible skill change → bump the patch (`0.10.0` → `0.10.1`); a new skill or an existing one with new flags/options → bump the minor (`0.10.0` → `0.11.0`); skill rename / removal → bump the minor at least.
+
 ## Backend Patterns
 
 - Use `orjson` for backend JSON work instead of the standard `json` module.
