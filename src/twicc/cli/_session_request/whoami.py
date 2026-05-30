@@ -24,12 +24,13 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Optional
+import subprocess
+from collections.abc import Iterator
 
 logger = logging.getLogger(__name__)
 
 
-def _walk_ppids():
+def _walk_ppids() -> Iterator[int]:
     """Yield successive parent PIDs starting at ``os.getpid()`` up to PID 1."""
     pid = os.getpid()
     while pid is not None and pid > 1:
@@ -40,7 +41,7 @@ def _walk_ppids():
         pid = ppid
 
 
-def _get_ppid(pid: int) -> Optional[int]:
+def _get_ppid(pid: int) -> int | None:
     """Return the parent PID of ``pid``, or ``None`` if unobtainable.
 
     Prefer ``psutil`` when available; fall back to ``/proc/<pid>/status``
@@ -53,8 +54,9 @@ def _get_ppid(pid: int) -> Optional[int]:
     except ImportError:
         pass
     except Exception:
-        # Process gone / permission error: walk stops.
-        return None
+        # Process gone / permission error for this pid: fall through to
+        # /proc and ps for the same pid rather than aborting the walk.
+        pass
 
     # Linux fallback
     try:
@@ -67,14 +69,13 @@ def _get_ppid(pid: int) -> Optional[int]:
 
     # macOS fallback via `ps`
     try:
-        import subprocess
         out = subprocess.run(
             ["ps", "-o", "ppid=", "-p", str(pid)],
             capture_output=True, text=True, timeout=2.0, check=False,
         )
         if out.returncode == 0 and out.stdout.strip():
             return int(out.stdout.strip())
-    except Exception:
+    except (subprocess.SubprocessError, ValueError, OSError):
         pass
 
     return None
@@ -113,4 +114,10 @@ def resolve_current_session():
                 # while process still alive). Fall through; nothing else to
                 # match in the ancestry.
                 return None
+
+    logger.debug(
+        "resolve_current_session: no matching agent in PID ancestry "
+        "from %d (checked %d candidate PIDs)",
+        os.getpid(), len(pid_to_session_id),
+    )
     return None
