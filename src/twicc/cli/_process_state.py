@@ -7,12 +7,13 @@ shared by:
 - ``processes.py`` (``twicc processes``)
 - ``process.py`` (``twicc process <ID>``)
 - ``process_wait.py`` (``twicc process <ID> wait <STATUS>...``)
+- ``processes_get.py`` (``twicc processes get <SESSION_ID>...``)
 
 The first two never observe a DEAD row (their queryset filters it out at the
-SQL level). ``wait`` is the only caller that can: it has to detect the
-"no live process" condition as a matchable state, so it pulls the most-recent
-row regardless of state and lets the projection collapse DEAD (and absence
-of a row) to the virtual value ``"dead"``.
+SQL level). ``wait`` and ``get`` are the only callers that can: they have to
+detect the "no live process" condition as a matchable / reportable state, so
+they pull the most-recent row regardless of state and let the projection
+collapse DEAD (and absence of a row) to the virtual value ``"dead"``.
 """
 
 from __future__ import annotations
@@ -109,4 +110,44 @@ def serialize_wait_result(
         }
     data = serialize_process_row(row, session)
     data["matched_state"] = matched_state
+    return data
+
+
+def serialize_get_result(
+    row,
+    session,
+    *,
+    session_id: str,
+    session_known: bool,
+) -> dict:
+    """Serialize one entry of a ``processes get`` lookup.
+
+    Adds ``session_known`` to the standard schema. Accepts ``row = None``
+    for session_ids whose live ``ProcessRun`` row is missing — in that
+    branch the row-bound fields (``id``, ``started_at``,
+    ``last_state_change_at``, ``pid``) are ``null``; ``provider``,
+    ``session_title`` and ``project_id`` fall back to the ``Session`` row
+    when one exists, else are also ``null``.
+
+    ``session_known`` is the caller's claim that TwiCC has at least one
+    trace of the session (a ``Session`` row OR any ``ProcessRun`` row,
+    even DEAD). ``False`` flags typos, periodic cleanup, or a foreign
+    session_id from a stale script — distinguishing them from a session
+    that genuinely existed but whose live process is gone.
+    """
+    if row is None:
+        return {
+            "id": None,
+            "provider": session.provider if session is not None else None,
+            "session_id": session_id,
+            "session_title": session.title if session is not None else None,
+            "project_id": session.project_id if session is not None else None,
+            "state": DEAD_VIRTUAL_STATE,
+            "session_known": session_known,
+            "started_at": None,
+            "last_state_change_at": None,
+            "pid": None,
+        }
+    data = serialize_process_row(row, session)
+    data["session_known"] = session_known
     return data

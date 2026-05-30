@@ -215,8 +215,17 @@ def usage() -> None:
     usage_main()
 
 
-@app.command()
-def processes(
+processes_app = typer.Typer(
+    name="processes",
+    help="List live TwiCC processes, or look up specific session_ids.",
+    invoke_without_command=True,
+)
+app.add_typer(processes_app)
+
+
+@processes_app.callback(invoke_without_command=True)
+def _processes_default(
+    ctx: typer.Context,
     provider: str = typer.Option(None, "--provider", help="Filter by backend provider (e.g. 'claude_code', 'codex')."),
     state: str = typer.Option(
         None,
@@ -241,7 +250,10 @@ def processes(
         ),
     ),
 ) -> None:
-    """List currently running processes of the live TwiCC instance as JSON."""
+    """List currently running processes of the live TwiCC instance as JSON (default action)."""
+    if ctx.invoked_subcommand is not None:
+        return
+
     if include_hidden and only_hidden:
         typer.echo("Error: --include-hidden and --only-hidden are mutually exclusive.", err=True)
         raise typer.Exit(2)
@@ -257,6 +269,31 @@ def processes(
         only_hidden=only_hidden,
         spawned_by=spawned_by,
     )
+
+
+@processes_app.command(name="get")
+def _processes_get(
+    session_ids: list[str] = typer.Argument(
+        ...,
+        metavar="SESSION_ID...",
+        help=(
+            "One or more session IDs to look up. The output mirrors the input "
+            "order (duplicates collapsed, first occurrence wins). Each entry "
+            "is either the live process row or a placeholder with state=\"dead\" "
+            "when no live process exists for that ID; a session_known flag "
+            "distinguishes typos from genuinely-stopped sessions."
+        ),
+    ),
+) -> None:
+    """Look up live process state for one or more session_ids (placeholder for missing).
+
+    Unlike ``twicc processes``, ``get`` takes no filter flags: when the
+    caller names the sessions it cares about, layering ``--provider`` /
+    ``--state`` would only blur the meaning of the placeholder rows.
+    """
+    from twicc.cli.processes_get import main as processes_get_main
+
+    processes_get_main(session_ids)
 
 
 process_app = typer.Typer(
