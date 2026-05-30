@@ -96,17 +96,14 @@ def _check_type_session(session) -> list[SessionVisibilityError]:
 def _check_hidden_invariants(session) -> list[SessionVisibilityError]:
     """Run validate_hidden_constraints against the current Session row.
 
-    We construct the AgentSettings-like view by reading the columns
-    directly (the session is already saved, no preset to merge).
+    We read the columns directly (the session is already saved, no preset to merge).
     """
     from twicc.cli._session_request.validation import validate_hidden_constraints
     from twicc.providers.helpers import AgentSettings
 
-    fake_settings = AgentSettings(
-        **{field: getattr(session, field, None) for field in AgentSettings._fields}
-    )
+    settings = AgentSettings.from_session(session)
     vlist = validate_hidden_constraints(
-        session.provider, fake_settings, hidden=True,
+        session.provider, settings, hidden=True,
     )
     return [SessionVisibilityError(v.field, v.code, v.message) for v in vlist]
 
@@ -122,36 +119,46 @@ async def _apply_flip(session, *, new_hidden: bool) -> None:
 
     @sync_to_async
     def _save_and_recompute():
-        # 1. Toggle the flag and persist with a tight update_fields list.
+        # Step 1: Toggle the flag and persist. Must succeed; if it raises we abort.
         session.hidden = new_hidden
         session.save(update_fields=["hidden"])
 
-        # 2. Recompute sessions_count on the Project.
-        #    update_project_metadata takes project_id (str), not a Project instance.
-        from twicc.projects import update_project_metadata
-        update_project_metadata(session.project_id)
+        # Steps 2-4: best-effort. A failure here leaves the flag set but counters/FTS
+        # slightly stale; the next refresh / restart will heal.
+        try:
+            # 2. Recompute sessions_count on the Project.
+            #    update_project_metadata takes project_id (str), not a Project instance.
+            from twicc.projects import update_project_metadata
+            update_project_metadata(session.project_id)
 
-        # 3. Collect dates impacted by the session's items, then recompute
-        #    PeriodicActivity for each (DailyActivity + WeeklyActivity,
-        #    per-project + global).
-        from twicc.core.models import SessionItem, PeriodicActivity
-        from twicc.core.enums import Provider
+            # 3. Collect dates impacted by the session's items, then recompute
+            #    PeriodicActivity for each (DailyActivity + WeeklyActivity,
+            #    per-project + global).
+            from twicc.core.models import SessionItem, PeriodicActivity
+            from twicc.core.enums import Provider
 
-        days = {
-            d for d, in SessionItem.objects
-            .filter(session=session, timestamp__isnull=False)
-            .values_list("timestamp__date")
-            .distinct()
-        }
-        if days:
-            provider_enum = Provider(session.provider)
-            PeriodicActivity.recalculate_for_days(
-                session.project_id, days, provider_enum,
+            days = {
+                d for d, in SessionItem.objects
+                .filter(session=session, timestamp__isnull=False)
+                .values_list("timestamp__date")
+                .distinct()
+            }
+            if days:
+                provider_enum = Provider(session.provider)
+                PeriodicActivity.recalculate_for_days(
+                    session.project_id, days, provider_enum,
+                )
+
+            # 4. Reindex the session document — the `hidden` Tantivy field
+            #    is now stale.
+            reindex_session(session.id)
+        except Exception:
+            logger.exception(
+                "session_visibility flip side-effects failed for session %s "
+                "(hidden=%s). The DB flag is set; counters/FTS may be stale "
+                "until next refresh.",
+                session.id, new_hidden,
             )
-
-        # 4. Reindex the session document — the `hidden` Tantivy field
-        #    is now stale.
-        reindex_session(session.id)
 
     await _save_and_recompute()
 
@@ -167,8 +174,8 @@ async def _broadcast_session_removed(session_id: str) -> None:
     if layer is None:
         return
     await layer.group_send("updates", {
-        "type": "session_removed",
-        "session_id": session_id,
+        "type": "broadcast",
+        "data": {"type": "session_removed", "session_id": session_id},
     })
 
 
@@ -180,16 +187,25 @@ async def _broadcast_session_updated(session) -> None:
         return
     payload = await sync_to_async(serialize_session)(session)
     await layer.group_send("updates", {
-        "type": "session_updated",
-        "session": payload,
+        "type": "broadcast",
+        "data": {"type": "session_updated", "session": payload},
     })
 
 
 async def _broadcast_project_updated(project_id: str) -> None:
     """Emit a project_updated WS event (sessions_count + cost may have changed)."""
-    from twicc.providers.db_writer import _broadcast_project_updated as _broadcast
+    from twicc.core.models import Project
+    from twicc.core.serializers import serialize_project
+
+    layer = get_channel_layer()
+    if layer is None:
+        return
     try:
-        await _broadcast(project_id)
+        if project := await sync_to_async(Project.objects.filter(id=project_id).first)():
+            await layer.group_send("updates", {
+                "type": "broadcast",
+                "data": {"type": "project_updated", "project": serialize_project(project)},
+            })
     except Exception:
         logger.exception("Failed to broadcast project_updated for %s", project_id)
 
