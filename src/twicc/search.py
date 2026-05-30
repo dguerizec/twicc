@@ -56,6 +56,26 @@ class SearchIndexLockedError(RuntimeError):
         )
 
 
+class SearchIndexWipeError(RuntimeError):
+    """Raised when the search index dir cannot be wiped to migrate schema.
+
+    Surfaces the case where the on-disk version does not match the in-memory
+    schema (a CURRENT_SEARCH_VERSION bump), but the rmtree of the dir fails
+    — typically because another process still holds open file handles
+    inside it, or for a more mundane reason (permission denied, no space,
+    etc.). Distinct from SearchIndexLockedError, which is specifically
+    about Tantivy writer-lock contention.
+    """
+
+    def __init__(self, search_dir):
+        self.search_dir = search_dir
+        super().__init__(
+            f"Could not wipe the search index dir at {search_dir} to migrate "
+            f"its schema. Another process may be holding open files in it, "
+            f"or the directory may have stricter permissions than expected."
+        )
+
+
 # Score multiplier for title matches — titles are more important than message content
 TITLE_SCORE_BOOST = 3.0
 
@@ -135,13 +155,13 @@ def _register_tokenizer(index: tantivy.Index) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _ensure_search_dir(search_dir: Path) -> None:
+def _ensure_search_dir(search_dir: Path, current_version: str) -> None:
     """Wipe and recreate the search directory if the on-disk schema version doesn't match.
 
     Tantivy refuses to open an index whose on-disk schema disagrees with the in-memory
     schema. We guard against this by comparing a ``.schema-version`` file in the search
-    directory against ``CURRENT_SEARCH_VERSION`` (from Django settings). On mismatch
-    (or when the file is absent), the whole directory is removed and re-created so
+    directory against ``current_version`` (the caller passes ``str(settings.CURRENT_SEARCH_VERSION)``).
+    On mismatch (or when the file is absent), the whole directory is removed and re-created so
     Tantivy initializes a fresh empty index.
 
     The ``.schema-version`` file is written AFTER the writer is successfully acquired
@@ -153,10 +173,7 @@ def _ensure_search_dir(search_dir: Path) -> None:
     (schema change) and the per-session re-index sweep (search content regeneration);
     they share the same version counter so bumping once is sufficient for both.
     """
-    from django.conf import settings
-
     schema_version_file = search_dir / ".schema-version"
-    current_version = str(settings.CURRENT_SEARCH_VERSION)
 
     if search_dir.exists():
         try:
@@ -173,7 +190,7 @@ def _ensure_search_dir(search_dir: Path) -> None:
             try:
                 shutil.rmtree(search_dir)
             except OSError as e:
-                raise SearchIndexLockedError(search_dir) from e
+                raise SearchIndexWipeError(search_dir) from e
 
     search_dir.mkdir(parents=True, exist_ok=True)
 
@@ -185,11 +202,14 @@ def init_search_index() -> None:
     """
     global _index, _writer, _schema
 
+    from django.conf import settings
     from twicc.paths import get_search_dir
+
+    current_version = str(settings.CURRENT_SEARCH_VERSION)
 
     _schema = _build_schema()
     search_dir = get_search_dir()
-    _ensure_search_dir(search_dir)
+    _ensure_search_dir(search_dir, current_version)
 
     _index = tantivy.Index(_schema, path=str(search_dir))
     _register_tokenizer(_index)
@@ -213,8 +233,7 @@ def init_search_index() -> None:
     # This means the marker truthfully reflects "we fully booted with this schema version";
     # a half-baked index that crashed during init won't falsely claim to be up-to-date.
     schema_version_file = search_dir / ".schema-version"
-    from django.conf import settings
-    schema_version_file.write_text(str(settings.CURRENT_SEARCH_VERSION))
+    schema_version_file.write_text(current_version)
 
     logger.info("Search index initialized at %s", search_dir)
 
