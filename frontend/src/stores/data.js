@@ -953,11 +953,15 @@ export const useDataStore = defineStore('data', {
         /**
          * Remove a session from the store by id.
          * Called when the backend emits ``session_removed`` (e.g. a session
-         * was hidden and the REST API no longer serves it). Reactive
-         * dependents (sidebar, counters, MRU) update automatically.
+         * was hidden and the REST API no longer serves it). Delegates the
+         * derived-state cleanup (sessionItems, expandedGroups, agentLinks,
+         * etc.) to ``unloadSession`` so the same teardown logic is shared
+         * with reconciliation-driven unloads; then drops the row itself
+         * from ``sessions`` and removes it from the MRU.
          * @param {string} sessionId
          */
         removeSession(sessionId) {
+            this.unloadSession(sessionId)
             delete this.sessions[sessionId]
             this.removeMruSession(sessionId)
         },
