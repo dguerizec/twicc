@@ -352,6 +352,12 @@ from twicc.cli.password import app as password_app  # noqa: E402
 app.add_typer(password_app)
 
 
+# ``whoami`` resolves the TwiCC session owning the calling process via PID
+# ancestry. The function performs lazy Django setup inside its body.
+from twicc.cli.whoami import whoami_cmd  # noqa: E402
+app.command("whoami")(whoami_cmd)
+
+
 def main() -> None:
     """Entry point for ``pyproject.toml`` scripts and ``__main__.py``."""
     app()
