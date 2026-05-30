@@ -97,13 +97,24 @@ def resolve_spawned_by_filter(value: str | None) -> str | None:
     """Translate a ``--spawned-by`` CLI value into a session_id filter.
 
     - ``None``  → ``None`` (no filter)
-    - ``"self"`` → resolve via whoami; raise if no session in ancestry
+    - ``"self"`` → resolve via whoami; raise ``RuntimeError`` on any failure
+      (missing session in ancestry, DB error, ...)
     - any other string → use it verbatim as a session_id
+
+    Any internal failure is wrapped in ``RuntimeError`` so the typer
+    wrappers that call this can surface a clean human error + non-zero
+    exit code instead of leaking a raw traceback.
     """
     if value is None:
         return None
     if value == "self":
-        session = resolve_current_session()
+        try:
+            session = resolve_current_session()
+        except Exception as e:
+            raise RuntimeError(
+                f"--spawned-by self: could not resolve the current "
+                f"session: {type(e).__name__}: {e}",
+            ) from e
         if session is None:
             raise RuntimeError(
                 "--spawned-by self: no TwiCC session found in PID ancestry. "
