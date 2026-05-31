@@ -1,9 +1,9 @@
 """
-Pending per-session structural attributes buffer (hidden + spawned_by).
+Pending per-session structural attributes buffer.
 
-Same pattern as :mod:`twicc.pending_agent_settings`, but for the two
-structural attributes that fall outside the closed ``AgentSettings``
-bundle: ``hidden`` and ``spawned_by_id``.
+Same pattern as :mod:`twicc.pending_agent_settings`, but for structural
+attributes that fall outside the closed ``AgentSettings`` bundle: ``hidden``
+and spawned-session links.
 
 When the CLI / WS handler decides those values, the ``Session`` row
 does not exist yet — it will be created by the provider's file watcher
@@ -31,6 +31,7 @@ logger = logging.getLogger(__name__)
 class PendingSessionAttributes(NamedTuple):
     hidden: bool
     spawned_by_id: str | None
+    spawn_root_id: str | None
 
 
 # session_id -> PendingSessionAttributes
@@ -42,15 +43,17 @@ def set_pending_session_attributes(
     *,
     hidden: bool = False,
     spawned_by_id: str | None = None,
+    spawn_root_id: str | None = None,
 ) -> None:
     """Store pending structural attributes to be applied at row creation."""
     _pending[session_id] = PendingSessionAttributes(
         hidden=hidden,
         spawned_by_id=spawned_by_id,
+        spawn_root_id=spawn_root_id,
     )
     logger.debug(
-        "Set pending session attributes for %s: hidden=%s spawned_by_id=%s",
-        session_id, hidden, spawned_by_id,
+        "Set pending session attributes for %s: hidden=%s spawned_by_id=%s spawn_root_id=%s",
+        session_id, hidden, spawned_by_id, spawn_root_id,
     )
 
 

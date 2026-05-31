@@ -155,16 +155,20 @@ async def create_session_from_payload(payload: dict) -> SessionCreationResult:
                                   f"Project {project_id!r} has no directory set")
         ])
 
-    # --- spawned_by validation -----------------------------------
+    # --- spawned tree validation ---------------------------------
     # A forged or stale ID would later raise IntegrityError on the FK
     # constraint when the watcher creates the Session row. Fail loudly
-    # now with a clear error rather than a downstream stack trace.
+    # now with a clear error rather than a downstream stack trace. When a
+    # normal top-level session spawns its first child, initialize its own
+    # spawn_root to itself so the whole tree can be queried by one indexed FK.
+    spawn_root_session_id = None
     if spawned_by_session_id is not None:
-        from twicc.core.models import Session
-        exists = await sync_to_async(
-            lambda: Session.objects.filter(pk=spawned_by_session_id).exists()
-        )()
-        if not exists:
+        spawn_root_session_id = await run_under_db_write_lock(
+            lambda: sync_to_async(_resolve_or_initialize_spawn_root_session_id)(
+                spawned_by_session_id
+            )
+        )
+        if spawn_root_session_id is None:
             return SessionCreationResult(False, None, None, None, [
                 SessionCreationError(
                     "spawned_by_session_id", "invalid_spawned_by",
@@ -203,6 +207,7 @@ async def create_session_from_payload(payload: dict) -> SessionCreationResult:
         session_id,
         hidden=hidden,
         spawned_by_id=spawned_by_session_id,
+        spawn_root_id=spawn_root_session_id,
     )
 
     # --- resolve to effective settings (None -> synced default) --
@@ -245,3 +250,31 @@ async def create_session_from_payload(payload: dict) -> SessionCreationResult:
         project_id=project_id,
         errors=None,
     )
+
+
+def _resolve_or_initialize_spawn_root_session_id(spawned_by_session_id: str) -> str | None:
+    """Return the spawner's root id and initialize it when absent.
+
+    Synchronous by design; async callers must run this through
+    ``sync_to_async``. The helper writes the spawner row when it becomes
+    the root of a spawned-session tree, so callers should hold the DB
+    write lock.
+    """
+    from twicc.core.models import Session
+
+    spawned_by_session = (
+        Session.objects
+        .filter(pk=spawned_by_session_id)
+        .values("id", "spawn_root_id")
+        .first()
+    )
+    if spawned_by_session is None:
+        return None
+
+    root_id = spawned_by_session["spawn_root_id"] or spawned_by_session["id"]
+    if spawned_by_session["spawn_root_id"] is None:
+        Session.objects.filter(
+            pk=spawned_by_session["id"],
+            spawn_root__isnull=True,
+        ).update(spawn_root_id=spawned_by_session["id"])
+    return root_id

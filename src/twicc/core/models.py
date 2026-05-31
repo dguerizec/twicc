@@ -367,6 +367,20 @@ class Session(models.Model):
         related_name="spawned_sessions",
         db_index=True,
     )
+    # Root session for this spawned-session tree. Set on sessions created via
+    # ``twicc create-session`` from another session; ordinary UI/manual sessions
+    # keep it null until they spawn their first child, then point to themselves.
+    # Denormalized to fetch an orchestration tree in one query while
+    # ``spawned_by`` remains the direct parent edge.
+    spawn_root = models.ForeignKey(
+        "self",
+        null=True,
+        blank=True,
+        default=None,
+        on_delete=models.SET_NULL,
+        related_name="spawn_tree_sessions",
+        db_index=True,
+    )
 
     # Per-session permission mode. Values are provider-specific (e.g. "default",
     # "acceptEdits", "plan", "bypassPermissions" for Claude Code). NULL = use global default.

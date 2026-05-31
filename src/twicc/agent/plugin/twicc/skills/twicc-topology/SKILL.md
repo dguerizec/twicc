@@ -48,6 +48,8 @@ $TWICC topology <SESSION_ID|self> [OPTIONS]
   "root_session_id": "A",
   "path_to_seed": ["A", "B"],
   "cycle_detected": false,
+  "total_cost": 2.34,
+  "node_count": 2,
   "processes": {"requested": true, "available": true, "reason": null},
   "tree": {"id": "A", "children": [{"id": "B", "children": []}]},
   "nodes": [
@@ -59,12 +61,29 @@ $TWICC topology <SESSION_ID|self> [OPTIONS]
         "provider": "codex",
         "title": "Root orchestrator",
         "total_cost": 1.23,
-        "spawned_by": null
+        "spawned_by": null,
+        "spawn_root": "A"
       },
       "process": {"id": 42, "state": "user_turn", "started_at": "...", "last_state_change_at": "...", "pid": 12345},
       "direct_child_count": 1,
       "descendant_count": 1,
       "subtree_total_cost": 2.34
+    },
+    {
+      "id": "B",
+      "session": {
+        "id": "B",
+        "project_id": "-home-twidi-dev-myproject",
+        "provider": "codex",
+        "title": "Implementation worker",
+        "total_cost": 1.11,
+        "spawned_by": "A",
+        "spawn_root": "A"
+      },
+      "process": {"id": null, "state": "dead", "started_at": null, "last_state_change_at": null, "pid": null},
+      "direct_child_count": 0,
+      "descendant_count": 0,
+      "subtree_total_cost": 1.11
     }
   ]
 }
@@ -73,6 +92,8 @@ $TWICC topology <SESSION_ID|self> [OPTIONS]
 - `seed_session_id` — session id passed as input, after resolving `self`.
 - `root_session_id` — top-level ancestor id for this spawned-session tree.
 - `path_to_seed` — root-to-seed chain.
+- `total_cost` — sum of `session.total_cost` for every node, or `null` when none has cost.
+- `node_count` — total number of nodes in the topology.
 - `tree` — nested id-only tree for traversal.
 - `nodes` — node data in tree pre-order; the root is first.
 - `nodes[].id` — same value as `nodes[].session.id`, exposed for direct indexing.

@@ -94,7 +94,8 @@ Returns one entry per id in input order (duplicates collapsed). No filter flags 
     "context_max": 200000,
     "compacted": false,
     "hidden": false,
-    "spawned_by": null
+    "spawned_by": null,
+    "spawn_root": null
   }
 ]
 ```
@@ -111,6 +112,7 @@ Returns one entry per id in input order (duplicates collapsed). No filter flags 
 - `last_viewed_at` — when the user last opened the session in TwiCC.
 - `hidden` — whether the session is hidden from all listings and broadcasts.
 - `spawned_by` — session ID that spawned this session, or `null`.
+- `spawn_root` — root session ID for the spawned-session tree, or `null` before a session joins one.
 
 ### Batch lookup (`get`)
 

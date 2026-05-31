@@ -76,9 +76,10 @@ Works for regular sessions and subagents.
   "claude_in_chrome": false,
   "fast_mode": false,
   "context_max": 200000,
-  "compacted": false
+  "compacted": false,
   "hidden": false,
   "spawned_by": null,
+  "spawn_root": null
 }
 ```
 
@@ -95,6 +96,7 @@ Works for regular sessions and subagents.
 - `last_viewed_at` — when the user last opened the session in TwiCC.
 - `hidden` — whether the session is hidden from all listings and broadcasts.
 - `spawned_by` — session ID that spawned this session, or `null`.
+- `spawn_root` — root session ID for the spawned-session tree, or `null` before a session joins one.
 
 ### Content — raw items
 

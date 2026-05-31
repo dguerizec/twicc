@@ -42,35 +42,15 @@ def build_topology(
     requested, the live TwiCC sidecar is resolved; if unavailable, topology is
     still returned with process data marked unavailable.
     """
-    from twicc.core.models import ProcessRun, Session, SessionType
+    from twicc.core.models import ProcessRun
 
-    ancestors, cycle_detected = _collect_ancestors(seed)
-    root = ancestors[0]
-
-    sessions_by_id: dict[str, Session] = {
-        session.id: session
-        for session in ancestors
-    }
-    children_by_parent: dict[str, list[str]] = {}
-    frontier = [root.id]
-    seen = {root.id}
-
-    while frontier:
-        children = list(
-            Session.objects
-            .filter(type=SessionType.SESSION, spawned_by_id__in=frontier)
-            .order_by("created_at", "id")
-        )
-        next_frontier = []
-        for child in children:
-            if child.id in seen:
-                cycle_detected = True
-                continue
-            seen.add(child.id)
-            sessions_by_id[child.id] = child
-            children_by_parent.setdefault(child.spawned_by_id, []).append(child.id)
-            next_frontier.append(child.id)
-        frontier = next_frontier
+    (
+        root,
+        path_to_seed,
+        sessions_by_id,
+        children_by_parent,
+        cycle_detected,
+    ) = _load_topology_sessions(seed)
 
     tree = _build_tree(root.id, children_by_parent)
     ordered_ids = list(_walk_tree_ids(tree))
@@ -105,8 +85,10 @@ def build_topology(
     return {
         "seed_session_id": seed.id,
         "root_session_id": root.id,
-        "path_to_seed": [session.id for session in ancestors],
+        "path_to_seed": path_to_seed,
         "cycle_detected": cycle_detected,
+        "total_cost": metrics_by_id[root.id]["subtree_total_cost"],
+        "node_count": len(ordered_ids),
         "processes": {
             "requested": include_processes,
             "available": processes_available,
@@ -138,26 +120,88 @@ def _resolve_seed(session_id: str):
         sys.exit(1)
 
 
-def _collect_ancestors(seed) -> tuple[list, bool]:
-    """Return ``[root, ..., seed]`` following ``spawned_by`` links."""
-    current = seed
-    ancestors = [seed]
-    seen = {seed.id}
+def _load_topology_sessions(seed) -> tuple:
+    """Load the topology containing ``seed``.
+
+    Spawned sessions carry ``spawn_root`` so the whole tree can be loaded in
+    one query. Ordinary sessions with no ``spawn_root`` are single-node trees
+    until they spawn a child.
+    """
+    root = _get_session(seed.spawn_root_id) if seed.spawn_root_id is not None else None
+    if root is None:
+        root = seed
+
+    return _build_loaded_topology(seed, root, _get_spawn_root_sessions(root.id))
+
+
+def _get_spawn_root_sessions(root_id: str) -> list:
+    from twicc.core.models import Session
+
+    return list(
+        Session.objects
+        .filter(spawn_root_id=root_id)
+        .order_by("created_at", "id")
+    )
+
+
+def _build_loaded_topology(seed, root, descendants: list) -> tuple:
+    sessions_by_id = {root.id: root}
+    for session in descendants:
+        sessions_by_id.setdefault(session.id, session)
+
+    children_by_parent: dict[str, list[str]] = {}
+    cycle_detected = False
+    for session in sessions_by_id.values():
+        if session.id == root.id:
+            continue
+        if session.spawned_by_id == session.id:
+            cycle_detected = True
+            continue
+        if session.spawned_by_id in sessions_by_id:
+            children_by_parent.setdefault(session.spawned_by_id, []).append(session.id)
+
+    path_to_seed, path_cycle_detected = _build_path_to_seed(
+        seed.id,
+        root.id,
+        sessions_by_id,
+    )
+    return (
+        root,
+        path_to_seed,
+        sessions_by_id,
+        children_by_parent,
+        cycle_detected or path_cycle_detected,
+    )
+
+
+def _build_path_to_seed(
+    seed_id: str,
+    root_id: str,
+    sessions_by_id: dict,
+) -> tuple[list[str], bool]:
+    current_id = seed_id
+    path = []
+    seen = set()
     cycle_detected = False
 
-    while current.spawned_by_id is not None:
-        if current.spawned_by_id in seen:
+    while True:
+        if current_id in seen:
             cycle_detected = True
             break
-        parent = _get_session(current.spawned_by_id)
-        if parent is None:
-            break
-        ancestors.append(parent)
-        seen.add(parent.id)
-        current = parent
+        seen.add(current_id)
 
-    ancestors.reverse()
-    return ancestors, cycle_detected
+        session = sessions_by_id.get(current_id)
+        if session is None:
+            break
+        path.append(current_id)
+        if current_id == root_id:
+            break
+        if session.spawned_by_id is None:
+            break
+        current_id = session.spawned_by_id
+
+    path.reverse()
+    return path, cycle_detected
 
 
 def _get_session(session_id: str):

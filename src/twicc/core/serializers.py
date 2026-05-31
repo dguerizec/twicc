@@ -97,12 +97,13 @@ def serialize_session(session):
         },
         # Whether the session has been compacted at least once
         "compacted": session.compacted,
-        # Hidden + spawned_by (cf. hidden-sessions design spec). The
+        # Hidden + spawned tree links (cf. hidden-sessions design spec). The
         # frontend never sees a hidden session via REST (filtered server
         # side); the CLI uses these fields when it explicitly opts into
         # hidden listings via --include-hidden / --only-hidden.
         "hidden": session.hidden,
         "spawned_by": session.spawned_by_id,
+        "spawn_root": session.spawn_root_id,
     }
 
 
