@@ -41,7 +41,7 @@ Results are ordered by most recently active.
 - `--include-archived` — include archived sessions (excluded by default).
 - `--include-hidden` — include hidden sessions (excluded by default).
 - `--only-hidden` — only hidden sessions. Mutually exclusive with `--include-hidden`.
-- `--spawned-by <ID|self>` — filter to sessions spawned by the given session ID. `self` means the current session. Implies `--include-hidden`.
+- `--spawned-by <ID|self>` — filter to direct child sessions spawned by the given session ID. `self` means the current session. Implies `--include-hidden`.
 
 ### Batch lookup
 
@@ -140,6 +140,7 @@ $TWICC sessions get abc123 def456 ghi789
 ## Related commands
 
 - `$TWICC session <session_id>` — full metadata for one session (exit 1 if missing). Skill: `twicc-session`.
+- `$TWICC topology <ID|self>` — map a spawned-session tree. Skill: `twicc-topology`.
 - `$TWICC project <PROJECT>` / `$TWICC projects` — project details or listing. Skill: `twicc-project` / `twicc-projects`.
 - `$TWICC search "<query>"` — full-text search across sessions. Skill: `twicc-search`.
 

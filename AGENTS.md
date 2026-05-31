@@ -42,6 +42,10 @@ Do not restart development servers unless the user asks. After backend changes, 
 
 ## Data Directory And Worktrees
 
+In this section, `worktree` means an additional Git checkout created with
+`git worktree` (typically under `.worktrees/`). Do not use this term for the
+main repository checkout.
+
 Persistent data lives in the TwiCC data directory:
 
 ```text
@@ -56,7 +60,14 @@ Data directory priority:
 2. `$TWICC_DATA_DIR`
 3. `~/.twicc/`
 
-When running Python or Django code manually inside a worktree, always set `TWICC_DATA_DIR` to the worktree root. `paths.py` does not detect worktrees by itself; `devctl.py` injects the correct environment only for processes it starts.
+When running Python or Django code manually inside an additional Git worktree,
+always set `TWICC_DATA_DIR` to that worktree root. `paths.py` does not detect
+additional worktrees by itself; `devctl.py` injects the correct environment
+only for processes it starts.
+
+When running commands manually from the main repository checkout, do not set
+`TWICC_DATA_DIR=$PWD` by default. Leave it unset to use the normal TwiCC data
+directory unless the user explicitly wants checkout-local data.
 
 Example:
 

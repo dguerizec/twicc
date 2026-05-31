@@ -40,7 +40,7 @@ $TWICC processes [OPTIONS]
 - `--offset N` — skip first N for pagination (default: 0).
 - `--include-hidden` — include processes for hidden sessions (excluded by default).
 - `--only-hidden` — only processes for hidden sessions. Mutually exclusive with `--include-hidden`.
-- `--spawned-by <ID|self>` — filter to sessions spawned by the given session ID. `self` means the current session. Implies `--include-hidden`.
+- `--spawned-by <ID|self>` — filter to direct child sessions spawned by the given session ID. `self` means the current session. Implies `--include-hidden`.
 
 ### Batch lookup (`get`)
 
@@ -186,6 +186,7 @@ $TWICC processes wait abc123 def456 user_turn --transition --timeout 600
 - `$TWICC process <session_id>` — inspect/stop/wait for a single session. Skill: `twicc-process`.
 - `$TWICC session <session_id>` — session metadata. Skill: `twicc-session`.
 - `$TWICC sessions` — browse all sessions (including stopped). Skill: `twicc-sessions`.
+- `$TWICC topology <ID|self>` — show process states in tree context. Skill: `twicc-topology`.
 
 ## How to present results
 

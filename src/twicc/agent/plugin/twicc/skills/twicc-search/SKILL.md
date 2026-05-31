@@ -36,7 +36,7 @@ $TWICC search '<query>' [OPTIONS]
 - `--offset N` — skip first N for pagination (default: 0).
 - `--include-hidden` — include hits from hidden sessions (excluded by default).
 - `--only-hidden` — hits only from hidden sessions. Mutually exclusive with `--include-hidden`.
-- `--spawned-by <ID|self>` — filter hits to sessions spawned by the given session ID. `self` means the current session. Implies `--include-hidden`.
+- `--spawned-by <ID|self>` — filter hits to direct child sessions spawned by the given session ID. `self` means the current session. Implies `--include-hidden`.
 
 ### Query syntax
 
@@ -94,6 +94,7 @@ $TWICC search 'websocket' --include-hidden --limit 50 --offset 20
 
 - `$TWICC session <session_id> content <line_num>` — fetch the full item at a search result's `line_num`. Skill: `twicc-session`.
 - `$TWICC session <session_id>` — full session metadata. Skill: `twicc-session`.
+- `$TWICC topology <ID|self>` — discover the spawned-session tree before scoping search. Skill: `twicc-topology`.
 - `$TWICC sessions --project <PROJECT>` — browse sessions in the same project. Skill: `twicc-sessions`.
 - `$TWICC project <PROJECT>` — project details. Skill: `twicc-project`.
 

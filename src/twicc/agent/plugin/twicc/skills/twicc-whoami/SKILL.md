@@ -11,8 +11,6 @@ Identify the TwiCC session you are running in. Returns the same output as `$TWIC
 
 - You need your own `session_id` and don't already have it in context.
 
-Note: to filter listings to sessions you spawned, prefer `--spawned-by self` on `$TWICC sessions`, `$TWICC processes`, and `$TWICC search` — no need to call `whoami` first.
-
 ## How to invoke
 
 TwiCC's executable varies by launch mode (uvx, dev, installed tool). ALWAYS USE THIS TO RESOLVE $TWICC AT THE START OF EACH BASH INVOCATION:
@@ -31,6 +29,10 @@ $TWICC whoami           # human-readable (indented JSON)
 $TWICC whoami --json    # compact JSON, suitable for parsing
 ```
 
+### Self-aware shortcuts
+
+Commands that accept `self` resolve the calling session on their own. Use `--spawned-by self` on `$TWICC sessions`, `$TWICC processes`, and `$TWICC search` instead of calling `whoami` only to copy your id. Use `$TWICC topology self` when you need the surrounding spawned-session tree.
+
 ### Exit codes
 
 - `0` — Session resolved.
@@ -47,3 +49,4 @@ MY_SESSION_ID=$($TWICC whoami --json | jq -r .id)
 - `$TWICC sessions --spawned-by self` — list sessions you spawned. Skill: `twicc-sessions`.
 - `$TWICC processes --spawned-by self` — list running processes you spawned. Skill: `twicc-processes`.
 - `$TWICC search '<query>' --spawned-by self` — search within sessions you spawned. Skill: `twicc-search`.
+- `$TWICC topology self` — map the spawned-session tree around you. Skill: `twicc-topology`.

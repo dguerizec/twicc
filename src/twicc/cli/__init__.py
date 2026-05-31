@@ -342,6 +342,27 @@ def usage() -> None:
     usage_main()
 
 
+@app.command()
+def topology(
+    session_id: str = typer.Argument(
+        help="Session ID to anchor the topology, or 'self' from inside an agent session.",
+    ),
+    processes: bool = typer.Option(
+        True,
+        "--processes/--no-processes",
+        help=(
+            "Include compact live process state when a TwiCC backend is running. "
+            "If no backend is running, topology is still returned with process "
+            "data marked unavailable."
+        ),
+    ),
+) -> None:
+    """Show the spawned-session tree containing a session as JSON."""
+    from twicc.cli.topology import main as topology_main
+
+    topology_main(session_id, include_processes=processes)
+
+
 processes_app = typer.Typer(
     name="processes",
     help="List live TwiCC processes, or look up specific session_ids.",

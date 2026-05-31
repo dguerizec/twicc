@@ -43,6 +43,10 @@ $TWICC send-message [OPTIONS] '<SESSION_ID|parent>' '<PROMPT>'
 - `--json` — emit a single JSON object on stdout (implies `--no-color`).
 - `--no-color` — disable ANSI colors.
 
+### Target discovery
+
+To message a sibling or descendant whose id you don't know yet, use `$TWICC topology self` first and pick the target node (skill: `twicc-topology`).
+
 ## Errors
 
 ### Local (exit 1)
@@ -108,6 +112,7 @@ The message is queued; the agent picks it up on its next turn.
 
 - `$TWICC info commands [--provider <key>] [--project <PROJECT>]` — list slash / dollar commands available in the target session's scope before referencing them in the message. Skill: `twicc-info`.
 - `$TWICC create-session` — create a new session instead. Skill: `twicc-create-session`.
+- `$TWICC topology self` — discover sibling and descendant session ids. Skill: `twicc-topology`.
 - `$TWICC update-session <session_id> settings` — change agent settings before sending. Skill: `twicc-update-session`.
 - `$TWICC process <session_id> stop` — stop the live agent. Skill: `twicc-process`.
 - `$TWICC processes --state awaiting_user_input` — find sessions blocked on user input. Skill: `twicc-processes`.

@@ -153,7 +153,7 @@ Common patterns:
 $TWICC session <SESSION_ID> agents [--limit N] [--offset N]
 ```
 
-Only valid on parent sessions (errors on subagents). Returns a JSON array in the same shape as `$TWICC sessions`, each entry with `parent_session_id` set. Ordered by most recently active.
+Only valid on parent sessions (errors on subagents). Returns provider-internal subagents, not sessions created via `create-session`; use `$TWICC topology <ID|self>` for the `spawned_by` tree (skill: `twicc-topology`). Ordered by most recently active.
 
 ## Examples
 
@@ -171,6 +171,7 @@ $TWICC session abc123 agents --limit 50
 
 - `$TWICC sessions` — find session IDs. Skill: `twicc-sessions`.
 - `$TWICC process <session_id>` — live process state and PID. Skill: `twicc-process`.
+- `$TWICC topology <ID|self>` — map spawned sessions around this node. Skill: `twicc-topology`.
 - `$TWICC search "<query>"` — results include `session_id` + `line_num` for use with `content`. Skill: `twicc-search`.
 - `$TWICC project <project_id>` — project details. Skill: `twicc-project`.
 

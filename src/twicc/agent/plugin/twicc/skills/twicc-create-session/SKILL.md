@@ -121,6 +121,8 @@ $TWICC create-session --json --provider claude_code 'Hello'
 
 Creation returns immediately; the agent keeps working in the background.
 
+**Map spawned work:** `$TWICC topology self` shows the full spawned-session tree rooted at your top-level ancestor, with compact process state for every node (skill: `twicc-topology`).
+
 **Check state:** `$TWICC process <SESSION_ID>` (skill: `twicc-process`):
 - `assistant_turn` → still working.
 - `awaiting_user_input` → blocked on a pending UI dialog. Do NOT call `send-message` — the user must click in the TwiCC UI first. Fetch what's being asked with `$TWICC session <ID> messages --tail 1`.
@@ -138,6 +140,7 @@ Creation returns immediately; the agent keeps working in the background.
 - `$TWICC send-message <session_id>` — send a follow-up. Skill: `twicc-send-message`.
 - `$TWICC process <session_id>` — check agent state. Skill: `twicc-process`.
 - `$TWICC processes --spawned-by self` — track sessions you spawned. Skill: `twicc-processes`.
+- `$TWICC topology self` — map the spawned-session tree around you. Skill: `twicc-topology`.
 - `$TWICC update-session <session_id> settings` — change agent settings. Skill: `twicc-update-session`.
 - `$TWICC session <session_id>` — full metadata. Skill: `twicc-session`.
 - `$TWICC sessions --project <PROJECT>` — browse sessions in the project. Skill: `twicc-sessions`.
