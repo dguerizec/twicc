@@ -17,6 +17,7 @@ from collections.abc import Callable, Coroutine
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from twicc.core.enums import Provider
+from twicc.logging_context import provider_log_context
 
 from .states import AgentInfo, AgentState, PendingRequest, get_process_memory
 
@@ -113,22 +114,32 @@ class BaseAgent:
         self.state_changed_at = time.time()
         if new_state == AgentState.DEAD:
             self._dead_event.set()
-        logger.debug(
-            "State transition for session %s: %s -> %s",
-            self.session_id, old_state.value, new_state.value,
-        )
+        with provider_log_context(self.provider):
+            logger.debug(
+                "State transition for session %s: %s -> %s",
+                self.session_id, old_state.value, new_state.value,
+            )
 
     async def _notify_state_change(self) -> None:
-        """Dispatch the registered state-change callback, swallowing failures."""
+        """Dispatch the registered state-change callback, swallowing failures.
+
+        Wrapped in :func:`provider_log_context` so every log emitted by the
+        callback chain (typically ``BaseAgentManager._on_state_change`` and
+        its descendants) carries the provider tag — agent message loops may
+        run in tasks that were not created via the orchestrator's
+        ``_create_task`` helper (e.g. tasks reached from a WS consumer),
+        so the tag must be (re-)posted here to cover the whole notify path.
+        """
         if self._state_change_callback is None:
             return
-        try:
-            await self._state_change_callback(self)
-        except Exception as e:
-            logger.error(
-                "Error in state change callback for session %s: %s",
-                self.session_id, e, exc_info=True,
-            )
+        with provider_log_context(self.provider):
+            try:
+                await self._state_change_callback(self)
+            except Exception as e:
+                logger.error(
+                    "Error in state change callback for session %s: %s",
+                    self.session_id, e, exc_info=True,
+                )
 
     async def _transition_to_dead(self) -> None:
         """Atomically transition into DEAD: set state, notify, then signal done.
@@ -285,11 +296,12 @@ class BaseAgent:
             # Outer cancel takes precedence; inner cancel is redundant.
         except Exception as inner_exc:
             if captured_outer_cancel is not None:
-                logger.error(
-                    "DEAD callback for session %s raised while the "
-                    "transition was being cancelled; suppressing inner: %s",
-                    self.session_id, inner_exc, exc_info=inner_exc,
-                )
+                with provider_log_context(self.provider):
+                    logger.error(
+                        "DEAD callback for session %s raised while the "
+                        "transition was being cancelled; suppressing inner: %s",
+                        self.session_id, inner_exc, exc_info=inner_exc,
+                    )
             else:
                 raise
         if captured_outer_cancel is not None:
@@ -392,13 +404,14 @@ class BaseAgent:
         """
         future = self._pending_futures.get(request_id)
         if future is None or future.done():
-            logger.warning(
-                "[session %s] resolve_pending_request: no in-flight Future "
-                "for request_id=%s (known=%s)",
-                self.session_id,
-                request_id,
-                list(self._pending_requests.keys()),
-            )
+            with provider_log_context(self.provider):
+                logger.warning(
+                    "[session %s] resolve_pending_request: no in-flight Future "
+                    "for request_id=%s (known=%s)",
+                    self.session_id,
+                    request_id,
+                    list(self._pending_requests.keys()),
+                )
             return False
         future.set_result(response)
         return True

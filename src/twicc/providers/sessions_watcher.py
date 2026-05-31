@@ -37,6 +37,7 @@ from twicc.core.serializers import (
     serialize_session_item,
     serialize_session_item_metadata,
 )
+from twicc.logging_context import current_provider
 from twicc.projects import (
     load_project_directories,
     load_project_git_roots,
@@ -773,6 +774,15 @@ class BaseSessionsWatcher:
         is called — typically right before a session-start that's about to
         create the directory.
         """
+        # Tag every log emitted from this watcher task with the provider —
+        # the orchestrator's ``_create_task`` already sets the same tag on
+        # the task's context, but doing it here too keeps a direct call
+        # (e.g. a future helper that does not go through the orchestrator)
+        # from leaking the watcher's logs into the global tag. The ContextVar
+        # set is scoped to the asyncio.Task that runs this coroutine, so
+        # it cannot leak into sibling tasks.
+        current_provider.set(self.get_compute().provider.value)
+
         channel_layer = get_channel_layer()
         projects_dir = self.projects_dir
         stop_event = self.get_stop_event()

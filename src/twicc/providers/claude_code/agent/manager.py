@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from django.conf import settings
 
@@ -72,6 +72,8 @@ class ClaudeCodeAgentManager(BaseAgentManager):
         # Shutdown all
         await manager.shutdown()
     """
+
+    provider: ClassVar[Provider] = Provider.CLAUDE_CODE
 
     # Cron expiry check cadence (seconds). Detects recurring crons auto-deleted
     # by the CLI after their 7-day window without forcing a tighter timeout loop.

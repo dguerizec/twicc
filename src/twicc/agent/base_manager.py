@@ -14,10 +14,11 @@ import logging
 import os
 import time
 from collections.abc import Callable, Coroutine
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from asgiref.sync import sync_to_async
 
+from twicc.logging_context import provider_log_context
 from twicc.providers.db_writer import run_under_db_write_lock
 
 from .base_agent import BaseAgent
@@ -40,7 +41,16 @@ class BaseAgentManager:
     agent type and typically wrap it in a higher-level method
     (``send_to_session``, ``create_session``, ...) whose signature depends on
     the provider's settings shape.
+
+    Subclasses must also set the ``provider`` class attribute to the matching
+    :class:`twicc.core.enums.Provider` enum member — the manager's external
+    entry points and background task bodies use it via
+    :func:`provider_log_context` to tag every log record with the owning
+    provider.
     """
+
+    # Provider key (e.g. ``Provider.CLAUDE_CODE``). Subclasses must override.
+    provider: ClassVar[Provider]
 
     # Interval (seconds) of the timeout monitor loop. Frequent enough to
     # catch short startup timeouts accurately without excessive churn.
@@ -99,33 +109,35 @@ class BaseAgentManager:
 
         Returns ``True`` if the agent was found and updated.
         """
-        agent = self._agents.get(session_id)
-        if agent is None:
-            return False
-        if agent.state not in (AgentState.USER_TURN, AgentState.ASSISTANT_TURN):
-            return False
-        agent.last_activity = time.time()
-        logger.debug(
-            "Touched last_activity for session %s (state=%s)",
-            session_id, agent.state.value,
-        )
-        return True
+        with provider_log_context(self.provider):
+            agent = self._agents.get(session_id)
+            if agent is None:
+                return False
+            if agent.state not in (AgentState.USER_TURN, AgentState.ASSISTANT_TURN):
+                return False
+            agent.last_activity = time.time()
+            logger.debug(
+                "Touched last_activity for session %s (state=%s)",
+                session_id, agent.state.value,
+            )
+            return True
 
     async def kill_agent(self, session_id: str, reason: str = "manual") -> bool:
         """Stop one agent. Returns ``True`` if a kill was actually issued."""
-        async with self._lock:
-            agent = self._agents.get(session_id)
-            if agent is None:
-                logger.debug("kill_agent: session %s not found", session_id)
-                return False
-            if agent.state == AgentState.DEAD:
-                logger.debug("kill_agent: session %s already dead", session_id)
-                return False
-            logger.info(
-                "Stopping agent for session %s (reason: %s)", session_id, reason,
-            )
-            await agent.interrupt_or_kill(reason=reason)
-            return True
+        with provider_log_context(self.provider):
+            async with self._lock:
+                agent = self._agents.get(session_id)
+                if agent is None:
+                    logger.debug("kill_agent: session %s not found", session_id)
+                    return False
+                if agent.state == AgentState.DEAD:
+                    logger.debug("kill_agent: session %s already dead", session_id)
+                    return False
+                logger.info(
+                    "Stopping agent for session %s (reason: %s)", session_id, reason,
+                )
+                await agent.interrupt_or_kill(reason=reason)
+                return True
 
     async def stop_subagent(self, session_id: str, subagent_id: str) -> bool:
         """Stop a running subagent (Task) within ``session_id``.
@@ -170,83 +182,84 @@ class BaseAgentManager:
         is emptied. A subsequent ``_register_and_start`` would lazily restart
         the timeout monitor.
         """
-        if self._stop_event is not None:
-            self._stop_event.set()
+        with provider_log_context(self.provider):
+            if self._stop_event is not None:
+                self._stop_event.set()
 
-        if self._timeout_monitor_task is not None:
-            self._timeout_monitor_task.cancel()
-            try:
-                await self._timeout_monitor_task
-            except asyncio.CancelledError:
-                pass
-            self._timeout_monitor_task = None
+            if self._timeout_monitor_task is not None:
+                self._timeout_monitor_task.cancel()
+                try:
+                    await self._timeout_monitor_task
+                except asyncio.CancelledError:
+                    pass
+                self._timeout_monitor_task = None
 
-        # Drop any background pending-title work — fire-and-forget cancel,
-        # we don't await them. The DB row already holds the user's title,
-        # so the worst case is a missing custom-title entry in the provider's
-        # own store (the watcher's next resync may or may not recover it,
-        # but the user-visible title is preserved).
-        self._cancel_all_pending_title_retries()
-        self._cancel_all_pending_title_verifies()
+            # Drop any background pending-title work — fire-and-forget cancel,
+            # we don't await them. The DB row already holds the user's title,
+            # so the worst case is a missing custom-title entry in the provider's
+            # own store (the watcher's next resync may or may not recover it,
+            # but the user-visible title is preserved).
+            self._cancel_all_pending_title_retries()
+            self._cancel_all_pending_title_verifies()
 
-        await self._stop_extra_monitors()
-        await self._pre_shutdown_extra()
+            await self._stop_extra_monitors()
+            await self._pre_shutdown_extra()
 
-        async with self._lock:
-            if self._agents:
-                logger.info("Shutting down %d active agent(s)", len(self._agents))
+            async with self._lock:
+                if self._agents:
+                    logger.info("Shutting down %d active agent(s)", len(self._agents))
 
-                agents_snapshot = list(self._agents.values())
-                shutdown_tasks = [
-                    asyncio.create_task(
-                        agent.interrupt_or_kill(reason="shutdown"),
-                        name=f"shutdown-{agent.session_id}",
+                    agents_snapshot = list(self._agents.values())
+                    shutdown_tasks = [
+                        asyncio.create_task(
+                            agent.interrupt_or_kill(reason="shutdown"),
+                            name=f"shutdown-{agent.session_id}",
+                        )
+                        for agent in agents_snapshot
+                    ]
+                    if shutdown_tasks:
+                        _, pending = await asyncio.wait(shutdown_tasks, timeout=timeout)
+                        for task in pending:
+                            task.cancel()
+
+                    # Belt-and-suspenders: an ``interrupt_or_kill`` override is
+                    # free to return as soon as the agent has reached the DEAD
+                    # state, but the DEAD state-change callback may still be in
+                    # flight afterwards — and that callback is where the
+                    # lifecycle DB writes happen, under ``run_under_db_write_lock``.
+                    # ``wait_for_dead`` blocks on both ``_dead_event`` and
+                    # ``_dead_callback_done_event``, so this gather guarantees
+                    # every callback's lock-protected writes have committed
+                    # before we let the caller proceed to ``stop_db_writer()``.
+                    wait_results = await asyncio.gather(
+                        *[agent.wait_for_dead(timeout=timeout) for agent in agents_snapshot],
+                        return_exceptions=True,
                     )
-                    for agent in agents_snapshot
-                ]
-                if shutdown_tasks:
-                    _, pending = await asyncio.wait(shutdown_tasks, timeout=timeout)
-                    for task in pending:
-                        task.cancel()
+                    # Surface anything that timed out or raised — the caller
+                    # (``run_server``) is about to call ``stop_db_writer()``,
+                    # and a False/exception here means a DEAD callback's
+                    # lock-protected writes may not have committed. We can't
+                    # block forever (the user pressed Ctrl-C), but a log line
+                    # is what makes the silent drop debuggable after the fact.
+                    for agent, result in zip(agents_snapshot, wait_results):
+                        if isinstance(result, BaseException):
+                            logger.error(
+                                "Waiting for DEAD callback of session %s raised during shutdown: %s",
+                                agent.session_id, result, exc_info=result,
+                            )
+                        elif result is False:
+                            logger.warning(
+                                "DEAD callback for session %s did not finish within %.1fs "
+                                "during shutdown — its lifecycle DB writes may have been dropped",
+                                agent.session_id, timeout,
+                            )
 
-                # Belt-and-suspenders: an ``interrupt_or_kill`` override is
-                # free to return as soon as the agent has reached the DEAD
-                # state, but the DEAD state-change callback may still be in
-                # flight afterwards — and that callback is where the
-                # lifecycle DB writes happen, under ``run_under_db_write_lock``.
-                # ``wait_for_dead`` blocks on both ``_dead_event`` and
-                # ``_dead_callback_done_event``, so this gather guarantees
-                # every callback's lock-protected writes have committed
-                # before we let the caller proceed to ``stop_db_writer()``.
-                wait_results = await asyncio.gather(
-                    *[agent.wait_for_dead(timeout=timeout) for agent in agents_snapshot],
-                    return_exceptions=True,
-                )
-                # Surface anything that timed out or raised — the caller
-                # (``run_server``) is about to call ``stop_db_writer()``,
-                # and a False/exception here means a DEAD callback's
-                # lock-protected writes may not have committed. We can't
-                # block forever (the user pressed Ctrl-C), but a log line
-                # is what makes the silent drop debuggable after the fact.
-                for agent, result in zip(agents_snapshot, wait_results):
-                    if isinstance(result, BaseException):
-                        logger.error(
-                            "Waiting for DEAD callback of session %s raised during shutdown: %s",
-                            agent.session_id, result, exc_info=result,
-                        )
-                    elif result is False:
-                        logger.warning(
-                            "DEAD callback for session %s did not finish within %.1fs "
-                            "during shutdown — its lifecycle DB writes may have been dropped",
-                            agent.session_id, timeout,
-                        )
+                    self._agents.clear()
+                    logger.info("All agents shut down")
 
-                self._agents.clear()
-                logger.info("All agents shut down")
-
-        # Clear the stop event last so a future `_ensure_timeout_monitor_running`
-        # creates a fresh one tied to the new lifecycle.
-        self._stop_event = None
+            # Clear the stop event last so a future `_ensure_timeout_monitor_running`
+            # creates a fresh one tied to the new lifecycle.
+            self._stop_event = None
 
     # ------------------------------------------------------------------
     # Lifecycle helpers (called by subclasses)
@@ -285,95 +298,96 @@ class BaseAgentManager:
 
         Must be called while holding ``self._lock``.
         """
-        label = "session" if resume else "draft session"
-        logger.debug(
-            "Creating agent for %s %s, project %s",
-            label, session_id, project_id,
-        )
-        agent = await self._create_agent(
-            session_id, project_id, cwd, resume=resume, settings=settings,
-        )
+        with provider_log_context(self.provider):
+            label = "session" if resume else "draft session"
+            logger.debug(
+                "Creating agent for %s %s, project %s",
+                label, session_id, project_id,
+            )
+            agent = await self._create_agent(
+                session_id, project_id, cwd, resume=resume, settings=settings,
+            )
 
-        # Once ``_create_agent`` returns, the agent owns external resources
-        # (SDK client / subprocess). If any of the post-creation steps below
-        # raise — pending re-keying, WS broadcast, DB writes in
-        # ``_register_and_start``, ``agent.start`` itself — nothing else will
-        # release them: the agent is at most in ``_agents`` but its state is
-        # still ``STARTING``, so the DEAD-driven ``_cleanup_dead`` path never
-        # fires. Tear it down explicitly via the provider's own
-        # ``interrupt_or_kill`` (which is required to be safe on a not-yet-
-        # started agent — see the docstring of ``_create_agent``).
-        try:
-            # Brand-new sessions: tell the frontend which canonical id is bound
-            # to its local draft, so it can reconcile (redirect or discard).
-            # On resume the frontend already knows the canonical id — skip it.
-            if not resume:
-                # When the provider mints its own canonical id (Codex), the WS
-                # handler stored the pending agent settings under the draft id we
-                # received. Re-key them under the canonical id so the watcher
-                # pops them when it creates the Session row from the JSONL —
-                # otherwise selected_model / effort / ... stay NULL until the
-                # next user-initiated settings update. No-op when ids match
-                # (Claude Code): the existing pending entry is already under the
-                # canonical key.
-                if session_id != agent.session_id:
-                    from twicc.pending_agent_settings import (
-                        pop_pending_agent_settings,
-                        set_pending_agent_settings,
-                    )
-
-                    pending = pop_pending_agent_settings(session_id)
-                    if pending is not None:
-                        set_pending_agent_settings(agent.session_id, pending)
-
-                    # Same rationale for pending_titles: the WS handler stored it under
-                    # the draft id we received; re-key under the canonical id so the
-                    # Codex manager's ASSISTANT_TURN flush actually finds it. No-op for
-                    # Claude Code where draft id == canonical id.
-                    from twicc.pending_titles import (
-                        pop_pending_title,
-                        set_pending_title,
-                    )
-
-                    pending_title = pop_pending_title(session_id)
-                    if pending_title is not None:
-                        set_pending_title(agent.session_id, pending_title)
-
-                    # Same rationale for pending_session_attributes (hidden +
-                    # spawned_by): the create-session service stashed them
-                    # under the draft id, but the watcher pops them when it
-                    # creates the row keyed on the canonical id Codex writes
-                    # into the JSONL. Re-key here so the pop finds them.
-                    from twicc.pending_session_attributes import (
-                        pop_pending_session_attributes,
-                        set_pending_session_attributes,
-                    )
-
-                    pending_attrs = pop_pending_session_attributes(session_id)
-                    if pending_attrs is not None:
-                        set_pending_session_attributes(
-                            agent.session_id,
-                            hidden=pending_attrs.hidden,
-                            spawned_by_id=pending_attrs.spawned_by_id,
+            # Once ``_create_agent`` returns, the agent owns external resources
+            # (SDK client / subprocess). If any of the post-creation steps below
+            # raise — pending re-keying, WS broadcast, DB writes in
+            # ``_register_and_start``, ``agent.start`` itself — nothing else will
+            # release them: the agent is at most in ``_agents`` but its state is
+            # still ``STARTING``, so the DEAD-driven ``_cleanup_dead`` path never
+            # fires. Tear it down explicitly via the provider's own
+            # ``interrupt_or_kill`` (which is required to be safe on a not-yet-
+            # started agent — see the docstring of ``_create_agent``).
+            try:
+                # Brand-new sessions: tell the frontend which canonical id is bound
+                # to its local draft, so it can reconcile (redirect or discard).
+                # On resume the frontend already knows the canonical id — skip it.
+                if not resume:
+                    # When the provider mints its own canonical id (Codex), the WS
+                    # handler stored the pending agent settings under the draft id we
+                    # received. Re-key them under the canonical id so the watcher
+                    # pops them when it creates the Session row from the JSONL —
+                    # otherwise selected_model / effort / ... stay NULL until the
+                    # next user-initiated settings update. No-op when ids match
+                    # (Claude Code): the existing pending entry is already under the
+                    # canonical key.
+                    if session_id != agent.session_id:
+                        from twicc.pending_agent_settings import (
+                            pop_pending_agent_settings,
+                            set_pending_agent_settings,
                         )
 
-                await self.notify_session_bound(
-                    draft_session_id=session_id,
-                    session_id=agent.session_id,
-                )
+                        pending = pop_pending_agent_settings(session_id)
+                        if pending is not None:
+                            set_pending_agent_settings(agent.session_id, pending)
 
-            await self._register_and_start(agent, text, resume=resume, **start_kwargs)
-            return agent.session_id
-        except Exception:
-            try:
-                await agent.interrupt_or_kill(reason="startup-failed")
+                        # Same rationale for pending_titles: the WS handler stored it under
+                        # the draft id we received; re-key under the canonical id so the
+                        # Codex manager's ASSISTANT_TURN flush actually finds it. No-op for
+                        # Claude Code where draft id == canonical id.
+                        from twicc.pending_titles import (
+                            pop_pending_title,
+                            set_pending_title,
+                        )
+
+                        pending_title = pop_pending_title(session_id)
+                        if pending_title is not None:
+                            set_pending_title(agent.session_id, pending_title)
+
+                        # Same rationale for pending_session_attributes (hidden +
+                        # spawned_by): the create-session service stashed them
+                        # under the draft id, but the watcher pops them when it
+                        # creates the row keyed on the canonical id Codex writes
+                        # into the JSONL. Re-key here so the pop finds them.
+                        from twicc.pending_session_attributes import (
+                            pop_pending_session_attributes,
+                            set_pending_session_attributes,
+                        )
+
+                        pending_attrs = pop_pending_session_attributes(session_id)
+                        if pending_attrs is not None:
+                            set_pending_session_attributes(
+                                agent.session_id,
+                                hidden=pending_attrs.hidden,
+                                spawned_by_id=pending_attrs.spawned_by_id,
+                            )
+
+                    await self.notify_session_bound(
+                        draft_session_id=session_id,
+                        session_id=agent.session_id,
+                    )
+
+                await self._register_and_start(agent, text, resume=resume, **start_kwargs)
+                return agent.session_id
             except Exception:
-                logger.exception(
-                    "Cleanup interrupt_or_kill failed for session %s after start-up error",
-                    agent.session_id,
-                )
-            self._agents.pop(agent.session_id, None)
-            raise
+                try:
+                    await agent.interrupt_or_kill(reason="startup-failed")
+                except Exception:
+                    logger.exception(
+                        "Cleanup interrupt_or_kill failed for session %s after start-up error",
+                        agent.session_id,
+                    )
+                self._agents.pop(agent.session_id, None)
+                raise
 
     async def _register_and_start(
         self,
@@ -636,25 +650,26 @@ class BaseAgentManager:
         every exit path via a ``finally``. The :meth:`_cancel_pending_title_retry`
         helper also pops eagerly so the dict never references a cancelled task.
         """
-        backoff = 1.0
-        max_backoff = 30.0
-        # The inline attempt in _flush_pending_title was attempt #1.
-        attempt = 1
+        with provider_log_context(self.provider):
+            backoff = 1.0
+            max_backoff = 30.0
+            # The inline attempt in _flush_pending_title was attempt #1.
+            attempt = 1
 
-        try:
-            while True:
-                await asyncio.sleep(backoff)
-                attempt += 1
-                if await self._try_flush_pending_title(agent, pending):
-                    await self._on_flush_success(agent, pending)
-                    logger.info(
-                        "Pending title flush retry succeeded for session %s on attempt %d",
-                        agent.session_id, attempt,
-                    )
-                    return
-                backoff = min(backoff * 2, max_backoff)
-        finally:
-            self._pending_title_retry_tasks.pop(agent.session_id, None)
+            try:
+                while True:
+                    await asyncio.sleep(backoff)
+                    attempt += 1
+                    if await self._try_flush_pending_title(agent, pending):
+                        await self._on_flush_success(agent, pending)
+                        logger.info(
+                            "Pending title flush retry succeeded for session %s on attempt %d",
+                            agent.session_id, attempt,
+                        )
+                        return
+                    backoff = min(backoff * 2, max_backoff)
+            finally:
+                self._pending_title_retry_tasks.pop(agent.session_id, None)
 
     async def _verify_pending_title_after_delay(
         self, provider: "Provider", session_id: str, expected_title: str,
@@ -673,20 +688,21 @@ class BaseAgentManager:
         """
         from twicc.providers.helpers import get_provider_helpers
 
-        delay = 5.0
-        try:
-            await asyncio.sleep(delay)
-            helpers = get_provider_helpers(provider)
-            await helpers.verify_session_title(session_id, expected_title)
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:
-            logger.warning(
-                "Pending title verify failed for session %s: %s",
-                session_id, e,
-            )
-        finally:
-            self._pending_title_verify_tasks.pop(session_id, None)
+        with provider_log_context(self.provider):
+            delay = 5.0
+            try:
+                await asyncio.sleep(delay)
+                helpers = get_provider_helpers(provider)
+                await helpers.verify_session_title(session_id, expected_title)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.warning(
+                    "Pending title verify failed for session %s: %s",
+                    session_id, e,
+                )
+            finally:
+                self._pending_title_verify_tasks.pop(session_id, None)
 
     def _cancel_pending_title_retry(self, session_id: str) -> None:
         """Cancel a single session's background pending-title retry, if any."""
@@ -958,24 +974,25 @@ class BaseAgentManager:
         """
         from channels.layers import get_channel_layer
 
-        channel_layer = get_channel_layer()
-        try:
-            await channel_layer.group_send(
-                "updates",
-                {
-                    "type": "broadcast",
-                    "data": {
-                        "type": "session_bound",
-                        "draft_session_id": draft_session_id,
-                        "session_id": session_id,
+        with provider_log_context(self.provider):
+            channel_layer = get_channel_layer()
+            try:
+                await channel_layer.group_send(
+                    "updates",
+                    {
+                        "type": "broadcast",
+                        "data": {
+                            "type": "session_bound",
+                            "draft_session_id": draft_session_id,
+                            "session_id": session_id,
+                        },
                     },
-                },
-            )
-        except Exception as e:
-            logger.error(
-                "Error broadcasting session_bound for draft=%s, session=%s: %s",
-                draft_session_id, session_id, e,
-            )
+                )
+            except Exception as e:
+                logger.error(
+                    "Error broadcasting session_bound for draft=%s, session=%s: %s",
+                    draft_session_id, session_id, e,
+                )
 
     # ------------------------------------------------------------------
     # Timeout monitor
@@ -995,28 +1012,36 @@ class BaseAgentManager:
         self._start_extra_monitors()
 
     async def _run_timeout_monitor(self) -> None:
-        """Periodically check every active agent against its timeout policy."""
-        logger.info("Agent timeout monitor started")
-        while self._stop_event is not None and not self._stop_event.is_set():
-            try:
-                killed = await self.check_and_stop_timed_out_agents()
-                if killed:
-                    logger.info(
-                        "Auto-stopped %d timed out agent(s): %s",
-                        len(killed), ", ".join(killed),
+        """Periodically check every active agent against its timeout policy.
+
+        Wrapped in :func:`provider_log_context` so every log emitted by the
+        monitor (and by the kill paths it triggers via
+        :meth:`check_and_stop_timed_out_agents`) carries the provider tag —
+        the task may be created from a caller whose context already taps it,
+        but the wrap makes the attribution self-contained regardless.
+        """
+        with provider_log_context(self.provider):
+            logger.info("Agent timeout monitor started")
+            while self._stop_event is not None and not self._stop_event.is_set():
+                try:
+                    killed = await self.check_and_stop_timed_out_agents()
+                    if killed:
+                        logger.info(
+                            "Auto-stopped %d timed out agent(s): %s",
+                            len(killed), ", ".join(killed),
+                        )
+                except Exception as e:
+                    logger.error(
+                        "Error in agent timeout monitor: %s", e, exc_info=True,
                     )
-            except Exception as e:
-                logger.error(
-                    "Error in agent timeout monitor: %s", e, exc_info=True,
-                )
-            try:
-                await asyncio.wait_for(
-                    self._stop_event.wait(),
-                    timeout=self.TIMEOUT_MONITOR_INTERVAL,
-                )
-            except asyncio.TimeoutError:
-                pass
-        logger.info("Agent timeout monitor stopped")
+                try:
+                    await asyncio.wait_for(
+                        self._stop_event.wait(),
+                        timeout=self.TIMEOUT_MONITOR_INTERVAL,
+                    )
+                except asyncio.TimeoutError:
+                    pass
+            logger.info("Agent timeout monitor stopped")
 
     async def check_and_stop_timed_out_agents(self) -> list[str]:
         """Kill every agent whose ``_check_agent_timeout`` returns a decision."""

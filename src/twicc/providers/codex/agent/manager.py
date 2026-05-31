@@ -14,7 +14,7 @@ approval policy come from the user's ``permission_mode`` preset via
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, ClassVar
 
 from openai_codex import AppServerConfig
 
@@ -48,6 +48,8 @@ class CodexAgentManager(BaseAgentManager):
         # Create a new session (Codex mints its own canonical id)
         await manager.create_session(draft_id, project_id, cwd, "Hi", settings=...)
     """
+
+    provider: ClassVar[Provider] = Provider.CODEX
 
     # No ``_on_state_change`` override: the pending-title flush is handled
     # by :meth:`BaseAgentManager._flush_pending_title`, which delegates to
