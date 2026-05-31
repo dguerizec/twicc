@@ -174,6 +174,8 @@ The agent-facing skills live under `src/twicc/agent/plugin/twicc/skills/`, packa
 
 Bump rule of thumb: any user-visible skill change → bump the patch (`0.10.0` → `0.10.1`); a new skill or an existing one with new flags/options → bump the minor (`0.10.0` → `0.11.0`); skill rename / removal → bump the minor at least.
 
+**Before creating or updating any skill, read `src/twicc/agent/plugin/README.md`.** It documents the established structure, wording rules, and anti-patterns for TwiCC skills. Also read a few existing skills to calibrate tone and level of detail.
+
 ## Database Models
 
 Key models in `src/twicc/core/models.py`:
