@@ -19,7 +19,8 @@ def main() -> None:
     from twicc.core.models import UsageSnapshot
     from twicc.core.serializers import serialize_usage_snapshot
     from twicc.providers.helpers import get_provider_helpers_registry
-    from twicc.usage import compute_period_costs
+    from twicc.usage import compute_period_costs, compute_recent_burn_rates
+    from twicc.usage_task import _build_reference_snapshots
 
     def _fmt_dt(dt):
         return dt.isoformat() if dt else None
@@ -54,6 +55,16 @@ def main() -> None:
         data["seven_day_temporal_pct"] = _round_pct(snapshot.seven_day_temporal_pct)
         data["seven_day_burn_rate"] = _round_rate(snapshot.seven_day_burn_rate)
         data["seven_day_started_at"] = _fmt_dt(snapshot.seven_day_started_at)
+
+        # Recent burn rates over short / long lookbacks, computed from
+        # historical snapshots (with cross-period fallback when the
+        # current window is younger than the lookback). Mirrors what
+        # the web UI shows next to the quota rings.
+        recent = compute_recent_burn_rates(snapshot, _build_reference_snapshots(snapshot))
+        data["five_hour_burn_rate_30min"] = _round_rate(recent["five_hour"]["short"])
+        data["five_hour_burn_rate_1h"] = _round_rate(recent["five_hour"]["long"])
+        data["seven_day_burn_rate_12h"] = _round_rate(recent["seven_day"]["short"])
+        data["seven_day_burn_rate_24h"] = _round_rate(recent["seven_day"]["long"])
 
         output[snapshot.provider] = data
 

@@ -159,6 +159,194 @@ def compute_period_costs(snapshot: UsageSnapshot) -> dict:
     return result
 
 
+def _recent_burn_rate(utilization, fetched_at, ref_utilization, ref_fetched_at, window_seconds):
+    """Burn rate between two intra-period snapshots, as a ratio (1.0 = sustainable).
+
+    Returns ``None`` when not computable (missing data, reset between snapshots,
+    non-positive delta).
+    """
+    if utilization is None or ref_utilization is None or window_seconds <= 0:
+        return None
+    delta_util = utilization - ref_utilization
+    if delta_util < 0:
+        return None  # a quota reset happened between snapshots
+    delta_seconds = (fetched_at - ref_fetched_at).total_seconds()
+    if delta_seconds <= 0:
+        return None
+    delta_time_pct = (delta_seconds / window_seconds) * 100.0
+    if delta_time_pct <= 0:
+        return None
+    return delta_util / delta_time_pct
+
+
+def _compute_recent_rate(
+    utilization,
+    fetched_at,
+    window_start,
+    window_seconds,
+    lookback_seconds,
+    ref,  # {"fetched_at": dt, "utilization": float} or None
+    cross_ref,  # {"prev_ref": {...}, "prev_end": {...}} or None
+):
+    """Compute a single recent burn rate, with cross-period fallback.
+
+    Mirrors ``_computeRecent`` in ``frontend/src/utils/usage.js`` so the CLI
+    exposes the same view of recent burn rate that the UI shows. When the
+    current window is younger than the lookback, falls back to a calculation
+    spanning the end of the previous period plus the start of the current one.
+    """
+    if utilization is None or window_seconds <= 0:
+        return None
+
+    elapsed = (fetched_at - window_start).total_seconds() if window_start else None
+
+    if elapsed is not None and elapsed < lookback_seconds:
+        if not cross_ref:
+            return None
+        prev_ref = cross_ref.get("prev_ref")
+        prev_end = cross_ref.get("prev_end")
+        if not prev_ref or not prev_end:
+            return None
+        prev_ref_util = prev_ref.get("utilization")
+        prev_end_util = prev_end.get("utilization")
+        if prev_ref_util is None or prev_end_util is None:
+            return None
+        old_consumption = prev_end_util - prev_ref_util
+        if old_consumption < 0:
+            return None
+        total_consumption = old_consumption + utilization
+        delta_seconds = (fetched_at - prev_ref["fetched_at"]).total_seconds()
+        if delta_seconds <= 0:
+            return None
+        delta_time_pct = (delta_seconds / window_seconds) * 100.0
+        if delta_time_pct <= 0:
+            return None
+        return total_consumption / delta_time_pct
+
+    if not ref:
+        return None
+    return _recent_burn_rate(
+        utilization,
+        fetched_at,
+        ref.get("utilization"),
+        ref["fetched_at"],
+        window_seconds,
+    )
+
+
+def compute_recent_burn_rates(snapshot: UsageSnapshot, references: dict | None) -> dict:
+    """Compute recent burn rates over short / long lookbacks for both windows.
+
+    Returns a dict::
+
+        {
+            "five_hour":  {"short": <30min rate>, "long": <1h rate>},
+            "seven_day":  {"short": <12h rate>,   "long": <24h rate>},
+        }
+
+    Each value is a ratio (1.0 = on track to use exactly the quota at reset,
+    >1.0 = on track to exhaust before reset), or ``None`` when not computable.
+
+    ``references`` is the dict produced by
+    :func:`twicc.usage_task._build_reference_snapshots` (already de-stringified
+    in this function, so callers can pass it as-is from JSON or from the
+    builder).
+    """
+    empty = {
+        "five_hour": {"short": None, "long": None},
+        "seven_day": {"short": None, "long": None},
+    }
+    if not snapshot or not snapshot.fetched_at:
+        return empty
+
+    references = references or {}
+    fetched_at = snapshot.fetched_at
+    fh_window_start = (
+        snapshot.five_hour_resets_at - timedelta(hours=5)
+        if snapshot.five_hour_resets_at
+        else None
+    )
+    sd_window_start = (
+        snapshot.seven_day_resets_at - timedelta(days=7)
+        if snapshot.seven_day_resets_at
+        else None
+    )
+
+    def _parse_dt(value):
+        if isinstance(value, datetime) or value is None:
+            return value
+        return datetime.fromisoformat(value)
+
+    def _ref(key, util_field):
+        raw = references.get(key)
+        if not raw:
+            return None
+        return {
+            "fetched_at": _parse_dt(raw.get("fetched_at")),
+            "utilization": raw.get(util_field),
+        }
+
+    def _cross(key, util_field):
+        raw = references.get(key)
+        if not raw:
+            return None
+        prev_ref = raw.get("prev_ref") or {}
+        prev_end = raw.get("prev_end") or {}
+        return {
+            "prev_ref": {
+                "fetched_at": _parse_dt(prev_ref.get("fetched_at")),
+                "utilization": prev_ref.get(util_field),
+            },
+            "prev_end": {
+                "fetched_at": _parse_dt(prev_end.get("fetched_at")),
+                "utilization": prev_end.get(util_field),
+            },
+        }
+
+    return {
+        "five_hour": {
+            "short": _compute_recent_rate(
+                snapshot.five_hour_utilization,
+                fetched_at,
+                fh_window_start,
+                5 * 3600,
+                30 * 60,
+                _ref("thirty_min", "five_hour_utilization"),
+                _cross("cross_fh_short", "five_hour_utilization"),
+            ),
+            "long": _compute_recent_rate(
+                snapshot.five_hour_utilization,
+                fetched_at,
+                fh_window_start,
+                5 * 3600,
+                60 * 60,
+                _ref("one_hour", "five_hour_utilization"),
+                _cross("cross_fh_long", "five_hour_utilization"),
+            ),
+        },
+        "seven_day": {
+            "short": _compute_recent_rate(
+                snapshot.seven_day_utilization,
+                fetched_at,
+                sd_window_start,
+                7 * 86400,
+                12 * 3600,
+                _ref("twelve_hour", "seven_day_utilization"),
+                _cross("cross_sd_short", "seven_day_utilization"),
+            ),
+            "long": _compute_recent_rate(
+                snapshot.seven_day_utilization,
+                fetched_at,
+                sd_window_start,
+                7 * 86400,
+                24 * 3600,
+                _ref("one_day", "seven_day_utilization"),
+                _cross("cross_sd_long", "seven_day_utilization"),
+            ),
+        },
+    }
+
+
 def validate_usage_dump_path(file_path: str) -> tuple[bool, str]:
     """Validate that a dump file path is usable (parent directory exists and is writable).
 

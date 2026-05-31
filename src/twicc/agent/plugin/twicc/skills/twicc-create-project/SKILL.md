@@ -1,82 +1,64 @@
 ---
 name: twicc-create-project
-description: Create a new TwiCC project from a directory path — optionally with a display name and a color. The project id is derived from the directory; the directory must be unique (one project per realpath). Use when the user wants to register a directory as a TwiCC project from the CLI before any session has been started in it.
-argument-hint: <DIRECTORY> [--name X] [--color X] [--create-directory]
+description: Create a new TwiCC project from a directory path — optionally with a display name and a color. One project per directory (unique by realpath). Use when you or the user want to register a directory as a TwiCC project before any session has been started in it.
+argument-hint: <directory> [--name X] [--color X] [--create-directory]
 ---
 
 # TwiCC Create Project
 
-Create a project by dropping a request file the live TwiCC server picks up. The server normalises the directory via `os.path.realpath`, derives the project id, validates everything, calls the single creation entry point (`register_project`) which fires `project_added` and runs workspace auto-add.
-
-A project corresponds 1-to-1 with a working directory (`id = path_to_project_id(realpath(directory))`). You cannot create two projects for the same directory.
+Register a directory as a TwiCC project. One project per directory — creating a duplicate is rejected.
 
 ## When to use
 
-- The user asks to "register a new project at /path/...", "create a project for this folder", or wants to scaffold a project before its first session.
-- A script preps several projects in batch (e.g. mass-import a directory tree as TwiCC projects).
+- You or the user want to register a directory as a TwiCC project.
+- A script preps several projects in batch.
 
 ## How to invoke
 
-TwiCC's executable varies by launch mode (uvx, dev, installed tool). Resolve it once at the start of each Bash invocation:
+TwiCC's executable varies by launch mode (uvx, dev, installed tool). ALWAYS USE THIS TO RESOLVE $TWICC AT THE START OF EACH BASH INVOCATION:
 
 ```bash
 TWICC=${TWICC_BIN:-$(command -v twicc 2>/dev/null)}
 [ -n "$TWICC" ] || { echo "TwiCC executable not found in this context" >&2; exit 1; }
 ```
 
-Then run `$TWICC <args>` — **do NOT quote `$TWICC`** (use `$TWICC args`, never `"$TWICC" args`).
+Then run `$TWICC <args>` — **never quote `$TWICC`** (use `$TWICC args`, never `"$TWICC" args`): it may expand to multiple words, which quoting would break.
 
-## Prerequisite: the server must be running
-
-Heartbeat check fails fast (exit 2) if `<data_dir>/twicc.heartbeat` is missing or stale (> 15 s old).
-
-## Basic shape
+## Usage
 
 ```bash
 $TWICC create-project '<DIRECTORY>' [OPTIONS]
 ```
 
-### Required argument
+### Arguments
 
-- **`DIRECTORY`** — path of the project's working directory. Normalised via `os.path.realpath` server-side, so symlinks resolve to their canonical target. Must be absolute (or resolvable to an absolute path). The project id is derived deterministically from this canonical path via `path_to_project_id` (every non-alphanumeric char becomes `-`).
+- `DIRECTORY` — path of the project's working directory (absolute or resolvable). Symlinks are resolved to their canonical target.
 
 ### Options
 
-| Flag | |
-|------|---|
-| `--name VALUE` | Optional display name. Trimmed; ≤ 25 characters; globally unique across all projects (collision → `duplicate_name`). If omitted, the UI falls back to the directory's basename. |
-| `--color VALUE` | Optional CSS hex color (`#rgb`, `#rrggbb`, or `#rrggbbaa`). |
-| `--create-directory` | If the directory does not exist on disk, create it (and any missing parents) before registering. Without this flag, a missing directory is rejected with `directory_not_found`. |
-| `--timeout SECONDS` | Seconds to wait for the server's final status (default 30). |
-| `--json` | Emit a single JSON object on stdout (implies `--no-color`). |
-| `--no-color` | Disable ANSI colors. |
+- `--name VALUE` — Display name. Trimmed; ≤ 25 characters; globally unique (collision → `duplicate_name`). Defaults to the directory basename in the UI.
+- `--color VALUE` — CSS hex color (`#rgb`, `#rrggbb`, or `#rrggbbaa`).
+- `--create-directory` — Create the directory (and missing parents) if it doesn't exist. Without this flag, a missing directory is rejected.
+- `--timeout SECONDS` — Seconds to wait for the server's response (default 30).
+- `--json` — Emit a single JSON object on stdout (implies `--no-color`).
+- `--no-color` — Disable ANSI colors.
 
-## Rejections caught locally (exit 1)
+## Errors
 
-- `invalid_directory` — directory not absolute, or path exists but is not a directory.
-- `directory_not_found` — directory does not exist and `--create-directory` was not passed.
-- `project_already_exists` — a project already exists for this directory (same canonical path).
-- `invalid_name` — name > 25 characters after trim.
-- `duplicate_name` — another project already uses this name (case-sensitive).
-- `invalid_color` — `--color` value is not a valid hex color.
+### Local (exit 1)
 
-## Rejections from the server (exit 3)
+- `invalid_directory` — path not absolute, or exists but is not a directory.
+- `directory_not_found` — directory doesn't exist and `--create-directory` was not passed.
+- `project_already_exists`
+- `invalid_name` — name exceeds 25 characters after trim.
+- `duplicate_name`
+- `invalid_color`
 
-The server re-runs every check (the drop-file is a trust boundary). Same vocabulary plus:
-- `directory_creation_failed` — `--create-directory` was set but `os.makedirs` failed (permission denied, read-only fs, etc.).
+### Server (exit 3)
+
+Same codes plus `directory_creation_failed` — `--create-directory` set but `mkdir` failed (permissions, read-only fs, etc.).
 
 ## Output format
-
-### Text mode (default)
-
-```
-✓ Heartbeat OK (last seen 0.4s ago)
-✓ Pre-flight validation passed
-→ Request submitted (request_uuid: 4a8352fb...)
-✓ Project created: -home-twidi-dev-newproj
-```
-
-### JSON mode (`--json`)
 
 ```json
 {"status":"created","project_id":"-home-twidi-dev-newproj","request_uuid":"..."}
@@ -88,42 +70,31 @@ The server re-runs every check (the drop-file is a trust boundary). Same vocabul
 
 ### Exit codes
 
-| Code | Meaning |
-|------|---------|
-| 0 | Project created |
-| 1 | CLI validation error |
-| 2 | TwiCC server not running |
-| 3 | Server rejected (race-detected duplicate, mkdir failed, ...) |
-| 4 | Server hit an unexpected error |
-| 5 | Timeout |
-| 64 | Bad CLI usage (handled by Typer) |
+- `0` — Project created
+- `1` — Local validation error
+- `2` — TwiCC server not running
+- `3` — Server rejected
+- `4` — Server error
+- `5` — Timeout
+- `64` — Bad CLI usage
 
 ## Examples
 
 ```bash
-# Minimal: register an existing directory.
 $TWICC create-project /home/twidi/dev/newproj
-
-# With name + color.
 $TWICC create-project /home/twidi/dev/newproj --name 'New Project' --color '#4a90d9'
-
-# Scaffold a brand-new directory and project in one shot.
 $TWICC create-project /home/twidi/dev/scratch --create-directory
-
-# Machine-parseable output for scripts.
 $TWICC create-project --json /home/twidi/dev/newproj
 # → {"status":"created","project_id":"-home-twidi-dev-newproj","request_uuid":"..."}
 ```
 
 ## Related commands
 
-- **Update an existing project:** `twicc update-project <ID> [--name X | --unset-name] [--color X | --unset-color] [--archive | --unarchive]`.
-- **List / inspect projects:** `twicc projects` (with `--include-archived` / `--workspace` filters) and `twicc project <ID>`.
-- **Add the new project to a workspace right after creation:** `twicc update-workspace <WORKSPACE_ID> --add-project <PROJECT_ID>` (workspace auto-add patterns may already cover this).
+- `$TWICC update-project <PROJECT>` — rename, recolor, archive/unarchive. Skill: `twicc-update-project`.
+- `$TWICC project <PROJECT>` / `$TWICC projects` — inspect or list. Skill: `twicc-project` / `twicc-projects`.
+- `$TWICC update-workspace <ID> --add-project <PROJECT>` — add to a workspace (auto-add patterns may already handle this). Skill: `twicc-update-workspace`.
 
 ## How to present results
 
-1. On success, restate the project_id and any custom name set. Offer a clickable link: `[link text](/project/{project_id})`.
-2. Mention the change is broadcast — open UI clients see the project appear without reload.
-3. If the project is added to one or more workspaces via auto-add patterns, the server's `workspaces_updated` broadcast will also fire (no additional user action needed).
-4. On `project_already_exists`, surface the existing project id from the error message — the user usually wants to update / inspect it instead.
+1. On success, give the project_id and a clickable link: `[link text](/project/{project_id})`.
+2. On `project_already_exists`, surface the existing project id — updating or inspecting it is likely the right next step.

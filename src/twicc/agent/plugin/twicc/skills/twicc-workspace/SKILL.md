@@ -1,49 +1,38 @@
 ---
 name: twicc-workspace
-description: Show details of a single TwiCC workspace by ID. Use when the user wants to inspect a specific workspace's projects, color, archived state, or auto-add patterns.
+description: Show details of a single TwiCC workspace by ID. Use when you or the user want to inspect a specific workspace's projects, color, archived state, or auto-add patterns.
 argument-hint: <workspace_id>
 ---
 
 # TwiCC Workspace
 
-Show the full details of a single workspace by its ID. Returns the workspace even when archived.
+Show the full details of a single workspace by its ID, including when archived.
 
 ## When to use
 
-- The user wants details about a specific workspace
-- The user has a workspace ID (from `twicc workspaces` output, or from the `workspaces` field of a project) and wants to see its content (projects, patterns, etc.)
+- You or the user want details about a specific workspace.
+- You have a workspace ID (from `$TWICC workspaces` or from a project's `workspaces` field) and want to see its content.
 
 ## How to invoke
 
-TwiCC's executable varies by launch mode (uvx, dev, installed tool). Resolve it once at the start of each Bash invocation:
+TwiCC's executable varies by launch mode (uvx, dev, installed tool). ALWAYS USE THIS TO RESOLVE $TWICC AT THE START OF EACH BASH INVOCATION:
 
 ```bash
 TWICC=${TWICC_BIN:-$(command -v twicc 2>/dev/null)}
 [ -n "$TWICC" ] || { echo "TwiCC executable not found in this context" >&2; exit 1; }
 ```
 
-Then run any subcommand via `$TWICC <args>` — **do NOT quote `$TWICC`** (use `$TWICC args`, never `"$TWICC" args`). The variable may expand to a multi-word command (e.g. `uv run --directory ... run.py`); Bash relies on word-splitting to parse it, and quoting it would treat the entire expansion as a single program name and fail with "No such file or directory". All bash examples below use the unquoted form.
+Then run `$TWICC <args>` — **never quote `$TWICC`** (use `$TWICC args`, never `"$TWICC" args`): it may expand to multiple words, which quoting would break.
 
-## How to inspect a workspace
-
-Run the `twicc workspace` CLI command via the Bash tool:
+## Usage
 
 ```bash
 $TWICC workspace <WORKSPACE_ID>
 ```
 
-The `<WORKSPACE_ID>` is the slug-style identifier shown by `twicc workspaces` (e.g. `backend`, `home-side-projects`). **The ID does NOT change when the workspace is renamed**, so it may look unrelated to the current `name`.
-
-### Examples
-
-```bash
-$TWICC workspace backend
-$TWICC workspace home-side-projects
-```
+The `WORKSPACE_ID` is the slug shown by `$TWICC workspaces`. **The ID does NOT change when the workspace is renamed**, so it may look unrelated to the current name.
 
 ## Output format
-
-The command outputs a single JSON workspace object:
 
 ```json
 {
@@ -63,25 +52,24 @@ The command outputs a single JSON workspace object:
 
 ### Fields
 
-- **`id`** — workspace identifier (slug derived from the original name at creation time; never updated on rename)
-- **`name`** — user-facing workspace name (mutable)
-- **`archived`** — whether the workspace is archived
-- **`color`** — optional CSS color value (may be `null`)
-- **`projectIds`** — list of project IDs that belong to this workspace. These match what `twicc projects` returns (leading dash included). **Drop the leading dash when passing them on the command line** (bash would otherwise parse `-home-...` as a flag and reject the call); the CLI re-adds the dash internally. For `twicc project`, `twicc sessions --project`, `twicc update-project`, and `--add-project` / `--remove-project` on workspace commands, you can also pass a directory path directly — usually simpler than chasing the id.
-- **`autoProjectPatterns`** — optional list of directory patterns (with `*` wildcards) used to auto-add newly detected projects. A pattern without `*` is treated as a directory prefix.
+- `id` — slug derived from the name at creation time; never changes on rename.
+- `name` — display name (mutable).
+- `color` — may be `null`.
+- `projectIds` — project IDs (leading dash included). **Drop the leading dash** when passing on the command line; prefer directory paths when possible.
+- `autoProjectPatterns` — auto-add patterns (`*` wildcard). A pattern without `*` is treated as a directory prefix.
 
 ## Related commands
 
-- **List all workspaces:** `twicc workspaces` — find workspace IDs
-- **Inspect a project in the workspace:** `twicc project <project_path_or_id>` — use any entry from `projectIds` (drop the leading dash on the CLI) or the project's directory path
-- **List sessions for a project in the workspace:** `twicc sessions --project <project_path_or_id>` — same path-or-id rule (drop the leading dash on ids)
-- **Update this workspace:** `twicc update-workspace <ID> [--name X] [--color X|--unset-color] [--add-project PROJECT]... [--remove-project PROJECT]... [--add-pattern P]... [--remove-pattern P]... [--archive|--unarchive]` — `--add-project` / `--remove-project` accept a directory path or an id (drop the leading dash on ids)
-- **Delete this workspace:** `twicc delete-workspace <ID>` — non-destructive for the underlying projects
-- **Create a new workspace:** `twicc create-workspace <NAME> [...]`
+- `$TWICC workspaces` — list all workspaces. Skill: `twicc-workspaces`.
+- `$TWICC update-workspace <ID>` — rename, recolor, add/remove projects or patterns, archive/unarchive. Skill: `twicc-update-workspace`.
+- `$TWICC delete-workspace <ID>` — delete a workspace. Skill: `twicc-delete-workspace`.
+- `$TWICC create-workspace <NAME>` — create a new workspace. Skill: `twicc-create-workspace`.
+- `$TWICC project <PROJECT>` — inspect a project from `projectIds`. Skill: `twicc-project`.
+- `$TWICC sessions --project <PROJECT>` — list sessions for a project. Skill: `twicc-sessions`.
+- `$TWICC sessions --workspace <ID>` — list sessions for a workspace.
 
 ## How to present results
 
-1. Show the workspace name and the count of projects (length of `projectIds`)
-2. Optionally list the project IDs (or fetch each with `twicc project` for more context)
-3. If `autoProjectPatterns` is set, mention that the workspace auto-grows for matching directories
-4. You are in TwiCC, so you can link to the workspace using a relative Markdown link: `[link text](/workspace/{workspace_id})`
+1. Show the workspace name and project count (length of `projectIds`).
+2. If `autoProjectPatterns` is set, mention that the workspace auto-grows for matching directories.
+3. You are in TwiCC — link to the workspace: `[link text](/projects?workspace={workspace_id})`.

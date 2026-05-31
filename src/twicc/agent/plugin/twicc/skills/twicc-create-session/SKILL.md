@@ -1,194 +1,90 @@
 ---
 name: twicc-create-session
-description: Create a new TwiCC session in a project, with a prompt and optional agent settings (provider, model, effort, permission mode, attachments, etc.). Use when the user wants to spawn a fresh Claude Code or Codex session, kick off a sub-task in another project, or scaffold conversations from a script.
+description: Create a new TwiCC session with a prompt and optional agent settings (provider, model, effort, permission mode, attachments, etc.). Use when you or the user want to spawn a fresh Claude Code or Codex session, kick off a sub-task in another project, or scaffold conversations from a script.
 argument-hint: <prompt>
 ---
 
 # TwiCC Create Session
 
-Spawn a new agent session by dropping a request file the live TwiCC server picks up. The session ends up as a regular row in TwiCC, same as if it had been started from the UI.
+Spawn a new agent session. The session appears in TwiCC exactly as if started from the UI.
 
 ## When to use
 
-- The user asks to "create / start / spawn a new session" in some project
-- The user wants to kick off work on a separate project (or sub-task) without leaving the current one
-- A script needs to programmatically queue work into TwiCC (use `--json` for machine-parseable output)
-- The user wants to attach files (images, PDFs, text) to a fresh conversation
+- You or the user want to start a new session in a project.
+- You want to kick off work on a sub-task or separate project.
+- A script needs to queue work into TwiCC programmatically.
 
 ## How to invoke
 
-TwiCC's executable varies by launch mode (uvx, dev, installed tool). Resolve it once at the start of each Bash invocation:
+TwiCC's executable varies by launch mode (uvx, dev, installed tool). ALWAYS USE THIS TO RESOLVE $TWICC AT THE START OF EACH BASH INVOCATION:
 
 ```bash
 TWICC=${TWICC_BIN:-$(command -v twicc 2>/dev/null)}
 [ -n "$TWICC" ] || { echo "TwiCC executable not found in this context" >&2; exit 1; }
 ```
 
-Then run any subcommand via `$TWICC <args>` — **do NOT quote `$TWICC`** (use `$TWICC args`, never `"$TWICC" args`). The variable may expand to a multi-word command (e.g. `uv run --directory ... run.py`); Bash relies on word-splitting to parse it, and quoting it would treat the entire expansion as a single program name and fail with "No such file or directory". All bash examples below use the unquoted form.
+Then run `$TWICC <args>` — **never quote `$TWICC`** (use `$TWICC args`, never `"$TWICC" args`): it may expand to multiple words, which quoting would break.
 
-## Prerequisite: the server must be running
-
-The command communicates with the live TwiCC server through the data directory (no network, no auth). It checks `<data_dir>/twicc.heartbeat` first and fails fast (exit code 2) if it's missing or stale (> 15 s old). If the user gets that error, ask them to start the server (`twicc` in another terminal) and retry.
-
-## How to create a session
-
-Basic shape:
+## Usage
 
 ```bash
 $TWICC create-session [OPTIONS] '<PROMPT>'
 ```
 
-### Required argument
+### Arguments
 
-- **`PROMPT`** — the first user message. Either inline text or an absolute/relative path to a UTF-8 file whose content will be used as the prompt.
+- `PROMPT` — the first user message. Inline text or a path to a UTF-8 file.
 
-### Common options
+### Options
 
-All options are optional. Omitted values fall back to the synced defaults.
+- `--project PATH-OR-ID` — directory path or project id (**drop the leading dash** on ids). Non-existent directories are auto-created as projects. Defaults to the current working directory.
+- `--provider claude_code|codex` — falls back to the synced `defaultProvider`.
+- `--preset NAME` — saved agent-settings preset. Per-flag options override preset values. Run `$TWICC create-session --help` for the current list.
+- `--title TEXT` — **always pass this.** A concise 5–7 word title derived from the prompt. Don't rely on the auto-derived title.
+- `--timeout SECONDS` — seconds to wait for the server's response (default 30). If the CLI times out, the session may still get created.
+- `--json` — emit a single JSON object on stdout (implies `--no-color`).
+- `--no-color` — disable ANSI colors.
 
-- `--project PATH-OR-ID` — directory (absolute / relative; resolved via `realpath`) or project id. **When passing an id on the command line, drop the leading dash** (bash would otherwise parse `-home-...` as a flag and the call would fail); the CLI re-adds the dash internally. Prefer passing a path — that's what the user usually knows; an id is only convenient when you got it back from another `twicc` command. New directories are auto-created as projects. Defaults to the current working directory.
-- `--provider claude_code|codex` — provider to use. Falls back to the synced `defaultProvider` when omitted.
-- `--preset NAME` — name of a saved agent-settings preset for the chosen provider. Per-flag options below override preset values; unset fields fall back to the synced defaults.
-- `--title TEXT` — **you MUST always pass this.** A concise 5–7 word title — not necessarily a grammatical sentence, but specific enough that the user can find the session later in a long list. Derive it from the prompt; don't fall back on the auto-derived title (it's rarely as good).
-- `--timeout SECONDS` — how long to wait for the server's final status (default 30). Independent of the session itself — even if the CLI times out, the session may still get created on the server.
+### Agent settings
 
-### Agent settings (per provider)
+All optional. Omit to use preset / synced defaults. Run `$TWICC create-session --help` for the current list (model values can shift over time).
 
-Each value is optional — omit to let the preset / synced default apply.
-
-| Flag | Claude Code                                                                                                  | Codex                                               |
-|------|--------------------------------------------------------------------------------------------------------------|-----------------------------------------------------|
-| `--model VALUE` | `opus`, `sonnet`, `opus-4.7`, `opus-4.6`, `opus-4.5`, `sonnet-4.5`                                           | `gpt`, `gpt-mini`, `gpt-5.4`                        |
-| `--effort VALUE` | `low`, `medium`, `high`, `xhigh`, `max` (xhigh / max are silently demoted if the model doesn't support them) | `low`, `medium`, `high`, `xhigh`                    |
-| `--permission-mode VALUE` | `default`, `acceptEdits`, `plan`, `dontAsk`, `bypassPermissions`                                             | `read_only`, `strict`, `auto`, `autonomous`, `yolo` |
-| `--thinking / --no-thinking` | extended thinking on/off                                                                                     | not supported                                       |
-| `--claude-in-chrome / --no-claude-in-chrome` | Chrome MCP integration on/off                                                                                | not supported                                       |
-| `--fast-mode / --no-fast-mode` | fast mode on/off (only on Opus; billed against extra usage credits; silently off on Sonnet)                  | not supported                                       |
-| `--context-max VALUE` | `200k` or `1m` (1m (million) silently capped to 200K on unsupported models)                                  | `272k`                                              |
-| `--question-widget / --no-question-widget` | interactive question widget on/off — see ["When to pass `--no-question-widget`"](#when-to-pass---no-question-widget) below | not supported                                       |
-
-The exact model list can shift over time — `twicc create-session --help` always reflects the current state. If a flag isn't supported by the chosen provider, the CLI rejects with an explicit `unsupported_field` validation error before sending anything.
+- `--model VALUE` — Claude Code: `opus`, `sonnet`, `opus-4.7`, `opus-4.6`, `opus-4.5`, `sonnet-4.5`. Codex: `gpt`, `gpt-mini`, `gpt-5.4`.
+- `--effort VALUE` — Claude Code: `low`, `medium`, `high`, `xhigh`, `max`. Codex: `low`, `medium`, `high`, `xhigh`.
+- `--permission-mode VALUE` — Claude Code: `default`, `auto`, `acceptEdits`, `plan`, `dontAsk`, `bypassPermissions`. Codex: `read_only`, `strict`, `auto`, `autonomous`, `yolo`.
+- `--thinking / --no-thinking` — Claude Code only.
+- `--claude-in-chrome / --no-claude-in-chrome` — Claude Code only (Allows to manipulate browser tabs, take screenshots, etc.).
+- `--fast-mode / --no-fast-mode` — Claude Code only (Opus only; billed against extra credits).
+- `--context-max VALUE` — Claude Code: `200k` or `1m` (silently capped to 200k on unsupported models). Codex: `272k`.
+- `--question-widget / --no-question-widget` — Claude Code only. See below.
 
 ### `--hidden`
 
-Creates the session as hidden — invisible in every user-facing listing, search, broadcast, and counter, while still counted in cost aggregates.
+Creates the session invisible in every user-facing listings, search, and broadcasts (still counted in cost aggregates). Requires a non-interactive `--permission-mode` (Claude Code: `bypassPermissions` or `dontAsk`; Codex: `yolo` or `strict`). `--hidden` forces `question_widget=False` automatically — passing `--question-widget` alongside is rejected.
 
-**Constraints (the CLI rejects creation if these are not met):**
+### `--no-question-widget`
 
-- `--permission-mode` must be a non-interactive value:
-  - Claude Code: `bypassPermissions` or `dontAsk`
-  - Codex: `yolo` or `strict`
-- `question_widget` is forced to `False` (Claude Code only — Codex ignores). You don't need to pass `--no-question-widget` — `--hidden` applies it automatically. But explicitly passing `--question-widget` alongside `--hidden` is rejected as a conflict.
-
-This ensures a hidden session can never land in an interactive state (`awaiting_user_input`) that requires a human to click in the TwiCC UI, since a hidden session is invisible and no one would know to click.
-
-### When to pass `--no-question-widget`
-
-By default, when the agent needs to ask the user a question, it uses an interactive UI widget (Claude Code's `AskUserQuestion` tool) — the user picks an answer in the TwiCC web UI before the agent can continue.
-
-For workflows driven entirely from a script or terminal, that's a dead end: the agent ends up in `awaiting_user_input` state (see ["Following up"](#following-up)) and a poll loop can never unblock it without the user opening TwiCC.
-
-`--no-question-widget` strips the widget tool from what the agent can call. The model then has no choice but to ask its questions as plain text in the conversation, which you can read via `twicc session <ID> messages` and answer with `twicc send-message <ID> '<answer>'`. The whole interaction stays in the CLI.
-
-Pass it when:
-
-- The user is driving the workflow purely from a terminal / script and does not want to switch to the TwiCC web UI to answer questions.
-- You are scaffolding an automated loop (`create-session` → poll → `send-message`) and need every agent question to surface as text the loop can read.
-
-Leave it at the default (widget enabled) for any interactive use where the user already has the TwiCC UI open.
-
-Claude Code only — Codex does not currently use a UI widget for questions, so the flag is a no-op there (and rejected with `unsupported_field`).
+By default (Claude Code), questions from the agent surface as an interactive UI widget (`AskUserQuestion`) — the user must click in the TwiCC UI to answer. Pass `--no-question-widget` when driving the workflow from a script: questions then appear as plain text in the conversation, readable via `messages` and answerable via `send-message`.
 
 ### Attachments
 
-- `--attach PATH` — repeatable. Each call adds one file.
-- Accepted types per provider (sniffed by magic bytes, not extension):
-  - **Claude Code**: PNG, JPEG, GIF, WebP, PDF, text/plain
-  - **Codex**: images only (PNG, JPEG, GIF, WebP)
-- Per-file cap: 5 MB. Per-batch cap: 100 files, 32 MB total.
-- Images are auto-resized to the long-edge cap the provider/model accepts (Opus 4.7+ keeps 2576 px, older Claude models drop to 1568 px, >20 images further caps at 2000 px, Codex re-resizes server-side so we ship at 2576 px). Resize is no-op when the image is already within the cap. JPEG stays JPEG (quality 92); everything else becomes PNG (lossless).
-- Resize errors abort the whole batch (no partial delivery).
+- `--attach PATH` (repeatable). Accepted types (sniffed by magic bytes): Claude Code: PNG, JPEG, GIF, WebP, PDF, text/plain; Codex: images only. Per-file cap: 5 MB. Per-batch cap: 100 files, 32 MB. Images are auto-resized to the provider/model's long-edge cap.
 
-### Output mode
+## Errors
 
-- Pretty text by default — progress lines, then summary, then final result.
-- `--json` emits a single JSON object on stdout instead (implies `--no-color`). Use this from scripts.
-- `--no-color` disables ANSI colors. Always implied by `--json`.
+### Local (exit 1)
 
-## Examples
+- `unsupported_field` — flag not supported by the chosen provider.
+- `invalid_choice` — value out of the provider's allowed set.
+- `hidden_constraint_violation` — `--hidden` used with an interactive permission mode or `--question-widget`.
 
-```bash
-# Simplest: project = cwd, provider = synced default, inline prompt
-$TWICC create-session 'Run the tests and fix the failing ones'
+### Server (exit 3)
 
-# Explicit project + provider
-$TWICC create-session \
-    --project /home/twidi/dev/myproj \
-    --provider claude_code \
-    'Add a /healthz endpoint'
-
-# Prompt from a file, with a saved preset
-$TWICC create-session \
-    --project /home/twidi/dev/myproj \
-    --preset 'deep think' \
-    /home/twidi/prompts/security-audit.md
-
-# Preset + targeted override (preset wins for the other fields)
-$TWICC create-session \
-    --provider claude_code \
-    --preset 'deep think' \
-    --effort low \
-    'Quick review of last commit'
-
-# Attachments (Claude Code only for PDF/text)
-$TWICC create-session \
-    --provider claude_code \
-    --attach /home/twidi/screenshot.png \
-    --attach /home/twidi/report.pdf \
-    'What do you think of these results?'
-
-# Machine-parseable output for scripts
-$TWICC create-session --json \
-    --provider claude_code \
-    'Hello'
-# → {"status":"created","session_id":"...","provider":"claude_code","project_id":"...","request_uuid":"..."}
-
-# CLI-driven workflow: force the agent to ask any question as plain text
-# instead of through the TwiCC UI widget, so a script can read and answer
-# without anyone touching the web UI.
-$TWICC create-session \
-    --provider claude_code \
-    --no-question-widget \
-    'Resize all images in ./assets to 1024px wide — ask me before overwriting'
-```
+- `provider_disabled` — enable the provider from the UI.
+- `project_not_found` / `project_no_directory` — `--project` didn't resolve.
+- `manager_busy` — transient; retry.
 
 ## Output format
-
-### Text mode (default)
-
-```
-✓ Heartbeat OK (last seen 0.7s ago)
-✓ Bootstrap loaded (2 providers, 3 presets total)
-✓ Prompt resolved (40 chars)
-✓ Project '-home-twidi-dev-myproj' (existing)
-✓ Settings validated
-✓ Attachments validated (1 images, 0 documents)
-  • screenshot.png — image (image/png), resized 3000x2000 → 1568x1045, 22.0 KB → 7.1 KB
-→ Request submitted (request_uuid: 4a8352fb...)
-✓ Session created: 4a8352fb-1674-41c0-8a85-0a5a3e4e623a
-```
-
-Validation errors (exit code 1) print as:
-
-```
-✗ Validation error:
-  - --effort: invalid value 'ultra' for claude_code. Expected: ['low', 'medium', 'high', 'xhigh', 'max'].
-  - --attach /tmp/big.pdf: size 8.2 MB exceeds 5 MB limit
-```
-
-### JSON mode (`--json`)
-
-A single JSON object, one of:
 
 ```json
 {"status":"created","session_id":"...","provider":"...","project_id":"...","request_uuid":"..."}
@@ -200,73 +96,51 @@ A single JSON object, one of:
 
 ### Exit codes
 
-| Code | Meaning |
-|------|---------|
-| 0 | Session created |
-| 1 | CLI validation error (bad flag, bad attachment, prompt empty, etc.) |
-| 2 | TwiCC server not running (heartbeat missing or stale) |
-| 3 | Server rejected the request (provider disabled, project missing, etc. — see `errors[].code`) |
-| 4 | Server hit an unexpected error mid-flight |
-| 5 | Timeout waiting for the server's final status |
-| 64 | Bad CLI usage (handled by Typer) |
+- `0` — Session created
+- `1` — Local validation error
+- `2` — TwiCC server not running
+- `3` — Server rejected
+- `4` — Server error
+- `5` — Timeout
+- `64` — Bad CLI usage
+
+## Examples
+
+```bash
+$TWICC create-session 'Run the tests and fix the failing ones'
+$TWICC create-session --project /home/twidi/dev/myproj --provider claude_code 'Add a /healthz endpoint'
+$TWICC create-session --project /home/twidi/dev/myproj --preset 'deep think' /home/twidi/prompts/audit.md
+$TWICC create-session --provider claude_code --preset 'deep think' --effort low 'Quick review of last commit'
+$TWICC create-session --provider claude_code --attach /home/twidi/screenshot.png --attach /home/twidi/report.pdf 'What do you think?'
+$TWICC create-session --provider claude_code --no-question-widget 'Resize images — ask me before overwriting'
+$TWICC create-session --json --provider claude_code 'Hello'
+# → {"status":"created","session_id":"...","provider":"claude_code","project_id":"...","request_uuid":"..."}
+```
 
 ## Following up
 
-Creation returns immediately; the agent keeps working in the background. Two complementary ways to check where the session has landed — pick the one that matches the user's question.
+Creation returns immediately; the agent keeps working in the background.
 
-### Is the assistant done? Is it stuck waiting on me?
+**Check state:** `$TWICC process <SESSION_ID>` (skill: `twicc-process`):
+- `assistant_turn` → still working.
+- `awaiting_user_input` → blocked on a pending UI dialog. Do NOT call `send-message` — the user must click in the TwiCC UI first. Fetch what's being asked with `$TWICC session <ID> messages --tail 1`.
+- `user_turn` → done; fetch the reply with `$TWICC session <ID> messages --tail 1`.
+- `starting` → still booting; retry shortly.
+- Exit 1 (no process row) → the process finished and was cleaned up. Check `messages --tail 1`: if the last message is from the assistant, the turn completed; if still from the user, the agent likely crashed.
 
-`twicc process <SESSION_ID>` is the cheap one-shot answer. It reports the live `state` of the process attached to the session (see the `twicc-process` skill for the full vocabulary). Map the result like this:
-
-- `assistant_turn` → still working, no reply yet — wait and retry.
-- `awaiting_user_input` → the agent is **blocked** on a tool approval / `AskUserQuestion` in the TwiCC UI. **The user has to click in the UI to unblock it — a `--tail 1` poll loop will never make progress.** That said, `--tail 1` is still useful here: the last assistant message often spells out *what* is being asked (the tool input, the question's body) so you can tell the user what's on the pending dialog before they switch back to TwiCC. (If the session was created with [`--no-question-widget`](#when-to-pass---no-question-widget), the `AskUserQuestion` branch is impossible — the agent will have posted its question as plain text and stayed in `assistant_turn` then `user_turn`, never landing here.)
-- `user_turn` → the turn is finished; the latest assistant message is the reply (fetch it via the messages command below).
-- `starting` → still spinning up, retry shortly.
-- Exit 1 ("no running process for session …") → **not necessarily an error**: TwiCC doesn't keep finished processes around indefinitely, so a missing row most often means the agent already wrapped up and was cleaned up. Two real cases to disambiguate by fetching `--tail 1`:
-  - The last message is from the **assistant** → the turn completed normally; that message is the reply.
-  - The last message is still from the **user** (the initial prompt) and nothing followed → the agent failed to produce any output (early startup failure, kill, crash). Surface this to the user as "the session didn't produce a reply".
-
-### Fetch the reply itself
-
-**Only if the user asks** for the reply text:
-
-```bash
-$TWICC session <SESSION_ID> messages --tail 1
-```
-
-- `role: "assistant"` → that's the reply.
-- `role: "user"` → no text reply yet (still working, or only tool calls so far) — combine with `twicc process` above to know whether to wait or to act.
-
-Use `--tail N` for more turns when needed.
-
-### Continue the conversation
-
-Once `twicc process` reports `user_turn` (or returns exit 1 because the run already wrapped up cleanly), you can post a follow-up to the same session via `twicc send-message <SESSION_ID> '<TEXT>'` — see the `twicc-send-message` skill. Together they form the natural loop: `create-session` to start, `process` to know when the agent is done (or blocked), `send-message` to reply, then `process` again, and so on. `send-message` preserves the session's stored agent settings; to change model / effort / permission mode / etc. for a session that's already running, use `twicc update-session <SESSION_ID> settings ...` (see the `twicc-update-session` skill). Both commands refuse to operate on subagents — target the parent session if you need to act on the surrounding conversation.
-
-If `process` reports `awaiting_user_input`, do NOT call `send-message` — the server rejects with exit 3 / `awaiting_user_input` because a CLI message cannot resolve a pending UI dialog. Tell the user to click in the TwiCC UI first, then retry.
+**Continue the conversation:** once at `user_turn`, post a follow-up with `$TWICC send-message <SESSION_ID> '<text>'` (skill: `twicc-send-message`). To change settings mid-session, use `$TWICC update-session <SESSION_ID> settings ...` (skill: `twicc-update-session`).
 
 ## Related commands
 
-- **List sessions spawned by this session:** `twicc sessions --spawned-by self` — list child sessions created by the current session (useful when the agent spawned hidden sub-tasks and wants to track them)
-- **Search within sessions spawned by this session:** `twicc search "<query>" --spawned-by self` — full-text search restricted to child sessions only
-- **Inspect the created session:** `twicc session <session_id>` — full metadata for the new session
-- **Check the live agent's state:** `twicc process <session_id>` — is the agent still working, blocked on a user click, or done? Cheaper than polling `messages` and the only reliable way to detect the "awaiting user input" case (see "Following up" above)
-- **List all live processes:** `twicc processes` — useful when you fired several `create-session` calls and want to see which are still running, which need attention, etc. Supports `--state awaiting_user_input` to filter to those waiting for the user
-- **Reply to the created session:** `twicc send-message <session_id> '<text>'` — post a follow-up message into the same session once the agent is back to `user_turn`. Same drop-file mechanics as this command; settings are preserved
-- **Change the session's settings, title, archived state, or pin:** `twicc update-session <session_id> {settings|title|archive|unarchive|pin|unpin} ...` — see the `twicc-update-session` skill
-- **Stop the live agent attached to the session:** `twicc process <session_id> stop` — see the `twicc-process` skill. Idempotent; does not touch the row (use `update-session archive` if you also want to mark it archived)
-- **Read the agent's reply (uniform shape):** `twicc session <session_id> messages --tail 1` — the latest user/assistant message (see "Following up" above)
-- **Read raw session content:** `twicc session <session_id> content <line_or_range>` — see every item (tool calls, reasoning, system) in the provider's native JSONL shape
-- **List sessions:** `twicc sessions --project <project_path_or_id>` — to see other recent sessions in the same project (path preferred; id works too)
-- **Find a project id:** `twicc projects` — only needed when you want the canonical id; otherwise pass the directory path directly to `--project`
+- `$TWICC send-message <session_id>` — send a follow-up. Skill: `twicc-send-message`.
+- `$TWICC process <session_id>` — check agent state. Skill: `twicc-process`.
+- `$TWICC processes --spawned-by self` — track sessions you spawned. Skill: `twicc-processes`.
+- `$TWICC update-session <session_id> settings` — change agent settings. Skill: `twicc-update-session`.
+- `$TWICC session <session_id>` — full metadata. Skill: `twicc-session`.
+- `$TWICC sessions --project <PROJECT>` — browse sessions in the project. Skill: `twicc-sessions`.
 
 ## How to present results
 
-1. On success, give the user the title you set, the canonical session id, and (when available) a clickable link to the new session: `[link text](/project/{project_id}/session/{session_id})`.
-2. On a validation error, summarise the failing fields and the expected values — don't just dump the raw output.
-3. If the server is down (exit 2), tell the user to start TwiCC (`twicc` in another terminal) and offer to retry.
-4. If the request was rejected (exit 3), parse `errors[].code` from JSON mode to give a precise diagnosis:
-   - `provider_disabled` → suggest enabling the provider from the UI or settings.
-   - `project_not_found` / `project_no_directory` → the `--project` value didn't resolve; re-check it.
-   - `manager_busy` → another session for the same id is already live; retry with a fresh request.
-5. Only mention resize info or per-file summaries if the user is debugging or explicitly asks.
+1. On success, give the title, session id, and a clickable link: `[link text](/project/{project_id}/session/{session_id})`.
+2. On validation error, summarize the failing fields with expected values.
+3. On exit 3, diagnose from `errors[].code` (see Errors section above).

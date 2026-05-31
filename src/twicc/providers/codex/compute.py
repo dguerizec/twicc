@@ -76,7 +76,7 @@ Classification rules (any change MUST bump CODEX_COMPUTE_VERSION):
   (plus the matching event_msg.*_end when applicable).
 - top-level ``compacted`` → ``COMPACT_SUMMARY`` (lands at ``ALWAYS``).
   Codex CLI writes this line on auto-compaction; the payload carries
-  a ``replacement_history`` of the messages that were summarised plus
+  a ``replacement_history`` of the messages that were summarized plus
   an encrypted summary in
   ``replacement_history[-1].encrypted_content``. We pick this wrapper
   over the redundant ``event_msg.context_compacted`` event because
@@ -164,7 +164,7 @@ _TYPE_SESSION_META = "session_meta"
 _TYPE_TURN_CONTEXT = "turn_context"
 # ``compacted`` is the top-level wrapper Codex CLI writes when it auto-
 # compacts the rolling context. The payload carries a ``replacement_history``
-# of the messages that were summarised plus a trailing
+# of the messages that were summarized plus a trailing
 # ``{"type":"compaction","encrypted_content":"..."}`` entry — the
 # summary itself is encrypted, so we can't surface a body, only mark
 # the item as a ``COMPACT_SUMMARY`` so the UI shows the standard
