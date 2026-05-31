@@ -403,6 +403,8 @@ class BaseSessionsWatcher:
                 kwargs["spawned_by_id"] = pending.spawned_by_id
             if pending.spawn_root_id is not None:
                 kwargs["spawn_root_id"] = pending.spawn_root_id
+            if pending.annotations:
+                kwargs["annotations"] = pending.annotations
         return Session.objects.create(**kwargs)
 
     # ------------------------------------------------------------------

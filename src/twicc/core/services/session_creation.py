@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from typing import NamedTuple
 
+import orjson
 from asgiref.sync import sync_to_async
 
 from twicc.core.enums import Provider
@@ -79,6 +80,9 @@ async def create_session_from_payload(payload: dict) -> SessionCreationResult:
     documents = payload.get("documents") or []
     hidden = bool(payload.get("hidden", False))
     spawned_by_session_id = payload.get("spawned_by_session_id")  # str | None
+    annotations = payload.get("annotations", {})
+    if annotations is None:
+        annotations = {}
 
     errors: list[SessionCreationError] = []
     if not session_id:
@@ -89,6 +93,9 @@ async def create_session_from_payload(payload: dict) -> SessionCreationResult:
         errors.append(SessionCreationError("provider", "missing", "provider is required"))
     if not text:
         errors.append(SessionCreationError("text", "empty_text", "text is required for a new session"))
+    annotations_error = _validate_annotations(annotations)
+    if annotations_error is not None:
+        errors.append(annotations_error)
     if errors:
         return SessionCreationResult(False, None, None, None, errors)
 
@@ -208,6 +215,7 @@ async def create_session_from_payload(payload: dict) -> SessionCreationResult:
         hidden=hidden,
         spawned_by_id=spawned_by_session_id,
         spawn_root_id=spawn_root_session_id,
+        annotations=annotations,
     )
 
     # --- resolve to effective settings (None -> synced default) --
@@ -250,6 +258,24 @@ async def create_session_from_payload(payload: dict) -> SessionCreationResult:
         project_id=project_id,
         errors=None,
     )
+
+
+def _validate_annotations(annotations: object) -> SessionCreationError | None:
+    if not isinstance(annotations, dict):
+        return SessionCreationError(
+            "annotations",
+            "invalid_annotations",
+            "annotations must be a JSON object.",
+        )
+    try:
+        orjson.dumps(annotations)
+    except TypeError as e:
+        return SessionCreationError(
+            "annotations",
+            "invalid_annotations",
+            f"annotations must be JSON-serializable: {e}",
+        )
+    return None
 
 
 def _resolve_or_initialize_spawn_root_session_id(spawned_by_session_id: str) -> str | None:

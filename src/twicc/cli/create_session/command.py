@@ -145,6 +145,19 @@ def create_session_cmd(
             "images only. Max 100 files, 32 MB total."
         ),
     ),
+    annotation: list[str] = typer.Option(
+        [],
+        "--annotation",
+        help=(
+            "Free-form session annotation as key=value (repeatable). Keys may "
+            "use dotted paths; values support true, false, null, numbers, or strings."
+        ),
+    ),
+    annotations_file: str | None = typer.Option(
+        None,
+        "--annotations-file",
+        help="Path to a JSON object containing session annotations.",
+    ),
     timeout: int = typer.Option(
         30,
         "--timeout",
@@ -181,6 +194,7 @@ def create_session_cmd(
     import django
     django.setup()
 
+    from twicc.cli._drop_request.annotations import parse_annotations
     from twicc.cli._drop_request.attachments import (
         AttachmentResizeError,
         validate_and_encode,
@@ -295,8 +309,11 @@ def create_session_cmd(
     )
 
     errors: list[ValidationError] = []
-    errors.extend(validate_provider(provider, bootstrap))
-    if not errors:  # only validate settings if the provider is OK
+    annotations, annotation_errors = parse_annotations(annotation or [], annotations_file)
+    errors.extend(annotation_errors)
+    provider_errors = validate_provider(provider, bootstrap)
+    errors.extend(provider_errors)
+    if not provider_errors:  # only validate settings if the provider is OK
         errors.extend(validate_settings(provider, settings, bootstrap))
 
     # --hidden auto-forces question_widget=False so the agent never lands
@@ -374,6 +391,7 @@ def create_session_cmd(
         "documents": attach_result.documents,
         "hidden": hidden,
         "spawned_by_session_id": spawned_by_session_id,
+        "annotations": annotations,
         **settings._asdict(),
     }
 

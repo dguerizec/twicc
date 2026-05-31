@@ -370,6 +370,7 @@ class BaseAgentManager:
                                 hidden=pending_attrs.hidden,
                                 spawned_by_id=pending_attrs.spawned_by_id,
                                 spawn_root_id=pending_attrs.spawn_root_id,
+                                annotations=pending_attrs.annotations,
                             )
 
                     await self.notify_session_bound(

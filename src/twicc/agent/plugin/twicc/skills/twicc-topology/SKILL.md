@@ -62,7 +62,8 @@ $TWICC topology <SESSION_ID|self> [OPTIONS]
         "title": "Root orchestrator",
         "total_cost": 1.23,
         "spawned_by": null,
-        "spawn_root": "A"
+        "spawn_root": "A",
+        "annotations": {"role": "coordinator"}
       },
       "process": {"id": 42, "state": "user_turn", "started_at": "...", "last_state_change_at": "...", "pid": 12345},
       "direct_child_count": 1,
@@ -78,7 +79,8 @@ $TWICC topology <SESSION_ID|self> [OPTIONS]
         "title": "Implementation worker",
         "total_cost": 1.11,
         "spawned_by": "A",
-        "spawn_root": "A"
+        "spawn_root": "A",
+        "annotations": {"role": "worker"}
       },
       "process": {"id": null, "state": "dead", "started_at": null, "last_state_change_at": null, "pid": null},
       "direct_child_count": 0,

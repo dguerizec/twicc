@@ -104,6 +104,7 @@ def serialize_session(session):
         "hidden": session.hidden,
         "spawned_by": session.spawned_by_id,
         "spawn_root": session.spawn_root_id,
+        "annotations": session.annotations,
     }
 
 

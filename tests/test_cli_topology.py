@@ -51,7 +51,8 @@ def test_build_topology_returns_rooted_tree_from_middle_node(project):
     root = make_session(project, "A", title="Root", minutes=0)
     root.total_cost = Decimal("1.000000")
     root.spawn_root = root
-    root.save(update_fields=["total_cost", "spawn_root"])
+    root.annotations = {"role": "coordinator"}
+    root.save(update_fields=["total_cost", "spawn_root", "annotations"])
     b = make_session(
         project,
         "B",
@@ -125,6 +126,7 @@ def test_build_topology_returns_rooted_tree_from_middle_node(project):
     assert nodes["A"]["session"]["id"] == "A"
     assert nodes["A"]["session"]["context_usage"] is None
     assert nodes["A"]["session"]["spawn_root"] == "A"
+    assert nodes["A"]["session"]["annotations"] == {"role": "coordinator"}
     assert nodes["B"]["session"]["spawn_root"] == "A"
     assert nodes["A"]["direct_child_count"] == 3
     assert nodes["A"]["descendant_count"] == 4

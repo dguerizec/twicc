@@ -41,6 +41,8 @@ $TWICC create-session [OPTIONS] '<PROMPT>'
 - `--provider claude_code|codex` — falls back to the user's default. Use `$TWICC info` to check available providers, which is the default, and which are disabled (skill: `twicc-info`).
 - `--preset NAME` — saved agent-settings preset. Per-flag options override preset values. `__defaults__` forces the user-configured defaults explicitly. Use `$TWICC info presets` to list available presets (skill: `twicc-info`).
 - `--title TEXT` — **always pass this.** A concise 5–7 word title derived from the prompt. Don't rely on the auto-derived title.
+- `--annotation KEY=VALUE` — add a free-form session annotation; repeatable.
+- `--annotations-file PATH` — load session annotations from a JSON object file.
 - `--timeout SECONDS` — seconds to wait for the server's response (default 30). If the CLI times out, the session may still get created.
 - `--json` — emit a single JSON object on stdout (implies `--no-color`).
 - `--no-color` — disable ANSI colors.
@@ -66,6 +68,12 @@ Creates the session invisible in every user-facing listings, search, and broadca
 
 By default (Claude Code), questions from the agent surface as an interactive UI widget (`AskUserQuestion`) — the user must click in the TwiCC UI to answer. Pass `--no-question-widget` when driving the workflow from a script: questions then appear as plain text in the conversation, readable via `messages` and answerable via `send-message`.
 
+### Annotations
+
+- `--annotation KEY=VALUE` supports dotted keys and scalar values: `true`, `false`, `null`, numbers, or strings.
+- `--annotations-file PATH` must contain a JSON object and is merged before `--annotation` flags.
+- Use `--annotations-file` for list or object values.
+
 ### Attachments
 
 - `--attach PATH` (repeatable). Accepted types (sniffed by magic bytes): Claude Code: PNG, JPEG, GIF, WebP, PDF, text/plain; Codex: images only. Per-file cap: 5 MB. Per-batch cap: 100 files, 32 MB. Images are auto-resized to the provider/model's long-edge cap.
@@ -77,11 +85,17 @@ By default (Claude Code), questions from the agent surface as an interactive UI 
 - `unsupported_field` — flag not supported by the chosen provider.
 - `invalid_choice` — value out of the provider's allowed set.
 - `hidden_constraint_violation` — `--hidden` used with an interactive permission mode or `--question-widget`.
+- `invalid_annotation` — `--annotation` must use `key=value`.
+- `invalid_annotation_path` — dotted annotation keys cannot contain empty segments.
+- `annotation_path_conflict` — an annotation path conflicts with an existing scalar or object.
+- `annotation_non_scalar` — use `--annotations-file` for list or object values.
+- `invalid_annotations_file` — file missing, invalid JSON, or root value is not an object.
 
 ### Server (exit 3)
 
 - `provider_disabled` — enable the provider from the UI.
 - `project_not_found` / `project_no_directory` — `--project` didn't resolve.
+- `invalid_annotations` — annotations must be a JSON object.
 - `manager_busy` — transient; retry.
 
 ## Output format
@@ -112,6 +126,8 @@ $TWICC create-session --project /home/twidi/dev/myproj --provider claude_code 'A
 $TWICC create-session --project /home/twidi/dev/myproj --preset 'deep think' /home/twidi/prompts/audit.md
 $TWICC create-session --provider claude_code --preset 'deep think' --effort low 'Quick review of last commit'
 $TWICC create-session --provider claude_code --attach /home/twidi/screenshot.png --attach /home/twidi/report.pdf 'What do you think?'
+$TWICC create-session --annotation role=reviewer --annotation task.priority=2 'Review this change'
+$TWICC create-session --annotations-file /home/twidi/session-annotations.json 'Run the annotated task'
 $TWICC create-session --provider claude_code --no-question-widget 'Resize images — ask me before overwriting'
 $TWICC create-session --json --provider claude_code 'Hello'
 # → {"status":"created","session_id":"...","provider":"claude_code","project_id":"...","request_uuid":"..."}

@@ -79,7 +79,8 @@ Works for regular sessions and subagents.
   "compacted": false,
   "hidden": false,
   "spawned_by": null,
-  "spawn_root": null
+  "spawn_root": null,
+  "annotations": {"role": "reviewer"}
 }
 ```
 
@@ -97,6 +98,7 @@ Works for regular sessions and subagents.
 - `hidden` — whether the session is hidden from all listings and broadcasts.
 - `spawned_by` — session ID that spawned this session, or `null`.
 - `spawn_root` — root session ID for the spawned-session tree, or `null` before a session joins one.
+- `annotations` — free-form JSON object attached at session creation.
 
 ### Content — raw items
 

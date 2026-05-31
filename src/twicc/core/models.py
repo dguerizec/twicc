@@ -381,6 +381,9 @@ class Session(models.Model):
         related_name="spawn_tree_sessions",
         db_index=True,
     )
+    # Free-form agent-facing data attached at session creation time. The core
+    # does not interpret it and the UI does not expose editing controls for it.
+    annotations = models.JSONField(default=dict, blank=True)
 
     # Per-session permission mode. Values are provider-specific (e.g. "default",
     # "acceptEdits", "plan", "bypassPermissions" for Claude Code). NULL = use global default.
