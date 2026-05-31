@@ -28,14 +28,22 @@ def provider_label(name: str) -> str:
     return _PROVIDER_LABELS.get(name, name)
 
 
-def format_tokens(value) -> str:
-    """Render a token count compactly: 1_000_000 → 1m, 200_000 → 200k."""
+def tokens_to_alias(value: int) -> str:
+    """Compact token count alias: ``1_000_000 → "1m"``, ``200_000 → "200k"``.
+
+    Non-integer or non-round inputs fall through to ``str(value)``.
+    """
     if isinstance(value, int):
         if value % 1_000_000 == 0:
-            value = f"{value // 1_000_000}m"
-        elif value % 1_000 == 0:
-            value = f"{value // 1_000}k"
-    return repr(str(value))
+            return f"{value // 1_000_000}m"
+        if value % 1_000 == 0:
+            return f"{value // 1_000}k"
+    return str(value)
+
+
+def format_tokens(value) -> str:
+    """Render a token count for ``--help`` strings: quoted compact alias."""
+    return repr(tokens_to_alias(value))
 
 
 def default_suffix(ctx: HelpContext, field: str, formatter=repr) -> str:

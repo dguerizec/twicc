@@ -37,11 +37,11 @@ Then run `$TWICC <args>` — **never quote `$TWICC`** (use `$TWICC args`, never 
 $TWICC update-session '<SESSION_ID>' settings [OPTIONS]
 ```
 
-**Patch mode** (no `--preset`): only explicitly passed flags are written; everything else keeps its current value. Pass `--unset <field>` to reset a field to NULL (= synced default). At least one flag or `--unset` is required.
+**Patch mode** (no `--preset`): only explicitly passed flags are written; everything else keeps its current value. Pass `--unset <field>` to reset a field to NULL (= user defined default). At least one flag or `--unset` is required.
 
 **Replace mode** (`--preset NAME`): every settings field is rewritten. The preset defines some fields; absent fields become NULL. Per-flag options and `--unset` override the preset.
 
-Agent settings flags (all optional; run `$TWICC update-session DUMMY settings --help` for the current lists):
+Agent settings flags (all optional; use `$TWICC info models agent-settings presets` to discover the supported models, valid agent settings values per provider and the presets, — skill: `twicc-info`):
 
 - `--model VALUE` — Claude Code: `opus`, `sonnet`, `opus-4.7`, `opus-4.6`, `opus-4.5`, `sonnet-4.5`. Codex: `gpt`, `gpt-mini`, `gpt-5.4`.
 - `--effort VALUE` — Claude Code: `low`, `medium`, `high`, `xhigh`, `max`. Codex: `low`, `medium`, `high`, `xhigh`.
@@ -52,7 +52,7 @@ Agent settings flags (all optional; run `$TWICC update-session DUMMY settings --
 - `--context-max VALUE` — Claude Code: `200k` or `1m`. Codex: `272k`.
 - `--question-widget / --no-question-widget` — Claude Code only (Decide to allow or not UI interactive widget for questions, to be answered by the user).
 - `--unset TOKEN` (repeatable) — reset a field to NULL. Accepted tokens: `model`, `effort`, `permission-mode`, `thinking`, `claude-in-chrome`, `fast-mode`, `context-max`, `question-widget` (provider-supported subset only).
-- `--preset NAME` — apply a saved preset (replace mode).
+- `--preset NAME` — apply a saved preset (replace mode). `__defaults__` resets all fields to the user-configured defaults. Use `$TWICC info presets` to list available presets (skill: `twicc-info`).
 
 **How settings reach a live process:** if a session currently has a process attached (a running agent), changes are propagated immediately per field category:
 - *Live* (`permission_mode` on Claude Code) — applied immediately.
@@ -155,6 +155,7 @@ $TWICC update-session 4a8352fb-... unhide
 
 ## Related commands
 
+- `$TWICC info [models|agent-settings|presets]` — discover providers, models, agent-settings values and presets before editing a session. Skill: `twicc-info`.
 - `$TWICC process <session_id> stop` — stop the agent without touching the row. Skill: `twicc-process`.
 - `$TWICC send-message <session_id>` — send a message (settings unchanged). Skill: `twicc-send-message`.
 - `$TWICC session <session_id>` — full metadata. Skill: `twicc-session`.

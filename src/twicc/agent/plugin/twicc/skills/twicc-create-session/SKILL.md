@@ -33,13 +33,13 @@ $TWICC create-session [OPTIONS] '<PROMPT>'
 
 ### Arguments
 
-- `PROMPT` — the first user message. Inline text or a path to a UTF-8 file.
+- `PROMPT` — the first user message. Inline text or a path to a UTF-8 file. For available slash/dollar commands, use `$TWICC info commands` (skill: `twicc-info`).
 
 ### Options
 
 - `--project PATH-OR-ID` — directory path or project id (**drop the leading dash** on ids). Non-existent directories are auto-created as projects. Defaults to the current working directory.
-- `--provider claude_code|codex` — falls back to the synced `defaultProvider`.
-- `--preset NAME` — saved agent-settings preset. Per-flag options override preset values. Run `$TWICC create-session --help` for the current list.
+- `--provider claude_code|codex` — falls back to the user's default. Use `$TWICC info` to check available providers, which is the default, and which are disabled (skill: `twicc-info`).
+- `--preset NAME` — saved agent-settings preset. Per-flag options override preset values. `__defaults__` forces the user-configured defaults explicitly. Use `$TWICC info presets` to list available presets (skill: `twicc-info`).
 - `--title TEXT` — **always pass this.** A concise 5–7 word title derived from the prompt. Don't rely on the auto-derived title.
 - `--timeout SECONDS` — seconds to wait for the server's response (default 30). If the CLI times out, the session may still get created.
 - `--json` — emit a single JSON object on stdout (implies `--no-color`).
@@ -47,7 +47,7 @@ $TWICC create-session [OPTIONS] '<PROMPT>'
 
 ### Agent settings
 
-All optional. Omit to use preset / synced defaults. Run `$TWICC create-session --help` for the current list (model values can shift over time).
+All optional. Omit to use preset / user defined defaults. Use `$TWICC info models agent-settings` for authoritative model lists, valid values, and per-value restrictions (skill: `twicc-info`). The lists below are indicative.
 
 - `--model VALUE` — Claude Code: `opus`, `sonnet`, `opus-4.7`, `opus-4.6`, `opus-4.5`, `sonnet-4.5`. Codex: `gpt`, `gpt-mini`, `gpt-5.4`.
 - `--effort VALUE` — Claude Code: `low`, `medium`, `high`, `xhigh`, `max`. Codex: `low`, `medium`, `high`, `xhigh`.
@@ -132,6 +132,7 @@ Creation returns immediately; the agent keeps working in the background.
 
 ## Related commands
 
+- `$TWICC info [models|agent-settings|presets|commands]` — discover providers, models, agent-settings values, presets, and slash / dollar commands before crafting a session. Skill: `twicc-info`.
 - `$TWICC send-message <session_id>` — send a follow-up. Skill: `twicc-send-message`.
 - `$TWICC process <session_id>` — check agent state. Skill: `twicc-process`.
 - `$TWICC processes --spawned-by self` — track sessions you spawned. Skill: `twicc-processes`.

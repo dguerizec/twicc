@@ -28,7 +28,11 @@ from twicc.auth.session_auth import (
     is_session_authenticated,
 )
 from twicc.agent.registry import get_agent_manager_registry
-from twicc.agent_settings_presets import read_agent_settings_presets, write_agent_settings_presets
+from twicc.agent_settings_presets import (
+    RESERVED_PRESET_NAMES,
+    read_agent_settings_presets,
+    write_agent_settings_presets,
+)
 from twicc.core.enums import Provider
 from twicc.core.services.session_creation import create_session_from_payload
 from twicc.providers.claude_code.ws import ClaudeCodeWSHandler
@@ -1477,7 +1481,15 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
         # them after persistence would let the rebroadcast leak them.
         presets = config.get("presets")
         if isinstance(presets, list):
-            for preset in presets:
+            # Reject presets whose name is in RESERVED_PRESET_NAMES — these
+            # slots are owned by ``twicc info presets`` (e.g. ``__defaults__``)
+            # and must not be shadowed by a stored preset, even from a
+            # hand-edited payload.
+            config["presets"] = [
+                p for p in presets
+                if not (isinstance(p, dict) and p.get("name") in RESERVED_PRESET_NAMES)
+            ]
+            for preset in config["presets"]:
                 if isinstance(preset, dict):
                     for hidden in AGENT_SETTINGS_HIDDEN_FROM_FRONTEND:
                         preset.pop(hidden, None)

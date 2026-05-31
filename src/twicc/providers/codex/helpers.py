@@ -28,6 +28,7 @@ from twicc.providers.helpers import (
 
 from .constants import (
     AGENT_SETTINGS_CATEGORIES as _AGENT_SETTINGS_CATEGORIES,
+    AGENT_SETTINGS_DESCRIPTIONS as _AGENT_SETTINGS_DESCRIPTIONS,
     AGENT_SETTINGS_FIELDS_MAPPING as _AGENT_SETTINGS_FIELDS_MAPPING,
     MODEL_VERSIONS as _MODEL_VERSIONS,
     SYNCED_SETTINGS_DEFAULTS as _SYNCED_SETTINGS_DEFAULTS,
@@ -92,6 +93,7 @@ class CodexHelpers(BaseProviderHelpers):
     """Helpers for sessions produced by the Codex CLI."""
 
     provider: ClassVar[Provider] = Provider.CODEX
+    LABEL: ClassVar[str] = "Codex"
 
     # Constants are defined in ``.constants`` (Django-free module) so the
     # CLI's ``--help`` enrichment can read them without ``django.setup()``.
@@ -100,6 +102,7 @@ class CodexHelpers(BaseProviderHelpers):
     SYNCED_SETTINGS_DEFAULTS: ClassVar[dict] = _SYNCED_SETTINGS_DEFAULTS
     AGENT_SETTINGS_CATEGORIES: ClassVar[dict[AgentSettingCategory, list[str]]] = _AGENT_SETTINGS_CATEGORIES
     AGENT_SETTINGS_FIELDS_MAPPING: ClassVar[dict[str, str]] = _AGENT_SETTINGS_FIELDS_MAPPING
+    AGENT_SETTINGS_DESCRIPTIONS: ClassVar[dict[str, dict]] = _AGENT_SETTINGS_DESCRIPTIONS
 
     # Codex permission modes that do not require interactive approval.
     NON_INTERACTIVE_PERMISSION_MODES: ClassVar[frozenset[str]] = frozenset({"yolo", "strict"})

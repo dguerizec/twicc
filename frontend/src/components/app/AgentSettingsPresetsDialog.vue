@@ -14,7 +14,7 @@
 
 import { computed, nextTick, ref, watch } from 'vue'
 import { getProviderHelpers } from '../../providers'
-import { useAgentSettingsPresetsStore } from '../../stores/agentSettingsPresets'
+import { RESERVED_PRESET_NAMES, useAgentSettingsPresetsStore } from '../../stores/agentSettingsPresets'
 import { formatPresetSummary } from '../../utils/presetFormat'
 import { DEFAULT_SENTINEL } from '../../composables/useSessionAgentSettings'
 
@@ -193,6 +193,10 @@ function handleSave() {
     const trimmedName = formData.value.name.trim()
     if (!trimmedName) {
         errorMessage.value = 'Name is required'
+        return
+    }
+    if (RESERVED_PRESET_NAMES.has(trimmedName)) {
+        errorMessage.value = `"${trimmedName}" is a reserved name and cannot be used`
         return
     }
     if (presetsStore.findIndexByName(props.provider, trimmedName, editIndex.value) !== -1) {

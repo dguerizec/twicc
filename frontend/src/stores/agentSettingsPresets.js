@@ -23,6 +23,12 @@ const PRESET_FIELDS = [
     'fast_mode',
 ]
 
+// Names owned by ``twicc info presets`` (e.g. the synthetic "effective
+// defaults" entry). Users cannot pick them for their own presets — the
+// dialog rejects matches in handleSave(). Kept in sync with
+// ``twicc.agent_settings_presets.RESERVED_PRESET_NAMES``.
+export const RESERVED_PRESET_NAMES = new Set(['__defaults__'])
+
 function normalizePreset(raw) {
     const preset = { name: typeof raw?.name === 'string' ? raw.name : '' }
     for (const field of PRESET_FIELDS) {

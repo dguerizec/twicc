@@ -198,6 +198,14 @@ class BaseProviderHelpers:
 
     provider: ClassVar[Provider]
 
+    # Human-readable display name of the provider (e.g. "Claude Code",
+    # "Codex"). Surfaced by ``twicc info`` and any other discovery
+    # surface that needs a label distinct from the wire key. Each
+    # provider sets its own value; the base default is intentionally
+    # empty so a freshly-added provider that forgets to declare it
+    # fails visibly.
+    LABEL: ClassVar[str] = ""
+
     # Provider-specific entries to merge into ``SYNCED_SETTINGS_DEFAULTS``.
     # Keys must be namespaced (e.g. ``claudeCodeDefault*``) to avoid clashes
     # between providers and with the cross-provider generic defaults.
@@ -225,6 +233,18 @@ class BaseProviderHelpers:
     # its own list; the cross-provider registry aggregates them via the
     # :class:`ProviderHelpersRegistry`.
     MODEL_VERSIONS: ClassVar[list[ModelVersion]] = []
+
+    # Map ``(field, value) -> provider_extra_flag`` for agent-settings values
+    # whose applicability depends on the selected model. Drives
+    # :meth:`get_agent_settings_constraints`. Empty by default — providers
+    # without contextual constraints (e.g. Codex) inherit the empty mapping.
+    CONSTRAINT_FLAG_MAPPING: ClassVar[dict[tuple[str, Any], str]] = {}
+
+    # Per-(field, value) human-readable description. Surfaced by
+    # ``twicc info agent-settings``; values without an entry are silently
+    # omitted. Each provider redeclares the catalogue from its own
+    # ``.constants`` module so it stays Django-free.
+    AGENT_SETTINGS_DESCRIPTIONS: ClassVar[dict[str, dict]] = {}
 
     # Polling interval (seconds) for this provider's usage sync task, or
     # ``None`` when the provider has no usage tracking. The actual loop
@@ -431,6 +451,41 @@ class BaseProviderHelpers:
         bootstrap (to populate select widgets).
         """
         raise NotImplementedError
+
+    def get_agent_settings_descriptions(self) -> dict[str, dict]:
+        """Return the per-value human-readable descriptions.
+
+        Shape: ``{field: {value: description}}``. Drives the
+        ``description`` field of ``twicc info agent-settings``. Empty
+        for providers that don't declare any.
+        """
+        return self.AGENT_SETTINGS_DESCRIPTIONS
+
+    def get_agent_settings_constraints(self) -> dict[str, dict]:
+        """Return the contextual constraints on agent-settings values.
+
+        Shape: ``{field: {value: [supported_identifiers]}}``. Only fields
+        and values that have a constraint appear in the output; values
+        with no constraint are absent. Each ``supported_identifiers``
+        list is the exhaustive set of model identifiers — for every
+        :class:`ModelVersion` whose flag (per :attr:`CONSTRAINT_FLAG_MAPPING`)
+        is true, the canonical ``<family>-<version>`` form is included,
+        plus the bare alias ``<family>`` when the entry is the latest of
+        its family.
+
+        Providers without :attr:`CONSTRAINT_FLAG_MAPPING` entries inherit
+        an empty result, signalling "no contextual constraints".
+        """
+        result: dict[str, dict] = {}
+        for (field, value), flag in self.CONSTRAINT_FLAG_MAPPING.items():
+            supported: list = []
+            for mv in self.MODEL_VERSIONS:
+                if getattr(mv.provider_extra, flag, False):
+                    supported.append(f"{mv.model}-{mv.version}")
+                    if mv.latest:
+                        supported.append(mv.model)
+            result.setdefault(field, {})[value] = supported
+        return result
 
     def get_attachment_support(self) -> dict:
         """Return the attachment capabilities of this provider.

@@ -43,6 +43,22 @@ AGENT_SETTINGS_FIELDS_MAPPING: dict[str, str] = {
 }
 
 
+# Per-(field, value) human-readable description. Mirrors the
+# ``description`` field of ``AGENT_SETTINGS_CHOICES`` in
+# ``frontend/src/providers/codex/helpers.js`` — keep in sync. Surfaced
+# by ``twicc info agent-settings``; absent values are silently omitted
+# from the output.
+AGENT_SETTINGS_DESCRIPTIONS: dict[str, dict] = {
+    "permission_mode": {
+        "read_only": "Read-only. Any write requires confirmation.",
+        "strict": "Read-only. Writes are refused silently (no prompt).",
+        "auto": "Writes freely in the project; asks to step outside.",
+        "autonomous": "Like Auto but uninterrupted (sandbox protects).",
+        "yolo": "No restrictions.",
+    },
+}
+
+
 # Codex CLI models the bundled binary accepts (verified at startup time
 # via ``codex.models()``). ``selected_model_value`` returns the bare
 # alias for ``latest=True`` entries (``"gpt"``, ``"gpt-mini"``) and the

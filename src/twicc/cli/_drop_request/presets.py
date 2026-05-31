@@ -7,6 +7,7 @@ preset file uses the historical keys ``model`` and ``thinking`` which map to
 
 from __future__ import annotations
 
+from twicc.agent_settings_presets import DEFAULTS_PRESET_NAME
 from twicc.providers.helpers import AgentSettings
 
 PRESET_KEY_MAP = {
@@ -37,6 +38,10 @@ def apply_preset_and_overrides(
     Order:
       1. Start with all-None.
       2. If a preset is named, merge its values (after key remapping).
+         The sentinel name ``DEFAULTS_PRESET_NAME`` (``__defaults__``)
+         is treated as "no preset" — it skips the lookup but still
+         signals "replace mode" to the caller, so all fields stay
+         None and the back fills them from the user's synced defaults.
       3. Each non-None override replaces the corresponding field.
       4. Each field in ``unset`` is forced to ``None`` (wins over preset).
 
@@ -45,7 +50,7 @@ def apply_preset_and_overrides(
     """
     fields = {name: None for name in AgentSettings._fields}
 
-    if preset_name is not None:
+    if preset_name is not None and preset_name != DEFAULTS_PRESET_NAME:
         preset = find_preset(presets, preset_name)
         if preset is None:
             names = ", ".join(p.get("name", "<unnamed>") for p in presets) or "<empty>"

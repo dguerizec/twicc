@@ -769,6 +769,14 @@ from twicc.cli.update_project import update_project_cmd  # noqa: E402
 app.command(name="update-project")(update_project_cmd)
 
 
+# ``info`` is a single read-only command taking zero or more positional
+# section names (presets, commands, models, agent-settings). The command
+# performs lazy Django setup inside its body, so importing it here stays
+# cheap.
+from twicc.cli.info.command import info_cmd  # noqa: E402
+app.command(name="info")(info_cmd)
+
+
 def main() -> None:
     """Entry point for ``pyproject.toml`` scripts and ``__main__.py``."""
     app()

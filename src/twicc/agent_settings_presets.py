@@ -23,6 +23,18 @@ import orjson
 from twicc.core.enums import Provider
 from twicc.providers.helpers import get_provider_helpers
 
+# Sentinel preset name routing ``--preset`` to the effective defaults
+# (resolved via ``resolve_agent_settings``) instead of a stored preset.
+# Exposed as the first entry of ``twicc info presets`` and accepted by
+# ``create-session`` / ``update-session settings`` to mean "reset the
+# bundle to all-None so the back fills in the user's synced defaults".
+DEFAULTS_PRESET_NAME = "__defaults__"
+
+# Preset names reserved for synthetic / sentinel entries. Users cannot
+# pick any of these for their own presets — they stay free for the
+# matching feature.
+RESERVED_PRESET_NAMES: frozenset[str] = frozenset({DEFAULTS_PRESET_NAME})
+
 
 def _get_path(provider: Provider):
     return get_provider_helpers(provider).get_settings_presets_path()

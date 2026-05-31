@@ -27,7 +27,7 @@ class ClaudeCodeModelExtra(NamedTuple):
     supports_effort_xhigh: bool
     supports_effort_max: bool
     supports_fast: bool
-    support_permission_auto: bool
+    supports_permission_auto: bool
 
 
 SYNCED_SETTINGS_DEFAULTS: dict = {
@@ -92,6 +92,26 @@ AGENT_SETTINGS_FIELDS_MAPPING: dict[str, str] = {
     "context_max": "claudeCodeDefaultContextMax",
 }
 
+
+# Per-(field, value) human-readable description. Mirrors the
+# ``description`` field of ``AGENT_SETTINGS_CHOICES`` in
+# ``frontend/src/providers/claude_code/helpers.js`` — keep in sync.
+# Surfaced by ``twicc info agent-settings``; absent values are silently
+# omitted from the output.
+AGENT_SETTINGS_DESCRIPTIONS: dict[str, dict] = {
+    "permission_mode": {
+        "default": "Prompts for permission on first use of each tool",
+        "auto": "Auto-approves tools, with safety checks blocking risky actions",
+        "acceptEdits": "Auto-accepts file edit permissions",
+        "plan": "Read-only: Claude can analyze but not modify files",
+        "dontAsk": "Auto-denies tools unless pre-approved via permission rules",
+        "bypassPermissions": "Skips all permission prompts",
+    },
+    "fast_mode": {
+        True: "Faster generation, billed on extra usage credits. Tokens cost 6x more (only 2x since 4.8).",
+    },
+}
+
 # ------------------------------------------------------------------
 # Model registry — supported model versions
 #
@@ -115,7 +135,7 @@ MODEL_VERSIONS: list[ModelVersion] = [
         latest=True,
         provider_extra=ClaudeCodeModelExtra(
             supports_1m=True, supports_effort_xhigh=True, supports_effort_max=True,
-            supports_fast=True, support_permission_auto=True,
+            supports_fast=True, supports_permission_auto=True,
         ),
     ),
     ModelVersion(
@@ -125,7 +145,7 @@ MODEL_VERSIONS: list[ModelVersion] = [
         latest=False,
         provider_extra=ClaudeCodeModelExtra(
             supports_1m=True, supports_effort_xhigh=True, supports_effort_max=True,
-            supports_fast=True, support_permission_auto=True,
+            supports_fast=True, supports_permission_auto=True,
         ),
     ),
     ModelVersion(
@@ -135,7 +155,7 @@ MODEL_VERSIONS: list[ModelVersion] = [
         latest=False,
         provider_extra=ClaudeCodeModelExtra(
             supports_1m=True, supports_effort_xhigh=False, supports_effort_max=True,
-            supports_fast=True, support_permission_auto=True,
+            supports_fast=True, supports_permission_auto=True,
         ),
     ),
     ModelVersion(
@@ -145,7 +165,7 @@ MODEL_VERSIONS: list[ModelVersion] = [
         latest=False,
         provider_extra=ClaudeCodeModelExtra(
             supports_1m=False, supports_effort_xhigh=False, supports_effort_max=False,
-            supports_fast=False, support_permission_auto=False,
+            supports_fast=False, supports_permission_auto=False,
         ),
     ),
     ModelVersion(
@@ -155,7 +175,7 @@ MODEL_VERSIONS: list[ModelVersion] = [
         latest=True,
         provider_extra=ClaudeCodeModelExtra(
             supports_1m=True, supports_effort_xhigh=False, supports_effort_max=True,
-            supports_fast=False, support_permission_auto=True,
+            supports_fast=False, supports_permission_auto=True,
         ),
     ),
     ModelVersion(
@@ -165,7 +185,7 @@ MODEL_VERSIONS: list[ModelVersion] = [
         latest=False,
         provider_extra=ClaudeCodeModelExtra(
             supports_1m=False, supports_effort_xhigh=False, supports_effort_max=False,
-            supports_fast=False, support_permission_auto=False,
+            supports_fast=False, supports_permission_auto=False,
         ),
     ),
 ]

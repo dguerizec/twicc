@@ -13,7 +13,7 @@ from datetime import date
 from decimal import Decimal
 from functools import lru_cache
 from pathlib import Path
-from typing import TYPE_CHECKING, ClassVar, NamedTuple
+from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple
 
 import orjson
 from django.conf import settings
@@ -33,6 +33,7 @@ from twicc.providers.helpers import (
 from .compute import extract_command, get_message_content, get_message_content_list, strip_markdown
 from .constants import (
     AGENT_SETTINGS_CATEGORIES as _AGENT_SETTINGS_CATEGORIES,
+    AGENT_SETTINGS_DESCRIPTIONS as _AGENT_SETTINGS_DESCRIPTIONS,
     AGENT_SETTINGS_FIELDS_MAPPING as _AGENT_SETTINGS_FIELDS_MAPPING,
     MODEL_VERSIONS as _MODEL_VERSIONS,
     OBSOLETE_SYNCED_SETTINGS_KEYS as _OBSOLETE_SYNCED_SETTINGS_KEYS,
@@ -130,6 +131,7 @@ class ClaudeCodeHelpers(BaseProviderHelpers):
     """Helpers for sessions produced by the Claude Code CLI / SDK."""
 
     provider: ClassVar[Provider] = Provider.CLAUDE_CODE
+    LABEL: ClassVar[str] = "Claude Code"
 
     # Constants are defined in ``.constants`` (Django-free module) so the
     # CLI's ``--help`` enrichment can read them without ``django.setup()``.
@@ -140,9 +142,20 @@ class ClaudeCodeHelpers(BaseProviderHelpers):
     OBSOLETE_SYNCED_SETTINGS_KEYS: ClassVar[tuple[str, ...]] = _OBSOLETE_SYNCED_SETTINGS_KEYS
     AGENT_SETTINGS_CATEGORIES: ClassVar[dict[AgentSettingCategory, list[str]]] = _AGENT_SETTINGS_CATEGORIES
     AGENT_SETTINGS_FIELDS_MAPPING: ClassVar[dict[str, str]] = _AGENT_SETTINGS_FIELDS_MAPPING
+    AGENT_SETTINGS_DESCRIPTIONS: ClassVar[dict[str, dict]] = _AGENT_SETTINGS_DESCRIPTIONS
 
     # Claude Code permission modes that do not require interactive approval.
     NON_INTERACTIVE_PERMISSION_MODES: ClassVar[frozenset[str]] = frozenset({"bypassPermissions", "dontAsk"})
+
+    # Per-(field, value) capability flag in :class:`ClaudeCodeModelExtra`
+    # gating the value. Values not listed here are universally available.
+    CONSTRAINT_FLAG_MAPPING: ClassVar[dict[tuple[str, Any], str]] = {
+        ("effort", "max"):           "supports_effort_max",
+        ("effort", "xhigh"):         "supports_effort_xhigh",
+        ("context_max", 1_000_000):  "supports_1m",
+        ("fast_mode", True):         "supports_fast",
+        ("permission_mode", "auto"): "supports_permission_auto",
+    }
 
     USAGE_SYNC_INTERVAL: ClassVar[int | None] = 5 * 60
 
@@ -351,7 +364,7 @@ class ClaudeCodeHelpers(BaseProviderHelpers):
         mv = self.find_model(selected_model) if selected_model else None
         if mv is None:
             mv = self._resolve_to_default_model_version()
-        return bool(mv and mv.provider_extra.support_permission_auto)
+        return bool(mv and mv.provider_extra.supports_permission_auto)
 
     def enforce_synced_settings_consistency(self, synced: dict, changes: dict) -> None:
         """Normalise ``claudeCodeDefault*`` keys when the default model changed.

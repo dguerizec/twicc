@@ -34,7 +34,7 @@ $TWICC send-message [OPTIONS] '<SESSION_ID>' '<PROMPT>'
 ### Arguments
 
 - `SESSION_ID` — id of the session to send to.
-- `PROMPT` — message text, or a path to a UTF-8 file whose content is used as the message.
+- `PROMPT` — message text, or a path to a UTF-8 file. For available slash/dollar commands, use `$TWICC info commands` (skill: `twicc-info`).
 
 ### Options
 
@@ -101,6 +101,7 @@ The message is queued; the agent picks it up on its next turn.
 
 ## Related commands
 
+- `$TWICC info commands [--provider <key>] [--project <PROJECT>]` — list slash / dollar commands available in the target session's scope before referencing them in the message. Skill: `twicc-info`.
 - `$TWICC create-session` — create a new session instead. Skill: `twicc-create-session`.
 - `$TWICC update-session <session_id> settings` — change agent settings before sending. Skill: `twicc-update-session`.
 - `$TWICC process <session_id> stop` — stop the live agent. Skill: `twicc-process`.

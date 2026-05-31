@@ -150,7 +150,12 @@ const AGENT_SETTINGS_CHOICES = {
         { value: false, label: 'Disabled', display_label: 'No Chrome MCP' },
     ],
     fast_mode: [
-        { value: true,  label: 'Enabled',  display_label: 'Fast mode' },
+        {
+            value: true,
+            label: 'Enabled',
+            display_label: 'Fast mode',
+            description: 'Faster generation, billed on extra usage credits. Tokens cost 6x more (only 2x since 4.8).',
+        },
         { value: false, label: 'Disabled', display_label: 'No fast mode' },
     ],
     context_max: [
@@ -378,7 +383,7 @@ export class ClaudeCodeHelpers extends BaseProviderHelpers {
 
     modelSupportsPermissionAuto(selectedModel) {
         const entry = this._resolveRegistryEntry(selectedModel)
-        return entry ? entry.provider_extra.support_permission_auto : false
+        return entry ? entry.provider_extra.supports_permission_auto : false
     }
 
     /**
@@ -506,11 +511,10 @@ export class ClaudeCodeHelpers extends BaseProviderHelpers {
         }
         if (field === 'fast_mode') {
             if (!this.modelSupportsFast(context?.effectiveModel)) return 'Fast mode is only available on supported Opus versions.'
-            // Surface the cost note whenever the toggle is available — both in the
-            // session popover and in the per-provider settings panel (the session-
-            // level value here covers the popover; the provider panel synthesises
-            // its own context with the default model).
-            return 'Fast mode is billed separately from your subscription (extra usage credits).'
+            // When fast mode is available, the cost note lives under the
+            // ``Enabled`` option (see ``AGENT_SETTINGS_CHOICES.fast_mode``)
+            // so the field-level help stays empty to avoid duplication.
+            return null
         }
         return null
     }
