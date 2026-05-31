@@ -1,7 +1,7 @@
 ---
 name: twicc-send-message
 description: Send a message (and optional attachments) to an existing TwiCC session. Use when you or the user want to continue a conversation in an existing session, drop a follow-up from a script, or attach files to an ongoing session.
-argument-hint: <session_id> <prompt>
+argument-hint: <session_id|parent> <prompt>
 ---
 
 # TwiCC Send Message
@@ -28,12 +28,12 @@ Then run `$TWICC <args>` — **never quote `$TWICC`** (use `$TWICC args`, never 
 ## Usage
 
 ```bash
-$TWICC send-message [OPTIONS] '<SESSION_ID>' '<PROMPT>'
+$TWICC send-message [OPTIONS] '<SESSION_ID|parent>' '<PROMPT>'
 ```
 
 ### Arguments
 
-- `SESSION_ID` — id of the session to send to.
+- `SESSION_ID` — id of the session to send to, **or** the keyword `parent` to target the session that spawned the calling agent. When using `parent`, fails with `parent_not_found` if not running inside a TwiCC agent or if the current session has no spawner.
 - `PROMPT` — message text, or a path to a UTF-8 file. For available slash/dollar commands, use `$TWICC info commands` (skill: `twicc-info`).
 
 ### Options
@@ -51,6 +51,7 @@ $TWICC send-message [OPTIONS] '<SESSION_ID>' '<PROMPT>'
 - `is_subagent` — subagents cannot be messaged directly; target the parent session.
 - `session_stale`
 - `project_no_directory`
+- `parent_not_found` — `parent` used but no TwiCC session in the ancestry, or the current session has no `spawned_by` link.
 
 ### Server (exit 3)
 
@@ -90,6 +91,8 @@ $TWICC send-message 4a8352fb-1674-41c0-8a85-0a5a3e4e623a /home/twidi/prompts/fol
 $TWICC send-message 4a8352fb-1674-41c0-8a85-0a5a3e4e623a --attach /home/twidi/screenshot.png --attach /home/twidi/report.pdf 'What do you think?'
 $TWICC send-message --json 4a8352fb-1674-41c0-8a85-0a5a3e4e623a 'Hello'
 # → {"status":"sent","session_id":"...","provider":"claude_code","project_id":"...","request_uuid":"..."}
+$TWICC send-message parent 'I finished the sub-task you asked for.'
+# From inside an agent: targets the session that spawned it;
 ```
 
 ## Following up
@@ -98,6 +101,8 @@ The message is queued; the agent picks it up on its next turn.
 
 - Check state: `$TWICC process <SESSION_ID>` — still working, blocked, or done? Skill: `twicc-process`.
 - Read the reply: `$TWICC session <SESSION_ID> messages --tail 1`. Skill: `twicc-session`.
+
+**Let the child talk back:** if the target is a session you spawned, tell it in the message to load the `twicc-send-message` skill and use `send-message parent '<text>'` to reply async — `parent` resolves to you via its `spawned_by` link. Loading the skill is what gives the child the `$TWICC` resolution and full invocation syntax.
 
 ## Related commands
 

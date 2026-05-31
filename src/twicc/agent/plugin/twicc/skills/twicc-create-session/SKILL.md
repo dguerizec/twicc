@@ -130,6 +130,8 @@ Creation returns immediately; the agent keeps working in the background.
 
 **Continue the conversation:** once at `user_turn`, post a follow-up with `$TWICC send-message <SESSION_ID> '<text>'` (skill: `twicc-send-message`). To change settings mid-session, use `$TWICC update-session <SESSION_ID> settings ...` (skill: `twicc-update-session`).
 
+**Let the child talk back:** to enable async replies, instruct the spawned session in the prompt to load the `twicc-send-message` skill and use `send-message parent '<text>'` — the `parent` keyword resolves to you via its `spawned_by` link, and the reply lands in your own session prefixed with the child's id. Loading the skill is what gives the child the `$TWICC` resolution and full invocation syntax.
+
 ## Related commands
 
 - `$TWICC info [models|agent-settings|presets|commands]` — discover providers, models, agent-settings values, presets, and slash / dollar commands before crafting a session. Skill: `twicc-info`.

@@ -8,7 +8,11 @@ import typer
 def send_message_cmd(
     session_id: str = typer.Argument(
         ...,
-        help="Id of the existing session to send the message to.",
+        help=(
+            "Id of the existing session to send the message to, or the "
+            "keyword 'parent' to target the parent of the calling session "
+            "(resolved via PID ancestry → current session's spawned_by)."
+        ),
     ),
     prompt: str = typer.Argument(
         ...,
@@ -81,6 +85,7 @@ def send_message_cmd(
         lookup_session,
     )
     from twicc.cli._drop_request.validation import ValidationError
+    from twicc.cli._drop_request.whoami import resolve_current_session
     from twicc.providers.helpers import get_provider_helpers
 
     try:
@@ -90,6 +95,49 @@ def send_message_cmd(
         raise typer.Exit(2)
 
     emit_progress(f"✓ Heartbeat OK (last seen {age:.1f}s ago)", json_output=json_output)
+
+    # 'parent' keyword: PID ancestry → current TwiCC session (same mechanism
+    # as `--spawned-by self` on create-session) → its `spawned_by` field, which
+    # is the session that originally created the current one via
+    # `twicc create-session`. Done before lookup_session, which expects a real
+    # session_id. The current session's id is kept aside so the message can be
+    # prefixed with the caller's identity (the recipient parent is otherwise
+    # blind to which spawned session is talking).
+    parent_caller_id: str | None = None
+    if session_id == "parent":
+        current_session = resolve_current_session()
+        if current_session is None:
+            emit_validation_errors(
+                [ValidationError(
+                    "SESSION_ID",
+                    "parent_not_found",
+                    "No TwiCC session found in the process ancestry. "
+                    "Run from inside a TwiCC-spawned agent, or pass an "
+                    "explicit session_id.",
+                )],
+                json_output=json_output,
+            )
+            raise typer.Exit(1)
+        if current_session.spawned_by_id is None:
+            emit_validation_errors(
+                [ValidationError(
+                    "SESSION_ID",
+                    "parent_not_found",
+                    f"Current session {current_session.id!r} has no "
+                    f"spawned_by — it was not created via "
+                    f"`twicc create-session` from a parent agent. Pass an "
+                    f"explicit session_id instead.",
+                )],
+                json_output=json_output,
+            )
+            raise typer.Exit(1)
+        parent_caller_id = current_session.id
+        session_id = current_session.spawned_by_id
+        emit_progress(
+            f"✓ 'parent' resolved to session {session_id!r} "
+            f"(spawned_by of current session {parent_caller_id!r})",
+            json_output=json_output,
+        )
 
     # Local pre-check: session must exist, not be stale, and have a project
     # directory. The watcher-side service re-validates these in case the DB
@@ -120,6 +168,21 @@ def send_message_cmd(
         raise typer.Exit(1)
 
     emit_progress(f"✓ Prompt resolved ({len(text)} chars)", json_output=json_output)
+
+    # When the 'parent' keyword was used, prefix the message so the recipient
+    # parent session sees who is talking — otherwise it would receive an
+    # anonymous follow-up from "the user" and have no way to tell which of
+    # its spawned sessions sent it.
+    if parent_caller_id is not None:
+        text = (
+            f"> Message from your spawned session {parent_caller_id}\n"
+            f"---\n"
+            f"{text}"
+        )
+        emit_progress(
+            f"✓ Prompt prefixed with caller id ({len(text)} chars total)",
+            json_output=json_output,
+        )
 
     # Attachments are validated against the resolved session's provider, with
     # the resize cap derived from its currently stored ``selected_model``
