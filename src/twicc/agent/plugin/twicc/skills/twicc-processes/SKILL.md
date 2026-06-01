@@ -40,9 +40,9 @@ $TWICC processes [OPTIONS]
 - `--offset N` — skip first N for pagination (default: 0).
 - `--include-hidden` — include processes for hidden sessions (excluded by default).
 - `--only-hidden` — only processes for hidden sessions. Mutually exclusive with `--include-hidden`.
-- `--spawned-by <ID|self>` — filter to direct child sessions spawned by the given session ID. `self` means the current session. Implies `--include-hidden`. Mutually exclusive with `--spawn-root`.
-- `--spawn-root <ID|self>` — filter to every session in a spawn tree (any depth), identified by the tree's root session ID. `self` means the current session's spawn-root tree (its own id when it is itself the root). Implies `--include-hidden`. Mutually exclusive with `--spawned-by` and `--descendants`.
-- `--descendants <ID|self>` — filter to processes of the proper descendants of the given session (every session transitively spawned by it, target excluded). `self` means the current session. Implies `--include-hidden`. Mutually exclusive with `--spawned-by` and `--spawn-root`. Use this when you want "everything under X" but not X itself.
+- `--spawned-by <ID|self|parent>` — filter to direct child sessions spawned by the given session ID. `self` is the current session (= my children); `parent` is the session that spawned the current one (= my siblings, myself included). Implies `--include-hidden`. Mutually exclusive with `--spawn-root` and `--descendants`.
+- `--spawn-root <ID|self>` — filter to every session in a spawn tree (any depth), identified by the tree's root session ID. `self` means the current session's spawn-root tree (its own id when it is itself the root). `parent` is not accepted: my parent is always in the same tree as me, so `--spawn-root parent` is either redundant with `--spawn-root self` or empty. Implies `--include-hidden`. Mutually exclusive with `--spawned-by` and `--descendants`.
+- `--descendants <ID|self|parent>` — filter to processes of the proper descendants of the given session (every session transitively spawned by it, target excluded). `self` is the current session; `parent` is the current session's spawner (= my siblings, their subtrees, and my own subtree). Implies `--include-hidden`. Mutually exclusive with `--spawned-by` and `--spawn-root`. Use this when you want "everything under X" but not X itself.
 
 ### Batch lookup (`get`)
 
@@ -175,8 +175,10 @@ Possible `wait_status` values:
 $TWICC processes
 $TWICC processes --state awaiting_user_input
 $TWICC processes --spawned-by self
+$TWICC processes --spawned-by parent
 $TWICC processes --spawn-root self
 $TWICC processes --descendants self
+$TWICC processes --descendants parent
 $TWICC processes get abc123 def456 ghi789
 $TWICC processes stop abc123 def456
 $TWICC processes stop abc123 def456 --timeout 60

@@ -31,7 +31,7 @@ $TWICC whoami --json    # compact JSON, suitable for parsing
 
 ### Self-aware shortcuts
 
-Commands that accept `self` resolve the calling session on their own. Use `--spawned-by self` (direct children), `--descendants self` (every descendant, you excluded), or `--spawn-root self` (full spawn tree including yourself's root) on `$TWICC sessions`, `$TWICC processes`, and `$TWICC search` instead of calling `whoami` only to copy your id. Use `$TWICC topology self` when you need the surrounding spawned-session tree.
+Commands that accept `self` resolve the calling session on their own. On `$TWICC sessions`, `$TWICC processes`, and `$TWICC search` use `--spawned-by self` (direct children), `--descendants self` (every descendant, you excluded), or `--spawn-root self` (full spawn tree including yourself's root). `--spawned-by` and `--descendants` also accept `parent` (the session that spawned the current one), which pivots the same query around your parent — surfacing your siblings on `--spawned-by parent`, and your siblings + their subtrees + your own subtree on `--descendants parent`. `--spawn-root parent` is intentionally not supported: parent is always in your tree, so it's either redundant or empty. Use `$TWICC topology self` when you need the surrounding spawned-session tree.
 
 ### Exit codes
 
@@ -48,7 +48,7 @@ MY_PID=$($TWICC whoami --json | jq -r .process.pid)
 
 ## Related commands
 
-- `$TWICC sessions --spawned-by self` / `--descendants self` / `--spawn-root self` — direct children, every descendant (self excluded), or the full spawn tree. Skill: `twicc-sessions`.
-- `$TWICC processes --spawned-by self` / `--descendants self` / `--spawn-root self` — same for live processes. Skill: `twicc-processes`.
-- `$TWICC search '<query>' --spawned-by self` / `--descendants self` / `--spawn-root self` — same for full-text search. Skill: `twicc-search`.
+- `$TWICC sessions --spawned-by <self|parent>` / `--descendants <self|parent>` / `--spawn-root self` — children/siblings, every descendant (self/parent excluded), or the full spawn tree. Skill: `twicc-sessions`.
+- `$TWICC processes --spawned-by <self|parent>` / `--descendants <self|parent>` / `--spawn-root self` — same for live processes. Skill: `twicc-processes`.
+- `$TWICC search '<query>' --spawned-by <self|parent>` / `--descendants <self|parent>` / `--spawn-root self` — same for full-text search. Skill: `twicc-search`.
 - `$TWICC topology self` — map the spawned-session tree around you. Skill: `twicc-topology`.

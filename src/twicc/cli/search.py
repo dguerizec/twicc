@@ -17,14 +17,15 @@ def main(
     """Execute a raw Tantivy search and print JSON results to stdout.
 
     ``spawned_by``, ``spawn_root`` and ``descendants`` are raw CLI values
-    (``None``, a session_id, or the literal ``"self"``). When any value
-    needs DB access (``"self"`` for any of them, or an explicit id for
-    ``descendants`` which always walks the spawn tree), we ``django.setup()``
-    so an ordinary full-text query stays Django-free. The typer wrapper
-    guarantees they are mutually exclusive.
+    (``None``, a session_id, or the literal ``"self"`` / ``"parent"``).
+    When any value needs DB access (a keyword on ``spawned_by`` /
+    ``spawn_root``, or any value on ``descendants`` which always walks the
+    spawn tree), we ``django.setup()`` so an ordinary full-text query
+    stays Django-free. The typer wrapper guarantees they are mutually
+    exclusive.
     """
     if (
-        spawned_by == "self"
+        spawned_by in ("self", "parent")
         or spawn_root == "self"
         or descendants is not None
     ):

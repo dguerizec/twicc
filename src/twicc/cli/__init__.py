@@ -215,12 +215,13 @@ def _sessions_default(
         None,
         "--spawned-by",
         help=(
-            "Filter to sessions spawned by the given session_id, or 'self' for the "
-            "current session. Implies --include-hidden by default: a filiation query "
-            "shows every matching child whatever its visibility. Add --only-hidden to "
-            "narrow to hidden children, or pass an explicit ID and rely on the JSON "
-            "output's `hidden` field to filter further. Mutually exclusive with "
-            "--spawn-root."
+            "Filter to sessions spawned by the given session_id, 'self' for the "
+            "current session, or 'parent' for the session that spawned the current "
+            "one (= my siblings, myself included). Implies --include-hidden by "
+            "default: a filiation query shows every matching child whatever its "
+            "visibility. Add --only-hidden to narrow to hidden children, or pass an "
+            "explicit ID and rely on the JSON output's `hidden` field to filter "
+            "further. Mutually exclusive with --spawn-root."
         ),
     ),
     spawn_root: str = typer.Option(
@@ -239,9 +240,11 @@ def _sessions_default(
         "--descendants",
         help=(
             "Filter to the proper descendants of the given session_id (every session "
-            "transitively spawned by it, at any depth, target excluded), or 'self' "
-            "for the descendants of the current session. Mutually exclusive with "
-            "--spawned-by and --spawn-root. Implies --include-hidden by default."
+            "transitively spawned by it, at any depth, target excluded), 'self' for "
+            "the descendants of the current session, or 'parent' for the descendants "
+            "of the current session's spawner (= my siblings, their subtrees, and my "
+            "own subtree). Mutually exclusive with --spawned-by and --spawn-root. "
+            "Implies --include-hidden by default."
         ),
     ),
 ) -> None:
@@ -437,10 +440,11 @@ def _processes_default(
         None,
         "--spawned-by",
         help=(
-            "Filter to processes of sessions spawned by the given session_id, or 'self' "
-            "for the current session. Implies --include-hidden by default: a filiation "
-            "query surfaces every matching child whatever its visibility. Mutually "
-            "exclusive with --spawn-root."
+            "Filter to processes of sessions spawned by the given session_id, 'self' "
+            "for the current session, or 'parent' for the session that spawned the "
+            "current one (= my siblings, myself included). Implies --include-hidden "
+            "by default: a filiation query surfaces every matching child whatever "
+            "its visibility. Mutually exclusive with --spawn-root."
         ),
     ),
     spawn_root: str = typer.Option(
@@ -460,9 +464,10 @@ def _processes_default(
         help=(
             "Filter to processes of the proper descendants of the given session_id "
             "(every session transitively spawned by it, at any depth, target "
-            "excluded), or 'self' for the descendants of the current session. "
-            "Mutually exclusive with --spawned-by and --spawn-root. Implies "
-            "--include-hidden by default."
+            "excluded), 'self' for the descendants of the current session, or "
+            "'parent' for the descendants of the current session's spawner (= my "
+            "siblings, their subtrees, and my own subtree). Mutually exclusive with "
+            "--spawned-by and --spawn-root. Implies --include-hidden by default."
         ),
     ),
 ) -> None:
@@ -787,10 +792,11 @@ def search(
         None,
         "--spawned-by",
         help=(
-            "Filter to sessions spawned by the given session_id, or 'self' for the "
-            "current session. Implies --include-hidden by default: a filiation query "
-            "matches every spawned child whatever its visibility. Mutually exclusive "
-            "with --spawn-root."
+            "Filter to sessions spawned by the given session_id, 'self' for the "
+            "current session, or 'parent' for the session that spawned the current "
+            "one (= my siblings, myself included). Implies --include-hidden by "
+            "default: a filiation query matches every spawned child whatever its "
+            "visibility. Mutually exclusive with --spawn-root."
         ),
     ),
     spawn_root: str = typer.Option(
@@ -810,9 +816,10 @@ def search(
         help=(
             "Filter to hits in the proper descendants of the given session_id "
             "(every session transitively spawned by it, at any depth, target "
-            "excluded), or 'self' for the descendants of the current session. "
-            "Mutually exclusive with --spawned-by and --spawn-root. Implies "
-            "--include-hidden by default."
+            "excluded), 'self' for the descendants of the current session, or "
+            "'parent' for the descendants of the current session's spawner (= my "
+            "siblings, their subtrees, and my own subtree). Mutually exclusive "
+            "with --spawned-by and --spawn-root. Implies --include-hidden by default."
         ),
     ),
 ) -> None:

@@ -92,30 +92,42 @@ def resolve_spawned_by_filter(value: str | None) -> str | None:
     """Translate a ``--spawned-by`` CLI value into a session_id filter.
 
     - ``None``  → ``None`` (no filter)
-    - ``"self"`` → resolve via whoami; raise ``RuntimeError`` on any failure
-      (missing session in ancestry, DB error, ...)
+    - ``"self"`` → current session's id (filter to my direct children)
+    - ``"parent"`` → current session's ``spawned_by_id`` (filter to the
+      sessions my parent spawned — my siblings, myself included). Raises
+      ``RuntimeError`` if the current session has no spawner.
     - any other string → use it verbatim as a session_id
 
+    Both keywords resolve via PID ancestry (``resolve_current_session``).
     Any internal failure is wrapped in ``RuntimeError`` so the typer
     wrappers that call this can surface a clean human error + non-zero
     exit code instead of leaking a raw traceback.
     """
     if value is None:
         return None
-    if value == "self":
+    if value in ("self", "parent"):
         try:
             session = resolve_current_session()
         except Exception as e:
             raise RuntimeError(
-                f"--spawned-by self: could not resolve the current "
+                f"--spawned-by {value}: could not resolve the current "
                 f"session: {type(e).__name__}: {e}",
             ) from e
         if session is None:
             raise RuntimeError(
-                "--spawned-by self: no TwiCC session found in PID ancestry. "
-                "This flag is only meaningful from inside an active session.",
+                f"--spawned-by {value}: no TwiCC session found in PID ancestry. "
+                f"This flag is only meaningful from inside an active session.",
             )
-        return session.id
+        if value == "self":
+            return session.id
+        # value == "parent"
+        if session.spawned_by_id is None:
+            raise RuntimeError(
+                f"--spawned-by parent: current session {session.id!r} has no "
+                f"spawned_by — it was not created via `twicc create-session` "
+                f"from a parent agent.",
+            )
+        return session.spawned_by_id
     return value
 
 
@@ -156,24 +168,29 @@ def resolve_descendants_filter(value: str | None) -> set[str] | None:
     """Translate a ``--descendants`` CLI value into a session_id set filter.
 
     - ``None``  → ``None`` (no filter at all).
-    - ``"self"`` → resolve via whoami; raises ``RuntimeError`` on failure.
+    - ``"self"`` → descendants of the current session (resolved via whoami).
+    - ``"parent"`` → descendants of the current session's parent (= my
+      siblings, their subtrees, and my own subtree; the parent itself is
+      excluded). Raises ``RuntimeError`` if the current session has no
+      spawner.
     - any other string → looked up as a session_id; an unknown id resolves
       to an empty set (same silent-no-match behavior as ``--spawned-by`` /
       ``--spawn-root`` for unknown ids).
 
     The returned set contains the *proper* descendants of the resolved
-    session — the target itself is never included. An empty set means
+    target — the target itself is never included. An empty set means
     "the target has no descendants"; callers must treat that as a strict
     match against an empty pool (returns nothing), not as "no filter".
 
     Algorithm:
-    1. ``tree_key = session.spawn_root_id or session.id`` — every session
-       in a spawn tree carries the root id in ``spawn_root_id`` (the root
-       points at itself); a standalone session that never spawned anyone
-       has no rows in the universe and falls through to an empty set.
+    1. Resolve ``target_id`` and ``tree_key`` from ``value`` (the target
+       is the resolved session for ``"self"`` / an explicit id, or the
+       current session's spawner for ``"parent"``). ``tree_key`` is the
+       resolved session's ``spawn_root_id`` (with a defensive fallback
+       to the target's id).
     2. Fetch the universe with a single ``filter(spawn_root_id=tree_key)``
        projection on ``(id, spawned_by_id)``.
-    3. If ``tree_key == session.id`` (the target IS the tree root), every
+    3. If ``tree_key == target_id`` (the target IS the tree root), every
        row except the target itself is a descendant — shortcut, no BFS.
     4. Otherwise, BFS the ``spawned_by_id`` edges from the target to
        isolate its branch within the tree.
@@ -183,27 +200,42 @@ def resolve_descendants_filter(value: str | None) -> set[str] | None:
 
     from twicc.core.models import Session
 
-    if value == "self":
+    if value in ("self", "parent"):
         try:
             session = resolve_current_session()
         except Exception as e:
             raise RuntimeError(
-                f"--descendants self: could not resolve the current "
+                f"--descendants {value}: could not resolve the current "
                 f"session: {type(e).__name__}: {e}",
             ) from e
         if session is None:
             raise RuntimeError(
-                "--descendants self: no TwiCC session found in PID ancestry. "
-                "This flag is only meaningful from inside an active session.",
+                f"--descendants {value}: no TwiCC session found in PID ancestry. "
+                f"This flag is only meaningful from inside an active session.",
             )
+        if value == "self":
+            target_id = session.id
+            tree_key = session.spawn_root_id or session.id
+        else:  # value == "parent"
+            if session.spawned_by_id is None:
+                raise RuntimeError(
+                    f"--descendants parent: current session {session.id!r} has "
+                    f"no spawned_by — it was not created via "
+                    f"`twicc create-session` from a parent agent.",
+                )
+            target_id = session.spawned_by_id
+            # The current session shares its spawn_root with its parent (the
+            # denormalization propagates at creation), so we can derive the
+            # tree key without loading the parent row.
+            tree_key = session.spawn_root_id or session.spawned_by_id
     else:
         try:
             session = Session.objects.only("id", "spawn_root_id").get(pk=value)
         except Session.DoesNotExist:
             return set()
+        target_id = session.id
+        tree_key = session.spawn_root_id or session.id
 
-    target_id = session.id
-    tree_key = session.spawn_root_id or session.id
     rows = list(
         Session.objects.filter(spawn_root_id=tree_key).only("id", "spawned_by_id")
     )
