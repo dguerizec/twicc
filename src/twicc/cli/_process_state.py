@@ -57,8 +57,8 @@ def project_virtual_state(row) -> str:
 def serialize_process_row(row, session) -> dict:
     """Serialize a (ProcessRun, Session) pair into the common output schema.
 
-    ``row`` MUST be a real ``ProcessRun`` (use :func:`serialize_wait_result`
-    for the "wait dead matched, no row" case). ``session`` may be ``None``
+    ``row`` MUST be a real ``ProcessRun`` (use :func:`serialize_dead_process_row`
+    for the "no row, project to dead" case). ``session`` may be ``None``
     when the watcher has not created the ``Session`` row yet — title and
     ``project_id`` fall back to ``None`` then.
     """
@@ -76,6 +76,27 @@ def serialize_process_row(row, session) -> dict:
             else None
         ),
         "pid": row.agent_pid,
+    }
+
+
+def serialize_dead_process_row(session, *, session_id: str) -> dict:
+    """Serialize the "no live ProcessRun row" case into the common output schema.
+
+    Returns the same shape as :func:`serialize_process_row` with ``state="dead"``
+    and every row-bound field (``id``, ``started_at``, ``last_state_change_at``,
+    ``pid``) set to ``None``. ``provider``, ``session_title`` and ``project_id``
+    fall back to the ``Session`` row when one exists, else ``None``.
+    """
+    return {
+        "id": None,
+        "provider": session.provider if session is not None else None,
+        "session_id": session_id,
+        "session_title": session.title if session is not None else None,
+        "project_id": session.project_id if session is not None else None,
+        "state": DEAD_VIRTUAL_STATE,
+        "started_at": None,
+        "last_state_change_at": None,
+        "pid": None,
     }
 
 

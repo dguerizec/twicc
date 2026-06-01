@@ -22,8 +22,10 @@ def whoami_cmd(
 
     Walks the PID ancestry from the current process upward and matches
     against the live agents tracked by TwiCC. When a match is found,
-    prints the same details ``twicc session <ID>`` does — title,
-    provider, project_id, cost, settings, lifecycle, spawned_by, etc.
+    prints a JSON object with: ``session_id``, ``title``, ``project_id``,
+    ``project_directory``, the resolved ``agent_settings`` (synced
+    defaults applied), the full ``session`` payload (same as
+    ``twicc session <ID>``), and the matching ``process`` row.
 
     Useful from inside a session's Bash tool to discover the session's
     own identity (the agent doesn't otherwise know its TwiCC session_id).
@@ -35,8 +37,17 @@ def whoami_cmd(
 
     django.setup()
 
+    from twicc.agent.states import AgentState
     from twicc.cli._drop_request.whoami import resolve_current_session
+    from twicc.cli._process_state import (
+        serialize_dead_process_row,
+        serialize_process_row,
+    )
+    from twicc.cli._twicc_info import resolve_live_twicc_or_exit
+    from twicc.core.models import ProcessRun, Project
     from twicc.core.serializers import serialize_session
+    from twicc.pending_titles import get_pending_title
+    from twicc.providers.helpers import AgentSettings, get_provider_helpers
 
     session = resolve_current_session()
     if session is None:
@@ -51,6 +62,36 @@ def whoami_cmd(
             typer.echo(msg, err=True)
         raise typer.Exit(1)
 
-    data = serialize_session(session)
+    helpers = get_provider_helpers(session.provider)
+    resolved_settings = helpers.resolve_agent_settings(AgentSettings.from_session(session))
+
+    project_directory = None
+    if session.project_id:
+        project = Project.objects.filter(id=session.project_id).only("directory").first()
+        if project is not None:
+            project_directory = project.directory
+
+    info = resolve_live_twicc_or_exit()
+    row = (
+        ProcessRun.objects
+        .filter(twicc_pid=info.pid, session_id=session.id)
+        .exclude(state=AgentState.DEAD.value)
+        .order_by("-started_at")
+        .first()
+    )
+    if row is not None:
+        process = serialize_process_row(row, session)
+    else:
+        process = serialize_dead_process_row(session, session_id=session.id)
+
+    data = {
+        "session_id": session.id,
+        "title": get_pending_title(session.id) or session.title,
+        "project_id": session.project_id,
+        "project_directory": project_directory,
+        "agent_settings": resolved_settings._asdict(),
+        "session": serialize_session(session),
+        "process": process,
+    }
     sys.stdout.buffer.write(orjson.dumps(data, option=orjson.OPT_INDENT_2))
     sys.stdout.buffer.write(b"\n")

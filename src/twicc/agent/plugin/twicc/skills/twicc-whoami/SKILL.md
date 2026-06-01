@@ -5,7 +5,7 @@ description: Return the details of the session that owns the calling process. Us
 
 # TwiCC Whoami
 
-Identify the TwiCC session you are running in. Returns the same output as `$TWICC session <ID>`. Exits 1 if not running inside a TwiCC agent.
+Identify the TwiCC session you are running in. Returns a JSON object with `session_id`, `title`, `project_id`, `project_directory`, the resolved `agent_settings` (synced defaults applied), the full `session` payload (same shape as `$TWICC session <ID>`), and the matching `process` row. Exits 1 if not running inside a TwiCC agent.
 
 ## When to use
 
@@ -41,7 +41,9 @@ Commands that accept `self` resolve the calling session on their own. Use `--spa
 ## Examples
 
 ```bash
-MY_SESSION_ID=$($TWICC whoami --json | jq -r .id)
+MY_SESSION_ID=$($TWICC whoami --json | jq -r .session_id)
+MY_MODEL=$($TWICC whoami --json | jq -r .agent_settings.selected_model)
+MY_PID=$($TWICC whoami --json | jq -r .process.pid)
 ```
 
 ## Related commands
