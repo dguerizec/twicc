@@ -9,6 +9,7 @@ import pytest
 from django.utils import timezone
 
 from twicc.agent.states import AgentState
+from twicc.cli._annotation_filters import AnnotationFilter, AnnotationOp
 from twicc.cli.topology import TOPOLOGY_SESSION_FIELDS, build_topology
 from twicc.core.models import ProcessRun, Project, Session, SessionType
 
@@ -242,3 +243,76 @@ def test_build_topology_marks_processes_unavailable_without_live_twicc(project, 
         "reason": "twicc_not_running",
     }
     assert data["nodes"][0]["process"] is None
+
+
+def test_topology_no_annotation_filter_omits_matches_field(project):
+    root = make_session(project, "R", title="root")
+    root.spawn_root = root
+    root.save(update_fields=["spawn_root"])
+    make_session(project, "C", title="child", spawned_by=root, spawn_root=root)
+
+    data = build_topology(root, include_processes=False)
+    for node in data["nodes"]:
+        assert "matches_annotations" not in node
+
+
+def test_topology_annotation_filter_sets_flag_per_node(project):
+    root = make_session(project, "R", title="root", annotations={"role": "coord"})
+    root.spawn_root = root
+    root.save(update_fields=["spawn_root", "annotations"])
+    make_session(
+        project, "I", title="impl",
+        spawned_by=root, spawn_root=root,
+        annotations={"role": "implementer"},
+    )
+    make_session(
+        project, "Rv", title="rev",
+        spawned_by=root, spawn_root=root,
+        annotations={"role": "reviewer"},
+    )
+
+    data = build_topology(
+        root,
+        include_processes=False,
+        annotation_filters=[AnnotationFilter(("role",), AnnotationOp.EQ, "implementer")],
+    )
+    by_id = {node["id"]: node for node in data["nodes"]}
+    assert by_id["R"]["matches_annotations"] is False
+    assert by_id["I"]["matches_annotations"] is True
+    assert by_id["Rv"]["matches_annotations"] is False
+
+
+def test_topology_annotation_filter_no_match_still_returns_full_tree(project):
+    root = make_session(project, "R", title="root")
+    root.spawn_root = root
+    root.save(update_fields=["spawn_root"])
+    make_session(project, "C", title="child", spawned_by=root, spawn_root=root)
+
+    data = build_topology(
+        root,
+        include_processes=False,
+        annotation_filters=[AnnotationFilter(("role",), AnnotationOp.EQ, "nobody")],
+    )
+    ids = {node["id"] for node in data["nodes"]}
+    assert ids == {"R", "C"}  # tree is preserved
+    assert all(node["matches_annotations"] is False for node in data["nodes"])
+
+
+def test_topology_root_with_null_spawn_root_matches_its_own_annotations(project):
+    """Regression: a session that has never spawned a child has spawn_root_id=NULL.
+    The annotation match query must include it via Q(pk=root.id) — otherwise
+    matches_annotations is always False even when annotations match.
+    """
+    root = make_session(
+        project, "STANDALONE", title="standalone",
+        annotations={"role": "implementer"},
+    )
+    # Intentionally do NOT set root.spawn_root = root — leave spawn_root_id NULL.
+
+    data = build_topology(
+        root,
+        include_processes=False,
+        annotation_filters=[AnnotationFilter(("role",), AnnotationOp.EQ, "implementer")],
+    )
+    by_id = {node["id"]: node for node in data["nodes"]}
+    assert by_id["STANDALONE"]["matches_annotations"] is True

@@ -690,6 +690,7 @@ def raw_search(
     spawned_by: str | None = None,
     spawn_root: str | None = None,
     descendants: set[str] | None = None,
+    annotation_filters: list | None = None,
 ) -> dict | str:
     """Execute a raw Tantivy query and return JSON-serializable results.
 
@@ -713,6 +714,10 @@ def raw_search(
         descendants: If set, restrict results to this explicit set of session_ids
             (proper descendants of some target, resolved by the caller). An empty set
             returns no results. Mutually exclusive with ``spawned_by`` and ``spawn_root``.
+        annotation_filters: If set (non-empty list), run an oversample-and-post-filter loop:
+            Tantivy ranks the corpus, then Django ORM filters on ``Session.annotations``.
+            The result dict gains ``annotation_filtered``, ``exhausted``, and ``partial`` keys.
+            When ``None`` (default), the existing single-shot path runs unchanged.
 
     Returns:
         If ``to_json`` is True: a JSON string (pretty-printed, sorted keys).
@@ -797,19 +802,14 @@ def raw_search(
     index.reload()
     searcher = index.searcher()
 
-    # Fetch enough hits to satisfy offset + limit
-    raw_limit = offset + limit
-    result = searcher.search(parsed_query, limit=raw_limit)
-
     # Generate snippets from the text query (use text_query, not the composite boolean query,
     # so highlights reflect the user's search terms rather than filter clauses)
     snippet_generator = tantivy.SnippetGenerator.create(searcher, text_query, schema, "body")
     snippet_generator.set_max_num_chars(200)
 
-    hits = []
-    for score, doc_addr in result.hits[offset:]:
+    def _hit_to_dict(score: float, doc_addr: object) -> dict:
+        """Build the per-hit dict from a Tantivy (score, doc_addr) pair."""
         doc = searcher.doc(doc_addr)
-
         ts = doc.get_first("timestamp")
         ts_str = None
         if ts is not None:
@@ -819,10 +819,8 @@ def raw_search(
                 ts_str = ts.isoformat()
             else:
                 ts_str = str(ts)
-
         snippet = snippet_generator.snippet_from_doc(doc)
-
-        hits.append({
+        return {
             "score": round(score, 4),
             "session_id": doc.get_first("session_id"),
             "project_id": doc.get_first("project_id"),
@@ -831,15 +829,94 @@ def raw_search(
             "timestamp": ts_str,
             "archived": doc.get_first("archived"),
             "snippet": snippet.to_html(),
-        })
+        }
 
-    result_dict = {
-        "query": query_str,
-        "total_hits": result.count,
-        "limit": limit,
-        "offset": offset,
-        "hits": hits,
-    }
+    if annotation_filters:
+        # Oversample-and-post-filter loop.
+        # Tantivy's Python binding does not expose a native offset parameter: the existing
+        # code works by pre-fetching `offset + limit` hits and slicing in Python.  We keep
+        # one `tantivy_consumed` counter (how many Tantivy hits we have already examined)
+        # and fetch progressively larger batches until we have enough post-filter matches
+        # or Tantivy is exhausted.
+        from twicc.cli._annotation_filters import apply_annotation_filters
+        from twicc.core.models import Session
+
+        # Score-ordered (session_id, (score, doc_addr)) tuples that passed the ORM filter.
+        matched_pairs: list[tuple[str, tuple[float, object]]] = []
+        tantivy_consumed = offset
+        batch_size = max(limit, 20)
+        max_iterations = 50
+        iteration = 0
+        exhausted = False
+        result = None  # set on first loop iteration; may stay None if limit == 0
+
+        while len(matched_pairs) < limit and iteration < max_iterations:
+            # Fetch enough hits to cover what we have already consumed plus the next batch.
+            fetch_limit = tantivy_consumed + batch_size
+            result = searcher.search(parsed_query, limit=fetch_limit)
+            all_hits = result.hits
+            # The slice we haven't examined yet.
+            batch_hits = all_hits[tantivy_consumed:]
+            if not batch_hits:
+                exhausted = True
+                break
+            # Build (session_id, hit_pair) tuples preserving Tantivy score order.
+            ordered_pairs = [
+                (searcher.doc(doc_addr).get_first("session_id"), (score, doc_addr))
+                for (score, doc_addr) in batch_hits
+            ]
+            ids_in_score_order = [sid for sid, _ in ordered_pairs]
+            matching_ids = set(
+                apply_annotation_filters(
+                    Session.objects.filter(id__in=ids_in_score_order),
+                    annotation_filters,
+                ).values_list("id", flat=True)
+            )
+            for sid, hit in ordered_pairs:
+                if sid in matching_ids:
+                    matched_pairs.append((sid, hit))
+                    if len(matched_pairs) >= limit:
+                        break
+            tantivy_consumed += len(batch_hits)
+            # If Tantivy returned fewer hits than we asked for it is exhausted.
+            if len(all_hits) < fetch_limit:
+                exhausted = True
+                break
+            iteration += 1
+
+        partial = (not exhausted) and len(matched_pairs) < limit
+
+        # Re-use `result` from the last Tantivy query to report total_hits.
+        # `result` stays None only when limit == 0 (loop never entered).
+        total_hits = result.count if result is not None else 0
+
+        hits = [_hit_to_dict(score, doc_addr) for _, (score, doc_addr) in matched_pairs]
+
+        result_dict = {
+            "query": query_str,
+            "total_hits": total_hits,
+            "limit": limit,
+            "offset": offset,
+            "hits": hits,
+            "annotation_filtered": True,
+            "exhausted": exhausted,
+            "partial": partial,
+        }
+    else:
+        # Existing single-shot path — behaviour is byte-identical to before this change.
+        raw_limit = offset + limit
+        result = searcher.search(parsed_query, limit=raw_limit)
+
+        hits = [_hit_to_dict(score, doc_addr) for score, doc_addr in result.hits[offset:]]
+
+        result_dict = {
+            "query": query_str,
+            "total_hits": result.count,
+            "limit": limit,
+            "offset": offset,
+            "hits": hits,
+        }
+
     if to_json:
         import orjson
 

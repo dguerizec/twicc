@@ -16,6 +16,7 @@ def main(
     spawned_by: str | None = None,
     spawn_root: str | None = None,
     descendants: str | None = None,
+    annotation: list[str] | None = None,
 ) -> None:
     """List currently running processes (live ProcessRuns) of the running TwiCC.
 
@@ -65,6 +66,22 @@ def main(
     )
     from twicc.cli._twicc_info import resolve_live_twicc_or_exit
     from twicc.core.models import ProcessRun, Session
+
+    matching_session_ids: set[str] | None = None
+    if annotation:
+        from twicc.cli._annotation_filters import apply_annotation_filters, parse_annotation_filter
+        try:
+            annotation_filters = [parse_annotation_filter(spec) for spec in annotation]
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            sys.exit(2)
+        # Full scan intentional: processes.py has no pre-existing session-id scope
+        # at this point in the flow. For a DB with many sessions this is one JSON1
+        # scan; acceptable for v1 given the tiny number of live process rows.
+        matching_session_ids = set(
+            apply_annotation_filters(Session.objects.all(), annotation_filters)
+            .values_list("id", flat=True)
+        )
 
     info = resolve_live_twicc_or_exit()
 
@@ -143,6 +160,8 @@ def main(
         if spawn_root_id is not None and sr != spawn_root_id:
             continue
         if descendants_ids is not None and row.session_id not in descendants_ids:
+            continue
+        if matching_session_ids is not None and row.session_id not in matching_session_ids:
             continue
         filtered.append(row)
     rows = filtered

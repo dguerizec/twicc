@@ -17,6 +17,7 @@ def main(
     spawned_by: str | None = None,
     spawn_root: str | None = None,
     descendants: str | None = None,
+    annotation: list[str] | None = None,
 ) -> None:
     """List sessions as JSON to stdout.
 
@@ -81,6 +82,15 @@ def main(
         # An empty set means "the target has no descendants"; ``id__in=[]``
         # returns nothing without hitting the DB, which is exactly what we want.
         qs = qs.filter(id__in=descendants_ids)
+
+    if annotation:
+        from twicc.cli._annotation_filters import apply_annotation_filters, parse_annotation_filter
+        try:
+            annotation_filters = [parse_annotation_filter(spec) for spec in annotation]
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            sys.exit(2)
+        qs = apply_annotation_filters(qs, annotation_filters)
 
     if workspace is not None:
         from twicc.workspaces import read_workspaces

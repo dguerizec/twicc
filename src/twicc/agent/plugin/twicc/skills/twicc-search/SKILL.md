@@ -39,6 +39,18 @@ $TWICC search '<query>' [OPTIONS]
 - `--spawned-by <ID|self|parent>` — filter hits to direct child sessions spawned by the given session ID. `self` is the current session (= my children); `parent` is the session that spawned the current one (= my siblings, myself included). Implies `--include-hidden`. Mutually exclusive with `--spawn-root` and `--descendants`.
 - `--spawn-root <ID|self>` — filter hits to every session in a spawn tree (any depth), identified by the tree's root session ID. `self` means the current session's spawn-root tree (its own id when it is itself the root). `parent` is not accepted: my parent is always in the same tree as me, so `--spawn-root parent` is either redundant with `--spawn-root self` or empty. Implies `--include-hidden`. Mutually exclusive with `--spawned-by` and `--descendants`.
 - `--descendants <ID|self|parent>` — filter hits to the proper descendants of the given session (every session transitively spawned by it, target excluded). `self` is the current session; `parent` is the current session's spawner (= my siblings, their subtrees, and my own subtree). Implies `--include-hidden`. Mutually exclusive with `--spawned-by` and `--spawn-root`. Use this when you want "everything under X" but not X itself.
+- `--annotation KEY[OP]VALUE` — filter hits to sessions whose `annotations` object matches the expression. Repeatable; multiple flags are AND-combined. Does **not** imply `--include-hidden` (orthogonal). Five operators:
+  - `KEY=VALUE` — annotation key equals VALUE.
+  - `KEY!=VALUE` — annotation key differs from VALUE (or key absent).
+  - `KEY:exists` — annotation key is present (any value).
+  - `KEY:not-exists` — annotation key is absent.
+  - `KEY:in:V1,V2,...` — annotation key equals one of the listed values; escape a literal comma with `\,`.
+  - Values are inferred as typed: `true`/`false` → boolean, `null` → null, integers and floats parsed numerically, everything else → string (same rules as `create-session --annotation`).
+  - Example: `--spawn-root self --annotation role=implementer`
+  - When `--annotation` is set, three extra keys appear in the output (absent on the unfiltered path):
+    - `annotation_filtered: true` — signals that annotation filtering was active.
+    - `exhausted: bool` — `true` if Tantivy had no more hits in the last batch (corpus exhausted); when `true` and result count < limit, the result is complete.
+    - `partial: bool` — `true` if the 50-batch guardrail tripped before filling the page (results may be missing; re-paginate with a higher `--offset`).
 
 ### Query syntax
 
@@ -94,6 +106,9 @@ $TWICC search 'websocket' --spawn-root self
 $TWICC search 'websocket' --descendants self
 $TWICC search 'websocket' --descendants parent
 $TWICC search 'websocket' --include-hidden --limit 50 --offset 20
+$TWICC search 'websocket' --annotation role=implementer
+$TWICC search 'websocket' --spawn-root self --annotation role=implementer
+$TWICC search 'bug' --annotation priority:in:high,critical --annotation status:exists
 ```
 
 ## Related commands

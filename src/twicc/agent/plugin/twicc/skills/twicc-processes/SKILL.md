@@ -43,6 +43,14 @@ $TWICC processes [OPTIONS]
 - `--spawned-by <ID|self|parent>` — filter to direct child sessions spawned by the given session ID. `self` is the current session (= my children); `parent` is the session that spawned the current one (= my siblings, myself included). Implies `--include-hidden`. Mutually exclusive with `--spawn-root` and `--descendants`.
 - `--spawn-root <ID|self>` — filter to every session in a spawn tree (any depth), identified by the tree's root session ID. `self` means the current session's spawn-root tree (its own id when it is itself the root). `parent` is not accepted: my parent is always in the same tree as me, so `--spawn-root parent` is either redundant with `--spawn-root self` or empty. Implies `--include-hidden`. Mutually exclusive with `--spawned-by` and `--descendants`.
 - `--descendants <ID|self|parent>` — filter to processes of the proper descendants of the given session (every session transitively spawned by it, target excluded). `self` is the current session; `parent` is the current session's spawner (= my siblings, their subtrees, and my own subtree). Implies `--include-hidden`. Mutually exclusive with `--spawned-by` and `--spawn-root`. Use this when you want "everything under X" but not X itself.
+- `--annotation KEY[OP]VALUE` — filter to processes whose session's `annotations` object matches the expression. Implemented as a session-id pre-filter: the backend first selects sessions matching all annotation predicates, then filters live processes to those session ids. Repeatable; multiple flags are AND-combined. Does **not** imply `--include-hidden` (orthogonal). Composes with filiation flags. Five operators:
+  - `KEY=VALUE` — annotation key equals VALUE.
+  - `KEY!=VALUE` — annotation key differs from VALUE (or key absent).
+  - `KEY:exists` — annotation key is present (any value).
+  - `KEY:not-exists` — annotation key is absent.
+  - `KEY:in:V1,V2,...` — annotation key equals one of the listed values; escape a literal comma with `\,`.
+  - Values are inferred as typed: `true`/`false` → boolean, `null` → null, integers and floats parsed numerically, everything else → string (same rules as `create-session --annotation`).
+  - Example: `--spawn-root self --annotation role=implementer`
 
 ### Batch lookup (`get`)
 
@@ -179,6 +187,9 @@ $TWICC processes --spawned-by parent
 $TWICC processes --spawn-root self
 $TWICC processes --descendants self
 $TWICC processes --descendants parent
+$TWICC processes --annotation role=implementer
+$TWICC processes --spawn-root self --annotation role=implementer
+$TWICC processes --annotation status:exists --annotation priority:in:high,critical
 $TWICC processes get abc123 def456 ghi789
 $TWICC processes stop abc123 def456
 $TWICC processes stop abc123 def456 --timeout 60

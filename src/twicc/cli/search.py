@@ -13,6 +13,7 @@ def main(
     spawned_by: str | None = None,
     spawn_root: str | None = None,
     descendants: str | None = None,
+    annotation: list[str] | None = None,
 ) -> None:
     """Execute a raw Tantivy search and print JSON results to stdout.
 
@@ -28,6 +29,7 @@ def main(
         spawned_by in ("self", "parent")
         or spawn_root == "self"
         or descendants is not None
+        or annotation
     ):
         import django
 
@@ -47,6 +49,15 @@ def main(
         print(str(e), file=sys.stderr)
         sys.exit(1)
 
+    annotation_filters = None
+    if annotation:
+        from twicc.cli._annotation_filters import parse_annotation_filter
+        try:
+            annotation_filters = [parse_annotation_filter(spec) for spec in annotation]
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            sys.exit(2)
+
     from twicc.search import raw_search
 
     try:
@@ -59,6 +70,7 @@ def main(
             spawned_by=spawned_by_id,
             spawn_root=spawn_root_id,
             descendants=descendants_ids,
+            annotation_filters=annotation_filters,
         )
     except RuntimeError as exc:
         print(f"Error: {exc}", file=sys.stderr)

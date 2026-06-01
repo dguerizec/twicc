@@ -35,6 +35,7 @@ def main(
     *,
     include_processes: bool = True,
     full_sessions: bool = False,
+    annotation: list[str] | None = None,
 ) -> None:
     """Emit the spawned-session tree containing ``session_id`` as JSON."""
     import django
@@ -52,10 +53,20 @@ def main(
         )
         sys.exit(1)
 
+    annotation_filters = None
+    if annotation:
+        from twicc.cli._annotation_filters import parse_annotation_filter
+        try:
+            annotation_filters = [parse_annotation_filter(spec) for spec in annotation]
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            sys.exit(2)
+
     data = build_topology(
         seed,
         include_processes=include_processes,
         full_sessions=full_sessions,
+        annotation_filters=annotation_filters,
     )
     sys.stdout.buffer.write(orjson.dumps(data, option=orjson.OPT_INDENT_2))
     sys.stdout.buffer.write(b"\n")
@@ -67,12 +78,16 @@ def build_topology(
     include_processes: bool = True,
     full_sessions: bool = False,
     twicc_pid: int | None = None,
+    annotation_filters: list | None = None,
 ) -> dict:
     """Build the spawned-session topology containing ``seed``.
 
     ``twicc_pid`` is injectable for tests. When omitted and process data is
     requested, the live TwiCC sidecar is resolved; if unavailable, topology is
     still returned with process data marked unavailable.
+
+    ``annotation_filters`` preserves the full tree but enriches every node with
+    a ``matches_annotations`` flag when provided.
     """
     from twicc.core.models import ProcessRun
 
@@ -83,6 +98,27 @@ def build_topology(
         children_by_parent,
         cycle_detected,
     ) = _load_topology_sessions(seed)
+
+    # Second query: same spawn_root filter + annotation filter.
+    # The full tree above is preserved; this set drives the
+    # matches_annotations flag per node — see spec §5.4.
+    matching_ids: set[str] | None = None
+    if annotation_filters:
+        from twicc.cli._annotation_filters import apply_annotation_filters
+        from django.db.models import Q
+        from twicc.core.models import Session
+
+        # `Q(spawn_root_id=root.id) | Q(pk=root.id)` includes root in the match
+        # universe even when its own spawn_root_id is NULL (standalone session
+        # or root before its first child is ever spawned).
+        # Note: spec §5.4 pseudocode uses `filter(spawn_root_id=root.id)` alone,
+        # which misses standalone roots. This diverges intentionally from the spec.
+        matching_ids = set(
+            apply_annotation_filters(
+                Session.objects.filter(Q(spawn_root_id=root.id) | Q(pk=root.id)),
+                annotation_filters,
+            ).values_list("id", flat=True)
+        )
 
     tree = _build_tree(root.id, children_by_parent)
     ordered_ids = list(_walk_tree_ids(tree))
@@ -111,6 +147,7 @@ def build_topology(
             processes_available=processes_available,
             metrics=metrics_by_id[session_id],
             full_sessions=full_sessions,
+            matching_ids=matching_ids,
         )
         for session_id in ordered_ids
     ]
@@ -320,18 +357,22 @@ def _serialize_topology_node(
     processes_available: bool,
     metrics: dict,
     full_sessions: bool,
+    matching_ids: set[str] | None = None,
 ) -> dict:
     from twicc.core.serializers import serialize_session
 
     serialized = serialize_session(session)
     session_payload = serialized if full_sessions else _slim_session(serialized)
 
-    return {
+    node = {
         "id": session.id,
         "session": session_payload,
         "process": _serialize_process(process_row, processes_available=processes_available),
         **metrics,
     }
+    if matching_ids is not None:
+        node["matches_annotations"] = session.id in matching_ids
+    return node
 
 
 def _slim_session(serialized: dict) -> dict:

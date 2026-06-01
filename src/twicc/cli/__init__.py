@@ -247,6 +247,17 @@ def _sessions_default(
             "Implies --include-hidden by default."
         ),
     ),
+    annotation: list[str] = typer.Option(
+        [],
+        "--annotation",
+        help=(
+            "Filter sessions by annotation. Repeatable, AND-combined. "
+            "Operators: KEY=VALUE, KEY!=VALUE, KEY:exists, KEY:not-exists, "
+            "KEY:in:V1,V2. KEY is a dotted path. Values are typed "
+            "(true/false/null/int/float/string), same rules as "
+            "create-session --annotation. See twicc-sessions skill for details."
+        ),
+    ),
 ) -> None:
     """List sessions as JSON (ordered by most recently active, default action)."""
     if ctx.invoked_subcommand is not None:
@@ -276,6 +287,7 @@ def _sessions_default(
         spawned_by=spawned_by,
         spawn_root=spawn_root,
         descendants=descendants,
+        annotation=annotation,
     )
 
 
@@ -404,11 +416,22 @@ def topology(
             "you actually care about."
         ),
     ),
+    annotation: list[str] = typer.Option(
+        [],
+        "--annotation",
+        help=(
+            "Filter sessions by annotation. Repeatable, AND-combined. "
+            "Operators: KEY=VALUE, KEY!=VALUE, KEY:exists, KEY:not-exists, "
+            "KEY:in:V1,V2. KEY is a dotted path. Values are typed "
+            "(true/false/null/int/float/string), same rules as "
+            "create-session --annotation. See twicc-sessions skill for details."
+        ),
+    ),
 ) -> None:
     """Show the spawned-session tree containing a session as JSON."""
     from twicc.cli.topology import main as topology_main
 
-    topology_main(session_id, include_processes=processes, full_sessions=full_sessions)
+    topology_main(session_id, include_processes=processes, full_sessions=full_sessions, annotation=annotation)
 
 
 processes_app = typer.Typer(
@@ -470,6 +493,17 @@ def _processes_default(
             "--spawned-by and --spawn-root. Implies --include-hidden by default."
         ),
     ),
+    annotation: list[str] = typer.Option(
+        [],
+        "--annotation",
+        help=(
+            "Filter sessions by annotation. Repeatable, AND-combined. "
+            "Operators: KEY=VALUE, KEY!=VALUE, KEY:exists, KEY:not-exists, "
+            "KEY:in:V1,V2. KEY is a dotted path. Values are typed "
+            "(true/false/null/int/float/string), same rules as "
+            "create-session --annotation. See twicc-sessions skill for details."
+        ),
+    ),
 ) -> None:
     """List currently running processes of the live TwiCC instance as JSON (default action)."""
     if ctx.invoked_subcommand is not None:
@@ -498,6 +532,7 @@ def _processes_default(
         spawned_by=spawned_by,
         spawn_root=spawn_root,
         descendants=descendants,
+        annotation=annotation,
     )
 
 
@@ -822,6 +857,17 @@ def search(
             "with --spawned-by and --spawn-root. Implies --include-hidden by default."
         ),
     ),
+    annotation: list[str] = typer.Option(
+        [],
+        "--annotation",
+        help=(
+            "Filter sessions by annotation. Repeatable, AND-combined. "
+            "Operators: KEY=VALUE, KEY!=VALUE, KEY:exists, KEY:not-exists, "
+            "KEY:in:V1,V2. KEY is a dotted path. Values are typed "
+            "(true/false/null/int/float/string), same rules as "
+            "create-session --annotation. See twicc-sessions skill for details."
+        ),
+    ),
 ) -> None:
     """Query the TwiCC search index using raw Tantivy query syntax."""
     if include_hidden and only_hidden:
@@ -846,6 +892,7 @@ def search(
         spawned_by=spawned_by,
         spawn_root=spawn_root,
         descendants=descendants,
+        annotation=annotation,
     )
 
 

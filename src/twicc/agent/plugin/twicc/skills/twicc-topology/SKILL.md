@@ -40,6 +40,15 @@ $TWICC topology <SESSION_ID|self> [OPTIONS]
 
 - `--processes / --no-processes` — include compact live process state when a TwiCC backend is running. Defaults to `--processes`; if no backend is running, topology is still returned with process data marked unavailable.
 - `--full-sessions / --no-full-sessions` — emit the full session serialization for every node (same shape as `$TWICC session <ID>`). Defaults to `--no-full-sessions`: each `nodes[].session` block carries only the slim subset listed below. Use this only when you actually need extra fields for every node; otherwise call `$TWICC session <ID>` for the few nodes you care about.
+- `--annotation KEY[OP]VALUE` — annotate every node with a `matches_annotations` boolean indicating whether that node's `annotations` match the expression. The full tree is always preserved (no pruning). Repeatable; multiple flags are AND-combined. Five operators:
+  - `KEY=VALUE` — annotation key equals VALUE.
+  - `KEY!=VALUE` — annotation key differs from VALUE (or key absent).
+  - `KEY:exists` — annotation key is present (any value).
+  - `KEY:not-exists` — annotation key is absent.
+  - `KEY:in:V1,V2,...` — annotation key equals one of the listed values; escape a literal comma with `\,`.
+  - Values are inferred as typed: `true`/`false` → boolean, `null` → null, integers and floats parsed numerically, everything else → string (same rules as `create-session --annotation`).
+  - `matches_annotations` is absent from each `nodes[]` entry when no `--annotation` is passed.
+  - Example: `$TWICC topology self --annotation role=implementer`
 
 ## Output format
 
@@ -74,7 +83,8 @@ $TWICC topology <SESSION_ID|self> [OPTIONS]
       "process": {"id": 42, "state": "user_turn", "started_at": "...", "last_state_change_at": "...", "pid": 12345},
       "direct_child_count": 1,
       "descendant_count": 1,
-      "subtree_total_cost": 2.34
+      "subtree_total_cost": 2.34,
+      "matches_annotations": true
     },
     {
       "id": "B",
@@ -96,7 +106,8 @@ $TWICC topology <SESSION_ID|self> [OPTIONS]
       "process": {"id": null, "state": "dead", "started_at": null, "last_state_change_at": null, "pid": null},
       "direct_child_count": 0,
       "descendant_count": 0,
-      "subtree_total_cost": 1.11
+      "subtree_total_cost": 1.11,
+      "matches_annotations": false
     }
   ]
 }
@@ -115,6 +126,7 @@ $TWICC topology <SESSION_ID|self> [OPTIONS]
 - `nodes[].direct_child_count` — immediate spawned children.
 - `nodes[].descendant_count` — spawned descendants across all levels.
 - `nodes[].subtree_total_cost` — sum of `session.total_cost` for this node and all descendants, or `null` when none has cost.
+- `nodes[].matches_annotations` — `true` if this node's annotations match all `--annotation` predicates; `false` otherwise. Absent when no `--annotation` is passed. The tree is never pruned: all nodes are present regardless.
 - `process.state` — `starting`, `assistant_turn`, `awaiting_user_input`, `user_turn`, or `dead`; `process` is `null` when process data is unavailable or not requested.
 - `cycle_detected` — defensive flag for corrupt `spawned_by` data.
 
@@ -131,6 +143,8 @@ $TWICC topology self
 $TWICC topology 4a8352fb-1674-41c0-8a85-0a5a3e4e623a
 $TWICC topology self --no-processes
 $TWICC topology self --full-sessions
+$TWICC topology self --annotation role=implementer
+$TWICC topology self --annotation status:exists --annotation priority:in:high,critical
 ```
 
 ## Related commands
