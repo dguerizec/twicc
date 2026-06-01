@@ -528,7 +528,15 @@ def search(
         clauses.append((Occur.Must, Query.term_query(_schema, "spawned_by", spawned_by)))
 
     if spawn_root is not None:
-        clauses.append((Occur.Must, Query.term_query(_schema, "spawn_root", spawn_root)))
+        # OR with the session_id field so a standalone session (spawn_root=""
+        # in the index because its DB spawn_root_id column is still NULL) is
+        # also returned when queried by its own id. Same single-node-tree
+        # fallback as ``twicc topology`` and the ORM callers.
+        spawn_root_clauses = [
+            (Occur.Should, Query.term_query(_schema, "spawn_root", spawn_root)),
+            (Occur.Should, Query.term_query(_schema, "session_id", spawn_root)),
+        ]
+        clauses.append((Occur.Must, Query.boolean_query(spawn_root_clauses)))
 
     if descendants is not None:
         # Empty set is short-circuited above; here we always have at least one id.

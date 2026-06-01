@@ -157,7 +157,16 @@ def main(
         if spawned_by_id is not None and sb != spawned_by_id:
             continue
         sr = session.spawn_root_id if session is not None else None
-        if spawn_root_id is not None and sr != spawn_root_id:
+        # Accept either: this row's session is in the requested spawn tree
+        # (its spawn_root_id matches), or it *is* the tree's root in a
+        # single-node tree (standalone session whose spawn_root_id is still
+        # NULL because it has never spawned). Mirrors ``twicc topology`` and
+        # the ``Q(spawn_root_id=X) | Q(pk=X)`` filter in ``sessions.py``.
+        if (
+            spawn_root_id is not None
+            and sr != spawn_root_id
+            and row.session_id != spawn_root_id
+        ):
             continue
         if descendants_ids is not None and row.session_id not in descendants_ids:
             continue

@@ -139,7 +139,13 @@ def resolve_spawn_root_filter(value: str | None) -> str | None:
       ``spawn_root_id`` if set, else its own id (the "I am my own root"
       fallback — matches the invariant established by ``twicc topology``).
       Raises ``RuntimeError`` on any failure.
-    - any other string → use it verbatim as a session_id
+    - any other string → looked up as a session_id and resolved to the
+      id of its tree's root (``s.spawn_root_id or s.id``), so the
+      downstream filter ``qs.filter(spawn_root_id=...)`` returns the
+      whole tree regardless of where in the tree the caller pointed.
+      Unknown ids are returned verbatim — the downstream filter then
+      matches nothing, which is the same silent-no-match behavior as
+      ``--spawned-by`` / ``--descendants``.
 
     Any internal failure is wrapped in ``RuntimeError`` so the typer
     wrappers that call this can surface a clean human error + non-zero
@@ -161,7 +167,12 @@ def resolve_spawn_root_filter(value: str | None) -> str | None:
                 "This flag is only meaningful from inside an active session.",
             )
         return session.spawn_root_id or session.id
-    return value
+    from twicc.core.models import Session
+
+    row = Session.objects.filter(pk=value).values("id", "spawn_root_id").first()
+    if row is None:
+        return value
+    return row["spawn_root_id"] or row["id"]
 
 
 def resolve_descendants_filter(value: str | None) -> set[str] | None:

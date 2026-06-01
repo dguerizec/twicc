@@ -45,6 +45,8 @@ def main(
         print(str(e), file=sys.stderr)
         sys.exit(1)
 
+    from django.db.models import Q
+
     from twicc.core.models import Session
     from twicc.core.serializers import serialize_session
 
@@ -76,7 +78,11 @@ def main(
         qs = qs.filter(spawned_by_id=spawned_by_id)
 
     if spawn_root_id is not None:
-        qs = qs.filter(spawn_root_id=spawn_root_id)
+        # OR with Q(pk=spawn_root_id) to also include the root of a single-node
+        # tree (a standalone session that has never spawned a child still has
+        # spawn_root_id=NULL, so the plain equality filter would exclude it).
+        # Same pattern as ``twicc topology`` (cf. ``cli/topology.py``).
+        qs = qs.filter(Q(spawn_root_id=spawn_root_id) | Q(pk=spawn_root_id))
 
     if descendants_ids is not None:
         # An empty set means "the target has no descendants"; ``id__in=[]``
