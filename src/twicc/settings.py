@@ -1,5 +1,6 @@
 import os
 import shlex
+import shutil
 import sys
 from pathlib import Path
 
@@ -12,7 +13,30 @@ PACKAGE_DIR = Path(__file__).resolve().parent  # src/twicc/
 
 APP_VERSION = get_version()
 DEV_MODE = PACKAGE_DIR.parent.name == "src"
-UVX_MODE = not DEV_MODE and "UV_RUN_RECURSION_DEPTH" in os.environ
+
+
+def _is_uv_managed(segment: str) -> bool:
+    """Whether ``sys.executable`` lives inside a uv-managed directory of
+    the given kind: ``archive-v0`` for ephemeral ``uvx`` runs (cache),
+    ``tools`` for persistent ``uv tool install`` venvs.
+
+    We don't rely on environment variables: ``UV_RUN_RECURSION_DEPTH`` is
+    only set by ``uv run``, never by ``uvx`` / ``uv tool run``. The
+    interpreter path is the only stable signal across both modes.
+
+    We intentionally do NOT ``resolve()`` the path: uv venvs ship a
+    ``bin/python`` that's a symlink to the system Python (or to its own
+    download), so resolving would strip the very ``uv/<segment>/`` parts
+    we're trying to detect.
+    """
+    parts = Path(sys.executable).parts
+    for i, p in enumerate(parts):
+        if p == "uv" and i + 1 < len(parts) and parts[i + 1] == segment:
+            return True
+    return False
+
+
+UVX_MODE = not DEV_MODE and _is_uv_managed("archive-v0")
 
 
 def _resolve_twicc_launch_prefix() -> str:
@@ -23,24 +47,47 @@ def _resolve_twicc_launch_prefix() -> str:
 
     Detection, in order:
 
-    1. ``uvx twicc`` when launched via ``uvx``.
-    2. ``cd <dir> && uv run ./<script>`` when launched via ``uv run`` in
-       dev mode (e.g. ``uv run ./run.py`` via ``devctl``). The ``cd``
-       makes the command work regardless of the terminal's current
-       working directory.
-    3. Quoted absolute path of the ``twicc`` script when ``sys.argv[0]``
-       points at one (typical for an installed package).
-    4. ``<sys.executable> -m twicc`` as a generic fallback (covers
+    1. ``uvx twicc`` when launched via ephemeral ``uvx`` (cache lives in
+       ``~/.cache/uv/archive-v0/<hash>/``).
+    2. Bare ``twicc`` when launched from a ``uv tool install`` venv
+       (``~/.local/share/uv/tools/<name>/``) AND its shim is on PATH.
+    3. ``uv run --directory <dir> <script>`` when launched via ``uv run``
+       in dev mode (e.g. ``uv run ./run.py`` via ``devctl``). The
+       ``--directory`` makes the command work regardless of the
+       terminal's current working directory.
+    4. Quoted absolute path of the ``twicc`` script when ``sys.argv[0]``
+       points at one (covers the ``uv tool install`` shim-not-on-PATH
+       case, and any other installed-package layout).
+    5. ``<sys.executable> -m twicc`` as a generic fallback (covers
        ``python -m twicc`` and any other case where the launching
        interpreter has the ``twicc`` package importable).
     """
     if UVX_MODE:
         return "uvx twicc"
 
+    # ``uv tool install twicc`` puts the venv in ``~/.local/share/uv/tools/twicc/``
+    # and creates a shim in the uv tool bin dir. Only return the bare name when
+    # that shim is actually on PATH (so the command works from anywhere);
+    # otherwise fall through to the absolute argv0 path below.
+    if not DEV_MODE and _is_uv_managed("tools") and shutil.which("twicc"):
+        return "twicc"
+
+    # Build the shortest viable form of argv0 — both ``absolute()`` (no
+    # symlink following, keeps the path the user actually typed) and
+    # ``resolve()`` (follows symlinks, but normalises ``..``/``.``) are
+    # candidates; we keep whichever is shorter. In practice ``absolute()``
+    # almost always wins (e.g. ``~/.local/bin/twicc`` vs the longer
+    # ``~/.local/share/uv/tools/twicc/bin/twicc`` target), but ``resolve()``
+    # can win when argv0 carries redundant segments.
     argv0 = sys.argv[0] if sys.argv else ""
-    try:
-        argv0_path = Path(argv0).resolve() if argv0 else None
-    except OSError:
+    if argv0:
+        candidates = [Path(argv0).absolute()]
+        try:
+            candidates.append(Path(argv0).resolve())
+        except OSError:
+            pass
+        argv0_path = min(candidates, key=lambda p: len(str(p)))
+    else:
         argv0_path = None
 
     # uv run <script> in dev mode: re-invoke the same script through uv,
@@ -58,6 +105,15 @@ def _resolve_twicc_launch_prefix() -> str:
     # Installed ``twicc`` script.
     if argv0_path and argv0_path.is_file() and argv0_path.name in ("twicc", "twicc.exe"):
         return shlex.quote(str(argv0_path))
+
+    # Sibling entry-point script in the same venv ``bin/`` as ``sys.executable``.
+    # Covers any installed-package layout (including ``uv tool install`` with
+    # the shim off PATH) — always preferable to the ``python -m twicc``
+    # fallback because it doesn't depend on PATH and produces a single-binary
+    # command.
+    sibling = Path(sys.executable).parent / "twicc"
+    if sibling.is_file():
+        return shlex.quote(str(sibling))
 
     # Fallback: same interpreter, twicc as a module.
     return f"{shlex.quote(sys.executable)} -m twicc"
