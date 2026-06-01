@@ -131,8 +131,14 @@ def resolve_spawned_by_filter(value: str | None) -> str | None:
     return value
 
 
-def resolve_spawn_root_filter(value: str | None) -> str | None:
-    """Translate a ``--spawn-root`` CLI value into a session_id filter.
+def resolve_spawn_tree_filter(value: str | None) -> str | None:
+    """Translate a ``--spawn-tree`` CLI value into a session_id filter.
+
+    The CLI flag describes the user-facing concept ("the tree containing
+    this session"); internally we return the id of that tree's root,
+    because that's what the downstream filter
+    ``qs.filter(spawn_root_id=...)`` keys on (the DB column name stays
+    ``spawn_root`` even though the CLI flag is ``--spawn-tree``).
 
     - ``None``  → ``None`` (no filter)
     - ``"self"`` → resolve via whoami; returns the current session's
@@ -141,11 +147,11 @@ def resolve_spawn_root_filter(value: str | None) -> str | None:
       Raises ``RuntimeError`` on any failure.
     - any other string → looked up as a session_id and resolved to the
       id of its tree's root (``s.spawn_root_id or s.id``), so the
-      downstream filter ``qs.filter(spawn_root_id=...)`` returns the
-      whole tree regardless of where in the tree the caller pointed.
-      Unknown ids are returned verbatim — the downstream filter then
-      matches nothing, which is the same silent-no-match behavior as
-      ``--spawned-by`` / ``--descendants``.
+      downstream filter returns the whole tree regardless of where in
+      the tree the caller pointed (any id in the tree works — root,
+      middle, or leaf). Unknown ids are returned verbatim — the
+      downstream filter then matches nothing, which is the same
+      silent-no-match behavior as ``--spawned-by`` / ``--descendants``.
 
     Any internal failure is wrapped in ``RuntimeError`` so the typer
     wrappers that call this can surface a clean human error + non-zero
@@ -158,12 +164,12 @@ def resolve_spawn_root_filter(value: str | None) -> str | None:
             session = resolve_current_session()
         except Exception as e:
             raise RuntimeError(
-                f"--spawn-root self: could not resolve the current "
+                f"--spawn-tree self: could not resolve the current "
                 f"session: {type(e).__name__}: {e}",
             ) from e
         if session is None:
             raise RuntimeError(
-                "--spawn-root self: no TwiCC session found in PID ancestry. "
+                "--spawn-tree self: no TwiCC session found in PID ancestry. "
                 "This flag is only meaningful from inside an active session.",
             )
         return session.spawn_root_id or session.id
@@ -186,7 +192,7 @@ def resolve_descendants_filter(value: str | None) -> set[str] | None:
       spawner.
     - any other string → looked up as a session_id; an unknown id resolves
       to an empty set (same silent-no-match behavior as ``--spawned-by`` /
-      ``--spawn-root`` for unknown ids).
+      ``--spawn-tree`` for unknown ids).
 
     The returned set contains the *proper* descendants of the resolved
     target — the target itself is never included. An empty set means

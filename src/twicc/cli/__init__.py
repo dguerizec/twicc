@@ -221,18 +221,19 @@ def _sessions_default(
             "default: a filiation query shows every matching child whatever its "
             "visibility. Add --only-hidden to narrow to hidden children, or pass an "
             "explicit ID and rely on the JSON output's `hidden` field to filter "
-            "further. Mutually exclusive with --spawn-root."
+            "further. Mutually exclusive with --spawn-tree."
         ),
     ),
-    spawn_root: str = typer.Option(
+    spawn_tree: str = typer.Option(
         None,
-        "--spawn-root",
+        "--spawn-tree",
         help=(
-            "Filter to sessions whose spawn-root is the given session_id (i.e. every "
-            "session in that spawn tree, any depth), or 'self' for the current "
-            "session's spawn-root tree (its own id when it is itself the root). "
-            "Mutually exclusive with --spawned-by and --descendants. Implies "
-            "--include-hidden by default."
+            "Filter to every session in the spawn tree that contains the given "
+            "session_id — any id in the tree works (root, middle, or leaf): the "
+            "CLI looks it up and resolves to the tree it belongs to. Use 'self' "
+            "for the tree containing the current session. Mutually exclusive "
+            "with --spawned-by and --descendants. Implies --include-hidden by "
+            "default."
         ),
     ),
     descendants: str = typer.Option(
@@ -243,7 +244,7 @@ def _sessions_default(
             "transitively spawned by it, at any depth, target excluded), 'self' for "
             "the descendants of the current session, or 'parent' for the descendants "
             "of the current session's spawner (= my siblings, their subtrees, and my "
-            "own subtree). Mutually exclusive with --spawned-by and --spawn-root. "
+            "own subtree). Mutually exclusive with --spawned-by and --spawn-tree. "
             "Implies --include-hidden by default."
         ),
     ),
@@ -267,9 +268,9 @@ def _sessions_default(
         typer.echo("Error: --include-hidden and --only-hidden are mutually exclusive.", err=True)
         raise typer.Exit(2)
 
-    if sum(x is not None for x in (spawned_by, spawn_root, descendants)) > 1:
+    if sum(x is not None for x in (spawned_by, spawn_tree, descendants)) > 1:
         typer.echo(
-            "Error: --spawned-by, --spawn-root and --descendants are mutually exclusive.",
+            "Error: --spawned-by, --spawn-tree and --descendants are mutually exclusive.",
             err=True,
         )
         raise typer.Exit(2)
@@ -285,7 +286,7 @@ def _sessions_default(
         include_hidden=include_hidden,
         only_hidden=only_hidden,
         spawned_by=spawned_by,
-        spawn_root=spawn_root,
+        spawn_tree=spawn_tree,
         descendants=descendants,
         annotation=annotation,
     )
@@ -467,17 +468,18 @@ def _processes_default(
             "for the current session, or 'parent' for the session that spawned the "
             "current one (= my siblings, myself included). Implies --include-hidden "
             "by default: a filiation query surfaces every matching child whatever "
-            "its visibility. Mutually exclusive with --spawn-root."
+            "its visibility. Mutually exclusive with --spawn-tree."
         ),
     ),
-    spawn_root: str = typer.Option(
+    spawn_tree: str = typer.Option(
         None,
-        "--spawn-root",
+        "--spawn-tree",
         help=(
-            "Filter to processes of sessions whose spawn-root is the given session_id "
-            "(i.e. every session in that spawn tree, any depth), or 'self' for the "
-            "current session's spawn-root tree (its own id when it is itself the root). "
-            "Mutually exclusive with --spawned-by and --descendants. Implies "
+            "Filter to processes of every session in the spawn tree that contains "
+            "the given session_id — any id in the tree works (root, middle, or "
+            "leaf): the CLI looks it up and resolves to the tree it belongs to. "
+            "Use 'self' for the tree containing the current session. Mutually "
+            "exclusive with --spawned-by and --descendants. Implies "
             "--include-hidden by default."
         ),
     ),
@@ -490,7 +492,7 @@ def _processes_default(
             "excluded), 'self' for the descendants of the current session, or "
             "'parent' for the descendants of the current session's spawner (= my "
             "siblings, their subtrees, and my own subtree). Mutually exclusive with "
-            "--spawned-by and --spawn-root. Implies --include-hidden by default."
+            "--spawned-by and --spawn-tree. Implies --include-hidden by default."
         ),
     ),
     annotation: list[str] = typer.Option(
@@ -513,9 +515,9 @@ def _processes_default(
         typer.echo("Error: --include-hidden and --only-hidden are mutually exclusive.", err=True)
         raise typer.Exit(2)
 
-    if sum(x is not None for x in (spawned_by, spawn_root, descendants)) > 1:
+    if sum(x is not None for x in (spawned_by, spawn_tree, descendants)) > 1:
         typer.echo(
-            "Error: --spawned-by, --spawn-root and --descendants are mutually exclusive.",
+            "Error: --spawned-by, --spawn-tree and --descendants are mutually exclusive.",
             err=True,
         )
         raise typer.Exit(2)
@@ -530,7 +532,7 @@ def _processes_default(
         include_hidden=include_hidden,
         only_hidden=only_hidden,
         spawned_by=spawned_by,
-        spawn_root=spawn_root,
+        spawn_tree=spawn_tree,
         descendants=descendants,
         annotation=annotation,
     )
@@ -831,18 +833,19 @@ def search(
             "current session, or 'parent' for the session that spawned the current "
             "one (= my siblings, myself included). Implies --include-hidden by "
             "default: a filiation query matches every spawned child whatever its "
-            "visibility. Mutually exclusive with --spawn-root."
+            "visibility. Mutually exclusive with --spawn-tree."
         ),
     ),
-    spawn_root: str = typer.Option(
+    spawn_tree: str = typer.Option(
         None,
-        "--spawn-root",
+        "--spawn-tree",
         help=(
-            "Filter to sessions whose spawn-root is the given session_id (i.e. every "
-            "session in that spawn tree, any depth), or 'self' for the current "
-            "session's spawn-root tree (its own id when it is itself the root). "
-            "Mutually exclusive with --spawned-by and --descendants. Implies "
-            "--include-hidden by default."
+            "Filter to every session in the spawn tree that contains the given "
+            "session_id — any id in the tree works (root, middle, or leaf): the "
+            "CLI looks it up and resolves to the tree it belongs to. Use 'self' "
+            "for the tree containing the current session. Mutually exclusive "
+            "with --spawned-by and --descendants. Implies --include-hidden by "
+            "default."
         ),
     ),
     descendants: str = typer.Option(
@@ -854,7 +857,7 @@ def search(
             "excluded), 'self' for the descendants of the current session, or "
             "'parent' for the descendants of the current session's spawner (= my "
             "siblings, their subtrees, and my own subtree). Mutually exclusive "
-            "with --spawned-by and --spawn-root. Implies --include-hidden by default."
+            "with --spawned-by and --spawn-tree. Implies --include-hidden by default."
         ),
     ),
     annotation: list[str] = typer.Option(
@@ -874,9 +877,9 @@ def search(
         typer.echo("Error: --include-hidden and --only-hidden are mutually exclusive.", err=True)
         raise typer.Exit(2)
 
-    if sum(x is not None for x in (spawned_by, spawn_root, descendants)) > 1:
+    if sum(x is not None for x in (spawned_by, spawn_tree, descendants)) > 1:
         typer.echo(
-            "Error: --spawned-by, --spawn-root and --descendants are mutually exclusive.",
+            "Error: --spawned-by, --spawn-tree and --descendants are mutually exclusive.",
             err=True,
         )
         raise typer.Exit(2)
@@ -890,7 +893,7 @@ def search(
         include_hidden=include_hidden,
         only_hidden=only_hidden,
         spawned_by=spawned_by,
-        spawn_root=spawn_root,
+        spawn_tree=spawn_tree,
         descendants=descendants,
         annotation=annotation,
     )

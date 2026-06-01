@@ -14,7 +14,7 @@ def main(
     include_hidden: bool = False,
     only_hidden: bool = False,
     spawned_by: str | None = None,
-    spawn_root: str | None = None,
+    spawn_tree: str | None = None,
     descendants: str | None = None,
     annotation: list[str] | None = None,
 ) -> None:
@@ -46,13 +46,13 @@ def main(
 
     from twicc.cli._drop_request.whoami import (
         resolve_descendants_filter,
-        resolve_spawn_root_filter,
+        resolve_spawn_tree_filter,
         resolve_spawned_by_filter,
     )
 
     try:
         spawned_by_id = resolve_spawned_by_filter(spawned_by)
-        spawn_root_id = resolve_spawn_root_filter(spawn_root)
+        spawn_root_id = resolve_spawn_tree_filter(spawn_tree)
         descendants_ids = resolve_descendants_filter(descendants)
     except RuntimeError as e:
         print(str(e), file=sys.stderr)
@@ -127,13 +127,13 @@ def main(
         )
     }
 
-    # Apply hidden / spawned_by / spawn_root / descendants filters (post-enrichment,
+    # Apply hidden / spawned_by / spawn_tree / descendants filters (post-enrichment,
     # since these fields come from the Session row, not from ProcessRun itself).
     # Same semantics as ``twicc sessions``:
     #
     # - ``--only-hidden``: keep hidden=True only.
     # - ``--include-hidden``: no implicit hidden filter (both kinds).
-    # - ``--spawned-by`` / ``--spawn-root`` / ``--descendants`` is set (without
+    # - ``--spawned-by`` / ``--spawn-tree`` / ``--descendants`` is set (without
     #   ``--include-hidden`` / ``--only-hidden``): the caller is explicitly asking
     #   about filiation, show every matching session in the tree whatever its
     #   visibility.

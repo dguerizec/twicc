@@ -1,6 +1,6 @@
 """Tests for the CLI filter resolvers in ``twicc.cli._drop_request.whoami``.
 
-Also covers the downstream ``--spawn-root`` filter applied by the CLI
+Also covers the downstream ``--spawn-tree`` filter applied by the CLI
 ``sessions`` / ``processes`` / ``search`` subcommands — the resolver and the
 filter together must return the whole spawn tree, including standalone
 sessions queried by their own id (the same single-node fallback that
@@ -15,7 +15,7 @@ import orjson
 import pytest
 from django.utils import timezone
 
-from twicc.cli._drop_request.whoami import resolve_spawn_root_filter
+from twicc.cli._drop_request.whoami import resolve_spawn_tree_filter
 from twicc.core.models import Project, Session, SessionType
 
 
@@ -44,7 +44,7 @@ def make_session(project, session_id, *, spawned_by=None, spawn_root=None, minut
     )
 
 
-def test_resolve_spawn_root_filter_returns_root_id_for_non_root_session(project):
+def test_resolve_spawn_tree_filter_returns_root_id_for_non_root_session(project):
     """Regression: a non-root session id must resolve to its tree's root id.
 
     Every session in a tree carries ``spawn_root_id`` pointing to the actual
@@ -60,13 +60,13 @@ def test_resolve_spawn_root_filter_returns_root_id_for_non_root_session(project)
     middle = make_session(project, "B", spawned_by=root, spawn_root=root, minutes=1)
     make_session(project, "C", spawned_by=middle, spawn_root=root, minutes=2)
 
-    assert resolve_spawn_root_filter("B") == "A"
+    assert resolve_spawn_tree_filter("B") == "A"
 
 
-def test_sessions_cli_returns_standalone_session_filtered_by_its_own_spawn_root(
+def test_sessions_cli_returns_standalone_session_filtered_by_its_own_spawn_tree(
     project, capsysbinary,
 ):
-    """Regression: ``twicc sessions --spawn-root <standalone-id>`` must return
+    """Regression: ``twicc sessions --spawn-tree <standalone-id>`` must return
     the session itself.
 
     A session that has never spawned a child carries ``spawn_root_id=NULL`` —
@@ -82,7 +82,7 @@ def test_sessions_cli_returns_standalone_session_filtered_by_its_own_spawn_root(
 
     from twicc.cli import sessions as cli_sessions
 
-    cli_sessions.main(spawn_root="STANDALONE")
+    cli_sessions.main(spawn_tree="STANDALONE")
 
     out = capsysbinary.readouterr().out
     rows = orjson.loads(out)

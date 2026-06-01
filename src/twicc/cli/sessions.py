@@ -15,13 +15,13 @@ def main(
     include_hidden: bool = False,
     only_hidden: bool = False,
     spawned_by: str | None = None,
-    spawn_root: str | None = None,
+    spawn_tree: str | None = None,
     descendants: str | None = None,
     annotation: list[str] | None = None,
 ) -> None:
     """List sessions as JSON to stdout.
 
-    ``spawned_by``, ``spawn_root`` and ``descendants`` are raw CLI values
+    ``spawned_by``, ``spawn_tree`` and ``descendants`` are raw CLI values
     (``None``, a session_id, or the literal ``"self"``) — they are resolved
     here, after ``django.setup()``, so callers don't need to bootstrap
     Django themselves. The typer wrapper guarantees they are mutually
@@ -33,13 +33,13 @@ def main(
 
     from twicc.cli._drop_request.whoami import (
         resolve_descendants_filter,
-        resolve_spawn_root_filter,
+        resolve_spawn_tree_filter,
         resolve_spawned_by_filter,
     )
 
     try:
         spawned_by_id = resolve_spawned_by_filter(spawned_by)
-        spawn_root_id = resolve_spawn_root_filter(spawn_root)
+        spawn_root_id = resolve_spawn_tree_filter(spawn_tree)
         descendants_ids = resolve_descendants_filter(descendants)
     except RuntimeError as e:
         print(str(e), file=sys.stderr)
@@ -59,7 +59,7 @@ def main(
     if not archived:
         qs = qs.filter(archived=False)
 
-    # When filtering by spawned_by / spawn_root / descendants, the caller is
+    # When filtering by spawned_by / spawn_tree / descendants, the caller is
     # explicitly asking about filiation — show every matching session in the
     # tree whatever its visibility. The hidden=False default only applies to
     # unscoped listings, where it keeps the output aligned with what the
