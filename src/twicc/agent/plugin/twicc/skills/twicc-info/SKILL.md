@@ -49,6 +49,7 @@ Every invocation returns at minimum:
 ```json
 {
   "twicc_version": "1.7.0",
+  "twicc_executable": "uvx twicc",
   "providers": {
     "claude_code": {"identifier": "claude_code", "name": "Claude Code", "disabled": false, "default": true},
     "codex":       {"identifier": "codex",       "name": "Codex",       "disabled": true,  "default": false}
@@ -57,6 +58,7 @@ Every invocation returns at minimum:
 ```
 
 - `twicc_version` — the installed TwiCC version.
+- `twicc_executable` — shell command that re-invokes the same TwiCC distribution (e.g. `uvx twicc`, `twicc`, `uv run --directory <dir> run.py`, an absolute path, …). Suffix it with subcommand args to reach this TwiCC instance from anywhere.
 - `providers` — dict keyed by provider identifier. Each entry carries:
   - `identifier` — same as the dict key.
   - `name` — human-readable label.

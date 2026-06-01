@@ -91,6 +91,8 @@ def info_cmd(
 
     django.setup()
 
+    from django.conf import settings
+
     from twicc.cli.info._common import emit_json
     from twicc.providers.helpers import get_provider_helpers_registry
     from twicc.providers.state import is_provider_enabled
@@ -110,6 +112,7 @@ def info_cmd(
 
     output: dict = {
         "twicc_version": get_version(),
+        "twicc_executable": settings.TWICC_LAUNCH_PREFIX,
         "providers": providers,
     }
 
