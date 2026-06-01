@@ -356,11 +356,25 @@ def topology(
             "data marked unavailable."
         ),
     ),
+    full_sessions: bool = typer.Option(
+        False,
+        "--full-sessions/--no-full-sessions",
+        help=(
+            "Emit the full session serialization for every node (same shape as "
+            "``twicc session <id>``). Disabled by default: each node carries a "
+            "slim subset (id, project_id, provider, title, annotations, "
+            "spawned_by, spawn_root, created_at, last_new_content_at, "
+            "context_usage, context_max, total_cost, directory). Use this when "
+            "you need fields like timestamps, costs breakdown or agent "
+            "settings; otherwise call ``twicc session <id>`` for the few nodes "
+            "you actually care about."
+        ),
+    ),
 ) -> None:
     """Show the spawned-session tree containing a session as JSON."""
     from twicc.cli.topology import main as topology_main
 
-    topology_main(session_id, include_processes=processes)
+    topology_main(session_id, include_processes=processes, full_sessions=full_sessions)
 
 
 processes_app = typer.Typer(

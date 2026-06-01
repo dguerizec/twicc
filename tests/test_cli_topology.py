@@ -9,7 +9,7 @@ import pytest
 from django.utils import timezone
 
 from twicc.agent.states import AgentState
-from twicc.cli.topology import build_topology
+from twicc.cli.topology import TOPOLOGY_SESSION_FIELDS, build_topology
 from twicc.core.models import ProcessRun, Project, Session, SessionType
 
 
@@ -135,8 +135,62 @@ def test_build_topology_returns_rooted_tree_from_middle_node(project):
     assert nodes["B"]["descendant_count"] == 1
     assert nodes["B"]["subtree_total_cost"] == 2.5
     assert nodes["C"]["subtree_total_cost"] is None
-    assert nodes["E"]["session"]["hidden"] is True
-    assert nodes["E"]["session"]["archived"] is True
+    # Slim default: every node carries exactly the expected field set plus
+    # the synthetic ``directory`` — and nothing else (no hidden/archived/etc).
+    expected_session_keys = set(TOPOLOGY_SESSION_FIELDS) | {"directory"}
+    for node in nodes.values():
+        assert set(node["session"].keys()) == expected_session_keys
+
+
+def test_build_topology_full_sessions_emits_full_session_payload(project):
+    root = make_session(project, "A", title="Root", cwd="/tmp/twicc")
+    root.spawn_root = root
+    root.save(update_fields=["spawn_root"])
+    make_session(
+        project,
+        "B",
+        title="Hidden worker",
+        spawned_by=root,
+        spawn_root=root,
+        minutes=1,
+        hidden=True,
+        archived=True,
+    )
+
+    data = build_topology(root, include_processes=False, full_sessions=True)
+    nodes = {node["id"]: node for node in data["nodes"]}
+
+    # The full payload exposes the model fields that the slim shape hides.
+    assert nodes["A"]["session"]["cwd"] == "/tmp/twicc"
+    assert "directory" not in nodes["A"]["session"]
+    assert nodes["B"]["session"]["hidden"] is True
+    assert nodes["B"]["session"]["archived"] is True
+
+
+def test_build_topology_slim_default_resolves_directory(project):
+    root = make_session(project, "A", title="Root", cwd="/tmp/twicc")
+    root.spawn_root = root
+    root.save(update_fields=["spawn_root"])
+    make_session(
+        project,
+        "B",
+        title="Git worker",
+        spawned_by=root,
+        spawn_root=root,
+        minutes=1,
+        cwd="/tmp/twicc/sub",
+        git_directory="/tmp/twicc/git",
+    )
+
+    data = build_topology(root, include_processes=False)
+    nodes = {node["id"]: node for node in data["nodes"]}
+
+    # ``directory`` prefers ``git_directory``, falls back to ``cwd``.
+    assert nodes["A"]["session"]["directory"] == "/tmp/twicc"
+    assert nodes["B"]["session"]["directory"] == "/tmp/twicc/git"
+    # The raw fields are NOT in the slim payload.
+    assert "cwd" not in nodes["A"]["session"]
+    assert "git_directory" not in nodes["B"]["session"]
 
 
 def test_build_topology_adds_compact_process_state(project):

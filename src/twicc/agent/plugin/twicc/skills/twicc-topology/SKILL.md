@@ -1,7 +1,7 @@
 ---
 name: twicc-topology
 description: Show the spawned-session tree around a session, rooted at its top-level ancestor, with session metadata, process state, and aggregate child/cost data.
-argument-hint: <session_id|self> [--no-processes]
+argument-hint: <session_id|self> [--no-processes] [--full-sessions]
 ---
 
 # TwiCC Topology
@@ -39,6 +39,7 @@ $TWICC topology <SESSION_ID|self> [OPTIONS]
 ### Options
 
 - `--processes / --no-processes` — include compact live process state when a TwiCC backend is running. Defaults to `--processes`; if no backend is running, topology is still returned with process data marked unavailable.
+- `--full-sessions / --no-full-sessions` — emit the full session serialization for every node (same shape as `$TWICC session <ID>`). Defaults to `--no-full-sessions`: each `nodes[].session` block carries only the slim subset listed below. Use this only when you actually need extra fields for every node; otherwise call `$TWICC session <ID>` for the few nodes you care about.
 
 ## Output format
 
@@ -60,10 +61,15 @@ $TWICC topology <SESSION_ID|self> [OPTIONS]
         "project_id": "-home-twidi-dev-myproject",
         "provider": "codex",
         "title": "Root orchestrator",
-        "total_cost": 1.23,
+        "annotations": {"role": "coordinator"},
         "spawned_by": null,
         "spawn_root": "A",
-        "annotations": {"role": "coordinator"}
+        "created_at": "2026-06-01T10:00:00+00:00",
+        "last_new_content_at": "2026-06-01T10:05:12+00:00",
+        "context_usage": 18432,
+        "context_max": 200000,
+        "total_cost": 1.23,
+        "directory": "/home/twidi/dev/myproject"
       },
       "process": {"id": 42, "state": "user_turn", "started_at": "...", "last_state_change_at": "...", "pid": 12345},
       "direct_child_count": 1,
@@ -77,10 +83,15 @@ $TWICC topology <SESSION_ID|self> [OPTIONS]
         "project_id": "-home-twidi-dev-myproject",
         "provider": "codex",
         "title": "Implementation worker",
-        "total_cost": 1.11,
+        "annotations": {"role": "worker"},
         "spawned_by": "A",
         "spawn_root": "A",
-        "annotations": {"role": "worker"}
+        "created_at": "2026-06-01T10:01:30+00:00",
+        "last_new_content_at": "2026-06-01T10:04:55+00:00",
+        "context_usage": 9210,
+        "context_max": 200000,
+        "total_cost": 1.11,
+        "directory": "/home/twidi/dev/myproject"
       },
       "process": {"id": null, "state": "dead", "started_at": null, "last_state_change_at": null, "pid": null},
       "direct_child_count": 0,
@@ -99,7 +110,8 @@ $TWICC topology <SESSION_ID|self> [OPTIONS]
 - `tree` — nested id-only tree for traversal.
 - `nodes` — node data in tree pre-order; the root is first.
 - `nodes[].id` — same value as `nodes[].session.id`, exposed for direct indexing.
-- `nodes[].session` — full session metadata, same shape as `$TWICC session <ID>`.
+- `nodes[].session` — slim session payload by default (fields shown above); pass `--full-sessions` to get the full shape — identical to `$TWICC session <ID>` — for every node. With `--full-sessions`, the synthetic `directory` field is **not** added: use `git_directory` / `cwd` directly.
+- `nodes[].session.directory` — resolved working directory: `git_directory` when known, else `cwd`. Slim payload only.
 - `nodes[].direct_child_count` — immediate spawned children.
 - `nodes[].descendant_count` — spawned descendants across all levels.
 - `nodes[].subtree_total_cost` — sum of `session.total_cost` for this node and all descendants, or `null` when none has cost.
@@ -118,6 +130,7 @@ $TWICC topology <SESSION_ID|self> [OPTIONS]
 $TWICC topology self
 $TWICC topology 4a8352fb-1674-41c0-8a85-0a5a3e4e623a
 $TWICC topology self --no-processes
+$TWICC topology self --full-sessions
 ```
 
 ## Related commands
@@ -133,5 +146,4 @@ $TWICC topology self --no-processes
 1. Lead with the root title/id, the target path, and the number of nodes.
 2. Render the tree by title when available, falling back to session id.
 3. Call out `awaiting_user_input` and long-running `assistant_turn` nodes first.
-4. Mention hidden or archived nodes only when they matter to the user's question.
-5. You are in TwiCC — link to a session: `[link text](/project/{project_id}/session/{session_id})`.
+4. You are in TwiCC — link to a session: `[link text](/project/{project_id}/session/{session_id})`.

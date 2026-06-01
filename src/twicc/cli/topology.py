@@ -8,7 +8,34 @@ import sys
 import orjson
 
 
-def main(session_id: str, *, include_processes: bool = True) -> None:
+# Fields kept in each ``nodes[].session`` block by default. The caller can opt
+# into the full ``serialize_session()`` shape with ``--full-sessions``; the slim
+# shape is enough to render the tree and identify nodes, and any other field can
+# be recovered for a specific node via ``twicc session <id>``. The synthetic
+# ``directory`` field (``git_directory`` falling back to ``cwd``) is added on
+# top of these by ``_slim_session``.
+TOPOLOGY_SESSION_FIELDS = (
+    "id",
+    "project_id",
+    "provider",
+    "title",
+    "annotations",
+    "spawned_by",
+    "spawn_root",
+    "created_at",
+    "last_new_content_at",
+    "context_usage",
+    "context_max",
+    "total_cost",
+)
+
+
+def main(
+    session_id: str,
+    *,
+    include_processes: bool = True,
+    full_sessions: bool = False,
+) -> None:
     """Emit the spawned-session tree containing ``session_id`` as JSON."""
     import django
 
@@ -25,7 +52,11 @@ def main(session_id: str, *, include_processes: bool = True) -> None:
         )
         sys.exit(1)
 
-    data = build_topology(seed, include_processes=include_processes)
+    data = build_topology(
+        seed,
+        include_processes=include_processes,
+        full_sessions=full_sessions,
+    )
     sys.stdout.buffer.write(orjson.dumps(data, option=orjson.OPT_INDENT_2))
     sys.stdout.buffer.write(b"\n")
 
@@ -34,6 +65,7 @@ def build_topology(
     seed,
     *,
     include_processes: bool = True,
+    full_sessions: bool = False,
     twicc_pid: int | None = None,
 ) -> dict:
     """Build the spawned-session topology containing ``seed``.
@@ -78,6 +110,7 @@ def build_topology(
             process_rows_by_id.get(session_id),
             processes_available=processes_available,
             metrics=metrics_by_id[session_id],
+            full_sessions=full_sessions,
         )
         for session_id in ordered_ids
     ]
@@ -286,15 +319,26 @@ def _serialize_topology_node(
     *,
     processes_available: bool,
     metrics: dict,
+    full_sessions: bool,
 ) -> dict:
     from twicc.core.serializers import serialize_session
 
+    serialized = serialize_session(session)
+    session_payload = serialized if full_sessions else _slim_session(serialized)
+
     return {
         "id": session.id,
-        "session": serialize_session(session),
+        "session": session_payload,
         "process": _serialize_process(process_row, processes_available=processes_available),
         **metrics,
     }
+
+
+def _slim_session(serialized: dict) -> dict:
+    """Project the full session payload down to the topology default shape."""
+    slim = {field: serialized[field] for field in TOPOLOGY_SESSION_FIELDS}
+    slim["directory"] = serialized["git_directory"] or serialized["cwd"]
+    return slim
 
 
 def _serialize_process(row, *, processes_available: bool) -> dict | None:
