@@ -15,6 +15,7 @@ def main(
     only_hidden: bool = False,
     spawned_by: str | None = None,
     spawn_root: str | None = None,
+    descendants: str | None = None,
 ) -> None:
     """List currently running processes (live ProcessRuns) of the running TwiCC.
 
@@ -43,6 +44,7 @@ def main(
     django.setup()
 
     from twicc.cli._drop_request.whoami import (
+        resolve_descendants_filter,
         resolve_spawn_root_filter,
         resolve_spawned_by_filter,
     )
@@ -50,6 +52,7 @@ def main(
     try:
         spawned_by_id = resolve_spawned_by_filter(spawned_by)
         spawn_root_id = resolve_spawn_root_filter(spawn_root)
+        descendants_ids = resolve_descendants_filter(descendants)
     except RuntimeError as e:
         print(str(e), file=sys.stderr)
         sys.exit(1)
@@ -107,15 +110,16 @@ def main(
         )
     }
 
-    # Apply hidden / spawned_by / spawn_root filters (post-enrichment, since these
-    # fields come from the Session row, not from ProcessRun itself). Same semantics
-    # as ``twicc sessions``:
+    # Apply hidden / spawned_by / spawn_root / descendants filters (post-enrichment,
+    # since these fields come from the Session row, not from ProcessRun itself).
+    # Same semantics as ``twicc sessions``:
     #
     # - ``--only-hidden``: keep hidden=True only.
     # - ``--include-hidden``: no implicit hidden filter (both kinds).
-    # - ``--spawned-by`` or ``--spawn-root`` is set (without ``--include-hidden`` /
-    #   ``--only-hidden``): the caller is explicitly asking about filiation,
-    #   show every matching session in the tree whatever its visibility.
+    # - ``--spawned-by`` / ``--spawn-root`` / ``--descendants`` is set (without
+    #   ``--include-hidden`` / ``--only-hidden``): the caller is explicitly asking
+    #   about filiation, show every matching session in the tree whatever its
+    #   visibility.
     # - Default (no flag): keep hidden=False only — match what the UI sees.
     filtered = []
     for row in rows:
@@ -128,6 +132,7 @@ def main(
             and not only_hidden
             and spawned_by_id is None
             and spawn_root_id is None
+            and descendants_ids is None
             and is_hidden
         ):
             continue
@@ -136,6 +141,8 @@ def main(
             continue
         sr = session.spawn_root_id if session is not None else None
         if spawn_root_id is not None and sr != spawn_root_id:
+            continue
+        if descendants_ids is not None and row.session_id not in descendants_ids:
             continue
         filtered.append(row)
     rows = filtered

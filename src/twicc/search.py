@@ -433,6 +433,7 @@ def search(
     only_hidden: bool = False,
     spawned_by: str | None = None,
     spawn_root: str | None = None,
+    descendants: set[str] | None = None,
     limit: int = 20,
     offset: int = 0,
 ) -> SearchResults:
@@ -454,15 +455,23 @@ def search(
         only_hidden: Whether to return only hidden sessions (default False).
         spawned_by: Filter to sessions directly spawned by this session_id (default None = no filter).
         spawn_root: Filter to sessions whose spawn-root is this session_id (default None = no filter).
-            Mutually exclusive with ``spawned_by``.
+            Mutually exclusive with ``spawned_by`` and ``descendants``.
+        descendants: Filter to this explicit set of session_ids (proper descendants of some target,
+            resolved by the caller). An empty set means "no descendants" — returns no results.
+            Mutually exclusive with ``spawned_by`` and ``spawn_root``.
         limit: Max number of session groups to return (default 20).
         offset: Pagination offset for session groups (default 0).
 
     Returns:
         SearchResults with grouped, scored, and snippet-annotated results.
     """
-    if spawned_by is not None and spawn_root is not None:
-        raise ValueError("search(): spawned_by and spawn_root are mutually exclusive")
+    if sum(x is not None for x in (spawned_by, spawn_root, descendants)) > 1:
+        raise ValueError(
+            "search(): spawned_by, spawn_root and descendants are mutually exclusive"
+        )
+
+    if descendants is not None and not descendants:
+        return SearchResults(query=query_str, total_sessions=0, results=[])
 
     _check_index()
 
@@ -498,15 +507,21 @@ def search(
     # Hidden-session filters:
     # - only_hidden: restrict to hidden=True
     # - include_hidden (else branch): no filter added, both hidden and visible are returned
-    # - spawned_by or spawn_root is set (without include_hidden / only_hidden): no
-    #   implicit hidden filter — when the caller asks about filiation, they want
-    #   every matching session in the tree whatever its visibility (the spawn
-    #   targets are almost always hidden sessions in practice)
+    # - spawned_by / spawn_root / descendants is set (without include_hidden /
+    #   only_hidden): no implicit hidden filter — when the caller asks about
+    #   filiation, they want every matching session in the tree whatever its
+    #   visibility (the spawn targets are almost always hidden sessions in
+    #   practice)
     # - default: restrict to hidden=False (UI and CLI without --include-hidden see only
     #   visible sessions; hidden documents stay in the index for agent-owned searches)
     if only_hidden:
         clauses.append((Occur.Must, Query.term_query(_schema, "hidden", True)))
-    elif not include_hidden and spawned_by is None and spawn_root is None:
+    elif (
+        not include_hidden
+        and spawned_by is None
+        and spawn_root is None
+        and descendants is None
+    ):
         clauses.append((Occur.Must, Query.term_query(_schema, "hidden", False)))
 
     if spawned_by is not None:
@@ -514,6 +529,14 @@ def search(
 
     if spawn_root is not None:
         clauses.append((Occur.Must, Query.term_query(_schema, "spawn_root", spawn_root)))
+
+    if descendants is not None:
+        # Empty set is short-circuited above; here we always have at least one id.
+        descendant_clauses = [
+            (Occur.Should, Query.term_query(_schema, "session_id", sid))
+            for sid in descendants
+        ]
+        clauses.append((Occur.Must, Query.boolean_query(descendant_clauses)))
 
     # Date range filters via parsed query syntax (tantivy-py's range_query doesn't
     # accept datetime objects for date fields, but the query parser handles ISO dates)
@@ -666,6 +689,7 @@ def raw_search(
     only_hidden: bool = False,
     spawned_by: str | None = None,
     spawn_root: str | None = None,
+    descendants: set[str] | None = None,
 ) -> dict | str:
     """Execute a raw Tantivy query and return JSON-serializable results.
 
@@ -685,7 +709,10 @@ def raw_search(
             with ``include_hidden`` (caller's responsibility to enforce).
         spawned_by: If set, restrict results to sessions directly spawned by this session ID.
         spawn_root: If set, restrict results to sessions whose spawn-root is this session ID.
-            Mutually exclusive with ``spawned_by``.
+            Mutually exclusive with ``spawned_by`` and ``descendants``.
+        descendants: If set, restrict results to this explicit set of session_ids
+            (proper descendants of some target, resolved by the caller). An empty set
+            returns no results. Mutually exclusive with ``spawned_by`` and ``spawn_root``.
 
     Returns:
         If ``to_json`` is True: a JSON string (pretty-printed, sorted keys).
@@ -693,8 +720,24 @@ def raw_search(
         and ``hits`` keys. Each hit contains ``score``, ``session_id``, ``project_id``,
         ``line_num``, ``from_role``, ``timestamp``, ``archived``, and ``snippet``.
     """
-    if spawned_by is not None and spawn_root is not None:
-        raise ValueError("raw_search(): spawned_by and spawn_root are mutually exclusive")
+    if sum(x is not None for x in (spawned_by, spawn_root, descendants)) > 1:
+        raise ValueError(
+            "raw_search(): spawned_by, spawn_root and descendants are mutually exclusive"
+        )
+
+    if descendants is not None and not descendants:
+        result_dict = {
+            "query": query_str,
+            "total_hits": 0,
+            "limit": limit,
+            "offset": offset,
+            "hits": [],
+        }
+        if to_json:
+            import orjson
+
+            return orjson.dumps(result_dict, option=orjson.OPT_INDENT_2 | orjson.OPT_SORT_KEYS).decode()
+        return result_dict
 
     index, schema = _init_read_only()
 
@@ -715,15 +758,21 @@ def raw_search(
             return orjson.dumps(result_dict, option=orjson.OPT_INDENT_2 | orjson.OPT_SORT_KEYS).decode()
         return result_dict
 
-    # Build filter clauses for hidden / spawned_by / spawn_root.
-    # When spawned_by or spawn_root is set without include_hidden / only_hidden
-    # the implicit hidden=False filter is lifted: a filiation query is an
-    # explicit ask about every session in the tree whatever its visibility.
+    # Build filter clauses for hidden / spawned_by / spawn_root / descendants.
+    # When any of the filiation flags is set without include_hidden /
+    # only_hidden the implicit hidden=False filter is lifted: a filiation
+    # query is an explicit ask about every session in the tree whatever its
+    # visibility.
     clauses: list[tuple[Occur, Query]] = [(Occur.Must, text_query)]
 
     if only_hidden:
         clauses.append((Occur.Must, Query.term_query(schema, "hidden", True)))
-    elif not include_hidden and spawned_by is None and spawn_root is None:
+    elif (
+        not include_hidden
+        and spawned_by is None
+        and spawn_root is None
+        and descendants is None
+    ):
         clauses.append((Occur.Must, Query.term_query(schema, "hidden", False)))
 
     if spawned_by is not None:
@@ -731,6 +780,14 @@ def raw_search(
 
     if spawn_root is not None:
         clauses.append((Occur.Must, Query.term_query(schema, "spawn_root", spawn_root)))
+
+    if descendants is not None:
+        # Empty set is short-circuited above; here we always have at least one id.
+        descendant_clauses = [
+            (Occur.Should, Query.term_query(schema, "session_id", sid))
+            for sid in descendants
+        ]
+        clauses.append((Occur.Must, Query.boolean_query(descendant_clauses)))
 
     if len(clauses) == 1:
         parsed_query = clauses[0][1]

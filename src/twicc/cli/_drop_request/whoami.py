@@ -150,3 +150,80 @@ def resolve_spawn_root_filter(value: str | None) -> str | None:
             )
         return session.spawn_root_id or session.id
     return value
+
+
+def resolve_descendants_filter(value: str | None) -> set[str] | None:
+    """Translate a ``--descendants`` CLI value into a session_id set filter.
+
+    - ``None``  → ``None`` (no filter at all).
+    - ``"self"`` → resolve via whoami; raises ``RuntimeError`` on failure.
+    - any other string → looked up as a session_id; an unknown id resolves
+      to an empty set (same silent-no-match behavior as ``--spawned-by`` /
+      ``--spawn-root`` for unknown ids).
+
+    The returned set contains the *proper* descendants of the resolved
+    session — the target itself is never included. An empty set means
+    "the target has no descendants"; callers must treat that as a strict
+    match against an empty pool (returns nothing), not as "no filter".
+
+    Algorithm:
+    1. ``tree_key = session.spawn_root_id or session.id`` — every session
+       in a spawn tree carries the root id in ``spawn_root_id`` (the root
+       points at itself); a standalone session that never spawned anyone
+       has no rows in the universe and falls through to an empty set.
+    2. Fetch the universe with a single ``filter(spawn_root_id=tree_key)``
+       projection on ``(id, spawned_by_id)``.
+    3. If ``tree_key == session.id`` (the target IS the tree root), every
+       row except the target itself is a descendant — shortcut, no BFS.
+    4. Otherwise, BFS the ``spawned_by_id`` edges from the target to
+       isolate its branch within the tree.
+    """
+    if value is None:
+        return None
+
+    from twicc.core.models import Session
+
+    if value == "self":
+        try:
+            session = resolve_current_session()
+        except Exception as e:
+            raise RuntimeError(
+                f"--descendants self: could not resolve the current "
+                f"session: {type(e).__name__}: {e}",
+            ) from e
+        if session is None:
+            raise RuntimeError(
+                "--descendants self: no TwiCC session found in PID ancestry. "
+                "This flag is only meaningful from inside an active session.",
+            )
+    else:
+        try:
+            session = Session.objects.only("id", "spawn_root_id").get(pk=value)
+        except Session.DoesNotExist:
+            return set()
+
+    target_id = session.id
+    tree_key = session.spawn_root_id or session.id
+    rows = list(
+        Session.objects.filter(spawn_root_id=tree_key).only("id", "spawned_by_id")
+    )
+
+    if tree_key == target_id:
+        # Target is the tree root → every other row is a descendant.
+        return {r.id for r in rows if r.id != target_id}
+
+    # Target is mid-tree → BFS its branch to drop sibling/parent rows.
+    adj: dict[str, list[str]] = {}
+    for r in rows:
+        if r.spawned_by_id:
+            adj.setdefault(r.spawned_by_id, []).append(r.id)
+
+    out: set[str] = set()
+    stack = list(adj.get(target_id, ()))
+    while stack:
+        node = stack.pop()
+        if node in out:
+            continue
+        out.add(node)
+        stack.extend(adj.get(node, ()))
+    return out

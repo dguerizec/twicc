@@ -37,7 +37,8 @@ $TWICC search '<query>' [OPTIONS]
 - `--include-hidden` — include hits from hidden sessions (excluded by default).
 - `--only-hidden` — hits only from hidden sessions. Mutually exclusive with `--include-hidden`.
 - `--spawned-by <ID|self>` — filter hits to direct child sessions spawned by the given session ID. `self` means the current session. Implies `--include-hidden`. Mutually exclusive with `--spawn-root`.
-- `--spawn-root <ID|self>` — filter hits to every session in a spawn tree (any depth), identified by the tree's root session ID. `self` means the current session's spawn-root tree (its own id when it is itself the root). Implies `--include-hidden`. Mutually exclusive with `--spawned-by`.
+- `--spawn-root <ID|self>` — filter hits to every session in a spawn tree (any depth), identified by the tree's root session ID. `self` means the current session's spawn-root tree (its own id when it is itself the root). Implies `--include-hidden`. Mutually exclusive with `--spawned-by` and `--descendants`.
+- `--descendants <ID|self>` — filter hits to the proper descendants of the given session (every session transitively spawned by it, target excluded). `self` means the current session. Implies `--include-hidden`. Mutually exclusive with `--spawned-by` and `--spawn-root`. Use this when you want "everything under X" but not X itself.
 
 ### Query syntax
 
@@ -89,6 +90,7 @@ $TWICC search 'body:websocket AND from_role:user'
 $TWICC search 'project_id:-home-twidi-dev-a OR project_id:-home-twidi-dev-b'
 $TWICC search 'websocket' --spawned-by self
 $TWICC search 'websocket' --spawn-root self
+$TWICC search 'websocket' --descendants self
 $TWICC search 'websocket' --include-hidden --limit 50 --offset 20
 ```
 

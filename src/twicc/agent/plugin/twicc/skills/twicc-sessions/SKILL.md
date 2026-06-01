@@ -42,7 +42,8 @@ Results are ordered by most recently active.
 - `--include-hidden` — include hidden sessions (excluded by default).
 - `--only-hidden` — only hidden sessions. Mutually exclusive with `--include-hidden`.
 - `--spawned-by <ID|self>` — filter to direct child sessions spawned by the given session ID. `self` means the current session. Implies `--include-hidden`. Mutually exclusive with `--spawn-root`.
-- `--spawn-root <ID|self>` — filter to every session in a spawn tree (any depth), identified by the tree's root session ID. `self` means the current session's spawn-root tree (its own id when it is itself the root). Implies `--include-hidden`. Mutually exclusive with `--spawned-by`.
+- `--spawn-root <ID|self>` — filter to every session in a spawn tree (any depth), identified by the tree's root session ID. `self` means the current session's spawn-root tree (its own id when it is itself the root). Implies `--include-hidden`. Mutually exclusive with `--spawned-by` and `--descendants`.
+- `--descendants <ID|self>` — filter to the proper descendants of the given session (every session transitively spawned by it, target excluded). `self` means the current session. Implies `--include-hidden`. Mutually exclusive with `--spawned-by` and `--spawn-root`. Use this when you want "everything under X" but not X itself — `--spawn-root` gives the whole tree including the root, `--spawned-by` only direct children.
 
 ### Batch lookup
 
@@ -138,6 +139,7 @@ $TWICC sessions --workspace backend
 $TWICC sessions --include-archived
 $TWICC sessions --spawned-by self
 $TWICC sessions --spawn-root self
+$TWICC sessions --descendants self
 $TWICC sessions --limit 50 --offset 20
 $TWICC sessions get abc123-def456
 $TWICC sessions get abc123 def456 ghi789
