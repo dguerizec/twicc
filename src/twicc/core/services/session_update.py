@@ -28,6 +28,10 @@ whose ``kind`` matches one of the supported update actions:
 - ``kind="session:update_hidden"`` → :func:`update_session_hidden_from_payload`.
   Looks up the session via the standard guards then delegates to
   :func:`session_visibility.hide_session` / ``unhide_session``.
+- ``kind="session:update_annotations"`` → :func:`update_session_annotations_from_payload`.
+  Applies ordered free-form JSON annotation operations, writes the final
+  annotations object under the DB write lock, and broadcasts
+  ``session_updated``.
 
 The functions do NOT raise for business-rule errors (missing session,
 provider disabled, etc.); they return an :class:`UpdateSessionResult` with
@@ -44,9 +48,11 @@ aligned.
 from __future__ import annotations
 
 import asyncio
+from copy import deepcopy
 import logging
 from typing import Any, NamedTuple
 
+import orjson
 from asgiref.sync import sync_to_async
 from channels.layers import get_channel_layer
 
@@ -655,3 +661,235 @@ async def update_session_hidden_from_payload(payload: dict):
     if hidden:
         return await hide_session(session)
     return await unhide_session(session)
+
+
+async def update_session_annotations_from_payload(payload: dict) -> UpdateSessionResult:
+    """Apply ordered annotation operations to an existing session.
+
+    Supported structured operations:
+    - ``{"op": "clear"}``
+    - ``{"op": "replace", "value": {...}}``
+    - ``{"op": "merge", "value": {...}}``
+    - ``{"op": "set", "path": ["a", "b"], "value": scalar}``
+    - ``{"op": "unset", "path": ["a", "b"]}``
+    """
+    session_id = payload.get("session_id")
+    operations = payload.get("operations")
+
+    errors: list[UpdateSessionError] = []
+    if not session_id:
+        errors.append(UpdateSessionError("session_id", "missing", "session_id is required"))
+    if not isinstance(operations, list) or not operations:
+        errors.append(UpdateSessionError(
+            "operations", "empty_operations",
+            "At least one annotation operation is required.",
+        ))
+    if errors:
+        return UpdateSessionResult(False, None, None, None, errors)
+
+    session, project, provider, error = await _lookup_session_for_update(session_id)
+    if error is not None:
+        return error
+
+    annotations, operation_errors = apply_annotation_operations(
+        session.annotations or {},
+        operations,
+    )
+    if operation_errors:
+        return UpdateSessionResult(False, None, None, None, operation_errors)
+
+    from twicc.core.models import Session
+    from twicc.core.serializers import serialize_session
+
+    await run_under_db_write_lock(
+        lambda: Session.objects.filter(id=session_id).aupdate(annotations=annotations)
+    )
+
+    updated_session = await sync_to_async(
+        lambda: Session.objects.select_related("project").filter(id=session_id).first()
+    )()
+
+    channel_layer = get_channel_layer()
+    if updated_session is not None and channel_layer is not None and not updated_session.hidden:
+        await channel_layer.group_send(
+            "updates",
+            {
+                "type": "broadcast",
+                "data": {
+                    "type": "session_updated",
+                    "session": serialize_session(updated_session),
+                },
+            },
+        )
+
+    logger.info(
+        "[update_session_annotations] session=%s operations=%s",
+        session_id, len(operations),
+    )
+
+    return UpdateSessionResult(
+        success=True,
+        session_id=session_id,
+        provider=provider.value,
+        project_id=session.project_id,
+        errors=None,
+    )
+
+
+def apply_annotation_operations(
+    current_annotations: object,
+    operations: list,
+) -> tuple[dict, list[UpdateSessionError]]:
+    """Apply structured annotation operations and return a fresh object."""
+    if not isinstance(current_annotations, dict):
+        annotations: dict[str, Any] = {}
+    else:
+        annotations = deepcopy(current_annotations)
+
+    errors: list[UpdateSessionError] = []
+    for index, operation in enumerate(operations):
+        if not isinstance(operation, dict):
+            errors.append(UpdateSessionError(
+                "operations", "invalid_annotation_operation",
+                f"Operation #{index + 1} must be an object.",
+            ))
+            continue
+
+        op = None
+        try:
+            op = operation.get("op")
+            if op == "clear":
+                annotations = {}
+            elif op == "replace":
+                value = operation.get("value")
+                error = _validate_annotation_object(value, field="operations")
+                if error is None:
+                    annotations = deepcopy(value)
+                else:
+                    errors.append(error)
+            elif op == "merge":
+                value = operation.get("value")
+                error = _validate_annotation_object(value, field="operations")
+                if error is None:
+                    _merge_annotation_object(annotations, value)
+                else:
+                    errors.append(error)
+            elif op == "set":
+                path = operation.get("path")
+                if _validate_operation_path(path):
+                    error = _set_annotation_path(annotations, path, operation.get("value"))
+                    if error is not None:
+                        errors.append(error)
+                else:
+                    errors.append(UpdateSessionError(
+                        "operations", "invalid_annotation_path",
+                        f"Operation #{index + 1} has an invalid annotation path.",
+                    ))
+            elif op == "unset":
+                path = operation.get("path")
+                if _validate_operation_path(path):
+                    _unset_annotation_path(annotations, path)
+                else:
+                    errors.append(UpdateSessionError(
+                        "operations", "invalid_annotation_path",
+                        f"Operation #{index + 1} has an invalid annotation path.",
+                    ))
+            else:
+                errors.append(UpdateSessionError(
+                    "operations", "invalid_annotation_operation",
+                    f"Operation #{index + 1} has unknown op {op!r}.",
+                ))
+        except Exception as e:
+            errors.append(_annotation_operation_exception(index, op, e))
+
+    if errors:
+        return {}, errors
+
+    error = _validate_annotation_object(annotations, field="annotations")
+    if error is not None:
+        return {}, [error]
+    return annotations, []
+
+
+def _validate_annotation_object(value: object, *, field: str) -> UpdateSessionError | None:
+    if not isinstance(value, dict):
+        return UpdateSessionError(
+            field,
+            "invalid_annotations",
+            "annotations must be a JSON object.",
+        )
+    try:
+        orjson.dumps(value)
+    except TypeError as e:
+        return UpdateSessionError(
+            field,
+            "invalid_annotations",
+            f"annotations must be JSON-serializable: {e}",
+        )
+    return None
+
+
+def _annotation_operation_exception(
+    index: int,
+    op: object,
+    exception: Exception,
+) -> UpdateSessionError:
+    return UpdateSessionError(
+        "operations",
+        "annotation_operation_failed",
+        f"Operation #{index + 1} ({op!r}) failed while applying annotations: {exception}",
+    )
+
+
+def _validate_operation_path(path: object) -> bool:
+    return (
+        isinstance(path, list)
+        and bool(path)
+        and all(isinstance(segment, str) and segment for segment in path)
+    )
+
+
+def _merge_annotation_object(target: dict, patch: dict) -> None:
+    for key, value in patch.items():
+        if isinstance(value, dict) and isinstance(target.get(key), dict):
+            _merge_annotation_object(target[key], value)
+        else:
+            target[key] = deepcopy(value)
+
+
+def _set_annotation_path(
+    annotations: dict,
+    path: list[str],
+    value: Any,
+) -> UpdateSessionError | None:
+    current = annotations
+    for segment in path[:-1]:
+        if segment not in current:
+            current[segment] = {}
+        elif not isinstance(current[segment], dict):
+            return UpdateSessionError(
+                "operations",
+                "annotation_path_conflict",
+                f"Annotation path {'.'.join(path)!r} conflicts with existing scalar value.",
+            )
+        current = current[segment]
+
+    leaf = path[-1]
+    if isinstance(current.get(leaf), dict):
+        return UpdateSessionError(
+            "operations",
+            "annotation_path_conflict",
+            f"Annotation path {'.'.join(path)!r} would replace an existing object.",
+        )
+    current[leaf] = value
+    return None
+
+
+def _unset_annotation_path(annotations: dict, path: list[str]) -> None:
+    current = annotations
+    for segment in path[:-1]:
+        next_value = current.get(segment)
+        if not isinstance(next_value, dict):
+            return
+        current = next_value
+    current.pop(path[-1], None)

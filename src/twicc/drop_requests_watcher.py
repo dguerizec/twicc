@@ -76,6 +76,11 @@ _KIND_HANDLERS: dict[str, tuple[str, str, str]] = {
         "update_session_hidden_from_payload",
         "updated",
     ),
+    "session:update_annotations": (
+        "twicc.core.services.session_update",
+        "update_session_annotations_from_payload",
+        "updated",
+    ),
     "process:stop": (
         "twicc.core.services.process_kill",
         "kill_session_process_from_payload",

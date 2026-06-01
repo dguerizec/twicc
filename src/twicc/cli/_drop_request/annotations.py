@@ -1,4 +1,4 @@
-"""Parse free-form session annotations for create-session."""
+"""Parse free-form session annotations for create/update commands."""
 
 from __future__ import annotations
 
@@ -33,7 +33,7 @@ def parse_annotations(
             errors.append(error)
 
     for entry in entries:
-        parsed = _parse_annotation_entry(entry)
+        parsed = _parse_annotation_entry(entry, field="--annotation")
         if isinstance(parsed, ValidationError):
             errors.append(parsed)
             continue
@@ -44,6 +44,69 @@ def parse_annotations(
             errors.append(error)
 
     return annotations, errors
+
+
+def parse_annotation_update_operations(
+    operations: list[str],
+) -> tuple[list[dict], list[ValidationError]]:
+    """Parse ordered annotation operations for update-session annotations."""
+    parsed_operations: list[dict] = []
+    errors: list[ValidationError] = []
+
+    for operation in operations:
+        if operation == "clear":
+            parsed_operations.append({"op": "clear"})
+            continue
+        if operation.startswith("clear:"):
+            errors.append(ValidationError(
+                "OPERATION", "invalid_annotation_operation",
+                "clear does not take a value.",
+            ))
+            continue
+
+        op, separator, value = operation.partition(":")
+        if not separator:
+            errors.append(ValidationError(
+                "OPERATION", "invalid_annotation_operation",
+                "Annotation operation must be clear or use op:value syntax.",
+            ))
+            continue
+
+        if op == "set":
+            parsed = _parse_annotation_entry(value, field="OPERATION")
+            if isinstance(parsed, ValidationError):
+                errors.append(parsed)
+                continue
+            path, scalar = parsed
+            parsed_operations.append({"op": "set", "path": path, "value": scalar})
+        elif op == "unset":
+            path_error = _validate_annotation_path(value, field="OPERATION")
+            if path_error is not None:
+                errors.append(path_error)
+                continue
+            parsed_operations.append({"op": "unset", "path": value.split(".")})
+        elif op in ("merge-file", "replace-file"):
+            annotations, error = _load_annotations_file(value)
+            if error is not None:
+                errors.append(error)
+                continue
+            parsed_operations.append({
+                "op": "merge" if op == "merge-file" else "replace",
+                "value": annotations,
+            })
+        else:
+            errors.append(ValidationError(
+                "OPERATION", "invalid_annotation_operation",
+                f"Unknown annotation operation {op!r}.",
+            ))
+
+    if not parsed_operations and not errors:
+        errors.append(ValidationError(
+            "OPERATION", "no_op",
+            "At least one annotation operation is required.",
+        ))
+
+    return parsed_operations, errors
 
 
 def _load_annotations_file(path: str) -> tuple[dict[str, Any], ValidationError | None]:
@@ -75,30 +138,46 @@ def _load_annotations_file(path: str) -> tuple[dict[str, Any], ValidationError |
     return parsed, None
 
 
-def _parse_annotation_entry(entry: str) -> tuple[list[str], Any] | ValidationError:
+def _parse_annotation_entry(
+    entry: str,
+    *,
+    field: str,
+) -> tuple[list[str], Any] | ValidationError:
     key, separator, raw_value = entry.partition("=")
     if not separator:
         return ValidationError(
-            "--annotation",
+            field,
             "invalid_annotation",
             "Annotation must use key=value syntax.",
         )
 
-    path = key.split(".")
-    if any(segment == "" for segment in path):
-        return ValidationError(
-            "--annotation",
-            "invalid_annotation_path",
-            f"Annotation path {key!r} contains an empty segment.",
-        )
+    path_error = _validate_annotation_path(key, field=field)
+    if path_error is not None:
+        return path_error
 
-    value, error = _parse_scalar_value(raw_value)
+    value, error = _parse_scalar_value(raw_value, field=field)
     if error is not None:
         return error
-    return path, value
+    return key.split("."), value
 
 
-def _parse_scalar_value(raw_value: str) -> tuple[Any, ValidationError | None]:
+def _validate_annotation_path(path: str, *, field: str) -> ValidationError | None:
+    if not path:
+        return ValidationError(
+            field,
+            "invalid_annotation_path",
+            "Annotation path cannot be empty.",
+        )
+    if any(segment == "" for segment in path.split(".")):
+        return ValidationError(
+            field,
+            "invalid_annotation_path",
+            f"Annotation path {path!r} contains an empty segment.",
+        )
+    return None
+
+
+def _parse_scalar_value(raw_value: str, *, field: str) -> tuple[Any, ValidationError | None]:
     if raw_value == "true":
         return True, None
     if raw_value == "false":
@@ -120,7 +199,7 @@ def _parse_scalar_value(raw_value: str) -> tuple[Any, ValidationError | None]:
             return raw_value, None
         if isinstance(parsed, dict | list):
             return None, ValidationError(
-                "--annotation",
+                field,
                 "annotation_non_scalar",
                 "Use --annotations-file for object or list annotation values.",
             )

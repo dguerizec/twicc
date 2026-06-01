@@ -1,12 +1,12 @@
 ---
 name: twicc-update-session
-description: Update an existing TwiCC session — change agent settings, rename, archive/unarchive, pin/unpin, hide/unhide. Use when you or the user want to change a session's settings, title, or state without sending a new message. To stop the live agent without touching the row, use `$TWICC process <ID> stop`.
-argument-hint: <session_id> {settings|title|archive|unarchive|pin|unpin|hide|unhide} [ARGS / OPTIONS]
+description: Update an existing TwiCC session — change settings, title, annotations, archive/unarchive, pin/unpin, hide/unhide. Use when you or the user want to change a session without sending a message.
+argument-hint: <session_id> {settings|title|annotations|archive|unarchive|pin|unpin|hide|unhide} [ARGS / OPTIONS]
 ---
 
 # TwiCC Update Session
 
-Eight sub-commands: `settings`, `title`, `archive`, `unarchive`, `pin <MODE>`, `unpin`, `hide`, `unhide`. To stop the live agent without touching the row, use `$TWICC process <SESSION_ID> stop` (skill: `twicc-process`).
+Nine sub-commands: `settings`, `title`, `annotations`, `archive`, `unarchive`, `pin <MODE>`, `unpin`, `hide`, `unhide`. To stop the live agent without touching the row, use `$TWICC process <SESSION_ID> stop` (skill: `twicc-process`).
 
 All sub-commands share these output flags: `--timeout SECONDS` (default 30), `--json`, `--no-color` (implied by `--json`).
 
@@ -14,6 +14,7 @@ All sub-commands share these output flags: `--timeout SECONDS` (default 30), `--
 
 - Change model, effort, permission mode, or other settings → `settings`.
 - Rename a session → `title`.
+- Edit free-form session annotations → `annotations`.
 - Archive (also stops the agent) / unarchive → `archive` / `unarchive`.
 - Pin to project / workspace / globally, or unpin → `pin <MODE>` / `unpin`.
 - Hide from all listings and broadcasts / unhide → `hide` / `unhide`.
@@ -67,6 +68,22 @@ $TWICC update-session '<SESSION_ID>' title '<NEW_TITLE>'
 
 Trimmed; non-empty; ≤ 200 characters. After the DB write, the server persists the title to the provider's backing store (non-critical; DB is already updated regardless).
 
+### `annotations`
+
+```bash
+$TWICC update-session '<SESSION_ID>' annotations <OPERATION>...
+```
+
+Operations are applied left-to-right:
+
+- `clear` — replace annotations with `{}`.
+- `replace-file:PATH` — replace annotations with a JSON object file.
+- `merge-file:PATH` — recursively merge a JSON object file.
+- `set:KEY=VALUE` — set a scalar value; dotted keys are supported.
+- `unset:KEY` — remove a key; dotted keys are supported and missing paths are ignored.
+
+`set:` parses `true`, `false`, `null`, numbers, and strings. Use `merge-file:` or `replace-file:` for list or object values.
+
 ### `archive` / `unarchive`
 
 ```bash
@@ -108,12 +125,13 @@ $TWICC update-session '<SESSION_ID>' unhide
 
 - `settings`: `unknown_unset_field`, `unsupported_field`, `invalid_choice`, `invalid_format`, `unset_conflict`, `no_op`.
 - `title`: `invalid_title` — empty after trim.
+- `annotations`: `invalid_annotation_operation`, `invalid_annotation`, `invalid_annotation_path`, `annotation_path_conflict`, `annotation_non_scalar`, `invalid_annotations_file`, `no_op`.
 - `pin`: `invalid_pin_mode` — MODE not in `{project, workspace, all}`.
 - `hide`: `hidden_constraint_violation` — non-interactive permission_mode or question_widget constraint not met.
 
 ### Server (exit 3)
 
-Same codes, re-checked server-side. Additionally `invalid_title` (title too long) and `manager_busy` (transient, `settings` only; retry).
+Same codes, re-checked server-side. Additionally `invalid_title` (title too long), `invalid_annotations`, and `manager_busy` (transient, `settings` only; retry).
 
 ## Output format
 
@@ -144,6 +162,11 @@ $TWICC update-session 4a8352fb-... settings --preset 'deep think' --effort low
 $TWICC update-session --json 4a8352fb-... settings --model opus
 # → {"status":"updated","session_id":"...","provider":"claude_code","project_id":"...","request_uuid":"..."}
 $TWICC update-session 4a8352fb-... title 'Better title'
+$TWICC update-session 4a8352fb-... annotations set:role=reviewer unset:temporary
+$TWICC update-session 4a8352fb-... annotations set:note="Needs backend review"
+$TWICC update-session 4a8352fb-... annotations unset:foo set:foo.point=bar
+$TWICC update-session 4a8352fb-... annotations replace-file:/tmp/base.json merge-file:/tmp/extra.json
+$TWICC update-session 4a8352fb-... annotations clear
 $TWICC update-session 4a8352fb-... archive
 $TWICC update-session 4a8352fb-... unarchive
 $TWICC update-session 4a8352fb-... pin project
