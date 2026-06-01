@@ -52,6 +52,12 @@ async function getMermaid() {
             startOnLoad: false,
             theme: 'default',
             securityLevel: 'loose',
+            // Don't inject the "Syntax error" bomb diagram on parse/render
+            // failures: during streaming, the markdown is re-rendered
+            // repeatedly with an incomplete mermaid block, and mermaid would
+            // leave one orphan div per failed attempt in <body>, piling up
+            // below the app.
+            suppressErrorRendering: true,
         })
     }
     return mermaidModule
@@ -423,6 +429,13 @@ function handleLinkClick(event) {
 }
 .markdown-body pre.mermaid-error {
     border-left: 3px solid #d29922;
+}
+/* Defensive: hide any orphan mermaid temp div that escapes into <body>.
+   suppressErrorRendering should prevent this, but a regression in mermaid
+   or an unrelated failure path would otherwise stack "Syntax error" bombs
+   below the app. */
+body > div[id^="dmermaid-"] {
+    display: none !important;
 }
 
 /* Dark tweak to handle dark mode https://shiki.style/guide/dual-themes */
