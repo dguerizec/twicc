@@ -23,9 +23,12 @@ def whoami_cmd(
     Walks the PID ancestry from the current process upward and matches
     against the live agents tracked by TwiCC. When a match is found,
     prints a JSON object with: ``session_id``, ``title``, ``project_id``,
-    ``project_directory``, the resolved ``agent_settings`` (synced
-    defaults applied), the full ``session`` payload (same as
-    ``twicc session <ID>``), and the matching ``process`` row.
+    ``project_directory``, ``current_working_directory`` (resolved
+    from tool_use paths, may differ from ``project_directory`` when
+    the agent works in a worktree or other repo), the resolved
+    ``agent_settings``, the full ``session``
+    payload (same as ``twicc session <ID>``), and the matching
+    ``process`` row.
 
     Useful from inside a session's Bash tool to discover the session's
     own identity (the agent doesn't otherwise know its TwiCC session_id).
@@ -89,6 +92,7 @@ def whoami_cmd(
         "title": get_pending_title(session.id) or session.title,
         "project_id": session.project_id,
         "project_directory": project_directory,
+        "current_working_directory": session.git_directory,
         "agent_settings": resolved_settings._asdict(),
         "session": serialize_session(session),
         "process": process,

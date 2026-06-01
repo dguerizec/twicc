@@ -5,7 +5,7 @@ description: Return the details of the session that owns the calling process. Us
 
 # TwiCC Whoami
 
-Identify the TwiCC session you are running in. Returns a JSON object with `session_id`, `title`, `project_id`, `project_directory`, the resolved `agent_settings` (synced defaults applied), the full `session` payload (same shape as `$TWICC session <ID>`), and the matching `process` row. Exits 1 if not running inside a TwiCC agent.
+Identify the TwiCC session you are running in. Returns a JSON object with `session_id`, `title`, `project_id`, `project_directory`, `current_working_directory` (resolved from tool_use activity — may differ from `project_directory` when working in a worktree or another repo), the resolved `agent_settings`, the full `session` payload (same shape as `$TWICC session <ID>`), and the matching `process` row. Exits 1 if not running inside a TwiCC agent.
 
 ## When to use
 
