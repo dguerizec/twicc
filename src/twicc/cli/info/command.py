@@ -94,6 +94,7 @@ def info_cmd(
     from django.conf import settings
 
     from twicc.cli.info._common import emit_json
+    from twicc.cli.info._meta import AVAILABLE_INFO_ARGUMENTS, build_available_twicc_commands
     from twicc.providers.helpers import get_provider_helpers_registry
     from twicc.providers.state import is_provider_enabled
     from twicc.synced_settings import read_synced_settings
@@ -114,6 +115,8 @@ def info_cmd(
         "twicc_version": get_version(),
         "twicc_executable": settings.TWICC_LAUNCH_PREFIX,
         "providers": providers,
+        "available_info_arguments": AVAILABLE_INFO_ARGUMENTS,
+        "available_twicc_commands": build_available_twicc_commands(settings.TWICC_LAUNCH_PREFIX),
     }
 
     if "presets" in canonical_sections:
