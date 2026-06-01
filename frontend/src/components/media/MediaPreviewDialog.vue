@@ -17,7 +17,7 @@ const props = defineProps({
     }
 })
 
-const emit = defineEmits(['remove'])
+const emit = defineEmits(['remove', 'close'])
 
 const dialogRef = ref(null)
 const currentIndex = ref(0)
@@ -150,6 +150,26 @@ function close() {
     document.removeEventListener('keydown', onKeyDown)
 }
 
+/**
+ * Triggered by the underlying wa-dialog's `wa-hide` event — covers every way
+ * the dialog can close (programmatic close, Escape, light-dismiss).
+ * Cleans up the document-level keydown listener and notifies the parent so
+ * external state (e.g. the useMediaPreview singleton) can sync.
+ */
+function onWaHide() {
+    document.removeEventListener('keydown', onKeyDown)
+    emit('close')
+}
+
+/**
+ * Open the current item's link (when set) in a new tab.
+ */
+function openLink() {
+    const link = currentItem.value?.link
+    if (!link) return
+    window.open(link, '_blank', 'noopener,noreferrer')
+}
+
 onBeforeUnmount(() => {
     document.removeEventListener('keydown', onKeyDown)
 })
@@ -164,6 +184,7 @@ defineExpose({ open, close })
         :label="dialogTitle"
         class="media-preview-dialog"
         light-dismiss
+        @wa-hide="onWaHide"
     >
         <div class="preview-content">
             <!-- Previous button -->
@@ -216,6 +237,19 @@ defineExpose({ open, close })
             </button>
             <AppTooltip :for="nextButtonId">Next (Right arrow)</AppTooltip>
         </div>
+
+        <!-- Open-link button in footer (when the current item carries a link) -->
+        <wa-button
+            v-if="currentItem?.link"
+            slot="footer"
+            variant="brand"
+            appearance="outlined"
+            size="small"
+            @click="openLink"
+        >
+            <wa-icon name="arrow-up-right-from-square" slot="start"></wa-icon>
+            Open link
+        </wa-button>
 
         <!-- Remove button in footer -->
         <wa-button

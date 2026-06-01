@@ -18,6 +18,7 @@ import CommandPalette from './components/app/CommandPalette.vue'
 import SearchOverlay from './components/app/SearchOverlay.vue'
 import StopProcessConfirmDialog from './components/app/StopProcessConfirmDialog.vue'
 import ProviderActivationDialog from './components/app/ProviderActivationDialog.vue'
+import GlobalMediaPreview from './components/media/GlobalMediaPreview.vue'
 import { initStaticCommands } from './commands/staticCommands'
 import {
     pendingConfirmation,
@@ -397,6 +398,10 @@ const toastTheme = computed(() => {
         @confirm="confirmPendingStop"
         @cancel="cancelPendingStop"
     />
+    <!-- Singleton dialog used to preview images & SVGs embedded in markdown
+         (and any other "open this media fullscreen" call site that doesn't
+         own its own MediaPreviewDialog instance). -->
+    <GlobalMediaPreview />
     <!-- Prevent browser default drop behavior (e.g. navigating to a dropped image).
          Our specific drop handlers in SessionItemsList call preventDefault themselves;
          this catches any drops that miss those zones. -->

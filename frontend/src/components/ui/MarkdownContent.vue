@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router'
 import { renderMarkdown } from '../../utils/markdown.js'
 import { vHighlight } from '../../directives/vHighlight.js'
 import { toast } from '../../composables/useToast'
+import { openMediaPreview } from '../../composables/useMediaPreview'
 // Uses the combined version that includes both light and dark
 // Then override with our theme file that uses [data-color-scheme] without media queries
 import 'github-markdown-css/github-markdown.css'
@@ -148,13 +149,113 @@ function copySource() {
     toast.success('Markdown copied to clipboard', { duration: 2000 })
 }
 
-// Route clicks on rendered <a> elements:
-//   - data-file-resolved → open in Files tab via injected openFile
-//   - data-file-broken   → swallow the click (link is rendered as plain text)
-//   - external / mailto  → leave the browser to handle (target=_blank or default)
-//   - anchor-only (#…)   → leave the browser to scroll
-//   - everything else    → SPA navigation via router.push
+// Selector for media that should open in MediaPreviewDialog when clicked:
+// any <img> rendered from markdown, plus the SVG produced by Mermaid (which
+// lives inside .mermaid-diagram). Restricting SVGs to .mermaid-diagram avoids
+// hijacking unrelated inline SVGs (e.g. shiki / icon SVGs) that might be
+// injected by future plugins.
+const MEDIA_SELECTOR = 'img, .mermaid-diagram svg'
+
+// Serialize an inline SVG (e.g. a Mermaid diagram) into a self-contained
+// data URL the dialog's <img> can render. We use percent-encoded utf-8
+// (data:image/svg+xml;charset=utf-8,...) rather than base64 because it is
+// simpler, avoids encoding pitfalls with Unicode, and is universally supported.
+//
+// Width/height are forced from the viewBox: when an SVG is embedded in
+// <img src="data:...">, percentage dimensions (Mermaid emits width="100%")
+// have no containing block to resolve against and collapse to 0, making the
+// image render as a 0×0 sliver. Explicit pixel dimensions give the <img>
+// an intrinsic size the dialog can measure for its fit-content panel.
+function svgToDataUrl(svg) {
+    const clone = svg.cloneNode(true)
+    if (!clone.getAttribute('xmlns')) {
+        clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg')
+    }
+    const vb = clone.getAttribute('viewBox')
+    if (vb) {
+        const parts = vb.trim().split(/[\s,]+/).map(Number)
+        if (parts.length === 4 && parts.every(Number.isFinite)) {
+            const [, , w, h] = parts
+            if (w > 0) clone.setAttribute('width', String(w))
+            if (h > 0) clone.setAttribute('height', String(h))
+        }
+    }
+    const xml = new XMLSerializer().serializeToString(clone)
+    return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(xml)}`
+}
+
+// Build a MediaItem for an <img>. Walks up to a wrapping <a> (if any) to
+// preserve the link as an item-level attribute so the dialog can offer
+// "Open link". Skips file-link annotations (data-file-resolved /
+// data-file-broken) since those aren't real URLs the user can open.
+function buildImgItem(img) {
+    if (!img.src) return null
+    const anchor = img.closest('a')
+    let link = null
+    if (anchor
+        && !anchor.hasAttribute('data-file-resolved')
+        && !anchor.hasAttribute('data-file-broken')) {
+        link = anchor.getAttribute('href') || null
+    }
+    return {
+        type: 'image',
+        src: img.src,
+        name: img.getAttribute('alt') || 'Image',
+        link,
+    }
+}
+
+function buildSvgItem(svg) {
+    const src = svgToDataUrl(svg)
+    if (!src) return null
+    return {
+        type: 'image',
+        src,
+        name: 'Mermaid diagram',
+        link: null,
+    }
+}
+
+// Scan the rendered markdown for every media element (in DOM order) and
+// build the items list passed to the preview dialog. Also locates the index
+// of the clicked element within the filtered list so navigation lands on it.
+function buildMediaItems(root, clickedEl) {
+    const nodes = Array.from(root.querySelectorAll(MEDIA_SELECTOR))
+    const items = []
+    let clickedIndex = 0
+    for (const node of nodes) {
+        const item = node.tagName === 'IMG' ? buildImgItem(node) : buildSvgItem(node)
+        if (!item) continue
+        if (node === clickedEl) clickedIndex = items.length
+        items.push(item)
+    }
+    return { items, clickedIndex }
+}
+
+// Route clicks on rendered <a> and media (<img>, Mermaid SVG) elements:
+//   - <img> or Mermaid SVG → open MediaPreviewDialog (wins over link nav,
+//                            but the wrapping <a href>'s URL is preserved
+//                            as an "Open link" affordance inside the dialog)
+//   - data-file-resolved   → open in Files tab via injected openFile
+//   - data-file-broken     → swallow the click (link is rendered as plain text)
+//   - external / mailto    → leave the browser to handle (target=_blank or default)
+//   - anchor-only (#…)     → leave the browser to scroll
+//   - everything else      → SPA navigation via router.push
 function handleLinkClick(event) {
+    // Image / Mermaid SVG: open the preview dialog and short-circuit. The
+    // check runs first so an image wrapped in <a> still opens the dialog
+    // (the link remains reachable via the dialog's "Open link" button).
+    const media = event.target.closest(MEDIA_SELECTOR)
+    if (media && container.value && container.value.contains(media)) {
+        event.preventDefault()
+        event.stopPropagation()
+        const { items, clickedIndex } = buildMediaItems(container.value, media)
+        if (items.length > 0) {
+            openMediaPreview(items, clickedIndex)
+        }
+        return
+    }
+
     const anchor = event.target.closest('a')
     if (!anchor) return
 
