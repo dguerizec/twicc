@@ -384,6 +384,17 @@ class Session(models.Model):
     # Free-form agent-facing data attached at session creation time. The core
     # does not interpret it and the UI does not expose editing controls for it.
     annotations = models.JSONField(default=dict, blank=True)
+    # TwiCC system-prompt addendum frozen at session creation time. Composed by
+    # ``core.services.session_creation`` and stashed via
+    # ``pending_session_attributes``; the watcher copies it here when it
+    # creates the row from the first JSONL line. NEVER mutated after creation:
+    # the Anthropic / OpenAI prompt cache requires byte-for-byte stability of
+    # the system prompt across every turn of the session, including across
+    # resumes that follow a TwiCC restart. ``twicc-whoami`` is the canonical
+    # source for the *live* values that this snapshot froze. NULL for sessions
+    # created before this column existed; the agent code passes the SDK no
+    # addendum in that case (preserving their cache prefix).
+    system_prompt_addendum = models.TextField(null=True, blank=True, default=None)
 
     # Per-session permission mode. Values are provider-specific (e.g. "default",
     # "acceptEdits", "plan", "bypassPermissions" for Claude Code). NULL = use global default.

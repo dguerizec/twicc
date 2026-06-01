@@ -405,6 +405,8 @@ class BaseSessionsWatcher:
                 kwargs["spawn_root_id"] = pending.spawn_root_id
             if pending.annotations:
                 kwargs["annotations"] = pending.annotations
+            if pending.system_prompt_addendum is not None:
+                kwargs["system_prompt_addendum"] = pending.system_prompt_addendum
         return Session.objects.create(**kwargs)
 
     # ------------------------------------------------------------------

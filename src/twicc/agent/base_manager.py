@@ -371,6 +371,7 @@ class BaseAgentManager:
                                 spawned_by_id=pending_attrs.spawned_by_id,
                                 spawn_root_id=pending_attrs.spawn_root_id,
                                 annotations=pending_attrs.annotations,
+                                system_prompt_addendum=pending_attrs.system_prompt_addendum,
                             )
 
                     await self.notify_session_bound(

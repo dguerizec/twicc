@@ -15,11 +15,13 @@ translate (e.g. to ``status: failed`` in the watcher).
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import NamedTuple
 
 import orjson
 from asgiref.sync import sync_to_async
 
+from twicc.agent.system_prompt import compose_addendum
 from twicc.core.enums import Provider
 from twicc.pending_agent_settings import set_pending_agent_settings
 from twicc.pending_session_attributes import set_pending_session_attributes
@@ -210,13 +212,6 @@ async def create_session_from_payload(payload: dict) -> SessionCreationResult:
     # --- stash agent settings (consumed by the watcher when it creates
     #     the Session row from the JSONL) ---------------------------
     set_pending_agent_settings(session_id, agent_settings)
-    set_pending_session_attributes(
-        session_id,
-        hidden=hidden,
-        spawned_by_id=spawned_by_session_id,
-        spawn_root_id=spawn_root_session_id,
-        annotations=annotations,
-    )
 
     # --- resolve to effective settings (None -> synced default) --
     effective = helpers.resolve_agent_settings(agent_settings)
@@ -237,6 +232,51 @@ async def create_session_from_payload(payload: dict) -> SessionCreationResult:
         return SessionCreationResult(False, None, None, None, [
             SessionCreationError(e.field, e.code, e.message) for e in hidden_errors
         ])
+
+    # --- compose the TwiCC system-prompt addendum --------------------
+    # Frozen at creation time and persisted on the row by the watcher.
+    # See ``Session.system_prompt_addendum``: the cache key on Anthropic /
+    # OpenAI requires the system prompt to be byte-stable across resumes,
+    # so this snapshot is what every subsequent ``--append-system-prompt``
+    # / ``developer_instructions`` replay will use verbatim.
+    addendum_session_id = session_id if provider == Provider.CLAUDE_CODE else None
+
+    def _build_addendum() -> str:
+        from twicc.core.models import Session as SessionModel
+
+        spawned_by_project_id: str | None = None
+        if spawned_by_session_id:
+            parent = (
+                SessionModel.objects
+                .filter(id=spawned_by_session_id)
+                .only("project_id")
+                .first()
+            )
+            if parent is not None:
+                spawned_by_project_id = parent.project_id
+
+        return compose_addendum(
+            provider=provider.value,
+            project_id=project_id,
+            resolved_settings=effective,
+            session_id=addendum_session_id,
+            started_at=datetime.now(timezone.utc),
+            spawned_by_id=spawned_by_session_id,
+            spawned_by_project_id=spawned_by_project_id,
+            hidden=hidden,
+            annotations=annotations,
+        )
+
+    system_prompt_addendum = await sync_to_async(_build_addendum)()
+
+    set_pending_session_attributes(
+        session_id,
+        hidden=hidden,
+        spawned_by_id=spawned_by_session_id,
+        spawn_root_id=spawn_root_session_id,
+        annotations=annotations,
+        system_prompt_addendum=system_prompt_addendum,
+    )
 
     # --- invoke the agent manager --------------------------------
     from twicc.agent.registry import get_agent_manager_registry

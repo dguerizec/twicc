@@ -89,14 +89,22 @@ class TwiccAsyncCodex(AsyncCodex):
         config: dict[str, Any] | None = None,
         model: str | None = None,
         ephemeral: bool | None = None,
+        developer_instructions: str | None = None,
     ) -> TwiccAsyncThread:
-        """Start a new thread with fine-grained approval/sandbox."""
+        """Start a new thread with fine-grained approval/sandbox.
+
+        ``developer_instructions`` lands in the thread rollout as a
+        ``developer``-role message and is replayed on every subsequent
+        turn, including after ``thread_resume`` (the Codex protocol keeps
+        the original block when resume does not re-pass the field).
+        """
         await self._ensure_initialized()
         params = ThreadStartParams(
             approval_policy=approval_policy,
             approvals_reviewer=None,
             config=config,
             cwd=cwd,
+            developer_instructions=developer_instructions,
             ephemeral=ephemeral,
             model=model,
             sandbox=sandbox,

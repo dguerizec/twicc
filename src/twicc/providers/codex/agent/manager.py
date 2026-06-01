@@ -18,8 +18,11 @@ from typing import Any, ClassVar
 
 from openai_codex import AppServerConfig
 
+from asgiref.sync import sync_to_async
+
 from twicc.agent import AgentState, BaseAgent, BaseAgentManager
 from twicc.core.enums import Provider
+from twicc.pending_session_attributes import get_pending_session_attributes
 from twicc.providers.helpers import AgentSettings, get_provider_helpers
 
 from ..bin import resolve_bundled_binary
@@ -349,11 +352,26 @@ class CodexAgentManager(BaseAgentManager):
                 # picks its own default.
                 helpers = get_provider_helpers(Provider.CODEX)
                 sdk_model = helpers.resolve_sdk_model(settings.selected_model)
+
+                # TwiCC's addendum, passed as ``developer_instructions`` so
+                # Codex injects it as a ``developer``-role message at the
+                # head of the rollout. Read the frozen value composed by
+                # ``core.services.session_creation`` and stashed in the
+                # pending buffer keyed by the draft id. On resume we never
+                # repass it — the original block already lives in the
+                # rollout and would be replayed on every turn anyway.
+                def _read_pending_addendum() -> str | None:
+                    pending = get_pending_session_attributes(session_id)
+                    return pending.system_prompt_addendum if pending else None
+
+                developer_instructions = await sync_to_async(_read_pending_addendum)()
+
                 thread = await codex.thread_start_with_policy(
                     model=sdk_model,
                     sandbox=sandbox,
                     approval_policy=approval_policy,
                     config=thread_config,
+                    developer_instructions=developer_instructions,
                 )
 
             # On resume ``thread.id == session_id``; on new sessions Codex

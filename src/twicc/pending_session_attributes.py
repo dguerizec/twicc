@@ -33,6 +33,10 @@ class PendingSessionAttributes(NamedTuple):
     spawned_by_id: str | None
     spawn_root_id: str | None
     annotations: dict
+    # TwiCC system-prompt addendum, composed at session creation time and
+    # carried through to the row by the watcher. See the comment on
+    # ``Session.system_prompt_addendum`` in :mod:`twicc.core.models`.
+    system_prompt_addendum: str | None
 
 
 # session_id -> PendingSessionAttributes
@@ -46,6 +50,7 @@ def set_pending_session_attributes(
     spawned_by_id: str | None = None,
     spawn_root_id: str | None = None,
     annotations: dict | None = None,
+    system_prompt_addendum: str | None = None,
 ) -> None:
     """Store pending structural attributes to be applied at row creation."""
     _pending[session_id] = PendingSessionAttributes(
@@ -53,12 +58,14 @@ def set_pending_session_attributes(
         spawned_by_id=spawned_by_id,
         spawn_root_id=spawn_root_id,
         annotations=annotations or {},
+        system_prompt_addendum=system_prompt_addendum,
     )
     logger.debug(
         "Set pending session attributes for %s: hidden=%s spawned_by_id=%s "
-        "spawn_root_id=%s annotations_keys=%s",
+        "spawn_root_id=%s annotations_keys=%s addendum_len=%s",
         session_id, hidden, spawned_by_id, spawn_root_id,
         sorted((annotations or {}).keys()),
+        len(system_prompt_addendum) if system_prompt_addendum else 0,
     )
 
 
@@ -67,3 +74,15 @@ def pop_pending_session_attributes(
 ) -> PendingSessionAttributes | None:
     """Get and remove the pending attributes for a session, or ``None``."""
     return _pending.pop(session_id, None)
+
+
+def get_pending_session_attributes(
+    session_id: str,
+) -> PendingSessionAttributes | None:
+    """Read the pending attributes without consuming them, or ``None``.
+
+    Use this from code that needs to look at the values before the watcher
+    consumes them at row creation (e.g. composing the system prompt addendum
+    at agent start time, when the ``Session`` row does not exist yet).
+    """
+    return _pending.get(session_id)

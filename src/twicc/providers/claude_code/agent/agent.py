@@ -30,8 +30,10 @@ import json_repair
 import orjson
 
 from twicc.agent import AgentInfo, AgentState, BaseAgent, PendingRequest, StateChangeCallback
-from twicc.core.enums import Provider
 from twicc.agent.plugin import get_plugin_dir
+from twicc.core.enums import Provider
+from twicc.core.models import Session
+from twicc.pending_session_attributes import get_pending_session_attributes
 from twicc.providers.helpers import AgentSettings
 
 from .sdk_logger import patch_client as patch_client_for_logging
@@ -776,11 +778,39 @@ class ClaudeCodeAgent(BaseAgent):
                 else []
             )
 
+            # TwiCC's system-prompt addendum: read the frozen value from
+            # the Session row (resume case) or from the pending buffer
+            # (brand-new sessions whose row is not yet created by the
+            # watcher). The content was composed once by
+            # ``core.services.session_creation`` and is byte-stable across
+            # every subsequent start — required for the Anthropic prompt
+            # cache to keep hitting on resumes. Pre-existing sessions
+            # created before the column existed leave it as ``None``;
+            # in that case we omit ``append`` entirely so the SDK behaves
+            # exactly as it did before the addendum feature.
+            def _read_system_prompt_addendum() -> str | None:
+                row = (
+                    Session.objects
+                    .filter(id=self.session_id)
+                    .only("system_prompt_addendum")
+                    .first()
+                )
+                if row is not None:
+                    return row.system_prompt_addendum
+                pending = get_pending_session_attributes(self.session_id)
+                return pending.system_prompt_addendum if pending else None
+
+            system_prompt_append = await sync_to_async(_read_system_prompt_addendum)()
+
+            system_prompt_option: dict[str, Any] = {
+                "type": "preset",
+                "preset": "claude_code",  # Use Claude Code's system prompt
+            }
+            if system_prompt_append is not None:
+                system_prompt_option["append"] = system_prompt_append
+
             options = ClaudeAgentOptions(
-                system_prompt={
-                    "type": "preset",
-                    "preset": "claude_code",  # Use Claude Code's system prompt
-                },
+                system_prompt=system_prompt_option,
                 cwd=self.cwd,
                 permission_mode=self.agent_settings.permission_mode,
                 model=self.sdk_model,
