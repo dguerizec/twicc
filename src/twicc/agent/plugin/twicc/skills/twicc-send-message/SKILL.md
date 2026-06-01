@@ -99,9 +99,16 @@ $TWICC send-message parent 'I finished the sub-task you asked for.'
 # From inside an agent: targets the session that spawned it;
 ```
 
-## Following up
+## Delivery timing
 
-The message is queued; the agent picks it up on its next turn.
+The message is delivered immediately. The recipient picks it up based on its current state:
+
+- **`user_turn`** — starts a new turn right away.
+- **`assistant_turn`** — delivered immediately; the agent reads it as soon as possible, typically before finishing its current turn (real-time steering, mid-flight redirects, reminders).
+- **`dead`** — the session is resumed automatically. A session stopped by timeout, manual kill, or any other reason will come back to life on receiving a message. This means there is no need to check a session's state before sending — `user_turn`, `assistant_turn`, and `dead` all work transparently.
+- **`awaiting_user_input`** — the only case that fails (exit 3). A CLI message cannot unblock a pending UI dialog. To avoid this entirely, create orchestration sessions with `--hidden` (which enforces a non-interactive `permission_mode` and disables the question widget), making `awaiting_user_input` impossible.
+
+## Following up
 
 - Check state: `$TWICC process <SESSION_ID>` — still working, blocked, or done? Skill: `twicc-process`.
 - Read the reply: `$TWICC session <SESSION_ID> messages --tail 1`. Skill: `twicc-session`.
