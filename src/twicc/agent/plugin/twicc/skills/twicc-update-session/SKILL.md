@@ -1,7 +1,7 @@
 ---
 name: twicc-update-session
 description: Update an existing TwiCC session — change settings, title, annotations, archive/unarchive, pin/unpin, hide/unhide. Use when you or the user want to change a session without sending a message.
-argument-hint: <session_id> {settings|title|annotations|archive|unarchive|pin|unpin|hide|unhide} [ARGS / OPTIONS]
+argument-hint: <session_id|self> {settings|title|annotations|archive|unarchive|pin|unpin|hide|unhide} [ARGS / OPTIONS]
 ---
 
 # TwiCC Update Session
@@ -31,6 +31,13 @@ TWICC=${TWICC_BIN:-$(command -v twicc 2>/dev/null)}
 Then run `$TWICC <args>` — **never quote `$TWICC`** (use `$TWICC args`, never `"$TWICC" args`): it may expand to multiple words, which quoting would break.
 
 ## Usage
+
+### Session id argument
+
+Every sub-command takes a session id as its first positional argument:
+
+- `SESSION_ID` — id of the session to update.
+- `self` — the current TwiCC session.
 
 ### `settings`
 
@@ -174,6 +181,7 @@ $TWICC update-session 4a8352fb-... pin all
 $TWICC update-session 4a8352fb-... unpin
 $TWICC update-session 4a8352fb-... hide
 $TWICC update-session 4a8352fb-... unhide
+$TWICC update-session self annotations set:role=worker
 ```
 
 ## Related commands

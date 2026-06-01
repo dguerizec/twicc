@@ -43,10 +43,39 @@ def _update_session_default(
     ctx: typer.Context,
     session_id: str = typer.Argument(
         ...,
-        help="Id of the existing session to update.",
+        help=(
+            "Id of the existing session to update. Use 'self' to target the "
+            "current TwiCC session (resolved from PID ancestry)."
+        ),
     ),
 ) -> None:
-    """Parent callback. Stashes ``session_id`` for the sub-command to read."""
+    """Parent callback. Stashes ``session_id`` for the sub-command to read.
+
+    The ``self`` keyword is resolved here so every sub-command sees a real
+    session id in ``ctx.obj``. Django is bootstrapped lazily only on the
+    ``self`` branch, to keep ``--help`` and the common explicit-id path fast.
+    """
+    if session_id == "self":
+        import os
+        import sys
+
+        os.environ.setdefault("DJANGO_SETTINGS_MODULE", "twicc.settings")
+        import django
+
+        django.setup()
+
+        from twicc.cli._drop_request.whoami import resolve_current_session
+
+        current = resolve_current_session()
+        if current is None:
+            print(
+                "Error: self could not be resolved: no TwiCC session found "
+                "in PID ancestry.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        session_id = current.id
+
     ctx.obj = session_id
 
 
