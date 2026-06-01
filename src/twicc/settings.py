@@ -275,7 +275,8 @@ CODEX_COMPUTE_VERSION = 29
 # Bumped when the schema or document layout changes — forces a full
 # rebuild of the on-disk index at next startup.
 # v2 -> v3: added `hidden` and `spawned_by` fields (hidden-sessions feature).
-CURRENT_SEARCH_VERSION = 3
+# v3 -> v4: added `spawn_root` field for full-tree filiation queries.
+CURRENT_SEARCH_VERSION = 4
 
 # Process auto-stop timeouts (in seconds)
 # Processes are automatically stopped if they remain in a state for too long

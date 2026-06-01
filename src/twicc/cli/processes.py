@@ -14,6 +14,7 @@ def main(
     include_hidden: bool = False,
     only_hidden: bool = False,
     spawned_by: str | None = None,
+    spawn_root: str | None = None,
 ) -> None:
     """List currently running processes (live ProcessRuns) of the running TwiCC.
 
@@ -41,10 +42,14 @@ def main(
 
     django.setup()
 
-    from twicc.cli._drop_request.whoami import resolve_spawned_by_filter
+    from twicc.cli._drop_request.whoami import (
+        resolve_spawn_root_filter,
+        resolve_spawned_by_filter,
+    )
 
     try:
         spawned_by_id = resolve_spawned_by_filter(spawned_by)
+        spawn_root_id = resolve_spawn_root_filter(spawn_root)
     except RuntimeError as e:
         print(str(e), file=sys.stderr)
         sys.exit(1)
@@ -90,27 +95,27 @@ def main(
 
     rows = list(qs[offset : offset + limit])
 
-    # Enrich with the matching Session's title, project_id, hidden, and spawned_by_id
-    # when the session row has already been created by the watcher. Brand-new sessions
-    # that haven't reached their first JSONL line yet have no Session row, so those
-    # fields fall back to ``None``.
+    # Enrich with the matching Session's title, project_id, hidden, spawned_by_id
+    # and spawn_root_id when the session row has already been created by the
+    # watcher. Brand-new sessions that haven't reached their first JSONL line yet
+    # have no Session row, so those fields fall back to ``None``.
     session_ids = [r.session_id for r in rows]
     sessions_by_id = {
         s.id: s
         for s in Session.objects.filter(id__in=session_ids).only(
-            "id", "title", "project_id", "hidden", "spawned_by_id"
+            "id", "title", "project_id", "hidden", "spawned_by_id", "spawn_root_id"
         )
     }
 
-    # Apply hidden / spawned_by filters (post-enrichment, since these fields come
-    # from the Session row, not from ProcessRun itself). Same semantics as
-    # ``twicc sessions``:
+    # Apply hidden / spawned_by / spawn_root filters (post-enrichment, since these
+    # fields come from the Session row, not from ProcessRun itself). Same semantics
+    # as ``twicc sessions``:
     #
     # - ``--only-hidden``: keep hidden=True only.
     # - ``--include-hidden``: no implicit hidden filter (both kinds).
-    # - ``--spawned-by`` is set (without ``--include-hidden`` /
+    # - ``--spawned-by`` or ``--spawn-root`` is set (without ``--include-hidden`` /
     #   ``--only-hidden``): the caller is explicitly asking about filiation,
-    #   show every matching child whatever its visibility.
+    #   show every matching session in the tree whatever its visibility.
     # - Default (no flag): keep hidden=False only — match what the UI sees.
     filtered = []
     for row in rows:
@@ -122,11 +127,15 @@ def main(
             not include_hidden
             and not only_hidden
             and spawned_by_id is None
+            and spawn_root_id is None
             and is_hidden
         ):
             continue
         sb = session.spawned_by_id if session is not None else None
         if spawned_by_id is not None and sb != spawned_by_id:
+            continue
+        sr = session.spawn_root_id if session is not None else None
+        if spawn_root_id is not None and sr != spawn_root_id:
             continue
         filtered.append(row)
     rows = filtered

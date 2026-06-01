@@ -117,3 +117,36 @@ def resolve_spawned_by_filter(value: str | None) -> str | None:
             )
         return session.id
     return value
+
+
+def resolve_spawn_root_filter(value: str | None) -> str | None:
+    """Translate a ``--spawn-root`` CLI value into a session_id filter.
+
+    - ``None``  → ``None`` (no filter)
+    - ``"self"`` → resolve via whoami; returns the current session's
+      ``spawn_root_id`` if set, else its own id (the "I am my own root"
+      fallback — matches the invariant established by ``twicc topology``).
+      Raises ``RuntimeError`` on any failure.
+    - any other string → use it verbatim as a session_id
+
+    Any internal failure is wrapped in ``RuntimeError`` so the typer
+    wrappers that call this can surface a clean human error + non-zero
+    exit code instead of leaking a raw traceback.
+    """
+    if value is None:
+        return None
+    if value == "self":
+        try:
+            session = resolve_current_session()
+        except Exception as e:
+            raise RuntimeError(
+                f"--spawn-root self: could not resolve the current "
+                f"session: {type(e).__name__}: {e}",
+            ) from e
+        if session is None:
+            raise RuntimeError(
+                "--spawn-root self: no TwiCC session found in PID ancestry. "
+                "This flag is only meaningful from inside an active session.",
+            )
+        return session.spawn_root_id or session.id
+    return value

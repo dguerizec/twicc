@@ -31,7 +31,7 @@ $TWICC whoami --json    # compact JSON, suitable for parsing
 
 ### Self-aware shortcuts
 
-Commands that accept `self` resolve the calling session on their own. Use `--spawned-by self` on `$TWICC sessions`, `$TWICC processes`, and `$TWICC search` instead of calling `whoami` only to copy your id. Use `$TWICC topology self` when you need the surrounding spawned-session tree.
+Commands that accept `self` resolve the calling session on their own. Use `--spawned-by self` (direct children) or `--spawn-root self` (full spawn tree) on `$TWICC sessions`, `$TWICC processes`, and `$TWICC search` instead of calling `whoami` only to copy your id. Use `$TWICC topology self` when you need the surrounding spawned-session tree.
 
 ### Exit codes
 
@@ -48,7 +48,7 @@ MY_PID=$($TWICC whoami --json | jq -r .process.pid)
 
 ## Related commands
 
-- `$TWICC sessions --spawned-by self` — list sessions you spawned. Skill: `twicc-sessions`.
-- `$TWICC processes --spawned-by self` — list running processes you spawned. Skill: `twicc-processes`.
-- `$TWICC search '<query>' --spawned-by self` — search within sessions you spawned. Skill: `twicc-search`.
+- `$TWICC sessions --spawned-by self` / `--spawn-root self` — direct children, or the full spawn tree. Skill: `twicc-sessions`.
+- `$TWICC processes --spawned-by self` / `--spawn-root self` — same for live processes. Skill: `twicc-processes`.
+- `$TWICC search '<query>' --spawned-by self` / `--spawn-root self` — same for full-text search. Skill: `twicc-search`.
 - `$TWICC topology self` — map the spawned-session tree around you. Skill: `twicc-topology`.

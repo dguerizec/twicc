@@ -219,7 +219,18 @@ def _sessions_default(
             "current session. Implies --include-hidden by default: a filiation query "
             "shows every matching child whatever its visibility. Add --only-hidden to "
             "narrow to hidden children, or pass an explicit ID and rely on the JSON "
-            "output's `hidden` field to filter further."
+            "output's `hidden` field to filter further. Mutually exclusive with "
+            "--spawn-root."
+        ),
+    ),
+    spawn_root: str = typer.Option(
+        None,
+        "--spawn-root",
+        help=(
+            "Filter to sessions whose spawn-root is the given session_id (i.e. every "
+            "session in that spawn tree, any depth), or 'self' for the current "
+            "session's spawn-root tree (its own id when it is itself the root). "
+            "Mutually exclusive with --spawned-by. Implies --include-hidden by default."
         ),
     ),
 ) -> None:
@@ -229,6 +240,10 @@ def _sessions_default(
 
     if include_hidden and only_hidden:
         typer.echo("Error: --include-hidden and --only-hidden are mutually exclusive.", err=True)
+        raise typer.Exit(2)
+
+    if spawned_by is not None and spawn_root is not None:
+        typer.echo("Error: --spawned-by and --spawn-root are mutually exclusive.", err=True)
         raise typer.Exit(2)
 
     from twicc.cli.sessions import main as sessions_main
@@ -242,6 +257,7 @@ def _sessions_default(
         include_hidden=include_hidden,
         only_hidden=only_hidden,
         spawned_by=spawned_by,
+        spawn_root=spawn_root,
     )
 
 
@@ -408,7 +424,18 @@ def _processes_default(
         help=(
             "Filter to processes of sessions spawned by the given session_id, or 'self' "
             "for the current session. Implies --include-hidden by default: a filiation "
-            "query surfaces every matching child whatever its visibility."
+            "query surfaces every matching child whatever its visibility. Mutually "
+            "exclusive with --spawn-root."
+        ),
+    ),
+    spawn_root: str = typer.Option(
+        None,
+        "--spawn-root",
+        help=(
+            "Filter to processes of sessions whose spawn-root is the given session_id "
+            "(i.e. every session in that spawn tree, any depth), or 'self' for the "
+            "current session's spawn-root tree (its own id when it is itself the root). "
+            "Mutually exclusive with --spawned-by. Implies --include-hidden by default."
         ),
     ),
 ) -> None:
@@ -418,6 +445,10 @@ def _processes_default(
 
     if include_hidden and only_hidden:
         typer.echo("Error: --include-hidden and --only-hidden are mutually exclusive.", err=True)
+        raise typer.Exit(2)
+
+    if spawned_by is not None and spawn_root is not None:
+        typer.echo("Error: --spawned-by and --spawn-root are mutually exclusive.", err=True)
         raise typer.Exit(2)
 
     from twicc.cli.processes import main as processes_main
@@ -430,6 +461,7 @@ def _processes_default(
         include_hidden=include_hidden,
         only_hidden=only_hidden,
         spawned_by=spawned_by,
+        spawn_root=spawn_root,
     )
 
 
@@ -726,13 +758,28 @@ def search(
         help=(
             "Filter to sessions spawned by the given session_id, or 'self' for the "
             "current session. Implies --include-hidden by default: a filiation query "
-            "matches every spawned child whatever its visibility."
+            "matches every spawned child whatever its visibility. Mutually exclusive "
+            "with --spawn-root."
+        ),
+    ),
+    spawn_root: str = typer.Option(
+        None,
+        "--spawn-root",
+        help=(
+            "Filter to sessions whose spawn-root is the given session_id (i.e. every "
+            "session in that spawn tree, any depth), or 'self' for the current "
+            "session's spawn-root tree (its own id when it is itself the root). "
+            "Mutually exclusive with --spawned-by. Implies --include-hidden by default."
         ),
     ),
 ) -> None:
     """Query the TwiCC search index using raw Tantivy query syntax."""
     if include_hidden and only_hidden:
         typer.echo("Error: --include-hidden and --only-hidden are mutually exclusive.", err=True)
+        raise typer.Exit(2)
+
+    if spawned_by is not None and spawn_root is not None:
+        typer.echo("Error: --spawned-by and --spawn-root are mutually exclusive.", err=True)
         raise typer.Exit(2)
 
     from twicc.cli.search import main as search_main
@@ -744,6 +791,7 @@ def search(
         include_hidden=include_hidden,
         only_hidden=only_hidden,
         spawned_by=spawned_by,
+        spawn_root=spawn_root,
     )
 
 

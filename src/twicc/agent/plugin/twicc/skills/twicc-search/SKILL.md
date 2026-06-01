@@ -36,7 +36,8 @@ $TWICC search '<query>' [OPTIONS]
 - `--offset N` — skip first N for pagination (default: 0).
 - `--include-hidden` — include hits from hidden sessions (excluded by default).
 - `--only-hidden` — hits only from hidden sessions. Mutually exclusive with `--include-hidden`.
-- `--spawned-by <ID|self>` — filter hits to direct child sessions spawned by the given session ID. `self` means the current session. Implies `--include-hidden`.
+- `--spawned-by <ID|self>` — filter hits to direct child sessions spawned by the given session ID. `self` means the current session. Implies `--include-hidden`. Mutually exclusive with `--spawn-root`.
+- `--spawn-root <ID|self>` — filter hits to every session in a spawn tree (any depth), identified by the tree's root session ID. `self` means the current session's spawn-root tree (its own id when it is itself the root). Implies `--include-hidden`. Mutually exclusive with `--spawned-by`.
 
 ### Query syntax
 
@@ -87,6 +88,7 @@ $TWICC search 'websocket'
 $TWICC search 'body:websocket AND from_role:user'
 $TWICC search 'project_id:-home-twidi-dev-a OR project_id:-home-twidi-dev-b'
 $TWICC search 'websocket' --spawned-by self
+$TWICC search 'websocket' --spawn-root self
 $TWICC search 'websocket' --include-hidden --limit 50 --offset 20
 ```
 

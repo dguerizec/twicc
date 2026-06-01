@@ -41,7 +41,8 @@ Results are ordered by most recently active.
 - `--include-archived` — include archived sessions (excluded by default).
 - `--include-hidden` — include hidden sessions (excluded by default).
 - `--only-hidden` — only hidden sessions. Mutually exclusive with `--include-hidden`.
-- `--spawned-by <ID|self>` — filter to direct child sessions spawned by the given session ID. `self` means the current session. Implies `--include-hidden`.
+- `--spawned-by <ID|self>` — filter to direct child sessions spawned by the given session ID. `self` means the current session. Implies `--include-hidden`. Mutually exclusive with `--spawn-root`.
+- `--spawn-root <ID|self>` — filter to every session in a spawn tree (any depth), identified by the tree's root session ID. `self` means the current session's spawn-root tree (its own id when it is itself the root). Implies `--include-hidden`. Mutually exclusive with `--spawned-by`.
 
 ### Batch lookup
 
@@ -136,6 +137,7 @@ $TWICC sessions --project /home/twidi/dev/myproj
 $TWICC sessions --workspace backend
 $TWICC sessions --include-archived
 $TWICC sessions --spawned-by self
+$TWICC sessions --spawn-root self
 $TWICC sessions --limit 50 --offset 20
 $TWICC sessions get abc123-def456
 $TWICC sessions get abc123 def456 ghi789

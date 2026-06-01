@@ -15,21 +15,27 @@ def main(
     include_hidden: bool = False,
     only_hidden: bool = False,
     spawned_by: str | None = None,
+    spawn_root: str | None = None,
 ) -> None:
     """List sessions as JSON to stdout.
 
-    ``spawned_by`` is the raw CLI value (``None``, a session_id, or the
-    literal ``"self"``) — it is resolved here, after ``django.setup()``,
-    so callers don't need to bootstrap Django themselves.
+    ``spawned_by`` and ``spawn_root`` are raw CLI values (``None``, a
+    session_id, or the literal ``"self"``) — they are resolved here, after
+    ``django.setup()``, so callers don't need to bootstrap Django themselves.
+    The typer wrapper guarantees they are mutually exclusive.
     """
     import django
 
     django.setup()
 
-    from twicc.cli._drop_request.whoami import resolve_spawned_by_filter
+    from twicc.cli._drop_request.whoami import (
+        resolve_spawn_root_filter,
+        resolve_spawned_by_filter,
+    )
 
     try:
         spawned_by_id = resolve_spawned_by_filter(spawned_by)
+        spawn_root_id = resolve_spawn_root_filter(spawn_root)
     except RuntimeError as e:
         print(str(e), file=sys.stderr)
         sys.exit(1)
@@ -46,18 +52,21 @@ def main(
     if not archived:
         qs = qs.filter(archived=False)
 
-    # When filtering by spawned_by, the caller is explicitly asking
-    # about filiation — show every matching child whatever its
-    # visibility. The hidden=False default only applies to unscoped
-    # listings, where it keeps the output aligned with what the UI
-    # displays. --only-hidden still narrows further if requested.
+    # When filtering by spawned_by / spawn_root, the caller is explicitly
+    # asking about filiation — show every matching session in the tree
+    # whatever its visibility. The hidden=False default only applies to
+    # unscoped listings, where it keeps the output aligned with what the
+    # UI displays. --only-hidden still narrows further if requested.
     if only_hidden:
         qs = qs.filter(hidden=True)
-    elif not include_hidden and spawned_by_id is None:
+    elif not include_hidden and spawned_by_id is None and spawn_root_id is None:
         qs = qs.filter(hidden=False)
 
     if spawned_by_id is not None:
         qs = qs.filter(spawned_by_id=spawned_by_id)
+
+    if spawn_root_id is not None:
+        qs = qs.filter(spawn_root_id=spawn_root_id)
 
     if workspace is not None:
         from twicc.workspaces import read_workspaces

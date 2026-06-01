@@ -449,8 +449,9 @@ class BaseSessionsWatcher:
                         "user" if item.kind == ItemKind.USER_MESSAGE else "assistant",
                         item.timestamp,
                         session.archived,
-                        session.hidden,
-                        session.spawned_by_id,
+                        hidden=session.hidden,
+                        spawned_by_id=session.spawned_by_id,
+                        spawn_root_id=session.spawn_root_id,
                     )
                     indexed_count += 1
 
