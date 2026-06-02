@@ -206,6 +206,14 @@ class BaseProviderHelpers:
     # fails visibly.
     LABEL: ClassVar[str] = ""
 
+    # Provider-specific block appended to the shared TwiCC system-prompt
+    # addendum by :func:`twicc.agent.system_prompt.compose_addendum`,
+    # inserted before the dynamic ``## Live environment`` section. Use it
+    # for guidance that only makes sense to agents of this provider (e.g.
+    # SDK quirks the agent must work around). Default is empty so a
+    # provider with nothing extra to say contributes nothing.
+    SYSTEM_PROMPT_STATIC_ADDENDUM: ClassVar[str] = ""
+
     # Provider-specific entries to merge into ``SYNCED_SETTINGS_DEFAULTS``.
     # Keys must be namespaced (e.g. ``claudeCodeDefault*``) to avoid clashes
     # between providers and with the cross-provider generic defaults.

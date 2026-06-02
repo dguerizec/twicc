@@ -5,12 +5,16 @@ Appended to the provider's default system prompt at session start:
 - Claude Code: ``system_prompt={"type": "preset", "preset": "claude_code", "append": ...}``.
 - Codex: ``developer_instructions=...`` on ``thread_start`` / ``thread_resume``.
 
-Two parts:
+Three parts:
 
-- :data:`STATIC_ADDENDUM` — invariant guidance about the TwiCC environment.
+- :data:`STATIC_ADDENDUM` — invariant guidance about the TwiCC environment,
+  shared across providers.
+- :attr:`BaseProviderHelpers.SYSTEM_PROMPT_STATIC_ADDENDUM` — per-provider
+  static block (e.g. SDK quirks an agent must know about), inserted between
+  the shared block and the dynamic ``## Live environment`` section.
 - :func:`build_dynamic_block` — per-session context (project, provider, resolved
   agent settings, ...) composed at start time from primitives the caller has
-  on hand.
+  on hand. Carries its own ``## Live environment`` heading.
 
 :func:`compose_addendum` returns the concatenation, ready to hand to the SDK.
 
@@ -146,10 +150,13 @@ the future:
 - If your provider is Claude Code, use `CronCreate`. Do not use or improvise 
   other scheduling mechanisms except if told by the user.
 - If your provider is Codex (no native cron) and Claude Code is enabled,
-  propose to spawn a Claude Code session via the `twicc-create-session` skill 
-  to host the cron. That session must NOT be created with `--hidden`, so the 
+  propose to spawn a Claude Code session via the `twicc-create-session` skill
+  to host the cron. That session must NOT be created with `--hidden`, so the
   user can see and manage it.
+"""
 
+
+_LIVE_ENVIRONMENT_INTRO = """\
 ## Live environment
 
 The blocks below describe the providers known to TwiCC and the session state
@@ -229,7 +236,7 @@ def build_dynamic_block(
     from twicc.core.models import Project
     from twicc.paths import get_artifacts_dir
 
-    lines: list[str] = ["### Providers", ""]
+    lines: list[str] = [_LIVE_ENVIRONMENT_INTRO, "### Providers", ""]
     lines.extend(_build_providers_lines())
 
     lines.extend(["", "### Session", ""])
@@ -330,4 +337,10 @@ def compose_addendum(
         hidden=hidden,
         annotations=annotations,
     )
-    return f"{STATIC_ADDENDUM}\n{dynamic}\n"
+    parts: list[str] = [STATIC_ADDENDUM]
+    helpers = get_provider_helpers(Provider(provider))
+    provider_static = helpers.SYSTEM_PROMPT_STATIC_ADDENDUM
+    if provider_static:
+        parts.append(provider_static)
+    parts.append(dynamic)
+    return "\n".join(parts) + "\n"
