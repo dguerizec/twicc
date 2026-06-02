@@ -117,7 +117,7 @@ Every list / inspect command outputs JSON, so you can compose TwiCC into scripts
 | `twicc search "<query>"`                      | Full-text search across all sessions                 |
 | `twicc usage`                                 | Latest quota snapshot                                |
 | `twicc create-session ...`                    | Spawn a fresh Claude or Codex session with a prompt  |
-| `twicc claude` / `twicc codex`                | Run the bundled Claude or Codex CLI binary directly  |
+| `twicc claude` / `twicc codex`                | Run the Claude or Codex CLI directly                 |
 
 Run `twicc --help` (or `twicc <command> --help`) for full details.
 
@@ -125,7 +125,7 @@ Run `twicc --help` (or `twicc <command> --help`) for full details.
 
 TwiCC reads the JSONL data files written by each provider and indexes them into a local SQLite database (`~/.twicc/db/data.sqlite`). Claude Code sessions are read from `~/.claude/projects/`; Codex sessions are read from `~/.codex/sessions/`. **Provider data files remain the source of truth** — TwiCC never modifies them. Whether you use Claude Code or Codex directly from the terminal or through TwiCC, everything shows up in the same place.
 
-When you start a session or send messages through TwiCC, it uses the provider SDK under the hood: the [Claude Agent SDK](https://github.com/anthropics/claude-code-sdk-python) for Claude Code and OpenAI's vendored Codex SDK/CLI for Codex. This means it uses your existing provider credentials and configuration — there is nothing extra to set up. The conversation data written by the provider is then picked up by TwiCC's file watcher and broadcast to the UI in real time over WebSocket.
+When you start a session or send messages through TwiCC, it uses the provider SDK under the hood: the [Claude Agent SDK](https://github.com/anthropics/claude-code-sdk-python) for Claude Code and OpenAI's vendored Codex SDK for Codex. This means it uses your existing provider credentials and configuration — there is nothing extra to set up. The conversation data written by the provider is then picked up by TwiCC's file watcher and broadcast to the UI in real time over WebSocket.
 
 On each startup, TwiCC detects changes and updates its database accordingly. While running, it watches the filesystem for new sessions and updates them in real time.
 
@@ -184,7 +184,7 @@ By default in `~/.twicc/`. This includes the SQLite database, logs, and user set
 
 ### Where are the logs?
 
-In `~/.twicc/logs/backend.log` for the backend (the file to check first when troubleshooting), and `~/.twicc/logs/sdk/` for raw per-provider SDK message logs.
+In `~/.twicc/logs/backend.log` for the backend. This is the first file to check when troubleshooting.
 
 ### How do I reset the database?
 
@@ -198,7 +198,7 @@ For Claude Code sessions, TwiCC uses the official [Claude Agent SDK](https://git
 
 ### Is this allowed by OpenAI?
 
-For Codex sessions, TwiCC uses OpenAI's Codex SDK and CLI binary (vendored — see [`docs/codex-vendoring.md`](docs/codex-vendoring.md)). OpenAI does not document any limitation on this kind of usage, and TwiCC sessions draw from the same plan quota as the regular Codex CLI.
+For Codex sessions, TwiCC uses OpenAI's Codex SDK (vendored — see [`docs/codex-vendoring.md`](docs/codex-vendoring.md)) and the Codex CLI. OpenAI does not document any limitation on this kind of usage, and TwiCC sessions draw from the same plan quota as the regular Codex CLI.
 
 ### How can I support this project?
 
