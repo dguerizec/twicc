@@ -82,8 +82,21 @@ urlpatterns = [
     path("api/projects/<str:project_id>/sessions/<str:session_id>/file-delete/", views.file_delete),
     path("api/projects/<str:project_id>/sessions/<str:session_id>/file-move/", views.file_move),
     path("api/projects/<str:project_id>/sessions/<str:session_id>/file-create/", views.file_create),
-    # Catch-all for Vue Router (must be last)
+    # Session-scoped artifact serving. Not nested under ``/api/`` because
+    # this is a media endpoint rather than a JSON API; not nested under any
+    # project/session SPA path because no project ownership is implied.
+    # Must come before the SPA catch-all below — otherwise ``spa_index``
+    # would happily serve ``index.html`` for these URLs. Authentication is
+    # enforced by ``PasswordAuthMiddleware`` via its protected non-API
+    # path list.
+    path(
+        "artifacts/<str:session_id>/<str:artifact_file_name>",
+        views.session_artifact,
+    ),
+    # Catch-all for Vue Router (must be last). ``artifacts/`` is excluded
+    # so malformed artifact URLs (subdirectories, missing filename, ...)
+    # surface as 404 instead of serving the SPA HTML.
     # Static files (/static/) are served by BlackNoise at the ASGI level,
     # before reaching Django's URL routing (see asgi.py).
-    re_path(r"^(?!api/|static/|ws/).*$", views.spa_index),
+    re_path(r"^(?!api/|static/|ws/|artifacts/).*$", views.spa_index),
 ]

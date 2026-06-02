@@ -26,6 +26,14 @@ PUBLIC_PATHS = (
     "/static/",
 )
 
+# Non-API URL prefixes whose responses leak data and therefore require an
+# authenticated session. Anything not in this list and not under ``/api/``
+# falls through to the SPA catch-all, which only serves ``index.html`` (no
+# sensitive content) and lets the frontend redirect to login.
+PROTECTED_NON_API_PREFIXES: tuple[str, ...] = (
+    "/artifacts/",
+)
+
 
 class PasswordAuthMiddleware:
     """Middleware that enforces password authentication via session.
@@ -60,8 +68,13 @@ class PasswordAuthMiddleware:
             return await self.get_response(request)
 
         # Allow non-API paths (SPA catch-all serves index.html which contains
-        # no sensitive data; Vue Router handles the login redirect client-side)
-        if not request.path.startswith("/api/"):
+        # no sensitive data; Vue Router handles the login redirect client-side).
+        # Non-API URLs that DO leak data (artifact serving, ...) are listed
+        # in ``PROTECTED_NON_API_PREFIXES`` and fall through to the auth check.
+        is_protected_non_api = any(
+            request.path.startswith(prefix) for prefix in PROTECTED_NON_API_PREFIXES
+        )
+        if not request.path.startswith("/api/") and not is_protected_non_api:
             return await self.get_response(request)
 
         # Check session authentication for API requests. A session that was

@@ -129,6 +129,24 @@ def get_drop_requests_dir() -> Path:
     return get_data_dir() / "drop-requests"
 
 
+def get_artifacts_dir() -> Path:
+    """Return the artifacts root directory (``<data_dir>/artifacts/``).
+
+    Session-scoped artifacts (typically screenshots saved by agents) live
+    under ``<data_dir>/artifacts/<session_id>/<artifact_file_name>``.
+    """
+    return get_data_dir() / "artifacts"
+
+
+def get_session_artifacts_dir(session_id: str) -> Path:
+    """Return the artifact directory for a given session.
+
+    The directory is not created here; agents create it on demand when they
+    save an artifact.
+    """
+    return get_artifacts_dir() / session_id
+
+
 def get_seen_tips_path() -> Path:
     """Path to the synced seen-tips state file."""
     return get_data_dir() / "seen-tips.json"

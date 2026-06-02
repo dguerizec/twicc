@@ -42,6 +42,7 @@ export default defineConfig(({ command }) => ({
         allowedHosts: devAllowedHost ? [devAllowedHost] : [],
         proxy: {
             '/api': `http://localhost:${backendPort}`,
+            '/artifacts': `http://localhost:${backendPort}`,
             '/ws': { target: `ws://localhost:${backendPort}`, ws: true }
         }
     }

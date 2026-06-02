@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import os
+import re
 from bisect import bisect_left
 from datetime import datetime, timedelta
 
@@ -2451,6 +2452,114 @@ async def changelog(request):
     if not changelog_path.is_file():
         raise Http404
     return HttpResponse(changelog_path.read_bytes(), content_type="text/plain; charset=utf-8")
+
+
+# Image-only artifact serving. Extension → MIME type.
+# Keep in sync with the list documented in the agent system prompt and the
+# allowed_artifact_extensions block of any related skill.
+ALLOWED_ARTIFACT_EXTENSIONS: dict[str, str] = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".gif": "image/gif",
+    ".svg": "image/svg+xml",
+}
+
+# Filenames must start with an alphanumeric or underscore and may contain
+# letters, digits, underscores, hyphens and dots after that. This rejects
+# leading dots (hidden files, dot segments), spaces, slashes, backslashes
+# and any other special character.
+_ARTIFACT_FILENAME_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.\-]*$")
+
+
+def _classify_artifact_filename(filename: str) -> str | None:
+    """Return the MIME type for a valid artifact filename, or ``None``.
+
+    Rejects empty strings, ``.``/``..`` dot segments, paths containing
+    slashes or backslashes, leading dots, and filenames whose extension is
+    not in :data:`ALLOWED_ARTIFACT_EXTENSIONS`.
+    """
+    if not filename or "/" in filename or "\\" in filename:
+        return None
+    if filename in (".", ".."):
+        return None
+    if not _ARTIFACT_FILENAME_RE.match(filename):
+        return None
+    ext = os.path.splitext(filename)[1].lower()
+    return ALLOWED_ARTIFACT_EXTENSIONS.get(ext)
+
+
+async def session_artifact(request, session_id, artifact_file_name):
+    """Serve a session-scoped artifact image.
+
+    Mounted at ``/artifacts/<session_id>/<artifact_file_name>``. Not under
+    ``/api/`` (this serves media, not JSON) and not under any project URL
+    (no project ownership is implied — artifacts can be surfaced anywhere
+    in the UI). Files live on disk at
+    ``<data_dir>/artifacts/<session_id>/<artifact_file_name>``. Only the
+    images listed in :data:`ALLOWED_ARTIFACT_EXTENSIONS` are exposed.
+
+    The security envelope:
+
+    1. authentication is enforced by :class:`PasswordAuthMiddleware`, which
+       lists ``/artifacts/`` alongside ``/api/`` as a protected path;
+    2. the resolved file must live inside the session's artifacts directory
+       (no symlink escapes, no path traversal);
+    3. the file name must pass :func:`_classify_artifact_filename` (extension
+       and shape).
+    """
+    import stat
+
+    from django.http import FileResponse
+
+    from twicc.paths import get_session_artifacts_dir
+
+    if request.method not in ("GET", "HEAD"):
+        return HttpResponseNotAllowed(["GET", "HEAD"])
+
+    content_type = _classify_artifact_filename(artifact_file_name)
+    if content_type is None:
+        raise Http404("Artifact not found")
+
+    artifacts_dir = get_session_artifacts_dir(session_id)
+    artifact_path = artifacts_dir / artifact_file_name
+
+    def _resolve_and_open():
+        # Resolve the artifacts dir (it may itself be a symlink — uncommon but possible).
+        # ``strict=True`` raises if the path does not exist.
+        try:
+            resolved_dir = artifacts_dir.resolve(strict=True)
+        except (FileNotFoundError, RuntimeError, OSError):
+            return None
+        try:
+            resolved = artifact_path.resolve(strict=True)
+        except (FileNotFoundError, RuntimeError, OSError):
+            return None
+        # Defense in depth against symlinks pointing outside the artifacts dir.
+        try:
+            resolved.relative_to(resolved_dir)
+        except ValueError:
+            return None
+        # Reject anything that isn't a plain file (no directories, fifos, devices, sockets).
+        try:
+            st = resolved.stat()
+        except OSError:
+            return None
+        if not stat.S_ISREG(st.st_mode):
+            return None
+        try:
+            return resolved.open("rb")
+        except OSError:
+            return None
+
+    fp = await asyncio.to_thread(_resolve_and_open)
+    if fp is None:
+        raise Http404("Artifact not found")
+
+    # ``as_attachment=False`` keeps the image inline so the browser renders
+    # it directly inside the SPA (e.g. inside Markdown image tags).
+    return FileResponse(fp, content_type=content_type, as_attachment=False)
 
 
 async def spa_index(request):

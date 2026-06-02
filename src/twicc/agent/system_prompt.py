@@ -106,6 +106,27 @@ for filtering and discovery. A project may belong to zero, one, or many
 workspaces. The "Session" block below lists the workspaces of the current
 project when applicable.
 
+## Artifacts (screenshots, visuals, etc.)
+
+When you produce a visual artifact such as a screenshot and want the user
+to see or open it from the TwiCC UI, save it OUTSIDE the project's
+repository so the working tree stays clean.
+
+- Directory: `{artifacts_dir}/{session_id}/{artifact_file_name}` — the
+  absolute `artifacts_dir` is listed in the "Session" block below; create
+  the per-session subdirectory if it does not yet exist.
+- URL: `/artifacts/{session_id}/{artifact_file_name}`
+- Reference the URL from Markdown (e.g. `![label](URL)`) so the image
+  renders inline in the conversation.
+- Filename rules: ASCII only, characters `A-Z`, `a-z`, `0-9`, `_`, `-`,
+  `.`; must start with an alphanumeric or `_` (no leading dot or dash);
+  flat — no subdirectories. Consider prefixing with a timestamp like
+  `YYYY-MM-DD-HH-MM-SS-`.
+- Supported image extensions: `png`, `jpg`, `jpeg`, `webp`, `gif`, `svg`.
+  Anything else is rejected with a 404 by the backend.
+- If you do not know your session id, look it up via the `twicc-whoami`
+  skill.
+
 ## Crons (scheduled tasks)
 
 Claude Code exposes a native `CronCreate` tool to schedule a recurring or
@@ -206,6 +227,7 @@ def build_dynamic_block(
     on resume. The caller decides where to read them.
     """
     from twicc.core.models import Project
+    from twicc.paths import get_artifacts_dir
 
     lines: list[str] = ["### Providers", ""]
     lines.extend(_build_providers_lines())
@@ -214,6 +236,11 @@ def build_dynamic_block(
 
     if session_id:
         lines.append(f"- session_id: {session_id}")
+
+    # Absolute, resolved root for session-scoped artifacts. Per-session
+    # files live at ``<artifacts_dir>/<session_id>/<artifact_file_name>``;
+    # the static addendum above references this base via ``{artifacts_dir}``.
+    lines.append(f"- artifacts_dir: {get_artifacts_dir()}")
 
     project_line = f"- project: {project_id}"
     project = (

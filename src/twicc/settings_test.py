@@ -10,6 +10,11 @@ DATABASES = {
     }
 }
 
+# Disable password protection in tests. The setting is otherwise sourced from
+# the developer's local ``.env`` via :mod:`twicc.settings`, which would make
+# every test that hits the HTTP stack require an authenticated session.
+TWICC_PASSWORD_HASH = ""
+
 # Disable logging during tests
 LOGGING = {
     "version": 1,
