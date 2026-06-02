@@ -26,13 +26,16 @@ path needs to dispatch dynamically by ``Provider`` enum.
 
 from __future__ import annotations
 
+import base64
 import logging
 import os
 import re
 from collections import Counter
+from collections.abc import Callable, Iterator
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple
+from pathlib import Path
+from typing import Any, ClassVar, NamedTuple
 
 import orjson
 from django.core.exceptions import MultipleObjectsReturned
@@ -49,9 +52,6 @@ from twicc.projects import (
     get_project_git_root,
     update_project_metadata,
 )
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -182,6 +182,29 @@ _EMPTY_ANALYSIS = ContentAnalysis(
 )
 
 
+class ImageHit(NamedTuple):
+    """One base64 image located in a prior ``tool_result`` item.
+
+    Produced by :meth:`BaseSessionCompute.iter_images_backward` when the
+    ``<twicc:insert-screenshot />`` substitution walks back through a
+    session's history. Carries everything the substitution helper needs
+    to save the image to disk and emit a markdown image link:
+
+    - ``tool_use_id`` of the originating tool_use (used in the filename
+      for deterministic, idempotent saves);
+    - ``media_type`` and base64 ``data`` to reconstruct the bytes;
+    - ``source_line_num`` of the SessionItem that carried the image;
+    - ``source_timestamp`` of that item (used for the filename prefix;
+      ``None`` when the source item has no timestamp).
+    """
+
+    tool_use_id: str
+    media_type: str
+    data: str
+    source_line_num: int
+    source_timestamp: datetime | None
+
+
 # =============================================================================
 # Pure utilities — shared helpers that don't depend on provider parsing
 # =============================================================================
@@ -231,6 +254,261 @@ def parse_timestamp_to_datetime(timestamp: str) -> datetime | None:
         return datetime.fromisoformat(timestamp)
     except (ValueError, TypeError):
         return None
+
+
+# =============================================================================
+# Inline screenshot insertion — shared utilities
+# =============================================================================
+
+
+# Pattern recognised in assistant text output by :func:`substitute_insert_screenshot_tags`.
+# Matches ``<twicc:insert-screenshot />`` with any number of
+# ``name="value"`` attributes in any order. Recognised attributes are
+# ``offset`` (0-indexed count back from the most recent image) and
+# ``title`` (used as the markdown alt text and in the missing-image
+# placeholder). Unknown attribute names are silently ignored so the
+# vocabulary can grow without breaking older agents. The values are
+# parsed out separately via :data:`_INSERT_SCREENSHOT_ATTR_RE`.
+INSERT_SCREENSHOT_TAG_RE = re.compile(
+    r'<twicc:insert-screenshot((?:\s+[a-zA-Z_][a-zA-Z0-9_-]*="[^"]*")*)\s*/>'
+)
+
+# Parses ``name="value"`` pairs out of the attribute blob captured by
+# :data:`INSERT_SCREENSHOT_TAG_RE`. Values cannot contain literal ``"``
+# (intentional — the agent is expected to drop or rephrase rather than
+# escape).
+_INSERT_SCREENSHOT_ATTR_RE = re.compile(r'([a-zA-Z_][a-zA-Z0-9_-]*)="([^"]*)"')
+
+# Replacement when no image is available at the requested offset.
+INSERT_SCREENSHOT_MISSING_PLACEHOLDER = "*[no screenshot available]*"
+
+# Default alt text used in the rendered ``![…](url)`` markdown when the
+# agent doesn't provide a ``title`` attribute.
+_DEFAULT_SCREENSHOT_ALT = "screenshot"
+
+# Extension picked for each ``image/...`` media type. Anything not listed
+# falls back to the second tuple member after the slash (e.g. ``image/avif``
+# would land as ``avif``); fallback is fine for serving but the artifacts
+# backend only renders the explicit list — same set as the addendum.
+_MEDIA_TYPE_TO_EXT: dict[str, str] = {
+    "image/jpeg": "jpeg",
+    "image/jpg": "jpg",
+    "image/png": "png",
+    "image/webp": "webp",
+    "image/gif": "gif",
+    "image/svg+xml": "svg",
+}
+
+
+def is_base64_image(value: Any) -> tuple[str, str] | None:
+    """Detect a base64 image content block.
+
+    Mirrors ``detectContentBlockSource`` in
+    ``frontend/src/components/json/JsonHumanView.vue``: a dict with
+    ``type`` (anything but ``"text"``), ``media_type`` starting with
+    ``image/`` and a ``data`` field. Returns ``(media_type, data)`` on a
+    match, ``None`` otherwise.
+
+    Provider-agnostic: works on the Claude SDK source shape
+    (``{type: "base64", media_type, data}``) and on any other emitter
+    that uses the same wrapper.
+    """
+    if not isinstance(value, dict):
+        return None
+    media_type = value.get("media_type")
+    data = value.get("data")
+    typ = value.get("type")
+    if not isinstance(media_type, str) or not isinstance(data, str) or not typ:
+        return None
+    if typ == "text":
+        return None
+    if not media_type.startswith("image/"):
+        return None
+    return media_type, data
+
+
+def _extension_for_media_type(media_type: str) -> str:
+    """Return the on-disk extension for an ``image/...`` media type."""
+    ext = _MEDIA_TYPE_TO_EXT.get(media_type)
+    if ext is not None:
+        return ext
+    # Unknown image subtype: derive from the slash, strip suffixes like
+    # ``+xml`` (e.g. ``image/svg+xml`` already covered above, defensive).
+    _, _, subtype = media_type.partition("/")
+    subtype = subtype.split("+", 1)[0]
+    return subtype or "bin"
+
+
+def _escape_markdown_alt(text: str) -> str:
+    """Escape characters that would break a markdown ``![alt](url)`` link.
+
+    Markdown parsers are strict about the alt-text bracket pair: ``]``
+    would terminate the alt segment early, and an unmatched inner ``[``
+    can trigger nested-link parsing that breaks the surrounding image
+    syntax altogether (the parser bails and renders the raw markdown as
+    plain text — see the title roundtrip test for the exact failure
+    case). ``\\`` would partially escape the following character.
+
+    Order matters: replace ``\\`` first so that the backslashes
+    introduced by ``[`` / ``]`` escaping below don't get double-escaped.
+    """
+    return (
+        text.replace("\\", "\\\\")
+        .replace("[", "\\[")
+        .replace("]", "\\]")
+    )
+
+
+class _TagAttrs(NamedTuple):
+    """Parsed attributes of a single ``<twicc:insert-screenshot />`` tag."""
+    offset: int
+    title: str | None  # ``None`` ≡ no ``title=…`` attribute on the tag
+
+
+def _parse_tag_attrs(blob: str) -> _TagAttrs:
+    """Pull ``offset`` and ``title`` out of a tag's attribute blob.
+
+    Unknown attribute names are silently dropped. Malformed ``offset``
+    values (non-integer, negative) fall back to ``0`` rather than
+    raising — the substitution is best-effort, never a fatal failure,
+    and a negative index would otherwise wrap around to ``hits[-1]``
+    via Python's indexing rules.
+    """
+    offset = 0
+    title: str | None = None
+    for name, value in _INSERT_SCREENSHOT_ATTR_RE.findall(blob):
+        if name == "offset":
+            try:
+                parsed_offset = int(value)
+            except ValueError:
+                parsed_offset = 0
+            offset = parsed_offset if parsed_offset >= 0 else 0
+        elif name == "title":
+            title = value
+    return _TagAttrs(offset=offset, title=title)
+
+
+def _artifact_filename(hit: ImageHit, offset: int) -> str:
+    """Compose the deterministic filename for an extracted image.
+
+    Format: ``{iso_timestamp}-{tool_use_id}-off{N}.{ext}``. Determinism
+    matters: re-processing the same SessionItem must point to the same
+    file so the disk save short-circuits when the file is already there.
+
+    The ``iso_timestamp`` is taken from the source SessionItem's own
+    timestamp (the moment the tool_result landed); when the source item
+    carries no timestamp (rare), ``unknowntime`` is used as a stable
+    sentinel rather than a wall-clock fallback.
+    """
+    if hit.source_timestamp is not None:
+        # Match the addendum's documented ``YYYY-MM-DD-HH-MM-SS`` prefix.
+        iso = hit.source_timestamp.strftime("%Y-%m-%d-%H-%M-%S")
+    else:
+        iso = "unknowntime"
+    # ``tool_use_id`` is short and ASCII-safe in every provider we ship;
+    # the artifacts backend validates the filename charset anyway and
+    # would reject anything exotic at the 404 layer. Defensive fallback
+    # for the (rare) case where the provider couldn't extract one.
+    tool_use_id = hit.tool_use_id or "unknown"
+    ext = _extension_for_media_type(hit.media_type)
+    return f"{iso}-{tool_use_id}-off{offset}.{ext}"
+
+
+def substitute_insert_screenshot_tags(
+    text: str,
+    *,
+    session_id: str,
+    images_provider: Callable[[int], Iterator[ImageHit]],
+    artifacts_dir: Path,
+) -> str:
+    """Replace every ``<twicc:insert-screenshot />`` tag in ``text``.
+
+    Walk the tag occurrences, ask ``images_provider`` for up to ``max_offset + 1``
+    images, then rewrite each tag inline:
+
+    - on success: ``![<alt>](/artifacts/<session_id>/<filename>)`` where
+      ``<alt>`` is the tag's ``title="…"`` (escaped for markdown safety)
+      when provided, else ``"screenshot"``; the image is saved to
+      ``artifacts_dir / session_id / filename`` (the directory is
+      created if missing, and an existing file with the same
+      deterministic name is left untouched);
+    - on miss: :data:`INSERT_SCREENSHOT_MISSING_PLACEHOLDER`, augmented
+      with ``"*[no screenshot available: <title>]*"`` when the tag
+      carried a title.
+
+    ``images_provider`` is a callable returning an iterator of
+    :class:`ImageHit` ordered most-recent-first; called once with the
+    number of images needed (``max_offset + 1``). Returning fewer hits
+    than requested is fine — every tag whose offset isn't reached lands
+    on the placeholder.
+
+    Returns ``text`` unchanged if no tag is present.
+    """
+    matches = list(INSERT_SCREENSHOT_TAG_RE.finditer(text))
+    if not matches:
+        return text
+
+    # Resolve each tag's parsed attributes (offset defaults to 0; title
+    # to None when absent — distinct from an empty title="").
+    attrs_per_match = [_parse_tag_attrs(m.group(1)) for m in matches]
+    max_offset = max(a.offset for a in attrs_per_match)
+
+    # Pull just enough images to cover the highest offset requested. The
+    # provider walks the session history backward, yields lazily, and
+    # caps its own DB query — so asking for ``max_offset + 1`` images
+    # bounds the work even when the session has many.
+    needed = max_offset + 1
+    hits: list[ImageHit] = []
+    for hit in images_provider(needed):
+        hits.append(hit)
+        if len(hits) >= needed:
+            break
+
+    session_dir: Path | None = None  # lazily created on first save
+
+    def _replacement_for(attrs: _TagAttrs) -> str:
+        nonlocal session_dir
+        if attrs.offset >= len(hits):
+            # Mirror the title back in the placeholder so a message with
+            # several distinctly-titled missing images stays readable.
+            if attrs.title:
+                return f"*[no screenshot available: {attrs.title}]*"
+            return INSERT_SCREENSHOT_MISSING_PLACEHOLDER
+        hit = hits[attrs.offset]
+        filename = _artifact_filename(hit, attrs.offset)
+        if session_dir is None:
+            session_dir = artifacts_dir / session_id
+            session_dir.mkdir(parents=True, exist_ok=True)
+        target = session_dir / filename
+        if not target.exists():
+            try:
+                payload = base64.b64decode(hit.data, validate=False)
+            except (ValueError, base64.binascii.Error):
+                logger.warning(
+                    "Failed to decode base64 image for tool_use_id=%s "
+                    "(session=%s, source_line=%d)",
+                    hit.tool_use_id, session_id, hit.source_line_num,
+                )
+                return INSERT_SCREENSHOT_MISSING_PLACEHOLDER
+            try:
+                target.write_bytes(payload)
+            except OSError:
+                logger.exception(
+                    "Failed to write extracted screenshot to %s", target,
+                )
+                return INSERT_SCREENSHOT_MISSING_PLACEHOLDER
+        alt_raw = attrs.title or _DEFAULT_SCREENSHOT_ALT
+        return f"![{_escape_markdown_alt(alt_raw)}](/artifacts/{session_id}/{filename})"
+
+    # Rebuild the text by walking the original tag matches in order.
+    out: list[str] = []
+    cursor = 0
+    for m, attrs in zip(matches, attrs_per_match, strict=True):
+        out.append(text[cursor:m.start()])
+        out.append(_replacement_for(attrs))
+        cursor = m.end()
+    out.append(text[cursor:])
+    return "".join(out)
 
 
 # =============================================================================
@@ -495,18 +773,42 @@ class BaseSessionCompute:
     # Extraction surface — overridden by each provider
     # ------------------------------------------------------------------
 
-    def transform_inline(self, parsed_json: dict, *, line_num: int) -> str | None:
+    def transform_inline(
+        self,
+        parsed_json: dict,
+        *,
+        session_id: str,
+        line_num: int,
+        in_memory_items: list[tuple[int, datetime | None, dict]] | None = None,
+    ) -> str | None:
         """
         Optionally rewrite a parsed item in place before metadata computation.
 
         Used by Claude Code to normalise legacy or non-standard formats
         (``<task-notification>``, ``<local-command-stdout>``) into the
         standard tool_result / assistant_message shape that the rest of
-        the compute pipeline expects.
+        the compute pipeline expects, and by every provider to substitute
+        ``<twicc:insert-screenshot />`` tags in assistant text against
+        prior tool_result images.
 
         Returns the new serialised JSON string when a transformation was
         applied (caller updates ``SessionItem.content``), or ``None`` when
         the item was left untouched.
+
+        ``session_id`` is the SessionItem's owning session, threaded for
+        provider hooks (task enrichment, screenshot substitution) that
+        need to scope DB lookups or artifact paths to that session.
+        Providers historically read ``parsed_json.get('sessionId')``;
+        prefer the explicit argument — it stays correct if the agent
+        emits a line missing the legacy field.
+
+        ``in_memory_items`` carries ``(line_num, timestamp, parsed)``
+        tuples for items already processed in the current live-watcher
+        batch but not yet committed to the DB. Used by the screenshot
+        substitution helper so a tag can resolve against tool_results
+        that landed in the same batch as the assistant message
+        referencing them. The base value is ``None`` (batch mode: every
+        prior item is already in the DB).
         """
         raise NotImplementedError
 
@@ -707,6 +1009,105 @@ class BaseSessionCompute:
         in memory.
         """
         raise NotImplementedError
+
+    def iter_tool_result_image_refs(
+        self, parsed_json: dict
+    ) -> Iterator[tuple[str, str, str]]:
+        """Yield ``(tool_use_id, media_type, data)`` for each base64 image
+        carried by this item's tool_result block(s).
+
+        Default: yield nothing. Each provider that emits images inside
+        tool_results overrides this to walk its own native content layout
+        and surface the underlying base64 payloads to
+        :meth:`iter_images_backward`.
+
+        Images are yielded **most-recent-first within a single item**:
+        when a tool_result contains several images (e.g. an MCP
+        ``browser_batch`` that took two screenshots in one tool call),
+        the chronologically later image is yielded first, so it ends up
+        at ``offset=0`` in :meth:`iter_images_backward`'s hits list.
+        Implementations therefore walk the content blocks in *reverse
+        document order*; single-image tool_results (the common case)
+        are unaffected.
+        """
+        return
+        yield  # pragma: no cover — placate the type checker
+
+    def image_candidate_queryset(
+        self, session_id: str, before_line_num: int
+    ) -> QuerySet[SessionItem]:
+        """Return a queryset of items that may contain a base64 image,
+        ordered ``line_num`` DESC, strictly before ``before_line_num``.
+
+        Used by :meth:`iter_images_backward` to look up images that
+        landed in earlier watcher batches (so the row is already in the
+        DB). The default returns every prior item — correct but
+        unnecessarily expensive on large sessions. Each provider should
+        override with a tight ``content__contains`` filter on a literal
+        that occurs in *every* image-bearing tool_result (e.g. Claude
+        Code uses ``'"media_type":"image/'``).
+
+        The caller slices the queryset with ``[:images_needed]`` so
+        providers don't need to limit themselves — they just have to
+        keep the ordering and the cheap pre-filter.
+        """
+        return SessionItem.objects.filter(
+            session_id=session_id, line_num__lt=before_line_num,
+        ).order_by('-line_num')
+
+    def iter_images_backward(
+        self,
+        *,
+        session_id: str,
+        before_line_num: int,
+        images_needed: int,
+        in_memory_items: list[tuple[int, datetime | None, dict]] | None = None,
+    ) -> Iterator[ImageHit]:
+        """Yield up to ``images_needed`` :class:`ImageHit` from prior items,
+        most recent first.
+
+        Walks two sources in sequence:
+
+        1. ``in_memory_items`` (when supplied), in descending ``line_num``
+           order — used in live watcher mode where the item carrying the
+           image landed in the same JSONL batch as the assistant message
+           referencing it and is therefore not yet committed to the DB.
+        2. :meth:`image_candidate_queryset` sliced to ``images_needed``
+           rows — handles older items already persisted.
+
+        Stops as soon as ``images_needed`` hits have been yielded. A
+        single tool_result item may contribute several images, in which
+        case fewer DB rows are needed than the offset would naively
+        suggest.
+        """
+        if images_needed <= 0:
+            return
+        yielded = 0
+        if in_memory_items:
+            for line_num, ts, parsed in sorted(
+                in_memory_items, key=lambda x: -x[0],
+            ):
+                if line_num >= before_line_num:
+                    continue
+                for tool_use_id, media_type, data in self.iter_tool_result_image_refs(parsed):
+                    yield ImageHit(tool_use_id, media_type, data, line_num, ts)
+                    yielded += 1
+                    if yielded >= images_needed:
+                        return
+
+        qs = self.image_candidate_queryset(session_id, before_line_num)[:images_needed]
+        for item in qs:
+            try:
+                parsed = orjson.loads(item.content)
+            except orjson.JSONDecodeError:
+                continue
+            for tool_use_id, media_type, data in self.iter_tool_result_image_refs(parsed):
+                yield ImageHit(
+                    tool_use_id, media_type, data, item.line_num, item.timestamp,
+                )
+                yielded += 1
+                if yielded >= images_needed:
+                    return
 
     # ------------------------------------------------------------------
     # Per-session lifecycle and tool_result remap hooks
@@ -1701,7 +2102,9 @@ class BaseSessionCompute:
 
             # Provider-specific inline transformations (e.g. Claude's
             # task-notification / local-command rewrites).
-            new_content = self.transform_inline(parsed, line_num=item.line_num)
+            new_content = self.transform_inline(
+                parsed, session_id=session_id, line_num=item.line_num,
+            )
             if new_content is not None and new_content != item.content:
                 item.content = new_content
                 content_overrides.append({'id': item.id, 'content': new_content})
@@ -2341,6 +2744,13 @@ class BaseSessionCompute:
             ).values_list('message_id', flat=True)
         )
 
+        # Track items already processed in this batch so ``transform_inline``
+        # can resolve ``<twicc:insert-screenshot />`` tags against
+        # tool_results that landed in the same JSONL batch (and are
+        # therefore not yet committed to the DB). Each entry carries the
+        # ``(line_num, timestamp, parsed_json)`` triple the walker needs.
+        processed_items: list[tuple[int, datetime | None, dict]] = []
+
         for line in lines:
             line = line.strip()
             if not line:
@@ -2356,8 +2766,21 @@ class BaseSessionCompute:
             except orjson.JSONDecodeError:
                 parsed = {}
 
+            # Extract timestamp first so transform_inline can stash it in
+            # processed_items (used by the screenshot substitution
+            # helper). Provider hooks do not depend on the timestamp
+            # being set on the item before they run.
+            item.timestamp = self.extract_item_timestamp(parsed)
+            if first_timestamp is None and item.timestamp is not None:
+                first_timestamp = item.timestamp
+
             # Provider-specific inline transformations
-            new_content = self.transform_inline(parsed, line_num=current_line_num)
+            new_content = self.transform_inline(
+                parsed,
+                session_id=session.id,
+                line_num=current_line_num,
+                in_memory_items=processed_items,
+            )
             if new_content is not None:
                 item.content = new_content
 
@@ -2377,15 +2800,16 @@ class BaseSessionCompute:
                         session.id, current_line_num,
                     )
 
+            # Make the parsed view of the current item visible to the
+            # next iteration's transform_inline. Appended AFTER the
+            # transform call so a tag can only resolve against items
+            # *before* the one that wrote it.
+            processed_items.append((current_line_num, item.timestamp, parsed))
+
             # Pre-compute display_level + kind (no group info yet)
             metadata = self.compute_item_metadata(parsed)
             item.display_level = metadata['display_level']
             item.kind = metadata['kind']
-
-            # Extract timestamp
-            item.timestamp = self.extract_item_timestamp(parsed)
-            if first_timestamp is None and item.timestamp is not None:
-                first_timestamp = item.timestamp
 
             # Track compact summary for session.compacted flag
             if item.kind == ItemKind.COMPACT_SUMMARY:

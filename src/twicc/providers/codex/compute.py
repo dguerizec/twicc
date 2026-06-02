@@ -132,6 +132,7 @@ import orjson
 
 from twicc.core.enums import ItemKind, Provider
 from twicc.core.models import SessionItem
+from twicc.paths import get_artifacts_dir
 from twicc.pricing import calculate_line_context_usage
 from twicc.providers.compute_base import (
     _EMPTY_ANALYSIS,
@@ -140,9 +141,11 @@ from twicc.providers.compute_base import (
     _EMPTY_TOOL_USE_ENTRIES,
     BaseSessionCompute,
     ContentAnalysis,
+    INSERT_SCREENSHOT_TAG_RE,
     ToolResultInfo,
     ToolUseEntry,
     parse_timestamp_to_datetime,
+    substitute_insert_screenshot_tags,
 )
 
 from .agent.original_files_cache import pop_original_files
@@ -1274,10 +1277,51 @@ class CodexSessionCompute(BaseSessionCompute):
     # Extraction — content classification
     # ------------------------------------------------------------------
 
-    def transform_inline(self, parsed_json: dict, *, line_num: int) -> str | None:
-        # No inline rewrites for Codex: the JSONL format is already in
-        # its canonical shape (no legacy XML to normalise).
-        return None
+    def transform_inline(
+        self,
+        parsed_json: dict,
+        *,
+        session_id: str,
+        line_num: int,
+        in_memory_items: list[tuple[int, datetime | None, dict]] | None = None,
+    ) -> str | None:
+        # The only Codex rewrite is the cross-provider screenshot tag
+        # substitution: ``<twicc:insert-screenshot />`` markers placed
+        # by the agent in an ``event_msg.agent_message`` payload are
+        # replaced inline with a markdown image link, or with the
+        # missing-screenshot placeholder when no image is available.
+        # The Codex JSONL itself is already in its canonical shape — no
+        # legacy XML or normalisation work to do here.
+        #
+        # Until :meth:`iter_tool_result_image_refs` is wired for Codex,
+        # the substitution will always produce placeholders (no images
+        # surfaced from the JSONL). That's the documented fallback — the
+        # raw tag never leaks through to the rendered output.
+        if parsed_json.get("type") != _TYPE_EVENT_MSG:
+            return None
+        payload = _payload(parsed_json)
+        if payload is None or payload.get("type") != _PAYLOAD_AGENT_MESSAGE:
+            return None
+        message = payload.get("message")
+        if not isinstance(message, str) or not message:
+            return None
+        if not INSERT_SCREENSHOT_TAG_RE.search(message):
+            return None
+        new_message = substitute_insert_screenshot_tags(
+            message,
+            session_id=session_id,
+            images_provider=lambda needed: self.iter_images_backward(
+                session_id=session_id,
+                before_line_num=line_num,
+                images_needed=needed,
+                in_memory_items=in_memory_items,
+            ),
+            artifacts_dir=get_artifacts_dir(),
+        )
+        if new_message == message:
+            return None
+        payload["message"] = new_message
+        return orjson.dumps(parsed_json).decode("utf-8")
 
     def compute_item_kind(self, parsed_json: dict) -> ItemKind | None:
         # NOTE: any change to this classification MUST bump

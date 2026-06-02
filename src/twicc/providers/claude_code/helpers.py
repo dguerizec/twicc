@@ -140,6 +140,34 @@ To make sure the user can see what they actually asked, **quote the
 incoming message** at the top of your reply using a Markdown blockquote
 (``> …``) before responding to it. Without that quote, the user has no
 visible record of their own message in the conversation.
+
+## Inserting an image returned in a tool result
+
+If a tool you called returned an image (base64) and you cannot conveniently
+save it to `{artifacts_dir}/{session_id}/` yourself (e.g. the bytes only
+exist inside the tool result, with no path to the file on disk), insert
+`<twicc:insert-screenshot />` in your reply where you want the image to
+appear. TwiCC scans your previous tool results for the most recent
+base64 image, saves it to the session's artifacts directory, and
+rewrites the tag with a markdown image link before any client renders
+the message.
+
+The tag accepts two optional attributes, in any order:
+
+- `offset="N"` — 0-indexed count back from the most recent image
+  (`0` ≡ latest, `1` ≡ the one before, ...). When you include more than
+  one tag in the same message, each must carry an explicit distinct
+  `offset` — otherwise they all point to the same image.
+- `title="…"` — used as the markdown alt text in the rendered
+  `![title](url)` link, and echoed in the missing-image placeholder
+  when no image is found at the requested offset. Default alt is
+  `screenshot`. The value is double-quoted and cannot itself contain a
+  literal `"`; markdown-breaking characters (`[`, `]`, backslash) are
+  escaped automatically.
+
+If no image is found at the requested offset, the tag is replaced by
+`*[no screenshot available]*` (or `*[no screenshot available: <title>]*`
+when a title was provided).
 """
 
 

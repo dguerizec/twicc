@@ -13,6 +13,7 @@ import re
 import orjson
 import logging
 from datetime import datetime
+from pathlib import Path
 from typing import ClassVar, NamedTuple
 
 import xmltodict
@@ -20,6 +21,7 @@ from django.db.models import Q
 
 from twicc.core.enums import ItemKind, Provider
 from twicc.core.models import Session, SessionItem
+from twicc.paths import get_artifacts_dir
 from twicc.pricing import calculate_line_context_usage
 from twicc.providers.compute_base import (
     _EMPTY_ANALYSIS,
@@ -28,9 +30,12 @@ from twicc.providers.compute_base import (
     _EMPTY_TOOL_USE_ENTRIES,
     BaseSessionCompute,
     ContentAnalysis,
+    INSERT_SCREENSHOT_TAG_RE,
     ToolResultInfo,
+    is_base64_image,
     parse_timestamp_to_datetime,
     strip_markdown,
+    substitute_insert_screenshot_tags,
 )
 from .agent.original_file_cache import pop_original_file
 from .pricing import extract_model_info, to_token_usage
@@ -614,21 +619,81 @@ class ClaudeCodeSessionCompute(BaseSessionCompute):
 
         return mutated
 
+    def _substitute_screenshots_in_content(
+        self,
+        content: list,
+        *,
+        session_id: str,
+        line_num: int,
+        in_memory_items: list[tuple[int, datetime | None, dict]] | None,
+    ) -> bool:
+        """Replace ``<twicc:insert-screenshot />`` tags in assistant text blocks.
+
+        Walks ``content`` looking for ``{type: "text", text: ...}``
+        blocks that carry at least one tag, and rewrites the text via
+        :func:`substitute_insert_screenshot_tags`. The lookup of prior
+        images is delegated to
+        :meth:`BaseSessionCompute.iter_images_backward`, which combines
+        the live-batch ``in_memory_items`` with a per-provider DB query.
+
+        Returns ``True`` when at least one text block was modified.
+        """
+        mutated = False
+        artifacts_dir: Path | None = None
+        for block in content:
+            if not isinstance(block, dict) or block.get('type') != 'text':
+                continue
+            text = block.get('text')
+            if not isinstance(text, str) or not text:
+                continue
+            # Cheap fast-path: avoid building a callable / artifacts dir
+            # when no tag is present.
+            if not INSERT_SCREENSHOT_TAG_RE.search(text):
+                continue
+            if artifacts_dir is None:
+                artifacts_dir = get_artifacts_dir()
+            new_text = substitute_insert_screenshot_tags(
+                text,
+                session_id=session_id,
+                images_provider=lambda needed: self.iter_images_backward(
+                    session_id=session_id,
+                    before_line_num=line_num,
+                    images_needed=needed,
+                    in_memory_items=in_memory_items,
+                ),
+                artifacts_dir=artifacts_dir,
+            )
+            if new_text != text:
+                block['text'] = new_text
+                mutated = True
+        return mutated
+
     # ------------------------------------------------------------------
     # Extraction
     # ------------------------------------------------------------------
 
-    def transform_inline(self, parsed_json: dict, *, line_num: int) -> str | None:
-        # Three Claude-Code-specific rewrites:
+    def transform_inline(
+        self,
+        parsed_json: dict,
+        *,
+        session_id: str,
+        line_num: int,
+        in_memory_items: list[tuple[int, datetime | None, dict]] | None = None,
+    ) -> str | None:
+        # Claude-Code-specific rewrites:
         #   1. enrich TaskCreate / TaskUpdate / TaskGet / TaskList tool_use
         #      blocks with twiccTaskData / twiccTasksData / twiccTasksTotal,
         #      computed from an in-memory per-session task state that's
         #      reconstructed from the tool_use inputs themselves (see
         #      _enrich_task_tool_uses + _rebuild_state_if_missing);
-        #   2. populate the session-scoped Monitor task→tool_use_id map
+        #   2. substitute ``<twicc:insert-screenshot />`` tags in
+        #      assistant text blocks with markdown image links pointing
+        #      at base64 images extracted from prior tool_results
+        #      (see :meth:`_substitute_screenshots_in_content`);
+        #   3. populate the session-scoped Monitor task→tool_use_id map
         #      from each Monitor tool_result's ``toolUseResult.taskId``
         #      (side-effect only, no content rewrite);
-        #   3. ``<task-notification>`` XML user messages — three flavours:
+        #   4. ``<task-notification>`` XML user messages — three flavours:
         #      background-agent result (XML carries ``<tool-use-id>`` +
         #      ``<result>``/``<summary>`` but no ``<status>``), Monitor
         #      terminal user_message variant (XML carries
@@ -636,24 +701,36 @@ class ClaudeCodeSessionCompute(BaseSessionCompute):
         #      Monitor task notification fragment (XML carries only
         #      ``<task-id>`` + ``<event>``, ``tool_use_id`` resolved via
         #      the session-scoped map);
-        #   4. Monitor terminal ``attachment`` (queued_command /
+        #   5. Monitor terminal ``attachment`` (queued_command /
         #      task-notification, SDK ≤ 2.1.123) rewritten into a
         #      synthetic tool_result carrying ``twiccMonitorTerminal=True``;
-        #   5. CLI local command outputs wrapped in
+        #   6. CLI local command outputs wrapped in
         #      ``<local-command-stdout/stderr>`` tags.
-        # Steps 3, 4, and 5 are normalised in place into the regular
+        # Steps 4, 5, and 6 are normalised in place into the regular
         # tool_result / assistant message formats so the rest of the
         # pipeline doesn't need to care.
 
         entry_type = parsed_json.get('type')
 
-        # --- TaskCreate / TaskUpdate / TaskGet tool_use enrichment ---
+        # --- Assistant-side rewrites: task enrichment + screenshot
+        # substitution. Both apply to entry_type == 'assistant', and may
+        # mutate ``parsed_json`` independently. Accumulate the flags so
+        # that we return the rewritten payload once if either fired.
         if entry_type == 'assistant':
-            session_id = parsed_json.get('sessionId')
-            if isinstance(session_id, str) and session_id:
-                content = get_message_content_list(parsed_json, 'assistant')
-                if content is not None and self._enrich_task_tool_uses(content, session_id, line_num):
-                    return orjson.dumps(parsed_json).decode('utf-8')
+            mutated = False
+            content = get_message_content_list(parsed_json, 'assistant')
+            if content is not None:
+                if self._enrich_task_tool_uses(content, session_id, line_num):
+                    mutated = True
+                if self._substitute_screenshots_in_content(
+                    content,
+                    session_id=session_id,
+                    line_num=line_num,
+                    in_memory_items=in_memory_items,
+                ):
+                    mutated = True
+            if mutated:
+                return orjson.dumps(parsed_json).decode('utf-8')
 
         # --- Monitor tool_result side-effect: index its taskId so later
         # task-notification user_messages can be rewritten as tool_results
@@ -1182,6 +1259,47 @@ class ClaudeCodeSessionCompute(BaseSessionCompute):
             is_error=error_text is not None,
             error_text=error_text,
         )
+
+    def iter_tool_result_image_refs(self, parsed_json):
+        # Claude Code's user-message tool_results carry images in
+        # ``content[].source = {type: "base64", media_type, data}``.
+        # See :func:`twicc.providers.compute_base.is_base64_image` for the
+        # shape, which mirrors the front-end's ``detectContentBlockSource``.
+        # Inner content blocks are walked in REVERSE document order so
+        # that, in a multi-image tool_result (e.g. an MCP browser_batch
+        # capturing two screenshots in one call), the chronologically
+        # later image is yielded first — matching the "offset=0 = most
+        # recent" contract documented on the base hook.
+        content = get_message_content_list(parsed_json, "user")
+        if content is None:
+            return
+        for block in content:
+            if not isinstance(block, dict) or block.get('type') != 'tool_result':
+                continue
+            tool_use_id = block.get('tool_use_id') or ''
+            inner = block.get('content')
+            if not isinstance(inner, list):
+                continue
+            for entry in reversed(inner):
+                if not isinstance(entry, dict) or entry.get('type') != 'image':
+                    continue
+                detected = is_base64_image(entry.get('source'))
+                if detected is None:
+                    continue
+                media_type, data = detected
+                yield (tool_use_id, media_type, data)
+
+    def image_candidate_queryset(self, session_id, before_line_num):
+        # ``'"media_type":"image/'`` is the smallest invariant present in
+        # every Claude Code tool_result carrying a base64 image (the
+        # source dict's ``media_type`` always starts with ``image/``).
+        # Cheap LIKE pre-filter; iter_tool_result_image_refs handles the
+        # final shape check.
+        return SessionItem.objects.filter(
+            session_id=session_id,
+            line_num__lt=before_line_num,
+            content__contains='"media_type":"image/',
+        ).order_by('-line_num')
 
     def extract_agent_info_from_tool_result(
         self, parsed_json: dict
