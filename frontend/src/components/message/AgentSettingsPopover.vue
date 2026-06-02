@@ -176,6 +176,21 @@ const startupSettingsWarning = computed(() => {
     })
 })
 
+// Only surfaces during ASSISTANT_TURN for idle-only diffs: in USER_TURN
+// the next Send applies idle changes immediately via the SDK, and any
+// concurrent startup change subsumes idle ones under the startup
+// kill/restart — so the startup callout wins when both exist.
+const idleSettingsWarning = computed(() => {
+    if (!startupChanges.value?.idle.length) return null
+    if (startupChanges.value?.startup.length) return null
+    if (processState.value?.state !== 'assistant_turn') return null
+    const helpers = providerHelpers.value
+    if (!helpers) return null
+    return helpers.getIdleWarningText({
+        hasMessageText: Boolean(props.messageText.trim()),
+    })
+})
+
 // Setting rows below the model row — one v-for over all simple fields the
 // provider declares. The model row is rendered separately because it
 // consumes ``getModelSelectGroups`` instead of a flat choices list.
@@ -401,7 +416,7 @@ onBeforeUnmount(() => {
         </div>
 
         <!-- Actions & callouts (non-scrollable) — hidden on drafts since there's no process to apply to -->
-        <div v-if="(!isDraft && hasDropdownsChanged) || startupSettingsWarning" class="settings-panel-actions">
+        <div v-if="(!isDraft && hasDropdownsChanged) || startupSettingsWarning || idleSettingsWarning" class="settings-panel-actions">
             <div v-if="!isDraft && hasDropdownsChanged" class="settings-panel-links">
                 <a class="settings-action-link" @click.prevent="restoreSettings">
                     <wa-icon name="xmark"></wa-icon>
@@ -415,6 +430,10 @@ onBeforeUnmount(() => {
             <wa-callout v-if="startupSettingsWarning" variant="warning" class="startup-warning-callout">
                 <wa-icon name="triangle-exclamation" slot="icon"></wa-icon>
                 {{ startupSettingsWarning }}
+            </wa-callout>
+            <wa-callout v-else-if="idleSettingsWarning" variant="warning" class="idle-warning-callout">
+                <wa-icon name="triangle-exclamation" slot="icon"></wa-icon>
+                {{ idleSettingsWarning }}
             </wa-callout>
         </div>
 
@@ -507,6 +526,7 @@ onBeforeUnmount(() => {
 
 .settings-info-callout,
 .startup-warning-callout,
+.idle-warning-callout,
 .provider-blocked-callout {
     font-size: var(--wa-font-size-s);
     width: 100%;

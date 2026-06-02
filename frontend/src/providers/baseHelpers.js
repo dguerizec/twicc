@@ -619,6 +619,20 @@ export class BaseProviderHelpers {
     }
 
     /**
+     * Copy of the info shown in the popover when the pending changes are
+     * idle-only and the agent is currently in ASSISTANT_TURN: no stop or
+     * restart, but the new values only kick in once the agent's current
+     * turn ends. ``context`` carries ``hasMessageText`` (boolean). Default
+     * uses the provider's ``label`` for the agent's display name.
+     */
+    getIdleWarningText(context) {
+        const label = this.constructor.label ?? 'Agent'
+        return context?.hasMessageText
+            ? `Once ${label} finishes its current work, your changes will take effect and your message will be sent.`
+            : `Once ${label} finishes its current work, the new settings will take effect.`
+    }
+
+    /**
      * Resolve the model registry into the option groups rendered by the
      * model wa-select. Each group is ``{ entries: [{ value, label }] }`` —
      * adjacent groups are separated by a wa-divider. Default: a single
