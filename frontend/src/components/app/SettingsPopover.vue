@@ -15,6 +15,7 @@ import AppTooltip from '../ui/AppTooltip.vue'
 import ChangelogDialog from './ChangelogDialog.vue'
 import ProviderSettingsSection from './ProviderSettingsSection.vue'
 import { sendChangelogSeen, sendValidateUsageDumpPath, sendValidateUsageFile, sendValidateTmuxConfigPath } from '../../composables/useWebSocket'
+import { useProviderActivation } from '../../composables/useProviderActivation'
 import { vPopoverFocusFix } from '../../directives/vPopoverFocusFix'
 
 const router = useRouter()
@@ -308,36 +309,25 @@ function providerIconFor(provider) {
 
 // ─── Provider activation helpers ─────────────────────────────────────
 
+const { canDisableProvider, canEnableProvider, disableReasonFor, setProviderEnabled } = useProviderActivation()
+
 function providerLabelFor(p) {
     return getProviderLabel(p)
 }
 function providerStateFor(p) {
     return dataStore.getProviderState(p)
 }
-function isInTransition(p) {
-    const state = providerStateFor(p)
-    return state === 'starting' || state === 'stopping'
-}
-function isLastEnabled(p) {
-    return enabledProviders.value.size === 1 && enabledProviders.value.has(p)
-}
 function isSwitchDisabled(p) {
-    // Always disabled during a lifecycle transition (the back wouldn't
-    // honour the toggle anyway, and the user must wait until the state
-    // settles before they can flip again).
-    if (isInTransition(p)) return true
-    if (!enabledProviders.value.has(p)) return false
-    return isLastEnabled(p) || dataStore.hasActiveSessionForProvider(p)
+    // Enabled providers gate on the full disable check (transition, last,
+    // active sessions). Disabled providers only gate on the transition.
+    return enabledProviders.value.has(p) ? !canDisableProvider(p) : !canEnableProvider(p)
 }
 function reasonFor(p) {
-    // Transient states are shown as informational labels (with a spinner
-    // inline) rather than danger hints — they describe progress, not an
-    // error.
-    if (isInTransition(p)) return null
+    // Only enabled providers can be blocked from a disable attempt —
+    // disabled providers either re-enable instantly or are gated by a
+    // transition (shown as a spinner label, not a danger hint).
     if (!enabledProviders.value.has(p)) return null
-    if (isLastEnabled(p)) return 'Cannot disable: at least one provider must remain active.'
-    if (dataStore.hasActiveSessionForProvider(p)) return 'Cannot disable: active sessions in progress.'
-    return null
+    return disableReasonFor(p)
 }
 function transitionLabelFor(p) {
     const state = providerStateFor(p)
@@ -346,11 +336,7 @@ function transitionLabelFor(p) {
     return null
 }
 function onToggleProvider(p, event) {
-    const checked = event.target.checked
-    const current = new Set(store.disabledProviders || [])
-    if (checked) current.delete(p)
-    else current.add(p)
-    store.disabledProviders = [...current]
+    setProviderEnabled(p, event.target.checked)
 }
 const displayMode = computed(() => store.getDisplayMode)
 const fontSize = computed(() => store.getFontSize)

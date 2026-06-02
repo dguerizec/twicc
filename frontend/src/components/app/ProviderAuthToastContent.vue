@@ -8,11 +8,17 @@
  *   projects") terminal view and navigates there.
  * - "Check again" — asks the backend to re-check the auth state right now
  *   (instead of waiting for the next periodic tick).
+ * - "Disable provider" — turns the provider off via the shared
+ *   ``useProviderActivation`` composable. Hidden when the same gate that
+ *   greys out the Settings switch refuses the disable (last provider
+ *   standing, active sessions, lifecycle transition).
  */
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useTerminalCommandStore } from '../../stores/terminalCommand'
-import { getProviderHelpers } from '../../providers'
+import { getProviderHelpers, getProviderLabel } from '../../providers'
+import { useProviderActivation } from '../../composables/useProviderActivation'
+import { toast } from '../../composables/useToast'
 
 const props = defineProps({
     /** Notivue item reference — passed by CustomNotification (unused here, but standard signature) */
@@ -34,6 +40,7 @@ const props = defineProps({
 
 const terminalCommandStore = useTerminalCommandStore()
 const router = useRouter()
+const { canDisableProvider, setProviderEnabled } = useProviderActivation()
 
 // Disable the button briefly after a click to avoid spam-clicking while the
 // backend round-trip happens.
@@ -52,14 +59,39 @@ function launchInTerminal() {
     terminalCommandStore.request('global', props.loginCommand)
     router.push({ name: 'projects-terminal' })
 }
+
+const canDisable = computed(() => canDisableProvider(props.provider))
+
+function disableProvider() {
+    setProviderEnabled(props.provider, false)
+    toast.success(`${getProviderLabel(props.provider)} provider disabled`, { duration: 2000 })
+    // This toast disappears on its own: the provider leaves
+    // ``enabledProviders``, which flips the ``shouldShow`` watcher in
+    // App.vue and pushes the toast out.
+}
+
+function copyLoginCommand() {
+    navigator.clipboard.writeText(props.loginCommand)
+    toast.success('Command copied to clipboard', { duration: 2000 })
+}
 </script>
 
 <template>
     <div class="provider-auth-toast-content">
         <p class="provider-auth-toast-message">
-            Run <code>{{ loginCommand }}</code> to enable sending messages.
+            Run <code class="copyable" title="Click to copy" @click="copyLoginCommand">{{ loginCommand }}</code> to enable sending messages.
         </p>
         <div class="provider-auth-toast-actions wa-light">
+            <wa-button
+                v-if="canDisable"
+                size="small"
+                variant="danger"
+                appearance="outlined"
+                @click="disableProvider"
+            >
+                <wa-icon slot="start" name="power-off"></wa-icon>
+                Disable provider
+            </wa-button>
             <wa-button size="small" variant="brand" appearance="outlined" @click="launchInTerminal">
                 <wa-icon slot="start" name="terminal"></wa-icon>
                 Launch in terminal
@@ -89,6 +121,10 @@ function launchInTerminal() {
     padding: 0 var(--wa-space-3xs);
     background: var(--nv-accent, var(--nv-global-accent));
     border-radius: var(--wa-border-radius-s);
+}
+
+.provider-auth-toast-message code.copyable {
+    cursor: pointer;
 }
 
 .provider-auth-toast-actions {

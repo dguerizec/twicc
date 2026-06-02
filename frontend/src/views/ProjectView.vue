@@ -9,6 +9,7 @@ import { COLOR_SCHEME } from '../constants'
 import { useCommandRegistry } from '../composables/useCommandRegistry'
 import { useStartupPolling } from '../composables/useStartupPolling'
 import { useToast } from '../composables/useToast'
+import { useProviderActivation } from '../composables/useProviderActivation'
 import { useTerminalCommandStore } from '../stores/terminalCommand'
 import { getRegisteredProviders, getProviderHelpers, getProviderStore, getProviderLabel, getProviderIcon } from '../providers'
 import { toWorkspaceProjectId } from '../utils/workspaceIds'
@@ -66,6 +67,8 @@ const _authAwareProviders = getRegisteredProviders()
     .map(provider => ({ provider, helpers: getProviderHelpers(provider) }))
     .filter(({ helpers }) => helpers.getAuthState() !== null)
 
+const { canDisableProvider, setProviderEnabled } = useProviderActivation()
+
 const unauthenticatedProviders = computed(() => {
     const enabled = new Set(settingsStore.enabledProviders)
     const result = []
@@ -77,6 +80,7 @@ const unauthenticatedProviders = computed(() => {
             provider,
             label: helpers.constructor.label,
             loginCommand: helpers.getAuthLoginCommand(),
+            canDisable: canDisableProvider(provider),
         })
     }
     return result
@@ -98,6 +102,18 @@ function recheckProviderAuth(provider) {
 function launchProviderAuthInTerminal(loginCommand) {
     terminalCommandStore.request('global', loginCommand)
     router.push({ name: 'projects-terminal' })
+}
+
+function disableProvider(provider) {
+    setProviderEnabled(provider, false)
+    toast.success(`${getProviderLabel(provider)} provider disabled`, { duration: 2000 })
+    // Callout disappears on its own: the provider leaves ``enabledProviders``,
+    // which empties its slot in ``unauthenticatedProviders``.
+}
+
+function copyLoginCommand(loginCommand) {
+    navigator.clipboard.writeText(loginCommand)
+    toast.success('Command copied to clipboard', { duration: 2000 })
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1764,17 +1780,25 @@ function updateSidebarClosedClass(closed) {
                     <wa-divider v-else-if="index > 0"></wa-divider>
                     <div class="sidebar-footer-provider-auth">
                         <wa-callout variant="warning" size="small">
-                            <wa-icon slot="icon" name="triangle-exclamation"></wa-icon>
                             <div class="sidebar-footer-provider-auth-row">
-                                <span class="sidebar-footer-provider-auth-text">{{ entry.label }} CLI not authenticated. Run <code>{{ entry.loginCommand }}</code>.</span>
+                                <span class="sidebar-footer-provider-auth-text">{{ entry.label }} CLI not authenticated. Run <code class="copyable" title="Click to copy" @click="copyLoginCommand(entry.loginCommand)">{{ entry.loginCommand }}</code>.</span>
                                 <div class="sidebar-footer-provider-auth-buttons">
+                                    <wa-button
+                                        v-if="entry.canDisable"
+                                        size="small"
+                                        variant="danger"
+                                        appearance="outlined"
+                                        @click="disableProvider(entry.provider)"
+                                    >
+                                        <wa-icon name="power-off"></wa-icon>Disable provider
+                                    </wa-button>
                                     <wa-button
                                         size="small"
                                         variant="warning"
                                         appearance="outlined"
                                         @click="launchProviderAuthInTerminal(entry.loginCommand)"
                                     >
-                                        <wa-icon slot="start" name="terminal"></wa-icon>Launch in terminal
+                                        <wa-icon name="terminal"></wa-icon>Launch in terminal
                                     </wa-button>
                                     <wa-button
                                         size="small"
@@ -2222,11 +2246,15 @@ wa-split-panel::part(divider) {
 }
 
 .sidebar-footer-provider-auth-text code {
-    font-family: var(--wa-font-family-code);
+    font-family: var(--wa-font-mono);
     font-size: 0.95em;
     padding: 0 var(--wa-space-3xs);
-    background: var(--wa-color-warning-fill-quiet);
+    background: var(--wa-color-warning-fill-normal);
     border-radius: var(--wa-border-radius-s);
+}
+
+.sidebar-footer-provider-auth-text code.copyable {
+    cursor: pointer;
 }
 
 .sidebar-footer-provider-auth-buttons {
@@ -2235,6 +2263,18 @@ wa-split-panel::part(divider) {
     gap: var(--wa-space-xs);
     flex-shrink: 0;
     max-width: 90%;
+    wa-button {
+        &::part(base) {
+            height: auto;
+            min-height: var(--wa-form-control-height);
+        }
+        &::part(label) {
+            display: flex;
+            gap: .5em;
+            white-space: break-spaces;
+            line-height: calc(var(--wa-form-control-height) - var(--border-width) * 2);
+        }
+    }
 }
 
 .usage-quota {
