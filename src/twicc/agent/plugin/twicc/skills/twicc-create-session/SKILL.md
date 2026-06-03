@@ -64,6 +64,15 @@ All optional. Omit to use preset / user defined defaults. Use `$TWICC info model
 
 Creates the session invisible in every user-facing listings, search, and broadcasts (still counted in cost aggregates). Requires a non-interactive `--permission-mode` (Claude Code: `bypassPermissions` or `dontAsk`; Codex: `yolo` or `strict`). `--hidden` forces `question_widget=False` automatically — passing `--question-widget` alongside is rejected.
 
+**Restrictive modes (`dontAsk` / `strict`) are heavily sandboxed.** A hidden child running in one of these modes can read files from the project but typically **cannot**:
+- write any file (anywhere, including scratch or temp directories),
+- access the network,
+- run the `twicc` CLI (it writes to its DB, logs, and `uv` cache — all blocked),
+- therefore **invoke any TwiCC skill** (every skill goes through the `twicc` CLI),
+- therefore **send a message back to its parent** via `twicc-send-message`.
+
+The child's only output channel is the final assistant message of its turn. **The parent is responsible** for fetching it via `$TWICC session <ID> messages --tail 1` (skill: `twicc-session`). Use these modes for pure "analyst" workers (read code, return a synthesis as text); for anything that needs side effects, pick `bypassPermissions` (Claude Code) or `yolo` (Codex) and accept the broader latitude.
+
 ### `--no-question-widget`
 
 By default (Claude Code), questions from the agent surface as an interactive UI widget (`AskUserQuestion`) — the user must click in the TwiCC UI to answer. Pass `--no-question-widget` when driving the workflow from a script: questions then appear as plain text in the conversation, readable via `messages` and answerable via `send-message`.
@@ -148,7 +157,7 @@ Creation returns immediately; the agent keeps working in the background.
 
 **Continue the conversation:** once at `user_turn`, post a follow-up with `$TWICC send-message <SESSION_ID> '<text>'` (skill: `twicc-send-message`). To change settings mid-session, use `$TWICC update-session <SESSION_ID> settings ...` (skill: `twicc-update-session`).
 
-**Let the child talk back:** to enable async replies, instruct the spawned session in the prompt to load the `twicc-send-message` skill and use `send-message parent '<text>'` — the `parent` keyword resolves to you via its `spawned_by` link, and the reply lands in your own session prefixed with the child's id. Loading the skill is what gives the child the `$TWICC` resolution and full invocation syntax.
+**Let the child talk back:** to enable async replies, instruct the spawned session in the prompt to load the `twicc-send-message` skill and use `send-message parent '<text>'` — the `parent` keyword resolves to you via its `spawned_by` link, and the reply lands in your own session prefixed with the child's id. Loading the skill is what gives the child the `$TWICC` resolution and full invocation syntax. **Not available under `--permission-mode dontAsk` / `strict`** (the `twicc` CLI itself is blocked there — see the `--hidden` section above); fetch the child's final message via `$TWICC session <ID> messages --tail 1` instead.
 
 ## Related commands
 
