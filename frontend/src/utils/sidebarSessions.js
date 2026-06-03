@@ -100,6 +100,10 @@ export function computeSidebarSessionBlocks({
     const crossFilterPinned = Object.values(data.sessions).filter(s => {
         if (!s.pinned) return false
         if (s.parent_session_id) return false
+        // Archived sessions only surface in the `natural` block; out-of-scope
+        // archived sessions never get lifted into cross-filter (same rule in
+        // `crossFilterActive`). Selected-session deep-link still works via `extra`.
+        if (s.archived) return false
         if (naturalIds.has(s.id)) return false
         if (s.pinned === 'all') return true
         if (s.pinned === 'workspace' && activeWs) {
@@ -123,6 +127,7 @@ export function computeSidebarSessionBlocks({
         crossFilterActive = Object.values(data.sessions).filter(s => {
             if (s.parent_session_id) return false
             if (s.draft) return false
+            if (s.archived) return false
             if (naturalIds.has(s.id) || crossFilterPinnedIds.has(s.id)) return false
             const ps = processStates[s.id]
             const hasProcess = ps != null
