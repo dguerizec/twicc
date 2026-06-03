@@ -129,9 +129,9 @@ repository so the working tree stays clean.
   `YYYY-MM-DD-HH-MM-SS-`.
 - Supported image extensions: `png`, `jpg`, `jpeg`, `webp`, `gif`, `svg`.
   Anything else is rejected with a 404 by the backend.
-- If you do not know your session id — it may be absent from the `Context`
-  block at start and instead arrive later inside a `<twicc:context>` block —
-  look it up via the `twicc-whoami` skill when you need it.
+- Your session id (for this path) is in the `Context` block, or — if not there
+  at start — arrives in a `<twicc:context>` block with the first user message.
+  If you ever still can't find it, use the `twicc-whoami` skill.
 
 ## Crons (scheduled tasks)
 
@@ -166,14 +166,12 @@ TwiCC knows about and the session's own state. It is a startup snapshot —
 values may drift at runtime, so run the `twicc-whoami` skill when you need the
 current state.
 
-TwiCC may also extend or update this context mid-session: if a user message
-arrives with a leading `<twicc:context> ... </twicc:context>` block, its
-`key: value` lines are TwiCC handing you more context — a value not known at
-launch, or one that has changed since (an agent setting, the workspaces, the
-project name, the interaction mode, ...). They are not text the user typed.
-Treat them as part of this environment, and treat the latest value you receive
-as authoritative: it supersedes the matching line in the startup `### Context`
-block.
+TwiCC keeps this context current: whenever something changes, a user message
+carries a leading `<twicc:context> ... </twicc:context>` block whose `key: value`
+lines are TwiCC's, not text the user typed. Each line REPLACES the value above
+for that key — the latest you receive wins. A block lists ONLY what changed; any
+key it doesn't mention keeps its previous value. Treat these as part of this
+environment.
 """
 
 
@@ -190,16 +188,27 @@ _AGENT_SETTINGS_FIELDS: tuple[str, ...] = (
 )
 
 
-def _workspaces_containing(project_id: str) -> list[str]:
-    """Return the names of workspaces that list ``project_id``."""
+def _workspaces_containing(project_id: str) -> list[tuple[str, str]]:
+    """Return the ``(id, name)`` of workspaces that list ``project_id``."""
     from twicc.workspaces import read_workspaces
 
     data = read_workspaces()
-    names: list[str] = []
+    result: list[tuple[str, str]] = []
     for ws in data.get("workspaces", []):
         if project_id in ws.get("projectIds", []):
-            names.append(ws.get("name") or ws.get("id") or "?")
-    return names
+            result.append((ws.get("id") or "?", ws.get("name") or ""))
+    return result
+
+
+def _format_workspaces(pairs: list[tuple[str, str]]) -> str:
+    """Render workspaces as ``<id> (name: X), <id2> (name: Y)`` — mirrors the project line."""
+    parts: list[str] = []
+    for ws_id, name in pairs:
+        part = ws_id
+        if name:
+            part += f" (name: {name})"
+        parts.append(part)
+    return ", ".join(parts)
 
 
 def _project_descriptor(project_id: str) -> str:
@@ -235,24 +244,60 @@ def _interaction_mode_value(question_widget: bool | None, hidden: bool) -> str:
     return "interactive (the user can answer UI widgets)"
 
 
-def _build_providers_lines() -> list[str]:
-    """Render the providers list (identifier, name, default/disabled flags)."""
+def _agent_setting_annotation(field: str, value: object, *, helpers) -> str | None:
+    """Parenthetical note for an agent-setting value in the Context block, or ``None``.
+
+    Shared by :func:`build_dynamic_block` and
+    :func:`mutable_context_fields_from_resolved` so the addendum and the
+    mid-session reconciliation annotate identically. Today:
+
+    - ``selected_model`` → the model family and version (from the registry);
+    - any field that has a description entry (``permission_mode``, ``fast_mode``,
+      ...) → that description text.
+
+    Best-effort: never raises (it runs in the addendum-composition hot path).
+    """
+    try:
+        if field == "selected_model":
+            mv = helpers.find_model(value)
+            return f"family: {mv.model}, version: {mv.version}" if mv else None
+        description = helpers.get_agent_settings_descriptions().get(field, {}).get(value)
+        return description or None
+    except Exception:
+        return None
+
+
+def _provider_entries() -> list[str]:
+    """Render each provider as ``key (enabled|disabled, default)``.
+
+    Shared by the addendum's ``### Providers`` section
+    (:func:`_build_providers_lines`) and the reconciled ``providers`` snapshot key
+    (:func:`_providers_descriptor`) so both stay identical. The enabled/disabled
+    state (always stated) and the ``default`` flag are runtime-mutable (toggled
+    via settings); the set of registered providers itself is fixed at boot.
+    """
     from twicc.providers.helpers import get_provider_helpers_registry
     from twicc.providers.state import is_provider_enabled
     from twicc.synced_settings import read_synced_settings
 
     default_provider = read_synced_settings().get("defaultProvider")
-    lines: list[str] = []
-    for prov, helpers in get_provider_helpers_registry().items():
-        label = helpers.LABEL or prov.value
-        flags: list[str] = []
+    entries: list[str] = []
+    for prov, _ in get_provider_helpers_registry().items():
+        flags = ["enabled" if is_provider_enabled(prov) else "disabled"]
         if prov.value == default_provider:
             flags.append("default")
-        if not is_provider_enabled(prov):
-            flags.append("disabled")
-        suffix = f" [{', '.join(flags)}]" if flags else ""
-        lines.append(f"- {label} ({prov.value}){suffix}")
-    return lines
+        entries.append(f"{prov.value} ({', '.join(flags)})")
+    return entries
+
+
+def _build_providers_lines() -> list[str]:
+    """Render the ``### Providers`` block — one ``- `` bullet per provider."""
+    return [f"- {entry}" for entry in _provider_entries()]
+
+
+def _providers_descriptor() -> str:
+    """One-line providers list for the reconciled ``providers`` Context key."""
+    return ", ".join(_provider_entries())
 
 
 def build_dynamic_block(
@@ -297,7 +342,7 @@ def build_dynamic_block(
 
     workspaces = _workspaces_containing(project_id)
     if workspaces:
-        lines.append(f"- workspaces: {', '.join(workspaces)}")
+        lines.append(f"- workspaces: {_format_workspaces(workspaces)}")
 
     helpers = get_provider_helpers(Provider(provider))
     label = helpers.LABEL or provider
@@ -325,7 +370,11 @@ def build_dynamic_block(
         value = getattr(resolved_settings, field)
         if value is None:
             continue
-        settings_lines.append(f"  - {field}: {value}")
+        line = f"  - {field}: {value}"
+        annotation = _agent_setting_annotation(field, value, helpers=helpers)
+        if annotation:
+            line += f" ({annotation})"
+        settings_lines.append(line)
     if settings_lines:
         lines.append("- agent settings (resolved):")
         lines.extend(settings_lines)
@@ -381,6 +430,7 @@ def compose_addendum(
 
 def mutable_context_fields_from_resolved(
     *,
+    provider: Provider,
     project_id: str,
     resolved_settings: AgentSettings,
     hidden: bool,
@@ -388,26 +438,36 @@ def mutable_context_fields_from_resolved(
 ) -> dict[str, str]:
     """Flat ``{label: value}`` of the MUTABLE part of the dynamic ``### Context`` block.
 
-    The subset that can drift after launch — project name, workspaces, hidden,
-    interaction mode, the resolved agent settings, annotations — rendered with
-    the SAME vocabulary as :func:`build_dynamic_block`. Agent-settings keys carry
-    the ``Agent settings: `` prefix so a flat ``key: value`` channel mirrors the
-    addendum's indented ``agent settings (resolved):`` block. Empty states are
-    explicit sentinels (``(none)`` / ``false``) so a transition to empty is a
-    detectable change rather than a silent key removal. Immutable fields
-    (session_id, artifacts_dir, project id/dir, provider, started_at,
-    spawned_by) are NOT included — the agent keeps them from its addendum /
-    replayed rollout.
+    The subset that can drift after launch — the active providers (enabled /
+    default), project name, workspaces, hidden, interaction mode, the resolved
+    agent settings, annotations — rendered with
+    the SAME vocabulary as :func:`build_dynamic_block` (shared value/annotation
+    helpers, so the addendum and the reconciliation never diverge). Agent-settings
+    keys carry the ``Agent settings: `` prefix so a flat ``key: value`` channel
+    mirrors the addendum's indented ``agent settings (resolved):`` block, and each
+    gets the same parenthetical annotation as the addendum (model family/version,
+    permission_mode / fast_mode description, ...). Workspaces render as
+    ``<id> (name: X)`` like the project line. Empty states are explicit sentinels
+    (``(none)`` / ``false``) so a transition to empty is a detectable change
+    rather than a silent key removal. Immutable fields (session_id, artifacts_dir,
+    project id/dir, provider, started_at, spawned_by) are NOT included — the agent
+    keeps them from its addendum / replayed rollout.
+
+    Does NOT include the live gauges ``context usage`` / ``total cost``: those are
+    read from the row and added by :func:`mutable_context_fields_for_session`, so
+    they stay out of the addendum and the fresh-start seed (the first message).
 
     ``resolved_settings`` must already be resolved+enforced. Used to seed the
     reconciliation baseline at a fresh start (:func:`seed_environment_baseline`)
     and, via :func:`mutable_context_fields_for_session`, to recompute the
     snapshot at each turn.
     """
+    helpers = get_provider_helpers(provider)
     workspaces = _workspaces_containing(project_id)
     fields: dict[str, str] = {
+        "providers": _providers_descriptor(),
         "project": _project_descriptor(project_id),
-        "workspaces": ", ".join(workspaces) if workspaces else "(none)",
+        "workspaces": _format_workspaces(workspaces) if workspaces else "(none)",
         "hidden": "true" if hidden else "false",
         "interaction mode": _interaction_mode_value(
             resolved_settings.question_widget, hidden,
@@ -417,7 +477,11 @@ def mutable_context_fields_from_resolved(
         value = getattr(resolved_settings, field)
         if value is None:
             continue
-        fields[f"Agent settings: {field}"] = str(value)
+        rendered = str(value)
+        annotation = _agent_setting_annotation(field, value, helpers=helpers)
+        if annotation:
+            rendered += f" ({annotation})"
+        fields[f"Agent settings: {field}"] = rendered
     fields["annotations"] = (
         orjson.dumps(annotations).decode() if annotations else "(none)"
     )
@@ -429,11 +493,16 @@ async def mutable_context_fields_for_session(session_id: str) -> dict[str, str] 
 
     Reads the source of truth (the ``Session`` row, its ``Project`` and the
     workspaces file), resolves+enforces the agent settings for the owning
-    provider, and returns the same shape as
-    :func:`mutable_context_fields_from_resolved`. Returns ``None`` when the row
-    does not exist yet (a fresh session whose JSONL the watcher has not turned
-    into a row — the baseline was already seeded from primitives at start, so
-    there is nothing to reconcile).
+    provider, and returns the shape of :func:`mutable_context_fields_from_resolved`
+    PLUS two live gauges read straight off the row — ``context usage`` (tokens in
+    use, with the % of ``context_max``) and ``total cost`` (session cost in USD).
+    Both are absent from the addendum / fresh-start seed and only appear once
+    there is real data, so a brand-new session's first message carries neither;
+    they then climb every turn and the diff re-injects them on (almost) every
+    message, which is intended. Returns ``None`` when the row does not exist yet
+    (a fresh session whose JSONL the watcher has not turned into a row — the
+    baseline was already seeded from primitives at start, so there is nothing to
+    reconcile).
     """
     def _compute() -> dict[str, str] | None:
         from twicc.core.models import Session
@@ -446,6 +515,7 @@ async def mutable_context_fields_for_session(session_id: str) -> dict[str, str] 
                 "permission_mode", "selected_model", "effort",
                 "thinking_enabled", "claude_in_chrome", "fast_mode",
                 "context_max", "question_widget",
+                "context_usage", "total_cost",
             )
             .first()
         )
@@ -459,12 +529,27 @@ async def mutable_context_fields_for_session(session_id: str) -> dict[str, str] 
         resolved = helpers.enforce_agent_settings_consistency(
             helpers.resolve_agent_settings(AgentSettings.from_session(row))
         )
-        return mutable_context_fields_from_resolved(
+        fields = mutable_context_fields_from_resolved(
+            provider=provider,
             project_id=row.project_id,
             resolved_settings=resolved,
             hidden=row.hidden,
             annotations=row.annotations,
         )
+        # Live gauges — read from the row, so out of the addendum / fresh-start
+        # seed. They climb every turn, so the diff re-injects them on (almost)
+        # every message. Guarded on real data (both columns are NULL until the
+        # first usage / cost), so a brand-new session never shows them.
+        if row.context_usage:
+            context_max = resolved.context_max
+            if context_max:
+                pct = round(row.context_usage / context_max * 100)
+                fields["context usage"] = f"{row.context_usage} ({pct}%)"
+            else:
+                fields["context usage"] = str(row.context_usage)
+        if row.total_cost:
+            fields["total cost"] = f"${row.total_cost:.4f}"
+        return fields
 
     return await sync_to_async(_compute)()
 
@@ -498,6 +583,7 @@ def seed_environment_baseline(
         helpers.resolve_agent_settings(agent_settings)
     )
     fields = mutable_context_fields_from_resolved(
+        provider=provider,
         project_id=project_id,
         resolved_settings=resolved,
         hidden=hidden,
