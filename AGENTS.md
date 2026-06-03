@@ -73,7 +73,7 @@ Example:
 
 ```bash
 cd <worktree>
-TWICC_DATA_DIR=$PWD uv run python -m django <command> --settings=twicc.django.settings
+TWICC_DATA_DIR=$PWD uv run python -m django <command> --settings=twicc.settings
 ```
 
 Before running migrations or database-affecting commands, verify the resolved database path points inside the intended worktree.

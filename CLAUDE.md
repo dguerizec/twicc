@@ -146,7 +146,7 @@ When working inside a worktree, **always** do both of:
 ```bash
 cd <worktree>
 TWICC_DATA_DIR=$PWD uv run python -c "..."
-TWICC_DATA_DIR=$PWD uv run python -m django <command> --settings=twicc.django.settings
+TWICC_DATA_DIR=$PWD uv run python -m django <command> --settings=twicc.settings
 ```
 
 Before running any read or write that depends on the data directory (especially migrations or DB writes), print the resolved DB path first as a sanity check:
