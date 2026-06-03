@@ -388,7 +388,7 @@ class CodexAgentManager(BaseAgentManager):
             # picked its own canonical id and ``_start_agent`` will broadcast
             # the ``session_bound`` mapping (draft → canonical) for the
             # frontend.
-            return CodexAgent(
+            agent = CodexAgent(
                 session_id=thread.id,
                 project_id=project_id,
                 cwd=cwd,
@@ -396,6 +396,21 @@ class CodexAgentManager(BaseAgentManager):
                 codex=codex,
                 thread=thread,
             )
+
+            # Prime the environment-reconciliation baseline (best-effort; the
+            # agent methods log-and-swallow on failure). On a fresh start, seed
+            # it from the same primitives that built the addendum so the first
+            # turn re-states nothing — and read the pending attributes from the
+            # DRAFT ``session_id``, which differs from the canonical ``thread.id``
+            # the agent now carries. On resume, reset it so the first turn
+            # re-states the whole mutable Context block (the frozen
+            # ``developer_instructions`` reflect launch-time state and are never
+            # re-sent). See :mod:`twicc.context_injection`.
+            if resume:
+                agent._reset_context_baseline()
+            else:
+                await agent._seed_context_baseline(pending_id=session_id)
+            return agent
         except Exception:
             try:
                 await codex.close()

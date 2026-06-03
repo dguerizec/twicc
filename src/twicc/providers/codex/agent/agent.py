@@ -332,7 +332,7 @@ class CodexAgent(BaseAgent):
                     "Cannot steer: turn ended before steer could be issued",
                 )
 
-            turn_input = self._build_turn_input(text, images)
+            turn_input = await self._build_turn_input(text, images)
             try:
                 await turn_handle.steer(turn_input)
             except TransportClosedError:
@@ -360,7 +360,7 @@ class CodexAgent(BaseAgent):
             name=f"codex-turn-{self.session_id}",
         )
 
-    def _build_turn_input(
+    async def _build_turn_input(
         self,
         text: str,
         images: list[dict] | None,
@@ -384,14 +384,16 @@ class CodexAgent(BaseAgent):
         content-block ordering so the two providers feel consistent when
         the user attaches references before phrasing the prompt.
 
-        Folds any queued ``<twicc:context>`` block into ``text`` first: this is
-        the single point every outgoing Codex user message passes through — a
-        normal turn (``_run_turn``) and a steer (``send`` during an assistant
-        turn) — so a pending injection lands on whichever message goes out
-        next. One-shot and generic; a no-op when nothing is queued.
-        ``compute_base`` scrubs the block from the stored copy. See
-        :mod:`twicc.context_injection`.
+        Reconciles the dynamic Context block and folds any queued
+        ``<twicc:context>`` block into ``text`` first: this is the single point
+        every outgoing Codex user message passes through — a normal turn
+        (``_run_turn``) and a steer (``send`` during an assistant turn) — so a
+        pending injection, or a settings/environment change the reconcile picks
+        up, lands on whichever message goes out next. One-shot and generic; a
+        no-op when nothing changed. ``compute_base`` scrubs the block from the
+        stored copy. See :mod:`twicc.context_injection`.
         """
+        await self._reconcile_context()
         text = apply_pending_context(self.session_id, text)
         items: list[InputItem] = []
         for block in images or ():
@@ -437,7 +439,7 @@ class CodexAgent(BaseAgent):
         sdk_model = get_provider_helpers(Provider.CODEX).resolve_sdk_model(
             self.agent_settings.selected_model,
         )
-        turn_input = self._build_turn_input(text, images)
+        turn_input = await self._build_turn_input(text, images)
         try:
             turn_handle = await self._thread.turn_with_policy(
                 turn_input,

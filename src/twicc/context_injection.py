@@ -7,7 +7,7 @@ canonical ``session_id``: Codex mints it inside ``thread_start``, *after* the
 system-prompt addendum has been frozen, so it cannot live in the addendum the
 way it does for Claude Code (which knows its id up front).
 
-The facility is generic across providers, in three parts:
+The facility is generic across providers, in four parts:
 
 1. **Registry** (:func:`inject_context`) — any code, at any time, queues fields
    for a session. Same in-memory, keyed-by-session-id shape as
@@ -38,6 +38,24 @@ The facility is generic across providers, in three parts:
    every provider, so the UI, full-text search, session title and message
    browser never show it. The agent still saw the block in its turn input and
    replayed rollout; only the stored copy is cleaned.
+
+4. **Environment reconciliation** (:func:`seed_baseline` / :func:`reset_baseline`
+   / :func:`reconcile`) — the dynamic ``### Context`` block of the start-time
+   addendum is only a snapshot; parts of it drift after launch (agent settings,
+   workspaces, project name, interaction mode, hidden, annotations). Each agent
+   keeps an in-memory *baseline* of the snapshot it has already seen; at every
+   outgoing user message it recomputes the snapshot from the source of truth and
+   queues only the delta (via :func:`inject_context_fields`, with agent-settings
+   keys prefixed ``Agent settings: `` so a flat ``key: value`` channel mirrors
+   the addendum's indented ``agent settings (resolved):`` block). A fresh start
+   seeds the baseline (so the first message has no delta — the values are
+   already in the addendum); a resume resets it, so the whole snapshot is
+   re-stated — the frozen addendum reflects launch-time state and is never
+   re-sent, so we cannot otherwise know what the resumed agent still believes.
+   The recompute runs at the same chokepoint as the send-time fold
+   (``BaseAgent._reconcile_context`` called from ``_build_turn_input`` /
+   ``_build_query_prompt``); the strip in part 3 scrubs the result from the
+   stored copy like any other block.
 
 The block carries arbitrary ``key: value`` lines, so a new context field is a
 one-line change at the injection site and needs no change here.
@@ -139,7 +157,19 @@ def inject_context(session_id: str, /, **fields: object) -> None:
 
     Merges into anything already queued for the session (last write wins per
     key). Values are coerced to ``str`` so callers can pass ids/numbers without
-    ceremony. An empty call is a no-op.
+    ceremony. An empty call is a no-op. Thin ``**kwargs`` wrapper over
+    :func:`inject_context_fields`.
+    """
+    inject_context_fields(session_id, fields)
+
+
+def inject_context_fields(session_id: str, fields: Mapping[str, object]) -> None:
+    """Queue context ``fields`` (arbitrary keys) for the session's next user message.
+
+    Like :func:`inject_context` but takes a mapping, so keys that are not valid
+    Python identifiers can be queued — e.g. the ``"Agent settings: permission_mode"``
+    keys the environment reconciliation produces. Merges into anything already
+    queued (last write wins per key); values coerced to ``str``; empty is a no-op.
     """
     if not fields:
         return
@@ -184,3 +214,54 @@ def apply_pending_context(session_id: str, text: str) -> str:
         return text
     block = build_context_block(fields)
     return f"{block}\n\n{text}" if text else block
+
+
+# --------------------------------------------------------------------------
+# Environment reconciliation (keep the agent's view of the dynamic ``### Context``
+# block fresh as it drifts: agent settings, workspaces, project name,
+# interaction mode, hidden, annotations)
+# --------------------------------------------------------------------------
+
+# session_id -> the mutable Context snapshot ({label: value}) the agent has
+# already seen. Compared against the freshly-computed snapshot at each outgoing
+# user message; only the delta is queued. Touched only from the agent event
+# loop (seed/reset at start, reconcile at each message), so no locking.
+_baseline: dict[str, dict[str, str]] = {}
+
+
+def seed_baseline(session_id: str, fields: Mapping[str, str]) -> None:
+    """Record the snapshot the agent already knows — no injection follows.
+
+    Called once at a FRESH start with the values that went into the addendum,
+    so the first :func:`reconcile` finds no delta. A resume calls
+    :func:`reset_baseline` instead, so the first reconcile re-states everything.
+    """
+    _baseline[session_id] = dict(fields)
+
+
+def reset_baseline(session_id: str) -> None:
+    """Forget the session's baseline → next :func:`reconcile` re-injects everything.
+
+    Used on resume (the frozen addendum reflects launch-time state and is never
+    re-sent, so we cannot know what the resumed agent still believes) and on
+    teardown (best-effort cleanup, paired with :func:`clear_context`).
+    """
+    _baseline.pop(session_id, None)
+
+
+def reconcile(session_id: str, current: Mapping[str, str]) -> None:
+    """Queue the delta between ``current`` and the session's baseline.
+
+    ``current`` is the freshly-computed mutable Context snapshot. Any key whose
+    value differs from the baseline — which is every key when the baseline was
+    reset or never seeded, i.e. right after a resume — is queued via
+    :func:`inject_context_fields` so it lands in the next ``<twicc:context>``
+    block; the baseline is then advanced to ``current``. The snapshot always
+    carries the same labels (empty states rendered as explicit sentinels), so a
+    key never silently disappears and a plain value comparison is enough.
+    """
+    baseline = _baseline.get(session_id) or {}
+    changed = {key: value for key, value in current.items() if baseline.get(key) != value}
+    _baseline[session_id] = dict(current)
+    if changed:
+        inject_context_fields(session_id, changed)

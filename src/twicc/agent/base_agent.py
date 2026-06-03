@@ -16,7 +16,9 @@ import time
 from collections.abc import Callable, Coroutine
 from typing import TYPE_CHECKING, Any, ClassVar
 
-from twicc.context_injection import clear_context
+from asgiref.sync import sync_to_async
+
+from twicc.context_injection import clear_context, reconcile, reset_baseline
 from twicc.core.enums import Provider
 from twicc.logging_context import provider_log_context
 
@@ -174,11 +176,13 @@ class BaseAgent:
         finished; any outer cancellation we caught is re-raised once the
         callback has run to completion.
         """
-        # Drop any context injection this session queued but never consumed (an
-        # agent that died before composing its first user message). Generic
-        # across providers; a pure dict pop with no await, safe to run before
-        # the state-transition dance below. See :mod:`twicc.context_injection`.
+        # Drop any per-session context state this agent accumulated: the queued
+        # injection it never consumed (died before composing its first user
+        # message) and the reconciliation baseline. Generic across providers;
+        # pure dict pops with no await, safe to run before the state-transition
+        # dance below. See :mod:`twicc.context_injection`.
         clear_context(self.session_id)
+        reset_baseline(self.session_id)
         self._set_state(AgentState.DEAD)
         notify_task = asyncio.create_task(
             self._notify_state_change(),
@@ -472,6 +476,83 @@ class BaseAgent:
             kill_reason=self.kill_reason,
             pending_requests=self.pending_requests,
         )
+
+    # ------------------------------------------------------------------
+    # Environment context reconciliation (shared by every provider)
+    # ------------------------------------------------------------------
+
+    async def _reconcile_context(self) -> None:
+        """Fold any drift in the dynamic Context block into the next user message.
+
+        Recomputes the mutable Context snapshot (agent settings, workspaces,
+        project name, interaction mode, hidden, annotations) from the DB and
+        queues only what changed since the agent last saw it. A no-op until the
+        session row exists. Providers call this at the single chokepoint every
+        outgoing user message passes through (``_build_turn_input`` /
+        ``_build_query_prompt``), right where the ``<twicc:context>`` fold runs.
+        See :mod:`twicc.context_injection`.
+
+        Best-effort: this runs in the hot path of composing every user message,
+        so a failure is logged and swallowed rather than allowed to block the
+        message — the worst case is the agent misses one environment update.
+        """
+        from twicc.agent.system_prompt import mutable_context_fields_for_session
+
+        try:
+            current = await mutable_context_fields_for_session(self.session_id)
+            if current is None:
+                return
+            reconcile(self.session_id, current)
+        except Exception:
+            with provider_log_context(self.provider):
+                logger.warning(
+                    "Context reconciliation failed for session %s; "
+                    "skipping this turn.",
+                    self.session_id, exc_info=True,
+                )
+
+    async def _seed_context_baseline(self, *, pending_id: str | None = None) -> None:
+        """Seed the reconciliation baseline at a FRESH start — no injection follows.
+
+        Records the mutable Context snapshot that went into the addendum, built
+        from the same primitives (the resolved agent settings, plus the pending
+        ``hidden`` / ``annotations``), so the first :meth:`_reconcile_context`
+        finds no delta. ``pending_id`` is where to read the pending attributes
+        when it differs from this agent's canonical id — Codex mints its id
+        inside ``thread_start`` while the pending attributes stay keyed by the
+        draft id; it defaults to ``self.session_id`` (Claude Code, where the two
+        coincide). A resume calls :meth:`_reset_context_baseline` instead.
+
+        Best-effort: a failure only means the first reconcile re-states the whole
+        (correct) snapshot instead of nothing, so it is logged and swallowed
+        rather than allowed to abort agent startup.
+        """
+        from twicc.agent.system_prompt import seed_environment_baseline
+        from twicc.pending_session_attributes import get_pending_session_attributes
+
+        try:
+            pending = get_pending_session_attributes(pending_id or self.session_id)
+            hidden = bool(pending.hidden) if pending else False
+            annotations = (pending.annotations if pending else None) or {}
+            await sync_to_async(seed_environment_baseline)(
+                baseline_session_id=self.session_id,
+                provider=self.provider,
+                project_id=self.project_id,
+                agent_settings=self.agent_settings,
+                hidden=hidden,
+                annotations=annotations,
+            )
+        except Exception:
+            with provider_log_context(self.provider):
+                logger.warning(
+                    "Failed to seed context baseline for session %s; the first "
+                    "turn will re-state the full Context block instead.",
+                    self.session_id, exc_info=True,
+                )
+
+    def _reset_context_baseline(self) -> None:
+        """Forget the reconciliation baseline (resume) → next reconcile re-injects all."""
+        reset_baseline(self.session_id)
 
     # ------------------------------------------------------------------
     # Lifecycle (abstract)

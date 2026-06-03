@@ -36,6 +36,7 @@ from __future__ import annotations
 from datetime import datetime
 
 import orjson
+from asgiref.sync import sync_to_async
 
 from twicc.core.enums import Provider
 from twicc.providers.helpers import AgentSettings, get_provider_helpers
@@ -165,10 +166,14 @@ TwiCC knows about and the session's own state. It is a startup snapshot —
 values may drift at runtime, so run the `twicc-whoami` skill when you need the
 current state.
 
-TwiCC may also extend this context mid-session: if a user message arrives with
-a leading `<twicc:context> ... </twicc:context>` block, its `key: value` lines
-are TwiCC handing you more context (e.g. a value not yet known at launch), not
-text the user typed. Treat them as part of this environment.
+TwiCC may also extend or update this context mid-session: if a user message
+arrives with a leading `<twicc:context> ... </twicc:context>` block, its
+`key: value` lines are TwiCC handing you more context — a value not known at
+launch, or one that has changed since (an agent setting, the workspaces, the
+project name, the interaction mode, ...). They are not text the user typed.
+Treat them as part of this environment, and treat the latest value you receive
+as authoritative: it supersedes the matching line in the startup `### Context`
+block.
 """
 
 
@@ -195,6 +200,39 @@ def _workspaces_containing(project_id: str) -> list[str]:
         if project_id in ws.get("projectIds", []):
             names.append(ws.get("name") or ws.get("id") or "?")
     return names
+
+
+def _project_descriptor(project_id: str) -> str:
+    """Return the ``project`` line value: ``<id> (name: X) — <dir>`` (parts present).
+
+    Shared by :func:`build_dynamic_block` (start-time addendum) and
+    :func:`mutable_context_fields_from_resolved` (mid-session reconciliation) so
+    the project name — the one mutable piece — is formatted identically in both.
+    """
+    from twicc.core.models import Project
+
+    descriptor = project_id
+    project = Project.objects.filter(id=project_id).only("name", "directory").first()
+    if project is not None:
+        if project.name:
+            descriptor += f" (name: {project.name})"
+        if project.directory:
+            descriptor += f" — {project.directory}"
+    return descriptor
+
+
+def _interaction_mode_value(question_widget: bool | None, hidden: bool) -> str:
+    """Return the ``interaction mode`` value (scripted when hidden / widgets off).
+
+    Shared by :func:`build_dynamic_block` and
+    :func:`mutable_context_fields_from_resolved`.
+    """
+    if question_widget is False or hidden:
+        return (
+            "scripted (no UI dialogs; questions land in the conversation "
+            "as plain text)"
+        )
+    return "interactive (the user can answer UI widgets)"
 
 
 def _build_providers_lines() -> list[str]:
@@ -240,7 +278,6 @@ def build_dynamic_block(
     :mod:`twicc.pending_session_attributes`) or from the ``Session`` row
     on resume. The caller decides where to read them.
     """
-    from twicc.core.models import Project
     from twicc.paths import get_artifacts_dir
 
     lines: list[str] = [_LIVE_ENVIRONMENT_INTRO, "### Providers", ""]
@@ -256,18 +293,7 @@ def build_dynamic_block(
     # the static addendum above references this base via ``{artifacts_dir}``.
     lines.append(f"- artifacts_dir: {get_artifacts_dir()}")
 
-    project_line = f"- project: {project_id}"
-    project = (
-        Project.objects.filter(id=project_id)
-        .only("name", "directory")
-        .first()
-    )
-    if project is not None:
-        if project.name:
-            project_line += f" (name: {project.name})"
-        if project.directory:
-            project_line += f" — {project.directory}"
-    lines.append(project_line)
+    lines.append(f"- project: {_project_descriptor(project_id)}")
 
     workspaces = _workspaces_containing(project_id)
     if workspaces:
@@ -289,15 +315,10 @@ def build_dynamic_block(
     if hidden:
         lines.append("- hidden: true")
 
-    if resolved_settings.question_widget is False or hidden:
-        lines.append(
-            "- interaction mode: scripted (no UI dialogs; questions land "
-            "in the conversation as plain text)"
-        )
-    else:
-        lines.append(
-            "- interaction mode: interactive (the user can answer UI widgets)"
-        )
+    lines.append(
+        "- interaction mode: "
+        + _interaction_mode_value(resolved_settings.question_widget, hidden)
+    )
 
     settings_lines: list[str] = []
     for field in _AGENT_SETTINGS_FIELDS:
@@ -351,3 +372,135 @@ def compose_addendum(
         parts.append(provider_static)
     parts.append(dynamic)
     return "\n".join(parts) + "\n"
+
+
+# --------------------------------------------------------------------------
+# Mutable Context snapshot — the drifting subset of the dynamic block, used by
+# the per-turn environment reconciliation (see :mod:`twicc.context_injection`).
+# --------------------------------------------------------------------------
+
+def mutable_context_fields_from_resolved(
+    *,
+    project_id: str,
+    resolved_settings: AgentSettings,
+    hidden: bool,
+    annotations: dict | None,
+) -> dict[str, str]:
+    """Flat ``{label: value}`` of the MUTABLE part of the dynamic ``### Context`` block.
+
+    The subset that can drift after launch — project name, workspaces, hidden,
+    interaction mode, the resolved agent settings, annotations — rendered with
+    the SAME vocabulary as :func:`build_dynamic_block`. Agent-settings keys carry
+    the ``Agent settings: `` prefix so a flat ``key: value`` channel mirrors the
+    addendum's indented ``agent settings (resolved):`` block. Empty states are
+    explicit sentinels (``(none)`` / ``false``) so a transition to empty is a
+    detectable change rather than a silent key removal. Immutable fields
+    (session_id, artifacts_dir, project id/dir, provider, started_at,
+    spawned_by) are NOT included — the agent keeps them from its addendum /
+    replayed rollout.
+
+    ``resolved_settings`` must already be resolved+enforced. Used to seed the
+    reconciliation baseline at a fresh start (:func:`seed_environment_baseline`)
+    and, via :func:`mutable_context_fields_for_session`, to recompute the
+    snapshot at each turn.
+    """
+    workspaces = _workspaces_containing(project_id)
+    fields: dict[str, str] = {
+        "project": _project_descriptor(project_id),
+        "workspaces": ", ".join(workspaces) if workspaces else "(none)",
+        "hidden": "true" if hidden else "false",
+        "interaction mode": _interaction_mode_value(
+            resolved_settings.question_widget, hidden,
+        ),
+    }
+    for field in _AGENT_SETTINGS_FIELDS:
+        value = getattr(resolved_settings, field)
+        if value is None:
+            continue
+        fields[f"Agent settings: {field}"] = str(value)
+    fields["annotations"] = (
+        orjson.dumps(annotations).decode() if annotations else "(none)"
+    )
+    return fields
+
+
+async def mutable_context_fields_for_session(session_id: str) -> dict[str, str] | None:
+    """Recompute the mutable Context snapshot for a live session from the DB.
+
+    Reads the source of truth (the ``Session`` row, its ``Project`` and the
+    workspaces file), resolves+enforces the agent settings for the owning
+    provider, and returns the same shape as
+    :func:`mutable_context_fields_from_resolved`. Returns ``None`` when the row
+    does not exist yet (a fresh session whose JSONL the watcher has not turned
+    into a row — the baseline was already seeded from primitives at start, so
+    there is nothing to reconcile).
+    """
+    def _compute() -> dict[str, str] | None:
+        from twicc.core.models import Session
+
+        row = (
+            Session.objects
+            .filter(id=session_id)
+            .only(
+                "provider", "project_id", "hidden", "annotations",
+                "permission_mode", "selected_model", "effort",
+                "thinking_enabled", "claude_in_chrome", "fast_mode",
+                "context_max", "question_widget",
+            )
+            .first()
+        )
+        if row is None:
+            return None
+        try:
+            provider = Provider(row.provider)
+        except ValueError:
+            return None
+        helpers = get_provider_helpers(provider)
+        resolved = helpers.enforce_agent_settings_consistency(
+            helpers.resolve_agent_settings(AgentSettings.from_session(row))
+        )
+        return mutable_context_fields_from_resolved(
+            project_id=row.project_id,
+            resolved_settings=resolved,
+            hidden=row.hidden,
+            annotations=row.annotations,
+        )
+
+    return await sync_to_async(_compute)()
+
+
+def seed_environment_baseline(
+    *,
+    baseline_session_id: str,
+    provider: Provider,
+    project_id: str,
+    agent_settings: AgentSettings,
+    hidden: bool,
+    annotations: dict | None,
+) -> None:
+    """Compute the mutable Context snapshot from primitives and seed the baseline.
+
+    Called at a FRESH start so the first
+    :func:`twicc.context_injection.reconcile` finds no delta (the values are
+    already in the addendum the agent just got). ``agent_settings`` is
+    resolved+enforced here (idempotent if already effective).
+    ``baseline_session_id`` is the CANONICAL session id used as the
+    reconciliation key — for Codex that is the minted thread id, which differs
+    from the draft id the pending attributes are keyed by, hence the explicit
+    args rather than a ``Session``-row read (the row does not exist yet).
+    Synchronous (touches the DB / workspaces file); call via ``sync_to_async``
+    from the agent event loop.
+    """
+    from twicc.context_injection import seed_baseline
+
+    helpers = get_provider_helpers(provider)
+    resolved = helpers.enforce_agent_settings_consistency(
+        helpers.resolve_agent_settings(agent_settings)
+    )
+    fields = mutable_context_fields_from_resolved(
+        project_id=project_id,
+        resolved_settings=resolved,
+        hidden=hidden,
+        annotations=annotations,
+    )
+    seed_baseline(baseline_session_id, fields)

@@ -623,7 +623,7 @@ class ClaudeCodeAgent(BaseAgent):
 
         return response
 
-    def _build_query_prompt(
+    async def _build_query_prompt(
         self,
         text: str,
         images: list[dict] | None,
@@ -645,12 +645,14 @@ class ClaudeCodeAgent(BaseAgent):
         Returns:
             An async iterator yielding a single transport message dict.
         """
-        # Fold any queued <twicc:context> block into the user text. This is the
-        # single chokepoint for Claude Code outgoing user messages — both
-        # start() and send() build their prompt here. One-shot and generic;
-        # a no-op when nothing is queued (nothing injects for Claude Code
-        # today, but the channel is wired so it would just work). compute_base
+        # Reconcile the dynamic Context block, then fold any queued
+        # <twicc:context> block into the user text. This is the single chokepoint
+        # for Claude Code outgoing user messages — both start() and send() build
+        # their prompt here — so an environment change the reconcile picks up, or
+        # any queued injection, lands on whichever message goes out next.
+        # One-shot and generic; a no-op when nothing changed. compute_base
         # scrubs the block from the stored copy. See twicc.context_injection.
+        await self._reconcile_context()
         text = apply_pending_context(self.session_id, text)
 
         content_blocks: list[dict] = []
@@ -851,9 +853,17 @@ class ClaudeCodeAgent(BaseAgent):
             if resume:
                 # Resume existing session
                 options.resume = self.session_id
+                # The frozen addendum reflects launch-time state and is replayed
+                # verbatim on resume, so re-state the whole mutable Context block
+                # on the first message. See twicc.context_injection.
+                self._reset_context_baseline()
             else:
                 # New session with custom session ID
                 options.extra_args["session-id"] = self.session_id
+                # Seed the reconciliation baseline from the same primitives that
+                # built the addendum so the first turn re-states nothing
+                # (best-effort; logs and continues on failure).
+                await self._seed_context_baseline()
 
             self._client = ClaudeSDKClient(options=options)
             patch_client_for_logging(self._client, self.session_id)
@@ -866,7 +876,7 @@ class ClaudeCodeAgent(BaseAgent):
             await self._client.connect()
 
             # Build query prompt as async generator (streaming mode)
-            query_prompt = self._build_query_prompt(prompt, images, documents)
+            query_prompt = await self._build_query_prompt(prompt, images, documents)
             await self._client.query(query_prompt)
 
             logger.debug(
@@ -1128,7 +1138,7 @@ class ClaudeCodeAgent(BaseAgent):
                 await self._notify_state_change()
 
             # Build query prompt as async generator (streaming mode)
-            query_prompt = self._build_query_prompt(text, images, documents)
+            query_prompt = await self._build_query_prompt(text, images, documents)
             await self._client.query(query_prompt)
 
         except Exception as e:
