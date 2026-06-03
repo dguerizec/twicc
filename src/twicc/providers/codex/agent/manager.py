@@ -21,6 +21,7 @@ from openai_codex import CodexConfig
 from asgiref.sync import sync_to_async
 
 from twicc.agent import AgentState, BaseAgent, BaseAgentManager
+from twicc.context_injection import inject_context
 from twicc.core.enums import Provider
 from twicc.pending_session_attributes import get_pending_session_attributes
 from twicc.providers.helpers import AgentSettings, get_provider_helpers
@@ -373,6 +374,15 @@ class CodexAgentManager(BaseAgentManager):
                     config=thread_config,
                     developer_instructions=developer_instructions,
                 )
+
+                # Codex just minted the canonical thread id — the one piece of
+                # context that could not go into the (already-frozen)
+                # developer_instructions. Queue it so the first user message
+                # carries a ``<twicc:context>`` block announcing the session's
+                # own id; it is consumed once at the first turn and scrubbed
+                # from the stored copy by ``compute_base``. Never on resume:
+                # the original block already lives in the replayed rollout.
+                inject_context(thread.id, session_id=thread.id)
 
             # On resume ``thread.id == session_id``; on new sessions Codex
             # picked its own canonical id and ``_start_agent`` will broadcast

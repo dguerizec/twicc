@@ -42,6 +42,7 @@ from django.core.exceptions import MultipleObjectsReturned
 from django.db import transaction
 from django.db.models import Count, F, Max, QuerySet
 
+from twicc.context_injection import strip_context_blocks_in_place
 from twicc.core.enums import ItemDisplayLevel, ItemKind, Provider
 from twicc.core.models import AgentLink, Session, SessionItem, SessionType, ToolResultLink
 from twicc.git import read_head_branch, resolve_git_from_path
@@ -781,9 +782,55 @@ class BaseSessionCompute:
         line_num: int,
         in_memory_items: list[tuple[int, datetime | None, dict]] | None = None,
     ) -> str | None:
-        """
-        Optionally rewrite a parsed item in place before metadata computation.
+        """Rewrite a parsed item in place before metadata computation.
 
+        Template method shared by every provider. It first scrubs any injected
+        ``<twicc:context>`` block from the user text (a generic, cross-provider
+        step — see :mod:`twicc.context_injection`), then runs the provider's
+        own rewrites (:meth:`_transform_inline_provider`). Stripping first means
+        the provider logic and the stored ``SessionItem.content`` only ever see
+        the clean text, regardless of what the provider does. Both steps mutate
+        ``parsed_json`` in place, so the downstream computation
+        (``analyze_content``, title extraction, ...) operates on the cleaned,
+        rewritten item.
+
+        The strip keeps the ``<twicc:context>`` block out of the stored
+        content — and therefore out of the UI, full-text search, session title
+        and message browser. The agent still saw the block in its turn input
+        and replayed rollout; only the persisted copy is cleaned.
+
+        Returns the new serialised JSON string when anything changed (the
+        caller updates ``SessionItem.content``), or ``None`` when the item was
+        left untouched.
+        """
+        stripped = strip_context_blocks_in_place(parsed_json)
+        provider_content = self._transform_inline_provider(
+            parsed_json,
+            session_id=session_id,
+            line_num=line_num,
+            in_memory_items=in_memory_items,
+        )
+        # A provider rewrite serialises ``parsed_json`` in place, so its return
+        # already reflects the earlier strip; otherwise fall back to the strip's
+        # own serialisation when only the strip fired.
+        if provider_content is not None:
+            return provider_content
+        if stripped:
+            return orjson.dumps(parsed_json).decode()
+        return None
+
+    def _transform_inline_provider(
+        self,
+        parsed_json: dict,
+        *,
+        session_id: str,
+        line_num: int,
+        in_memory_items: list[tuple[int, datetime | None, dict]] | None = None,
+    ) -> str | None:
+        """
+        Provider-specific inline rewrite hook (invoked by :meth:`transform_inline`).
+
+        Optionally rewrite a parsed item in place before metadata computation.
         Used by Claude Code to normalise legacy or non-standard formats
         (``<task-notification>``, ``<local-command-stdout>``) into the
         standard tool_result / assistant_message shape that the rest of
@@ -791,9 +838,10 @@ class BaseSessionCompute:
         ``<twicc:insert-screenshot />`` tags in assistant text against
         prior tool_result images.
 
-        Returns the new serialised JSON string when a transformation was
-        applied (caller updates ``SessionItem.content``), or ``None`` when
-        the item was left untouched.
+        Implementations MUST mutate ``parsed_json`` in place when they rewrite
+        it (and return the new serialised JSON string); return ``None`` when
+        the item is left untouched. That in-place contract lets the generic
+        context-tag strip in :meth:`transform_inline` compose with the rewrite.
 
         ``session_id`` is the SessionItem's owning session, threaded for
         provider hooks (task enrichment, screenshot substitution) that
@@ -2100,8 +2148,9 @@ class BaseSessionCompute:
                 logger.warning(f"Invalid JSON in item {item.session_id}:{item.line_num}")
                 parsed = {}
 
-            # Provider-specific inline transformations (e.g. Claude's
-            # task-notification / local-command rewrites).
+            # Provider rewrites + the generic context-tag strip, both applied
+            # in place; see :meth:`transform_inline`. Returns the new content
+            # when either fired, else ``None``.
             new_content = self.transform_inline(
                 parsed, session_id=session_id, line_num=item.line_num,
             )
@@ -2774,7 +2823,8 @@ class BaseSessionCompute:
             if first_timestamp is None and item.timestamp is not None:
                 first_timestamp = item.timestamp
 
-            # Provider-specific inline transformations
+            # Provider rewrites + the generic context-tag strip, both applied
+            # in place; see :meth:`transform_inline`.
             new_content = self.transform_inline(
                 parsed,
                 session_id=session.id,

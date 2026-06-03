@@ -67,7 +67,7 @@ the data.
 
 - The `twicc-whoami` skill returns live info on your session (settings,
   resolved agent settings, process state). Use it whenever you need a fresh
-  read of any value from the "Session" block below.
+  read of any value from the "Context" block below.
 - Many TwiCC commands accept `self` for your own session and `parent` for the
   session that spawned you, when applicable. Prefer those keywords over raw IDs.
 
@@ -107,7 +107,7 @@ self-contained.
 Every session belongs to a project (a working directory tracked by TwiCC).
 The user can group projects into workspaces — named, colorable buckets used
 for filtering and discovery. A project may belong to zero, one, or many
-workspaces. The "Session" block below lists the workspaces of the current
+workspaces. The "Context" block below lists the workspaces of the current
 project when applicable.
 
 ## Artifacts (screenshots, visuals, etc.)
@@ -117,7 +117,7 @@ to see or open it from the TwiCC UI, save it OUTSIDE the project's
 repository so the working tree stays clean.
 
 - Directory: `{artifacts_dir}/{session_id}/{artifact_file_name}` — the
-  absolute `artifacts_dir` is listed in the "Session" block below; create
+  absolute `artifacts_dir` is listed in the "Context" block below; create
   the per-session subdirectory if it does not yet exist.
 - URL: `/artifacts/{session_id}/{artifact_file_name}`
 - Reference the URL from Markdown (e.g. `![label](URL)`) so the image
@@ -128,8 +128,9 @@ repository so the working tree stays clean.
   `YYYY-MM-DD-HH-MM-SS-`.
 - Supported image extensions: `png`, `jpg`, `jpeg`, `webp`, `gif`, `svg`.
   Anything else is rejected with a 404 by the backend.
-- If you do not know your session id, look it up via the `twicc-whoami`
-  skill.
+- If you do not know your session id — it may be absent from the `Context`
+  block at start and instead arrive later inside a `<twicc:context>` block —
+  look it up via the `twicc-whoami` skill when you need it.
 
 ## Crons (scheduled tasks)
 
@@ -159,9 +160,15 @@ the future:
 _LIVE_ENVIRONMENT_INTRO = """\
 ## Live environment
 
-The blocks below describe the providers known to TwiCC and the session state
-captured at startup. Values may drift at runtime — run the `twicc-whoami`
-skill for the current state.
+The blocks below capture this session's context as of its start: the providers
+TwiCC knows about and the session's own state. It is a startup snapshot —
+values may drift at runtime, so run the `twicc-whoami` skill when you need the
+current state.
+
+TwiCC may also extend this context mid-session: if a user message arrives with
+a leading `<twicc:context> ... </twicc:context>` block, its `key: value` lines
+are TwiCC handing you more context (e.g. a value not yet known at launch), not
+text the user typed. Treat them as part of this environment.
 """
 
 
@@ -239,7 +246,7 @@ def build_dynamic_block(
     lines: list[str] = [_LIVE_ENVIRONMENT_INTRO, "### Providers", ""]
     lines.extend(_build_providers_lines())
 
-    lines.extend(["", "### Session", ""])
+    lines.extend(["", "### Context", ""])
 
     if session_id:
         lines.append(f"- session_id: {session_id}")

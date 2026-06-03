@@ -16,6 +16,7 @@ import time
 from collections.abc import Callable, Coroutine
 from typing import TYPE_CHECKING, Any, ClassVar
 
+from twicc.context_injection import clear_context
 from twicc.core.enums import Provider
 from twicc.logging_context import provider_log_context
 
@@ -173,6 +174,11 @@ class BaseAgent:
         finished; any outer cancellation we caught is re-raised once the
         callback has run to completion.
         """
+        # Drop any context injection this session queued but never consumed (an
+        # agent that died before composing its first user message). Generic
+        # across providers; a pure dict pop with no await, safe to run before
+        # the state-transition dance below. See :mod:`twicc.context_injection`.
+        clear_context(self.session_id)
         self._set_state(AgentState.DEAD)
         notify_task = asyncio.create_task(
             self._notify_state_change(),

@@ -31,6 +31,7 @@ import orjson
 
 from twicc.agent import AgentInfo, AgentState, BaseAgent, PendingRequest, StateChangeCallback
 from twicc.agent.plugin import get_plugin_dir
+from twicc.context_injection import apply_pending_context
 from twicc.core.enums import Provider
 from twicc.core.models import Session
 from twicc.pending_session_attributes import get_pending_session_attributes
@@ -644,6 +645,14 @@ class ClaudeCodeAgent(BaseAgent):
         Returns:
             An async iterator yielding a single transport message dict.
         """
+        # Fold any queued <twicc:context> block into the user text. This is the
+        # single chokepoint for Claude Code outgoing user messages — both
+        # start() and send() build their prompt here. One-shot and generic;
+        # a no-op when nothing is queued (nothing injects for Claude Code
+        # today, but the channel is wired so it would just work). compute_base
+        # scrubs the block from the stored copy. See twicc.context_injection.
+        text = apply_pending_context(self.session_id, text)
+
         content_blocks: list[dict] = []
 
         if images:

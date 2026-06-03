@@ -1277,7 +1277,7 @@ class CodexSessionCompute(BaseSessionCompute):
     # Extraction — content classification
     # ------------------------------------------------------------------
 
-    def transform_inline(
+    def _transform_inline_provider(
         self,
         parsed_json: dict,
         *,

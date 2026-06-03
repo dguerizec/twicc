@@ -42,6 +42,7 @@ from openai_codex.generated.v2_all import (
 )
 
 from twicc.agent import AgentState, BaseAgent, StateChangeCallback
+from twicc.context_injection import apply_pending_context
 from twicc.core.enums import Provider
 from twicc.providers.helpers import AgentSettings, get_provider_helpers
 
@@ -359,8 +360,8 @@ class CodexAgent(BaseAgent):
             name=f"codex-turn-{self.session_id}",
         )
 
-    @staticmethod
     def _build_turn_input(
+        self,
         text: str,
         images: list[dict] | None,
     ) -> list[InputItem]:
@@ -382,7 +383,16 @@ class CodexAgent(BaseAgent):
         Order: images first, then the text — mirrors Claude Code's
         content-block ordering so the two providers feel consistent when
         the user attaches references before phrasing the prompt.
+
+        Folds any queued ``<twicc:context>`` block into ``text`` first: this is
+        the single point every outgoing Codex user message passes through — a
+        normal turn (``_run_turn``) and a steer (``send`` during an assistant
+        turn) — so a pending injection lands on whichever message goes out
+        next. One-shot and generic; a no-op when nothing is queued.
+        ``compute_base`` scrubs the block from the stored copy. See
+        :mod:`twicc.context_injection`.
         """
+        text = apply_pending_context(self.session_id, text)
         items: list[InputItem] = []
         for block in images or ():
             source = block.get("source") or {}
