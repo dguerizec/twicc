@@ -52,8 +52,8 @@ async def ensure_twicc_plugin_installed() -> None:
         )
         return
 
-    from openai_codex import AppServerConfig
-    from openai_codex.async_client import AsyncAppServerClient
+    from openai_codex import CodexConfig
+    from openai_codex.async_client import AsyncCodexClient
     from openai_codex.generated.v2_all import (
         MarketplaceAddResponse,
         PluginInstallResponse,
@@ -71,13 +71,13 @@ async def ensure_twicc_plugin_installed() -> None:
     bundled_bin = resolve_bundled_binary()
     # ``cwd`` here is the app-server's own working directory — it has no
     # bearing on plugin install, which writes to ``$CODEX_HOME``.
-    config = AppServerConfig(
+    config = CodexConfig(
         codex_bin=str(bundled_bin),
         cwd=str(Path.home()),
     )
 
     try:
-        async with AsyncAppServerClient(config=config) as client:
+        async with AsyncCodexClient(config=config) as client:
             await client.initialize()
 
             # 1. Register the marketplace in ``~/.codex/config.toml``.

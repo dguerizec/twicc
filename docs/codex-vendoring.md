@@ -4,8 +4,8 @@
 
 The Codex provider relies on OpenAI's Codex Python SDK (`openai_codex`) plus the Codex CLI binary it drives over JSON-RPC.
 
-- The **SDK** is vendored from the `openai/codex` repository at tag [`rust-v0.135.0`](https://github.com/openai/codex/releases/tag/rust-v0.135.0). A PyPI release (`openai-codex`) exists but currently pins an older runtime version, so we stay on the vendored source to ride a known-good combination with the matching upstream tag.
-- The **CLI binary** is a regular PyPI dependency: `openai-codex-cli-bin==0.135.0`. Since version `0.133.0` it publishes manylinux / macOS / Windows wheels — no more local bundling, no more per-platform TwiCC wheels.
+- The **SDK** is vendored from the `openai/codex` repository at tag [`rust-v0.136.0`](https://github.com/openai/codex/releases/tag/rust-v0.136.0). A PyPI release (`openai-codex`) exists but currently pins an older runtime version, so we stay on the vendored source to ride a known-good combination with the matching upstream tag.
+- The **CLI binary** is a regular PyPI dependency: `openai-codex-cli-bin==0.136.0`. Since version `0.133.0` it publishes manylinux / macOS / Windows wheels — no more local bundling, no more per-platform TwiCC wheels.
 
 ## Layout
 

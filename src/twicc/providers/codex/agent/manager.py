@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 from typing import Any, ClassVar
 
-from openai_codex import AppServerConfig
+from openai_codex import CodexConfig
 
 from asgiref.sync import sync_to_async
 
@@ -297,7 +297,7 @@ class CodexAgentManager(BaseAgentManager):
         categories carry no hot-applicable values in this v1.
         """
         bundled_bin = resolve_bundled_binary()
-        config = AppServerConfig(codex_bin=str(bundled_bin), cwd=cwd)
+        config = CodexConfig(codex_bin=str(bundled_bin), cwd=cwd)
         codex = TwiccAsyncCodex(config=config)
 
         # ``thread_start`` / ``thread_resume`` lazy-init the transport via

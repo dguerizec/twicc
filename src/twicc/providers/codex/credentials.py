@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 import orjson
-from openai_codex import AppServerConfig, TextInput
+from openai_codex import CodexConfig, TextInput
 from openai_codex.generated.v2_all import AskForApproval, ReasoningEffort, SandboxMode
 
 from .bin import resolve_bundled_binary
@@ -286,7 +286,7 @@ async def _codex_sdk_throwaway_call() -> None:
     transport closes without leaking the subprocess.
     """
     bundled_bin = resolve_bundled_binary()
-    config = AppServerConfig(codex_bin=str(bundled_bin))
+    config = CodexConfig(codex_bin=str(bundled_bin))
     async with TwiccAsyncCodex(config=config) as codex:
         thread = await codex.thread_start_with_policy(
             model=_REFRESH_MODEL,

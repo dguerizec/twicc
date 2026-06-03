@@ -21,7 +21,7 @@ which provider it talked to.
 import asyncio
 import logging
 
-from openai_codex import AppServerConfig, TextInput
+from openai_codex import CodexConfig, TextInput
 from openai_codex.generated.v2_all import AskForApproval, ReasoningEffort, SandboxMode
 
 from .bin import resolve_bundled_binary
@@ -123,7 +123,7 @@ async def _call_codex(
     full_prompt = system_prompt.replace("{text}", user_message)
 
     bundled_bin = resolve_bundled_binary()
-    config = AppServerConfig(codex_bin=str(bundled_bin))
+    config = CodexConfig(codex_bin=str(bundled_bin))
     codex = TwiccAsyncCodex(config=config)
 
     async def _execute() -> str:

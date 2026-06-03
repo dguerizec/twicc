@@ -164,8 +164,8 @@ async def _sync_to_database() -> dict[str, int]:
     # startup, but the module itself may be imported earlier).
     from asgiref.sync import sync_to_async
 
-    from openai_codex import AppServerConfig
-    from openai_codex.async_client import AsyncAppServerClient
+    from openai_codex import CodexConfig
+    from openai_codex.async_client import AsyncCodexClient
     from openai_codex.generated.v2_all import SkillsListResponse
 
     from twicc.core.enums import Provider
@@ -195,12 +195,12 @@ async def _sync_to_database() -> dict[str, int]:
     # ``cwd`` here is the app-server's own working directory, not a
     # skill scan path — those are passed via ``cwds``. ``Path.home()``
     # is a safe neutral choice that exists on every platform.
-    config = AppServerConfig(
+    config = CodexConfig(
         codex_bin=str(bundled_bin),
         cwd=str(Path.home()),
     )
 
-    async with AsyncAppServerClient(config=config) as client:
+    async with AsyncCodexClient(config=config) as client:
         await client.initialize()
         resp = await client.request(
             "skills/list",
