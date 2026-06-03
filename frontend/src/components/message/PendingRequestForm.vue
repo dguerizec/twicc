@@ -51,17 +51,33 @@ const provider = computed(() => dataStore.getSession(props.sessionId)?.provider)
 // Whether a response has been sent and we're waiting for the store to clear the pending request
 const isResponding = ref(false)
 
-// Whether the form is expanded (shows full content) or collapsed (compact view)
-const isExpanded = ref(false)
+// Display size of the form, as a single mutually-exclusive state:
+//   'normal'    — default, capped at 50dvh
+//   'minimized' — header only (body hidden), to free room to read the conversation above
+//   'maximized' — fills the whole session area
+// The two toggle buttons below each flip between their own extreme and 'normal'
+// (window-controls style); the single enum guarantees we can never be both
+// minimized and maximized at once.
+const viewState = ref('normal')
+const isMinimized = computed(() => viewState.value === 'minimized')
+const isMaximized = computed(() => viewState.value === 'maximized')
 
-// Unique ID for tooltip anchoring on the expand toggle button
-const toolExpandToggleId = useId()
+// Unique IDs for tooltip anchoring on the size toggle buttons
+const minimizeToggleId = useId()
+const maximizeToggleId = useId()
 
 /**
- * Toggle the expanded/collapsed state of the form.
+ * Toggle between the minimized state and the normal size.
  */
-function toggleExpanded() {
-    isExpanded.value = !isExpanded.value
+function toggleMinimized() {
+    viewState.value = isMinimized.value ? 'normal' : 'minimized'
+}
+
+/**
+ * Toggle between the maximized state and the normal size.
+ */
+function toggleMaximized() {
+    viewState.value = isMaximized.value ? 'normal' : 'maximized'
 }
 
 // Request type for conditional rendering of the header icon/title
@@ -94,6 +110,11 @@ function onBodySubmit(payload) {
 // after the previous was resolved). The body owns its own internal state reset.
 watch(() => props.pendingRequest?.request_id, () => {
     isResponding.value = false
+    // A new request taking over the slot should never inherit the previous
+    // request's minimized/maximized size — reset to the default so the new
+    // request is always shown at normal size (and never hidden by a leftover
+    // minimized state).
+    viewState.value = 'normal'
 })
 </script>
 
@@ -106,7 +127,7 @@ watch(() => props.pendingRequest?.request_id, () => {
         ``<template v-else-if>`` branches.
     -->
     <wa-divider></wa-divider>
-    <div class="pending-request-form" :class="{ expanded: isExpanded }">
+    <div class="pending-request-form" :class="{ maximized: isMaximized, minimized: isMinimized }">
         <!-- Shared header. Title + icon vary on requestType. -->
         <div class="pending-request-header">
             <wa-icon
@@ -133,13 +154,24 @@ watch(() => props.pendingRequest?.request_id, () => {
                 variant="neutral"
                 appearance="plain"
                 size="small"
-                class="expand-toggle-btn"
-                :id="toolExpandToggleId"
-                @click="toggleExpanded"
+                class="size-toggle-btn"
+                :id="minimizeToggleId"
+                @click="toggleMinimized"
             >
-                <wa-icon :name="isExpanded ? 'compress' : 'expand'" variant="classic"></wa-icon>
+                <wa-icon :name="isMinimized ? 'window-restore' : 'window-minimize'" variant="classic"></wa-icon>
             </wa-button>
-            <AppTooltip :for="toolExpandToggleId">{{ isExpanded ? 'Collapse' : 'Expand' }}</AppTooltip>
+            <AppTooltip :for="minimizeToggleId">{{ isMinimized ? 'Restore' : 'Minimize' }}</AppTooltip>
+            <wa-button
+                variant="neutral"
+                appearance="plain"
+                size="small"
+                class="size-toggle-btn"
+                :id="maximizeToggleId"
+                @click="toggleMaximized"
+            >
+                <wa-icon :name="isMaximized ? 'compress' : 'expand'" variant="classic"></wa-icon>
+            </wa-button>
+            <AppTooltip :for="maximizeToggleId">{{ isMaximized ? 'Restore' : 'Maximize' }}</AppTooltip>
         </div>
 
         <!-- Provider-routed body -->
@@ -168,11 +200,24 @@ wa-divider {
     padding: var(--wa-space-s);
     background: var(--wa-color-surface-default);
     max-height: 50dvh;
-    &.expanded {
+    &.maximized {
         max-height: unset;
         position: absolute;
         inset: 0;
     }
+}
+
+/* Minimized: collapse to the header only. The body is hidden (not unmounted), so
+   the per-provider body component keeps its in-progress state (deny reason draft,
+   question selections, edit mode) across a minimize/restore round-trip.
+   :deep() is required because the body root belongs to a child component: Vue's
+   scoped CSS only forwards this component's scope id to a *single*-root child
+   (Codex body), not to the Claude body's fragment root — so without :deep the
+   rule would silently miss the Claude body. We drop the scope requirement on the
+   target and hide every direct child of the form that isn't the header (i.e. the
+   body root, whatever provider owns it). The `>` keeps it to direct children. */
+.pending-request-form.minimized > :deep(:not(.pending-request-header)) {
+    display: none;
 }
 
 .pending-request-header {
@@ -200,7 +245,7 @@ wa-divider {
     white-space: nowrap;
 }
 
-.expand-toggle-btn {
+.size-toggle-btn {
     color: var(--wa-color-text-quiet);
     font-size: var(--wa-font-size-s);
 }

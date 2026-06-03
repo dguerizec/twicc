@@ -1615,7 +1615,7 @@ defineExpose({
         --spacing: 0;
     }
 }
-.session-footer:has(.pending-request-form.expanded) {
+.session-footer:has(.pending-request-form.maximized) {
     position: static;
 }
 
