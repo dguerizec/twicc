@@ -30,7 +30,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Bulk archive now respects the sidebar text filter, with an option to include sessions from archived projects.
 - Ctrl+F now cooperates with embedded code editors.
 - Codex sessions now report their subprocess memory usage, like Claude Code.
-- Bump `claude-agent-sdk` from 0.2.82 to 0.2.88 (bundled Claude Code CLI: 2.1.142 → 2.1.161)
+- Bump `claude-agent-sdk` from 0.2.82 to 0.2.90 (bundled Claude Code CLI: 2.1.142 → 2.1.163)
 - Bump vendored Codex Python SDK to rust-v0.136.0 (bundled Codex CLI: 0.131.0a4 → 0.136.0)
 
 ### Fixed

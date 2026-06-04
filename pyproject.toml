@@ -26,7 +26,7 @@ classifiers = [
 dependencies = [
     "blacknoise~=1.2.0",
     "channels~=4.3.2",
-    "claude-agent-sdk==0.2.88",
+    "claude-agent-sdk==0.2.90",
     "cronsim~=2.7",
     "daphne~=4.2.1",
     "django~=6.0.4",
