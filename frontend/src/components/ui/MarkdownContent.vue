@@ -77,7 +77,7 @@ async function renderMermaidDiagrams() {
         if (!pre) continue
 
         const source = block.textContent
-        const id = `mermaid-${Math.random().toString(36).slice(2, 11)}`
+        const id = `twicc-mermaid-${Math.random().toString(36).slice(2, 11)}`
 
         try {
             const { svg } = await mermaid.render(id, source)
