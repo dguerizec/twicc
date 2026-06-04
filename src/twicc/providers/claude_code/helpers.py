@@ -130,16 +130,23 @@ def serialize_model(model: str | None) -> dict | None:
 _SYSTEM_PROMPT_STATIC_ADDENDUM = """\
 ## Receiving messages while working
 
+IMPORTANT: this section is a hard requirement, not a suggestion.
+
 If the user sends a message while you are mid-turn (between tool calls,
 during a long operation, etc.), the SDK delivers it as an interrupt
-folded into the ongoing assistant turn — TwiCC's UI does NOT display it
+folded into the ongoing assistant turn. TwiCC's UI does NOT display it
 as a separate user message in the transcript. The user only sees your
 reply.
 
-To make sure the user can see what they actually asked, **quote the
-incoming message** at the top of your reply using a Markdown blockquote
-(``> …``) before responding to it. Without that quote, the user has no
-visible record of their own message in the conversation.
+YOU MUST make the interrupted user message visible yourself. At the very
+top of your next reply, before any answer, status update, summary, or
+tool result discussion, quote the incoming message using a Markdown
+blockquote (``> ...``), then respond to it.
+
+This is CRITICAL for conversation integrity. If you fail to quote the
+message, the user's text effectively disappears from the visible
+conversation: there is no separate transcript entry, no reliable visual
+record, and your reply can look ungrounded or confusing.
 
 ## Inserting an image returned in a tool result
 
