@@ -389,8 +389,9 @@ function handleSnippetSendTo(snippet, target) {
 // --- External "launch a command in this terminal context" requests ---
 //
 // Other components (e.g. the Claude CLI not-authenticated toast) queue a
-// command via the terminalCommand store. We pick it up here, always open
-// a fresh new tab, and send the command once its WebSocket is connected.
+// command via the terminalCommand store. We pick it up here, always open a
+// fresh new tab, make it the active (route-driven) tab so it actually starts,
+// and send the command once the tab is ready.
 
 const terminalCommandStore = useTerminalCommandStore()
 
@@ -399,27 +400,44 @@ watch(
     (entry) => {
         if (!entry) return
 
-        const targetIndex = nextIndex.value
-        createTerminal()
+        // Defer past this tick. The callers queue the command and then navigate
+        // to the bare ``…/terminal`` URL (no termIndex), so the panel mounts with
+        // a pending entry. The route-reconciliation watcher below runs right after
+        // this one and, seeing no termIndex, forces activeIndex back to 0 — which
+        // would clobber a tab created/activated synchronously here. Running on
+        // nextTick lets that reset happen first; we then create the tab and drive
+        // the route to it, so our navigation is the one that wins.
+        nextTick(() => {
+            const targetIndex = nextIndex.value
+            createTerminal()
 
-        // Wait on `isReady` (full PTY/tmux/shell chain alive) rather than
-        // `isConnected` (WS accepted) so the command doesn't land before the
-        // tmux pane is wired or the shell has rendered its prompt.
-        const stopWatch = watch(
-            () => terminalApis.get(targetIndex)?.isReady,
-            (ready) => {
-                if (!ready) return
-                stopWatch()
-                terminalApis.get(targetIndex)?.handleSnippetPress?.({
-                    snippet: entry.snippet,
-                    appendEnter: entry.appendEnter,
-                    placeholders: [],
-                })
-                terminalCommandStore.take(props.contextKey)
-            },
-            { immediate: true },
-        )
-        setTimeout(() => stopWatch(), 10000)
+            // Make the new tab the active one *through the route* (the source of
+            // truth for activeIndex). This is what flips TerminalInstance's
+            // ``active`` prop and triggers start(); without it the WS never opens,
+            // ``isReady`` never flips, and the command would only fire on a manual
+            // tab click. ``replace`` so we don't stack an extra history entry on
+            // top of the caller's push to the terminal view.
+            emit('navigate', { termIndex: targetIndex, replace: true })
+
+            // Wait on `isReady` (full PTY/tmux/shell chain alive) rather than
+            // `isConnected` (WS accepted) so the command doesn't land before the
+            // tmux pane is wired or the shell has rendered its prompt.
+            const stopWatch = watch(
+                () => terminalApis.get(targetIndex)?.isReady,
+                (ready) => {
+                    if (!ready) return
+                    stopWatch()
+                    terminalApis.get(targetIndex)?.handleSnippetPress?.({
+                        snippet: entry.snippet,
+                        appendEnter: entry.appendEnter,
+                        placeholders: [],
+                    })
+                    terminalCommandStore.take(props.contextKey)
+                },
+                { immediate: true },
+            )
+            setTimeout(() => stopWatch(), 10000)
+        })
     },
     { immediate: true },
 )
