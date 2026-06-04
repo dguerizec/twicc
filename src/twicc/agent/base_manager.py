@@ -1084,10 +1084,10 @@ class BaseAgentManager:
         Per-state policy:
 
         - ``STARTING``: ``PROCESS_TIMEOUT_STARTING`` (default 60s) — stuck startup.
-        - ``USER_TURN``: ``PROCESS_TIMEOUT_USER_TURN`` (default 15min) — idle.
-        - ``ASSISTANT_TURN``: ``PROCESS_TIMEOUT_ASSISTANT_TURN`` (default 2h)
+        - ``USER_TURN``: ``PROCESS_TIMEOUT_USER_TURN`` (default 30min) — idle.
+        - ``ASSISTANT_TURN``: ``PROCESS_TIMEOUT_ASSISTANT_TURN`` (default 3h)
           for inactivity, plus an absolute
-          ``PROCESS_TIMEOUT_ASSISTANT_TURN_ABSOLUTE`` (default 6h) safety cap.
+          ``PROCESS_TIMEOUT_ASSISTANT_TURN_ABSOLUTE`` (default 10h) safety cap.
         """
         from django.conf import settings
 
@@ -1105,7 +1105,7 @@ class BaseAgentManager:
             return None
 
         if agent.state == AgentState.USER_TURN:
-            timeout = getattr(settings, "PROCESS_TIMEOUT_USER_TURN", 15 * 60)
+            timeout = getattr(settings, "PROCESS_TIMEOUT_USER_TURN", 30 * 60)
             elapsed = current_time - agent.last_activity
             if elapsed > timeout:
                 return ("timeout_user_turn", elapsed, timeout)
@@ -1113,10 +1113,10 @@ class BaseAgentManager:
 
         if agent.state == AgentState.ASSISTANT_TURN:
             inactivity_timeout = getattr(
-                settings, "PROCESS_TIMEOUT_ASSISTANT_TURN", 2 * 60 * 60,
+                settings, "PROCESS_TIMEOUT_ASSISTANT_TURN", 3 * 60 * 60,
             )
             absolute_timeout = getattr(
-                settings, "PROCESS_TIMEOUT_ASSISTANT_TURN_ABSOLUTE", 6 * 60 * 60,
+                settings, "PROCESS_TIMEOUT_ASSISTANT_TURN_ABSOLUTE", 10 * 60 * 60,
             )
 
             # Floor both baselines on ``last_pending_resolved_at`` so the time
