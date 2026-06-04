@@ -1062,6 +1062,41 @@ async def tool_states(request, project_id, session_id):
     return JsonResponse({"tools": tools})
 
 
+async def session_topology(request, project_id, session_id):
+    """GET /api/projects/<id>/sessions/<session_id>/topology/
+
+    Return the spawned-session tree (``spawned_by`` links) containing this
+    session, rooted at its top-level ancestor. Reuses ``build_topology`` — the
+    same engine behind ``twicc topology`` — with full session payloads so the
+    frontend can render each node's title, agent-settings summary, annotations,
+    cost (own + cumulative subtree) and live process state.
+
+    Not live: the Orchestration tab renders a snapshot and refetches on demand.
+    ``twicc_pid=os.getpid()`` matches how the backend stamps ``ProcessRun`` rows
+    (cf. ``base_manager``), so process state resolves without re-reading the
+    instance status file.
+    """
+    try:
+        session = await Session.objects.aget(id=session_id, project_id=project_id)
+    except Session.DoesNotExist:
+        raise Http404("Session not found")
+
+    # Orchestration trees follow ``spawned_by``; provider-internal subagents
+    # (``parent_session_id`` set) are out of scope and never carry the tab.
+    if session.parent_session_id is not None:
+        raise Http404("Session not found")
+
+    from twicc.cli.topology import build_topology
+
+    data = await sync_to_async(build_topology)(
+        session,
+        include_processes=True,
+        full_sessions=True,
+        twicc_pid=os.getpid(),
+    )
+    return JsonResponse(data)
+
+
 async def directory_tree(request, project_id, session_id=None):
     """GET directory tree listing.
 

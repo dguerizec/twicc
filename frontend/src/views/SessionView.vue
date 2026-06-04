@@ -15,6 +15,7 @@ import SessionContent from '../components/session/detail/SessionContent.vue'
 import FilesPanel from '../components/files/FilesPanel.vue'
 import GitPanel from '../components/git/GitPanel.vue'
 import TerminalPanel from '../components/terminal/TerminalPanel.vue'
+import OrchestrationPanel from '../components/orchestration/OrchestrationPanel.vue'
 import AppTooltip from '../components/ui/AppTooltip.vue'
 import ProcessIndicator from '../components/ui/ProcessIndicator.vue'
 import CodeCommentsIndicator from '../components/ui/CodeCommentsIndicator.vue'
@@ -253,6 +254,12 @@ const hasGitRepo = computed(() =>
     || !!store.getProject(session.value?.project_id)?.git_root
 )
 
+// Whether the session belongs to a spawned-session orchestration tree.
+// ``spawn_root`` is set as soon as a session spawns its first child (it points
+// to itself) or is itself spawned by another session — i.e. exactly when there
+// is a topology worth showing. Drives the Orchestration tab's visibility.
+const hasSpawnRoot = computed(() => !!session.value?.spawn_root)
+
 // Code comments counts per tab
 const filesCommentsCount = computed(() =>
     codeCommentsStore.countBySource(projectId.value, sessionId.value, 'files')
@@ -293,6 +300,7 @@ const activeTabId = computed(() => {
     if (name === 'session-files' || name === 'projects-session-files') return 'files'
     if (name === 'session-git' || name === 'projects-session-git') return 'git'
     if (name === 'session-terminal' || name === 'projects-session-terminal') return 'terminal'
+    if (name === 'session-orchestration' || name === 'projects-session-orchestration') return 'orchestration'
     return 'main'
 })
 
@@ -314,6 +322,9 @@ const compactTabs = computed(() => {
         tabs.push({ id: 'git', label: 'Git', commentsCount: gitCommentsCount.value })
     }
     tabs.push({ id: 'terminal', label: 'Terminal' })
+    if (hasSpawnRoot.value) {
+        tabs.push({ id: 'orchestration', label: 'Orchestration' })
+    }
     return tabs
 })
 
@@ -330,6 +341,24 @@ watch([activeTabId, hasGitRepo], ([tabId, hasGit]) => {
         if (!isActive.value) return
         if (route.params.sessionId !== sessionId.value) return
         if (!store.getProject(session.value?.project_id)) return
+        router.replace({
+            name: buildSessionBaseRouteName(isAllProjectsMode.value),
+            params: { projectId: filterProjectId.value, sessionId: sessionId.value },
+            query: route.query,
+        })
+    }
+}, { immediate: true })
+
+// Redirect away from the orchestration tab if the session is not part of a
+// spawned-session tree (handles direct URL navigation and a session that
+// loses/never had a spawn_root). Mirrors the git-tab guard above; the
+// ``session.value`` check avoids a premature redirect before the session row
+// is loaded (when hasSpawnRoot is transiently false).
+watch([activeTabId, hasSpawnRoot], ([tabId, hasRoot]) => {
+    if (tabId === 'orchestration' && !hasRoot) {
+        if (!isActive.value) return
+        if (route.params.sessionId !== sessionId.value) return
+        if (!session.value) return
         router.replace({
             name: buildSessionBaseRouteName(isAllProjectsMode.value),
             params: { projectId: filterProjectId.value, sessionId: sessionId.value },
@@ -372,7 +401,7 @@ function onTerminalNavigate({ termIndex, replace }) {
     navigateInTab('terminal', params, replace ? 'replace' : 'push')
 }
 
-const TOOL_TAB_IDS = ['files', 'git', 'terminal']
+const TOOL_TAB_IDS = ['files', 'git', 'terminal', 'orchestration']
 
 // Keep the last granular URL visited for each tool tab so switching away and back
 // restores the previous state instead of resetting the panel to its base route.
@@ -380,6 +409,9 @@ const rememberedToolTabRoutes = {
     files: null,
     git: null,
     terminal: null,
+    // Orchestration has no granular sub-route; kept here so the generic
+    // tool-tab navigation in switchToTab treats it uniformly.
+    orchestration: null,
 }
 
 function getCurrentToolTabRouteParams(tabId) {
@@ -495,6 +527,7 @@ const orderedTabs = computed(() => {
     tabs.push('files')
     if (hasGitRepo.value) tabs.push('git')
     tabs.push('terminal')
+    if (hasSpawnRoot.value) tabs.push('orchestration')
     return tabs
 })
 
@@ -518,8 +551,8 @@ watch(activeTabId, (newTabId, oldTabId) => {
     if (oldTabId) pushTabHistory(oldTabId)
 })
 
-// Direct tab mapping: Alt+Shift+{1,2,3,4} → fixed tabs (subagents are skipped)
-const DIRECT_TAB_MAP = { 1: 'main', 2: 'files', 3: 'git', 4: 'terminal' }
+// Direct tab mapping: Alt+Shift+{1,2,3,4,5} → fixed tabs (subagents are skipped)
+const DIRECT_TAB_MAP = { 1: 'main', 2: 'files', 3: 'git', 4: 'terminal', 5: 'orchestration' }
 
 // Flag set by keyboard tab navigation to auto-focus the relevant element on tab arrival
 let pendingKeyboardFocus = false
@@ -538,6 +571,7 @@ function handleTabShortcut(event) {
         targetTab = DIRECT_TAB_MAP[index]
         if (!targetTab) return
         if (targetTab === 'git' && !hasGitRepo.value) return
+        if (targetTab === 'orchestration' && !hasSpawnRoot.value) return
     } else if (type === 'prev' || type === 'next') {
         const tabs = orderedTabs.value
         const currentIndex = tabs.indexOf(activeTabId.value)
@@ -1150,6 +1184,14 @@ onBeforeUnmount(() => {
                             size="small"
                             @click="switchToTabAndCollapse('terminal')"
                         >Terminal</wa-button>
+
+                        <wa-button
+                            v-if="hasSpawnRoot"
+                            :appearance="activeTabId === 'orchestration' ? 'outlined' : 'plain'"
+                            :variant="activeTabId === 'orchestration' ? 'brand' : 'neutral'"
+                            size="small"
+                            @click="switchToTabAndCollapse('orchestration')"
+                        >Orchestration</wa-button>
                     </div>
 
                     <!-- Scroll right button (faded when at the end) -->
@@ -1254,6 +1296,15 @@ onBeforeUnmount(() => {
                     Terminal
                 </wa-button>
             </wa-tab>
+            <wa-tab v-if="hasSpawnRoot" slot="nav" panel="orchestration">
+                <wa-button
+                    :appearance="activeTabId === 'orchestration' ? 'outlined' : 'plain'"
+                    :variant="activeTabId === 'orchestration' ? 'brand' : 'neutral'"
+                    size="small"
+                >
+                    Orchestration
+                </wa-button>
+            </wa-tab>
 
             <!-- Main session panel -->
             <wa-tab-panel name="main">
@@ -1320,6 +1371,13 @@ onBeforeUnmount(() => {
                     :route-term-index="activeTabId === 'terminal' ? terminalRouteTermIndex : undefined"
                     :active="isActive && activeTabId === 'terminal'"
                     @navigate="onTerminalNavigate"
+                />
+            </wa-tab-panel>
+            <wa-tab-panel v-if="hasSpawnRoot" name="orchestration">
+                <OrchestrationPanel
+                    :session-id="session.id"
+                    :project-id="session.project_id"
+                    :active="isActive && activeTabId === 'orchestration'"
                 />
             </wa-tab-panel>
         </wa-tab-group>

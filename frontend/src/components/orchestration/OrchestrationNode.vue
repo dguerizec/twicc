@@ -1,0 +1,417 @@
+<script setup>
+// One node of the orchestration tree, rendered recursively as a custom tree
+// (we dropped Web Awesome's <wa-tree>: its indent guides assume single-line
+// items and start the vertical line *below* the node's content, which breaks
+// with our multi-line blocks). Here the connectors are drawn ourselves:
+//   - a vertical line starts at a parent's chevron centre and runs down to its
+//     LAST child's elbow (not through the last child's own subtree),
+//   - each child gets a horizontal elbow from that line to its content.
+// The node's block (title + status, settings summary, cost, annotations) is
+// unchanged from before. Non-hidden titles link to the session; hidden ones
+// get a crossed-out eye and no link. Self-references for recursion via filename.
+import { computed, ref } from 'vue'
+import CostDisplay from '../ui/CostDisplay.vue'
+import JsonHumanView from '../json/JsonHumanView.vue'
+import AgentSettingsSummaryView from '../message/AgentSettingsSummaryView.vue'
+import { getProviderHelpers, getProviderStore } from '../../providers'
+import { formatDate, formatDuration } from '../../utils/date'
+
+const props = defineProps({
+    // Id-only tree node: { id, children: [...] }
+    node: { type: Object, required: true },
+    // Map of session id -> full topology node (session, process, metrics)
+    nodesById: { type: Object, required: true },
+    // Id of the session the Orchestration tab belongs to (highlighted).
+    currentSessionId: { type: String, default: null },
+})
+
+// Process-state vocabulary from the topology payload (5 virtual states, cf.
+// _process_state.project_virtual_state). ``dead`` here just means "no live
+// process" — the common, expected state for a finished session — so it is
+// neutral grey rather than the alarming red used elsewhere.
+const PROCESS_STATUS = {
+    starting:            { label: 'Starting',        icon: 'hourglass-start',    color: 'var(--wa-color-warning-60)' },
+    assistant_turn:      { label: 'Assistant turn',  icon: 'robot',              color: 'var(--wa-color-blue-60)' },
+    awaiting_user_input: { label: 'Awaiting input',  icon: 'hand',               color: 'var(--wa-color-warning-60)' },
+    user_turn:           { label: 'User turn',       icon: 'check',              color: 'var(--wa-color-success-60)' },
+    dead:                { label: 'Stopped',         icon: 'circle-stop',        color: 'var(--wa-color-neutral-50)' },
+}
+
+const nodeData = computed(() => props.nodesById[props.node.id] ?? null)
+
+const isCurrent = computed(() => props.node.id === props.currentSessionId)
+
+const isHidden = computed(() => nodeData.value?.session?.hidden === true)
+
+const sessionRoute = computed(() => ({
+    name: 'session',
+    params: { projectId: nodeData.value?.session?.project_id, sessionId: props.node.id },
+}))
+
+const title = computed(() => {
+    const t = nodeData.value?.session?.title
+    return (t && t.trim()) ? t : props.node.id.slice(0, 8)
+})
+
+const provider = computed(() => nodeData.value?.session?.provider ?? null)
+
+const summaryParts = computed(() => {
+    const helpers = provider.value ? getProviderHelpers(provider.value) : null
+    if (!helpers) return []
+    const s = nodeData.value.session
+    const pStore = provider.value ? getProviderStore(provider.value) : null
+    // Orchestration always shows the model's version — even when the setting is
+    // a bare "latest" family (e.g. "opus", which the shared summary renders as
+    // just "Opus"). Derive "family-version" from the session's RESOLVED model so
+    // the label reads "Opus 4.7"; fall back to the raw setting when no resolved
+    // model is known (e.g. a session that hasn't run yet).
+    const m = s.model
+    const modelForSummary = (m && m.family && m.version)
+        ? `${m.family}-${m.version}`
+        : (s.selected_model ?? null)
+    const state = {
+        selected: {
+            selected_model: modelForSummary,
+            permission_mode: s.permission_mode ?? null,
+            effort: s.effort ?? null,
+            thinking_enabled: s.thinking_enabled ?? null,
+            claude_in_chrome: s.claude_in_chrome ?? null,
+            fast_mode: s.fast_mode ?? null,
+            context_max: s.context_max ?? null,
+        },
+        defaults: {
+            selected_model: pStore?.defaultModel,
+            permission_mode: pStore?.defaultPermissionMode,
+            effort: pStore?.defaultEffort,
+            thinking_enabled: pStore?.defaultThinking,
+            claude_in_chrome: pStore?.defaultClaudeInChrome,
+            fast_mode: pStore?.defaultFastMode,
+            context_max: pStore?.defaultContextMax,
+        },
+    }
+    return helpers.getSummaryParts(state) ?? []
+})
+
+const ownCost = computed(() => nodeData.value?.session?.total_cost ?? null)
+const cumulativeCost = computed(() => nodeData.value?.subtree_total_cost ?? null)
+const hasChildren = computed(() => (props.node.children?.length ?? 0) > 0)
+
+const annotations = computed(() => nodeData.value?.session?.annotations ?? null)
+const hasAnnotations = computed(() => {
+    const a = annotations.value
+    return !!a && typeof a === 'object' && Object.keys(a).length > 0
+})
+
+const status = computed(() => {
+    const state = nodeData.value?.process?.state ?? 'dead'
+    return PROCESS_STATUS[state] ?? PROCESS_STATUS.dead
+})
+
+// Lifecycle dates. ``created_at`` is the session's creation; ``last_new_content_at``
+// (last assistant message synced) is the best available "finished working" proxy
+// — see the field rationale in the topology view. ISO strings → seconds for
+// formatDate.
+function fmtDate(iso) {
+    if (!iso) return null
+    const ms = Date.parse(iso)
+    return Number.isNaN(ms) ? null : formatDate(ms / 1000, { smart: true })
+}
+const createdLabel = computed(() => fmtDate(nodeData.value?.session?.created_at))
+const finishedLabel = computed(() => fmtDate(nodeData.value?.session?.last_new_content_at))
+
+// Wall-clock span between creation and last output (the two dates shown).
+const durationLabel = computed(() => {
+    const c = nodeData.value?.session?.created_at
+    const f = nodeData.value?.session?.last_new_content_at
+    if (!c || !f) return null
+    const sec = (Date.parse(f) - Date.parse(c)) / 1000
+    return sec > 0 ? formatDuration(sec) : null
+})
+
+// Expand/collapse this node's children (default expanded).
+const expanded = ref(true)
+</script>
+
+<template>
+    <div class="onode" :class="{ 'has-children': hasChildren, 'is-expanded': expanded }">
+        <div class="onode-row">
+            <div class="onode-rail">
+                <button
+                    v-if="hasChildren"
+                    type="button"
+                    class="onode-chevron"
+                    :aria-label="expanded ? 'Collapse' : 'Expand'"
+                    @click="expanded = !expanded"
+                >
+                    <wa-icon :name="expanded ? 'chevron-down' : 'chevron-right'"></wa-icon>
+                </button>
+            </div>
+            <div class="onode-body">
+                <div class="onode-head">
+                    <router-link
+                        v-if="!isHidden"
+                        :to="sessionRoute"
+                        class="orch-title orch-title-link"
+                        :class="{ 'is-current': isCurrent }"
+                    >{{ title }}</router-link>
+                    <span
+                        v-else
+                        class="orch-title"
+                        :class="{ 'is-current': isCurrent }"
+                    >{{ title }}</span>
+                    <wa-icon
+                        v-if="isHidden"
+                        name="eye-slash"
+                        label="Hidden session"
+                        title="Hidden session"
+                        class="orch-hidden-icon"
+                    ></wa-icon>
+                    <wa-icon
+                        :name="status.icon"
+                        :style="{ color: status.color }"
+                        :title="status.label"
+                        :label="status.label"
+                        class="orch-status-icon"
+                    ></wa-icon>
+                    <span v-if="isCurrent" class="orch-current-badge">current</span>
+                    <span class="orch-cost">
+                        <CostDisplay :cost="ownCost" />
+                        <span
+                            v-if="hasChildren"
+                            class="orch-cost-sub"
+                            title="Cumulative cost including spawned children"
+                        >
+                            Σ <CostDisplay :cost="cumulativeCost" />
+                        </span>
+                    </span>
+                </div>
+                <div class="onode-summary">
+                    <AgentSettingsSummaryView :provider="provider" :parts="summaryParts" :mark-forced="false" />
+                </div>
+                <div v-if="createdLabel" class="onode-dates">
+                    Created {{ createdLabel }}<template v-if="finishedLabel"> · Finished {{ finishedLabel }}</template><template v-if="durationLabel"> · {{ durationLabel }}</template>
+                </div>
+                <div v-if="hasAnnotations" class="onode-annotations">
+                    <JsonHumanView :value="annotations" />
+                </div>
+            </div>
+        </div>
+
+        <div v-if="hasChildren && expanded" class="onode-kids">
+            <OrchestrationNode
+                v-for="child in node.children"
+                :key="child.id"
+                :node="child"
+                :nodes-by-id="nodesById"
+                :current-session-id="currentSessionId"
+            />
+        </div>
+    </div>
+</template>
+
+<style scoped>
+/* Tree connector geometry. ``--elbow-y`` is the vertical centre of a node's
+   first line (where the chevron sits and where the elbow joins); it must equal
+   the row's top padding plus half the first-line height. */
+.onode {
+    --orch-rail-w: 1rem;       /* chevron column width */
+    --orch-elbow-w: 0.85rem;   /* horizontal elbow length (child's left padding) */
+    --orch-line-w: 2px;        /* connector thickness */
+    --orch-line-c: var(--wa-color-neutral-border-normal);
+    --orch-row-line: 1.5rem;        /* first-line height */
+    --orch-row-pad-top: 0.4rem;     /* breathing room above each node */
+    --orch-row-pad-bottom: 0.5rem;  /* and below — space before children / next node */
+    --orch-elbow-y: calc(var(--orch-row-pad-top) + var(--orch-row-line) / 2);
+    position: relative;
+}
+
+.onode-row {
+    position: relative;
+    display: flex;
+    align-items: flex-start;
+    padding-top: var(--orch-row-pad-top);
+    padding-bottom: var(--orch-row-pad-bottom);
+}
+
+.onode-rail {
+    flex: 0 0 var(--orch-rail-w);
+    height: var(--orch-row-line);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.onode-chevron {
+    appearance: none;
+    background: none;
+    border: 0;
+    padding: 0;
+    margin: 0;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--wa-color-text-quiet);
+    font-size: var(--wa-font-size-s);
+    line-height: 1;
+}
+
+.onode-chevron:hover {
+    color: var(--wa-color-text-normal);
+}
+
+.onode-body {
+    flex: 1;
+    min-width: 0;
+    /* Breathing room between the chevron / connectors and the content. */
+    margin-left: var(--wa-space-xs);
+}
+
+/* Children container: indented so the connecting line falls under the parent's
+   chevron centre (rail centre = --orch-rail-w / 2). */
+.onode-kids {
+    margin-left: calc(var(--orch-rail-w) / 2);
+}
+
+/* Each child reserves elbow space on its left; the connectors are absolutely
+   positioned at its box-left, which equals the parent's chevron centre. */
+.onode-kids > .onode {
+    padding-left: var(--orch-elbow-w);
+}
+
+/* Vertical line segment for each child (full height → the line continues to the
+   next sibling). */
+.onode-kids > .onode::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: var(--orch-line-w);
+    background: var(--orch-line-c);
+    transform: translateX(-50%);
+}
+
+/* The last child stops the vertical line at its own elbow (└ instead of ├). */
+.onode-kids > .onode:last-child::before {
+    bottom: auto;
+    height: var(--orch-elbow-y);
+}
+
+/* Horizontal elbow from the vertical line to the child's rail. */
+.onode-kids > .onode::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: var(--orch-elbow-y);
+    width: calc(var(--orch-elbow-w) - var(--wa-space-3xs));
+    height: var(--orch-line-w);
+    background: var(--orch-line-c);
+    transform: translateY(-50%);
+}
+
+/* Leaves have no chevron, so their elbow runs further right across the empty
+   chevron column toward the label (rather than stopping where a chevron would
+   sit, like nodes that do have children). */
+.onode-kids > .onode:not(.has-children)::after {
+    width: calc(var(--orch-elbow-w) + var(--orch-rail-w));
+}
+
+/* A parent's own segment: from its chevron centre down to the bottom of its
+   content row (= the top of its children), bridging the multi-line block. Only
+   while expanded — a collapsed node has no visible children, so the line would
+   dangle for nothing. */
+.onode.has-children.is-expanded > .onode-row::before {
+    content: '';
+    position: absolute;
+    left: calc(var(--orch-rail-w) / 2);
+    /* Start a touch below the chevron so the line isn't glued to it. */
+    top: calc(var(--orch-elbow-y) + var(--wa-space-xs));
+    bottom: 0;
+    width: var(--orch-line-w);
+    background: var(--orch-line-c);
+    transform: translateX(-50%);
+}
+
+/* ── Node block (unchanged content, shared with the message-input summary) ── */
+.onode-head {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: var(--wa-space-xs) var(--wa-space-s);
+    min-height: var(--orch-row-line);
+}
+
+.orch-status-icon {
+    flex-shrink: 0;
+    align-self: center;
+    font-size: var(--wa-font-size-m);
+}
+
+.orch-title {
+    font-weight: 600;
+}
+
+.orch-title.is-current {
+    color: var(--wa-color-brand-60);
+}
+
+.orch-title-link {
+    color: inherit;
+    text-decoration: none;
+    cursor: pointer;
+}
+
+.orch-title-link:hover {
+    text-decoration: underline;
+}
+
+.orch-hidden-icon {
+    flex-shrink: 0;
+    align-self: center;
+    color: var(--wa-color-text-quiet);
+}
+
+.orch-current-badge {
+    font-size: var(--wa-font-size-2xs);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--wa-color-brand-60);
+    border: 1px solid var(--wa-color-brand-60);
+    border-radius: var(--wa-border-radius-s);
+    padding: 0 var(--wa-space-2xs);
+    align-self: center;
+}
+
+.orch-cost {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: baseline;
+    gap: var(--wa-space-s);
+    font-size: var(--wa-font-size-s);
+    color: var(--wa-color-text-quiet);
+}
+
+.orch-cost-sub {
+    display: inline-flex;
+    align-items: baseline;
+    gap: var(--wa-space-3xs);
+}
+
+.onode-summary {
+    font-size: var(--wa-font-size-s);
+    color: var(--wa-color-text-quiet);
+    font-style: italic;
+}
+
+.onode-dates {
+    margin-top: var(--wa-space-3xs);
+    font-size: var(--wa-font-size-s);
+    color: var(--wa-color-text-quiet);
+}
+
+.onode-annotations {
+    margin-top: var(--wa-space-2xs);
+    font-size: var(--wa-font-size-s);
+}
+</style>

@@ -89,7 +89,7 @@ Annotations are short key/value tags on a session (free-form JSON). They are **s
 
 What they buy you:
 
-- **An overview at a glance.** `topology self` and `sessions --spawn-tree self` carry each node's annotations, so you — and the human, on request — see who does what and where it stands without reading any transcript.
+- **An overview at a glance.** `topology self` and `sessions --spawn-tree self` carry each node's annotations, so you — and the human, on request — see who does what and where it stands without reading any transcript. The human reads the same map visually: any session in the tree has a read-only **Orchestration** tab in the UI (titles, status, cost, annotations, timing) — point the human there to follow progress (its URL is a session's URL with `/orchestration` appended, e.g. `/project/<project_id>/session/<session_id>/orchestration`).
 - **Filtering and waiting by predicate.** `sessions`, `processes`, `search`, and `topology` accept `--annotation KEY=VALUE` (also `!=`, `:exists`, `:in:a,b`). For live processes, annotation is an extra filter on a filiation scope: use `processes --spawned-by self --annotation status=blocked` for direct children, or `processes wait --spawned-by self --annotation job=review user_turn dead --timeout 600` for a scoped barrier.
 
 Useful keys (free — conventions, not rules):

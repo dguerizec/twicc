@@ -39,9 +39,16 @@ const formattedCost = computed(() => {
 </template>
 
 <style scoped>
+/* Inline flow (not inline-flex): lets the dollar wa-icon use its natural
+   baseline alignment with the digits — the previous ``inline-flex`` +
+   ``align-items: center`` centred the icon on the line-box, which sits above
+   the digits' baseline and made the ``$`` look too high (session header,
+   session list, orchestration tree, …). */
 .cost-display {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--wa-space-2xs) !important;
+    white-space: nowrap;
+}
+
+.cost-icon {
+    margin-inline-end: var(--wa-space-3xs);
 }
 </style>
