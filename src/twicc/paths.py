@@ -147,6 +147,26 @@ def get_session_artifacts_dir(session_id: str) -> Path:
     return get_artifacts_dir() / session_id
 
 
+def get_scratch_dir() -> Path:
+    """Return the scratch root directory (``<data_dir>/scratch/``).
+
+    Scratch holds throwaway working files. A session's own scratch lives
+    under ``<data_dir>/scratch/<session_id>/``; an orchestration tree may
+    instead share one folder, passed to its members via the ``scratch_dir``
+    annotation.
+    """
+    return get_data_dir() / "scratch"
+
+
+def get_session_scratch_dir(session_id: str) -> Path:
+    """Return the per-session scratch directory.
+
+    The directory is not created here; agents create it on demand when they
+    need throwaway working files.
+    """
+    return get_scratch_dir() / session_id
+
+
 def get_seen_tips_path() -> Path:
     """Path to the synced seen-tips state file."""
     return get_data_dir() / "seen-tips.json"

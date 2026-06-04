@@ -219,6 +219,13 @@ Thumbs.db
 db/
 search-index/
 
+# Session artifacts and scratch space — data-dir subdirectories that surface
+# at the worktree root when the data dir is the worktree itself. Anchored to
+# the root (like /.worktrees/ below) so they only match there, never a source
+# directory that happens to share the name.
+/artifacts/
+/scratch/
+
 # SQLite database (legacy location, kept for safety)
 data.sqlite
 data.sqlite-wal

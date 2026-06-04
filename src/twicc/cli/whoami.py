@@ -25,10 +25,13 @@ def whoami_cmd(
     prints a JSON object with: ``session_id``, ``title``, ``project_id``,
     ``project_directory``, ``current_working_directory`` (resolved
     from tool_use paths, may differ from ``project_directory`` when
-    the agent works in a worktree or other repo), the resolved
-    ``agent_settings``, the full ``session``
-    payload (same as ``twicc session <ID>``), and the matching
-    ``process`` row.
+    the agent works in a worktree or other repo), ``artifacts_dir`` and
+    ``scratch_dir`` (the session's own working directories, already
+    joined with the session id), ``orchestration_scratch_dir`` (the
+    shared scratch folder, present only when the session is part of an
+    orchestration tree), the resolved ``agent_settings``, the full
+    ``session`` payload (same as ``twicc session <ID>``), and the
+    matching ``process`` row.
 
     Useful from inside a session's Bash tool to discover the session's
     own identity (the agent doesn't otherwise know its TwiCC session_id).
@@ -49,6 +52,7 @@ def whoami_cmd(
     from twicc.cli._twicc_info import resolve_live_twicc_or_exit
     from twicc.core.models import ProcessRun, Project
     from twicc.core.serializers import serialize_session
+    from twicc.paths import get_session_artifacts_dir, get_session_scratch_dir
     from twicc.pending_titles import get_pending_title
     from twicc.providers.helpers import AgentSettings, get_provider_helpers
 
@@ -87,12 +91,24 @@ def whoami_cmd(
     else:
         process = serialize_dead_process_row(session, session_id=session.id)
 
+    # Per-session working directories, pre-composed so the agent doesn't have
+    # to join the base dir (given in the system-prompt Context block) with its
+    # own session id. Both always point at the session's *own* folders —
+    # whoami only echoes the session's base data. The shared scratch folder of
+    # an orchestration tree (carried by the ``scratch_dir`` annotation) is a
+    # distinct concept, surfaced as ``orchestration_scratch_dir`` only when the
+    # session is actually part of an orchestration; the key is omitted otherwise.
+    orchestration_scratch_dir = (session.annotations or {}).get("scratch_dir")
+
     data = {
         "session_id": session.id,
         "title": get_pending_title(session.id) or session.title,
         "project_id": session.project_id,
         "project_directory": project_directory,
         "current_working_directory": session.git_directory,
+        "artifacts_dir": str(get_session_artifacts_dir(session.id)),
+        "scratch_dir": str(get_session_scratch_dir(session.id)),
+        **({"orchestration_scratch_dir": orchestration_scratch_dir} if orchestration_scratch_dir else {}),
         "agent_settings": resolved_settings._asdict(),
         "session": serialize_session(session),
         "process": process,

@@ -334,7 +334,7 @@ def build_dynamic_block(
     :mod:`twicc.pending_session_attributes`) or from the ``Session`` row
     on resume. The caller decides where to read them.
     """
-    from twicc.paths import get_artifacts_dir, get_data_dir
+    from twicc.paths import get_artifacts_dir, get_scratch_dir
 
     lines: list[str] = [_LIVE_ENVIRONMENT_INTRO, "### Providers", ""]
     lines.extend(_build_providers_lines())
@@ -352,7 +352,7 @@ def build_dynamic_block(
     # Absolute, resolved root for scratch files (throwaway work space, or a
     # shared folder for an orchestration tree). Created on demand by agents;
     # the static addendum above references this base via ``{scratch_base_dir}``.
-    lines.append(f"- scratch_base_dir: {get_data_dir() / 'scratch'}")
+    lines.append(f"- scratch_base_dir: {get_scratch_dir()}")
 
     lines.append(f"- project: {_project_descriptor(project_id)}")
 

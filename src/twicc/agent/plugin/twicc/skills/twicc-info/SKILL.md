@@ -54,8 +54,7 @@ Every invocation returns at minimum:
     "claude_code": {"identifier": "claude_code", "name": "Claude Code", "disabled": false, "default": true},
     "codex":       {"identifier": "codex",       "name": "Codex",       "disabled": true,  "default": false}
   },
-  "available_info_arguments": {},
-  "available_twicc_commands": {}
+  "available_info_arguments": {}
 }
 ```
 
@@ -67,10 +66,6 @@ Every invocation returns at minimum:
   - `disabled` — `true` when the user has disabled the provider; `create-session` and similar calls will refuse it.
   - `default` — `true` for the user's default provider; `false` otherwise.
 - `available_info_arguments` — discovery dict for the positional sections this command itself accepts (`presets`, `commands`, `models`, `agent-settings`, `all`). The reserved `__description` key explains the dict; every other key is an accepted argument paired with a one-line summary of what it adds to the payload.
-- `available_twicc_commands` — discovery dict of every TwiCC CLI command backed by a skill, keyed by the command name (e.g. `create-session`). Each entry carries:
-  - `description` — the matching skill's one-line summary.
-  - `command` — a ready-to-run `<twicc_executable> <command> --help` invocation; pasting it shows the command's full usage.
-  - `skill` — the matching skill name (e.g. `twicc-create-session`) to load when you want to actually call the command.
 
 ## Section payloads
 
