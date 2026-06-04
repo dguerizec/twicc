@@ -29,6 +29,8 @@ You know your own `permission_mode` from your injected context.
 - Executor: `send-message parent '<your result>'` when done.
 - Read-only: leave the result as your final message; your parent reads it.
 
+For bulky output (a large diff, a generated file), an executor writes it to the shared scratch space and sends a short message pointing to the file — see `twicc-orchestration`.
+
 If you can run commands, keep your own annotations current as you go — `$TWICC update-session self annotations set:status=working`, then `set:status=done` (or `failed`) when finished. Short single-line values only; see `twicc-orchestration` for what annotations are for. (A read-only session can't run commands, so it keeps whatever its parent tagged it with.)
 
 ## If the task is too big

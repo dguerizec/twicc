@@ -27,7 +27,7 @@ A manager has to spawn children and report up — a read-only session (`strict`/
 
 ## Report up
 
-Report to your parent with `send-message parent`; your parent may also pull you at any time. Wait only on **your own direct children**, never grandchildren:
+Report to your parent with `send-message parent`; your parent may also pull you at any time. For bulky output — e.g. a synthesis you build from your workers' results — write it to the shared scratch space and point to it in a short message (see `twicc-orchestration`). Wait only on **your own direct children**, never grandchildren:
 
 ```bash
 $TWICC processes wait --spawned-by self user_turn dead --timeout 900

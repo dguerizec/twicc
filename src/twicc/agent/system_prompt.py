@@ -117,8 +117,8 @@ When you produce a visual artifact such as a screenshot and want the user
 to see or open it from the TwiCC UI, save it OUTSIDE the project's
 repository so the working tree stays clean.
 
-- Directory: `{artifacts_dir}/{session_id}/{artifact_file_name}` — the
-  absolute `artifacts_dir` is listed in the "Context" block below; create
+- Directory: `{artifacts_base_dir}/{session_id}/{artifact_file_name}` — the
+  absolute `artifacts_base_dir` is listed in the "Context" block below; create
   the per-session subdirectory if it does not yet exist.
 - URL: `/artifacts/{session_id}/{artifact_file_name}`
 - Reference the URL from Markdown (e.g. `![label](URL)`) so the image
@@ -132,6 +132,17 @@ repository so the working tree stays clean.
 - Your session id (for this path) is in the `Context` block, or — if not there
   at start — arrives in a `<twicc:context>` block with the first user message.
   If you ever still can't find it, use the `twicc-whoami` skill.
+
+## Scratch space (throwaway working files)
+
+When you need somewhere to put throwaway working files, use the scratch space
+rather than the project repository, so the working tree stays clean.
+
+- Base directory: `{scratch_base_dir}`, listed in the "Context" block below.
+  It is not created for you; make what you need on demand (e.g. `mkdir -p`).
+- Delete files once you no longer need them.
+- Scratch files are not served over a URL and are not shown to the human; for
+  visuals the human should open, use Artifacts above.
 
 ## Crons (scheduled tasks)
 
@@ -323,7 +334,7 @@ def build_dynamic_block(
     :mod:`twicc.pending_session_attributes`) or from the ``Session`` row
     on resume. The caller decides where to read them.
     """
-    from twicc.paths import get_artifacts_dir
+    from twicc.paths import get_artifacts_dir, get_data_dir
 
     lines: list[str] = [_LIVE_ENVIRONMENT_INTRO, "### Providers", ""]
     lines.extend(_build_providers_lines())
@@ -334,9 +345,14 @@ def build_dynamic_block(
         lines.append(f"- session_id: {session_id}")
 
     # Absolute, resolved root for session-scoped artifacts. Per-session
-    # files live at ``<artifacts_dir>/<session_id>/<artifact_file_name>``;
-    # the static addendum above references this base via ``{artifacts_dir}``.
-    lines.append(f"- artifacts_dir: {get_artifacts_dir()}")
+    # files live at ``<artifacts_base_dir>/<session_id>/<artifact_file_name>``;
+    # the static addendum above references this base via ``{artifacts_base_dir}``.
+    lines.append(f"- artifacts_base_dir: {get_artifacts_dir()}")
+
+    # Absolute, resolved root for scratch files (throwaway work space, or a
+    # shared folder for an orchestration tree). Created on demand by agents;
+    # the static addendum above references this base via ``{scratch_base_dir}``.
+    lines.append(f"- scratch_base_dir: {get_data_dir() / 'scratch'}")
 
     lines.append(f"- project: {_project_descriptor(project_id)}")
 
