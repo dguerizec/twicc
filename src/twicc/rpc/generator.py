@@ -11,11 +11,9 @@ from typing import NamedTuple
 
 import click
 
+from twicc.cli._local_only import LOCAL_ONLY_COMMANDS
 from twicc.rpc.invoker import get_command
 from twicc.rpc.schema import ParamSpec, json_schema_for, param_spec
-
-# Commands never exposed over the API: human/local-only or PID-bound.
-DENYLIST = {"password", "claude", "codex", "run", "token", "whoami"}
 
 
 class Level(NamedTuple):
@@ -70,7 +68,7 @@ def _walk(cmd: click.Command, token: str | None, chain: list[Level], registry: d
         if not is_root and getattr(cmd, "invoke_without_command", False):
             _register(registry, child_chain, opts, cmd)
         for sub_name, sub in cmd.commands.items():
-            if is_root and sub_name in DENYLIST:
+            if is_root and sub_name in LOCAL_ONLY_COMMANDS:
                 continue
             _walk(sub, sub_name, child_chain, registry, is_root=False)
     else:

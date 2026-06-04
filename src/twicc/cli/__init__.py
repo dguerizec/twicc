@@ -1011,5 +1011,22 @@ app.command(name="info")(info_cmd)
 
 
 def main() -> None:
-    """Entry point for ``pyproject.toml`` scripts and ``__main__.py``."""
+    """Entry point for ``pyproject.toml`` scripts and ``__main__.py``.
+
+    Keep the common LOCAL path fast: a cheap argv pre-check avoids importing the
+    ``_remote`` module (httpx, the registry, …) on every invocation. Only when a
+    ``--remote`` token is actually present do we load the forwarder. A non-leading
+    literal ``--remote`` in free text trips this cheap check, but ``maybe_forward``
+    then returns ``None`` via its front-parse — so the local app still runs (a
+    rare, harmless extra import).
+    """
+    import sys
+
+    argv = sys.argv[1:]
+    if any(a == "--remote" or a.startswith("--remote=") for a in argv):
+        from twicc.cli._remote import maybe_forward
+
+        code = maybe_forward(argv)
+        if code is not None:
+            raise SystemExit(code)
     app()
