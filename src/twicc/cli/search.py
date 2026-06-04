@@ -2,6 +2,8 @@
 
 import sys
 
+from twicc.cli._output import emit_json
+
 
 def main(
     query: str,
@@ -66,6 +68,7 @@ def main(
             query,
             limit=limit,
             offset=offset,
+            to_json=False,
             include_hidden=include_hidden,
             only_hidden=only_hidden,
             spawned_by=spawned_by_id,
@@ -77,4 +80,4 @@ def main(
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    print(result)
+    emit_json(result)

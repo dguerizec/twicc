@@ -18,9 +18,7 @@ No Django setup is needed: workspaces live in a JSON file, not the DB.
 
 from __future__ import annotations
 
-import sys
-
-import orjson
+from twicc.cli._output import emit_json
 
 
 def main(workspace_ids: list[str]) -> None:
@@ -60,5 +58,4 @@ def main(workspace_ids: list[str]) -> None:
             entry["known"] = True
         results.append(entry)
 
-    sys.stdout.buffer.write(orjson.dumps(results, option=orjson.OPT_INDENT_2))
-    sys.stdout.buffer.write(b"\n")
+    emit_json(results)

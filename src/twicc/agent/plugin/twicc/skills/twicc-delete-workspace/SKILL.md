@@ -37,8 +37,6 @@ $TWICC delete-workspace '<WORKSPACE_ID>'
 ### Options
 
 - `--timeout SECONDS` — Seconds to wait for the server's response (default 30).
-- `--json` — Emit a single JSON object on stdout (implies `--no-color`).
-- `--no-color` — Disable ANSI colors.
 
 ## Errors
 
@@ -74,7 +72,6 @@ $TWICC delete-workspace '<WORKSPACE_ID>'
 
 ```bash
 $TWICC delete-workspace scratch
-$TWICC --json delete-workspace scratch
 # → {"status":"deleted","workspace_id":"scratch","request_uuid":"..."}
 ```
 

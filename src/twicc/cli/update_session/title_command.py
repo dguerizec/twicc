@@ -7,7 +7,7 @@ so the live TwiCC server applies the change via
 ``rename_session`` (Claude Code: JSONL custom-title entry, Codex:
 ``thread/name/set``), then ``session_updated`` broadcast.
 
-No options beyond the standard output controls — title is the only
+No options beyond the standard ``--timeout`` control — title is the only
 positional argument. Provider-specific validation (trim, non-empty,
 ≤ ``MAX_TITLE_LENGTH``) happens server-side via ``helpers.validate_title``.
 """
@@ -36,19 +36,6 @@ def update_title_cmd(
             "server side."
         ),
     ),
-    no_color: bool = typer.Option(
-        False,
-        "--no-color",
-        help="Disable ANSI colors in human-readable output.",
-    ),
-    json_output: bool = typer.Option(
-        False,
-        "--json",
-        help=(
-            "Emit a single JSON object on stdout instead of pretty text. "
-            "Implies --no-color."
-        ),
-    ),
 ) -> None:
     """Set a new title on the session.
 
@@ -67,9 +54,7 @@ def update_title_cmd(
         ServerDownError, check_heartbeat,
     )
     from twicc.cli._drop_request.drop_file import write_drop_file
-    from twicc.cli._drop_request.output import (
-        emit_final, emit_progress, emit_validation_errors,
-    )
+    from twicc.cli._drop_request.output import emit_final, emit_validation_errors
     from twicc.cli._drop_request.polling import poll_status
     from twicc.cli._drop_request.session_lookup import (
         SessionLookupError, lookup_session,
@@ -77,12 +62,10 @@ def update_title_cmd(
     from twicc.cli._drop_request.validation import ValidationError
 
     try:
-        age = check_heartbeat()
+        check_heartbeat()
     except ServerDownError as e:
         typer.echo(str(e), err=True)
         raise typer.Exit(2)
-
-    emit_progress(f"✓ Heartbeat OK (last seen {age:.1f}s ago)", json_output=json_output)
 
     # Local pre-check: session must exist, not be a subagent, not be stale,
     # and have a project directory. The watcher-side service re-validates
@@ -90,17 +73,8 @@ def update_title_cmd(
     try:
         resolved = lookup_session(session_id)
     except SessionLookupError as e:
-        emit_validation_errors(
-            [ValidationError("SESSION_ID", e.code, e.message)],
-            json_output=json_output,
-        )
+        emit_validation_errors([ValidationError("SESSION_ID", e.code, e.message)])
         raise typer.Exit(1)
-
-    emit_progress(
-        f"✓ Session {resolved.session_id!r} resolved "
-        f"(provider: {resolved.provider}, project: {resolved.project_id})",
-        json_output=json_output,
-    )
 
     # Local title sanity: non-empty after trim. The full validation
     # (length, provider-specific rules) happens server-side via
@@ -111,14 +85,8 @@ def update_title_cmd(
                 "NEW_TITLE", "invalid_title",
                 "Title cannot be empty (or whitespace only).",
             )],
-            json_output=json_output,
         )
         raise typer.Exit(1)
-
-    emit_progress(
-        f"✓ Title accepted ({len(new_title.strip())} chars, after trim)",
-        json_output=json_output,
-    )
 
     payload = {
         "session_id": resolved.session_id,
@@ -126,10 +94,6 @@ def update_title_cmd(
     }
 
     drop = write_drop_file(payload, kind="session:update_title")
-    emit_progress(
-        f"→ Request submitted (request_uuid: {drop.request_uuid[:8]}...)",
-        json_output=json_output,
-    )
 
     status_path = drop.path.with_name(f"{drop.request_uuid}.status.json")
     outcome = poll_status(status_path, timeout_seconds=timeout)
@@ -137,12 +101,7 @@ def update_title_cmd(
     drop.path.unlink(missing_ok=True)
     status_path.unlink(missing_ok=True)
 
-    emit_final(
-        outcome,
-        request_uuid=drop.request_uuid,
-        json_output=json_output,
-        timeout=timeout,
-    )
+    emit_final(outcome, request_uuid=drop.request_uuid, timeout=timeout)
 
     if outcome.status == "updated":
         raise typer.Exit(0)

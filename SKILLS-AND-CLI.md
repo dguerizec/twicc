@@ -6,12 +6,12 @@ TwiCC ships a command-line interface (every `twicc <command>`) **and** a Claude 
 
 Two audiences, one surface:
 
-- **You, in a terminal** — compose `twicc` into scripts; every list/inspect command prints JSON.
+- **You, in a terminal** — compose `twicc` into scripts; every structured command prints JSON.
 - **An agent, mid-session** — the plugin skills teach the agent the same commands, plus the `self` / `parent` keywords so it can act on its own session and its parent without knowing any id up front.
 
 ## Conventions
 
-- **JSON output.** List and inspect commands print JSON on stdout. Write commands (create / update / send / stop / …) accept `--json` to emit a single JSON object instead of pretty text (`--json` implies `--no-color`).
+- **JSON output.** Every structured command prints JSON on stdout — listings, inspections, and write commands (create / update / send / stop / …) alike. There is no text mode and no flag to pass: the CLI speaks JSON by default. The only exceptions are the purely interactive `password` commands and the `claude` / `codex` passthroughs, which stay text.
 - **Read vs write.** Read commands query TwiCC's database directly and work whether or not a backend is running (a few, like live process state, need the backend). Write commands drop a request file that the **running** TwiCC server picks up, then poll for the server's final status — they need a live backend and accept `--timeout` (default 30 s). If the deadline passes the request stays on disk and may still apply server-side.
 - **Exit codes.** `0` success; non-zero on failure (typically `1` not-found / validation, `2` backend down, `5` timeout). Run `twicc <command> --help` for a command's exact codes.
 - **Catalogues drift.** The model / effort / permission / preset lists shown below are the current built-ins; the live source of truth is always `twicc info` (see below).
@@ -60,7 +60,6 @@ Show the latest usage quota snapshot (quotas, burn rate, cost estimates) for eve
 
 ### `twicc whoami`
 Print details of the session that owns the calling process — `session_id`, `title`, `project_id`, `project_directory`, `current_working_directory`, `artifacts_dir`, `scratch_dir`, `orchestration_scratch_dir` (when part of an orchestration), the resolved `agent_settings`, the full `session` payload, and the live `process` row. Exits `1` from a plain terminal (only meaningful inside a session).
-- `--json` — emit a single JSON object.
 - Skill: [`twicc-whoami`](src/twicc/agent/plugin/twicc/skills/twicc-whoami/SKILL.md).
 
 ## Projects
@@ -78,13 +77,13 @@ Show a single project as JSON. Accepts a project id (with or without leading das
 ### `twicc create-project <DIRECTORY>`
 Register a directory as a TwiCC project (id derived from the canonical realpath; one project per directory).
 - `--name TEXT` (≤ 25 chars, globally unique), `--color TEXT` (CSS hex), `--create-directory` (mkdir if missing).
-- Plus the write-command flags `--timeout`, `--no-color`, `--json`.
+- Plus the write-command flag `--timeout`.
 - Skill: [`twicc-create-project`](src/twicc/agent/plugin/twicc/skills/twicc-create-project/SKILL.md).
 
 ### `twicc update-project <PROJECT>`
 Update a project's name, color, and/or archived state. The directory is immutable; there is no delete (projects are archived, never removed).
 - `--name TEXT` / `--unset-name`, `--color TEXT` / `--unset-color`, `--archive` / `--unarchive` (each pair mutually exclusive).
-- Plus `--timeout`, `--no-color`, `--json`.
+- Plus `--timeout`.
 - Skill: [`twicc-update-project`](src/twicc/agent/plugin/twicc/skills/twicc-update-project/SKILL.md).
 
 ## Workspaces
@@ -102,18 +101,18 @@ Show a single workspace as JSON.
 ### `twicc create-workspace <NAME>`
 Create a workspace (name trimmed, ≤ 20 chars, unique; id slugified from the name).
 - `--color TEXT`, `--add-project TEXT` (repeatable; id or path, must already exist), `--add-pattern TEXT` (repeatable auto-add directory glob), `--archived`.
-- Plus `--timeout`, `--no-color`, `--json`.
+- Plus `--timeout`.
 - Skill: [`twicc-create-workspace`](src/twicc/agent/plugin/twicc/skills/twicc-create-workspace/SKILL.md).
 
 ### `twicc update-workspace <WORKSPACE_ID>`
 Update a workspace. Flags combine into a single atomic edit.
 - `--name TEXT`, `--color TEXT` / `--unset-color`, `--add-project` / `--remove-project` (repeatable; id or path), `--add-pattern` / `--remove-pattern` (repeatable), `--archive` / `--unarchive`.
-- Plus `--timeout`, `--no-color`, `--json`.
+- Plus `--timeout`.
 - Skill: [`twicc-update-workspace`](src/twicc/agent/plugin/twicc/skills/twicc-update-workspace/SKILL.md).
 
 ### `twicc delete-workspace <WORKSPACE_ID>`
 Delete a workspace by id. Projects are **not** deleted — only the grouping disappears.
-- Plus `--timeout`, `--no-color`, `--json`.
+- Plus `--timeout`.
 - Skill: [`twicc-delete-workspace`](src/twicc/agent/plugin/twicc/skills/twicc-delete-workspace/SKILL.md).
 
 ## Sessions — browse & read
@@ -144,17 +143,17 @@ Create a session. `PROMPT` is text or a path to a file whose content is the prom
 - **Settings:** `--preset NAME`, `--model`, `--effort`, `--permission-mode`, `--thinking/--no-thinking`, `--claude-in-chrome/--no-claude-in-chrome`, `--fast-mode/--no-fast-mode`, `--question-widget/--no-question-widget`, `--context-max` (`200k`/`1m`/`272k`). Per-flag options override a preset; unset fields fall back to the synced defaults. Run `twicc info agent-settings models presets` for the current valid values.
 - **Visibility:** `--hidden` — create the session invisible to the UI (no list/search/broadcast/counter), still counted in cost aggregates. Requires a non-interactive permission mode (`bypassPermissions`/`dontAsk` for Claude Code; `yolo`/`strict` for Codex) and `question_widget=False`.
 - **Metadata:** `--title TEXT` (≤ 200 chars), `--annotation KEY=VALUE` (repeatable), `--annotations-file PATH`, `--attach PATH` (repeatable; images/PDF/text up to 5 MB each, 100 files / 32 MB total).
-- Plus `--timeout`, `--no-color`, `--json`.
+- Plus `--timeout`.
 - The spawning session is recorded automatically (`spawned_by`) when the command runs from inside a session.
 - Skill: [`twicc-create-session`](src/twicc/agent/plugin/twicc/skills/twicc-create-session/SKILL.md).
 
 ### `twicc send-message <SESSION_ID|parent> <PROMPT>`
 Send a message into an existing session (resurrects it if dead). Keeps the session's stored settings. `parent` targets the spawner of the calling session.
-- `--attach PATH` (repeatable), plus `--timeout`, `--no-color`, `--json`.
+- `--attach PATH` (repeatable), plus `--timeout`.
 - Skill: [`twicc-send-message`](src/twicc/agent/plugin/twicc/skills/twicc-send-message/SKILL.md).
 
 ### `twicc update-session <SESSION_ID|self> <SUBCOMMAND>`
-Change a session without sending a message. `self` targets the current session. All subcommands accept `--timeout`, `--no-color`, `--json`.
+Change a session without sending a message. `self` targets the current session. All subcommands accept `--timeout`.
 - `settings` — change agent settings (patch by default; `--preset` switches to replace mode). Per-field flags mirror `create-session` (`--model`, `--effort`, `--permission-mode`, `--thinking`, `--claude-in-chrome`, `--fast-mode`, `--question-widget`, `--context-max`); `--unset <field>` resets one to the synced default. Startup settings restart the agent; live ones apply on the next turn.
 - `title <NEW_TITLE>` — rename (trimmed, non-empty, ≤ 200 chars).
 - `archive` / `unarchive` — archive kills any live agent, tears down its tmux terminal, and (under `autoUnpinOnArchive`) unpins.
@@ -175,8 +174,8 @@ List or act on the live agent processes the backend currently runs. The CLI proj
 
 ### `twicc process <SESSION_ID> <SUBCOMMAND>`
 Inspect or control one session's live process. Bare `twicc process <id>` prints the current row.
-- `stop` — kill the live agent (`reason="manual"`, like the UI's *Stop process*; idempotent). Options `--timeout`, `--no-color`, `--json`.
-- `wait <STATUS...>` — block until the process reaches any listed virtual state (`starting`, `assistant_turn`, `awaiting_user_input`, `user_turn`, `dead`). Required `--timeout FLOAT`; `--transition`; `--no-color`, `--json`.
+- `stop` — kill the live agent (`reason="manual"`, like the UI's *Stop process*; idempotent). Option `--timeout`.
+- `wait <STATUS...>` — block until the process reaches any listed virtual state (`starting`, `assistant_turn`, `awaiting_user_input`, `user_turn`, `dead`). Required `--timeout FLOAT`; `--transition`.
 - Skill: [`twicc-process`](src/twicc/agent/plugin/twicc/skills/twicc-process/SKILL.md).
 
 ## Spawn tree & filiation

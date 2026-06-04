@@ -44,11 +44,11 @@ Exit codes:
 
 from __future__ import annotations
 
-import sys
 import time
 
-import orjson
 import typer
+
+from twicc.cli._output import emit_json
 
 
 POLL_INTERVAL_SECONDS = 0.25
@@ -179,8 +179,7 @@ def wait_cmd(
     def emit_and_exit(exit_code: int) -> None:
         """Serialize ``outcomes`` in input order and raise ``typer.Exit``."""
         results = [outcomes[sid] for sid in session_ids_ordered]
-        sys.stdout.buffer.write(orjson.dumps(results, option=orjson.OPT_INDENT_2))
-        sys.stdout.buffer.write(b"\n")
+        emit_json(results)
         raise typer.Exit(exit_code)
 
     # --- Vacuous truth: every session_id was skipped ---------------------

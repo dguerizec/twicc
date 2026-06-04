@@ -7,6 +7,8 @@ from pathlib import Path
 import orjson
 import psutil
 
+from twicc.cli._output import emit_json
+
 
 def main() -> None:
     """Report the live TwiCC backend's status as JSON, exit 0 only when fully running.
@@ -93,6 +95,5 @@ def _heartbeat_age(heartbeat_path: Path) -> float | None:
 
 
 def _emit_and_exit(data: dict, *, code: int) -> None:
-    sys.stdout.buffer.write(orjson.dumps(data, option=orjson.OPT_INDENT_2))
-    sys.stdout.buffer.write(b"\n")
+    emit_json(data)
     sys.exit(code)

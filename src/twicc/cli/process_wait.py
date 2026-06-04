@@ -9,24 +9,21 @@ Server-down handling follows the ``stop`` pattern (``check_heartbeat`` →
 exit 2), distinct from validation errors (exit 1) and bad CLI usage
 (exit 64). The full design lives in
 ``docs/superpowers/specs/2026-05-30-process-wait-subcommand-design.md``.
+
+On a match the result is emitted as JSON on stdout (exit 0). A timeout
+prints a short reason on stderr and exits 5 — no stdout payload.
 """
 
 from __future__ import annotations
 
-import sys
 import time
 
-import orjson
 import typer
+
+from twicc.cli._output import emit_json
 
 
 POLL_INTERVAL_SECONDS = 0.25
-
-
-def _log(line: str, *, json_output: bool, err: bool = False) -> None:
-    """Print a progress line unless JSON output is requested."""
-    if not json_output:
-        typer.echo(line, err=err)
 
 
 def wait_cmd(
@@ -35,8 +32,6 @@ def wait_cmd(
     *,
     timeout: float,
     transition: bool,
-    no_color: bool,  # noqa: ARG001 - accepted for CLI consistency
-    json_output: bool,
 ) -> None:
     """Block until the live process reaches any of the listed virtual states."""
     import os
@@ -91,7 +86,7 @@ def wait_cmd(
     # --- Server-up check (exit 2 on failure, like stop_cmd) --------------
 
     try:
-        age = check_heartbeat()
+        check_heartbeat()
     except ServerDownError as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(2)
@@ -106,8 +101,6 @@ def wait_cmd(
             err=True,
         )
         raise typer.Exit(2)
-
-    _log(f"✓ Heartbeat OK (last seen {age:.1f}s ago)", json_output=json_output)
 
     # --- session_id validation -------------------------------------------
 
@@ -126,13 +119,6 @@ def wait_cmd(
             err=True,
         )
         raise typer.Exit(1)
-
-    mode_label = "--transition" if transition else "normal"
-    _log(
-        f"→ Waiting for: {', '.join(requested)} "
-        f"(timeout {timeout:g}s, mode: {mode_label})",
-        json_output=json_output,
-    )
 
     # --- Snapshot + poll loop --------------------------------------------
 
@@ -167,15 +153,7 @@ def wait_cmd(
     initial_marker = row_change_marker(initial_row)
     initial_virtual = project_virtual_state(initial_row)
 
-    def emit_match(row, matched_state, elapsed=None):
-        if elapsed is not None:
-            _log(
-                f"✓ Matched '{matched_state}' after {elapsed:.1f}s",
-                json_output=json_output,
-            )
-        else:
-            _log(f"✓ Matched '{matched_state}'", json_output=json_output)
-
+    def emit_match(row, matched_state):
         # Re-fetch the Session row in case the watcher created it (or
         # refreshed the title) while we were polling.
         sess = (
@@ -186,29 +164,14 @@ def wait_cmd(
         data = serialize_wait_result(
             row, sess, session_id=session_id, matched_state=matched_state
         )
-        sys.stdout.buffer.write(orjson.dumps(data, option=orjson.OPT_INDENT_2))
-        sys.stdout.buffer.write(b"\n")
+        emit_json(data)
 
     # Normal mode: if the initial state already matches, return immediately.
     if not transition and initial_virtual in requested_set:
         emit_match(initial_row, initial_virtual)
         raise typer.Exit(0)
 
-    if transition:
-        _log(
-            f"… Initial state: {initial_virtual} "
-            f"(waiting for a transition before evaluating match)",
-            json_output=json_output,
-        )
-    else:
-        _log(
-            f"… Initial state: {initial_virtual} "
-            f"(not in requested set; polling)",
-            json_output=json_output,
-        )
-
     deadline = time.monotonic() + timeout
-    start = time.monotonic()
 
     while True:
         time.sleep(POLL_INTERVAL_SECONDS)
@@ -232,25 +195,22 @@ def wait_cmd(
         if transition and marker == initial_marker:
             # No transition observed yet — keep polling without evaluating.
             if time.monotonic() >= deadline:
-                _log(
-                    f"✗ Timeout after {timeout:g}s "
-                    f"(no transition observed, state: {virtual})",
-                    json_output=json_output,
+                typer.echo(
+                    f"Timeout after {timeout:g}s "
+                    f"(no transition observed, state: {virtual}).",
                     err=True,
                 )
                 raise typer.Exit(5)
             continue
 
         if virtual in requested_set:
-            elapsed = time.monotonic() - start
-            emit_match(row, virtual, elapsed=elapsed)
+            emit_match(row, virtual)
             raise typer.Exit(0)
 
         if time.monotonic() >= deadline:
-            _log(
-                f"✗ Timeout after {timeout:g}s "
-                f"(last observed state: {virtual})",
-                json_output=json_output,
+            typer.echo(
+                f"Timeout after {timeout:g}s "
+                f"(last observed state: {virtual}).",
                 err=True,
             )
             raise typer.Exit(5)

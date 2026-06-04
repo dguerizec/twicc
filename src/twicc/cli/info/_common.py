@@ -4,13 +4,10 @@ from __future__ import annotations
 
 import sys
 
-import orjson
-
-
-def emit_json(payload) -> None:
-    """Print ``payload`` as indented JSON to stdout."""
-    sys.stdout.buffer.write(orjson.dumps(payload, option=orjson.OPT_INDENT_2))
-    sys.stdout.buffer.write(b"\n")
+# Re-exported so existing ``from twicc.cli.info._common import emit_json``
+# call sites keep working; the canonical home is now ``twicc.cli._output``,
+# the single place that decides the CLI's JSON shape.
+from twicc.cli._output import emit_json  # noqa: F401
 
 
 def resolve_providers(provider: str | None, include_disabled: bool = False):

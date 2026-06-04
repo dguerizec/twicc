@@ -2,7 +2,7 @@
 
 import sys
 
-import orjson
+from twicc.cli._output import emit_json
 
 
 def main(project_id: str) -> None:
@@ -28,5 +28,4 @@ def main(project_id: str) -> None:
         if project_id in ws.get("projectIds", [])
     ]
 
-    sys.stdout.buffer.write(orjson.dumps(data, option=orjson.OPT_INDENT_2))
-    sys.stdout.buffer.write(b"\n")
+    emit_json(data)

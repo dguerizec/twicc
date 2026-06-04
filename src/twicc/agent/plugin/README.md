@@ -123,7 +123,7 @@ Common codes that always get a description: `is_subagent` (explain where to targ
 
 ### Output format
 
-**Always show only the JSON output** — omit the text mode (`✓ Heartbeat OK…` progress lines). Agents parse JSON.
+**Show the JSON output directly.** The CLI speaks JSON by default on every structured command — there is no text mode and no flag to pass. Agents parse the JSON.
 
 For commands with multiple output shapes (listing vs. `get`, or per-subcommand), use subsections. Keep JSON examples realistic and complete but not padded.
 
@@ -170,7 +170,6 @@ You are in TwiCC — link to a session: `[link text](/project/{project_id}/sessi
 | Avoid | Why |
 |---|---|
 | "Prerequisite: the server must be running" section | Adds noise; the exit code table already covers it |
-| Text-mode output examples (`✓ Heartbeat OK…`) | Agents always use `--json` |
 | Python scripting examples (`zip`, `subprocess`) | Agents read JSON directly |
 | Internal implementation details | `os.path.realpath`, `path_to_project_id`, drop-file mechanics — agents don't need these |
 | Background behavior descriptions | What the server does internally after a command (re-indexing, broadcasting, tmux teardown…) — unless it directly affects how the agent should call or follow up the command |

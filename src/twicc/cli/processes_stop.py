@@ -39,11 +39,12 @@ timeout typically covers N drops without compounding.
 
 from __future__ import annotations
 
-import sys
 import time
 
 import orjson
 import typer
+
+from twicc.cli._output import emit_json
 
 
 POLL_INTERVAL_SECONDS = 0.1
@@ -238,5 +239,4 @@ def stop_cmd(
     # --- Emit JSON array in input order ----------------------------------
 
     results = [outcomes[sid] for sid in unique_ids]
-    sys.stdout.buffer.write(orjson.dumps(results, option=orjson.OPT_INDENT_2))
-    sys.stdout.buffer.write(b"\n")
+    emit_json(results)

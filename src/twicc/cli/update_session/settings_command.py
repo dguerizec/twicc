@@ -163,19 +163,6 @@ def update_settings_cmd(
             "server side."
         ),
     ),
-    no_color: bool = typer.Option(
-        False,
-        "--no-color",
-        help="Disable ANSI colors in human-readable output.",
-    ),
-    json_output: bool = typer.Option(
-        False,
-        "--json",
-        help=(
-            "Emit a single JSON object on stdout instead of pretty text. "
-            "Implies --no-color."
-        ),
-    ),
 ) -> None:
     """Update the agent settings of an existing session.
 
@@ -195,9 +182,7 @@ def update_settings_cmd(
         ServerDownError, check_heartbeat,
     )
     from twicc.cli._drop_request.drop_file import write_drop_file
-    from twicc.cli._drop_request.output import (
-        emit_final, emit_progress, emit_validation_errors,
-    )
+    from twicc.cli._drop_request.output import emit_final, emit_validation_errors
     from twicc.cli._drop_request.polling import poll_status
     from twicc.cli._drop_request.presets import (
         apply_preset_and_overrides, PresetError,
@@ -216,12 +201,10 @@ def update_settings_cmd(
     from twicc.providers.helpers import AgentSettings, get_provider_helpers
 
     try:
-        age = check_heartbeat()
+        check_heartbeat()
     except ServerDownError as e:
         typer.echo(str(e), err=True)
         raise typer.Exit(2)
-
-    emit_progress(f"✓ Heartbeat OK (last seen {age:.1f}s ago)", json_output=json_output)
 
     # Local pre-check: session must exist, not be a subagent, not be stale,
     # and have a project directory. The watcher-side service re-validates
@@ -229,17 +212,8 @@ def update_settings_cmd(
     try:
         resolved = lookup_session(session_id)
     except SessionLookupError as e:
-        emit_validation_errors(
-            [ValidationError("SESSION_ID", e.code, e.message)],
-            json_output=json_output,
-        )
+        emit_validation_errors([ValidationError("SESSION_ID", e.code, e.message)])
         raise typer.Exit(1)
-
-    emit_progress(
-        f"✓ Session {resolved.session_id!r} resolved "
-        f"(provider: {resolved.provider}, project: {resolved.project_id})",
-        json_output=json_output,
-    )
 
     bootstrap = load_local_bootstrap()
     provider = resolved.provider
@@ -311,7 +285,7 @@ def update_settings_cmd(
         ))
 
     if errors:
-        emit_validation_errors(errors, json_output=json_output)
+        emit_validation_errors(errors)
         raise typer.Exit(1)
 
     # 7. Resolve the final settings + updates dict.
@@ -327,7 +301,6 @@ def update_settings_cmd(
         except PresetError as e:
             emit_validation_errors(
                 [ValidationError("--preset", "invalid_preset", str(e))],
-                json_output=json_output,
             )
             raise typer.Exit(1)
         updates = settings._asdict()
@@ -345,7 +318,7 @@ def update_settings_cmd(
     # 8. Validate each non-None setting against the provider's choices.
     errors = validate_settings(provider, settings, bootstrap)
     if errors:
-        emit_validation_errors(errors, json_output=json_output)
+        emit_validation_errors(errors)
         raise typer.Exit(1)
 
     # 9. Hidden invariants: if the target session is currently hidden, the
@@ -369,14 +342,8 @@ def update_settings_cmd(
             resolved.provider, effective_settings, hidden=True,
         )
         if hidden_errors:
-            emit_validation_errors(hidden_errors, json_output=json_output)
+            emit_validation_errors(hidden_errors)
             raise typer.Exit(1)
-
-    emit_progress(
-        f"✓ Settings validated (replace_all={replace_all}, fields="
-        f"{sorted(updates.keys())})",
-        json_output=json_output,
-    )
 
     payload = {
         "session_id": resolved.session_id,
@@ -385,10 +352,6 @@ def update_settings_cmd(
     }
 
     drop = write_drop_file(payload, kind="session:update_settings")
-    emit_progress(
-        f"→ Request submitted (request_uuid: {drop.request_uuid[:8]}...)",
-        json_output=json_output,
-    )
 
     status_path = drop.path.with_name(f"{drop.request_uuid}.status.json")
     outcome = poll_status(status_path, timeout_seconds=timeout)
@@ -396,12 +359,7 @@ def update_settings_cmd(
     drop.path.unlink(missing_ok=True)
     status_path.unlink(missing_ok=True)
 
-    emit_final(
-        outcome,
-        request_uuid=drop.request_uuid,
-        json_output=json_output,
-        timeout=timeout,
-    )
+    emit_final(outcome, request_uuid=drop.request_uuid, timeout=timeout)
 
     if outcome.status == "updated":
         raise typer.Exit(0)

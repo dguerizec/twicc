@@ -40,8 +40,6 @@ $TWICC create-workspace '<NAME>' [OPTIONS]
 - `--add-project PROJECT` (repeatable) — Add a project. Either a directory path or a project ID (**drop the leading dash** on ids — the CLI re-adds it). The project must already exist in TwiCC. Duplicates are silently deduplicated.
 - `--add-pattern PATTERN` (repeatable) — Add an auto-add pattern (`*` wildcard). Newly detected projects whose directory matches are added to the workspace automatically.
 - `--timeout SECONDS` — Seconds to wait for the server's response (default 30).
-- `--json` — Emit a single JSON object on stdout (implies `--no-color`).
-- `--no-color` — Disable ANSI colors.
 
 ## Errors
 
@@ -86,7 +84,7 @@ $TWICC create-workspace 'Frontend' --color '#4a90d9' \
     --add-project /home/twidi/dev/design-system \
     --add-project 'home-twidi-dev-shared'   # by id, dash dropped
 $TWICC create-workspace 'Sparkup' --add-pattern '/home/twidi/dev/sparkup/*'
-$TWICC --json create-workspace 'Scratch'
+$TWICC create-workspace 'Scratch'
 # → {"status":"created","workspace_id":"scratch","request_uuid":"..."}
 ```
 

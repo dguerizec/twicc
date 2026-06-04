@@ -74,19 +74,6 @@ def create_workspace_cmd(
             "the server side."
         ),
     ),
-    no_color: bool = typer.Option(
-        False,
-        "--no-color",
-        help="Disable ANSI colors in human-readable output.",
-    ),
-    json_output: bool = typer.Option(
-        False,
-        "--json",
-        help=(
-            "Emit a single JSON object on stdout instead of pretty text. "
-            "Implies --no-color."
-        ),
-    ),
 ) -> None:
     """Create a new workspace."""
     from twicc.cli._drop_request.project import derive_project_id
@@ -104,9 +91,7 @@ def create_workspace_cmd(
 
     from twicc.cli._drop_request.discovery import ServerDownError, check_heartbeat
     from twicc.cli._drop_request.drop_file import write_drop_file
-    from twicc.cli._drop_request.output import (
-        emit_final, emit_progress, emit_validation_errors,
-    )
+    from twicc.cli._drop_request.output import emit_final, emit_validation_errors
     from twicc.cli._drop_request.polling import poll_status
     from twicc.cli._drop_request.validation import ValidationError
     from twicc.core.models import Project
@@ -118,12 +103,10 @@ def create_workspace_cmd(
     )
 
     try:
-        age = check_heartbeat()
+        check_heartbeat()
     except ServerDownError as e:
         typer.echo(str(e), err=True)
         raise typer.Exit(2)
-
-    emit_progress(f"✓ Heartbeat OK (last seen {age:.1f}s ago)", json_output=json_output)
 
     # Pre-flight validation. Each helper returns a list of WorkspaceMutationError;
     # we re-wrap as ValidationError so the output helpers' shape stays uniform.
@@ -151,10 +134,8 @@ def create_workspace_cmd(
                                               f"Project {pid!r} not found."))
 
     if errors:
-        emit_validation_errors(errors, json_output=json_output)
+        emit_validation_errors(errors)
         raise typer.Exit(1)
-
-    emit_progress("✓ Pre-flight validation passed", json_output=json_output)
 
     payload = {
         "name": name,
@@ -165,10 +146,6 @@ def create_workspace_cmd(
     }
 
     drop = write_drop_file(payload, kind="workspace:create")
-    emit_progress(
-        f"→ Request submitted (request_uuid: {drop.request_uuid[:8]}...)",
-        json_output=json_output,
-    )
 
     status_path = drop.path.with_name(f"{drop.request_uuid}.status.json")
     outcome = poll_status(status_path, timeout_seconds=timeout)
@@ -176,12 +153,7 @@ def create_workspace_cmd(
     drop.path.unlink(missing_ok=True)
     status_path.unlink(missing_ok=True)
 
-    emit_final(
-        outcome,
-        request_uuid=drop.request_uuid,
-        json_output=json_output,
-        timeout=timeout,
-    )
+    emit_final(outcome, request_uuid=drop.request_uuid, timeout=timeout)
 
     if outcome.status == "created":
         raise typer.Exit(0)

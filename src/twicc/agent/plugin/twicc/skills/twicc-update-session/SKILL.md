@@ -8,7 +8,7 @@ argument-hint: <session_id|self> {settings|title|annotations|archive|unarchive|p
 
 Nine sub-commands: `settings`, `title`, `annotations`, `archive`, `unarchive`, `pin <MODE>`, `unpin`, `hide`, `unhide`. To stop the live agent without touching the row, use `$TWICC process <SESSION_ID> stop` (skill: `twicc-process`).
 
-All sub-commands share these output flags: `--timeout SECONDS` (default 30), `--json`, `--no-color` (implied by `--json`).
+All sub-commands share the `--timeout SECONDS` output flag (default 30).
 
 ## When to use
 
@@ -166,7 +166,7 @@ Same codes, re-checked server-side. Additionally `invalid_title` (title too long
 $TWICC update-session 4a8352fb-... settings --model sonnet
 $TWICC update-session 4a8352fb-... settings --effort high --unset model
 $TWICC update-session 4a8352fb-... settings --preset 'deep think' --effort low
-$TWICC update-session --json 4a8352fb-... settings --model opus
+$TWICC update-session 4a8352fb-... settings --model opus
 # → {"status":"updated","session_id":"...","provider":"claude_code","project_id":"...","request_uuid":"..."}
 $TWICC update-session 4a8352fb-... title 'Better title'
 $TWICC update-session 4a8352fb-... annotations set:role=reviewer unset:temporary

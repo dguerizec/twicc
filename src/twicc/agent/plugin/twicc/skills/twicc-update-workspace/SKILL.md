@@ -48,8 +48,6 @@ All patch flags are optional but at least one is required. Reordering of project
 - `--archive` — Mark as archived. Mutually exclusive with `--unarchive`.
 - `--unarchive` — Mark as not archived. Mutually exclusive with `--archive`.
 - `--timeout SECONDS` — Seconds to wait for the server's response (default 30).
-- `--json` — Emit a single JSON object on stdout (implies `--no-color`).
-- `--no-color` — Disable ANSI colors.
 
 ## Errors
 
@@ -99,7 +97,7 @@ $TWICC update-workspace backend --add-project .
 $TWICC update-workspace backend --remove-project /home/twidi/dev/old-api --add-project /home/twidi/dev/new-api
 $TWICC update-workspace scratch --add-pattern '/home/twidi/scratch/*' --archive
 $TWICC update-workspace scratch --unarchive --color '#4a90d9'
-$TWICC --json update-workspace backend --name 'BE'
+$TWICC update-workspace backend --name 'BE'
 # → {"status":"updated","workspace_id":"backend","request_uuid":"..."}
 ```
 

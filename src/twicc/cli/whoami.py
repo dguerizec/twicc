@@ -2,22 +2,12 @@
 
 from __future__ import annotations
 
-import sys
-
-import orjson
 import typer
 
+from twicc.cli._output import emit_json
 
-def whoami_cmd(
-    json_output: bool = typer.Option(
-        False,
-        "--json",
-        help=(
-            "Emit a single JSON object on stdout instead of pretty text. "
-            "Exit code is still 0 on success, 1 when no session is found."
-        ),
-    ),
-) -> None:
+
+def whoami_cmd() -> None:
     """Print details of the session that owns the calling process.
 
     Walks the PID ancestry from the current process upward and matches
@@ -62,11 +52,7 @@ def whoami_cmd(
             "No TwiCC session found in PID ancestry. whoami is only "
             "meaningful from inside an active agent session."
         )
-        if json_output:
-            sys.stdout.buffer.write(orjson.dumps({"error": msg}))
-            sys.stdout.buffer.write(b"\n")
-        else:
-            typer.echo(msg, err=True)
+        typer.echo(msg, err=True)
         raise typer.Exit(1)
 
     helpers = get_provider_helpers(session.provider)
@@ -113,5 +99,4 @@ def whoami_cmd(
         "session": serialize_session(session),
         "process": process,
     }
-    sys.stdout.buffer.write(orjson.dumps(data, option=orjson.OPT_INDENT_2))
-    sys.stdout.buffer.write(b"\n")
+    emit_json(data)

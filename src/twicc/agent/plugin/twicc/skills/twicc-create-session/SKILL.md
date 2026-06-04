@@ -44,8 +44,6 @@ $TWICC create-session [OPTIONS] '<PROMPT>'
 - `--annotation KEY=VALUE` — add a free-form session annotation; repeatable.
 - `--annotations-file PATH` — load session annotations from a JSON object file.
 - `--timeout SECONDS` — seconds to wait for the server's response (default 30). If the CLI times out, the session may still get created.
-- `--json` — emit a single JSON object on stdout (implies `--no-color`).
-- `--no-color` — disable ANSI colors.
 
 ### Agent settings
 
@@ -138,7 +136,7 @@ $TWICC create-session --provider claude_code --attach /home/twidi/screenshot.png
 $TWICC create-session --annotation role=reviewer --annotation task.priority=2 'Review this change'
 $TWICC create-session --annotations-file /home/twidi/session-annotations.json 'Run the annotated task'
 $TWICC create-session --provider claude_code --no-question-widget 'Resize images — ask me before overwriting'
-$TWICC create-session --json --provider claude_code 'Hello'
+$TWICC create-session --provider claude_code 'Hello'
 # → {"status":"created","session_id":"...","provider":"claude_code","project_id":"...","request_uuid":"..."}
 ```
 

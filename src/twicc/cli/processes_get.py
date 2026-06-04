@@ -26,9 +26,7 @@ prints to stderr and exits 1 if no live TwiCC owns ``twicc.info.json``.
 
 from __future__ import annotations
 
-import sys
-
-import orjson
+from twicc.cli._output import emit_json
 
 
 def main(session_ids: list[str]) -> None:
@@ -93,5 +91,4 @@ def main(session_ids: list[str]) -> None:
             )
         )
 
-    sys.stdout.buffer.write(orjson.dumps(results, option=orjson.OPT_INDENT_2))
-    sys.stdout.buffer.write(b"\n")
+    emit_json(results)

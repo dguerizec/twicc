@@ -167,19 +167,6 @@ def create_session_cmd(
             "the server side."
         ),
     ),
-    no_color: bool = typer.Option(
-        False,
-        "--no-color",
-        help="Disable ANSI colors in human-readable output.",
-    ),
-    json_output: bool = typer.Option(
-        False,
-        "--json",
-        help=(
-            "Emit a single JSON object on stdout instead of pretty text. "
-            "Implies --no-color."
-        ),
-    ),
 ) -> None:
     """Create a new session by dropping a request file the server picks up.
 
@@ -202,12 +189,7 @@ def create_session_cmd(
     from twicc.cli._drop_request.bootstrap_local import load_local_bootstrap
     from twicc.cli._drop_request.discovery import ServerDownError, check_heartbeat
     from twicc.cli._drop_request.drop_file import write_drop_file
-    from twicc.cli._drop_request.output import (
-        emit_attachment_summary,
-        emit_final,
-        emit_progress,
-        emit_validation_errors,
-    )
+    from twicc.cli._drop_request.output import emit_final, emit_validation_errors
     from twicc.cli._drop_request.polling import poll_status
     from twicc.cli._drop_request.prompt import resolve_prompt, PromptError
     from twicc.cli._drop_request.project import resolve_project
@@ -221,18 +203,12 @@ def create_session_cmd(
     from twicc.providers.helpers import get_provider_helpers
 
     try:
-        age = check_heartbeat()
+        check_heartbeat()
     except ServerDownError as e:
         typer.echo(str(e), err=True)
         raise typer.Exit(2)
 
     bootstrap = load_local_bootstrap()
-    emit_progress(f"✓ Heartbeat OK (last seen {age:.1f}s ago)", json_output=json_output)
-    emit_progress(
-        f"✓ Bootstrap loaded ({len(bootstrap.providers)} providers, "
-        f"{sum(len(p.presets) for p in bootstrap.providers.values())} presets total)",
-        json_output=json_output,
-    )
 
     # Resolve provider: explicit flag wins; otherwise fall back to the
     # default provider from settings. If neither is available, fail fast
@@ -246,13 +222,8 @@ def create_session_cmd(
                     "no_default_provider",
                     "No --provider given and no default provider set in settings.",
                 )],
-                json_output=json_output,
             )
             raise typer.Exit(1)
-        emit_progress(
-            f"✓ Provider (from default provider in settings): {provider}",
-            json_output=json_output,
-        )
 
     # Parse --context-max early so other validation can see the int form.
     try:
@@ -260,7 +231,6 @@ def create_session_cmd(
     except ValueError as e:
         emit_validation_errors(
             [ValidationError("--context-max", "invalid_format", str(e))],
-            json_output=json_output,
         )
         raise typer.Exit(1)
 
@@ -280,10 +250,10 @@ def create_session_cmd(
         preset_list = bootstrap.providers[provider].presets if provider in bootstrap.providers else []
         settings = apply_preset_and_overrides(preset, preset_list, overrides)
     except PromptError as e:
-        emit_validation_errors([ValidationError("prompt", "invalid_prompt", str(e))], json_output=json_output)
+        emit_validation_errors([ValidationError("prompt", "invalid_prompt", str(e))])
         raise typer.Exit(1)
     except PresetError as e:
-        emit_validation_errors([ValidationError("--preset", "invalid_preset", str(e))], json_output=json_output)
+        emit_validation_errors([ValidationError("--preset", "invalid_preset", str(e))])
         raise typer.Exit(1)
 
     # ``resolve_project`` never raises: when the input is an id with no
@@ -297,16 +267,8 @@ def create_session_cmd(
                 f"--project: {project!r} is neither an existing directory "
                 f"nor a known project_id (tried also with leading '-').",
             )],
-            json_output=json_output,
         )
         raise typer.Exit(1)
-
-    emit_progress(f"✓ Prompt resolved ({len(text)} chars)", json_output=json_output)
-    emit_progress(
-        f"✓ Project {resolved_project.project_id!r} "
-        f"({'existing' if resolved_project.exists else 'new'})",
-        json_output=json_output,
-    )
 
     errors: list[ValidationError] = []
     annotations, annotation_errors = parse_annotations(annotation or [], annotations_file)
@@ -348,24 +310,15 @@ def create_session_cmd(
         errors.append(ValidationError(
             f"--attach {e.path}", "resize_failed", e.message,
         ))
-        emit_validation_errors(errors, json_output=json_output)
+        emit_validation_errors(errors)
         raise typer.Exit(1)
 
     for err in attach_result.errors:
         errors.append(ValidationError(f"--attach {err.file}", err.code, err.message))
 
     if errors:
-        emit_validation_errors(errors, json_output=json_output)
+        emit_validation_errors(errors)
         raise typer.Exit(1)
-
-    emit_progress("✓ Settings validated", json_output=json_output)
-    emit_progress(
-        f"✓ Attachments validated "
-        f"({len(attach_result.images)} images, "
-        f"{len(attach_result.documents)} documents)",
-        json_output=json_output,
-    )
-    emit_attachment_summary(attach_result.summary, json_output=json_output)
 
     # Auto-fill spawned_by silently via PID ancestry. No CLI flag exposes
     # this — the agent never has to know its own session_id to call us.
@@ -396,10 +349,6 @@ def create_session_cmd(
     }
 
     drop = write_drop_file(payload, kind="session:create")
-    emit_progress(
-        f"→ Request submitted (request_uuid: {drop.request_uuid[:8]}...)",
-        json_output=json_output,
-    )
 
     status_path = drop.path.with_name(f"{drop.request_uuid}.status.json")
     outcome = poll_status(status_path, timeout_seconds=timeout)
@@ -411,7 +360,6 @@ def create_session_cmd(
     emit_final(
         outcome,
         request_uuid=drop.request_uuid,
-        json_output=json_output,
         timeout=timeout,
     )
 

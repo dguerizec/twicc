@@ -45,8 +45,6 @@ All patch flags are optional but at least one is required.
 - `--archive` — Mark as archived. Mutually exclusive with `--unarchive`.
 - `--unarchive` — Mark as not archived. Mutually exclusive with `--archive`.
 - `--timeout SECONDS` — Seconds to wait for the server's response (default 30).
-- `--json` — Emit a single JSON object on stdout (implies `--no-color`).
-- `--no-color` — Disable ANSI colors.
 
 ## Errors
 
@@ -94,7 +92,7 @@ $TWICC update-project /home/twidi/dev/myproj --color '#ff9900'
 $TWICC update-project /home/twidi/dev/myproj --unset-color
 $TWICC update-project /home/twidi/dev/legacy --archive
 $TWICC update-project /home/twidi/dev/legacy --unarchive --color '#4a90d9'
-$TWICC update-project --json /home/twidi/dev/myproj --name 'Renamed'
+$TWICC update-project /home/twidi/dev/myproj --name 'Renamed'
 # → {"status":"updated","project_id":"-home-twidi-dev-myproj","request_uuid":"..."}
 ```
 

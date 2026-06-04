@@ -2,7 +2,7 @@
 
 import sys
 
-import orjson
+from twicc.cli._output import emit_json
 
 
 def main(
@@ -51,5 +51,4 @@ def main(
         serialized["workspaces"] = workspaces_by_project.get(p.id, [])
         data.append(serialized)
 
-    sys.stdout.buffer.write(orjson.dumps(data, option=orjson.OPT_INDENT_2))
-    sys.stdout.buffer.write(b"\n")
+    emit_json(data)

@@ -5,7 +5,7 @@ from __future__ import annotations
 from decimal import Decimal
 import sys
 
-import orjson
+from twicc.cli._output import emit_json
 
 
 # Fields kept in each ``nodes[].session`` block by default. The caller can opt
@@ -68,8 +68,7 @@ def main(
         full_sessions=full_sessions,
         annotation_filters=annotation_filters,
     )
-    sys.stdout.buffer.write(orjson.dumps(data, option=orjson.OPT_INDENT_2))
-    sys.stdout.buffer.write(b"\n")
+    emit_json(data)
 
 
 def build_topology(

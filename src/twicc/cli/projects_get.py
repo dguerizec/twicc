@@ -16,9 +16,7 @@ by the Typer wrapper, not here — incoming ids are already normalized.
 
 from __future__ import annotations
 
-import sys
-
-import orjson
+from twicc.cli._output import emit_json
 
 
 # Cached null-filled template for the placeholder shape. Derived lazily
@@ -101,5 +99,4 @@ def main(project_ids: list[str]) -> None:
             entry["known"] = True
         results.append(entry)
 
-    sys.stdout.buffer.write(orjson.dumps(results, option=orjson.OPT_INDENT_2))
-    sys.stdout.buffer.write(b"\n")
+    emit_json(results)

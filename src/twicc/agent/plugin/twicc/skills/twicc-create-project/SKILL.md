@@ -40,8 +40,6 @@ $TWICC create-project '<DIRECTORY>' [OPTIONS]
 - `--color VALUE` — CSS hex color (`#rgb`, `#rrggbb`, or `#rrggbbaa`).
 - `--create-directory` — Create the directory (and missing parents) if it doesn't exist. Without this flag, a missing directory is rejected.
 - `--timeout SECONDS` — Seconds to wait for the server's response (default 30).
-- `--json` — Emit a single JSON object on stdout (implies `--no-color`).
-- `--no-color` — Disable ANSI colors.
 
 ## Errors
 
@@ -84,7 +82,7 @@ Same codes plus `directory_creation_failed` — `--create-directory` set but `mk
 $TWICC create-project /home/twidi/dev/newproj
 $TWICC create-project /home/twidi/dev/newproj --name 'New Project' --color '#4a90d9'
 $TWICC create-project /home/twidi/dev/scratch --create-directory
-$TWICC create-project --json /home/twidi/dev/newproj
+$TWICC create-project /home/twidi/dev/newproj
 # → {"status":"created","project_id":"-home-twidi-dev-newproj","request_uuid":"..."}
 ```
 

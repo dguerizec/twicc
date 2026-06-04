@@ -1,8 +1,6 @@
 """CLI implementation for the ``twicc workspaces`` subcommand."""
 
-import sys
-
-import orjson
+from twicc.cli._output import emit_json
 
 
 def main(*, limit: int = 20, offset: int = 0, archived: bool = False) -> None:
@@ -20,5 +18,4 @@ def main(*, limit: int = 20, offset: int = 0, archived: bool = False) -> None:
 
     workspaces = workspaces[offset : offset + limit]
 
-    sys.stdout.buffer.write(orjson.dumps(workspaces, option=orjson.OPT_INDENT_2))
-    sys.stdout.buffer.write(b"\n")
+    emit_json(workspaces)

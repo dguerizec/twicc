@@ -2,7 +2,7 @@
 
 import sys
 
-import orjson
+from twicc.cli._output import emit_json
 
 
 def main() -> None:
@@ -72,5 +72,4 @@ def main() -> None:
         print("Error: no usage snapshot available.", file=sys.stderr)
         sys.exit(1)
 
-    sys.stdout.buffer.write(orjson.dumps(output, option=orjson.OPT_INDENT_2))
-    sys.stdout.buffer.write(b"\n")
+    emit_json(output)

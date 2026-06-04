@@ -13,9 +13,8 @@ behaviour the UI does:
   No agent restart is implied (the session stays cold until the user
   resumes it).
 
-There are no options beyond the standard output / timeout controls;
-auto-unpin is honoured server-side from the synced setting, no CLI
-override.
+There are no options beyond the standard ``--timeout`` control; auto-unpin
+is honoured server-side from the synced setting, no CLI override.
 """
 
 from __future__ import annotations
@@ -28,8 +27,6 @@ def _run_archived_update(
     *,
     archived: bool,
     timeout: int,
-    no_color: bool,
-    json_output: bool,
 ) -> None:
     """Drop a ``kind="session:update_archived"`` payload and wait for the status."""
     # Lazy imports to keep --help fast (no Django setup until we need it).
@@ -42,9 +39,7 @@ def _run_archived_update(
         ServerDownError, check_heartbeat,
     )
     from twicc.cli._drop_request.drop_file import write_drop_file
-    from twicc.cli._drop_request.output import (
-        emit_final, emit_progress, emit_validation_errors,
-    )
+    from twicc.cli._drop_request.output import emit_final, emit_validation_errors
     from twicc.cli._drop_request.polling import poll_status
     from twicc.cli._drop_request.session_lookup import (
         SessionLookupError, lookup_session,
@@ -52,12 +47,10 @@ def _run_archived_update(
     from twicc.cli._drop_request.validation import ValidationError
 
     try:
-        age = check_heartbeat()
+        check_heartbeat()
     except ServerDownError as e:
         typer.echo(str(e), err=True)
         raise typer.Exit(2)
-
-    emit_progress(f"✓ Heartbeat OK (last seen {age:.1f}s ago)", json_output=json_output)
 
     # Local pre-check: session must exist, not be a subagent, not be stale,
     # and have a project directory. The watcher-side service re-validates
@@ -65,22 +58,8 @@ def _run_archived_update(
     try:
         resolved = lookup_session(session_id)
     except SessionLookupError as e:
-        emit_validation_errors(
-            [ValidationError("SESSION_ID", e.code, e.message)],
-            json_output=json_output,
-        )
+        emit_validation_errors([ValidationError("SESSION_ID", e.code, e.message)])
         raise typer.Exit(1)
-
-    emit_progress(
-        f"✓ Session {resolved.session_id!r} resolved "
-        f"(provider: {resolved.provider}, project: {resolved.project_id})",
-        json_output=json_output,
-    )
-
-    emit_progress(
-        f"✓ {'Archive' if archived else 'Unarchive'} request prepared",
-        json_output=json_output,
-    )
 
     payload = {
         "session_id": resolved.session_id,
@@ -88,10 +67,6 @@ def _run_archived_update(
     }
 
     drop = write_drop_file(payload, kind="session:update_archived")
-    emit_progress(
-        f"→ Request submitted (request_uuid: {drop.request_uuid[:8]}...)",
-        json_output=json_output,
-    )
 
     status_path = drop.path.with_name(f"{drop.request_uuid}.status.json")
     outcome = poll_status(status_path, timeout_seconds=timeout)
@@ -99,12 +74,7 @@ def _run_archived_update(
     drop.path.unlink(missing_ok=True)
     status_path.unlink(missing_ok=True)
 
-    emit_final(
-        outcome,
-        request_uuid=drop.request_uuid,
-        json_output=json_output,
-        timeout=timeout,
-    )
+    emit_final(outcome, request_uuid=drop.request_uuid, timeout=timeout)
 
     if outcome.status == "updated":
         raise typer.Exit(0)
@@ -126,19 +96,6 @@ def update_archive_cmd(
             "server side."
         ),
     ),
-    no_color: bool = typer.Option(
-        False,
-        "--no-color",
-        help="Disable ANSI colors in human-readable output.",
-    ),
-    json_output: bool = typer.Option(
-        False,
-        "--json",
-        help=(
-            "Emit a single JSON object on stdout instead of pretty text. "
-            "Implies --no-color."
-        ),
-    ),
 ) -> None:
     """Archive the session.
 
@@ -153,8 +110,6 @@ def update_archive_cmd(
         ctx.obj,
         archived=True,
         timeout=timeout,
-        no_color=no_color,
-        json_output=json_output,
     )
 
 
@@ -169,19 +124,6 @@ def update_unarchive_cmd(
             "server side."
         ),
     ),
-    no_color: bool = typer.Option(
-        False,
-        "--no-color",
-        help="Disable ANSI colors in human-readable output.",
-    ),
-    json_output: bool = typer.Option(
-        False,
-        "--json",
-        help=(
-            "Emit a single JSON object on stdout instead of pretty text. "
-            "Implies --no-color."
-        ),
-    ),
 ) -> None:
     """Unarchive the session.
 
@@ -193,6 +135,4 @@ def update_unarchive_cmd(
         ctx.obj,
         archived=False,
         timeout=timeout,
-        no_color=no_color,
-        json_output=json_output,
     )

@@ -25,8 +25,7 @@ Then run `$TWICC <args>` — **never quote `$TWICC`** (use `$TWICC args`, never 
 ## Usage
 
 ```bash
-$TWICC whoami           # human-readable (indented JSON)
-$TWICC whoami --json    # compact JSON, suitable for parsing
+$TWICC whoami    # emit a single JSON object describing the calling session
 ```
 
 ### Self-aware shortcuts
@@ -41,11 +40,11 @@ Commands that accept `self` resolve the calling session on their own. On `$TWICC
 ## Examples
 
 ```bash
-MY_SESSION_ID=$($TWICC whoami --json | jq -r .session_id)
-MY_MODEL=$($TWICC whoami --json | jq -r .agent_settings.selected_model)
-MY_PID=$($TWICC whoami --json | jq -r .process.pid)
-MY_ARTIFACTS_DIR=$($TWICC whoami --json | jq -r .artifacts_dir)
-MY_SCRATCH_DIR=$($TWICC whoami --json | jq -r .scratch_dir)
+MY_SESSION_ID=$($TWICC whoami | jq -r .session_id)
+MY_MODEL=$($TWICC whoami | jq -r .agent_settings.selected_model)
+MY_PID=$($TWICC whoami | jq -r .process.pid)
+MY_ARTIFACTS_DIR=$($TWICC whoami | jq -r .artifacts_dir)
+MY_SCRATCH_DIR=$($TWICC whoami | jq -r .scratch_dir)
 ```
 
 ## Related commands

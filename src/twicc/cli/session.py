@@ -4,6 +4,8 @@ import sys
 
 import orjson
 
+from twicc.cli._output import emit_json
+
 
 def _get_session(session_id: str):
     """Fetch a valid session (created_at set, at least one user message) or exit."""
@@ -58,8 +60,7 @@ def main(session_id: str) -> None:
     session = _get_session(session_id)
     data = serialize_session(session)
 
-    sys.stdout.buffer.write(orjson.dumps(data, option=orjson.OPT_INDENT_2))
-    sys.stdout.buffer.write(b"\n")
+    emit_json(data)
 
 
 def content(session_id: str, *, range_str: str) -> None:
@@ -85,8 +86,7 @@ def content(session_id: str, *, range_str: str) -> None:
         print("Error: no items found for the given range.", file=sys.stderr)
         sys.exit(1)
 
-    sys.stdout.buffer.write(orjson.dumps(data, option=orjson.OPT_INDENT_2))
-    sys.stdout.buffer.write(b"\n")
+    emit_json(data)
 
 
 def messages(
@@ -164,8 +164,7 @@ def messages(
         for msg in helpers.get_indexable_messages(items)
     ]
 
-    sys.stdout.buffer.write(orjson.dumps(data, option=orjson.OPT_INDENT_2))
-    sys.stdout.buffer.write(b"\n")
+    emit_json(data)
 
 
 def agents(session_id: str, *, limit: int = 20, offset: int = 0) -> None:
@@ -186,5 +185,4 @@ def agents(session_id: str, *, limit: int = 20, offset: int = 0) -> None:
     subagents = Session.objects.filter(parent_session_id=session_id).order_by("-mtime")[offset : offset + limit]
     data = [serialize_session(s) for s in subagents]
 
-    sys.stdout.buffer.write(orjson.dumps(data, option=orjson.OPT_INDENT_2))
-    sys.stdout.buffer.write(b"\n")
+    emit_json(data)

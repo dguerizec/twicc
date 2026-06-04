@@ -2,7 +2,7 @@
 
 import sys
 
-import orjson
+from twicc.cli._output import emit_json
 
 
 def main(workspace_id: str) -> None:
@@ -18,5 +18,4 @@ def main(workspace_id: str) -> None:
         print(f"Error: workspace '{workspace_id}' not found.", file=sys.stderr)
         sys.exit(1)
 
-    sys.stdout.buffer.write(orjson.dumps(workspace, option=orjson.OPT_INDENT_2))
-    sys.stdout.buffer.write(b"\n")
+    emit_json(workspace)

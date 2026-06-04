@@ -2,7 +2,7 @@
 
 import sys
 
-import orjson
+from twicc.cli._output import emit_json
 
 
 def main(
@@ -116,5 +116,4 @@ def main(
     sessions = qs[offset : offset + limit]
     data = [serialize_session(s) for s in sessions]
 
-    sys.stdout.buffer.write(orjson.dumps(data, option=orjson.OPT_INDENT_2))
-    sys.stdout.buffer.write(b"\n")
+    emit_json(data)

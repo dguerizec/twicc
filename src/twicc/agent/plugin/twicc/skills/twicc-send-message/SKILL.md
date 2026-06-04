@@ -40,8 +40,6 @@ $TWICC send-message [OPTIONS] '<SESSION_ID|parent>' '<PROMPT>'
 
 - `--attach PATH` (repeatable) — attach a file. Accepted types (sniffed by magic bytes): Claude Code: PNG, JPEG, GIF, WebP, PDF, text/plain; Codex: images only. Per-file cap: 5 MB. Per-batch cap: 100 files, 32 MB. Images are auto-resized to the provider/model's long-edge cap.
 - `--timeout SECONDS` — seconds to wait for the server's response (default 30). If the CLI times out, the message may still get delivered.
-- `--json` — emit a single JSON object on stdout (implies `--no-color`).
-- `--no-color` — disable ANSI colors.
 
 ### Target discovery
 
@@ -93,7 +91,7 @@ To message a sibling or descendant whose id you don't know yet, use `$TWICC topo
 $TWICC send-message 4a8352fb-1674-41c0-8a85-0a5a3e4e623a 'Run the tests now'
 $TWICC send-message 4a8352fb-1674-41c0-8a85-0a5a3e4e623a /home/twidi/prompts/follow-up.md
 $TWICC send-message 4a8352fb-1674-41c0-8a85-0a5a3e4e623a --attach /home/twidi/screenshot.png --attach /home/twidi/report.pdf 'What do you think?'
-$TWICC send-message --json 4a8352fb-1674-41c0-8a85-0a5a3e4e623a 'Hello'
+$TWICC send-message 4a8352fb-1674-41c0-8a85-0a5a3e4e623a 'Hello'
 # → {"status":"sent","session_id":"...","provider":"claude_code","project_id":"...","request_uuid":"..."}
 $TWICC send-message parent 'I finished the sub-task you asked for.'
 # From inside an agent: targets the session that spawned it;

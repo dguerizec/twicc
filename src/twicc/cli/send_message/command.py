@@ -36,19 +36,6 @@ def send_message_cmd(
             "the server side."
         ),
     ),
-    no_color: bool = typer.Option(
-        False,
-        "--no-color",
-        help="Disable ANSI colors in human-readable output.",
-    ),
-    json_output: bool = typer.Option(
-        False,
-        "--json",
-        help=(
-            "Emit a single JSON object on stdout instead of pretty text. "
-            "Implies --no-color."
-        ),
-    ),
 ) -> None:
     """Send a message to an existing session.
 
@@ -73,9 +60,7 @@ def send_message_cmd(
     )
     from twicc.cli._drop_request.drop_file import write_drop_file
     from twicc.cli._drop_request.output import (
-        emit_attachment_summary,
         emit_final,
-        emit_progress,
         emit_validation_errors,
     )
     from twicc.cli._drop_request.polling import poll_status
@@ -89,12 +74,10 @@ def send_message_cmd(
     from twicc.providers.helpers import get_provider_helpers
 
     try:
-        age = check_heartbeat()
+        check_heartbeat()
     except ServerDownError as e:
         typer.echo(str(e), err=True)
         raise typer.Exit(2)
-
-    emit_progress(f"✓ Heartbeat OK (last seen {age:.1f}s ago)", json_output=json_output)
 
     # 'parent' keyword: PID ancestry → current TwiCC session (same mechanism
     # as `--spawned-by self` on create-session) → its `spawned_by` field, which
@@ -115,7 +98,6 @@ def send_message_cmd(
                     "Run from inside a TwiCC-spawned agent, or pass an "
                     "explicit session_id.",
                 )],
-                json_output=json_output,
             )
             raise typer.Exit(1)
         if current_session.spawned_by_id is None:
@@ -128,16 +110,10 @@ def send_message_cmd(
                     f"`twicc create-session` from a parent agent. Pass an "
                     f"explicit session_id instead.",
                 )],
-                json_output=json_output,
             )
             raise typer.Exit(1)
         parent_caller_id = current_session.id
         session_id = current_session.spawned_by_id
-        emit_progress(
-            f"✓ 'parent' resolved to session {session_id!r} "
-            f"(spawned_by of current session {parent_caller_id!r})",
-            json_output=json_output,
-        )
 
     # Local pre-check: session must exist, not be stale, and have a project
     # directory. The watcher-side service re-validates these in case the DB
@@ -147,15 +123,8 @@ def send_message_cmd(
     except SessionLookupError as e:
         emit_validation_errors(
             [ValidationError("SESSION_ID", e.code, e.message)],
-            json_output=json_output,
         )
         raise typer.Exit(1)
-
-    emit_progress(
-        f"✓ Session {resolved.session_id!r} resolved "
-        f"(provider: {resolved.provider}, project: {resolved.project_id})",
-        json_output=json_output,
-    )
 
     # Resolve the prompt (inline text or file path → text content).
     try:
@@ -163,11 +132,8 @@ def send_message_cmd(
     except PromptError as e:
         emit_validation_errors(
             [ValidationError("PROMPT", "invalid_prompt", str(e))],
-            json_output=json_output,
         )
         raise typer.Exit(1)
-
-    emit_progress(f"✓ Prompt resolved ({len(text)} chars)", json_output=json_output)
 
     # When the 'parent' keyword was used, prefix the message so the recipient
     # parent session sees who is talking — otherwise it would receive an
@@ -178,10 +144,6 @@ def send_message_cmd(
             f"> Message from your spawned session {parent_caller_id}\n"
             f"---\n"
             f"{text}"
-        )
-        emit_progress(
-            f"✓ Prompt prefixed with caller id ({len(text)} chars total)",
-            json_output=json_output,
         )
 
     # Attachments are validated against the resolved session's provider, with
@@ -217,23 +179,15 @@ def send_message_cmd(
         errors.append(ValidationError(
             f"--attach {e.path}", "resize_failed", e.message,
         ))
-        emit_validation_errors(errors, json_output=json_output)
+        emit_validation_errors(errors)
         raise typer.Exit(1)
 
     for err in attach_result.errors:
         errors.append(ValidationError(f"--attach {err.file}", err.code, err.message))
 
     if errors:
-        emit_validation_errors(errors, json_output=json_output)
+        emit_validation_errors(errors)
         raise typer.Exit(1)
-
-    emit_progress(
-        f"✓ Attachments validated "
-        f"({len(attach_result.images)} images, "
-        f"{len(attach_result.documents)} documents)",
-        json_output=json_output,
-    )
-    emit_attachment_summary(attach_result.summary, json_output=json_output)
 
     # Payload — minimum required for the ``send`` kind. The watcher derives
     # provider, project, cwd, and current settings from the DB row.
@@ -245,10 +199,6 @@ def send_message_cmd(
     }
 
     drop = write_drop_file(payload, kind="session:send_message")
-    emit_progress(
-        f"→ Request submitted (request_uuid: {drop.request_uuid[:8]}...)",
-        json_output=json_output,
-    )
 
     status_path = drop.path.with_name(f"{drop.request_uuid}.status.json")
     outcome = poll_status(status_path, timeout_seconds=timeout)
@@ -260,7 +210,6 @@ def send_message_cmd(
     emit_final(
         outcome,
         request_uuid=drop.request_uuid,
-        json_output=json_output,
         timeout=timeout,
     )
 

@@ -8,9 +8,9 @@ the same wording without duplicating any of the rendering logic.
 
 The set of builders covers every flag whose help text depends on the user's
 current providers / presets / defaults. Flags whose help is purely static
-(``--timeout``, ``--no-color``, ``--json``, ``--attach``, ...) keep their
-inline help in the calling command — duplicating a one-liner is cheaper than
-shipping a tiny helper per flag.
+(``--timeout``, ``--attach``, ...) keep their inline help in the calling
+command — duplicating a one-liner is cheaper than shipping a tiny helper
+per flag.
 """
 
 from __future__ import annotations

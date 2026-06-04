@@ -42,7 +42,7 @@ $TWICC process <SESSION_ID>
 ### Stop
 
 ```bash
-$TWICC process <SESSION_ID> stop [--timeout N] [--json] [--no-color]
+$TWICC process <SESSION_ID> stop [--timeout N]
 ```
 
 Idempotent — succeeds even if no live process is attached.
@@ -50,7 +50,7 @@ Idempotent — succeeds even if no live process is attached.
 ### Wait
 
 ```bash
-$TWICC process <SESSION_ID> wait <STATUS>... --timeout N [--transition] [--json] [--no-color]
+$TWICC process <SESSION_ID> wait <STATUS>... --timeout N [--transition]
 ```
 
 - `STATUS` — one or more of: `starting`, `assistant_turn`, `awaiting_user_input`, `user_turn`, `dead`.
@@ -118,12 +118,12 @@ Same codes, re-checked server-side.
 ```bash
 $TWICC process abc123-def456
 $TWICC process abc123-def456 stop
-$TWICC process --json abc123-def456 stop
+$TWICC process abc123-def456 stop
 # → {"status":"stopped","session_id":"...","provider":"claude_code","project_id":"...","request_uuid":"..."}
 $TWICC process abc123 wait user_turn --timeout 600
 $TWICC process abc123 wait user_turn dead --timeout 120
 $TWICC process abc123 wait user_turn --transition --timeout 300
-$TWICC process --json abc123 wait user_turn dead --timeout 600
+$TWICC process abc123 wait user_turn dead --timeout 600
 ```
 
 ## Related commands

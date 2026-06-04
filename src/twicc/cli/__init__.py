@@ -695,19 +695,6 @@ def process_stop(
             "server side."
         ),
     ),
-    no_color: bool = typer.Option(
-        False,
-        "--no-color",
-        help="Disable ANSI colors in human-readable output.",
-    ),
-    json_output: bool = typer.Option(
-        False,
-        "--json",
-        help=(
-            "Emit a single JSON object on stdout instead of pretty text. "
-            "Implies --no-color."
-        ),
-    ),
 ) -> None:
     """Stop the live agent process attached to the session.
 
@@ -720,8 +707,6 @@ def process_stop(
     stop_cmd(
         ctx.obj,
         timeout=timeout,
-        no_color=no_color,
-        json_output=json_output,
     )
 
 
@@ -758,19 +743,6 @@ def process_wait(
             "row is frozen) and will always timeout."
         ),
     ),
-    no_color: bool = typer.Option(
-        False,
-        "--no-color",
-        help="Disable ANSI colors in human-readable output.",
-    ),
-    json_output: bool = typer.Option(
-        False,
-        "--json",
-        help=(
-            "Emit only the final JSON object on stdout (no progress lines). "
-            "Implies --no-color."
-        ),
-    ),
 ) -> None:
     """Block until the live process reaches any of the listed states.
 
@@ -785,8 +757,6 @@ def process_wait(
         statuses,
         timeout=timeout,
         transition=transition,
-        no_color=no_color,
-        json_output=json_output,
     )
 
 
