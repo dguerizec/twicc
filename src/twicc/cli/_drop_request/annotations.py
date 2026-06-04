@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import math
+import os
 from pathlib import Path
 import re
 from typing import Any
 
 import orjson
 
+from twicc.cli._output import in_api_mode
 from twicc.cli._drop_request.validation import ValidationError
 
 _INT_RE = re.compile(r"^[+-]?(0|[1-9][0-9]*)$")
@@ -110,6 +112,12 @@ def parse_annotation_update_operations(
 
 
 def _load_annotations_file(path: str) -> tuple[dict[str, Any], ValidationError | None]:
+    if in_api_mode() and not os.path.isabs(path):
+        return {}, ValidationError(
+            "--annotations-file", "relative_path",
+            "relative path not allowed over the API (no caller working directory); "
+            "pass an absolute path",
+        )
     try:
         raw = Path(path).read_bytes()
     except OSError as e:

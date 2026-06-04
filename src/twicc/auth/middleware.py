@@ -8,10 +8,11 @@ When TWICC_PASSWORD_HASH is empty/unset, all requests pass through (no protectio
 
 import logging
 
-from asgiref.sync import markcoroutinefunction
+from asgiref.sync import markcoroutinefunction, sync_to_async
 from django.conf import settings
 from django.http import JsonResponse
 
+from twicc.auth import tokens as api_tokens
 from twicc.auth.session_auth import (
     SESSION_AUTH_KEY,
     SESSION_FINGERPRINT_KEY,
@@ -97,3 +98,53 @@ class PasswordAuthMiddleware:
             )
 
         return await self.get_response(request)
+
+
+class RpcTokenAuthMiddleware:
+    """Bearer-token gate for ``/rpc/`` (independent of the SPA's cookie auth).
+
+    Protection posture:
+      - **Neither** ``TWICC_PASSWORD_HASH`` **nor** any token configured →
+        ``/rpc/`` is open (operator opted out of protection; local-only use).
+      - **A password is set OR at least one token exists** → a valid Bearer
+        token is mandatory. The password never itself authenticates RPC; it
+        only forces token-gating on (so the existing "set a password for
+        remote access" recommendation also closes /rpc/ automatically).
+    """
+
+    async_capable = True
+    sync_capable = False
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+        markcoroutinefunction(self)
+
+    async def __call__(self, request):
+        if not request.path.startswith("/rpc/"):
+            return await self.get_response(request)
+
+        password_set = bool(settings.TWICC_PASSWORD_HASH)
+        has_tokens = await sync_to_async(api_tokens.has_tokens)()
+
+        if not password_set and not has_tokens:
+            return await self.get_response(request)  # unprotected by choice
+
+        provided = self._bearer(request)
+        record = await sync_to_async(api_tokens.verify_token)(provided) if provided else None
+        if record is None:
+            msg = (
+                "API token required. Create one with `twicc token create`."
+                if not has_tokens
+                else "Invalid or missing API token."
+            )
+            return JsonResponse({"error": msg}, status=401)
+
+        await sync_to_async(api_tokens.touch_last_used)(record.id)
+        return await self.get_response(request)
+
+    @staticmethod
+    def _bearer(request):
+        header = request.headers.get("Authorization", "")
+        if header.startswith("Bearer "):
+            return header[len("Bearer "):].strip()
+        return None

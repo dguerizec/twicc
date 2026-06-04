@@ -42,9 +42,8 @@ from __future__ import annotations
 import time
 
 import orjson
-import typer
 
-from twicc.cli._output import emit_json
+from twicc.cli._output import emit_error, emit_json
 
 
 POLL_INTERVAL_SECONDS = 0.1
@@ -91,55 +90,49 @@ def stop_cmd(
     # --- Argument validation ---------------------------------------------
 
     if timeout <= 0:
-        typer.echo(
+        emit_error(
             f"Error: --timeout must be > 0 (got {timeout}).",
-            err=True,
+            code=1,
         )
-        raise typer.Exit(1)
 
     if spawned_by == "parent" or descendants == "parent":
-        typer.echo(
+        emit_error(
             "Error: processes stop does not support parent-scoped filters. "
             "Use 'self' or an explicit session_id.",
-            err=True,
+            code=1,
         )
-        raise typer.Exit(1)
 
     filiation_scope = any((spawned_by, descendants))
     if annotation and not filiation_scope:
-        typer.echo(
+        emit_error(
             "Error: --annotation on processes stop requires --spawned-by "
             "or --descendants.",
-            err=True,
+            code=1,
         )
-        raise typer.Exit(1)
 
     has_scope = filiation_scope or bool(annotation)
     if not session_ids and not has_scope:
-        typer.echo(
+        emit_error(
             "Error: no session_ids or filters given. Pass at least one "
             "session_id, or select sessions with --spawned-by or "
             "--descendants. Use --annotation only to narrow that scope.",
-            err=True,
+            code=1,
         )
-        raise typer.Exit(1)
 
     # --- Server-up check (exit 2 mirrors process stop) -------------------
 
     try:
         check_heartbeat()
     except ServerDownError as e:
-        typer.echo(f"Error: {e}", err=True)
-        raise typer.Exit(2)
+        emit_error(f"Error: {e}", code=2)
 
     info = resolve_live_twicc()
     if info is None:
-        typer.echo(
+        emit_error(
             "Error: TwiCC server is unresponsive "
             "(twicc.info.json missing or recorded PID is dead).",
-            err=True,
+            code=2,
         )
-        raise typer.Exit(2)
 
     # --- Resolve explicit ids + optional scope filters -------------------
 
@@ -153,11 +146,9 @@ def stop_cmd(
             annotation=annotation,
         )
     except RuntimeError as e:
-        typer.echo(f"Error: {e}", err=True)
-        raise typer.Exit(1)
+        emit_error(f"Error: {e}", code=1)
     except ValueError as e:
-        typer.echo(f"Error: {e}", err=True)
-        raise typer.Exit(2)
+        emit_error(f"Error: {e}", code=2)
 
     if not unique_ids:
         emit_json([])

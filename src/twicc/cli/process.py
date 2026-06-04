@@ -1,8 +1,6 @@
 """CLI implementation for the ``twicc process`` subcommand."""
 
-import sys
-
-from twicc.cli._output import emit_json
+from twicc.cli._output import emit_error, emit_json
 
 
 def main(session_id: str) -> None:
@@ -38,11 +36,10 @@ def main(session_id: str) -> None:
         .first()
     )
     if row is None:
-        print(
+        emit_error(
             f"Error: no running process for session '{session_id}'.",
-            file=sys.stderr,
+            code=1,
         )
-        sys.exit(1)
 
     session = (
         Session.objects.filter(id=session_id).only("id", "title", "project_id").first()

@@ -265,6 +265,8 @@ terminal-config.json
 message-snippets.json
 workspaces.json
 seen-tips.json
+# RPC API token store (SHA-256 digests; lives in the data dir, appears in worktrees).
+api-tokens.json
 # Per-provider agent settings presets (one file per provider, see
 # BaseProviderHelpers.get_settings_presets_path).
 *-settings-presets.json

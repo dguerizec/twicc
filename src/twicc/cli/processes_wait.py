@@ -53,7 +53,7 @@ import time
 
 import typer
 
-from twicc.cli._output import emit_json
+from twicc.cli._output import emit_error, emit_json
 
 
 POLL_INTERVAL_SECONDS = 0.25
@@ -90,11 +90,10 @@ def wait_cmd(
     # --- Argument validation ---------------------------------------------
 
     if timeout <= 0:
-        typer.echo(
+        emit_error(
             f"Error: --timeout must be > 0 (got {timeout}).",
-            err=True,
+            code=1,
         )
-        raise typer.Exit(1)
 
     # Split items by value. Order is preserved for each kind (so error
     # messages and the JSON output stay deterministic), duplicates are
@@ -114,56 +113,50 @@ def wait_cmd(
                 session_ids_ordered.append(item)
 
     if not statuses_ordered:
-        typer.echo(
+        emit_error(
             "Error: no statuses given (expected at least one of: "
             f"{', '.join(sorted(VALID_VIRTUAL_STATES))}).",
-            err=True,
+            code=1,
         )
-        raise typer.Exit(1)
 
     if spawned_by == "parent" or descendants == "parent":
-        typer.echo(
+        emit_error(
             "Error: processes wait does not support parent-scoped filters. "
             "Use 'self' or an explicit session_id.",
-            err=True,
+            code=1,
         )
-        raise typer.Exit(1)
 
     filiation_scope = any((spawned_by, descendants))
     if annotation and not filiation_scope:
-        typer.echo(
+        emit_error(
             "Error: --annotation on processes wait requires --spawned-by "
             "or --descendants.",
-            err=True,
+            code=1,
         )
-        raise typer.Exit(1)
 
     has_scope = filiation_scope or bool(annotation)
     if not session_ids_ordered and not has_scope:
-        typer.echo(
+        emit_error(
             "Error: no session_ids or filters given. Pass at least one "
             "session_id, or select sessions with --spawned-by or "
             "--descendants. Use --annotation only to narrow that scope.",
-            err=True,
+            code=1,
         )
-        raise typer.Exit(1)
 
     # --- Server-up check (exit 2) ----------------------------------------
 
     try:
         check_heartbeat()
     except ServerDownError as e:
-        typer.echo(f"Error: {e}", err=True)
-        raise typer.Exit(2)
+        emit_error(f"Error: {e}", code=2)
 
     info = resolve_live_twicc()
     if info is None:
-        typer.echo(
+        emit_error(
             "Error: TwiCC server is unresponsive "
             "(twicc.info.json missing or recorded PID is dead).",
-            err=True,
+            code=2,
         )
-        raise typer.Exit(2)
 
     # --- Resolve optional scope filters ---------------------------------
 
@@ -177,11 +170,9 @@ def wait_cmd(
             annotation=annotation,
         )
     except RuntimeError as e:
-        typer.echo(f"Error: {e}", err=True)
-        raise typer.Exit(1)
+        emit_error(f"Error: {e}", code=1)
     except ValueError as e:
-        typer.echo(f"Error: {e}", err=True)
-        raise typer.Exit(2)
+        emit_error(f"Error: {e}", code=2)
 
     if not session_ids_ordered:
         emit_json([])
@@ -303,12 +294,11 @@ def wait_cmd(
         # Re-verify the server hasn't died or been restarted under us.
         live_info = resolve_live_twicc()
         if live_info is None or live_info.pid != info.pid:
-            typer.echo(
+            emit_error(
                 "Error: TwiCC server is no longer running "
                 "(twicc.info.json missing or PID changed).",
-                err=True,
+                code=2,
             )
-            raise typer.Exit(2)
 
         rows = latest_rows_for(pending)
         still_pending: list[str] = []

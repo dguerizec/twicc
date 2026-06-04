@@ -10,6 +10,7 @@ import os
 import typer
 
 from twicc.cli._drop_request.project import derive_project_id
+from twicc.cli._output import emit_error
 from twicc.version import get_version
 
 # Ensure Django settings are discoverable for all subcommands that call django.setup().
@@ -265,15 +266,13 @@ def _sessions_default(
         return
 
     if include_hidden and only_hidden:
-        typer.echo("Error: --include-hidden and --only-hidden are mutually exclusive.", err=True)
-        raise typer.Exit(2)
+        emit_error("Error: --include-hidden and --only-hidden are mutually exclusive.", code=2)
 
     if sum(x is not None for x in (spawned_by, spawn_tree, descendants)) > 1:
-        typer.echo(
+        emit_error(
             "Error: --spawned-by, --spawn-tree and --descendants are mutually exclusive.",
-            err=True,
+            code=2,
         )
-        raise typer.Exit(2)
 
     from twicc.cli.sessions import main as sessions_main
 
@@ -516,23 +515,20 @@ def _processes_default(
         return
 
     if include_hidden and only_hidden:
-        typer.echo("Error: --include-hidden and --only-hidden are mutually exclusive.", err=True)
-        raise typer.Exit(2)
+        emit_error("Error: --include-hidden and --only-hidden are mutually exclusive.", code=2)
 
     if sum(x is not None for x in (spawned_by, spawn_tree, descendants)) > 1:
-        typer.echo(
+        emit_error(
             "Error: --spawned-by, --spawn-tree and --descendants are mutually exclusive.",
-            err=True,
+            code=2,
         )
-        raise typer.Exit(2)
 
     if annotation and not any((spawned_by, spawn_tree, descendants)):
-        typer.echo(
+        emit_error(
             "Error: --annotation requires --spawned-by, --spawn-tree, or "
             "--descendants on processes listing.",
-            err=True,
+            code=2,
         )
-        raise typer.Exit(2)
 
     from twicc.cli.processes import main as processes_main
 
@@ -628,11 +624,10 @@ def _processes_stop(
     completes — callers inspect each entry's ``status`` for the per-id outcome.
     """
     if sum(x is not None for x in (spawned_by, descendants)) > 1:
-        typer.echo(
+        emit_error(
             "Error: --spawned-by and --descendants are mutually exclusive.",
-            err=True,
+            code=2,
         )
-        raise typer.Exit(2)
 
     from twicc.cli.processes_stop import stop_cmd
 
@@ -719,11 +714,10 @@ def _processes_wait(
     wait for).
     """
     if sum(x is not None for x in (spawned_by, descendants)) > 1:
-        typer.echo(
+        emit_error(
             "Error: --spawned-by and --descendants are mutually exclusive.",
-            err=True,
+            code=2,
         )
-        raise typer.Exit(2)
 
     from twicc.cli.processes_wait import wait_cmd
 
@@ -922,15 +916,13 @@ def search(
 ) -> None:
     """Query the TwiCC search index using raw Tantivy query syntax."""
     if include_hidden and only_hidden:
-        typer.echo("Error: --include-hidden and --only-hidden are mutually exclusive.", err=True)
-        raise typer.Exit(2)
+        emit_error("Error: --include-hidden and --only-hidden are mutually exclusive.", code=2)
 
     if sum(x is not None for x in (spawned_by, spawn_tree, descendants)) > 1:
-        typer.echo(
+        emit_error(
             "Error: --spawned-by, --spawn-tree and --descendants are mutually exclusive.",
-            err=True,
+            code=2,
         )
-        raise typer.Exit(2)
 
     from twicc.cli.search import main as search_main
 
@@ -971,6 +963,12 @@ app.add_typer(update_session_app)
 # (no Django setup) so importing it at module load is cheap.
 from twicc.cli.password import app as password_app  # noqa: E402
 app.add_typer(password_app)
+
+
+# ``token`` manages RPC API tokens. Local/human only — never exposed via
+# ``/rpc/`` (chicken-and-egg). Lightweight module, cheap to import at load.
+from twicc.cli.token import app as token_app  # noqa: E402
+app.add_typer(token_app)
 
 
 # ``whoami`` resolves the TwiCC session owning the calling process via PID

@@ -198,13 +198,13 @@ def update_settings_cmd(
         validate_settings,
         validate_unset_fields,
     )
+    from twicc.cli._output import emit_error
     from twicc.providers.helpers import AgentSettings, get_provider_helpers
 
     try:
         check_heartbeat()
     except ServerDownError as e:
-        typer.echo(str(e), err=True)
-        raise typer.Exit(2)
+        emit_error(str(e), code=2)
 
     # Local pre-check: session must exist, not be a subagent, not be stale,
     # and have a project directory. The watcher-side service re-validates

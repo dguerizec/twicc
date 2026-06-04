@@ -1,8 +1,6 @@
 """CLI implementation for the ``twicc search`` subcommand."""
 
-import sys
-
-from twicc.cli._output import emit_json
+from twicc.cli._output import emit_error, emit_json
 
 
 def main(
@@ -49,8 +47,7 @@ def main(
         spawn_root_id = resolve_spawn_tree_filter(spawn_tree)
         descendants_ids = resolve_descendants_filter(descendants)
     except RuntimeError as e:
-        print(str(e), file=sys.stderr)
-        sys.exit(1)
+        emit_error(str(e), code=1)
 
     annotation_filters = None
     if annotation:
@@ -58,8 +55,7 @@ def main(
         try:
             annotation_filters = [parse_annotation_filter(spec) for spec in annotation]
         except ValueError as exc:
-            print(f"Error: {exc}", file=sys.stderr)
-            sys.exit(2)
+            emit_error(f"Error: {exc}", code=2)
 
     from twicc.search import raw_search
 
@@ -77,7 +73,6 @@ def main(
             annotation_filters=annotation_filters,
         )
     except RuntimeError as exc:
-        print(f"Error: {exc}", file=sys.stderr)
-        sys.exit(1)
+        emit_error(f"Error: {exc}", code=1)
 
     emit_json(result)

@@ -44,13 +44,13 @@ def delete_workspace_cmd(
     from twicc.cli._drop_request.output import emit_final, emit_validation_errors
     from twicc.cli._drop_request.polling import poll_status
     from twicc.cli._drop_request.validation import ValidationError
+    from twicc.cli._output import emit_error
     from twicc.workspaces import read_workspaces
 
     try:
         check_heartbeat()
     except ServerDownError as e:
-        typer.echo(str(e), err=True)
-        raise typer.Exit(2)
+        emit_error(str(e), code=2)
 
     # Pre-flight: workspace existence (cheap, gives the user a clean error
     # without waiting on the server). Re-checked under the lock server-side.

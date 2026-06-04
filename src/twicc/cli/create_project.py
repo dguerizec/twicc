@@ -76,6 +76,7 @@ def create_project_cmd(
     from twicc.cli._drop_request.output import emit_final, emit_validation_errors
     from twicc.cli._drop_request.polling import poll_status
     from twicc.cli._drop_request.validation import ValidationError
+    from twicc.cli._output import emit_error, in_api_mode
     from twicc.core.models import Project
     from twicc.paths import path_to_project_id
     from twicc.projects import validate_project_name_format
@@ -84,8 +85,7 @@ def create_project_cmd(
     try:
         check_heartbeat()
     except ServerDownError as e:
-        typer.echo(str(e), err=True)
-        raise typer.Exit(2)
+        emit_error(str(e), code=2)
 
     # Resolve the directory to a canonical absolute path locally so the
     # pre-flight checks (existence, id collision) see the same path the
@@ -93,6 +93,13 @@ def create_project_cmd(
     # safety net.
     resolved = os.path.realpath(directory)
     errors: list[ValidationError] = []
+
+    if in_api_mode() and not os.path.isabs(directory):
+        errors.append(ValidationError(
+            "DIRECTORY", "relative_path",
+            "relative path not allowed over the API (no caller working directory); "
+            "pass an absolute path",
+        ))
 
     if not os.path.isabs(resolved):
         errors.append(ValidationError("DIRECTORY", "invalid_directory",

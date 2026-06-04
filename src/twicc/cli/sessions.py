@@ -1,8 +1,6 @@
 """CLI implementation for the ``twicc sessions`` subcommand."""
 
-import sys
-
-from twicc.cli._output import emit_json
+from twicc.cli._output import emit_error, emit_json
 
 
 def main(
@@ -42,8 +40,7 @@ def main(
         spawn_root_id = resolve_spawn_tree_filter(spawn_tree)
         descendants_ids = resolve_descendants_filter(descendants)
     except RuntimeError as e:
-        print(str(e), file=sys.stderr)
-        sys.exit(1)
+        emit_error(str(e), code=1)
 
     from django.db.models import Q
 
@@ -94,8 +91,7 @@ def main(
         try:
             annotation_filters = [parse_annotation_filter(spec) for spec in annotation]
         except ValueError as exc:
-            print(f"Error: {exc}", file=sys.stderr)
-            sys.exit(2)
+            emit_error(f"Error: {exc}", code=2)
         qs = apply_annotation_filters(qs, annotation_filters)
 
     if workspace is not None:
@@ -106,8 +102,7 @@ def main(
             None,
         )
         if ws is None:
-            print(f"Error: workspace '{workspace}' not found.", file=sys.stderr)
-            sys.exit(1)
+            emit_error(f"Error: workspace '{workspace}' not found.", code=1)
         qs = qs.filter(project_id__in=ws.get("projectIds", []))
 
     if project is not None:

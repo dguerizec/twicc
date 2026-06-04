@@ -1,8 +1,6 @@
 """CLI implementation for the ``twicc projects`` subcommand."""
 
-import sys
-
-from twicc.cli._output import emit_json
+from twicc.cli._output import emit_error, emit_json
 
 
 def main(
@@ -33,8 +31,7 @@ def main(
     if workspace is not None:
         ws = next((w for w in all_workspaces if w.get("id") == workspace), None)
         if ws is None:
-            print(f"Error: workspace '{workspace}' not found.", file=sys.stderr)
-            sys.exit(1)
+            emit_error(f"Error: workspace '{workspace}' not found.", code=1)
         qs = qs.filter(id__in=ws.get("projectIds", []))
 
     projects = qs[offset : offset + limit]

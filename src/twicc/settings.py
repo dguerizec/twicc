@@ -164,6 +164,7 @@ if DEBUG:
 MIDDLEWARE = [
     "django.contrib.sessions.middleware.SessionMiddleware",
     "twicc.auth.middleware.PasswordAuthMiddleware",
+    "twicc.auth.middleware.RpcTokenAuthMiddleware",
 ]
 
 # Password protection

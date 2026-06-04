@@ -142,7 +142,10 @@ def create_session_cmd(
         help=(
             "Path to a file to attach (repeatable). Claude Code accepts "
             "PNG/JPEG/GIF/WebP/PDF/text/plain up to 5 MB each. Codex accepts "
-            "images only. Max 100 files, 32 MB total."
+            "images only. Max 100 files, 32 MB total. "
+            "Each value is either a local file path OR a base64 data URI "
+            "(data:<mime>;base64,<data>) — the data-URI form lets remote/API "
+            "callers attach files without a shared filesystem."
         ),
     ),
     annotation: list[str] = typer.Option(
@@ -207,13 +210,13 @@ def create_session_cmd(
         validate_provider,
         validate_settings,
     )
+    from twicc.cli._output import emit_error
     from twicc.providers.helpers import get_provider_helpers
 
     try:
         check_heartbeat()
     except ServerDownError as e:
-        typer.echo(str(e), err=True)
-        raise typer.Exit(2)
+        emit_error(str(e), code=2)
 
     bootstrap = load_local_bootstrap()
 
@@ -263,8 +266,9 @@ def create_session_cmd(
         emit_validation_errors([ValidationError("--preset", "invalid_preset", str(e))])
         raise typer.Exit(1)
 
-    # ``resolve_project`` never raises: when the input is an id with no
-    # matching Project row and no on-disk directory backing it, it returns
+    # ``resolve_project`` only raises in API mode (the relative-path guard,
+    # via ``emit_error``); otherwise, when the input is an id with no matching
+    # Project row and no on-disk directory backing it, it returns
     # ``directory=None``. ``create-session`` needs the directory (to seed
     # the project server-side), so reject here with the same UX as before.
     if resolved_project.directory is None:

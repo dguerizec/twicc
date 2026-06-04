@@ -103,6 +103,7 @@ def update_project_cmd(
     from twicc.cli._drop_request.output import emit_final, emit_validation_errors
     from twicc.cli._drop_request.polling import poll_status
     from twicc.cli._drop_request.validation import ValidationError
+    from twicc.cli._output import emit_error
     from twicc.core.models import Project
     from twicc.projects import validate_project_name_format
     from twicc.workspaces import validate_color
@@ -110,8 +111,7 @@ def update_project_cmd(
     try:
         check_heartbeat()
     except ServerDownError as e:
-        typer.echo(str(e), err=True)
-        raise typer.Exit(2)
+        emit_error(str(e), code=2)
 
     # Mutually-exclusive flag checks (don't depend on DB state).
     errors: list[ValidationError] = []

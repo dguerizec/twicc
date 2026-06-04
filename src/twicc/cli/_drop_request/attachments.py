@@ -9,9 +9,12 @@ the SDK-format dicts the back-end expects in ``send_message`` payloads.
 from __future__ import annotations
 
 import base64
+import binascii
 import io
 import os
 from typing import NamedTuple
+
+from twicc.cli._output import in_api_mode
 
 
 # Magic byte signatures for each accepted binary type.
@@ -26,6 +29,7 @@ _MAGIC = [
 
 
 class AttachmentError(NamedTuple):
+    # ``file`` may hold a filesystem path OR a ``data:<mime>`` label for data-URI inputs.
     file: str
     code: str
     message: str
@@ -33,10 +37,11 @@ class AttachmentError(NamedTuple):
 
 class AttachmentSummaryItem(NamedTuple):
     """One row of the per-attachment summary printed after validation."""
+    # ``path`` may hold a filesystem path OR a ``data:<mime>`` label for data-URI inputs.
     path: str
     kind: str                            # "image" | "document" | "text"
     mime: str
-    original_size: int                   # bytes read from disk
+    original_size: int                   # bytes (from disk or decoded URI)
     final_size: int                      # bytes after resize (== original for non-images / no-op)
     original_dim: tuple[int, int] | None  # (w, h) before resize, images only
     final_dim: tuple[int, int] | None     # (w, h) after resize, images only
@@ -76,6 +81,31 @@ def _sniff_mime(data: bytes) -> str | None:
         return "text/plain"
     except UnicodeDecodeError:
         return None
+
+
+def _parse_data_uri(spec: str) -> tuple[str, bytes]:
+    """Decode a base64 data URI ``data:<mediatype>;base64,<data>`` → (declared_mime, raw_bytes).
+
+    The declared media type is returned only for a display label; the real
+    type is re-sniffed from the bytes downstream (so a wrong declared type
+    cannot bypass validation). Raises ValueError on a malformed / non-base64
+    data URI.
+    """
+    rest = spec[len("data:"):]
+    header, sep, b64 = rest.partition(",")
+    if not sep:
+        raise ValueError("malformed data URI (missing comma)")
+    params = header.split(";")
+    declared_mime = params[0].strip() or "application/octet-stream"
+    if not any(p.strip().lower() == "base64" for p in params[1:]):
+        raise ValueError("only base64 data URIs are supported (data:<mime>;base64,...)")
+    try:
+        raw = base64.b64decode("".join(b64.split()), validate=True)
+    except (binascii.Error, ValueError):
+        raise ValueError("invalid base64 payload in data URI")
+    if not raw:
+        raise ValueError("empty data URI payload")
+    return declared_mime, raw
 
 
 def resize_image_if_needed(
@@ -153,13 +183,59 @@ def _kind_of(mime: str) -> str:
     return "text"
 
 
+def _size_error(label: str, size: int, max_per_file: int) -> AttachmentError:
+    return AttachmentError(
+        label, "size_exceeded",
+        f"size {size / 1024 / 1024:.1f} MB exceeds "
+        f"{max_per_file / 1024 / 1024:.0f} MB limit",
+    )
+
+
+def _resolve_spec(spec: str, max_per_file: int) -> tuple[str, bytes] | AttachmentError:
+    """Resolve one --attach entry (file path OR data: URI) to (label, raw_bytes).
+
+    Returns an AttachmentError instead on a bad data URI, a missing file, or a
+    per-file size overflow. For filesystem inputs the size is checked via
+    os.path.getsize() BEFORE the file is read, so an oversized file is rejected
+    without being loaded into memory.
+    """
+    if spec.startswith("data:"):
+        try:
+            declared_mime, data = _parse_data_uri(spec)
+        except ValueError as e:
+            return AttachmentError(f"data:{spec[5:40]}…", "invalid_data_uri", str(e))
+        label = f"data:{declared_mime}"
+        if len(data) > max_per_file:
+            return _size_error(label, len(data), max_per_file)
+        return label, data
+
+    label = spec
+    if in_api_mode() and not os.path.isabs(spec):
+        return AttachmentError(
+            spec, "relative_path",
+            "relative path not allowed over the API (no caller working directory); "
+            "pass an absolute path or a data: URI",
+        )
+    if not os.path.isfile(spec):
+        return AttachmentError(spec, "not_a_file", f"file {spec!r} does not exist")
+    size = os.path.getsize(spec)
+    if size > max_per_file:
+        return _size_error(label, size, max_per_file)
+    with open(spec, "rb") as f:
+        return label, f.read()
+
+
 def validate_and_encode(
-    paths: list[str],
+    specs: list[str],
     support: dict,
     helpers,
     model: str | None,
 ) -> AttachmentResult:
     """Validate, resize, and base64-encode every attachment in order.
+
+    Each entry in ``specs`` is either a local file path or a base64 data URI
+    of the form ``data:<mime>;base64,<data>``. The data-URI form lets
+    remote/API callers attach files without a shared filesystem.
 
     Validation errors (size / count / total / unsupported MIME) are
     aggregated and returned in ``AttachmentResult.errors``. The caller
@@ -178,52 +254,44 @@ def validate_and_encode(
     max_total = support.get("max_total_bytes") or 0
     max_count = support.get("max_files_per_message") or 0
 
-    if len(paths) > max_count:
+    if len(specs) > max_count:
         errors.append(AttachmentError(
-            "<all>", "too_many", f"{len(paths)} attachments, max {max_count}",
+            "<all>", "too_many", f"{len(specs)} attachments, max {max_count}",
         ))
         return AttachmentResult([], [], errors, [])
 
-    # Pass 1: validate every file and accumulate (path, raw_bytes, mime, kind).
+    # Pass 1: validate every entry (file path or data URI) and accumulate
+    # (label, raw_bytes, mime, kind). ``label`` is the path for filesystem
+    # inputs and ``data:<mime>`` for data-URI inputs — used in error messages
+    # and summary output only.
     # We need to know how many images there are to compute the right
     # resize cap (Anthropic tightens the cap for >20 images), so we
     # postpone resize/encode to a second pass.
     validated: list[tuple[str, bytes, str, str]] = []
     total = 0
-    for path in paths:
-        if not os.path.isfile(path):
-            errors.append(AttachmentError(path, "not_a_file",
-                                           f"file {path!r} does not exist"))
+    for spec in specs:
+        resolved = _resolve_spec(spec, max_per_file)
+        if isinstance(resolved, AttachmentError):
+            errors.append(resolved)
             continue
-        size = os.path.getsize(path)
-        if size > max_per_file:
-            errors.append(AttachmentError(
-                path, "size_exceeded",
-                f"size {size / 1024 / 1024:.1f} MB exceeds "
-                f"{max_per_file / 1024 / 1024:.0f} MB limit",
-            ))
-            continue
-        total += size
+        label, data = resolved
+        total += len(data)
         if total > max_total:
             errors.append(AttachmentError(
-                path, "total_size_exceeded",
+                label, "total_size_exceeded",
                 f"total size exceeds {max_total / 1024 / 1024:.0f} MB",
             ))
             continue
-
-        with open(path, "rb") as f:
-            data = f.read()
         mime = _sniff_mime(data)
         if mime is None or mime not in accepted:
             accepted_list = ", ".join(sorted(accepted))
             errors.append(AttachmentError(
-                path, "unsupported_mime",
+                label, "unsupported_mime",
                 f"type {mime or 'unknown'} not supported "
                 f"(accepted: {accepted_list})",
             ))
             continue
-
-        validated.append((path, data, mime, _kind_of(mime)))
+        validated.append((label, data, mime, _kind_of(mime)))
 
     if errors:
         return AttachmentResult([], [], errors, [])
@@ -234,7 +302,7 @@ def validate_and_encode(
     target_dim = helpers.get_effective_image_dimension(model, num_images)
 
     # Pass 2: resize images, base64-encode binaries, gather summary.
-    for path, data, mime, kind in validated:
+    for label, data, mime, kind in validated:
         original_size = len(data)
         original_dim: tuple[int, int] | None = None
         final_dim: tuple[int, int] | None = None
@@ -242,7 +310,7 @@ def validate_and_encode(
 
         if kind == "image":
             data, mime, original_dim, final_dim, resized = resize_image_if_needed(
-                data, mime, target_dim, path=path,
+                data, mime, target_dim, path=label,
             )
             images.append({
                 "type": "image",
@@ -272,7 +340,7 @@ def validate_and_encode(
             })
 
         summary.append(AttachmentSummaryItem(
-            path=path,
+            path=label,
             kind=kind,
             mime=mime,
             original_size=original_size,

@@ -9,9 +9,9 @@ saving the caller from issuing multiple commands.
 
 from __future__ import annotations
 
-import sys
-
 import typer
+
+from twicc.cli._output import emit_error
 
 VALID_SECTIONS: tuple[str, ...] = ("presets", "commands", "models", "agent-settings")
 
@@ -75,11 +75,10 @@ def info_cmd(
     canonical_sections = _validate_sections(sections)
 
     if (project is not None or filter_query is not None) and "commands" not in canonical_sections:
-        print(
+        emit_error(
             "Error: --project and --filter only apply to the 'commands' section; pass 'commands' as a positional argument.",
-            file=sys.stderr,
+            code=1,
         )
-        raise typer.Exit(1)
 
     project_id = None
     if project is not None:
@@ -158,11 +157,10 @@ def _validate_sections(sections: list[str]) -> set[str]:
     accepted = valid | {"all"}
     invalid = sorted({s for s in sections if s not in accepted})
     if invalid:
-        print(
+        emit_error(
             f"Error: unknown section(s) {invalid}. Valid: {[*VALID_SECTIONS, 'all']}.",
-            file=sys.stderr,
+            code=1,
         )
-        raise typer.Exit(1)
     if "all" in sections:
         return valid
     return {s for s in sections if s in valid}

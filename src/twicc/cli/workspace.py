@@ -1,8 +1,6 @@
 """CLI implementation for the ``twicc workspace`` subcommand."""
 
-import sys
-
-from twicc.cli._output import emit_json
+from twicc.cli._output import emit_error, emit_json
 
 
 def main(workspace_id: str) -> None:
@@ -15,7 +13,6 @@ def main(workspace_id: str) -> None:
     workspaces = read_workspaces().get("workspaces", [])
     workspace = next((w for w in workspaces if w.get("id") == workspace_id), None)
     if workspace is None:
-        print(f"Error: workspace '{workspace_id}' not found.", file=sys.stderr)
-        sys.exit(1)
+        emit_error(f"Error: workspace '{workspace_id}' not found.", code=1)
 
     emit_json(workspace)

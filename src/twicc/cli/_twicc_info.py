@@ -15,11 +15,12 @@ descriptive error rather than returning ambiguous data.
 
 from __future__ import annotations
 
-import sys
 from typing import NamedTuple
 
 import orjson
 import psutil
+
+from twicc.cli._output import emit_error
 
 
 class TwiCCInfo(NamedTuple):
@@ -70,9 +71,8 @@ def resolve_live_twicc_or_exit() -> TwiCCInfo:
     """Return :func:`resolve_live_twicc` or exit the CLI with a clear error."""
     info = resolve_live_twicc()
     if info is None:
-        print(
+        emit_error(
             "Error: TwiCC is not running (no live twicc.info.json found).",
-            file=sys.stderr,
+            code=1,
         )
-        sys.exit(1)
     return info

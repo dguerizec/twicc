@@ -1,8 +1,6 @@
 """CLI implementation for the ``twicc processes`` subcommand."""
 
-import sys
-
-from twicc.cli._output import emit_json
+from twicc.cli._output import emit_error, emit_json
 
 
 def main(
@@ -46,12 +44,11 @@ def main(
 
     filiation_scope = any((spawned_by, spawn_tree, descendants))
     if annotation and not filiation_scope:
-        print(
+        emit_error(
             "Error: --annotation on processes listing requires --spawned-by, "
             "--spawn-tree, or --descendants.",
-            file=sys.stderr,
+            code=1,
         )
-        sys.exit(1)
 
     has_scope = filiation_scope or bool(annotation)
     scoped_session_ids: list[str] | None = None
@@ -66,11 +63,9 @@ def main(
                 annotation=annotation,
             )
         except RuntimeError as e:
-            print(str(e), file=sys.stderr)
-            sys.exit(1)
+            emit_error(str(e), code=1)
         except ValueError as e:
-            print(f"Error: {e}", file=sys.stderr)
-            sys.exit(2)
+            emit_error(f"Error: {e}", code=2)
 
     from twicc.agent.states import AgentState
     from twicc.cli._process_state import (
@@ -92,12 +87,11 @@ def main(
 
     if state is not None:
         if state not in LIVE_VIRTUAL_STATES:
-            print(
+            emit_error(
                 f"Error: invalid --state '{state}'. Use one of: "
                 f"{', '.join(sorted(LIVE_VIRTUAL_STATES))}.",
-                file=sys.stderr,
+                code=1,
             )
-            sys.exit(1)
         if state == AWAITING_VIRTUAL_STATE:
             # awaiting_user_input rows are necessarily in ASSISTANT_TURN; the
             # flag is the canonical filter so we don't combine with state.

@@ -26,6 +26,7 @@ from __future__ import annotations
 import os
 from typing import NamedTuple
 
+from twicc.cli._output import emit_error, in_api_mode
 from twicc.paths import path_to_project_id
 
 
@@ -48,12 +49,40 @@ def _normalize_id(value: str) -> str:
     return value if value.startswith("-") else f"-{value}"
 
 
+def _reject_relative_over_api(value: str | None) -> None:
+    """In API mode, forbid the empty(->CWD) default and relative-path project inputs.
+
+    A project id never contains a path separator (path_to_project_id turns
+    every '/' into '-'), so a value with a separator — or one that resolves
+    to an existing directory — is a filesystem path; if it is not absolute it
+    would be realpath'd against the backend's CWD, which is meaningless to an
+    API caller. Ids (with or without leading dash) pass through untouched.
+    """
+    if not in_api_mode():
+        return
+    if value is None or value == "":
+        emit_error(
+            "a project or directory is required over the API (no caller working "
+            "directory); pass an absolute path or a project id",
+            code=2,
+        )
+    sep_hit = os.sep in value or (os.altsep is not None and os.altsep in value)
+    if not os.path.isabs(value) and (sep_hit or os.path.isdir(value)):
+        emit_error(
+            f"relative path {value!r} is not allowed over the API (no caller "
+            "working directory); pass an absolute path or a project id "
+            "(a leading-dash id like -home-foo-bar)",
+            code=2,
+        )
+
+
 def derive_project_id(value: str | None) -> tuple[str, str | None]:
     """Pure: derive ``(project_id, directory_or_none)`` from a path-or-id input.
 
     No Django, no DB. ``directory`` is the realpath when ``value`` points
     to an existing directory, ``None`` otherwise (id input).
     """
+    _reject_relative_over_api(value)
     if value is None or value == "":
         value = os.getcwd()
 
@@ -76,6 +105,7 @@ def resolve_project(value: str | None) -> ResolvedProject:
     ``directory=None`` and ``exists=False`` — the caller decides whether
     that's acceptable.
     """
+    _reject_relative_over_api(value)
     from twicc.core.models import Project
 
     if value is None or value == "":

@@ -20,7 +20,7 @@ import time
 
 import typer
 
-from twicc.cli._output import emit_json
+from twicc.cli._output import emit_error, emit_json
 
 
 POLL_INTERVAL_SECONDS = 0.25
@@ -55,17 +55,15 @@ def wait_cmd(
     # --- Argument validation ---------------------------------------------
 
     if timeout <= 0:
-        typer.echo(
+        emit_error(
             f"Error: --timeout must be > 0 (got {timeout}).",
-            err=True,
+            code=64,
         )
-        raise typer.Exit(64)
 
     if not statuses:
         # typer.Argument(...) already enforces this; keep the explicit
         # guard so the error message matches the rest of the validation.
-        typer.echo("Error: at least one status is required.", err=True)
-        raise typer.Exit(64)
+        emit_error("Error: at least one status is required.", code=64)
 
     requested = []
     seen: set[str] = set()
@@ -73,12 +71,11 @@ def wait_cmd(
         if s in seen:
             continue
         if s not in VALID_VIRTUAL_STATES:
-            typer.echo(
+            emit_error(
                 f"Error: invalid status '{s}'. Use one of: "
                 f"{', '.join(sorted(VALID_VIRTUAL_STATES))}.",
-                err=True,
+                code=64,
             )
-            raise typer.Exit(64)
         requested.append(s)
         seen.add(s)
     requested_set = frozenset(requested)
@@ -88,19 +85,17 @@ def wait_cmd(
     try:
         check_heartbeat()
     except ServerDownError as e:
-        typer.echo(f"Error: {e}", err=True)
-        raise typer.Exit(2)
+        emit_error(f"Error: {e}", code=2)
 
     info = resolve_live_twicc()
     if info is None:
         # Heartbeat passed but info.json is missing or its PID is dead.
         # Treat as server down to keep the exit code coherent.
-        typer.echo(
+        emit_error(
             "Error: TwiCC server is unresponsive "
             "(twicc.info.json missing or recorded PID is dead).",
-            err=True,
+            code=2,
         )
-        raise typer.Exit(2)
 
     # --- session_id validation -------------------------------------------
 
@@ -113,12 +108,11 @@ def wait_cmd(
         twicc_pid=info.pid, session_id=session_id
     ).exists()
     if session is None and not has_processrun:
-        typer.echo(
+        emit_error(
             f"Error: unknown session '{session_id}' "
             f"(no Session row and no ProcessRun in this TwiCC).",
-            err=True,
+            code=1,
         )
-        raise typer.Exit(1)
 
     # --- Snapshot + poll loop --------------------------------------------
 
@@ -181,12 +175,11 @@ def wait_cmd(
         # any row we read tagged with the old pid is meaningless.
         live_info = resolve_live_twicc()
         if live_info is None or live_info.pid != info.pid:
-            typer.echo(
+            emit_error(
                 "Error: TwiCC server is no longer running "
                 "(twicc.info.json missing or PID changed).",
-                err=True,
+                code=2,
             )
-            raise typer.Exit(2)
 
         row = latest_row()
         marker = row_change_marker(row)
@@ -195,12 +188,11 @@ def wait_cmd(
         if transition and marker == initial_marker:
             # No transition observed yet — keep polling without evaluating.
             if time.monotonic() >= deadline:
-                typer.echo(
+                emit_error(
                     f"Timeout after {timeout:g}s "
                     f"(no transition observed, state: {virtual}).",
-                    err=True,
+                    code=5,
                 )
-                raise typer.Exit(5)
             continue
 
         if virtual in requested_set:
@@ -208,9 +200,8 @@ def wait_cmd(
             raise typer.Exit(0)
 
         if time.monotonic() >= deadline:
-            typer.echo(
+            emit_error(
                 f"Timeout after {timeout:g}s "
                 f"(last observed state: {virtual}).",
-                err=True,
+                code=5,
             )
-            raise typer.Exit(5)

@@ -99,6 +99,11 @@ def get_env_path() -> Path:
     return get_data_dir() / ".env"
 
 
+def get_api_tokens_path() -> Path:
+    """Path to the RPC API token store (``<data_dir>/api-tokens.json``)."""
+    return get_data_dir() / "api-tokens.json"
+
+
 def get_synced_settings_path() -> Path:
     """Return the synced settings file path (<data_dir>/settings.json)."""
     return get_data_dir() / "settings.json"

@@ -99,6 +99,12 @@ TwiCC exposes a full `twicc` command-line interface — and a Claude Code / Code
 
 See [`SKILLS-AND-CLI.md`](SKILLS-AND-CLI.md) for the full reference, or run `twicc --help`.
 
+### HTTP RPC API
+
+The same CLI is also exposed over HTTP under `/rpc/`, so one TwiCC instance — or any HTTP client — can drive another over the network. Every command is auto-generated as a route from the CLI itself, so there is no separate API to keep in sync.
+
+See [`RPC-API.md`](RPC-API.md) for authentication, the request/response shape, and the few HTTP-specific limitations (server-side absolute paths, base64 attachments, blocking waits).
+
 ### Orchestration
 
 A session can spawn other sessions, which can spawn their own, forming a tree of cooperating agents. A leader/manager/worker skill family lets one agent split a task into sub-tasks across spawned sessions (optionally hidden from the UI), coordinate them through a shared scratch space, and aggregate the results — without a human in the loop for each step.

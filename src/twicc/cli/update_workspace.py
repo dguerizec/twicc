@@ -136,6 +136,7 @@ def update_workspace_cmd(
     from twicc.cli._drop_request.output import emit_final, emit_validation_errors
     from twicc.cli._drop_request.polling import poll_status
     from twicc.cli._drop_request.validation import ValidationError
+    from twicc.cli._output import emit_error
     from twicc.core.models import Project
     from twicc.workspaces import (
         read_workspaces,
@@ -147,8 +148,7 @@ def update_workspace_cmd(
     try:
         check_heartbeat()
     except ServerDownError as e:
-        typer.echo(str(e), err=True)
-        raise typer.Exit(2)
+        emit_error(str(e), code=2)
 
     # Mutually-exclusive flag checks first — they don't depend on disk state.
     errors: list[ValidationError] = []

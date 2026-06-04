@@ -8,13 +8,15 @@ from __future__ import annotations
 
 import os
 
+from twicc.cli._output import in_api_mode
+
 
 class PromptError(Exception):
     pass
 
 
 def resolve_prompt(prompt_arg: str) -> str:
-    if os.path.isfile(prompt_arg):
+    if os.path.isfile(prompt_arg) and (not in_api_mode() or os.path.isabs(prompt_arg)):
         try:
             with open(prompt_arg, "r", encoding="utf-8") as f:
                 text = f.read()

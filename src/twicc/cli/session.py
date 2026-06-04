@@ -1,10 +1,8 @@
 """CLI implementation for the ``twicc session`` subcommand."""
 
-import sys
-
 import orjson
 
-from twicc.cli._output import emit_json
+from twicc.cli._output import emit_error, emit_json
 
 
 def _get_session(session_id: str):
@@ -18,8 +16,7 @@ def _get_session(session_id: str):
             user_message_count__gt=0,
         )
     except Session.DoesNotExist:
-        print(f"Error: session '{session_id}' not found.", file=sys.stderr)
-        sys.exit(1)
+        emit_error(f"Error: session '{session_id}' not found.", code=1)
 
     return session
 
@@ -34,18 +31,15 @@ def _parse_range_filter(range_str: str) -> dict:
         try:
             start, end = int(parts[0]), int(parts[1])
         except ValueError:
-            print(f"Error: invalid range '{range_str}'. Use a number or start-end (e.g. '5' or '10-20').", file=sys.stderr)
-            sys.exit(1)
+            emit_error(f"Error: invalid range '{range_str}'. Use a number or start-end (e.g. '5' or '10-20').", code=1)
         if start > end:
-            print(f"Error: invalid range '{range_str}'. Start must be <= end.", file=sys.stderr)
-            sys.exit(1)
+            emit_error(f"Error: invalid range '{range_str}'. Start must be <= end.", code=1)
         return {"line_num__gte": start, "line_num__lte": end}
 
     try:
         line_num = int(range_str)
     except ValueError:
-        print(f"Error: invalid line number '{range_str}'. Use a number or start-end (e.g. '5' or '10-20').", file=sys.stderr)
-        sys.exit(1)
+        emit_error(f"Error: invalid line number '{range_str}'. Use a number or start-end (e.g. '5' or '10-20').", code=1)
     return {"line_num": line_num}
 
 
@@ -83,8 +77,7 @@ def content(session_id: str, *, range_str: str) -> None:
     data = [orjson.loads(item.content) for item in items]
 
     if not data:
-        print("Error: no items found for the given range.", file=sys.stderr)
-        sys.exit(1)
+        emit_error("Error: no items found for the given range.", code=1)
 
     emit_json(data)
 
@@ -120,16 +113,13 @@ def messages(
     session = _get_session(session_id)
 
     if role is not None and role not in {"user", "assistant"}:
-        print(f"Error: invalid --role '{role}'. Use 'user' or 'assistant'.", file=sys.stderr)
-        sys.exit(1)
+        emit_error(f"Error: invalid --role '{role}'. Use 'user' or 'assistant'.", code=1)
 
     if tail is not None:
         if limit is not None or offset:
-            print("Error: --tail is mutually exclusive with --limit and --offset.", file=sys.stderr)
-            sys.exit(1)
+            emit_error("Error: --tail is mutually exclusive with --limit and --offset.", code=1)
         if tail <= 0:
-            print(f"Error: --tail must be a positive integer (got {tail}).", file=sys.stderr)
-            sys.exit(1)
+            emit_error(f"Error: --tail must be a positive integer (got {tail}).", code=1)
 
     if role == "user":
         kinds = [ItemKind.USER_MESSAGE]
@@ -179,8 +169,7 @@ def agents(session_id: str, *, limit: int = 20, offset: int = 0) -> None:
     session = _get_session(session_id)
 
     if session.parent_session_id is not None:
-        print(f"Error: session '{session_id}' is a subagent, not a parent session.", file=sys.stderr)
-        sys.exit(1)
+        emit_error(f"Error: session '{session_id}' is a subagent, not a parent session.", code=1)
 
     subagents = Session.objects.filter(parent_session_id=session_id).order_by("-mtime")[offset : offset + limit]
     data = [serialize_session(s) for s in subagents]

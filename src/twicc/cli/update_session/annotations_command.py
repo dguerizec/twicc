@@ -45,12 +45,12 @@ def update_annotations_cmd(
         SessionLookupError, lookup_session,
     )
     from twicc.cli._drop_request.validation import ValidationError
+    from twicc.cli._output import emit_error
 
     try:
         check_heartbeat()
     except ServerDownError as e:
-        typer.echo(str(e), err=True)
-        raise typer.Exit(2)
+        emit_error(str(e), code=2)
 
     try:
         resolved = lookup_session(session_id)

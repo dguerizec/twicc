@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import typer
 
+from twicc.cli._output import emit_error
 from twicc.cli.update_session.annotations_command import update_annotations_cmd
 from twicc.cli.update_session.archived_command import (
     update_archive_cmd,
@@ -57,7 +58,6 @@ def _update_session_default(
     """
     if session_id == "self":
         import os
-        import sys
 
         os.environ.setdefault("DJANGO_SETTINGS_MODULE", "twicc.settings")
         import django
@@ -68,12 +68,11 @@ def _update_session_default(
 
         current = resolve_current_session()
         if current is None:
-            print(
+            emit_error(
                 "Error: self could not be resolved: no TwiCC session found "
                 "in PID ancestry.",
-                file=sys.stderr,
+                code=1,
             )
-            sys.exit(1)
         session_id = current.id
 
     ctx.obj = session_id

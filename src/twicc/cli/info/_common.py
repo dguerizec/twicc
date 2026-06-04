@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import sys
-
 # Re-exported so existing ``from twicc.cli.info._common import emit_json``
 # call sites keep working; the canonical home is now ``twicc.cli._output``,
 # the single place that decides the CLI's JSON shape.
-from twicc.cli._output import emit_json  # noqa: F401
+from twicc.cli._output import emit_error, emit_json  # noqa: F401
 
 
 def resolve_providers(provider: str | None, include_disabled: bool = False):
@@ -30,8 +28,7 @@ def resolve_providers(provider: str | None, include_disabled: bool = False):
             if prov.value == provider:
                 return [(prov, helpers)]
         valid = ", ".join(p.value for p, _ in pairs)
-        print(f"Error: unknown provider {provider!r}. Valid: {valid}.", file=sys.stderr)
-        sys.exit(1)
+        emit_error(f"Error: unknown provider {provider!r}. Valid: {valid}.", code=1)
 
     if include_disabled:
         return pairs

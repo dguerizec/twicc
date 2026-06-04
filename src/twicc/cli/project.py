@@ -1,8 +1,6 @@
 """CLI implementation for the ``twicc project`` subcommand."""
 
-import sys
-
-from twicc.cli._output import emit_json
+from twicc.cli._output import emit_error, emit_json
 
 
 def main(project_id: str) -> None:
@@ -18,8 +16,7 @@ def main(project_id: str) -> None:
     try:
         project = Project.objects.get(id=project_id)
     except Project.DoesNotExist:
-        print(f"Error: project '{project_id}' not found.", file=sys.stderr)
-        sys.exit(1)
+        emit_error(f"Error: project '{project_id}' not found.", code=1)
 
     data = serialize_project(project)
     data["workspaces"] = [

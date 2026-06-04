@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 from decimal import Decimal
-import sys
 
-from twicc.cli._output import emit_json
+from twicc.cli._output import emit_error, emit_json
 
 
 # Fields kept in each ``nodes[].session`` block by default. The caller can opt
@@ -46,12 +45,11 @@ def main(
 
     seed = _resolve_seed(session_id)
     if seed.type != SessionType.SESSION:
-        print(
+        emit_error(
             f"Error: session '{seed.id}' is a subagent; topology follows "
             "spawned_by, not parent_session_id.",
-            file=sys.stderr,
+            code=1,
         )
-        sys.exit(1)
 
     annotation_filters = None
     if annotation:
@@ -59,8 +57,7 @@ def main(
         try:
             annotation_filters = [parse_annotation_filter(spec) for spec in annotation]
         except ValueError as exc:
-            print(f"Error: {exc}", file=sys.stderr)
-            sys.exit(2)
+            emit_error(f"Error: {exc}", code=2)
 
     data = build_topology(
         seed,
@@ -175,18 +172,16 @@ def _resolve_seed(session_id: str):
     if session_id == "self":
         session = resolve_current_session()
         if session is None:
-            print(
+            emit_error(
                 "Error: self could not be resolved: no TwiCC session found in PID ancestry.",
-                file=sys.stderr,
+                code=1,
             )
-            sys.exit(1)
         return session
 
     try:
         return Session.objects.get(id=session_id)
     except Session.DoesNotExist:
-        print(f"Error: session '{session_id}' not found.", file=sys.stderr)
-        sys.exit(1)
+        emit_error(f"Error: session '{session_id}' not found.", code=1)
 
 
 def _load_topology_sessions(seed) -> tuple:

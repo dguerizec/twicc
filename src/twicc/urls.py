@@ -2,6 +2,7 @@ from django.urls import path, re_path
 
 from . import views
 from .auth import views as auth_views
+from .rpc import views as rpc_views
 
 urlpatterns = [
     # Auth endpoints (always accessible, no auth required)
@@ -93,10 +94,17 @@ urlpatterns = [
         "artifacts/<str:session_id>/<str:artifact_file_name>",
         views.session_artifact,
     ),
-    # Catch-all for Vue Router (must be last). ``artifacts/`` is excluded
-    # so malformed artifact URLs (subdirectories, missing filename, ...)
-    # surface as 404 instead of serving the SPA HTML.
+    # RPC API: every CLI command auto-exposed as ``POST /rpc/<command>``.
+    # Gated by Bearer API tokens via ``RpcTokenAuthMiddleware`` (open only when
+    # neither a password nor any token is configured). Must precede the SPA
+    # catch-all, which excludes ``rpc/`` so unknown RPC URLs 404 instead of
+    # serving ``index.html``.
+    path("rpc/", rpc_views.index),
+    path("rpc/openapi.json", rpc_views.openapi),
+    re_path(r"^rpc/(?P<command_path>[a-z0-9/-]+)/?$", rpc_views.dispatch),
+    # Catch-all for Vue Router (must be last). ``artifacts/`` and ``rpc/`` are
+    # excluded so those URLs surface as 404 instead of serving the SPA HTML.
     # Static files (/static/) are served by BlackNoise at the ASGI level,
     # before reaching Django's URL routing (see asgi.py).
-    re_path(r"^(?!api/|static/|ws/|artifacts/).*$", views.spa_index),
+    re_path(r"^(?!api/|rpc/|static/|ws/|artifacts/).*$", views.spa_index),
 ]

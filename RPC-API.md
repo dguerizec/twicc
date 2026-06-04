@@ -1,0 +1,136 @@
+# TwiCC RPC API
+
+Every `twicc` CLI command is automatically exposed over HTTP under `/rpc/`, so
+one TwiCC instance (or any HTTP client) can drive another over the network. The
+API is a thin transport in front of the exact same command code — there is **no
+hand-written endpoint layer** — so the CLI reference *is* the API reference:
+
+- the command tree, its options and arguments — [`SKILLS-AND-CLI.md`](SKILLS-AND-CLI.md) or `twicc --help`;
+- a machine-readable schema of every route — `GET /rpc/openapi.json` (OpenAPI 3.1).
+
+This file only documents what differs from running the CLI locally.
+
+## Endpoints
+
+| Method & path | Purpose |
+|---|---|
+| `POST /rpc/<command>[/<subcommand>…]` | Run a command (e.g. `POST /rpc/sessions`, `POST /rpc/process/wait`). |
+| `GET /rpc/` | List the exposed routes with their one-line summary. |
+| `GET /rpc/openapi.json` | OpenAPI 3.1 schema for every route. |
+
+A command's options and arguments are passed as a single JSON object in the
+request body, using the field names from the route's OpenAPI schema. An empty
+body is valid for commands that take no input.
+
+## Response
+
+Every call returns a JSON envelope mirroring the CLI outcome:
+
+```json
+{ "exit_code": 0, "result": "<command output, or null>", "error": "<message, or null>" }
+```
+
+`exit_code` is the same code the CLI would have returned, `result` is the JSON
+the command prints on success, and `error` carries the message on failure. The
+HTTP status is `200` whenever the command ran (inspect `exit_code` for the
+outcome); `4xx`/`405` are reserved for transport-level problems (unknown route,
+malformed body, wrong method, failed auth).
+
+## Authentication
+
+`/rpc/` is gated by Bearer tokens, independently of the web UI's password:
+
+- **Neither a password nor any token configured** → `/rpc/` is open (local-only, protection opted out).
+- **A password is set, or at least one token exists** → a valid token is **mandatory**.
+
+Mint a token locally — this command is host-only and is itself never exposed over the API:
+
+```bash
+twicc token create --name "my-script"   # prints the secret once: twicc_pat_…
+twicc token list                        # metadata only, never the secret
+twicc token revoke <id>
+```
+
+Send it on every request:
+
+```
+Authorization: Bearer twicc_pat_…
+```
+
+## Limitations and gotchas
+
+The things to keep in mind that don't apply when running the CLI on the same machine.
+
+### Paths are resolved on the server, and must be absolute
+
+Every path argument — a project directory, a `--directory`, an `--attach` file —
+is interpreted on the **machine running TwiCC**, not on the client. There is no
+meaningful working directory over HTTP, so **relative paths are rejected**. Pass
+absolute paths as they exist on the server. (A project can also be addressed by
+its id instead of its path.)
+
+### Attachments: absolute server path or base64 data URI
+
+`--attach` accepts either an absolute path to a file **on the server**, or an
+inline base64 data URI when the file only exists on the client:
+
+```
+data:<media-type>;base64,<base64-payload>
+```
+
+Only the `;base64,` form is supported. This is what lets a remote caller attach
+a file that isn't present on the server's filesystem.
+
+### Blocking waits can be cut short — mind the timeouts
+
+`process wait` and `processes wait` are **blocking long-polls**: the server holds
+the HTTP response open until the wait condition is met or the command's
+`--timeout` elapses (a timeout is a normal result with its own exit code, not an
+HTTP error). Over HTTP this means:
+
+- the **client's** HTTP read timeout must be **≥** the command `--timeout`, or the
+  client aborts a wait that would otherwise have succeeded;
+- any **intermediate proxy** (or the remote server itself) can drop a connection it
+  considers idle before `--timeout` is reached, interrupting the wait.
+
+Keep `--timeout` modest and retry, or raise the relevant client/proxy idle limits.
+
+### Some commands are local-only
+
+A few commands are host-bound or interactive and are **not** exposed over the API:
+`password`, `token`, `whoami`, `run`, and the `claude` / `codex` passthroughs.
+
+## Driving a remote from the CLI (`--remote`)
+
+The `twicc` CLI can run any command against a remote TwiCC instead of locally:
+
+```
+twicc --remote <url> [--remote-token <token>] <command> [args…]
+```
+
+- `--remote <url>` (or `--remote=<url>`) targets the remote's `/rpc/`. A **bare**
+  `--remote` takes the URL from `TWICC_REMOTE_URL`.
+- `--remote-token <token>` (or `TWICC_REMOTE_TOKEN`) supplies the Bearer token.
+- For both, an explicitly passed value wins over the environment variable.
+
+The forwarder mirrors the CLI: it resolves the command, POSTs it to the matching
+`/rpc/` route, prints the remote command's `result` to stdout and `error` to
+stderr, and **exits with the remote command's exit code** — so a script behaves
+the same whether run locally or via `--remote`. A transport / remote-layer
+failure instead (unreachable host, rejected auth, HTTP error, timeout, malformed
+response) prints `twicc: remote error…` to stderr and exits with a reserved code
+(**7**).
+
+Remote-specific behavior (the same limitations as above, from the client side):
+
+- **`--attach <local file>`** is read on the client and inlined as a base64
+  `data:` URI, so a local — even relative — path works without the file existing
+  on the server.
+- **Path arguments** (`--project`, `--directory`) are resolved on the server, so
+  they must be absolute (or, for `--project`, an id) — there is no caller working
+  directory over HTTP.
+- **`wait` commands** block as a long-poll; the client read timeout is sized to
+  the command `--timeout` (mind any intermediate proxy idle limit).
+- **Local-only commands** and the **`self`/`parent`** session keywords are
+  rejected client-side over `--remote` — they only mean something on the local
+  host.

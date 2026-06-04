@@ -24,7 +24,10 @@ def send_message_cmd(
         help=(
             "Path to a file to attach (repeatable). Claude Code accepts "
             "PNG/JPEG/GIF/WebP/PDF/text/plain up to 5 MB each. Codex accepts "
-            "images only. Max 100 files, 32 MB total."
+            "images only. Max 100 files, 32 MB total. "
+            "Each value is either a local file path OR a base64 data URI "
+            "(data:<mime>;base64,<data>) — the data-URI form lets remote/API "
+            "callers attach files without a shared filesystem."
         ),
     ),
     timeout: int = typer.Option(
@@ -79,13 +82,13 @@ def send_message_cmd(
     )
     from twicc.cli._drop_request.validation import ValidationError
     from twicc.cli._drop_request.whoami import resolve_current_session
+    from twicc.cli._output import emit_error
     from twicc.providers.helpers import get_provider_helpers
 
     try:
         check_heartbeat()
     except ServerDownError as e:
-        typer.echo(str(e), err=True)
-        raise typer.Exit(2)
+        emit_error(str(e), code=2)
 
     # 'parent' keyword: PID ancestry → current TwiCC session (same mechanism
     # as `--spawned-by self` on create-session) → its `spawned_by` field, which

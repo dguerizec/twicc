@@ -1,8 +1,6 @@
 """CLI implementation for the ``twicc usage`` subcommand."""
 
-import sys
-
-from twicc.cli._output import emit_json
+from twicc.cli._output import emit_error, emit_json
 
 
 def main() -> None:
@@ -69,7 +67,6 @@ def main() -> None:
         output[snapshot.provider] = data
 
     if not output:
-        print("Error: no usage snapshot available.", file=sys.stderr)
-        sys.exit(1)
+        emit_error("Error: no usage snapshot available.", code=1)
 
     emit_json(output)
