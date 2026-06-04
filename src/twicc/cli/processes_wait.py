@@ -15,6 +15,11 @@ By convention, callers pass session_ids first and statuses last
 (documented in the skill). Internally the order is irrelevant — the
 discriminator is value-based.
 
+Session ids may also come from scope filters (``--spawned-by`` and
+``--descendants``). ``--annotation`` can narrow one of those scopes but
+cannot select sessions by itself. Explicit ids and filtered ids are merged,
+explicit ids first.
+
 Flags:
 
 - ``--all`` (default) — wait until **every** active session_id has
@@ -60,6 +65,9 @@ def wait_cmd(
     timeout: float,
     wait_all: bool,
     transition: bool,
+    spawned_by: str | None = None,
+    descendants: str | None = None,
+    annotation: list[str] | None = None,
 ) -> None:
     """Block until the input pool of session_ids matches the requested statuses."""
     import os
@@ -112,10 +120,30 @@ def wait_cmd(
             err=True,
         )
         raise typer.Exit(1)
-    if not session_ids_ordered:
+
+    if spawned_by == "parent" or descendants == "parent":
         typer.echo(
-            "Error: no session_ids given (only statuses were passed). "
-            "Each call needs at least one session_id and one status.",
+            "Error: processes wait does not support parent-scoped filters. "
+            "Use 'self' or an explicit session_id.",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    filiation_scope = any((spawned_by, descendants))
+    if annotation and not filiation_scope:
+        typer.echo(
+            "Error: --annotation on processes wait requires --spawned-by "
+            "or --descendants.",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    has_scope = filiation_scope or bool(annotation)
+    if not session_ids_ordered and not has_scope:
+        typer.echo(
+            "Error: no session_ids or filters given. Pass at least one "
+            "session_id, or select sessions with --spawned-by or "
+            "--descendants. Use --annotation only to narrow that scope.",
             err=True,
         )
         raise typer.Exit(1)
@@ -136,6 +164,28 @@ def wait_cmd(
             err=True,
         )
         raise typer.Exit(2)
+
+    # --- Resolve optional scope filters ---------------------------------
+
+    try:
+        from twicc.cli._session_scope import merge_session_scope_ids
+
+        session_ids_ordered = merge_session_scope_ids(
+            session_ids_ordered,
+            spawned_by=spawned_by,
+            descendants=descendants,
+            annotation=annotation,
+        )
+    except RuntimeError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
+    except ValueError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(2)
+
+    if not session_ids_ordered:
+        emit_json([])
+        raise typer.Exit(0)
 
     # --- Batch metadata fetch + session_known ----------------------------
 

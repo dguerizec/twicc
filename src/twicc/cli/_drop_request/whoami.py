@@ -159,12 +159,18 @@ def resolve_spawn_tree_filter(value: str | None) -> str | None:
     """
     if value is None:
         return None
+    if value == "parent":
+        raise RuntimeError(
+            "--spawn-tree parent is not supported; use --spawn-tree self or "
+            "an explicit session_id from the tree, but self is enough as they"
+            "all ids from the tree resolve to the same tree.",
+        )
     if value == "self":
         try:
             session = resolve_current_session()
         except Exception as e:
             raise RuntimeError(
-                f"--spawn-tree self: could not resolve the current "
+                "--spawn-tree self: could not resolve the current "
                 f"session: {type(e).__name__}: {e}",
             ) from e
         if session is None:

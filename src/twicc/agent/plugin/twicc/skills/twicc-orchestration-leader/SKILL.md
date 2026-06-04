@@ -39,6 +39,7 @@ Decide the visibility and permission policy up front and **propagate it to the w
 ## Collect results
 
 - Read children as they report (`send-message parent` lands in your turn) and pull any child anytime with `$TWICC session <id> messages --tail N`.
+- Track your direct children with `$TWICC processes --spawned-by self`; add `--annotation` only with that scope or another filiation scope.
 - Wait only on **your direct children**:
 
 ```bash
@@ -48,7 +49,7 @@ $TWICC topology self
 
 ## Handle failures
 
-When a child fails or escalates: retry it, re-split the work, re-delegate to a fresh child, or bring the question back to the human. A manager's internal failures are the manager's job — you deal with the manager's deliverable, not its subtree.
+When a child fails or escalates: retry it, re-split the work, re-delegate to a fresh child, or bring the question back to the human. A manager's internal failures are the manager's job — you deal with the manager's deliverable, not its subtree. If you intentionally abort selected children, stop them with a scoped batch such as `$TWICC processes stop --spawned-by self --annotation status=cancelled --timeout 30`.
 
 ## Report and finish
 
@@ -60,7 +61,8 @@ Synthesize the children's results and report to the human. **Only non-hidden ses
 
 - `$TWICC create-session <PROMPT>` — spawn a manager or worker. Skill: `twicc-create-session`.
 - `$TWICC topology self` — map and cost your tree. Skill: `twicc-topology`.
-- `$TWICC processes --spawned-by self` / `wait` — track or wait on direct children. Skill: `twicc-processes`.
+- `$TWICC processes --spawned-by self` — track your direct children. Skill: `twicc-processes`.
+- `$TWICC processes wait --spawned-by self ...` / `processes stop --spawned-by self ...` — wait on or stop direct child batches. Skill: `twicc-processes`.
 - `$TWICC session <ID> messages` — pull a child's transcript. Skill: `twicc-session`.
 - `$TWICC send-message <ID> <TEXT>` — steer or follow up a child. Skill: `twicc-send-message`.
 - `$TWICC update-session <ID> annotations|archive|unhide` — annotate, archive, or unhide a session. Skill: `twicc-update-session`.

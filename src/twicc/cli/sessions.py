@@ -21,11 +21,11 @@ def main(
 ) -> None:
     """List sessions as JSON to stdout.
 
-    ``spawned_by``, ``spawn_tree`` and ``descendants`` are raw CLI values
-    (``None``, a session_id, or the literal ``"self"``) — they are resolved
-    here, after ``django.setup()``, so callers don't need to bootstrap
-    Django themselves. The typer wrapper guarantees they are mutually
-    exclusive.
+    ``spawned_by`` and ``descendants`` are raw CLI values (``None``, a
+    session_id, or ``"self"`` / ``"parent"``). ``spawn_tree`` accepts
+    ``None``, a session_id, or ``"self"``. They are resolved here, after
+    ``django.setup()``, so callers don't need to bootstrap Django
+    themselves. The typer wrapper guarantees they are mutually exclusive.
     """
     import django
 

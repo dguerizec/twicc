@@ -41,9 +41,9 @@ $TWICC processes [OPTIONS]
 - `--include-hidden` — include processes for hidden sessions (excluded by default).
 - `--only-hidden` — only processes for hidden sessions. Mutually exclusive with `--include-hidden`.
 - `--spawned-by <ID|self|parent>` — filter to direct child sessions spawned by the given session ID. `self` is the current session (= my children); `parent` is the session that spawned the current one (= my siblings, myself included). Implies `--include-hidden`. Mutually exclusive with `--spawn-tree` and `--descendants`.
-- `--spawn-tree <ID|self>` — filter to processes of every session in the spawn tree that contains the given session ID. Any id in the tree works — root, middle, or leaf: the CLI looks it up and resolves to the tree it belongs to. A standalone session (no children, never spawned) queried by its own id is returned as a single-node tree. `self` resolves to the tree that contains the current session. `parent` is not accepted: my parent is always in the same tree as me, so `--spawn-tree parent` is either redundant with `--spawn-tree self` or empty. Implies `--include-hidden`. Mutually exclusive with `--spawned-by` and `--descendants`.
+- `--spawn-tree <ID|self>` — filter to processes of every session in the spawn tree that contains the given session ID. Any id in the tree works — root, middle, or leaf: the CLI looks it up and resolves to the tree it belongs to. A standalone session (no children, never spawned) queried by its own id is returned as a single-node tree. `self` resolves to the tree that contains the current session. Implies `--include-hidden`. Mutually exclusive with `--spawned-by` and `--descendants`.
 - `--descendants <ID|self|parent>` — filter to processes of the proper descendants of the given session (every session transitively spawned by it, target excluded). `self` is the current session; `parent` is the current session's spawner (= my siblings, their subtrees, and my own subtree). Implies `--include-hidden`. Mutually exclusive with `--spawned-by` and `--spawn-tree`. Use this when you want "everything under X" but not X itself.
-- `--annotation KEY[OP]VALUE` — filter to processes whose session's `annotations` object matches the expression. Implemented as a session-id pre-filter: the backend first selects sessions matching all annotation predicates, then filters live processes to those session ids. Repeatable; multiple flags are AND-combined. Does **not** imply `--include-hidden` (orthogonal). Composes with filiation flags. Five operators:
+- `--annotation KEY[OP]VALUE` — filter to processes whose session's `annotations` object matches the expression. Requires one filiation scope (`--spawned-by`, `--spawn-tree`, or `--descendants`) so annotations cannot accidentally select sessions from another orchestration. Repeatable; multiple flags are AND-combined. Does **not** imply `--include-hidden` (orthogonal). Five operators:
   - `KEY=VALUE` — annotation key equals VALUE.
   - `KEY!=VALUE` — annotation key differs from VALUE (or key absent).
   - `KEY:exists` — annotation key is present (any value).
@@ -63,25 +63,35 @@ Returns one entry per id in input order (duplicates collapsed). No filter flags.
 ### Batch stop (`stop`)
 
 ```bash
-$TWICC processes stop <SESSION_ID> [<SESSION_ID>...] [--timeout N]
+$TWICC processes stop [SESSION_ID...] [--timeout N] [--spawned-by X|--descendants X] [--annotation KEY[OP]VALUE]...
 ```
 
-Idempotent. IDs that fail pre-check (unknown, subagent, stale, no directory, unknown provider) get a `skipped_*` status — they don't consume timeout budget. Valid drops are processed in parallel, so `--timeout` (default 30 s) is a wall-clock budget for the whole batch.
+Idempotent. Explicit IDs and filtered IDs are merged (explicit IDs first, duplicates collapsed). IDs that fail pre-check (unknown, subagent, stale, no directory, unknown provider) get a `skipped_*` status — they don't consume timeout budget. Valid drops are processed in parallel, so `--timeout` (default 30 s) is a wall-clock budget for the whole batch.
+
+Filter flags for process control:
+
+- `--spawned-by <ID|self>` — select direct children.
+- `--descendants <ID|self>` — select every proper descendant.
+- `--annotation KEY[OP]VALUE` — narrow selected sessions by annotations; requires `--spawned-by` or `--descendants`.
+
+The two filiation flags are mutually exclusive. If no explicit IDs are passed, `--spawned-by` or `--descendants` is required. `--annotation` cannot be used by itself, even with explicit IDs. An empty filtered set returns `[]` and exits 0.
 
 ### Batch wait (`wait`)
 
 ```bash
-$TWICC processes wait <SESSION_ID>... <STATUS>... --timeout N [--all|--first] [--transition]
+$TWICC processes wait [SESSION_ID...] <STATUS>... --timeout N [--all|--first] [--transition] [--spawned-by X|--descendants X] [--annotation KEY[OP]VALUE]...
 ```
 
-Session_ids and statuses are a **single positional list, auto-discriminated by value** — anything matching a valid state (`starting`, `assistant_turn`, `awaiting_user_input`, `user_turn`, `dead`) is a status; everything else is a session_id. Pass session_ids first, statuses last.
+Session_ids and statuses are a **single positional list, auto-discriminated by value** — anything matching a valid state (`starting`, `assistant_turn`, `awaiting_user_input`, `user_turn`, `dead`) is a status; everything else is a session_id. Pass session_ids first, statuses last. You may omit explicit session IDs when selecting the wait pool with filters.
 
 - `--all` (default) — wait until every active session has matched.
 - `--first` — stop as soon as one session matches.
 - `--transition` — only match after at least one state change per session since the initial snapshot.
 - `--timeout N` — **required**. Wall-clock budget for the whole batch. Exits 5 on timeout.
+- `--spawned-by <ID|self>` / `--descendants <ID|self>` — select the wait pool by filiation. Mutually exclusive.
+- `--annotation KEY[OP]VALUE` — narrow the wait pool by annotations; requires `--spawned-by` or `--descendants`.
 
-Unknown session_ids are dropped from the wait pool (`wait_status="skipped_unknown"`) and don't participate in `--all`/`--first`. An empty pool exits 0 immediately.
+Unknown explicit session_ids are dropped from the wait pool (`wait_status="skipped_unknown"`) and don't participate in `--all`/`--first`. An empty pool exits 0 immediately.
 
 ## Output format
 
@@ -187,15 +197,16 @@ $TWICC processes --spawned-by parent
 $TWICC processes --spawn-tree self
 $TWICC processes --descendants self
 $TWICC processes --descendants parent
-$TWICC processes --annotation role=implementer
 $TWICC processes --spawn-tree self --annotation role=implementer
-$TWICC processes --annotation status:exists --annotation priority:in:high,critical
+$TWICC processes --spawn-tree self --annotation status:exists --annotation priority:in:high,critical
 $TWICC processes get abc123 def456 ghi789
 $TWICC processes stop abc123 def456
 $TWICC processes stop abc123 def456 --timeout 60
+$TWICC processes stop --spawned-by self --annotation status=failed
 $TWICC processes wait abc123 def456 user_turn dead --timeout 300
 $TWICC processes wait abc123 def456 ghi789 awaiting_user_input --first --timeout 120
 $TWICC processes wait abc123 def456 user_turn --transition --timeout 600
+$TWICC processes wait --spawned-by self user_turn dead --timeout 300
 ```
 
 ## Related commands

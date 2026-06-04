@@ -14,7 +14,7 @@ common, useful combinations to start from. When none fits, compose your own.
   shared `scratch_dir`), steering (you message a child mid-`assistant_turn` to redirect it).
 - **Synchronization** — when you move on: barrier (wait for all,
   `processes wait --spawned-by self ... --all`), first-wins (`--first`, then stop the
-  rest), or continuous (no barrier — you watch and steer as they run).
+  losers by explicit id or scoped `processes stop`), or continuous (no barrier — you watch and steer as they run).
 - **Aggregation** — how N results become one: concat/merge/dedup, vote (majority),
   select (best, or first that works), synthesize (a new artifact from the inputs),
   or chain (no merge — one output is the next input).

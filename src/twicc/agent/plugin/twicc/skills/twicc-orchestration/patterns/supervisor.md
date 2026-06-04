@@ -14,12 +14,13 @@ Shape: star · pull + steering · continuous (no barrier) · — · —.
 
 ## Protocol
 1. Spawn the children (per whatever distribution pattern you're running).
-2. Poll, don't just wait: `topology self` and `processes --spawned-by self` for
-   states; `session <id> messages --tail 2` for progress.
+2. Poll, don't just wait: `topology self` for the map,
+   `processes --spawned-by self` for direct child states, and
+   `session <id> messages --tail 2` for progress.
 3. Intervene:
    - drifting → `send-message <id>` mid-`assistant_turn` to redirect (no restart);
-   - stuck/looping (stale `last_state_change_at`, repeating output) → `process <id> stop`,
-     then re-spawn or re-brief;
+   - stuck/looping (stale `last_state_change_at`, repeating output) → `process <id> stop`
+     for one child, or tag a batch and `processes stop --spawned-by self --annotation status=runaway --timeout <N>`, then re-spawn or re-brief;
    - blocked child → answer it.
 4. Aggregate as the underlying pattern dictates.
 

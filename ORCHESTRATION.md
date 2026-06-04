@@ -30,14 +30,14 @@ Orchestration is built entirely from the ordinary commands in [`SKILLS-AND-CLI.m
 - **Spawn** a child with `create-session` (its prompt carries the child's mode, job, and how to report back — a child starts with no memory of you, so every brief is self-contained).
 - **Push** results up with `send-message parent`.
 - **Pull** a child's transcript anytime with `session <id> messages --tail N` — independent of whether the child can push.
-- **Map** your tree with `topology self`, and **track / wait** on your direct children with `processes --spawned-by self` and `processes wait`.
+- **Map** your tree with `topology self`, **track** your direct children with `processes --spawned-by self`, and **wait / stop** scoped batches with `processes wait --spawned-by self ...` or `processes stop --spawned-by self ...`.
 - **Tag** nodes with annotations (`update-session self annotations set:status=done`) so the tree stays legible.
 
 ## Communication
 
 - **Push / pull coexist.** An executor child reports with `send-message parent`; a parent can also pull any child's messages at will. A read-only child (below) cannot push, so pull is the only way to read it.
 - **Siblings never talk directly** — route through the common parent.
-- **Wait only on your direct children**, never on grandchildren. Each level pilots its own children; a manager's subtree is the manager's responsibility.
+- **Wait only on your direct children** in normal synchronization, never on grandchildren. Each level pilots its own children; `--descendants` is for exceptional subtree cleanup, not for routine barriers.
 
 ## Permission modes: the two extremes
 
@@ -53,7 +53,7 @@ Orchestration uses only the two **non-interactive** extremes of each provider �
 
 ## Annotations: a map of the tree
 
-Annotations are short key/value tags (free-form JSON) on a session. They turn a tree of opaque sessions into something you — and, on request, the human — can read at a glance, because `topology self` and `sessions --spawn-tree self` carry each node's annotations, and `sessions` / `processes` / `search` / `topology` can filter by them (`--annotation status=blocked`).
+Annotations are short key/value tags (free-form JSON) on a session. They turn a tree of opaque sessions into something you — and, on request, the human — can read at a glance, because `topology self` and `sessions --spawn-tree self` carry each node's annotations, and `sessions` / `processes` / `search` / `topology` can filter by them. For live processes, always pair annotations with a filiation scope, e.g. `processes --spawned-by self --annotation status=blocked` for direct children, or `processes wait --spawned-by self --annotation job=review user_turn dead --timeout 600` for a scoped barrier.
 
 Conventional keys (free, not enforced):
 
@@ -76,6 +76,17 @@ The recurring pattern: an executor writes `<scratch_dir>/<session_id>-result.md`
 ## Lifecycle
 
 A session goes `starting → assistant_turn → user_turn`, then `dead` when its process stops. A dead session is **resurrected automatically** when it receives a `send-message` — so you never keep a child alive on purpose; message it whenever you need it again.
+
+## Process control in an orchestration
+
+Use live-process commands as scoped operations, never as global annotation searches:
+
+- **Observe your direct children** with `processes --spawned-by self`, or narrow them with `processes --spawned-by self --annotation status=blocked`.
+- **Wait for your own direct children** with `processes wait --spawned-by self user_turn dead --timeout <N>`. Add `--annotation` when you launched a named phase or role and only that subset should participate.
+- **Stop a selected batch** with `processes stop --spawned-by self --annotation status=cancelled --timeout <N>`, or pass explicit session ids when you know exactly which children are losers/runaways.
+- **Clean up a subtree** only when you intentionally abort it: `processes stop <manager_id> --descendants <manager_id> --timeout <N>` stops the manager plus its proper descendants.
+
+`processes wait` and `processes stop` do not use `--spawn-tree` or `parent`; those controls are for your own children/subtree, not for your parent or the entire tree that includes you.
 
 ## Patterns
 

@@ -27,7 +27,7 @@ A manager has to spawn children and report up — a read-only session (`strict`/
 
 ## Report up
 
-Report to your parent with `send-message parent`; your parent may also pull you at any time. For bulky output — e.g. a synthesis you build from your workers' results — write it to the shared scratch space and point to it in a short message (see `twicc-orchestration`). Wait only on **your own direct children**, never grandchildren:
+Report to your parent with `send-message parent`; your parent may also pull you at any time. For bulky output — e.g. a synthesis you build from your workers' results — write it to the shared scratch space and point to it in a short message (see `twicc-orchestration`). Track your direct children with `$TWICC processes --spawned-by self`. Wait only on **your own direct children**, never grandchildren:
 
 ```bash
 $TWICC processes wait --spawned-by self user_turn dead --timeout 900
@@ -35,7 +35,7 @@ $TWICC processes wait --spawned-by self user_turn dead --timeout 900
 
 ## Handle failures locally first
 
-If a child fails, deal with it yourself first — retry, re-split, or spawn a replacement. Escalate to your parent (`send-message parent`) only when the mandate is genuinely blocked.
+If a child fails, deal with it yourself first — retry, re-split, or spawn a replacement. If you intentionally abort selected children, stop them with a scoped batch such as `$TWICC processes stop --spawned-by self --annotation status=cancelled --timeout 30`. Escalate to your parent (`send-message parent`) only when the mandate is genuinely blocked.
 
 ## Same as a leader, except…
 
@@ -46,6 +46,7 @@ Everything else mirrors `twicc-orchestration-leader`: how you decompose, brief, 
 - `$TWICC create-session <PROMPT>` — spawn a manager or worker. Skill: `twicc-create-session`.
 - `$TWICC send-message parent <TEXT>` — report to your parent. Skill: `twicc-send-message`.
 - `$TWICC topology self` — map your subtree. Skill: `twicc-topology`.
-- `$TWICC processes --spawned-by self` / `wait` — track or wait on your direct children. Skill: `twicc-processes`.
+- `$TWICC processes --spawned-by self` — track your direct children. Skill: `twicc-processes`.
+- `$TWICC processes wait --spawned-by self ...` / `processes stop --spawned-by self ...` — wait on or stop direct child batches. Skill: `twicc-processes`.
 - `$TWICC session <ID> messages` — pull a child's transcript. Skill: `twicc-session`.
 - `$TWICC update-session <ID> annotations` — set tracking annotations. Skill: `twicc-update-session`.

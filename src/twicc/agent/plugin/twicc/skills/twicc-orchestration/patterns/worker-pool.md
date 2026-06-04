@@ -14,10 +14,14 @@ Shape: star · push or pull · waves · merge · homogeneous.
 
 ## Protocol
 1. Set K from the work size and cost/quota headroom (check `usage`).
-2. Launch the first K tasks.
-3. Each time a worker reaches `user_turn`/`dead`, collect its result, then either
-   `send-message` it the next task (reuse) or spawn a fresh worker for it.
-4. Continue until the queue drains; aggregate.
+2. Launch the first K tasks, optionally tagged with `--annotation wave=<n>`.
+3. Wait for the active wave with
+   `processes wait --spawned-by self --annotation wave=<n> user_turn dead --timeout <N>`,
+   collect each result, then either `send-message` a worker the next task (reuse)
+   or spawn a fresh worker for it.
+4. If you reuse workers by wave, update their `wave` annotation before sending the
+   next task so the next scoped wait targets the right sessions.
+5. Continue until the queue drains; aggregate.
 
 ## Use it when
 There are far more tasks than you should run at once (cost, rate limits, or just

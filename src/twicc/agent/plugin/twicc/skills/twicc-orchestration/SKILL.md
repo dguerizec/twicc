@@ -70,7 +70,7 @@ Avoid the interactive modes: they pause for per-tool approvals or questions, and
 
 ## Wait only on your direct children
 
-Only ever wait on the children **you** spawned — never on grandchildren. Each level pilots its own children; a manager's subtree is the manager's responsibility, not yours.
+Only ever wait on the children **you** spawned in normal synchronization — never on grandchildren. Each level pilots its own children; a manager's subtree is the manager's responsibility, not yours. Use `--descendants` only for exceptional cleanup of a subtree you intentionally abort.
 
 ```bash
 $TWICC processes wait --spawned-by self user_turn dead --timeout 600
@@ -90,7 +90,7 @@ Annotations are short key/value tags on a session (free-form JSON). They are **s
 What they buy you:
 
 - **An overview at a glance.** `topology self` and `sessions --spawn-tree self` carry each node's annotations, so you — and the human, on request — see who does what and where it stands without reading any transcript.
-- **Filtering and waiting by predicate.** `sessions`, `processes`, `search`, and `topology` accept `--annotation KEY=VALUE` (also `!=`, `:exists`, `:in:a,b`) — e.g. `processes --spawned-by self --annotation status=blocked`, or `sessions --spawn-tree self --annotation mode=worker`.
+- **Filtering and waiting by predicate.** `sessions`, `processes`, `search`, and `topology` accept `--annotation KEY=VALUE` (also `!=`, `:exists`, `:in:a,b`). For live processes, annotation is an extra filter on a filiation scope: use `processes --spawned-by self --annotation status=blocked` for direct children, or `processes wait --spawned-by self --annotation job=review user_turn dead --timeout 600` for a scoped barrier.
 
 Useful keys (free — conventions, not rules):
 
@@ -126,6 +126,17 @@ Pattern: an executor (worker or manager) writes `<scratch_dir>/<session_id>-resu
 
 A session goes `starting → assistant_turn → user_turn`, then `dead` when its process stops. A `dead` session is **resurrected automatically** when it receives a `send-message` — so you never need to keep a child alive; message it whenever you need it.
 
+## Process control
+
+Use process controls as scoped operations:
+
+- List your direct children's live work with `$TWICC processes --spawned-by self`, or narrow it with `$TWICC processes --spawned-by self --annotation status=blocked`.
+- Wait on direct children with `$TWICC processes wait --spawned-by self user_turn dead --timeout <N>`, optionally narrowed by `--annotation`.
+- Stop selected children with `$TWICC processes stop --spawned-by self --annotation status=cancelled --timeout <N>`, or pass explicit ids when you know the exact targets.
+- Abort a subtree deliberately with `$TWICC processes stop <manager_id> --descendants <manager_id> --timeout <N>`; `--descendants` excludes the target, so pass the manager id explicitly too.
+
+`processes wait` and `processes stop` do not accept `--spawn-tree` or `parent`.
+
 ## Freedom
 
 This is the unconstrained model: nothing here is enforced except the technical limits of read-only mode. The conventions above are what keep an orchestration legible — follow them, but the system will not stop you from doing otherwise.
@@ -151,6 +162,7 @@ Workers don't orchestrate, so they can ignore this.
 - `$TWICC send-message <ID|parent> <TEXT>` — push to a session or to your parent. Skill: `twicc-send-message`.
 - `$TWICC session <ID> messages` — pull a child's transcript. Skill: `twicc-session`.
 - `$TWICC topology self` — map your spawn tree. Skill: `twicc-topology`.
-- `$TWICC processes --spawned-by self` / `wait` — track or wait on your direct children. Skill: `twicc-processes`.
+- `$TWICC processes --spawned-by self` — track your direct children. Skill: `twicc-processes`.
+- `$TWICC processes wait --spawned-by self ...` / `processes stop --spawned-by self ...` — wait on or stop scoped child batches. Skill: `twicc-processes`.
 - `$TWICC update-session <ID> annotations` — set tracking annotations. Skill: `twicc-update-session`.
 - `$TWICC whoami` — your own session id, settings, and permission mode. Skill: `twicc-whoami`.

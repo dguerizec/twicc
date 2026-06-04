@@ -392,7 +392,10 @@ def usage() -> None:
 @app.command()
 def topology(
     session_id: str = typer.Argument(
-        help="Session ID to anchor the topology, or 'self' from inside an agent session.",
+        help=(
+            "Session ID to anchor the topology, or 'self' from inside an "
+            "agent session."
+        ),
     ),
     processes: bool = typer.Option(
         True,
@@ -503,7 +506,8 @@ def _processes_default(
             "Operators: KEY=VALUE, KEY!=VALUE, KEY:exists, KEY:not-exists, "
             "KEY:in:V1,V2. KEY is a dotted path. Values are typed "
             "(true/false/null/int/float/string), same rules as "
-            "create-session --annotation. See twicc-sessions skill for details."
+            "create-session --annotation. Requires --spawned-by, --spawn-tree, "
+            "or --descendants. See twicc-sessions skill for details."
         ),
     ),
 ) -> None:
@@ -518,6 +522,14 @@ def _processes_default(
     if sum(x is not None for x in (spawned_by, spawn_tree, descendants)) > 1:
         typer.echo(
             "Error: --spawned-by, --spawn-tree and --descendants are mutually exclusive.",
+            err=True,
+        )
+        raise typer.Exit(2)
+
+    if annotation and not any((spawned_by, spawn_tree, descendants)):
+        typer.echo(
+            "Error: --annotation requires --spawned-by, --spawn-tree, or "
+            "--descendants on processes listing.",
             err=True,
         )
         raise typer.Exit(2)
@@ -565,15 +577,13 @@ def _processes_get(
 
 @processes_app.command(name="stop")
 def _processes_stop(
-    session_ids: list[str] = typer.Argument(
-        ...,
+    session_ids: list[str] | None = typer.Argument(
+        None,
         metavar="SESSION_ID...",
         help=(
-            "One or more session IDs whose live agent process should be "
-            "stopped. The output mirrors the input order (duplicates "
-            "collapsed, first occurrence wins). Each entry carries a "
-            "`status` (stopped/rejected/failed/timeout/skipped_*) plus the "
-            "same metadata (provider, title, project_id) as `get`."
+            "Optional session IDs whose live agent process should be stopped. "
+            "If omitted, pass --spawned-by or --descendants to select "
+            "sessions; --annotation can narrow that scope."
         ),
     ),
     timeout: int = typer.Option(
@@ -586,33 +596,65 @@ def _processes_stop(
             "by the deadline are reported with status=\"timeout\". Must be > 0."
         ),
     ),
+    spawned_by: str = typer.Option(
+        None,
+        "--spawned-by",
+        help=(
+            "Stop processes of sessions spawned by the given session_id, 'self' "
+            "for the current session."
+        ),
+    ),
+    descendants: str = typer.Option(
+        None,
+        "--descendants",
+        help=(
+            "Stop processes of the proper descendants of the given session_id, "
+            "or 'self'."
+        ),
+    ),
+    annotation: list[str] = typer.Option(
+        [],
+        "--annotation",
+        help=(
+            "Filter selected sessions by annotation. Repeatable, AND-combined. "
+            "Requires --spawned-by or --descendants."
+        ),
+    ),
 ) -> None:
     """Batch-stop live agent processes (idempotent, tolerant to skipped IDs).
 
-    Pre-checks each ``session_id`` locally before dropping the kill request.
-    Session_ids that fail the pre-check (unknown, subagent, stale, no
-    directory, unknown provider) get a ``skipped_*`` status with no drop
-    emitted; valid ones get a ``process:stop`` drop file and a poll for
-    the server's final answer. Exit 0 always when the command completes —
-    callers inspect each entry's ``status`` for the per-id outcome.
+    Explicit session_ids and filtered session_ids are merged, then pre-checked
+    locally before dropping kill requests. Exit 0 always when the command
+    completes — callers inspect each entry's ``status`` for the per-id outcome.
     """
+    if sum(x is not None for x in (spawned_by, descendants)) > 1:
+        typer.echo(
+            "Error: --spawned-by and --descendants are mutually exclusive.",
+            err=True,
+        )
+        raise typer.Exit(2)
+
     from twicc.cli.processes_stop import stop_cmd
 
-    stop_cmd(session_ids, timeout=timeout)
+    stop_cmd(
+        session_ids or [],
+        timeout=timeout,
+        spawned_by=spawned_by,
+        descendants=descendants,
+        annotation=annotation,
+    )
 
 
 @processes_app.command(name="wait")
 def _processes_wait(
-    items: list[str] = typer.Argument(
-        ...,
+    items: list[str] | None = typer.Argument(
+        None,
         metavar="ITEM...",
         help=(
-            "A single list mixing session_ids and statuses, auto-discriminated "
-            "by value. Any item whose value is in (starting, assistant_turn, "
-            "awaiting_user_input, user_turn, dead) is a status; everything "
-            "else is a session_id. By convention pass session_ids first and "
-            "statuses last (so a typo doesn't accidentally classify as a "
-            "session_id); internally the order is irrelevant."
+            "A single list mixing optional session_ids and required statuses, "
+            "auto-discriminated by value. If session_ids are omitted, pass one "
+            "scope filter (--spawned-by or --descendants) to select sessions; "
+            "--annotation can narrow that scope."
         ),
     ),
     timeout: float = typer.Option(
@@ -642,21 +684,55 @@ def _processes_wait(
             "per-session — each id must transition before it can match."
         ),
     ),
+    spawned_by: str = typer.Option(
+        None,
+        "--spawned-by",
+        help=(
+            "Wait on sessions spawned by the given session_id, 'self' for the "
+            "current session."
+        ),
+    ),
+    descendants: str = typer.Option(
+        None,
+        "--descendants",
+        help=(
+            "Wait on the proper descendants of the given session_id, or "
+            "'self' for the current session."
+        ),
+    ),
+    annotation: list[str] = typer.Option(
+        [],
+        "--annotation",
+        help=(
+            "Filter selected sessions by annotation. Repeatable, AND-combined. "
+            "Requires --spawned-by or --descendants."
+        ),
+    ),
 ) -> None:
     """Block until multiple session_ids reach matching virtual states.
 
-    Unknown session_ids (no Session row AND no ProcessRun for this TwiCC)
-    are skipped silently and do NOT participate in --all / --first.
+    Unknown explicit session_ids (no Session row AND no ProcessRun for this
+    TwiCC) are skipped silently and do NOT participate in --all / --first.
     If every session_id is skipped, exits 0 (vacuous truth — nothing to
     wait for).
     """
+    if sum(x is not None for x in (spawned_by, descendants)) > 1:
+        typer.echo(
+            "Error: --spawned-by and --descendants are mutually exclusive.",
+            err=True,
+        )
+        raise typer.Exit(2)
+
     from twicc.cli.processes_wait import wait_cmd
 
     wait_cmd(
-        items,
+        items or [],
         timeout=timeout,
         wait_all=wait_all,
         transition=transition,
+        spawned_by=spawned_by,
+        descendants=descendants,
+        annotation=annotation,
     )
 
 

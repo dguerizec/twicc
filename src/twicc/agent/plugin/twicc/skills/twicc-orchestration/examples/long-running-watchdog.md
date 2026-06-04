@@ -6,11 +6,11 @@ Shape: leader supervises a set of long-running executor workers (no barrier).
 ## Walkthrough
 1. Spawn the workers for the long job (e.g. migrate N modules), `--annotation job=migrate`.
 2. Don't just block — supervise in a loop:
-   `processes --spawned-by self` for states; `session <id> messages --tail 2` for progress.
+   `processes --spawned-by self --annotation job=migrate` for states; `session <id> messages --tail 2` for progress.
 3. Intervene:
    - drifting → `send-message <id>` mid-run to redirect (no restart);
-   - hung (stale `last_state_change_at`, output unchanged) → `process <id> stop`, then
-     re-spawn it with a smaller mandate;
+   - hung (stale `last_state_change_at`, output unchanged) → `process <id> stop` for one,
+     or tag several as `status=runaway` and `processes stop --spawned-by self --annotation status=runaway --timeout <N>`, then re-spawn with smaller mandates;
    - a worker that escalates "stuck" → answer it or re-delegate its remainder.
 4. Collect results as each finishes; aggregate when the set is done.
 

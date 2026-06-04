@@ -66,6 +66,9 @@ def stop_cmd(
     session_ids: list[str],
     *,
     timeout: int,
+    spawned_by: str | None = None,
+    descendants: str | None = None,
+    annotation: list[str] | None = None,
 ) -> None:
     """Batch-stop live agent processes for one or more sessions."""
     import os
@@ -94,6 +97,33 @@ def stop_cmd(
         )
         raise typer.Exit(1)
 
+    if spawned_by == "parent" or descendants == "parent":
+        typer.echo(
+            "Error: processes stop does not support parent-scoped filters. "
+            "Use 'self' or an explicit session_id.",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    filiation_scope = any((spawned_by, descendants))
+    if annotation and not filiation_scope:
+        typer.echo(
+            "Error: --annotation on processes stop requires --spawned-by "
+            "or --descendants.",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    has_scope = filiation_scope or bool(annotation)
+    if not session_ids and not has_scope:
+        typer.echo(
+            "Error: no session_ids or filters given. Pass at least one "
+            "session_id, or select sessions with --spawned-by or "
+            "--descendants. Use --annotation only to narrow that scope.",
+            err=True,
+        )
+        raise typer.Exit(1)
+
     # --- Server-up check (exit 2 mirrors process stop) -------------------
 
     try:
@@ -111,15 +141,27 @@ def stop_cmd(
         )
         raise typer.Exit(2)
 
-    # --- Dedupe while preserving caller order ----------------------------
+    # --- Resolve explicit ids + optional scope filters -------------------
 
-    unique_ids: list[str] = []
-    seen: set[str] = set()
-    for sid in session_ids:
-        if sid in seen:
-            continue
-        seen.add(sid)
-        unique_ids.append(sid)
+    try:
+        from twicc.cli._session_scope import merge_session_scope_ids
+
+        unique_ids = merge_session_scope_ids(
+            session_ids,
+            spawned_by=spawned_by,
+            descendants=descendants,
+            annotation=annotation,
+        )
+    except RuntimeError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
+    except ValueError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(2)
+
+    if not unique_ids:
+        emit_json([])
+        return
 
     # --- Batch metadata fetch (one query each) ---------------------------
 

@@ -25,6 +25,8 @@ whole goal and answers to the human; a manager holds one slice and answers to it
    see the hub's briefing): atomic → worker; nested → manager.
 3. Barrier on your direct children:
    `processes wait --spawned-by self user_turn dead --timeout <N>`.
+   If this level runs several annotated batches, narrow the barrier with
+   `--annotation`, e.g. `processes wait --spawned-by self --annotation phase=audit user_turn dead --timeout <N>`.
 4. Collect each deliverable (push as it lands, or pull `session <id> messages --tail 1`;
    bulky → a file in the shared scratch).
 5. Aggregate into ONE deliverable, then report up / present.

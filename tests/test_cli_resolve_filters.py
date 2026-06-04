@@ -16,6 +16,7 @@ import pytest
 from django.utils import timezone
 
 from twicc.cli._drop_request.whoami import resolve_spawn_tree_filter
+from twicc.cli._session_scope import merge_session_scope_ids
 from twicc.core.models import Project, Session, SessionType
 
 
@@ -61,6 +62,23 @@ def test_resolve_spawn_tree_filter_returns_root_id_for_non_root_session(project)
     make_session(project, "C", spawned_by=middle, spawn_root=root, minutes=2)
 
     assert resolve_spawn_tree_filter("B") == "A"
+
+
+def test_resolve_spawn_tree_filter_rejects_parent():
+    with pytest.raises(RuntimeError, match="--spawn-tree parent is not supported"):
+        resolve_spawn_tree_filter("parent")
+
+
+def test_merge_session_scope_ids_keeps_explicit_ids_first_and_appends_scope(project):
+    root = make_session(project, "A", minutes=0)
+    root.spawn_root = root
+    root.save(update_fields=["spawn_root"])
+    b = make_session(project, "B", spawned_by=root, spawn_root=root, minutes=1)
+    c = make_session(project, "C", spawned_by=root, spawn_root=root, minutes=2)
+
+    ids = merge_session_scope_ids([b.id, "UNKNOWN"], spawned_by=root.id)
+
+    assert ids == [b.id, "UNKNOWN", c.id]
 
 
 def test_sessions_cli_returns_standalone_session_filtered_by_its_own_spawn_tree(

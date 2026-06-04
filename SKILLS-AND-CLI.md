@@ -166,10 +166,10 @@ Change a session without sending a message. `self` targets the current session. 
 
 ### `twicc processes` / `twicc processes <SUBCOMMAND>`
 List or act on the live agent processes the backend currently runs. The CLI projects state onto four virtual values: `starting`, `assistant_turn` (generating), `awaiting_user_input` (blocked on a UI click), `user_turn` (idle).
-- Listing: `--provider`, `--state <virtual>`, `--limit` (default 20), `--offset`, plus the shared filiation/visibility/annotation filters.
+- Listing: `--provider`, `--state <virtual>`, `--limit` (default 20), `--offset`, plus the shared filiation/visibility filters. `--annotation` requires a filiation scope here; use `--spawned-by self --annotation ...` for direct children, or `--spawn-tree self --annotation ...` only when you explicitly want the whole tree.
 - `get <SESSION_ID...>` — live state per id (`state="dead"` placeholder for stopped; `session_known` flags typos).
-- `stop <SESSION_ID...>` — batch-stop (idempotent, tolerant); `--timeout` is a wall-clock budget for the whole batch.
-- `wait <ITEM...>` — block until session ids reach matching virtual states. Items mix ids and statuses, auto-discriminated. Required `--timeout FLOAT`; `--all` (default) / `--first`; `--transition` (require a state change first).
+- `stop [SESSION_ID...]` — batch-stop (idempotent, tolerant). Optional scoped selection: `--spawned-by <ID|self>` or `--descendants <ID|self>`, plus `--annotation` to narrow that scope. No `parent`, no `--spawn-tree`. `--timeout` is a wall-clock budget for the whole batch.
+- `wait [SESSION_ID...] <STATUS...>` — block until session ids reach matching virtual states. Items mix ids and statuses, auto-discriminated. Optional scoped selection: `--spawned-by <ID|self>` or `--descendants <ID|self>`, plus `--annotation` to narrow that scope. Required `--timeout FLOAT`; `--all` (default) / `--first`; `--transition` (require a state change first).
 - Skill: [`twicc-processes`](src/twicc/agent/plugin/twicc/skills/twicc-processes/SKILL.md).
 
 ### `twicc process <SESSION_ID> <SUBCOMMAND>`
@@ -189,7 +189,7 @@ Show the spawned-session tree containing a session, rooted at its top-level ance
 
 ### Shared filiation, visibility & annotation filters
 
-`sessions`, `processes`, `search`, and (for annotations) `topology` accept the same cross-cutting filters:
+`sessions`, `processes` listing, `search`, and (for annotations) `topology` accept these cross-cutting filters:
 
 - `--spawned-by <ID|self|parent>` — direct children of a session.
 - `--spawn-tree <ID|self>` — every session in the tree containing that id (any id resolves to its tree).
@@ -197,6 +197,8 @@ Show the spawned-session tree containing a session, rooted at its top-level ance
 - The three filiation filters are mutually exclusive and each implies `--include-hidden`.
 - `--include-hidden` / `--only-hidden` — opt hidden sessions into (or restrict to) the results.
 - `--annotation KEY[OP]VALUE` (repeatable, AND-combined) — operators `=`, `!=`, `:exists`, `:not-exists`, `:in:V1,V2`; `KEY` is a dotted path; values are typed (`true`/`false`/`null`/int/float/string).
+
+Process-control subcommands are narrower on purpose: `processes stop` and `processes wait` accept `--spawned-by <ID|self>` or `--descendants <ID|self>` plus optional `--annotation`, but not `parent` and not `--spawn-tree`.
 
 ## Run the provider CLIs directly
 

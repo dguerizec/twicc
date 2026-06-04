@@ -19,14 +19,14 @@ def main(
 ) -> None:
     """Execute a raw Tantivy search and print JSON results to stdout.
 
-    ``spawned_by``, ``spawn_tree`` and ``descendants`` are raw CLI values
-    (``None``, a session_id, or the literal ``"self"`` / ``"parent"``).
-    When any value needs DB access (a keyword on ``spawned_by``, any value
-    on ``spawn_tree`` — the resolver always looks the id up to find the
-    tree's root — or any value on ``descendants`` which always walks the
-    spawn tree), we ``django.setup()`` so an ordinary full-text query
-    stays Django-free. The typer wrapper guarantees they are mutually
-    exclusive.
+    ``spawned_by`` and ``descendants`` are raw CLI values (``None``, a
+    session_id, or ``"self"`` / ``"parent"``). ``spawn_tree`` accepts
+    ``None``, a session_id, or ``"self"``. When any value needs DB access
+    (a keyword on ``spawned_by``, any value on ``spawn_tree`` — the
+    resolver always looks the id up to find the tree's root — or any value
+    on ``descendants`` which always walks the spawn tree), we
+    ``django.setup()`` so an ordinary full-text query stays Django-free.
+    The typer wrapper guarantees they are mutually exclusive.
     """
     if (
         spawned_by in ("self", "parent")

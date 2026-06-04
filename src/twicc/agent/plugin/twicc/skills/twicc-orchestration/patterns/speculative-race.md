@@ -14,10 +14,11 @@ Shape: star · pull + push · first-wins · select · heterogeneous (varied appr
 
 ## Protocol
 1. Spawn K attempts, ideally diverse (`--model`/`--provider`/`--preset` or a
-   different brief), `--annotation attempt=<k>`.
+   different brief), `--annotation attempt=<k>` and optionally `--annotation status=racing`.
 2. First-wins: `processes wait --spawned-by self user_turn --first --timeout <N>`.
-3. Inspect the finisher: if acceptable, `processes stop` the rest and take it; if
-   not, keep waiting for the next.
+3. Inspect the finisher: if acceptable, stop the rest by explicit ids, or mark the
+   losers and run `processes stop --spawned-by self --annotation status=loser --timeout <N>`.
+   If not acceptable, keep waiting for the next.
 4. Use the winning result.
 
 ## Use it when

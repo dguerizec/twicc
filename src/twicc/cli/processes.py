@@ -44,19 +44,33 @@ def main(
 
     django.setup()
 
-    from twicc.cli._drop_request.whoami import (
-        resolve_descendants_filter,
-        resolve_spawn_tree_filter,
-        resolve_spawned_by_filter,
-    )
-
-    try:
-        spawned_by_id = resolve_spawned_by_filter(spawned_by)
-        spawn_root_id = resolve_spawn_tree_filter(spawn_tree)
-        descendants_ids = resolve_descendants_filter(descendants)
-    except RuntimeError as e:
-        print(str(e), file=sys.stderr)
+    filiation_scope = any((spawned_by, spawn_tree, descendants))
+    if annotation and not filiation_scope:
+        print(
+            "Error: --annotation on processes listing requires --spawned-by, "
+            "--spawn-tree, or --descendants.",
+            file=sys.stderr,
+        )
         sys.exit(1)
+
+    has_scope = filiation_scope or bool(annotation)
+    scoped_session_ids: list[str] | None = None
+    if has_scope:
+        try:
+            from twicc.cli._session_scope import merge_session_scope_ids
+
+            scoped_session_ids = merge_session_scope_ids(
+                spawned_by=spawned_by,
+                spawn_tree=spawn_tree,
+                descendants=descendants,
+                annotation=annotation,
+            )
+        except RuntimeError as e:
+            print(str(e), file=sys.stderr)
+            sys.exit(1)
+        except ValueError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            sys.exit(2)
 
     from twicc.agent.states import AgentState
     from twicc.cli._process_state import (
@@ -66,22 +80,6 @@ def main(
     )
     from twicc.cli._twicc_info import resolve_live_twicc_or_exit
     from twicc.core.models import ProcessRun, Session
-
-    matching_session_ids: set[str] | None = None
-    if annotation:
-        from twicc.cli._annotation_filters import apply_annotation_filters, parse_annotation_filter
-        try:
-            annotation_filters = [parse_annotation_filter(spec) for spec in annotation]
-        except ValueError as exc:
-            print(f"Error: {exc}", file=sys.stderr)
-            sys.exit(2)
-        # Full scan intentional: processes.py has no pre-existing session-id scope
-        # at this point in the flow. For a DB with many sessions this is one JSON1
-        # scan; acceptable for v1 given the tiny number of live process rows.
-        matching_session_ids = set(
-            apply_annotation_filters(Session.objects.all(), annotation_filters)
-            .values_list("id", flat=True)
-        )
 
     info = resolve_live_twicc_or_exit()
 
@@ -113,67 +111,31 @@ def main(
     if provider is not None:
         qs = qs.filter(provider=provider)
 
+    if scoped_session_ids is not None:
+        if not scoped_session_ids:
+            emit_json([])
+            return
+        qs = qs.filter(session_id__in=scoped_session_ids)
+
+    hidden_session_ids = Session.objects.filter(hidden=True).values_list("id", flat=True)
+    if only_hidden:
+        qs = qs.filter(session_id__in=hidden_session_ids)
+    elif not include_hidden and not filiation_scope:
+        qs = qs.exclude(session_id__in=hidden_session_ids)
+
     rows = list(qs[offset : offset + limit])
 
-    # Enrich with the matching Session's title, project_id, hidden, spawned_by_id
-    # and spawn_root_id when the session row has already been created by the
-    # watcher. Brand-new sessions that haven't reached their first JSONL line yet
-    # have no Session row, so those fields fall back to ``None``.
+    # Enrich with the matching Session's title and project_id when the session
+    # row has already been created by the watcher. Brand-new sessions that
+    # haven't reached their first JSONL line yet have no Session row, so those
+    # fields fall back to ``None``.
     session_ids = [r.session_id for r in rows]
     sessions_by_id = {
         s.id: s
         for s in Session.objects.filter(id__in=session_ids).only(
-            "id", "title", "project_id", "hidden", "spawned_by_id", "spawn_root_id"
+            "id", "title", "project_id"
         )
     }
-
-    # Apply hidden / spawned_by / spawn_tree / descendants filters (post-enrichment,
-    # since these fields come from the Session row, not from ProcessRun itself).
-    # Same semantics as ``twicc sessions``:
-    #
-    # - ``--only-hidden``: keep hidden=True only.
-    # - ``--include-hidden``: no implicit hidden filter (both kinds).
-    # - ``--spawned-by`` / ``--spawn-tree`` / ``--descendants`` is set (without
-    #   ``--include-hidden`` / ``--only-hidden``): the caller is explicitly asking
-    #   about filiation, show every matching session in the tree whatever its
-    #   visibility.
-    # - Default (no flag): keep hidden=False only — match what the UI sees.
-    filtered = []
-    for row in rows:
-        session = sessions_by_id.get(row.session_id)
-        is_hidden = session.hidden if session is not None else False
-        if only_hidden and not is_hidden:
-            continue
-        if (
-            not include_hidden
-            and not only_hidden
-            and spawned_by_id is None
-            and spawn_root_id is None
-            and descendants_ids is None
-            and is_hidden
-        ):
-            continue
-        sb = session.spawned_by_id if session is not None else None
-        if spawned_by_id is not None and sb != spawned_by_id:
-            continue
-        sr = session.spawn_root_id if session is not None else None
-        # Accept either: this row's session is in the requested spawn tree
-        # (its spawn_root_id matches), or it *is* the tree's root in a
-        # single-node tree (standalone session whose spawn_root_id is still
-        # NULL because it has never spawned). Mirrors ``twicc topology`` and
-        # the ``Q(spawn_root_id=X) | Q(pk=X)`` filter in ``sessions.py``.
-        if (
-            spawn_root_id is not None
-            and sr != spawn_root_id
-            and row.session_id != spawn_root_id
-        ):
-            continue
-        if descendants_ids is not None and row.session_id not in descendants_ids:
-            continue
-        if matching_session_ids is not None and row.session_id not in matching_session_ids:
-            continue
-        filtered.append(row)
-    rows = filtered
 
     data = [
         serialize_process_row(row, sessions_by_id.get(row.session_id))
