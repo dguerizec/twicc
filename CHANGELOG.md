@@ -13,6 +13,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Added support for Claude Code Opus fast mode (billed against extra usage credits).
 - Through a system-prompt addendum, agents are now aware of their TwiCC context and of the settings they run under.
 - Lots of new `twicc` CLI commands (and matching skills) to manage sessions, processes, projects, and workspaces.
+- The `twicc` CLI is now also exposed as a token-gated HTTP API, and a `--remote <url>` flag lets one TwiCC instance drive another over the network.
 - A new orchestrator skills family lets one agent split a task into sub-tasks across spawned sessions, with a shared scratch space.
 - Agents can save images and screenshots outside the project repo, and TwiCC serves them and renders them inline in chat.
 - Clicking an image or a Mermaid diagram in a message now opens a full-screen viewer with pan/zoom and navigation.
