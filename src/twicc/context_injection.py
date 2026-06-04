@@ -19,7 +19,11 @@ The facility is generic across providers, in four parts:
    ``<twicc:context>`` block built from everything queued, then clear it
    (one-shot). Each provider folds in the one method every outgoing user
    message passes through, so a queued injection lands on the next message
-   whether it opens a fresh turn or is sent mid-turn (steer / queued). Current
+   whether it opens a fresh turn or is sent mid-turn (steer / queued). The one
+   exception is a slash-command message (``/compact`` & co.): prepending a block
+   would push the command off the start of the text and the CLI would treat the
+   whole thing as plain text, so the fold is skipped and the fields stay queued
+   for the next non-command message. Current
    integration points — add one when a new provider lands:
 
      - Codex:       ``CodexAgent._build_turn_input`` (a normal turn and a steer)
@@ -208,7 +212,18 @@ def apply_pending_context(session_id: str, text: str) -> str:
     block built from every queued field. Returns ``text`` unchanged when
     nothing is queued. Generic across providers — the caller just hands it the
     user-message text at send time.
+
+    Slash commands are the one exception. The CLIs TwiCC drives only run a
+    built-in like ``/compact`` when the command is the *first* thing in the
+    message text; prepending a ``<twicc:context>`` block in front of it turns
+    the whole message into plain text the agent answers conversationally
+    (the command never fires). So when ``text`` looks like a slash command we
+    leave it untouched and keep the fields queued — they merge with any later
+    delta (see :func:`inject_context_fields`) and ride the next non-command
+    message instead. The block is at most deferred by a turn, never dropped.
     """
+    if text.lstrip().startswith("/"):
+        return text
     fields = consume_context(session_id)
     if not fields:
         return text
