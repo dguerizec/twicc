@@ -25,6 +25,16 @@ export function sendCheckAuth() {
 }
 
 /**
+ * Ask the backend to refresh the Claude Code usage snapshot now, allowing the
+ * OAuth token refresh that the macOS background loop skips. The result comes
+ * back as a ``usage_updated`` message with ``reason: "manual"``.
+ * @returns {boolean} - True if message was sent
+ */
+export function sendCheckUsage() {
+    return sendWsMessage({ type: 'claude_code:check_usage' })
+}
+
+/**
  * Respond to a pending tool-approval / ask-user-question request raised
  * by the Claude SDK. The shape of ``responseData`` depends on the
  * ``request_type`` (tool_approval vs ask_user_question).

@@ -12,10 +12,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sys
 
 from twicc.core.enums import Provider
 from twicc.usage_task import broadcast_usage_updated
 
+from .credentials import CREDENTIALS_PATH
 from .helpers import CodexHelpers
 from .usage import fetch_and_save_usage
 
@@ -61,7 +63,20 @@ async def start_usage_sync_task() -> None:
     while not stop_event.is_set():
         success = False
         try:
-            snapshot = await fetch_and_save_usage()
+            # On macOS, skip the OAuth token refresh only when Codex is in
+            # keyring storage mode — there, refreshing makes the bundled codex
+            # binary rewrite the "Codex Auth" Keychain item, resetting its ACL
+            # and popping an unprompted authorization dialog (same issue as
+            # Claude Code). The CLI deletes ~/.codex/auth.json whenever it
+            # switches to keyring, so the file's presence is a reliable, always-
+            # current signal of where the binary writes: file present → refresh
+            # rewrites the file (no prompt) → allow; file absent (keyring) →
+            # refresh rewrites the Keychain → skip. Re-evaluated every cycle
+            # because the mode can change at runtime (unlike Claude Code, which
+            # is always Keychain on macOS). The token is then refreshed by real
+            # sessions or on demand via the sidebar "Refresh now" button.
+            allow_refresh = sys.platform != "darwin" or CREDENTIALS_PATH.is_file()
+            snapshot = await fetch_and_save_usage(allow_refresh=allow_refresh)
             if snapshot:
                 success = True
                 logger.info(

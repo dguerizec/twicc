@@ -229,13 +229,20 @@ def dump_usage_to_file(raw: dict, file_path: str) -> None:
         logger.warning("Failed to dump Codex usage to file: %s — %s", file_path, e)
 
 
-def _fetch_usage_raw_blocking() -> dict | None:
+def _fetch_usage_raw_blocking(allow_refresh: bool = True) -> dict | None:
     """Blocking half of :func:`fetch_and_save_usage` — pure I/O, no DB.
 
     Reads the synced settings and either loads a previously dumped payload
     from disk (read mode) or hits ChatGPT's ``wham/usage`` endpoint. On a
     successful API fetch, optionally dumps the raw response to disk. Returns
     the raw payload, or ``None`` when nothing usable was fetched.
+
+    ``allow_refresh`` is forwarded to :func:`fetch_usage` as
+    ``refresh_token_if_needed``: when ``False`` an expired token yields a
+    soft miss (``None``) instead of triggering a token refresh that, in
+    keyring storage mode, rewrites the macOS Keychain item and pops an
+    authorization prompt. See
+    :func:`twicc.providers.codex.usage_task.start_usage_sync_task`.
     """
     from twicc.synced_settings import read_synced_settings
 
@@ -248,13 +255,13 @@ def _fetch_usage_raw_blocking() -> dict | None:
     if read_enabled and read_path:
         return read_usage_from_file(read_path)
 
-    raw = fetch_usage()
+    raw = fetch_usage(refresh_token_if_needed=allow_refresh)
     if raw is not None and dump_enabled and dump_path:
         dump_usage_to_file(raw, dump_path)
     return raw
 
 
-async def fetch_and_save_usage() -> UsageSnapshot | None:
+async def fetch_and_save_usage(allow_refresh: bool = True) -> UsageSnapshot | None:
     """Fetch a Codex usage payload (API or replay file) and persist via the DB writer.
 
     Mirrors the Claude Code orchestration: when the user has enabled read
@@ -267,11 +274,16 @@ async def fetch_and_save_usage() -> UsageSnapshot | None:
     is then routed through the DB writer via
     :class:`_CreateUsageSnapshotJob`, so the ``UsageSnapshot.objects.create``
     never races the DB writer on the SQLite write lock.
+
+    ``allow_refresh`` (default ``True``) gates the OAuth token refresh on an
+    expired token: the macOS background sync passes ``False`` only when Codex
+    is in keyring storage mode (so it won't rewrite the Keychain unprompted),
+    while a user-initiated refresh passes ``True``.
     """
     from twicc.core.enums import Provider
     from twicc.providers.db_writer import _CreateUsageSnapshotJob, submit_async_job
 
-    raw = await asyncio.to_thread(_fetch_usage_raw_blocking)
+    raw = await asyncio.to_thread(_fetch_usage_raw_blocking, allow_refresh)
     if raw is None:
         return None
 

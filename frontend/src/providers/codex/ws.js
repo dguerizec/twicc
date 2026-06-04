@@ -20,6 +20,17 @@ export function sendCheckAuth() {
 }
 
 /**
+ * Ask the backend to refresh the Codex usage snapshot now, allowing the OAuth
+ * token refresh that the macOS background loop skips when Codex is in keyring
+ * storage mode. The result comes back as a ``usage_updated`` message with
+ * ``reason: "manual"``.
+ * @returns {boolean} - True if message was sent
+ */
+export function sendCheckUsage() {
+    return sendWsMessage({ type: 'codex:check_usage' })
+}
+
+/**
  * Respond to a pending Codex tool-approval request raised by the SDK
  * via the sync ↔ async bridge in CodexAgent. The ``responseData`` shape
  * must already match the Codex wire format (see backend spec §9.3/§9.5):

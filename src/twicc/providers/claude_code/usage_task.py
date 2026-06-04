@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sys
 
 from twicc.core.enums import Provider
 from twicc.usage_task import broadcast_usage_updated
@@ -52,12 +53,22 @@ async def start_usage_sync_task() -> None:
     # Reset for hot-restart support — see auth_task.start_auth_task().
     stop_event.clear()
 
+    # On macOS, never auto-refresh the OAuth token from this background loop.
+    # Refreshing makes the bundled ``claude`` CLI rewrite the
+    # "Claude Code-credentials" Keychain item, which resets its ACL and pops a
+    # macOS authorization prompt at an unpredictable time (no active session) —
+    # the exact symptom users complain about. The token is instead refreshed by
+    # real agent sessions, or on demand via the sidebar "Refresh now" button
+    # (``claude_code:check_usage``). Other platforms have no Keychain prompt, so
+    # they keep auto-refreshing for always-fresh usage data.
+    allow_refresh = sys.platform != "darwin"
+
     logger.info("Usage sync task started")
 
     while not stop_event.is_set():
         success = False
         try:
-            snapshot = await fetch_and_save_usage()
+            snapshot = await fetch_and_save_usage(allow_refresh=allow_refresh)
             if snapshot:
                 success = True
                 logger.info(

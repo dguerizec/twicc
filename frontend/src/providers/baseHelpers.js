@@ -179,6 +179,23 @@ export class BaseProviderHelpers {
         return null
     }
 
+    /**
+     * Whether this provider offers a user-initiated usage refresh — the
+     * "Refresh now" button in the sidebar quota block's stale-data tooltip.
+     * Providers that return ``true`` must also override
+     * ``requestUsageRefresh``. Default: not supported.
+     */
+    supportsUsageRefresh() {
+        return false
+    }
+
+    /**
+     * Ask the backend to refresh this provider's usage snapshot right now,
+     * allowing the on-demand OAuth token refresh that the macOS background
+     * loop skips. Bound to the "Refresh now" button. Default: no-op.
+     */
+    async requestUsageRefresh() {}
+
     // ─── Usage read/dump file settings ───────────────────────────────────
     //
     // Providers that track usage may also support sourcing the data from

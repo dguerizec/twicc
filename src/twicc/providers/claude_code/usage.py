@@ -194,13 +194,19 @@ def dump_usage_to_file(raw: dict, file_path: str) -> None:
         logger.warning("Failed to dump usage to file: %s — %s", file_path, e)
 
 
-def _fetch_usage_raw_blocking() -> dict | None:
+def _fetch_usage_raw_blocking(allow_refresh: bool = True) -> dict | None:
     """Blocking half of :func:`fetch_and_save_usage` — pure I/O, no DB.
 
     Reads the synced settings (file read), then either loads a previously
     dumped payload from disk or hits the Anthropic API; on a successful
     API fetch, optionally dumps the raw response to disk. Returns the raw
     payload, or ``None`` when nothing usable was fetched.
+
+    ``allow_refresh`` is forwarded to :func:`fetch_usage` as
+    ``refresh_token_if_needed``: when ``False`` an expired token yields a
+    soft miss (``None``) instead of triggering an OAuth token refresh
+    (which rewrites the macOS Keychain item and pops an authorization
+    prompt). See :func:`twicc.providers.claude_code.usage_task.start_usage_sync_task`.
     """
     from twicc.synced_settings import read_synced_settings
 
@@ -213,14 +219,14 @@ def _fetch_usage_raw_blocking() -> dict | None:
     if read_enabled and read_path:
         return read_usage_from_file(read_path)
 
-    raw = fetch_usage()
+    raw = fetch_usage(refresh_token_if_needed=allow_refresh)
     # Dump raw response to file if enabled (only when fetching from API)
     if raw is not None and dump_enabled and dump_path:
         dump_usage_to_file(raw, dump_path)
     return raw
 
 
-async def fetch_and_save_usage() -> UsageSnapshot | None:
+async def fetch_and_save_usage(allow_refresh: bool = True) -> UsageSnapshot | None:
     """Fetch a usage payload (API or replay file) and persist it via the DB writer.
 
     The HTTP / file read happens on a worker thread; the parsed-fields dict
@@ -229,11 +235,16 @@ async def fetch_and_save_usage() -> UsageSnapshot | None:
     never races the DB writer on the SQLite write lock. Returns the created
     ``UsageSnapshot``, or ``None`` when nothing was fetched (credentials
     missing, API error, or replay file unreadable).
+
+    ``allow_refresh`` (default ``True``) gates the OAuth token refresh on an
+    expired token: the macOS background sync passes ``False`` to avoid
+    rewriting the Keychain item unprompted, while a user-initiated refresh
+    passes ``True``.
     """
     from twicc.core.enums import Provider
     from twicc.providers.db_writer import _CreateUsageSnapshotJob, submit_async_job
 
-    raw = await asyncio.to_thread(_fetch_usage_raw_blocking)
+    raw = await asyncio.to_thread(_fetch_usage_raw_blocking, allow_refresh)
     if raw is None:
         return None
 

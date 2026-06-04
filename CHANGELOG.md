@@ -40,6 +40,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - The context usage ring on Claude Code sessions no longer briefly drops to 0% when resuming a session.
 - Commands launched into a freshly-opened terminal tab (login command, snippets opened in a new tab) no longer occasionally fail to run.
 - Workspace activity heatmaps and graphs now include archived projects.
+- On macOS, TwiCC now tries to trigger fewer repeated Keychain confirmation prompts.
 
 ## [1.6.1] - 2026-05-20
 

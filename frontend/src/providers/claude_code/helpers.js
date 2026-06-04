@@ -240,6 +240,16 @@ export class ClaudeCodeHelpers extends BaseProviderHelpers {
         return { url: 'https://claude.ai/settings/usage', label: 'View usage on claude.ai' }
     }
 
+    supportsUsageRefresh() {
+        return true
+    }
+
+    async requestUsageRefresh() {
+        // Lazy import to break the helpers ↔ ws cycle (see requestAuthRecheck).
+        const { sendCheckUsage } = await import('./ws')
+        sendCheckUsage()
+    }
+
     getUsageFileSetting(field) {
         const binding = USAGE_FILE_FIELD_TO_STORE_BINDING[field]
         if (!binding) return null

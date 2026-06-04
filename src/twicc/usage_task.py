@@ -239,16 +239,20 @@ def _build_usage_message_sync(
     return _build_usage_message(provider, success, reason, snapshot)
 
 
-async def broadcast_usage_updated(provider: Provider, success: bool) -> None:
+async def broadcast_usage_updated(provider: Provider, success: bool, reason: str = "sync") -> None:
     """Broadcast a ``usage_updated`` message for ``provider`` to all connected clients.
 
     Always sends the latest snapshot for that provider from the database
     (not necessarily the one just fetched) when one exists, plus a
     ``success`` flag indicating whether the last fetch succeeded. The
     frontend uses the snapshot's ``fetched_at`` to flag stale data.
+
+    ``reason`` defaults to ``"sync"`` (periodic background fetch); the
+    user-initiated refresh path passes ``"manual"`` so the frontend can
+    tell its on-demand refresh round-trip apart from a background tick.
     """
     snapshot = await _get_latest_usage_snapshot(provider)
-    data = await _build_usage_message_sync(provider, success, reason="sync", snapshot=snapshot)
+    data = await _build_usage_message_sync(provider, success, reason=reason, snapshot=snapshot)
     channel_layer = get_channel_layer()
     await channel_layer.group_send(
         "updates",

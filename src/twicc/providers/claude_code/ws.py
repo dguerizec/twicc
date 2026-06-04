@@ -31,9 +31,10 @@ from twicc.providers.claude_code.auth import (
     get_auth_message_for_connection,
 )
 from twicc.providers.claude_code.statuspage_task import get_statuspage_message_for_connection
+from twicc.providers.claude_code.usage import fetch_and_save_usage
 from twicc.providers.db_writer import run_under_db_write_lock
 from twicc.providers.state import ProviderDisabledError, ensure_provider_running
-from twicc.usage_task import get_usage_message_for_connection
+from twicc.usage_task import broadcast_usage_updated, get_usage_message_for_connection
 
 logger = logging.getLogger(__name__)
 
@@ -157,6 +158,17 @@ class ClaudeCodeWSHandler:
             # Forced re-check of Claude Code CLI auth state. The result is broadcast
             # to the entire "updates" group so every connected client refreshes.
             await check_auth_and_broadcast(force=True)
+            return True
+
+        if action == "check_usage":
+            # User-initiated usage refresh (sidebar "Refresh now" button). Unlike
+            # the macOS background loop — which skips the OAuth token refresh to
+            # avoid an unprompted Keychain dialog — this path allows the refresh,
+            # so any Keychain prompt is now tied to an explicit click. The result
+            # is broadcast with reason="manual" so the requesting client can tell
+            # its on-demand round-trip apart from a periodic background tick.
+            snapshot = await fetch_and_save_usage(allow_refresh=True)
+            await broadcast_usage_updated(Provider.CLAUDE_CODE, snapshot is not None, reason="manual")
             return True
 
         return False

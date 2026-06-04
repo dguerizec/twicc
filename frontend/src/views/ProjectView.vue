@@ -314,6 +314,45 @@ function openUsageGraph(period) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// Manual usage refresh (Claude Code only)
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// On macOS the background loop never auto-refreshes the OAuth token (it would
+// rewrite the Keychain item and pop an unprompted authorization dialog), so the
+// usage data goes stale once the token expires. The "Refresh now" button in the
+// stale-warning tooltip lets the user trigger the refresh explicitly — any
+// Keychain prompt then follows a deliberate click. The button shows a spinner
+// until the matching usage_updated (reason === 'manual') comes back.
+
+// Manual usage refresh is a per-provider capability: the helper exposes
+// ``supportsUsageRefresh()`` (gates the "Refresh now" button) and
+// ``requestUsageRefresh()`` (fires the provider's own check_usage WS action,
+// lazy-importing its ws module to avoid an import cycle). Both Claude Code and
+// Codex opt in; the button targets whichever provider is currently displayed.
+const canRefreshUsage = computed(() => currentUsageHelpers.value?.supportsUsageRefresh() ?? false)
+const usageRefreshing = computed(() => currentUsageStore.value?.usageRefreshing ?? false)
+
+// Safety net: clear the spinner if no manual usage_updated arrives (e.g. a WS
+// hiccup) within the backend's worst-case refresh window (SDK refresh timeout
+// is 30s; 40s leaves margin).
+const USAGE_REFRESH_SAFETY_MS = 40000
+let _usageRefreshTimer = null
+
+async function refreshUsage() {
+    const helpers = currentUsageHelpers.value
+    const store = currentUsageStore.value
+    if (!helpers || !store || store.usageRefreshing || !helpers.supportsUsageRefresh()) return
+    store.setUsageRefreshing(true)
+    if (_usageRefreshTimer) clearTimeout(_usageRefreshTimer)
+    _usageRefreshTimer = setTimeout(() => store.setUsageRefreshing(false), USAGE_REFRESH_SAFETY_MS)
+    await helpers.requestUsageRefresh()
+}
+
+onBeforeUnmount(() => {
+    if (_usageRefreshTimer) clearTimeout(_usageRefreshTimer)
+})
+
+// ═══════════════════════════════════════════════════════════════════════════
 // Shared Rename Dialog (single instance for both sidebar and session header)
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -1769,6 +1808,7 @@ function updateSidebarClosedClass(closed) {
                             <div class="quota-stale-header"><wa-icon name="triangle-exclamation" class="quota-stale-header-icon"></wa-icon><span>Data may be outdated</span></div>
                             <div class="quota-tooltip-row"><span class="quota-tooltip-label">Last update</span><span>{{ quotaLastUpdateFormatted }}</span></div>
                             <div class="quota-tooltip-buttons wa-light">
+                                <wa-button v-if="canRefreshUsage" size="small" variant="brand" :appearance="quotaButtonAppearance" :loading="usageRefreshing" :disabled="usageRefreshing" class="quota-stale-button" @click="refreshUsage()"><wa-icon slot="start" name="arrow-rotate-right"></wa-icon>Refresh now</wa-button>
                                 <wa-button v-if="usageExternalLink" size="small" variant="brand" :appearance="quotaButtonAppearance" :href="usageExternalLink.url" target="_blank" rel="noopener" class="quota-stale-button"><wa-icon slot="start" name="up-right-from-square"></wa-icon>{{ usageExternalLink.label }}</wa-button>
                             </div>
                         </div>

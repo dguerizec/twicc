@@ -16,9 +16,10 @@ from collections.abc import AsyncIterator
 from twicc.core.enums import Provider
 from twicc.providers.codex.statuspage_task import get_statuspage_message_for_connection
 from twicc.providers.state import ProviderDisabledError, ensure_provider_running
-from twicc.usage_task import get_usage_message_for_connection
+from twicc.usage_task import broadcast_usage_updated, get_usage_message_for_connection
 
 from .auth import check_and_broadcast, get_auth_message_for_connection
+from .usage import fetch_and_save_usage
 
 from twicc.agent.registry import get_agent_manager_registry
 
@@ -56,6 +57,17 @@ class CodexWSHandler:
         if action == "check_auth":
             # Forced re-check of Codex CLI auth state, broadcast to every client.
             await check_and_broadcast(force=True)
+            return True
+
+        if action == "check_usage":
+            # User-initiated usage refresh (sidebar "Refresh now" button). Unlike
+            # the macOS background loop — which skips the OAuth refresh in keyring
+            # mode to avoid an unprompted Keychain dialog — this path allows the
+            # refresh, so any Keychain prompt now follows an explicit click. The
+            # result is broadcast with reason="manual" so the requesting client
+            # can tell its on-demand round-trip apart from a background tick.
+            snapshot = await fetch_and_save_usage(allow_refresh=True)
+            await broadcast_usage_updated(Provider.CODEX, snapshot is not None, reason="manual")
             return True
 
         return False

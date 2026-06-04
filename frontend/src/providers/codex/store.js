@@ -34,8 +34,21 @@ export const useCodexStore = defineStore('codex', () => {
     // computed }``. Consumers should treat ``null`` as "not yet loaded".
     const usage = ref(null)
 
+    // True while a manual usage refresh requested from the sidebar is in
+    // flight. Set by the "Refresh now" button (codex:check_usage), cleared
+    // when the matching usage_updated (reason === 'manual') returns below,
+    // or by a safety timeout in the caller.
+    const usageRefreshing = ref(false)
+
     function setUsage(success, reason, raw, computed) {
         usage.value = { success, reason, raw, computed }
+        // The user-initiated refresh round-trip just came back — stop the
+        // "Refresh now" spinner, whether it succeeded or failed.
+        if (reason === 'manual') usageRefreshing.value = false
+    }
+
+    function setUsageRefreshing(value) {
+        usageRefreshing.value = !!value
     }
 
     // ─── Usage read/dump file settings (synced) ──────────────────────────
@@ -125,6 +138,8 @@ export const useCodexStore = defineStore('codex', () => {
         setOpenaiStatus,
         usage,
         setUsage,
+        usageRefreshing,
+        setUsageRefreshing,
         usageReadFileEnabled,
         usageReadFilePath,
         usageDumpFileEnabled,
