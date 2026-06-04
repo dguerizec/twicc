@@ -1,0 +1,33 @@
+# Worker pool (bounded concurrency)
+
+Process many tasks through a bounded set of workers, instead of spawning one child
+per task all at once.
+
+Shape: star · push or pull · waves · merge · homogeneous.
+
+## Who does what
+- **Leader or manager** — hold a queue of tasks and a concurrency cap K. Keep K
+  workers busy: as one finishes, hand it the next task (reuse it) or spawn a
+  replacement. Collect results as they complete.
+- **Workers** — take a task, do it, report back, and (if reused) wait for the next
+  via `send-message` — which resurrects them if they went idle/dead.
+
+## Protocol
+1. Set K from the work size and cost/quota headroom (check `usage`).
+2. Launch the first K tasks.
+3. Each time a worker reaches `user_turn`/`dead`, collect its result, then either
+   `send-message` it the next task (reuse) or spawn a fresh worker for it.
+4. Continue until the queue drains; aggregate.
+
+## Use it when
+There are far more tasks than you should run at once (cost, rate limits, or just
+dozens of files).
+Not for a handful of pieces (just scatter-gather them).
+
+## Pitfalls
+- Reuse via `send-message` keeps a worker warm but also accumulates its context —
+  start fresh workers when context bloats.
+- Mind `usage`/quota: a wide pool can exhaust a window fast.
+- Still wait on direct children only.
+
+Examples: `examples/codebase-audit.md`.

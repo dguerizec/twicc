@@ -130,6 +130,21 @@ A session goes `starting → assistant_turn → user_turn`, then `dead` when its
 
 This is the unconstrained model: nothing here is enforced except the technical limits of read-only mode. The conventions above are what keep an orchestration legible — follow them, but the system will not stop you from doing otherwise.
 
+## Orchestration patterns (for leaders and managers)
+
+You compose a structure from five axes — topology, channel, synchronization, aggregation, voice diversity. The recurring useful combinations are written up as bundled pattern files next to this skill, under `patterns/`. Read `patterns/composing.md` first (the five axes), then open the one that fits — you don't need them all:
+
+- Distribute — `patterns/scatter-gather.md`, `patterns/multi-angle.md`, `patterns/divide-and-conquer.md`
+- Chain — `patterns/pipeline.md`, `patterns/plan-then-execute.md`
+- Decide / verify — `patterns/quorum.md`, `patterns/debate.md`, `patterns/produce-refute.md`
+- Watch & steer — `patterns/supervisor.md`
+- Survive failure / scale — `patterns/speculative-race.md`, `patterns/worker-pool.md`
+- Stay within context — `patterns/context-offload.md`
+
+For worked, end-to-end walkthroughs that combine these patterns on a real task, see `examples/` — `pr-review`, `codebase-audit`, `architecture-decision`, `research-synthesis`, `ship-feature`, `content-pipeline`, `go-no-go-quorum`, `long-running-watchdog`, `hard-bug-race`, `context-relay`. Each pattern file also links the examples that use it.
+
+Workers don't orchestrate, so they can ignore this.
+
 ## Related commands
 
 - `$TWICC create-session <PROMPT>` — spawn a child. Skill: `twicc-create-session`.
