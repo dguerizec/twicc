@@ -82,7 +82,7 @@ The two filiation flags are mutually exclusive. If no explicit IDs are passed, `
 $TWICC processes wait [SESSION_ID...] <STATUS>... --timeout N [--all|--first] [--transition] [--spawned-by X|--descendants X] [--annotation KEY[OP]VALUE]...
 ```
 
-Session_ids and statuses are a **single positional list, auto-discriminated by value** — anything matching a valid state (`starting`, `assistant_turn`, `awaiting_user_input`, `user_turn`, `dead`) is a status; everything else is a session_id. Pass session_ids first, statuses last. You may omit explicit session IDs when selecting the wait pool with filters.
+Session_ids and statuses are a **single positional list, auto-discriminated by value** — anything matching a valid state (`starting`, `assistant_turn`, `awaiting_user_input`, `user_turn`, `dead`) is a status; everything else is a session_id. Pass session_ids first, statuses last. Explicit IDs and filtered IDs are merged (explicit IDs first, duplicates collapsed). You may omit explicit session IDs when selecting the wait pool with filters.
 
 - `--all` (default) — wait until every active session has matched.
 - `--first` — stop as soon as one session matches.

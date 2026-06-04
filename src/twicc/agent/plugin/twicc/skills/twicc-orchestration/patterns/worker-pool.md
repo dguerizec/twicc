@@ -34,4 +34,4 @@ Not for a handful of pieces (just scatter-gather them).
 - Mind `usage`/quota: a wide pool can exhaust a window fast.
 - Still wait on direct children only.
 
-Examples: `examples/codebase-audit.md`.
+Examples: `examples/codebase-audit.md`, `examples/large-migration.md`.

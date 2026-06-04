@@ -29,4 +29,4 @@ Not when the split is obvious (just scatter-gather directly).
 - The planner being read-only is a feature (safe, cheap); the executors must not be.
 - Keep the plan in the shared scratch if it's long, so executors can refer to it.
 
-Examples: `examples/research-synthesis.md`, `examples/ship-feature.md`.
+Examples: `examples/research-synthesis.md`, `examples/ship-feature.md`, `examples/parallel-feature-integration.md`.

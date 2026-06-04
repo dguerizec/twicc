@@ -30,4 +30,4 @@ Not when speed matters more than certainty.
 - Bound the produce↔refute loop so it terminates.
 - Refuters report *reproducible* breakages, not opinions.
 
-Examples: `examples/pr-review.md`, `examples/ship-feature.md`, `examples/content-pipeline.md`.
+Examples: `examples/pr-review.md`, `examples/ship-feature.md`, `examples/parallel-feature-integration.md`, `examples/content-pipeline.md`.

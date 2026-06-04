@@ -13,11 +13,13 @@ common, useful combinations to start from. When none fits, compose your own.
   a child anytime with `session <id> messages`), files (bulky exchange through the
   shared `scratch_dir`), steering (you message a child mid-`assistant_turn` to redirect it).
 - **Synchronization** — when you move on: barrier (wait for all,
-  `processes wait --spawned-by self ... --all`), first-wins (`--first`, then stop the
-  losers by explicit id or scoped `processes stop`), or continuous (no barrier — you watch and steer as they run).
+  `processes wait --spawned-by self ... --all`), phase gate (wait on one
+  annotation-scoped batch, validate, then advance), first-wins (`--first`, then
+  stop the losers by explicit id or scoped `processes stop`), or continuous (no
+  barrier — you watch and steer as they run).
 - **Aggregation** — how N results become one: concat/merge/dedup, vote (majority),
   select (best, or first that works), synthesize (a new artifact from the inputs),
-  or chain (no merge — one output is the next input).
+  single-writer integration, or chain (no merge — one output is the next input).
 - **Voice diversity** — how alike the children are: homogeneous (same
   model/preset/brief — throughput, redundancy) or heterogeneous (different model,
   provider, preset, angle, or prompt — diversity of judgment, e.g. Claude vs Codex).

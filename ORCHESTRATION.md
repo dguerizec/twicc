@@ -93,10 +93,12 @@ Use live-process commands as scoped operations, never as global annotation searc
 Leaders and managers compose a structure from five axes — topology, channel, synchronization, aggregation, voice diversity. The recurring combinations are written up as bundled pattern files next to the `twicc-orchestration` skill (start with [`composing.md`](src/twicc/agent/plugin/twicc/skills/twicc-orchestration/patterns/composing.md)):
 
 - **Distribute** — [scatter-gather](src/twicc/agent/plugin/twicc/skills/twicc-orchestration/patterns/scatter-gather.md), [multi-angle](src/twicc/agent/plugin/twicc/skills/twicc-orchestration/patterns/multi-angle.md), [divide-and-conquer](src/twicc/agent/plugin/twicc/skills/twicc-orchestration/patterns/divide-and-conquer.md)
+- **Gate phases** — [phase-gated-fanout](src/twicc/agent/plugin/twicc/skills/twicc-orchestration/patterns/phase-gated-fanout.md)
 - **Chain** — [pipeline](src/twicc/agent/plugin/twicc/skills/twicc-orchestration/patterns/pipeline.md), [plan-then-execute](src/twicc/agent/plugin/twicc/skills/twicc-orchestration/patterns/plan-then-execute.md)
 - **Decide / verify** — [quorum](src/twicc/agent/plugin/twicc/skills/twicc-orchestration/patterns/quorum.md), [debate](src/twicc/agent/plugin/twicc/skills/twicc-orchestration/patterns/debate.md), [produce-refute](src/twicc/agent/plugin/twicc/skills/twicc-orchestration/patterns/produce-refute.md)
 - **Watch & steer** — [supervisor](src/twicc/agent/plugin/twicc/skills/twicc-orchestration/patterns/supervisor.md)
 - **Survive failure / scale** — [speculative-race](src/twicc/agent/plugin/twicc/skills/twicc-orchestration/patterns/speculative-race.md), [worker-pool](src/twicc/agent/plugin/twicc/skills/twicc-orchestration/patterns/worker-pool.md)
+- **Integrate safely** — [single-writer-integration](src/twicc/agent/plugin/twicc/skills/twicc-orchestration/patterns/single-writer-integration.md)
 - **Stay within context** — [context-offload](src/twicc/agent/plugin/twicc/skills/twicc-orchestration/patterns/context-offload.md)
 
 ## Examples
@@ -108,9 +110,11 @@ For worked, end-to-end walkthroughs that combine these patterns on a real task, 
 - [`architecture-decision`](src/twicc/agent/plugin/twicc/skills/twicc-orchestration/examples/architecture-decision.md) — choose between two architectures (debate + judge).
 - [`research-synthesis`](src/twicc/agent/plugin/twicc/skills/twicc-orchestration/examples/research-synthesis.md) — research and synthesize a question (plan-then-execute + scatter-gather).
 - [`ship-feature`](src/twicc/agent/plugin/twicc/skills/twicc-orchestration/examples/ship-feature.md) — ship a feature end-to-end (plan-then-execute + divide-and-conquer + produce-refute).
+- [`parallel-feature-integration`](src/twicc/agent/plugin/twicc/skills/twicc-orchestration/examples/parallel-feature-integration.md) — integrate parallel feature work through one writer (single-writer-integration + produce-refute).
 - [`content-pipeline`](src/twicc/agent/plugin/twicc/skills/twicc-orchestration/examples/content-pipeline.md) — turn raw material into a polished deliverable (pipeline + a produce-refute fact-check stage).
 - [`go-no-go-quorum`](src/twicc/agent/plugin/twicc/skills/twicc-orchestration/examples/go-no-go-quorum.md) — make a risky go/no-go decision (quorum, with cross-provider diversity).
 - [`long-running-watchdog`](src/twicc/agent/plugin/twicc/skills/twicc-orchestration/examples/long-running-watchdog.md) — run a long migration under a watchdog (supervisor + retry/escalation).
+- [`large-migration`](src/twicc/agent/plugin/twicc/skills/twicc-orchestration/examples/large-migration.md) — migrate in bounded, validated waves (phase-gated-fanout + worker-pool + supervisor).
 - [`hard-bug-race`](src/twicc/agent/plugin/twicc/skills/twicc-orchestration/examples/hard-bug-race.md) — crack a hard bug by racing approaches (speculative-race, with diverse approaches).
 - [`context-relay`](src/twicc/agent/plugin/twicc/skills/twicc-orchestration/examples/context-relay.md) — relay a job too big for one context (context-offload).
 

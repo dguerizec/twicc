@@ -654,7 +654,8 @@ def _processes_wait(
             "A single list mixing optional session_ids and required statuses, "
             "auto-discriminated by value. If session_ids are omitted, pass one "
             "scope filter (--spawned-by or --descendants) to select sessions; "
-            "--annotation can narrow that scope."
+            "--annotation can narrow that scope. Explicit session_ids and "
+            "filtered session_ids are merged."
         ),
     ),
     timeout: float = typer.Option(
@@ -711,6 +712,7 @@ def _processes_wait(
 ) -> None:
     """Block until multiple session_ids reach matching virtual states.
 
+    Explicit session_ids and filtered session_ids are merged into one wait pool.
     Unknown explicit session_ids (no Session row AND no ProcessRun for this
     TwiCC) are skipped silently and do NOT participate in --all / --first.
     If every session_id is skipped, exits 0 (vacuous truth — nothing to

@@ -35,4 +35,4 @@ Overkill for short, reliable fan-outs (just barrier).
 - Distinguish "slow but progressing" from "hung" before killing — confirm the output
   actually changed.
 
-Examples: `examples/long-running-watchdog.md`.
+Examples: `examples/long-running-watchdog.md`, `examples/large-migration.md`.
