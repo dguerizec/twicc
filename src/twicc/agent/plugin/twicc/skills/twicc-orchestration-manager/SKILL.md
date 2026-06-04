@@ -39,7 +39,7 @@ If a child fails, deal with it yourself first — retry, re-split, or spawn a re
 
 ## Same as a leader, except…
 
-Everything else mirrors `twicc-orchestration-leader`: how you decompose, brief, observe, and collect. The differences: you **have a parent**, you **report to it** (not to a human), and you **propagate** the rules handed down to you rather than setting them.
+Everything else mirrors `twicc-orchestration-leader`: how you decompose, brief, observe, and collect. The differences: you **have a parent**, you **report to it** (not to a user), and you **propagate** the rules handed down to you rather than setting them.
 
 ## Related commands
 

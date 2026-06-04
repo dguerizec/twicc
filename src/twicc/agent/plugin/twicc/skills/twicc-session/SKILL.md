@@ -110,13 +110,13 @@ $TWICC session <SESSION_ID> content <LINE_OR_RANGE>
 - Range: `content 10-20` (inclusive)
 
 Returns a JSON array of raw JSONL objects. Schema depends on provider:
-- `claude_code` — Claude API objects (human/assistant messages, tool_use, tool_result, …).
+- `claude_code` — Claude API objects (user/assistant messages, tool_use, tool_result, …).
 - `codex` — Codex schema (user/assistant messages, function_call, function_call_output, …).
 
 ```json
 [
   {
-    "type": "human",
+    "type": "user",
     "message": {"role": "user", "content": [{"type": "text", "text": "Hello"}]},
     "timestamp": "2025-03-10T14:30:00.000Z"
   }

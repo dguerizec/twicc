@@ -10,7 +10,7 @@ This document explains the concept. The mechanics (commands, flags, keywords) li
 
 Every node in a spawn tree has a **mode**, defined by its position:
 
-- **Leader** — the root. No TwiCC parent; driven by a human. Owns the global task, decides the decomposition, reports to the human.
+- **Leader** — the root. No TwiCC parent; driven by a user. Owns the global task, decides the decomposition, reports to the user.
 - **Manager** — an internal node. Receives a mandate from its parent, decomposes it across its own children, aggregates, reports up.
 - **Worker** — a leaf. Executes one concrete task and delivers.
 
@@ -49,11 +49,11 @@ Orchestration uses only the two **non-interactive** extremes of each provider �
 ## Visibility & propagation
 
 - **Strongly prefer `--hidden`** for spawned sessions: no UI clutter, and a hidden session can never get stuck on a UI dialog. Hidden sessions stay out of every list, search, and counter while their cost still flows into aggregates.
-- **The human's choice wins and propagates.** If the human asks for visible sessions, or for a specific permission level, every descendant inherits the same rules.
+- **The user's choice wins and propagates.** If the user asks for visible sessions, or for a specific permission level, every descendant inherits the same rules.
 
 ## Annotations: a map of the tree
 
-Annotations are short key/value tags (free-form JSON) on a session. They turn a tree of opaque sessions into something you — and, on request, the human — can read at a glance, because `topology self` and `sessions --spawn-tree self` carry each node's annotations, and `sessions` / `processes` / `search` / `topology` can filter by them. For live processes, always pair annotations with a filiation scope, e.g. `processes --spawned-by self --annotation status=blocked` for direct children, or `processes wait --spawned-by self --annotation job=review user_turn dead --timeout 600` for a scoped barrier.
+Annotations are short key/value tags (free-form JSON) on a session. They turn a tree of opaque sessions into something you — and, on request, the user — can read at a glance, because `topology self` and `sessions --spawn-tree self` carry each node's annotations, and `sessions` / `processes` / `search` / `topology` can filter by them. For live processes, always pair annotations with a filiation scope, e.g. `processes --spawned-by self --annotation status=blocked` for direct children, or `processes wait --spawned-by self --annotation job=review user_turn dead --timeout 600` for a scoped barrier.
 
 Conventional keys (free, not enforced):
 

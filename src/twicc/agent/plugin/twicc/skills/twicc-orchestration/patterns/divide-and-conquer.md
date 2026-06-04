@@ -10,14 +10,14 @@ barrier at each level · aggregate at each level · usually homogeneous voices.
 - **Leader** — cut the goal into a few coarse pieces. Per piece, decide: atomic
   concrete work → a **worker**; still a sub-project → a **manager**. Spawn them,
   wait on your direct children only, aggregate their deliverables into the final
-  answer, present it to the human.
+  answer, present it to the user.
 - **Manager** — run the *same loop* on your mandate: split, decide worker vs
   sub-manager per piece, spawn, wait on your direct children, aggregate into ONE
   deliverable, `send-message parent`. Your parent never sees your subtree.
 - **Worker** — does its atomic piece, reports back (see `twicc-orchestration-worker`).
 
 Leader and manager are the same role at different altitude: the leader holds the
-whole goal and answers to the human; a manager holds one slice and answers to its parent.
+whole goal and answers to the user; a manager holds one slice and answers to its parent.
 
 ## Protocol (every orchestrating level applies this)
 1. Split your mandate into pieces that are independent *within this level*.
