@@ -108,7 +108,10 @@ The message is delivered immediately. The recipient picks it up based on its cur
 
 ## Following up
 
-- Check state: `$TWICC process <SESSION_ID>` — still working, blocked, or done? Skill: `twicc-process`.
+A `sent` status only means the message was handed to the agent — not that the agent has finished processing it.
+
+- Wait for a state: `$TWICC process <SESSION_ID> wait <STATE>... --timeout <N>` blocks until the agent reaches one of the listed states (`starting`, `assistant_turn`, `awaiting_user_input`, `user_turn`, `dead`). To wait for the end of the turn this message triggers, add `--transition` so it doesn't match the idle `user_turn` the session was already in before the message: `wait user_turn --transition --timeout <N>`. Skill: `twicc-process`.
+- Check state (snapshot): `$TWICC process <SESSION_ID>` — still working, blocked, or done? Skill: `twicc-process`.
 - Read the reply: `$TWICC session <SESSION_ID> messages --tail 1`. Skill: `twicc-session`.
 
 **Let the child talk back:** if the target is a session you spawned, tell it in the message to load the `twicc-send-message` skill and use `send-message parent '<text>'` to reply async — `parent` resolves to you via its `spawned_by` link. Loading the skill is what gives the child the `$TWICC` resolution and full invocation syntax.

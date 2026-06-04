@@ -142,11 +142,13 @@ $TWICC create-session --provider claude_code 'Hello'
 
 ## Following up
 
-Creation returns immediately; the agent keeps working in the background.
+A `created` status only means the session started and the prompt was handed to the agent — not that the agent has finished. It keeps working in the background.
 
 **Map spawned work:** `$TWICC topology self` shows the full spawned-session tree rooted at your top-level ancestor, with compact process state for every node (skill: `twicc-topology`).
 
-**Check state:** `$TWICC process <SESSION_ID>` (skill: `twicc-process`):
+**Wait for a state:** `$TWICC process <SESSION_ID> wait <STATE>... --timeout <N>` blocks until the agent reaches one of the listed states (`starting`, `assistant_turn`, `awaiting_user_input`, `user_turn`, `dead`). Pass `user_turn` to wait for the reply, or several (`user_turn awaiting_user_input dead`) to return on whichever comes first (skill: `twicc-process`).
+
+**Check state (snapshot):** `$TWICC process <SESSION_ID>` (skill: `twicc-process`):
 - `assistant_turn` → still working.
 - `awaiting_user_input` → blocked on a pending UI dialog. Do NOT call `send-message` — the user must click in the TwiCC UI first. Fetch what's being asked with `$TWICC session <ID> messages --tail 1`.
 - `user_turn` → done; fetch the reply with `$TWICC session <ID> messages --tail 1`.

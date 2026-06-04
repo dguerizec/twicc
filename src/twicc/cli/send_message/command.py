@@ -42,6 +42,14 @@ def send_message_cmd(
     The session keeps its currently stored agent settings (model, effort,
     permission mode, ...). To change settings, use
     ``twicc update-session <ID> settings`` — or the UI.
+
+    Asynchronous: a "sent" status only means the message was handed to the
+    agent — not that the agent has finished processing it. To block until it
+    reaches a given state, follow up with
+    "twicc process <SESSION_ID> wait <STATE>... --timeout N". To wait for the
+    end of the turn this message triggers, add --transition so it does not
+    match the idle user_turn the session was already in before the message:
+    "wait user_turn --transition --timeout N".
     """
     # Lazy imports to keep --help fast (no Django setup until we need it).
     import os

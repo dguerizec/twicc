@@ -174,6 +174,13 @@ def create_session_cmd(
     flags, the command uses the default provider from settings, falls back
     to the current directory as the project, and lets the defaults from
     settings drive model / effort / permission mode / etc.
+
+    Asynchronous: a "created" status only means the session was started and
+    the prompt handed to the agent — not that the agent has finished, which
+    can take a while. It keeps working in the background. To block until it
+    reaches a given state, follow up with
+    "twicc process <SESSION_ID> wait <STATE>... --timeout N" (e.g. user_turn
+    once the reply is complete).
     """
     # Lazy imports to keep --help fast (no Django setup until we need it).
     import os
