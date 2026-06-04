@@ -596,6 +596,27 @@ class BaseSessionsWatcher:
             await self._after_compaction_synced(session.id)
 
         if new_line_nums:
+            # New JSONL lines were just appended → this session is producing
+            # output even if its agent's SDK message loop has gone quiet (e.g.
+            # a background Bash the CLI keeps draining into the file while the
+            # agent sits in USER_TURN). Reset the idle-timeout countdown so the
+            # timeout monitor (see ``BaseAgentManager._state_based_timeout``)
+            # doesn't auto-kill the agent — and its still-running background
+            # work — mid-flight. A subagent JSONL has no live agent of its own
+            # in the manager, so the activity belongs to its parent (whose
+            # process owns the subagent's work); for a top-level session it's
+            # the session itself — never both. ``touch_agent_activity`` is a
+            # no-op unless a live agent in USER_TURN/ASSISTANT_TURN owns the id,
+            # so this is free for the overwhelmingly common non-live event.
+            # Local import: crosses the providers→agent layer; keeping the
+            # registry's manager stack out of this module's import graph.
+            from twicc.agent.registry import get_agent_manager_registry
+
+            activity_session_id = (
+                parsed.parent_session_id if is_subagent else parsed.session_id
+            )
+            get_agent_manager_registry().touch_agent_activity(activity_session_id)
+
             # Refresh session to get computed values
             session = await refresh_session(session)
 

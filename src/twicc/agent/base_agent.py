@@ -78,6 +78,15 @@ class BaseAgent:
         self.started_at = time.time()
         self.state_changed_at = self.started_at
         self.last_activity = self.started_at
+        # Epoch time the agent last stopped being blocked on a user-facing
+        # pending request — i.e. when the last pending request cleared (0.0
+        # until one ever resolves). The ASSISTANT_TURN timeout policy floors
+        # both its inactivity and absolute baselines on this so the time the
+        # user spent before validating a tool approval / question does not
+        # count against the caps. Stamped in ``_await_pending_request``'s
+        # ``finally`` when ``_pending_requests`` empties; consumed by
+        # ``BaseAgentManager._state_based_timeout``.
+        self.last_pending_resolved_at: float = 0.0
         self.error: str | None = None
         self.kill_reason: str | None = None
 
@@ -377,6 +386,15 @@ class BaseAgent:
             # Drop the entry whether we resolved or were cancelled.
             self._pending_requests.pop(request.request_id, None)
             self._pending_futures.pop(request.request_id, None)
+            # The agent stops being blocked on the user the instant the LAST
+            # pending request clears (parallel approvals resolve independently,
+            # so only the final one marks "work resumes"). Stamp that instant
+            # so the ASSISTANT_TURN timeout baselines can exclude the user-wait
+            # — without it, the activity-blind 6h absolute cap fires on the very
+            # next monitor tick after a long-delayed validation. See
+            # ``BaseAgentManager._state_based_timeout``.
+            if not self._pending_requests:
+                self.last_pending_resolved_at = time.time()
             # If the agent has already transitioned to DEAD (typically because
             # ``interrupt_or_kill`` cancelled this pending future as part of
             # its cleanup), the DEAD state-change callback has already fired

@@ -1119,8 +1119,19 @@ class BaseAgentManager:
                 settings, "PROCESS_TIMEOUT_ASSISTANT_TURN_ABSOLUTE", 6 * 60 * 60,
             )
 
-            inactivity_elapsed = current_time - agent.last_activity
-            absolute_elapsed = current_time - agent.state_changed_at
+            # Floor both baselines on ``last_pending_resolved_at`` so the time
+            # the agent spent blocked on a user-facing pending request is
+            # excluded from both budgets: the caps restart from the moment the
+            # agent actually resumed work, not the turn's start. The
+            # ``pending_requests`` skip above covers the in-progress wait; this
+            # covers the moment right after resolution, where the
+            # activity-blind absolute cap would otherwise fire immediately for
+            # a request validated after a long absence. Auto-resets per turn —
+            # a fresh ASSISTANT_TURN has a newer ``state_changed_at`` than any
+            # stale ``last_pending_resolved_at`` (0.0 until one ever resolves),
+            # so ``max`` reverts to the real turn start.
+            inactivity_elapsed = current_time - max(agent.last_activity, agent.last_pending_resolved_at)
+            absolute_elapsed = current_time - max(agent.state_changed_at, agent.last_pending_resolved_at)
 
             # Absolute takes precedence for the reason.
             if absolute_elapsed > absolute_timeout:
