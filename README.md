@@ -56,7 +56,7 @@ uv tool upgrade twicc
 
 - **Both providers in one UI**, using your existing credentials — nothing extra to set up
 - Live conversation with full tool-use details, real-time streaming of assistant text and thinking
-- Per-session agent control: model (Opus 4.7, Sonnet 4.6, …), context window (200K / 1M), effort, thinking, permissions, with reusable presets
+- Per-session agent control: model (Opus 4.8, Sonnet 4.6, …), context window (200K / 1M), effort, thinking, fast mode, permissions (including Claude Code's classifier-gated "auto" mode), with reusable presets
 - Interactive tool approvals and provider questions, answered directly from the browser
 - **Persistent Claude Code cron jobs**: scheduled tasks survive TwiCC restarts and are auto-renewed before their 7-day expiry — they would otherwise be lost on a Claude Code CLI restart
 - Provider status monitoring (Anthropic and OpenAI status pages) with in-app outage notifications
@@ -93,33 +93,17 @@ uv tool upgrade twicc
 - Scoped session list, search, snippets, and aggregated stats per workspace
 - Workspace-level Files, Git, and Terminal tabs in addition to per-project ones
 
-### Self-aware: the TwiCC plugin
+### Self-aware: agent skills and CLI
 
-TwiCC ships with a Claude Code / Codex plugin (auto-installed) whose skills let agents query TwiCC itself:
+TwiCC exposes a full `twicc` command-line interface — and a Claude Code / Codex plugin (auto-installed) whose skills wrap the same commands, so an agent can drive TwiCC from inside a running session. Either way you can inspect projects, workspaces, and sessions, run a full-text search, check usage and cost, and **create, reply to, update, and control sessions and their live processes** — every list/inspect command outputs JSON for scripting.
 
-- list and inspect **projects** and **workspaces**
-- browse **sessions**, read their messages, list their subagents
-- run a full-text **search** across all session history
-- check current **usage** and cost estimates
-- **spawn new sessions** in any project from within a running session
+See [`SKILLS-AND-CLI.md`](SKILLS-AND-CLI.md) for the full reference, or run `twicc --help`.
 
-Use it when you want an agent to look up its own past work, audit costs, or kick off a sub-task in another project — without leaving the chat.
+### Orchestration
 
-### CLI for scripts
+A session can spawn other sessions, which can spawn their own, forming a tree of cooperating agents. A leader/manager/worker skill family lets one agent split a task into sub-tasks across spawned sessions (optionally hidden from the UI), coordinate them through a shared scratch space, and aggregate the results — without a human in the loop for each step.
 
-Every list / inspect command outputs JSON, so you can compose TwiCC into scripts:
-
-| Command                                       | Purpose                                              |
-|-----------------------------------------------|------------------------------------------------------|
-| `twicc projects` / `twicc project <id>`       | List or inspect projects                             |
-| `twicc sessions` / `twicc session <id>`       | Browse sessions, read messages, list subagents      |
-| `twicc workspaces` / `twicc workspace <id>`   | List or inspect workspaces                           |
-| `twicc search "<query>"`                      | Full-text search across all sessions                 |
-| `twicc usage`                                 | Latest quota snapshot                                |
-| `twicc create-session ...`                    | Spawn a fresh Claude or Codex session with a prompt  |
-| `twicc claude` / `twicc codex`                | Run the Claude or Codex CLI directly                 |
-
-Run `twicc --help` (or `twicc <command> --help`) for full details.
+See [`ORCHESTRATION.md`](ORCHESTRATION.md).
 
 ## How it works
 

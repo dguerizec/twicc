@@ -9,22 +9,37 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Added
 
 - Added support for Claude Opus 4.8, now the latest Opus model (Opus 4.7 remains selectable).
-- Added a fast mode toggle for Claude Code Opus models, for faster responses (billed against extra usage credits).
+- Added support for Claude Code's "auto" permission mode, which runs without per-tool prompts while a classifier reviews and blocks risky actions.
+- Added support for Claude Code Opus fast mode (billed against extra usage credits).
+- Through a system-prompt addendum, agents are now aware of their TwiCC context and of the settings they run under.
+- Lots of new `twicc` CLI commands (and matching skills) to manage sessions, processes, projects, and workspaces.
+- A new orchestrator skills family lets one agent split a task into sub-tasks across spawned sessions, with a shared scratch space.
+- Agents can save images and screenshots outside the project repo, and TwiCC serves them and renders them inline in chat.
+- Clicking an image or a Mermaid diagram in a message now opens a full-screen viewer with pan/zoom and navigation.
+- Added support for Codex's `/compact` command.
 - The sidebar usage panel now shows your remaining Codex extra-usage credits.
+- The workspace edit dialog gained a per-dialog "Show archived" toggle for its project list.
 
 ### Changed
 
+- When you send a message while Claude Code is working, it now quotes your message at the top of its reply so your request stays visible in the transcript.
+- Codex's Approve button now approves "Once" in one click; the chevron still exposes the other approval variants.
 - Sidebar filter now supports exact substring matching: prefix the query with `"` or `'`.
+- Tool-approval and question forms can now be minimized to their header, to read the conversation behind a tall request.
 - Bulk archive now respects the sidebar text filter, with an option to include sessions from archived projects.
+- Ctrl+F now cooperates with embedded code editors.
+- Codex sessions now report their subprocess memory usage, like Claude Code.
 - Bump `claude-agent-sdk` from 0.2.82 to 0.2.88 (bundled Claude Code CLI: 2.1.142 → 2.1.161)
 - Bump vendored Codex Python SDK to rust-v0.136.0 (bundled Codex CLI: 0.131.0a4 → 0.136.0)
 
 ### Fixed
 
-- Sessions started outside the current sidebar scope (other tools, other projects) now reliably appear without needing a page reload.
 - In a non-tmux terminal, the Escape key is now properly forwarded to programs like vim, less, or htop.
-- Commands launched into a freshly-opened terminal tab (login command, snippets opened in a new tab) no longer occasionally fail to run.
+- Session titles were sometimes not saved correctly.
+- Sessions started outside the current sidebar scope now reliably appear without needing a page reload.
 - The context usage ring on Claude Code sessions no longer briefly drops to 0% when resuming a session.
+- Commands launched into a freshly-opened terminal tab (login command, snippets opened in a new tab) no longer occasionally fail to run.
+- Workspace activity heatmaps and graphs now include archived projects.
 
 ## [1.6.1] - 2026-05-20
 
