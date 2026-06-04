@@ -30,6 +30,7 @@ from ..bin import resolve_bundled_binary
 from ..permission_modes import resolve_codex_policy
 from ..sdk_wrappers import TwiccAsyncCodex
 from .agent import CodexAgent
+from .hardcoded_commands import HardcodedCommand, parse_hardcoded_command
 
 logger = logging.getLogger(__name__)
 
@@ -112,7 +113,21 @@ class CodexAgentManager(BaseAgentManager):
         """
         self._warn_about_documents(session_id, documents)
 
+        # Hardcoded slash commands (e.g. ``/compact``) are captured here — the
+        # single convergence point every send path funnels through (WS, CLI
+        # ``send-message`` drop-file, …) — and routed to a direct SDK action
+        # instead of becoming a turn. The Codex CLI gives ``/`` no native
+        # meaning, so this is collision-free; parsing is a cheap pure check
+        # run before the lock.
+        command = parse_hardcoded_command(text)
+
         async with self._lock:
+            if command is not None:
+                await self._dispatch_hardcoded_command(
+                    session_id, project_id, cwd, command, settings,
+                )
+                return
+
             if session_id in self._agents:
                 agent = self._agents[session_id]
 
@@ -193,6 +208,67 @@ class CodexAgentManager(BaseAgentManager):
                 session_id, project_id, cwd, text, resume=True,
                 settings=settings, images=images,
             )
+
+    async def _dispatch_hardcoded_command(
+        self,
+        session_id: str,
+        project_id: str,
+        cwd: str,
+        command: HardcodedCommand,
+        settings: AgentSettings,
+    ) -> None:
+        """Route a captured hardcoded command to its SDK action.
+
+        Must be called while holding ``self._lock``.
+
+        - Live, idle agent (``USER_TURN``): run the command on it directly.
+        - Live but busy (``ASSISTANT_TURN`` / ``STARTING``): refuse — a
+          compaction mid-turn is unsupported. The ``RuntimeError`` surfaces to
+          the caller (the WS handler turns it into an ``error`` frame).
+        - No agent (or ``DEAD``): resume the thread WITHOUT scheduling a turn
+          (``_start_agent`` with empty text + ``command=…``), then run it.
+          Mirrors Claude Code, where ``/compact`` on a cold session wakes it.
+        """
+        logger.info(
+            "Codex hardcoded command /%s for session %s (args=%r)",
+            command.name, session_id, command.args,
+        )
+        agent = self._agents.get(session_id)
+
+        if agent is not None and agent.state != AgentState.DEAD:
+            if agent.state != AgentState.USER_TURN:
+                raise RuntimeError(
+                    f"Cannot run /{command.name} while the session is busy "
+                    f"(state={agent.state.value})",
+                )
+            await agent.run_hardcoded_command(command)
+            return
+
+        # No live agent (or a dead one to replace): wake the thread in resume
+        # mode with no initial turn and let ``agent.start`` run the command
+        # once the (already-resumed) thread is live.
+        if agent is not None:
+            del self._agents[session_id]
+
+        await self._start_agent(
+            session_id, project_id, cwd, "", resume=True,
+            settings=settings, command=command,
+        )
+
+    async def notify_compacted(self, session_id: str) -> None:
+        """Relay a "session compacted" signal from the watcher to a live agent.
+
+        Neutral relay: the watcher detected a ``COMPACT_SUMMARY`` line and
+        tells us, without knowing whether the compaction was manual or
+        automatic. We forward to the agent if one is live; the agent alone
+        decides — via its ``_manual_compaction`` flag — whether to act (end a
+        manual ``/compact``'s ``ASSISTANT_TURN``) or ignore it (an
+        auto-compaction it did not trigger). No live agent → no-op.
+        """
+        agent = self._agents.get(session_id)
+        if agent is None:
+            return
+        await agent.notify_compacted()
 
     async def create_session(
         self,

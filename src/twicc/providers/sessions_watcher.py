@@ -291,6 +291,17 @@ class BaseSessionsWatcher:
         """
         return None
 
+    async def _after_compaction_synced(self, session_id: str) -> None:
+        """Hook fired once per live batch that ingested a COMPACT_SUMMARY line.
+
+        Default implementation is a no-op. Codex overrides this to notify
+        its agent manager that a compaction landed, so a live agent that
+        triggered a manual ``/compact`` can leave its ``ASSISTANT_TURN``.
+        Fires only on the live incremental-sync path (never on the
+        background recompute), so the signal is never replayed.
+        """
+        return None
+
     async def maybe_handle_special_change(
         self,
         path: Path,
@@ -569,10 +580,20 @@ class BaseSessionsWatcher:
             )
 
         old_title = session.title
-        new_line_nums, modified_line_nums, agent_link_updates, tool_result_updates, agent_stopped_updates = await sync_to_async(
+        new_line_nums, modified_line_nums, agent_link_updates, tool_result_updates, agent_stopped_updates, found_compact_summary = await sync_to_async(
             compute.sync_session_items_from_file
         )(session, path)
         title_changed = session.title != old_title
+
+        # Live-only signal: a freshly-ingested COMPACT_SUMMARY line means a
+        # compaction just landed for this session. Hand it to the provider
+        # hook (Codex relays it to the agent manager so a manually-triggered
+        # ``/compact`` can end the agent's ASSISTANT_TURN). This is the live
+        # path exclusively — the background recompute goes through
+        # ``compute_session_metadata``, never here — so the signal can never
+        # be replayed on a metadata recompute.
+        if found_compact_summary:
+            await self._after_compaction_synced(session.id)
 
         if new_line_nums:
             # Refresh session to get computed values

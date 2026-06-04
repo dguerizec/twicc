@@ -101,6 +101,7 @@ const images = computed(() => {
     />
     <WorkingAssistantMessage
         v-else-if="isWorkingAssistantMessage"
+        :label="data.label || null"
         :session-id="sessionId"
     />
     <Reasoning

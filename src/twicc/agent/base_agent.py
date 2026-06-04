@@ -17,6 +17,7 @@ from collections.abc import Callable, Coroutine
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from asgiref.sync import sync_to_async
+from channels.layers import get_channel_layer
 
 from twicc.context_injection import clear_context, reconcile, reset_baseline
 from twicc.core.enums import Provider
@@ -553,6 +554,61 @@ class BaseAgent:
     def _reset_context_baseline(self) -> None:
         """Forget the reconciliation baseline (resume) → next reconcile re-injects all."""
         reset_baseline(self.session_id)
+
+    async def _is_session_hidden(self) -> bool:
+        """Cheap DB lookup of ``Session.hidden`` for this agent's session.
+
+        Used as an early-return guard in the ``process_*`` broadcast emitters
+        (``_broadcast_process_label`` / ``_broadcast_process_tools``) so hidden
+        sessions produce zero per-tool / per-status churn on the frontend.
+        Not cached: the lookup is a tight indexed pk read; the cost is
+        microseconds per broadcast. Provider-agnostic — ``hidden`` is a
+        cross-provider ``Session`` column — so it lives here and every
+        provider's agent inherits it.
+        """
+        from twicc.core.models import Session
+        return bool(
+            await sync_to_async(
+                lambda: Session.objects.filter(pk=self.session_id)
+                .values_list("hidden", flat=True).first()
+            )()
+        )
+
+    # ------------------------------------------------------------------
+    # Live-update broadcasts (WebSocket "updates" group)
+    # ------------------------------------------------------------------
+
+    async def _broadcast_stream_event(self, data: dict[str, Any]) -> None:
+        """Broadcast a live-update event to all connected WebSocket clients.
+
+        Pushes ``data`` through the ``"updates"`` channel group; the
+        consumer's ``broadcast`` handler forwards it verbatim as a WS
+        message. Provider-agnostic — every agent's live-update emitters
+        (streaming blocks, process labels, …) funnel through here, so the
+        WS envelope shape lives in exactly one place.
+        """
+        channel_layer = get_channel_layer()
+        await channel_layer.group_send(
+            "updates",
+            {"type": "broadcast", "data": data},
+        )
+
+    async def _broadcast_process_label(self, label: str) -> None:
+        """Broadcast a transient label override for the process status display.
+
+        Consumed by the frontend ``process_label`` handler: it overrides the
+        working-status line (e.g. ``"compacting"``) until the next
+        ``process_state`` transition recreates the process-state object and
+        drops the override. Gated by :meth:`_is_session_hidden` so hidden
+        sessions emit nothing.
+        """
+        if await self._is_session_hidden():
+            return
+        await self._broadcast_stream_event({
+            "type": "process_label",
+            "session_id": self.session_id,
+            "label": label,
+        })
 
     # ------------------------------------------------------------------
     # Lifecycle (abstract)

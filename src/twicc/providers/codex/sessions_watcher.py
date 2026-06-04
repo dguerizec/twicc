@@ -99,6 +99,21 @@ class CodexSessionsWatcher(BaseSessionsWatcher):
     def get_compute(self) -> BaseSessionCompute:
         return _get_compute()
 
+    async def _after_compaction_synced(self, session_id: str) -> None:
+        # A COMPACT_SUMMARY line just landed in live sync. Tell the Codex
+        # agent manager neutrally ("this session was compacted"). The manager
+        # forwards it to a live agent if there is one; the agent itself
+        # decides — via its own flag — whether it had a manual ``/compact``
+        # in flight (and so should leave ASSISTANT_TURN) or whether this was
+        # an auto-compaction it can ignore. No live manager (e.g. a
+        # compute-only process) → nothing to notify.
+        from .agent.manager import get_codex_agent_manager
+        try:
+            manager = get_codex_agent_manager()
+        except KeyError:
+            return
+        await manager.notify_compacted(session_id)
+
 
 # ---- Singleton accessor ----
 

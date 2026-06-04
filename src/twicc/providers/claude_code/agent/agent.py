@@ -1651,44 +1651,6 @@ class ClaudeCodeAgent(BaseAgent):
                 e,
             )
 
-    async def _broadcast_stream_event(self, data: dict) -> None:
-        """Broadcast a streaming event to all connected WebSocket clients."""
-        channel_layer = get_channel_layer()
-        await channel_layer.group_send(
-            "updates",
-            {"type": "broadcast", "data": data},
-        )
-
-    async def _is_session_hidden(self) -> bool:
-        """Cheap DB lookup of ``Session.hidden`` for this agent's session.
-
-        Used as an early-return guard in the process_* broadcast emitters
-        so hidden sessions produce zero per-tool churn on the frontend.
-        Not cached: the lookup is a tight indexed pk read; the cost is
-        microseconds per broadcast.
-        """
-        from twicc.core.models import Session
-        return bool(
-            await sync_to_async(
-                lambda: Session.objects.filter(pk=self.session_id)
-                .values_list("hidden", flat=True).first()
-            )()
-        )
-
-    async def _broadcast_process_label(self, label: str) -> None:
-        """Broadcast a transient label override for the process status display."""
-        if await self._is_session_hidden():
-            return
-        channel_layer = get_channel_layer()
-        await channel_layer.group_send(
-            "updates",
-            {"type": "broadcast", "data": {
-                "type": "process_label",
-                "session_id": self.session_id,
-                "label": label,
-            }},
-        )
-
     async def _broadcast_process_tools(self) -> None:
         """Broadcast the current list of in-progress tools for the status display."""
         if await self._is_session_hidden():

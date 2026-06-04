@@ -5,6 +5,21 @@ import { SUPPORTED_IMAGE_TYPES } from '../../utils/fileUtils'
 import { CONTEXT_MAX, EFFORT, PERMISSION_MODE } from './constants'
 import { useCodexStore } from './store'
 
+// TwiCC-handled hardcoded commands for Codex, invoked with ``/``. Unlike
+// Claude Code's built-ins (interpreted by the CLI once the raw text reaches
+// it), these are captured and executed entirely on the backend — the Codex
+// CLI gives ``/`` no native meaning. Display-only here: this list feeds the
+// ``/`` autocomplete; the backend owns capture (``agent/hardcoded_commands.py``)
+// and execution (``CodexAgent``). ``$`` stays reserved for skills.
+//
+// ``is_builtin`` is the frontend-only picker sentinel (renders ``(built-in)``);
+// no matching ``Command`` row exists, same as Claude Code. ``compact`` takes
+// no argument on Codex (``argument_hint: null``) — the SDK ``thread_compact``
+// accepts only the thread id.
+const BUILTIN_COMMANDS = [
+    { name: 'compact', plugin_name: null, is_builtin: true, is_global: true, description: 'Compact the conversation context into a summary', argument_hint: null },
+]
+
 // Per-file ceiling for Codex uploads (5 MB). Aligned with the Claude
 // per-image API limit so a draft built up under one provider can be
 // switched to the other without a single attachment becoming invalid
@@ -122,13 +137,21 @@ export class CodexHelpers extends BaseProviderHelpers {
     }
 
     getCommandActivationChars() {
-        // Codex exposes its skill catalogue under the ``$`` prefix; the
-        // matching backend rows land in the ``Command`` table via the
-        // ``commands_task`` skill-list sync. No ``getBuiltInCommands``
-        // override needed — system/admin skills come back from the
-        // backend with ``is_builtin=true`` rather than from a frontend
-        // constant.
-        return ['$']
+        // Two prefixes for Codex: ``/`` for TwiCC's hardcoded commands
+        // (captured + executed on the backend — the Codex CLI has no native
+        // slash vocabulary) surfaced via ``getBuiltInCommands`` below, and
+        // ``$`` for the skill catalogue (rows synced into the ``Command``
+        // table by ``commands_task``; system/admin skills carry
+        // ``is_builtin=true`` from the backend rather than a frontend constant).
+        return ['/', '$']
+    }
+
+    getBuiltInCommands(activationChar) {
+        // ``/`` surfaces TwiCC's hardcoded commands (compact, …); ``$`` is
+        // skills-only (served from the backend ``Command`` table, no frontend
+        // constant). See ``BUILTIN_COMMANDS`` above and the backend
+        // ``agent/hardcoded_commands.py``.
+        return activationChar === '/' ? BUILTIN_COMMANDS : []
     }
 
     buildOptimisticUserMessageContent(text, attachments) {

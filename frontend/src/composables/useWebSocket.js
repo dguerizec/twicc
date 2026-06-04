@@ -891,6 +891,17 @@ export function useWebSocket() {
                 }
                 break
             }
+            case 'manual_compaction_done': {
+                // Codex finished a manually-triggered /compact. No real
+                // user_message JSONL line is ever produced for the command, so
+                // the optimistic "/compact" bubble would otherwise stay stuck —
+                // drop it here. (The "compacting" placeholder itself clears via
+                // the accompanying process_state → USER_TURN.) The agent only
+                // emits this for a compaction it triggered while gating input,
+                // so any pending optimistic message is necessarily the command.
+                store.clearOptimisticMessage(msg.session_id)
+                break
+            }
             case 'process_tools': {
                 // Active-tool list for the WorkingAssistantMessage status line.
                 const ps = store.processStates[msg.session_id]

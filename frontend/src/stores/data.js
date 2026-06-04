@@ -1922,6 +1922,20 @@ export const useDataStore = defineStore('data', {
                     expandedGroups,
                     isCurrentBlockDetailed,
                 )
+                // The working message's visible state (status label + active
+                // tools) lives in _parsedContent, which the stabilizer
+                // (visualItemEqual) skips. Without a top-level field that
+                // changes with it, a label/tools change with nothing else
+                // moving — e.g. a Codex /compact flipping the label to
+                // "compacting" with no new items arriving — would reuse the
+                // cached placeholder and never re-render. This signature
+                // forces re-stabilization when the visible state changes.
+                workingMessage.workingStatusKey = JSON.stringify([
+                    processState?.label || null,
+                    processState?.tools || [],
+                    processState?.lastStartedToolId || null,
+                    lastToolVisible,
+                ])
                 setParsedContent(workingMessage, {
                     type: 'assistant',
                     syntheticKind,
@@ -1972,6 +1986,9 @@ export const useDataStore = defineStore('data', {
                     vi.syntheticKind = startingMessage.syntheticKind
                 } else if (vi.lineNum === SYNTHETIC_ITEM.WORKING_ASSISTANT_MESSAGE.lineNum && workingMessage) {
                     vi.syntheticKind = workingMessage.syntheticKind
+                    // Carry the status signature onto the visual item so the
+                    // stabilizer detects label/tools changes (see above).
+                    vi.workingStatusKey = workingMessage.workingStatusKey
                 } else if (streamingLineNums?.has(vi.lineNum)) {
                     vi.syntheticKind = SYNTHETIC_ITEM.STREAMING_BLOCK.kind
                 }

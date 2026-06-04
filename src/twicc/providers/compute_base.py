@@ -2678,6 +2678,7 @@ class BaseSessionCompute:
         list[AgentLinkUpdate],
         list[ToolResultUpdate],
         list[AgentStoppedUpdate],
+        bool,
     ]:
         """
         Synchronise new lines from ``file_path`` into ``session``.
@@ -2686,7 +2687,15 @@ class BaseSessionCompute:
         line, computes metadata, persists items, links, lifecycle
         timestamps, costs, and returns the broadcast payload tuple
         ``(new_line_nums, modified_line_nums, agent_link_updates,
-        tool_result_updates, agent_stopped_updates)``.
+        tool_result_updates, agent_stopped_updates, found_compact_summary)``.
+
+        ``found_compact_summary`` is ``True`` when this batch ingested at
+        least one ``COMPACT_SUMMARY`` line. It is the live, append-only
+        signal the Codex watcher relays to the agent manager so a live
+        agent knows a compaction just landed (a manually-triggered
+        ``/compact`` ends its ``ASSISTANT_TURN`` on it). Never fires during
+        the background recompute — that path goes through
+        :meth:`compute_session_metadata`, not this method.
 
         Generic algorithm — every parsing or provider-specific decision
         is delegated through hooks (``transform_inline``,
@@ -2698,7 +2707,7 @@ class BaseSessionCompute:
         ``apply_session_title``).
         """
         if not file_path.exists():
-            return [], [], [], [], []
+            return [], [], [], [], [], False
 
         stat = file_path.stat()
         file_mtime = stat.st_mtime
@@ -2707,7 +2716,7 @@ class BaseSessionCompute:
         # Check file size too: mtime has ~1s resolution, so two writes within the same second
         # share the same mtime. Without the size check, the second write would be silently skipped.
         if session.mtime == file_mtime and session.last_offset >= stat.st_size:
-            return [], [], [], [], []
+            return [], [], [], [], [], False
 
         # Read raw bytes, then decode leniently — see
         # read_session_items_from_file in sync_helpers.py for the full
@@ -2733,7 +2742,7 @@ class BaseSessionCompute:
             # Update mtime even if no new content (file may have been touched)
             session.mtime = file_mtime
             session.save(update_fields=["mtime"])
-            return [], [], [], [], []
+            return [], [], [], [], [], False
 
         lines = [line for line in new_content.split("\n") if line.strip()]
 
@@ -2742,7 +2751,7 @@ class BaseSessionCompute:
 
         if not lines:
             session.save(update_fields=["last_offset", "mtime"])
-            return [], [], [], [], []
+            return [], [], [], [], [], False
 
         # Create SessionItem objects for bulk insert
         items_to_create: list[tuple[SessionItem, dict]] = []
@@ -3171,4 +3180,5 @@ class BaseSessionCompute:
             agent_link_updates,
             tool_result_updates,
             agent_stopped_updates,
+            found_compact_summary,
         )

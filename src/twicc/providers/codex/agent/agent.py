@@ -24,8 +24,6 @@ import time
 from pathlib import Path
 from typing import Any, ClassVar
 
-from channels.layers import get_channel_layer
-
 from openai_codex import (
     AsyncTurnHandle,
     ImageInput,
@@ -54,6 +52,7 @@ from .approvals import (
     is_approval_method,
     make_pending_request,
 )
+from .hardcoded_commands import HardcodedCommand
 from .original_files_cache import (
     MAX_FILE_SIZE as _ORIGINAL_FILE_MAX_SIZE,
     cache_original_files,
@@ -69,6 +68,16 @@ logger = logging.getLogger(__name__)
 # formatted message (``"unexpected status 401 Unauthorized: ..."``). Used by
 # ``CodexAgent._is_unauthorized_error`` as the third detection path.
 _AUTH_STATUS_IN_MESSAGE = re.compile(r"\bstatus\s+40[13]\b", re.IGNORECASE)
+
+# Safety net for a manually-triggered ``/compact``: ``thread.compact()`` is
+# fire-and-forget (it returns a start ack, not a completion) and the SDK
+# completion notification is lost outside a turn. The compaction's synthetic
+# ASSISTANT_TURN normally ends when the watcher ingests the ``compacted``
+# JSONL line; if that line never lands (server-side failure), this timeout
+# forces the agent back to USER_TURN so it can't stay stuck "compacting".
+# Generous on purpose: overshooting only drops the label a little early — the
+# compaction, if still running, finishes server-side and its summary appears.
+COMPACTION_SAFETY_TIMEOUT_S = 300
 
 
 def _capture_original_files_for_apply_patch(inner: Any, session_id: str) -> None:
@@ -183,6 +192,14 @@ class CodexAgent(BaseAgent):
         # still ``None`` despite ``state == ASSISTANT_TURN``.
         self._current_turn_ready: asyncio.Event = asyncio.Event()
         self._turn_task: asyncio.Task[None] | None = None
+        # Manual-compaction tracking. ``compact()`` flips the agent into a
+        # synthetic ASSISTANT_TURN and sets this flag; when the ``compacted``
+        # JSONL line lands, the watcher → manager → ``notify_compacted`` path
+        # uses the flag to tell a manual ``/compact`` (act: end the turn) from
+        # an auto-compaction (ignore). ``_compaction_timeout_task`` is the
+        # safety net that ends the turn if that line never arrives.
+        self._manual_compaction: bool = False
+        self._compaction_timeout_task: asyncio.Task[None] | None = None
         # ``reasoning`` items can fan out into several summary parts (each
         # with its own ``summaryIndex``). The SDK fires one
         # ``summaryPartAdded`` per part but a single ``item/completed`` for
@@ -258,6 +275,7 @@ class CodexAgent(BaseAgent):
         resume: bool,
         *,
         images: list[dict] | None = None,
+        command: HardcodedCommand | None = None,
         **kwargs: Any,
     ) -> None:
         """Wire the state-change callback and schedule the first turn.
@@ -266,6 +284,12 @@ class CodexAgent(BaseAgent):
         forwarded by the manager. ``documents`` is intentionally absent —
         Codex has no protocol for them, the manager drops them upstream
         with a warning.
+
+        ``command`` is set only on the "wake a cold session to run a hardcoded
+        command" path (the manager resumes the thread with empty text and
+        ``command=…``): instead of opening a turn, the agent comes up idle
+        and runs the command on the already-resumed thread. See
+        :meth:`run_hardcoded_command`.
         """
         self._state_change_callback = on_state_change
 
@@ -273,6 +297,17 @@ class CodexAgent(BaseAgent):
         # so the SDK's worker threads can resume our coroutines back here
         # via ``asyncio.run_coroutine_threadsafe`` (see ``_sync_approval_handler``).
         self._loop = asyncio.get_running_loop()
+
+        if command is not None:
+            # Woken purely to run a hardcoded command (e.g. ``/compact``) on a
+            # cold session: the thread was already resumed in
+            # ``_create_agent``, so there is no initial turn to schedule. Run
+            # the command — it drives its own state (``compact`` flips to a
+            # synthetic ASSISTANT_TURN and back to USER_TURN on completion).
+            # The agent is still STARTING here; the command's first
+            # ``_set_state`` moves it forward.
+            await self.run_hardcoded_command(command)
+            return
 
         # Flip to ASSISTANT_TURN immediately so the UI gates the input as
         # "working" — the actual turn runs in the background task below.
@@ -502,6 +537,136 @@ class CodexAgent(BaseAgent):
         self.last_activity = time.time()
         await self._notify_state_change()
 
+    # ------------------------------------------------------------------
+    # Hardcoded slash commands (captured by the manager — see
+    # ``hardcoded_commands.py``)
+    # ------------------------------------------------------------------
+
+    async def run_hardcoded_command(self, command: HardcodedCommand) -> None:
+        """Execute a hardcoded slash command captured by the manager.
+
+        Tiny dispatch table — adding a command is a branch here plus its
+        action method. ``parse_hardcoded_command`` only ever yields a name in
+        ``KNOWN_COMMANDS``, so the trailing ``else`` is a defensive guard
+        against parser/dispatch drift, not a user-reachable path.
+        """
+        if command.name == "compact":
+            await self.compact()
+        else:
+            raise RuntimeError(
+                f"No handler for hardcoded command {command.name!r}",
+            )
+
+    async def compact(self) -> None:
+        """Kick off a server-side context compaction on the live thread.
+
+        Fire-and-forget at the SDK layer: ``thread.compact()`` issues the
+        ``thread/compact/start`` RPC and returns an empty start ack — never a
+        completion. So we model the compaction as a synthetic turn: set the
+        ``_manual_compaction`` flag, flip to ``ASSISTANT_TURN`` (the input
+        gates), then fire the RPC. The synthetic turn ends in
+        :meth:`notify_compacted` when the watcher ingests the ``compacted``
+        JSONL line, or in :meth:`_compaction_safety_timeout` if it never lands.
+
+        The ``"compacting"`` status label goes out via the shared
+        ``_broadcast_process_label`` channel (same mechanism as Claude Code),
+        right after the ``ASSISTANT_TURN`` ``process_state``. Order matters:
+        the ``process_state`` is broadcast first (the frontend rebuilds its
+        process-state object on it, which would wipe a label set earlier),
+        then the label overrides on top — and a placeholder already on screen
+        only re-renders the new label thanks to ``workingStatusKey`` (see
+        ``recomputeVisualItems``), since the stabilizer ignores ``_parsedContent``.
+        """
+        logger.info(
+            "Codex /compact: starting manual compaction for session %s", self.session_id,
+        )
+        self._manual_compaction = True
+        self._set_state(AgentState.ASSISTANT_TURN)
+        self.last_activity = time.time()
+        await self._notify_state_change()
+        await self._broadcast_process_label("compacting")
+        try:
+            await self._thread.compact()
+        except Exception as e:
+            # The RPC failed to even start — unwind the synthetic turn through
+            # the same path as a normal completion (back to USER_TURN AND
+            # retire the optimistic /compact bubble), then surface as
+            # RuntimeError so the WS handler turns it into a clean ``error``
+            # frame (its except clause only catches RuntimeError). Never
+            # swallowed. The timeout task isn't armed yet, so there's nothing
+            # to cancel.
+            logger.warning(
+                "Codex compact failed to start for session %s: %s",
+                self.session_id, e,
+            )
+            await self.notify_compacted()
+            raise RuntimeError(f"Compaction failed: {e}") from e
+        # Arm the safety net: end the synthetic turn after a generous delay if
+        # the ``compacted`` line never lands (server-side failure).
+        self._compaction_timeout_task = asyncio.create_task(
+            self._compaction_safety_timeout(),
+            name=f"codex-compact-timeout-{self.session_id}",
+        )
+
+    async def notify_compacted(self) -> None:
+        """End a manual compaction's synthetic turn (called when ``compacted`` lands).
+
+        Routed here from the watcher via the manager. Neutral entry point: it
+        is the agent that knows, via ``_manual_compaction``, whether this
+        ``compacted`` line concludes a ``/compact`` it triggered (→ leave
+        ``ASSISTANT_TURN`` and tell the frontend to drop the optimistic
+        ``/compact`` bubble) or an auto-compaction it never owned (→ no-op).
+        Also a no-op once ``DEAD`` (a tear-down may race the watcher).
+        """
+        if not self._manual_compaction or self.state == AgentState.DEAD:
+            return
+        self._manual_compaction = False
+        self._cancel_compaction_timeout()
+        logger.info(
+            "Codex /compact: compaction finished for session %s — back to USER_TURN",
+            self.session_id,
+        )
+        self._set_state(AgentState.USER_TURN)
+        self.last_activity = time.time()
+        await self._notify_state_change()
+        # Dedicated signal so the frontend retires the optimistic ``/compact``
+        # bubble (no real user_message JSONL line is ever produced for it).
+        await self._broadcast_stream_event({
+            "type": "manual_compaction_done",
+            "session_id": self.session_id,
+        })
+
+    async def _compaction_safety_timeout(self) -> None:
+        """Force-end a manual compaction if its ``compacted`` line never lands.
+
+        See :data:`COMPACTION_SAFETY_TIMEOUT_S`. A clean conclusion via
+        :meth:`notify_compacted` cancels this task; if it fires anyway, the
+        flag is still set and we end the synthetic turn ourselves.
+        """
+        try:
+            await asyncio.sleep(COMPACTION_SAFETY_TIMEOUT_S)
+        except asyncio.CancelledError:
+            return
+        if self._manual_compaction:
+            logger.warning(
+                "Codex /compact: no 'compacted' line after %ds for session %s — "
+                "forcing USER_TURN",
+                COMPACTION_SAFETY_TIMEOUT_S, self.session_id,
+            )
+            await self.notify_compacted()
+
+    def _cancel_compaction_timeout(self) -> None:
+        """Cancel the pending compaction safety-timeout task, if any.
+
+        No-op if the canceller is the timeout task itself (it just fired and
+        is calling back into ``notify_compacted``) — cancelling our own task
+        mid-run would raise ``CancelledError`` into this very coroutine.
+        """
+        task = self._compaction_timeout_task
+        self._compaction_timeout_task = None
+        if task is not None and task is not asyncio.current_task():
+            task.cancel()
+
     async def interrupt_or_kill(self, reason: str) -> None:
         """Stop the agent. Tries a clean ``turn/interrupt`` first, then closes.
 
@@ -511,6 +676,11 @@ class CodexAgent(BaseAgent):
             return
 
         self.kill_reason = reason
+
+        # A manual /compact may be mid-flight — drop its safety-timeout task
+        # and flag so a late firing can't touch a dying agent.
+        self._manual_compaction = False
+        self._cancel_compaction_timeout()
 
         # Cancel any in-flight approval BEFORE closing the transport.
         # Cascade per pending approval:
@@ -1227,17 +1397,4 @@ class CodexAgent(BaseAgent):
             "Codex decision recorded: session=%s itemId=%s "
             "outcome=%s (no marking)",
             self.session_id, item_id, decision,
-        )
-
-    async def _broadcast_stream_event(self, data: dict[str, Any]) -> None:
-        """Broadcast a streaming event to all connected WebSocket clients.
-
-        Mirror of ``ClaudeCodeAgent._broadcast_stream_event``: pushes through
-        the ``"updates"`` channel group; the consumer's ``broadcast`` handler
-        forwards ``data`` verbatim as a WS message.
-        """
-        channel_layer = get_channel_layer()
-        await channel_layer.group_send(
-            "updates",
-            {"type": "broadcast", "data": data},
         )
