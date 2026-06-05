@@ -955,6 +955,21 @@ function onChangelogClose() {
                             size="small"
                         >Enabled</wa-switch>
                     </div>
+                    <div class="setting-group">
+                        <label class="setting-group-label">Time display</label>
+                        <wa-select
+                            :value.prop="sessionTimeFormat"
+                            @change="onSessionTimeFormatChange"
+                            size="small"
+                            class="session-time-format-select"
+                        >
+                            <wa-option
+                                v-for="option in sessionTimeFormatOptions"
+                                :key="option.value"
+                                :value="option.value"
+                            >{{ option.label }}</wa-option>
+                        </wa-select>
+                    </div>
                 </section>
 
                 <!-- Providers section -->
@@ -1073,21 +1088,6 @@ function onChangelogClose() {
                             size="small"
                         >Side by side</wa-switch>
                         <span class="setting-group-hint">Inactive if the screen is too narrow.</span>
-                    </div>
-                    <div class="setting-group">
-                        <label class="setting-group-label">Time display</label>
-                        <wa-select
-                            :value.prop="sessionTimeFormat"
-                            @change="onSessionTimeFormatChange"
-                            size="small"
-                            class="session-time-format-select"
-                        >
-                            <wa-option
-                                v-for="option in sessionTimeFormatOptions"
-                                :key="option.value"
-                                :value="option.value"
-                            >{{ option.label }}</wa-option>
-                        </wa-select>
                     </div>
                     <div class="setting-group">
                         <label class="setting-group-label">Message timestamps</label>
