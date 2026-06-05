@@ -14,6 +14,7 @@ import CostDisplay from '../ui/CostDisplay.vue'
 import AppTooltip from '../ui/AppTooltip.vue'
 import JsonHumanView from '../json/JsonHumanView.vue'
 import AgentSettingsSummaryView from '../message/AgentSettingsSummaryView.vue'
+import ProjectBadge from '../project/ProjectBadge.vue'
 import { getProviderHelpers, getProviderStore } from '../../providers'
 import { formatDate, formatDuration } from '../../utils/date'
 import { useSettingsStore } from '../../stores/settings'
@@ -60,6 +61,12 @@ const sessionRoute = computed(() => ({
     name: 'session',
     params: { projectId: nodeData.value?.session?.project_id, sessionId: props.node.id },
 }))
+
+// Project the node's session was launched in. Rendered through the shared
+// ProjectBadge (color dot + name); ``use-directory-for-unnamed`` shows the full
+// directory path for projects that have no user-given name, instead of just the
+// folder basename.
+const projectId = computed(() => nodeData.value?.session?.project_id ?? null)
 
 const title = computed(() => {
     const t = nodeData.value?.session?.title
@@ -255,6 +262,9 @@ const expanded = ref(true)
                 </div>
                 <div class="onode-summary">
                     <AgentSettingsSummaryView :provider="provider" :parts="summaryParts" :mark-forced="false" />
+                </div>
+                <div v-if="projectId" class="onode-project">
+                    <ProjectBadge :project-id="projectId" :use-directory-for-unnamed="true" />
                 </div>
                 <div v-if="createdLabel" class="onode-dates">
                     Created {{ createdLabel }}<template v-if="finishedLabel"> · Finished {{ finishedLabel }}</template><template v-if="durationLabel"> · <wa-icon auto-width name="clock" variant="regular"></wa-icon> {{ durationLabel }}</template><template v-if="turnsLabel"> · <wa-icon auto-width name="comment" variant="regular"></wa-icon> {{ turnsLabel }}</template><template v-if="contextUsagePercentage != null"><wa-progress-ring
@@ -499,6 +509,12 @@ const expanded = ref(true)
     font-size: var(--wa-font-size-s);
     color: var(--wa-color-text-quiet);
     font-style: italic;
+}
+
+.onode-project {
+    margin-top: var(--wa-space-3xs);
+    font-size: var(--wa-font-size-s);
+    color: var(--wa-color-text-quiet);
 }
 
 .onode-dates {
