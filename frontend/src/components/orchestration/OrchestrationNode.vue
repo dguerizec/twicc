@@ -11,6 +11,7 @@
 // get a crossed-out eye and no link. Self-references for recursion via filename.
 import { computed, ref } from 'vue'
 import CostDisplay from '../ui/CostDisplay.vue'
+import AppTooltip from '../ui/AppTooltip.vue'
 import JsonHumanView from '../json/JsonHumanView.vue'
 import AgentSettingsSummaryView from '../message/AgentSettingsSummaryView.vue'
 import { getProviderHelpers, getProviderStore } from '../../providers'
@@ -140,6 +141,60 @@ const durationLabel = computed(() => {
     return sec > 0 ? formatDuration(sec) : null
 })
 
+// Number of message turns (user messages). Backed by Session.n, which defaults
+// to 0; same field/icon the SessionHeader uses for its turns count. Rendered
+// only when > 0 (a session that hasn't produced a turn yet shows nothing).
+const turnsLabel = computed(() => nodeData.value?.session?.user_message_count ?? null)
+
+// Context window usage ring — same data and rules as the SessionHeader. The
+// provider helper reads only fields present in the topology payload
+// (context_max, selected_model, context_usage) plus provider-store defaults,
+// so it resolves the effective window from the serialized session alone,
+// without the row being loaded in the data store.
+const providerHelpers = computed(() => (provider.value ? getProviderHelpers(provider.value) : null))
+
+const contextMax = computed(() => {
+    const s = nodeData.value?.session
+    const helpers = providerHelpers.value
+    if (!s || !helpers) return null
+    return helpers.getEffectiveContextMax(s)
+})
+
+const contextUsagePercentage = computed(() => {
+    const usage = nodeData.value?.session?.context_usage
+    const max = contextMax.value
+    if (usage == null || !max) return null
+    return Math.round((usage / max) * 100)
+})
+
+// Tooltip text — resolve the choice label through the session's own provider
+// helpers (so Codex etc. render their own context_max catalogue), falling back
+// to a rounded "XK" label.
+const contextUsageTooltip = computed(() => {
+    const max = contextMax.value
+    if (max == null) return null
+    const helpers = providerHelpers.value
+    const label = helpers?.getChoiceLabel('context_max', max) || `${Math.round(max / 1000)}K`
+    return `Context window usage (${label} max)`
+})
+
+// Indicator color by threshold, mirroring the header.
+const contextUsageColor = computed(() => {
+    const pct = contextUsagePercentage.value
+    if (pct == null) return null
+    if (pct > 70) return 'var(--wa-color-danger)'
+    if (pct > 50) return 'var(--wa-color-warning)'
+    return 'var(--wa-color-primary)'
+})
+
+// Indicator width multiplier (1x at 0%, up to 1.5x at 80%+), mirroring the header.
+const contextUsageIndicatorWidth = computed(() => {
+    const pct = contextUsagePercentage.value
+    if (pct == null) return null
+    const multiplier = Math.min(1 + (pct / 80), 1.5)
+    return `calc(var(--track-width) * ${multiplier.toFixed(2)})`
+})
+
 // Expand/collapse this node's children (default expanded).
 const expanded = ref(true)
 </script>
@@ -202,7 +257,15 @@ const expanded = ref(true)
                     <AgentSettingsSummaryView :provider="provider" :parts="summaryParts" :mark-forced="false" />
                 </div>
                 <div v-if="createdLabel" class="onode-dates">
-                    Created {{ createdLabel }}<template v-if="finishedLabel"> · Finished {{ finishedLabel }}</template><template v-if="durationLabel"> · {{ durationLabel }}</template>
+                    Created {{ createdLabel }}<template v-if="finishedLabel"> · Finished {{ finishedLabel }}</template><template v-if="durationLabel"> · <wa-icon auto-width name="clock" variant="regular"></wa-icon> {{ durationLabel }}</template><template v-if="turnsLabel"> · <wa-icon auto-width name="comment" variant="regular"></wa-icon> {{ turnsLabel }}</template><template v-if="contextUsagePercentage != null"><wa-progress-ring
+                        :id="`orch-context-${node.id}`"
+                        class="onode-context-ring"
+                        :value="Math.min(contextUsagePercentage, 100)"
+                        :style="{
+                            '--indicator-color': contextUsageColor,
+                            '--indicator-width': contextUsageIndicatorWidth,
+                        }"
+                    ><span class="wa-font-weight-bold">{{ contextUsagePercentage }}%</span></wa-progress-ring><AppTooltip :for="`orch-context-${node.id}`">{{ contextUsageTooltip }}</AppTooltip></template>
                 </div>
                 <div v-if="hasAnnotations" class="onode-annotations">
                     <JsonHumanView :value="annotations" />
@@ -442,6 +505,25 @@ const expanded = ref(true)
     margin-top: var(--wa-space-3xs);
     font-size: var(--wa-font-size-s);
     color: var(--wa-color-text-quiet);
+}
+
+/* Inline icons (clock before the duration, comment before the turns count) sit
+   a touch low against the text baseline by default — nudge them onto it. */
+.onode-dates wa-icon {
+    vertical-align: -0.1em;
+}
+
+/* Context window usage ring — same sizing/colors as the SessionHeader ring.
+   Centered against the line; the inner % uses normal text color so it stays
+   legible over the quiet dates line. */
+.onode-context-ring {
+    --size: 2rem;
+    --track-width: 3px;
+    font-size: var(--wa-font-size-2xs);
+    vertical-align: middle;
+    color: var(--wa-color-text-normal);
+    translate: 0px -0.2em;
+    margin-left: 1em;
 }
 
 .onode-annotations {
