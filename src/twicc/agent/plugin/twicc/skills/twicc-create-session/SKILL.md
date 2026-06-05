@@ -33,7 +33,7 @@ $TWICC create-session [OPTIONS] '<PROMPT>'
 
 ### Arguments
 
-- `PROMPT` — the first user message. Inline text or a path to a UTF-8 file. For available slash/dollar commands, use `$TWICC info commands` (skill: `twicc-info`).
+- `PROMPT` — the first user message. Inline text or a path to a UTF-8 file. For available slash/dollar commands, use `$TWICC info commands` (skill: `twicc-info`). Over `--remote` the file is read locally; prefix an absolute path with `remote:` to read it on the remote server instead.
 
 ### Options
 
@@ -83,7 +83,7 @@ By default (Claude Code), questions from the agent surface as an interactive UI 
 
 ### Attachments
 
-- `--attach PATH` (repeatable). Accepted types (sniffed by magic bytes): Claude Code: PNG, JPEG, GIF, WebP, PDF, text/plain; Codex: images only. Per-file cap: 5 MB. Per-batch cap: 100 files, 32 MB. Images are auto-resized to the provider/model's long-edge cap.
+- `--attach PATH` (repeatable). Accepted types (sniffed by magic bytes): Claude Code: PNG, JPEG, GIF, WebP, PDF, text/plain; Codex: images only. Per-file cap: 5 MB. Per-batch cap: 100 files, 32 MB. Images are auto-resized to the provider/model's long-edge cap. Over `--remote`, prefix an absolute path with `remote:` to read it on the remote server instead.
 
 ## Errors
 

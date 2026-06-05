@@ -42,7 +42,11 @@ def send_messages_cmd(
     message: str = typer.Option(
         ...,
         "--message",
-        help="Message text, or path to a file whose content is the message.",
+        help=(
+            "Message text, or path to a file whose content is the message. Over "
+            "--remote the file is read locally; prefix an absolute path with "
+            "'remote:' to read it on the remote server instead."
+        ),
     ),
     attach: list[str] = typer.Option(
         [],
@@ -54,7 +58,8 @@ def send_messages_cmd(
             "per session against its provider — a file its provider rejects "
             "yields a per-id validation_error. Each value is a local file path "
             "OR a base64 data URI (data:<mime>;base64,<data>) for remote/API "
-            "callers without a shared filesystem."
+            "callers without a shared filesystem. Over --remote, prefix an "
+            "absolute path with 'remote:' to read it on the remote server instead."
         ),
     ),
     spawned_by: str = typer.Option(

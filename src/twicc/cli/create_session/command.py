@@ -23,7 +23,11 @@ _HELP_CTX = load_help_context()
 def create_session_cmd(
     prompt: str = typer.Argument(
         ...,
-        help="Prompt text, or path to a file whose content is the prompt.",
+        help=(
+            "Prompt text, or path to a file whose content is the prompt. Over "
+            "--remote the file is read locally; prefix an absolute path with "
+            "'remote:' to read it on the remote server instead."
+        ),
     ),
     project: str | None = typer.Option(
         None,
@@ -145,7 +149,9 @@ def create_session_cmd(
             "images only. Max 100 files, 32 MB total. "
             "Each value is either a local file path OR a base64 data URI "
             "(data:<mime>;base64,<data>) — the data-URI form lets remote/API "
-            "callers attach files without a shared filesystem."
+            "callers attach files without a shared filesystem. Over --remote, "
+            "prefix an absolute path with 'remote:' to read it on the remote "
+            "server instead."
         ),
     ),
     annotation: list[str] = typer.Option(

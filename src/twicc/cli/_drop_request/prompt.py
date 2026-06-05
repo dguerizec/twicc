@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 
 from twicc.cli._output import in_api_mode
+from twicc.cli._drop_request.remote_scheme import has_remote_scheme
 
 
 class PromptError(Exception):
@@ -16,6 +17,10 @@ class PromptError(Exception):
 
 
 def resolve_prompt(prompt_arg: str) -> str:
+    if has_remote_scheme(prompt_arg):
+        # `remote:` only has meaning over --remote, where the forwarder strips it
+        # before the server ever runs this. Reaching it here means a local run.
+        raise PromptError("remote: paths are only valid with --remote")
     if os.path.isfile(prompt_arg) and (not in_api_mode() or os.path.isabs(prompt_arg)):
         try:
             with open(prompt_arg, "r", encoding="utf-8") as f:

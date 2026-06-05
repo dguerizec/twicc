@@ -40,6 +40,7 @@ import orjson
 
 from twicc.cli._drop_request.attachments import _sniff_mime
 from twicc.cli._drop_request.prompt import PromptError, resolve_prompt
+from twicc.cli._drop_request.remote_scheme import has_remote_scheme, remote_scheme_path
 from twicc.cli._local_only import LOCAL_ONLY_COMMANDS
 from twicc.rpc.generator import CommandSpec, build_registry
 from twicc.rpc.invoker import get_command
@@ -283,22 +284,48 @@ def _attach_option_strings(resolved: Resolved) -> list[str] | None:
     return None
 
 
+def _resolve_remote_path(value: str) -> str | None:
+    """Return the bare absolute path of a ``remote:`` value, or None if not one.
+
+    A ``remote:`` value is forwarded as its bare path so the server reads it from
+    its own filesystem (instead of the client inlining the local file). The path
+    must be absolute — the server has no caller working directory to resolve a
+    relative one against.
+
+    Raises :class:`RemoteUsageError` if the path is not absolute (a client-side
+    error — no HTTP is attempted).
+    """
+    if not has_remote_scheme(value):
+        return None
+    path = remote_scheme_path(value)
+    if not path.startswith("/"):
+        raise RemoteUsageError(
+            f"remote: requires an absolute path (e.g. remote:/abs/path), got {value!r}"
+        )
+    return path
+
+
 def _inline_one(value: str) -> str:
-    """Rewrite a single attach value to a ``data:`` URI (pass-through if already one).
+    """Rewrite a single attach value for forwarding.
 
-    A value already in ``data:`` form is returned unchanged. Otherwise the value
-    is treated as a local file path (relative paths are read against the client's
-    cwd): its bytes are read, the MIME is sniffed (falling back to
-    ``application/octet-stream`` when the sniffer can't recognize the bytes —
-    same fallback the server uses for an unknown declared media type), and the
-    payload is base64-encoded into ``data:<mime>;base64,<payload>``. The declared
-    MIME is only a label; the server re-sniffs from the decoded bytes.
+    A value already in ``data:`` form is returned unchanged, and a ``remote:``
+    value is reduced to its bare absolute path so the *server* reads it (see
+    :func:`_resolve_remote_path`). Otherwise the value is a local file path
+    (relative paths are read against the client's cwd): its bytes are read, the
+    MIME is sniffed (falling back to ``application/octet-stream`` when the sniffer
+    can't recognize the bytes — same fallback the server uses for an unknown
+    declared media type), and the payload is base64-encoded into
+    ``data:<mime>;base64,<payload>``. The declared MIME is only a label; the
+    server re-sniffs from the decoded bytes.
 
-    Raises :class:`RemoteUsageError` if the file is missing or unreadable
-    (a client-side error — no HTTP is attempted).
+    Raises :class:`RemoteUsageError` if a ``remote:`` path is not absolute, or a
+    local file is missing or unreadable (a client-side error — no HTTP attempted).
     """
     if value.startswith("data:"):
         return value
+    remote_path = _resolve_remote_path(value)
+    if remote_path is not None:
+        return remote_path
     try:
         with open(value, "rb") as f:
             data = f.read()
@@ -387,24 +414,26 @@ def inline_attachments(argv: list[str], resolved: Resolved) -> list[str]:
 _PROMPT_PARAM_NAMES: frozenset[str] = frozenset({"prompt", "message"})
 
 
-def _resolve_prompt_file(value: str) -> str | None:
-    """Read ``value`` as a local file and return its text, or ``None`` if not a file.
+def _inline_prompt_value(value: str) -> str | None:
+    """Return the forwarded form of a prompt/message value, or None to leave it as-is.
 
-    Over ``--remote`` the server only sees the forwarded argv and cannot read
-    the client's filesystem — so a prompt/message given as a *local* file path
-    must be read here and forwarded as text, mirroring how
-    :func:`inline_attachments` reads ``--attach`` files client-side.
+    Over ``--remote`` the server only sees the forwarded argv and cannot read the
+    client's filesystem, so a file-borne prompt/message is resolved here:
 
-    Resolution is intentionally identical to a *local* :func:`resolve_prompt`
-    run (the client is never in API mode): both absolute and cwd-relative paths
-    that exist are read. A value that is not an existing file returns ``None``
-    and is forwarded untouched — the server then treats it as literal text (or,
-    for an absolute path that happens to exist on the *server*, resolves it
-    there, exactly as before this inlining existed).
+    - ``remote:<abs path>`` → its bare absolute path, so the *server* reads it
+      (see :func:`_resolve_remote_path`).
+    - an existing local file → its UTF-8 text, read client-side (identical to a
+      local :func:`resolve_prompt` run — absolute or cwd-relative paths resolve).
+    - anything else (inline text, or an absolute path that exists only on the
+      server) → ``None``, forwarded unchanged for the server to handle as before.
 
-    Raises :class:`RemoteUsageError` for an unreadable / non-UTF-8 / empty file
-    (a client-side error — no HTTP is attempted), matching the attachment path.
+    Raises :class:`RemoteUsageError` if a ``remote:`` path is not absolute, or a
+    local prompt file is unreadable / non-UTF-8 / empty (a client-side error —
+    no HTTP is attempted).
     """
+    remote_path = _resolve_remote_path(value)
+    if remote_path is not None:
+        return remote_path
     if not os.path.isfile(value):
         return None
     try:
@@ -414,9 +443,9 @@ def _resolve_prompt_file(value: str) -> str | None:
 
 
 def _inline_message_value(value: str) -> str:
-    """Transform for an option-borne message: a local file → its text, else as-is."""
-    text = _resolve_prompt_file(value)
-    return value if text is None else text
+    """Transform for an option-borne message: file/remote → resolved, else as-is."""
+    new = _inline_prompt_value(value)
+    return value if new is None else new
 
 
 def _positional_token_indices(
@@ -457,15 +486,16 @@ def _positional_token_indices(
 def _inline_positional_prompt(
     argv: list[str], resolved: Resolved, prompt_param: ParamSpec
 ) -> list[str]:
-    """Rewrite a positional ``prompt`` token (a local file path) to the file's text.
+    """Rewrite a positional ``prompt`` token (a local file or ``remote:`` path).
 
     The prompt's ordinal among *all* positionals (every level's token + every
     ancestor level's arguments precede the leaf arguments, in argv order) is
     derived from the resolved spec, then mapped to a concrete argv index by
     walking the tokens. The rewrite is applied only when the located token still
     equals the value Click bound to the prompt param (a defensive guard against
-    any walk/parse disagreement) and that token names an existing local file.
-    A variadic/multiple positional at or before the prompt makes the
+    any walk/parse disagreement) and :func:`_inline_prompt_value` resolves it
+    (a local file → its text, or ``remote:`` → its bare server path). A
+    variadic/multiple positional at or before the prompt makes the
     token→positional mapping ambiguous, so such a command is left untouched.
     """
     chain = resolved.spec.chain
@@ -501,7 +531,7 @@ def _inline_positional_prompt(
     if argv[idx] != resolved.params.get(prompt_param.name):
         return list(argv)
 
-    text = _resolve_prompt_file(argv[idx])
+    text = _inline_prompt_value(argv[idx])
     if text is None:
         return list(argv)
     out = list(argv)
@@ -515,14 +545,16 @@ def inline_prompt(argv: list[str], resolved: Resolved) -> list[str]:
     The symmetric counterpart to :func:`inline_attachments` for the message
     body: over ``--remote`` the server cannot read the client's filesystem, so a
     prompt/message given as a *local* file path is read here and forwarded as
-    text. ``create-session`` / ``send-message`` carry it as the positional
-    ``prompt`` argument; ``send-messages`` as the ``--message`` option — both are
-    handled. A value that is not an existing local file (inline text, or a path
+    text, while a ``remote:<abs path>`` value is reduced to its bare path so the
+    server reads it. ``create-session`` / ``send-message`` carry it as the
+    positional ``prompt`` argument; ``send-messages`` as the ``--message``
+    option — both are handled. A value that is neither (inline text, or a path
     meant to resolve on the server) is forwarded unchanged, and a command with
     no prompt param returns ``argv`` unchanged.
 
-    Raises :class:`RemoteUsageError` if a prompt file exists but is unreadable /
-    non-UTF-8 / empty (a client-side error — no HTTP is attempted).
+    Raises :class:`RemoteUsageError` if a ``remote:`` path is not absolute, or a
+    prompt file exists but is unreadable / non-UTF-8 / empty (a client-side error
+    — no HTTP is attempted).
     """
     leaf_args = resolved.spec.chain[-1].arguments if resolved.spec.chain else []
     pos_param = next((a for a in leaf_args if a.name in _PROMPT_PARAM_NAMES), None)

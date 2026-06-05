@@ -37,8 +37,8 @@ $TWICC send-messages [SESSION_ID...] --message <TEXT> [--attach PATH...] [--spaw
 Selection is identical to `update-sessions` (skill: `twicc-update-sessions`): a positional `SESSION_ID...` list merged (union, explicit first) with the scope filters. `self` means the current session.
 
 - `SESSION_ID...` — recipients; optional if a filiation scope is given.
-- `--message TEXT` — **required**. Message text, or a path to a UTF-8 file whose content is the message. Same text for every recipient.
-- `--attach PATH` (repeatable) — attach a file to every message. **Validated per session against its provider** (Claude Code: PNG/JPEG/GIF/WebP/PDF/text up to 5 MB; Codex: images only), so a file one provider rejects yields a per-id `validation_error` while the others still receive it. Local path or a `data:<mime>;base64,...` URI for remote/API callers.
+- `--message TEXT` — **required**. Message text, or a path to a UTF-8 file whose content is the message. Same text for every recipient. Over `--remote` the file is read locally; prefix an absolute path with `remote:` to read it on the remote server instead.
+- `--attach PATH` (repeatable) — attach a file to every message. **Validated per session against its provider** (Claude Code: PNG/JPEG/GIF/WebP/PDF/text up to 5 MB; Codex: images only), so a file one provider rejects yields a per-id `validation_error` while the others still receive it. Local path or a `data:<mime>;base64,...` URI for remote/API callers. Over `--remote`, prefix an absolute path with `remote:` to read it on the remote server instead.
 - `--spawned-by <ID|self>` / `--descendants <ID|self>` — also target children / proper descendants. `parent` is **not** supported (use `send-message parent`). Mutually exclusive.
 - `--annotation KEY[OP]VALUE` — narrow the filiation scope by annotation; repeatable, AND-combined; requires a filiation scope; does not filter explicit ids. Same syntax as `twicc sessions --annotation` (skill: `twicc-sessions`).
 - `--timeout SECONDS` — wall-clock budget for the whole batch (default 30; drops run in parallel server-side).

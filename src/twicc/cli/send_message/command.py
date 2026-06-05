@@ -16,7 +16,11 @@ def send_message_cmd(
     ),
     prompt: str = typer.Argument(
         ...,
-        help="Message text, or path to a file whose content is the message.",
+        help=(
+            "Message text, or path to a file whose content is the message. Over "
+            "--remote the file is read locally; prefix an absolute path with "
+            "'remote:' to read it on the remote server instead."
+        ),
     ),
     attach: list[str] = typer.Option(
         [],
@@ -27,7 +31,9 @@ def send_message_cmd(
             "images only. Max 100 files, 32 MB total. "
             "Each value is either a local file path OR a base64 data URI "
             "(data:<mime>;base64,<data>) — the data-URI form lets remote/API "
-            "callers attach files without a shared filesystem."
+            "callers attach files without a shared filesystem. Over --remote, "
+            "prefix an absolute path with 'remote:' to read it on the remote "
+            "server instead."
         ),
     ),
     timeout: int = typer.Option(

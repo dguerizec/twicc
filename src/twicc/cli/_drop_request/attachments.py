@@ -14,6 +14,7 @@ import io
 import os
 from typing import NamedTuple
 
+from twicc.cli._drop_request.remote_scheme import has_remote_scheme
 from twicc.cli._output import in_api_mode
 
 
@@ -208,6 +209,14 @@ def _resolve_spec(spec: str, max_per_file: int) -> tuple[str, bytes] | Attachmen
         if len(data) > max_per_file:
             return _size_error(label, len(data), max_per_file)
         return label, data
+
+    if has_remote_scheme(spec):
+        # `remote:` only has meaning over --remote, where the forwarder strips it
+        # before the server ever runs this. Reaching it here means a local run.
+        return AttachmentError(
+            spec, "remote_requires_remote",
+            "remote: paths are only valid with --remote",
+        )
 
     label = spec
     if in_api_mode() and not os.path.isabs(spec):
