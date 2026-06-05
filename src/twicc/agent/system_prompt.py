@@ -71,6 +71,10 @@ the data.
   read of any value from the "Context" block below.
 - Many TwiCC commands accept `self` for your own session and `parent` for the
   session that spawned you, when applicable. Prefer those keywords over raw IDs.
+- Whenever you use a session id — as a skill argument, as the
+  `{session_id}` segment of an artifacts or scratch path, when you need to
+  communicate it, or for any other reason — always use it in full. Never
+  truncate, abbreviate, or shorten it.
 
 ## Persisting user preferences
 
