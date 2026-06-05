@@ -6,8 +6,8 @@ HTTP API. It is the inverse of the server's generator: it reuses the very same
 command→URL on the server maps argv→URL on the client.
 
 This file implements the **pre-flight** half (path resolution + local
-rejections), **attachment inlining**, and the **network** half — the HTTP
-call to ``/rpc/`` and the envelope→exit mapping (:func:`forward`). The
+rejections), **attachment / prompt inlining**, and the **network** half — the
+HTTP call to ``/rpc/`` and the envelope→exit mapping (:func:`forward`). The
 entry-point wiring (intercepting ``--remote`` before Typer) lands in a later
 task (R5). The public surface is intentionally small:
 
@@ -19,6 +19,8 @@ task (R5). The public surface is intentionally small:
   the *local* session and have no meaning on a remote;
 - :func:`inline_attachments` — rewrite each ``--attach <local path>`` into a
   ``data:`` URI so the server can decode it without a shared filesystem;
+- :func:`inline_prompt` — read a file-path prompt / ``--message`` into its text
+  client-side (the symmetric counterpart of :func:`inline_attachments`);
 - :func:`forward` — resolve, pre-flight, POST to ``<base>/rpc/<path>`` and map
   the ``{exit_code, result, error}`` envelope to local stdout/stderr/exit;
 - :data:`HOST_BOUND_PARAMS` — the audited set of param names that accept the
@@ -37,9 +39,11 @@ import httpx
 import orjson
 
 from twicc.cli._drop_request.attachments import _sniff_mime
+from twicc.cli._drop_request.prompt import PromptError, resolve_prompt
 from twicc.cli._local_only import LOCAL_ONLY_COMMANDS
 from twicc.rpc.generator import CommandSpec, build_registry
 from twicc.rpc.invoker import get_command
+from twicc.rpc.schema import ParamSpec
 
 
 class RemoteUsageError(Exception):
@@ -305,26 +309,21 @@ def _inline_one(value: str) -> str:
     return f"data:{mime};base64,{payload}"
 
 
-def inline_attachments(argv: list[str], resolved: Resolved) -> list[str]:
-    """Return a copy of ``argv`` with each ``--attach <local path>`` inlined.
+def _rewrite_option_values(
+    argv: list[str], option_strings: list[str], transform
+) -> list[str]:
+    """Return a copy of ``argv`` with each ``<option> VALUE`` value transformed.
 
-    Over ``--remote``, the server only sees the forwarded argv — it has no
-    access to the client's filesystem. So every ``--attach`` value that names a
-    *local* file is rewritten to a ``data:<mime>;base64,<payload>`` URI that the
-    server decodes unchanged (it re-sniffs the MIME, so the label is advisory).
-
-    Both token forms are handled: ``--attach VALUE`` (two tokens) and
-    ``--attach=VALUE`` (one token). A value already in ``data:`` form is left as
-    is. Commands without an attach option return ``argv`` unchanged.
-
-    No size pre-check is done here: an oversized payload fails later at the HTTP
-    layer and surfaces as a remote error. The original ``argv`` is never mutated
-    — a fresh list is returned, preserving every other token and the order.
-
-    Raises :class:`RemoteUsageError` if an ``--attach`` file is missing or
-    unreadable (a client-side error — no HTTP is attempted).
+    Shared machinery for the option-borne inliners (``--attach`` files,
+    ``--message`` prompts). ``transform`` maps an option's raw value to its
+    replacement (it is responsible for leaving values it does not handle
+    unchanged). Both token forms are handled: ``<option> VALUE`` (two tokens)
+    and ``<option>=VALUE`` (one token). A dangling option with no value (last
+    token) is left untouched — Click would reject it anyway; the forwarder never
+    invents a value. The original ``argv`` is never mutated — a fresh list is
+    returned, preserving every other token and the order. With no option
+    strings, ``argv`` is returned unchanged.
     """
-    option_strings = _attach_option_strings(resolved)
     if not option_strings:
         return list(argv)
 
@@ -336,28 +335,206 @@ def inline_attachments(argv: list[str], resolved: Resolved) -> list[str]:
     while i < n:
         token = argv[i]
         if token in option_strings:
-            # Two-token form: "--attach" "VALUE". Keep the option token, then
-            # rewrite the next token (the value). A dangling option with no
-            # value (last token) is left untouched — Click would reject it
-            # anyway; the forwarder does not invent a value.
+            # Two-token form: "<option>" "VALUE". Keep the option token, then
+            # transform the next token (the value).
             out.append(token)
             if i + 1 < n:
-                out.append(_inline_one(argv[i + 1]))
+                out.append(transform(argv[i + 1]))
                 i += 2
             else:
                 i += 1
             continue
         matched_prefix = next((p for p in eq_prefixes if token.startswith(p)), None)
         if matched_prefix is not None:
-            # One-token form: "--attach=VALUE". Rewrite only the value part,
-            # preserving the exact "--attach=" prefix that was used.
+            # One-token form: "<option>=VALUE". Transform only the value part,
+            # preserving the exact "<option>=" prefix that was used.
             value = token[len(matched_prefix):]
-            out.append(f"{matched_prefix}{_inline_one(value)}")
+            out.append(f"{matched_prefix}{transform(value)}")
             i += 1
             continue
         out.append(token)
         i += 1
     return out
+
+
+def inline_attachments(argv: list[str], resolved: Resolved) -> list[str]:
+    """Return a copy of ``argv`` with each ``--attach <local path>`` inlined.
+
+    Over ``--remote``, the server only sees the forwarded argv — it has no
+    access to the client's filesystem. So every ``--attach`` value that names a
+    *local* file is rewritten to a ``data:<mime>;base64,<payload>`` URI that the
+    server decodes unchanged (it re-sniffs the MIME, so the label is advisory).
+    A value already in ``data:`` form is left as is. Commands without an attach
+    option return ``argv`` unchanged.
+
+    No size pre-check is done here: an oversized payload fails later at the HTTP
+    layer and surfaces as a remote error.
+
+    Raises :class:`RemoteUsageError` if an ``--attach`` file is missing or
+    unreadable (a client-side error — no HTTP is attempted).
+    """
+    return _rewrite_option_values(argv, _attach_option_strings(resolved) or [], _inline_one)
+
+
+# Click param names that carry a file-resolvable prompt / message body, audited
+# from the command signatures: ``create-session`` and ``send-message`` take it
+# as the positional ``prompt`` argument; ``send-messages`` takes it as the
+# ``--message`` option. No other CLI command defines a param with these names
+# (the ``message`` fields on the error NamedTuples in ``attachments.py`` /
+# ``validation.py`` are not Click params, so they never enter a CommandSpec).
+# Only these specific params are inlined — a free-text value on any other
+# command is never read from disk.
+_PROMPT_PARAM_NAMES: frozenset[str] = frozenset({"prompt", "message"})
+
+
+def _resolve_prompt_file(value: str) -> str | None:
+    """Read ``value`` as a local file and return its text, or ``None`` if not a file.
+
+    Over ``--remote`` the server only sees the forwarded argv and cannot read
+    the client's filesystem — so a prompt/message given as a *local* file path
+    must be read here and forwarded as text, mirroring how
+    :func:`inline_attachments` reads ``--attach`` files client-side.
+
+    Resolution is intentionally identical to a *local* :func:`resolve_prompt`
+    run (the client is never in API mode): both absolute and cwd-relative paths
+    that exist are read. A value that is not an existing file returns ``None``
+    and is forwarded untouched — the server then treats it as literal text (or,
+    for an absolute path that happens to exist on the *server*, resolves it
+    there, exactly as before this inlining existed).
+
+    Raises :class:`RemoteUsageError` for an unreadable / non-UTF-8 / empty file
+    (a client-side error — no HTTP is attempted), matching the attachment path.
+    """
+    if not os.path.isfile(value):
+        return None
+    try:
+        return resolve_prompt(value)
+    except PromptError as exc:
+        raise RemoteUsageError(str(exc))
+
+
+def _inline_message_value(value: str) -> str:
+    """Transform for an option-borne message: a local file → its text, else as-is."""
+    text = _resolve_prompt_file(value)
+    return value if text is None else text
+
+
+def _positional_token_indices(
+    argv: list[str], value_option_strings: frozenset[str]
+) -> list[int]:
+    """Return the indices in ``argv`` of positional tokens, in order.
+
+    Option tokens, and the values consumed by value-taking options, are skipped
+    so that only genuine positionals (command tokens, group args, leaf args) are
+    counted. ``--`` ends option processing — everything after it is positional.
+    An unknown option (absent from ``value_option_strings``) is assumed to take
+    no value; if that guess is wrong, the caller's defensive value check catches
+    it and declines to rewrite, so a miscount never corrupts the argv.
+    """
+    indices: list[int] = []
+    i = 0
+    n = len(argv)
+    end_of_options = False
+    while i < n:
+        token = argv[i]
+        if not end_of_options and token == "--":
+            end_of_options = True
+            i += 1
+            continue
+        if not end_of_options and len(token) > 1 and token.startswith("-"):
+            if "=" in token:
+                i += 1
+            elif token in value_option_strings:
+                i += 2
+            else:
+                i += 1
+            continue
+        indices.append(i)
+        i += 1
+    return indices
+
+
+def _inline_positional_prompt(
+    argv: list[str], resolved: Resolved, prompt_param: ParamSpec
+) -> list[str]:
+    """Rewrite a positional ``prompt`` token (a local file path) to the file's text.
+
+    The prompt's ordinal among *all* positionals (every level's token + every
+    ancestor level's arguments precede the leaf arguments, in argv order) is
+    derived from the resolved spec, then mapped to a concrete argv index by
+    walking the tokens. The rewrite is applied only when the located token still
+    equals the value Click bound to the prompt param (a defensive guard against
+    any walk/parse disagreement) and that token names an existing local file.
+    A variadic/multiple positional at or before the prompt makes the
+    token→positional mapping ambiguous, so such a command is left untouched.
+    """
+    chain = resolved.spec.chain
+    if not chain:
+        return list(argv)
+    leaf_args = chain[-1].arguments
+
+    leaf_ordinal = next(
+        (k for k, a in enumerate(leaf_args) if a.name == prompt_param.name), None
+    )
+    if leaf_ordinal is None:
+        return list(argv)
+    if any(a.variadic or a.multiple for a in leaf_args[: leaf_ordinal + 1]):
+        return list(argv)
+    if any(a.variadic or a.multiple for lvl in chain[:-1] for a in lvl.arguments):
+        return list(argv)
+
+    total_tokens = sum(1 for lvl in chain if lvl.token is not None)
+    ancestor_args = sum(len(lvl.arguments) for lvl in chain[:-1])
+    target = total_tokens + ancestor_args + leaf_ordinal
+
+    value_option_strings = frozenset(
+        o.opt for o in resolved.spec.options if o.opt and not o.is_flag
+    )
+    positions = _positional_token_indices(argv, value_option_strings)
+    if target >= len(positions):
+        return list(argv)
+    idx = positions[target]
+
+    # Defensive: only rewrite if the located token is exactly what Click bound
+    # to the prompt param. A mismatch means our positional walk and the parser
+    # disagree, so we must not touch the argv.
+    if argv[idx] != resolved.params.get(prompt_param.name):
+        return list(argv)
+
+    text = _resolve_prompt_file(argv[idx])
+    if text is None:
+        return list(argv)
+    out = list(argv)
+    out[idx] = text
+    return out
+
+
+def inline_prompt(argv: list[str], resolved: Resolved) -> list[str]:
+    """Return a copy of ``argv`` with a file-path prompt / message inlined to text.
+
+    The symmetric counterpart to :func:`inline_attachments` for the message
+    body: over ``--remote`` the server cannot read the client's filesystem, so a
+    prompt/message given as a *local* file path is read here and forwarded as
+    text. ``create-session`` / ``send-message`` carry it as the positional
+    ``prompt`` argument; ``send-messages`` as the ``--message`` option — both are
+    handled. A value that is not an existing local file (inline text, or a path
+    meant to resolve on the server) is forwarded unchanged, and a command with
+    no prompt param returns ``argv`` unchanged.
+
+    Raises :class:`RemoteUsageError` if a prompt file exists but is unreadable /
+    non-UTF-8 / empty (a client-side error — no HTTP is attempted).
+    """
+    leaf_args = resolved.spec.chain[-1].arguments if resolved.spec.chain else []
+    pos_param = next((a for a in leaf_args if a.name in _PROMPT_PARAM_NAMES), None)
+    if pos_param is not None:
+        return _inline_positional_prompt(argv, resolved, pos_param)
+    opt_param = next(
+        (o for o in resolved.spec.options if o.name in _PROMPT_PARAM_NAMES), None
+    )
+    if opt_param is not None:
+        option_strings = [s for s in (opt_param.opt, opt_param.secondary_opt) if s]
+        return _rewrite_option_values(argv, option_strings, _inline_message_value)
+    return list(argv)
 
 
 # Registry paths of the blocking long-poll commands. The server holds the
@@ -456,8 +633,9 @@ def forward(url: str, token: str | None, argv: list[str]) -> int:
     """Forward a CLI command to a remote TwiCC ``/rpc/`` and map the result.
 
     Resolves ``argv`` against the local registry, applies the same pre-flight
-    rejections as a local run would, inlines local ``--attach`` files, then POSTs
-    ``{"argv": [...]}`` to ``<url>/rpc/<path>``. On a 200 envelope it reproduces
+    rejections as a local run would, inlines local ``--attach`` files and reads a
+    file-path prompt / ``--message`` into text, then POSTs ``{"argv": [...]}`` to
+    ``<url>/rpc/<path>``. On a 200 envelope it reproduces
     the command's own output exactly (``result`` to stdout in the same indented
     JSON shape as :func:`twicc.cli._output.emit_json`, ``error`` to stderr) and
     returns the remote ``exit_code`` — so a script behaves identically whether
@@ -476,6 +654,7 @@ def forward(url: str, token: str | None, argv: list[str]) -> int:
     resolved = resolve_command(argv)
     reject_host_bound(resolved)
     argv2 = inline_attachments(argv, resolved)
+    argv2 = inline_prompt(argv2, resolved)
 
     endpoint = _endpoint_url(url, resolved.path)
     headers = {"Content-Type": "application/json"}
