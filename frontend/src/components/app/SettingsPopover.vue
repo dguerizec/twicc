@@ -353,6 +353,7 @@ const titleSystemPromptInput = ref('')
 const terminalUseTmux = computed(() => store.isTerminalUseTmux)
 const terminalTmuxConfigPath = computed(() => store.getTerminalTmuxConfigPath)
 const compactSessionList = computed(() => store.isCompactSessionList)
+const showMessageTimestamps = computed(() => store.areMessageTimestampsShown)
 const waTheme = computed(() => store.getWaTheme)
 const waBrand = computed(() => store.getWaBrand)
 const showDiffs = computed(() => store.isShowDiffs)
@@ -735,6 +736,13 @@ function onCompactSessionListChange(event) {
 }
 
 /**
+ * Toggle per-block message timestamps in the session view.
+ */
+function onShowMessageTimestampsChange(event) {
+    store.setShowMessageTimestamps(event.target.checked)
+}
+
+/**
  * Toggle show diffs (auto-expand Edit/Write details).
  */
 function onShowDiffsChange(event) {
@@ -1080,6 +1088,14 @@ function onChangelogClose() {
                                 :value="option.value"
                             >{{ option.label }}</wa-option>
                         </wa-select>
+                    </div>
+                    <div class="setting-group">
+                        <label class="setting-group-label">Message timestamps</label>
+                        <wa-switch
+                            :checked="showMessageTimestamps"
+                            @change="onShowMessageTimestampsChange"
+                            size="small"
+                        >Show time under each message block</wa-switch>
                     </div>
                     <div class="setting-group">
                         <label class="setting-group-label">Auto-unpin on archive <wa-icon name="cloud" class="synced-icon"></wa-icon></label>

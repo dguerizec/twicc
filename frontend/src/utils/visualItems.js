@@ -2,6 +2,7 @@
 
 import { DISPLAY_LEVEL, DISPLAY_MODE, SYNTHETIC_ITEM } from '../constants'
 import { getParsedContent, setParsedContent } from './parsedContent'
+import { formatDayKey, formatDaySeparatorLabel } from './date'
 
 /**
  * Decide whether an item is visible in conversation mode (non-detailed branch).
@@ -90,6 +91,7 @@ export function computeVisualItems(items, mode, expandedGroups = [], isAssistant
             kind: item.kind,
             groupHead: item.group_head ?? null,
             groupTail: item.group_tail ?? null,
+            timestamp: item.timestamp ?? null,
             ...extras
         }
         const parsed = getParsedContent(item)
@@ -302,6 +304,92 @@ export function computeVisualItems(items, mode, expandedGroups = [], isAssistant
  * @param {Object} b - Newly computed visual item
  * @returns {boolean} true if all non-cache properties are identical
  */
+/**
+ * Local calendar-day key for a visual item, derived from its ISO `timestamp`.
+ * Returns null for separators, synthetic/dayless items, or unparseable values.
+ */
+function visualItemDayKey(vi) {
+    if (!vi || vi.isDaySeparator || !vi.timestamp) return null
+    const ms = Date.parse(vi.timestamp)
+    return Number.isFinite(ms) ? formatDayKey(ms) : null
+}
+
+/**
+ * Build a day-separator visual item placed before `beforeItem` (a block-start),
+ * showing the day of `dayItem` (that block's block-end — the day the user
+ * actually sees for the block). Keyed on the block-start's line number so the
+ * key is unique per block and stable across recomputes.
+ */
+function makeDaySeparatorItem(beforeItem, dayItem) {
+    const ms = Date.parse(dayItem.timestamp)
+    return {
+        lineNum: `daysep-${beforeItem.lineNum}`,
+        isDaySeparator: true,
+        dayKey: formatDayKey(ms),
+        dayLabel: formatDaySeparatorLabel(ms),
+    }
+}
+
+/**
+ * Insert day-separator entries into the visual items list, BEFORE each block
+ * whose "shown day" differs from the previous block's.
+ *
+ * A block's shown day is the day of its **block-end** item — the only timestamp
+ * the user sees for the block, since the HH:MM label is rendered on the
+ * block-end. So a block visually belongs to its end day: an assistant turn that
+ * starts at 23:58 (day J) and ends at 00:18 (day J+1) shows "00:18" and is a
+ * J+1 block — its separator is placed BEFORE it (between the day-J user message
+ * and the turn), not after.
+ *
+ * A `displayedDay` is tracked across blocks (seeded from the first dated block,
+ * which therefore gets no leading separator). Blocks with no dated item at all
+ * (e.g. a synthetic live placeholder) are skipped without touching displayedDay.
+ *
+ * Requires `isBlockEnd` flags to already be set; each item carries a `timestamp`
+ * (ISO 8601) when available.
+ *
+ * @param {Array} visualItems - Flagged visual items (with isBlockStart/End + timestamp).
+ * @returns {Array} A new array with day separators interleaved (or the input when none).
+ */
+export function insertDaySeparators(visualItems) {
+    if (!visualItems || visualItems.length === 0) return visualItems
+
+    const n = visualItems.length
+    const result = []
+    let displayedDayKey = null
+    let i = 0
+
+    while (i < n) {
+        // Block = run of consecutive same-kind items, ending at the first
+        // isBlockEnd from i onward (the last item is always a block-end).
+        let j = i
+        while (j < n && !visualItems[j].isBlockEnd) j++
+        if (j >= n) j = n - 1
+
+        // Shown day = the block-end item's day; fall back to the last dated item
+        // in the block if the block-end itself carries no timestamp.
+        let dayItem = null
+        for (let k = j; k >= i; k--) {
+            if (visualItemDayKey(visualItems[k])) { dayItem = visualItems[k]; break }
+        }
+        const blockDayKey = dayItem ? visualItemDayKey(dayItem) : null
+
+        if (blockDayKey) {
+            if (displayedDayKey === null) {
+                displayedDayKey = blockDayKey  // first dated block: no leading separator
+            } else if (blockDayKey !== displayedDayKey) {
+                result.push(makeDaySeparatorItem(visualItems[i], dayItem))
+                displayedDayKey = blockDayKey
+            }
+        }
+
+        for (let k = i; k <= j; k++) result.push(visualItems[k])
+        i = j + 1
+    }
+
+    return result
+}
+
 export function visualItemEqual(a, b) {
     if (a === b) return true
     if (!a || !b) return false

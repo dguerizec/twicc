@@ -2,6 +2,7 @@
 import { computed, ref } from 'vue'
 import { PROVIDER } from '../../../constants'
 import { useDataStore } from '../../../stores/data'
+import { useSettingsStore } from '../../../stores/settings'
 import JsonViewer from '../../json/JsonViewer.vue'
 import ClaudeCodeMessage from './items/claude_code/Message.vue'
 import ClaudeCodeApiError from './items/claude_code/ApiError.vue'
@@ -11,10 +12,12 @@ import CodexToolUse from './items/codex/ToolUse.vue'
 import CodexReasoning from './items/codex/Reasoning.vue'
 import CodexImageGeneration from './items/codex/ImageGeneration.vue'
 import UnknownEntry from './items/UnknownEntry.vue'
+import MessageTimestamp from './items/MessageTimestamp.vue'
 import AppTooltip from '../../ui/AppTooltip.vue'
 import CodeCommentsIndicator from '../../ui/CodeCommentsIndicator.vue'
 
 const dataStore = useDataStore()
+const settingsStore = useSettingsStore()
 
 const props = defineProps({
     content: {
@@ -73,6 +76,12 @@ const props = defineProps({
     blockCommentsCount: {
         type: Number,
         default: 0
+    },
+    // True when this item is the last of its conversation block (mirrors the
+    // `.is-block-end` CSS class). Drives the per-block timestamp below.
+    isBlockEnd: {
+        type: Boolean,
+        default: false
     }
 })
 
@@ -98,6 +107,18 @@ const showJson = ref(false)
 const entryType = computed(() => props.content?.type || 'unknown')
 
 const sessionProvider = computed(() => dataStore.getSession(props.sessionId)?.provider)
+
+// Timestamp (date/time) shown at the very bottom of the LAST item of each
+// conversation block (the one rendered with `.is-block-end`), so a multi-item
+// turn carries a single timestamp at its end rather than one per message.
+// Skipped for synthetic / optimistic / streaming placeholders (no real
+// timestamp).
+const showTimestamp = computed(() =>
+    settingsStore.areMessageTimestampsShown
+    && props.isBlockEnd
+    && !props.content?.syntheticKind
+    && !!props.content?.timestamp
+)
 
 // Track collapsed state for JSON view
 const collapsedPaths = ref(new Set())
@@ -271,6 +292,12 @@ function toggleJsonView() {
                 :data="content"
                 :session-id="sessionId"
                 :detail-key="`line:${lineNum}`"
+            />
+
+            <!-- Per-block timestamp: very last, after the rendered markdown -->
+            <MessageTimestamp
+                v-if="showTimestamp"
+                :timestamp="content.timestamp"
             />
         </template>
     </div>
@@ -523,9 +550,11 @@ body:not([data-display-mode="debug"]) .json-toggle {
 
         }
     }
-    .virtual-scroller-item:has(.session-item[data-kind="user_message"]) {
+    .virtual-scroller-item:has(.session-item[data-kind="user_message"]),
+    .virtual-scroller-item:has(.day-separator) {
         + .virtual-scroller-item:not(:has(.session-item[data-kind="user_message"])) {
-            /* First non-user after a user message */
+            /* First non-user after a user message (or a day separator, which
+               breaks the direct user→assistant adjacency) */
             .session-item.is-block-start, .group-toggle.is-block-start {
                 --content-card-start-item: 1;
                 --content-card-inner-item: 0;
@@ -544,7 +573,9 @@ body:not([data-display-mode="debug"]) .json-toggle {
         /* Last non-user wih nothing after */
         &:not(:has(+ .virtual-scroller-item)),
         /* Last non-user before a user message */
-        &:has(+ .virtual-scroller-item .session-item[data-kind="user_message"])
+        &:has(+ .virtual-scroller-item .session-item[data-kind="user_message"]),
+        /* Last non-user before a day separator (which precedes the next block) */
+        &:has(+ .virtual-scroller-item .day-separator)
         {
             .session-item.is-block-end, .group-toggle.is-block-end {
                 --content-card-end-item: 1;
@@ -558,6 +589,21 @@ body:not([data-display-mode="debug"]) .json-toggle {
                 --assistant-card-bottom-spacing: var(--assistant-card-spacing);
                 --assistant-card-shadow: var(--assistant-card-default-shadow);
                 margin-bottom: calc(var(--main-shadow-size) + 1px); /* For the shadow to appear on the last element with virtual scroller "cropping" if we don't have this */;
+            }
+        }
+    }
+
+    .virtual-scroller-item:has(.session-item[data-kind="user_message"]) {
+        + .virtual-scroller-item:has( > .day-separator) {
+            .day-separator {
+                margin-top: calc(-1 * var(--wa-space-s));
+            }
+        }
+    }
+    .virtual-scroller-item:has(> .day-separator) {
+        &:has(+ .virtual-scroller-item .session-item[data-kind="user_message"]) {
+            .day-separator {
+                margin-bottom: calc(-1 * var(--wa-space-s));
             }
         }
     }

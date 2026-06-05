@@ -35,6 +35,7 @@ export const SETTINGS_SCHEMA = {
     diffSideBySide: true,
     editorWordWrap: true,
     compactSessionList: false,
+    showMessageTimestamps: false,
     showArchivedSessions: false,
     showArchivedProjects: false,
     showArchivedWorkspaces: false,
@@ -96,6 +97,7 @@ const SETTINGS_VALIDATORS = {
     diffSideBySide: (v) => typeof v === 'boolean',
     editorWordWrap: (v) => typeof v === 'boolean',
     compactSessionList: (v) => typeof v === 'boolean',
+    showMessageTimestamps: (v) => typeof v === 'boolean',
     showArchivedSessions: (v) => typeof v === 'boolean',
     showArchivedProjects: (v) => typeof v === 'boolean',
     showArchivedWorkspaces: (v) => typeof v === 'boolean',
@@ -256,6 +258,7 @@ export const useSettingsStore = defineStore('settings', {
         isDiffSideBySide: (state) => state.diffSideBySide,
         isEditorWordWrap: (state) => state.editorWordWrap,
         isCompactSessionList: (state) => state.compactSessionList,
+        areMessageTimestampsShown: (state) => state.showMessageTimestamps,
         isShowArchivedSessions: (state) => state.showArchivedSessions,
         isShowArchivedProjects: (state) => state.showArchivedProjects,
         isShowArchivedWorkspaces: (state) => state.showArchivedWorkspaces,
@@ -512,6 +515,17 @@ export const useSettingsStore = defineStore('settings', {
         setCompactSessionList(enabled) {
             if (SETTINGS_VALIDATORS.compactSessionList(enabled)) {
                 this.compactSessionList = enabled
+            }
+        },
+
+        /**
+         * Set whether per-block message timestamps are shown in the session view.
+         * Local-only (non-synced) setting; off by default.
+         * @param {boolean} enabled
+         */
+        setShowMessageTimestamps(enabled) {
+            if (SETTINGS_VALIDATORS.showMessageTimestamps(enabled)) {
+                this.showMessageTimestamps = enabled
             }
         },
 
@@ -819,6 +833,7 @@ export function initSettings() {
             diffSideBySide: store.diffSideBySide,
             editorWordWrap: store.editorWordWrap,
             compactSessionList: store.compactSessionList,
+            showMessageTimestamps: store.showMessageTimestamps,
             showArchivedSessions: store.showArchivedSessions,
             showArchivedProjects: store.showArchivedProjects,
             showArchivedWorkspaces: store.showArchivedWorkspaces,
@@ -932,6 +947,16 @@ export function initSettings() {
             const { useDataStore } = await import('./data')
             const dataStore = useDataStore()
             dataStore.recomputeAllVisualItems()
+        }
+    )
+
+    // Recompute all visual items when message-timestamps toggles: day separators
+    // are inserted into the visual item list, so the list must be rebuilt.
+    watch(
+        () => store.showMessageTimestamps,
+        async () => {
+            const { useDataStore } = await import('./data')
+            useDataStore().recomputeAllVisualItems()
         }
     )
 }

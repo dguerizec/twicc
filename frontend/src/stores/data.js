@@ -3,7 +3,7 @@
 import { defineStore, acceptHMRUpdate } from 'pinia'
 import { toRaw } from 'vue'
 import { getPrefixSuffixBoundaries } from '../utils/contentVisibility'
-import { computeVisualItems, visualItemEqual } from '../utils/visualItems'
+import { computeVisualItems, visualItemEqual, insertDaySeparators } from '../utils/visualItems'
 import { DISPLAY_LEVEL, DISPLAY_MODE, PROCESS_STATE, SYNTHETIC_ITEM } from '../constants'
 import { getProviderHelpers } from '../providers'
 import { getSessionCutoffMs } from '../utils/sessions'
@@ -1176,6 +1176,9 @@ export const useDataStore = defineStore('data', {
                     existingItem.group_head = update.group_head
                     existingItem.group_tail = update.group_tail
                     existingItem.kind = update.kind
+                    if (update.timestamp !== undefined) {
+                        existingItem.timestamp = update.timestamp
+                    }
                 }
             }
 
@@ -2011,12 +2014,20 @@ export const useDataStore = defineStore('data', {
                 visualItems[i].isBlockEnd = i === visualItems.length - 1 || isUser !== nextIsUser
             }
 
+            // Insert per-block day separators (on calendar-day changes, only at
+            // inter-block boundaries) when the message-timestamps setting is on.
+            // Runs after the block flags are set (it relies on isBlockEnd) and
+            // before stabilization so separators get stable references too.
+            const renderItems = settingsStore.areMessageTimestampsShown
+                ? insertDaySeparators(visualItems)
+                : visualItems
+
             // Stabilize visual item references: reuse cached objects when properties
             // haven't changed, so Vue sees the same reference and skips re-render.
             const cache = this.localState.visualItemCache[sessionId] || new Map()
             const newCache = new Map()
 
-            const stableItems = visualItems.map(vi => {
+            const stableItems = renderItems.map(vi => {
                 const cached = cache.get(vi.lineNum)
                 if (visualItemEqual(cached, vi)) {
                     // Properties identical — reuse old reference.
@@ -2299,6 +2310,7 @@ export const useDataStore = defineStore('data', {
                 group_head: m.group_head,
                 group_tail: m.group_tail,
                 kind: m.kind,
+                timestamp: m.timestamp ?? null,  // ISO 8601; available before content loads
                 content: null  // Will be filled by content fetch
             }))
 
@@ -2334,6 +2346,9 @@ export const useDataStore = defineStore('data', {
                     }
                     if (item.kind !== undefined) {
                         sessionItemsArray[index].kind = item.kind
+                    }
+                    if (item.timestamp !== undefined) {
+                        sessionItemsArray[index].timestamp = item.timestamp
                     }
                     updatedItems.push(sessionItemsArray[index])
                 }

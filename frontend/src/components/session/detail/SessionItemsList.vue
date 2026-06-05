@@ -12,6 +12,7 @@ import { pendingSessionSearch } from '../../../utils/pendingSearch'
 import { classifyHref } from '../../../utils/fileLinks.js'
 import VirtualScroller from '../../virtual-scroller/VirtualScroller.vue'
 import SessionItem from './SessionItem.vue'
+import DaySeparator from './items/DaySeparator.vue'
 import SessionSearchBar from '../list/SessionSearchBar.vue'
 import FetchErrorPanel from '../../ui/FetchErrorPanel.vue'
 import GroupToggle from './GroupToggle.vue'
@@ -785,7 +786,8 @@ function onScrollerUpdate({ startIndex, endIndex, visibleStartIndex, visibleEndI
     const lineNumsToLoad = []
     for (let i = bufferedStart; i <= bufferedEnd; i++) {
         const visualItem = visItems[i]
-        if (visualItem && !hasContent(visualItem)) {
+        // Day separators carry no content and a non-numeric key — never queue them.
+        if (visualItem && !visualItem.isDaySeparator && !hasContent(visualItem)) {
             lineNumsToLoad.push(visualItem.lineNum)
         }
     }
@@ -1242,7 +1244,7 @@ async function scrollToLineNum(lineNum) {
     const lineNumsToLoad = []
 
     for (let i = startIdx; i <= endIdx; i++) {
-        if (!hasContent(visItems2[i])) {
+        if (!visItems2[i].isDaySeparator && !hasContent(visItems2[i])) {
             lineNumsToLoad.push(visItems2[i].lineNum)
         }
     }
@@ -1421,9 +1423,17 @@ defineExpose({
             @became-visible="onScrollerBecameVisible"
         >
             <template #default="{ item, index }">
+                <!-- Day separator (horizontal rule + date) — must come before the
+                     placeholder branch since separators carry no content. -->
+                <DaySeparator
+                    v-if="item.isDaySeparator"
+                    :label="item.dayLabel"
+                    :day-key="item.dayKey"
+                />
+
                 <!-- Placeholder (no content loaded yet) -->
                 <div
-                    v-if="!hasContent(item)"
+                    v-else-if="!hasContent(item)"
                     :class="{ 'is-block-start': item.isBlockStart, 'is-block-end': item.isBlockEnd }"
                     :style="{ minHeight: MIN_ITEM_SIZE + 'px' }"
                 ></div>
@@ -1447,6 +1457,7 @@ defineExpose({
                         :session-id="sessionId"
                         :parent-session-id="parentSessionId"
                         :line-num="item.lineNum"
+                        :is-block-end="item.isBlockEnd || false"
                     />
                 </template>
 
@@ -1467,6 +1478,7 @@ defineExpose({
                     :suffix-expanded="item.suffixExpanded || false"
                     :detail-toggle-for="item.detailToggleFor ?? null"
                     :block-comments-count="item.detailToggleFor != null ? blockCommentsCount(item.detailToggleFor) : 0"
+                    :is-block-end="item.isBlockEnd || false"
                     @toggle-suffix="toggleGroup(item.suffixGroupHead)"
                 />
             </template>

@@ -170,6 +170,10 @@ def serialize_session_item(item):
         "group_head": item.group_head,
         "group_tail": item.group_tail,
         "kind": item.kind,
+        # Item timestamp (ISO 8601, UTC) — the moment the provider wrote this
+        # JSONL line. Surfaced so the frontend can place per-block day separators
+        # without parsing the raw content (and even before content is loaded).
+        "timestamp": item.timestamp.isoformat() if item.timestamp else None,
     }
 
 
@@ -191,5 +195,9 @@ def serialize_session_item_metadata(item):
         "kind": item.kind,
         "git_directory": item.git_directory,
         "git_branch": item.git_branch,
+        # Item timestamp (ISO 8601, UTC) — surfaced at the metadata level so the
+        # frontend has it for every item up front (content stays lazy-loaded),
+        # which is what per-block day separators need.
+        "timestamp": item.timestamp.isoformat() if item.timestamp else None,
         # NO content field - that's the whole point
     }

@@ -58,6 +58,78 @@ export function formatDate(timestamp, { smart = false } = {}) {
 }
 
 /**
+ * Format an epoch ms timestamp as a fixed 24-hour clock "HH:MM" in local time.
+ *
+ * Used for the always-visible per-message timestamp label. Deliberately
+ * setting-independent and non-relative so it never needs periodic refreshing
+ * (no live "N minutes ago" tickers). Day-boundary disambiguation is left to the
+ * hover tooltip (formatFullDateTime).
+ *
+ * @param {number} timestampMs - Epoch milliseconds.
+ * @returns {string} e.g. "21:01", or "-" when no timestamp.
+ */
+export function formatClockTime(timestampMs) {
+    if (!timestampMs) return '-'
+    const d = new Date(timestampMs)
+    const pad = (n) => String(n).padStart(2, '0')
+    return `${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+/**
+ * Local calendar-day key for an epoch ms timestamp: "YYYY-MM-DD".
+ *
+ * Used to detect day changes between items (in local time, consistent with the
+ * HH:MM label) and as a stable identity for day-separator entries.
+ *
+ * @param {number} timestampMs - Epoch milliseconds.
+ * @returns {string|null} e.g. "2026-06-05", or null when no timestamp.
+ */
+export function formatDayKey(timestampMs) {
+    if (!timestampMs || !Number.isFinite(timestampMs)) return null
+    const d = new Date(timestampMs)
+    const pad = (n) => String(n).padStart(2, '0')
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+}
+
+/**
+ * Human-readable, locale-aware label for a day separator, e.g.
+ * "Friday, June 5, 2026" / "vendredi 5 juin 2026" (local time).
+ *
+ * @param {number} timestampMs - Epoch milliseconds.
+ * @returns {string} Localized full date, or "-" when no timestamp.
+ */
+export function formatDaySeparatorLabel(timestampMs) {
+    if (!timestampMs || !Number.isFinite(timestampMs)) return '-'
+    return new Date(timestampMs).toLocaleDateString(navigator.language, {
+        weekday: 'long',
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+    })
+}
+
+/**
+ * Format an epoch ms timestamp as a full, classic local date-time string:
+ * "YYYY-MM-DD HH:MM:SS" (with seconds). Uses the browser's local timezone.
+ *
+ * Used for the hover tooltip on per-message timestamps, where the always-visible
+ * label may be relative or smart-truncated but the tooltip must show the exact
+ * moment down to the second.
+ *
+ * @param {number} timestampMs - Epoch milliseconds.
+ * @returns {string} e.g. "2026-06-05 21:01:41", or "-" when no timestamp.
+ */
+export function formatFullDateTime(timestampMs) {
+    if (!timestampMs) return '-'
+    const d = new Date(timestampMs)
+    const pad = (n) => String(n).padStart(2, '0')
+    return (
+        `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` +
+        `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+    )
+}
+
+/**
  * Format a duration in seconds to a human-readable string.
  * - < 60s: "42s"
  * - < 1h: "2m 30s"
