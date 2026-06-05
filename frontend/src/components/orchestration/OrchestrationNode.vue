@@ -29,10 +29,14 @@ const props = defineProps({
 // _process_state.project_virtual_state). ``dead`` here just means "no live
 // process" — the common, expected state for a finished session — so it is
 // neutral grey rather than the alarming red used elsewhere.
+// ``pulse`` mirrors the live indicators used everywhere else: the robot pulses
+// while the agent works (ProcessIndicator's ``pulse``, 1s) and the hand pulses
+// while a request awaits the user (AggregatedProcessIndicator's ``pending-pulse``,
+// 1.5s). Static states carry no ``pulse``.
 const PROCESS_STATUS = {
     starting:            { label: 'Starting',        icon: 'hourglass-start',    color: 'var(--wa-color-warning-60)' },
-    assistant_turn:      { label: 'Assistant turn',  icon: 'robot',              color: 'var(--wa-color-blue-60)' },
-    awaiting_user_input: { label: 'Awaiting input',  icon: 'hand',               color: 'var(--wa-color-warning-60)' },
+    assistant_turn:      { label: 'Assistant turn',  icon: 'robot',              color: 'var(--wa-color-blue-60)',    pulse: 'work' },
+    awaiting_user_input: { label: 'Awaiting input',  icon: 'hand',               color: 'var(--wa-color-warning-60)', pulse: 'pending' },
     user_turn:           { label: 'User turn',       icon: 'check',              color: 'var(--wa-color-success-60)' },
     dead:                { label: 'Stopped',         icon: 'circle-stop',        color: 'var(--wa-color-neutral-50)' },
 }
@@ -172,6 +176,7 @@ const expanded = ref(true)
                         :title="status.label"
                         :label="status.label"
                         class="orch-status-icon"
+                        :class="status.pulse ? `orch-status-icon--pulse-${status.pulse}` : null"
                     ></wa-icon>
                     <span v-if="isCurrent" class="orch-current-badge">current</span>
                     <span class="orch-cost">
@@ -346,6 +351,27 @@ const expanded = ref(true)
     flex-shrink: 0;
     align-self: center;
     font-size: var(--wa-font-size-m);
+}
+
+/* Pulse the live states, matching the indicators used elsewhere: the working
+   robot (ProcessIndicator's ``pulse``, 1s, 1→0.4) and the awaiting-user hand
+   (AggregatedProcessIndicator's ``pending-pulse``, 1.5s, 1→0.3). */
+.orch-status-icon--pulse-work {
+    animation: orch-status-pulse-work 1s ease-in-out infinite;
+}
+
+.orch-status-icon--pulse-pending {
+    animation: orch-status-pulse-pending 1.5s ease-in-out infinite;
+}
+
+@keyframes orch-status-pulse-work {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+}
+
+@keyframes orch-status-pulse-pending {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
 }
 
 .orch-title {
