@@ -3,7 +3,7 @@
 One sub-command per supported batch update — ``archive`` / ``unarchive``,
 ``pin`` / ``unpin``, ``hide`` / ``unhide``, ``annotations`` — each applying the
 SAME change to every targeted session via the shared
-:func:`twicc.cli.update_sessions._runner.run_batch_update`.
+:func:`twicc.cli._batch_runner.run_batch`.
 
 Deliberately excluded from the batch surface:
 
@@ -30,9 +30,9 @@ from twicc.cli._drop_request.help_strings import (
     model_help,
     preset_help,
 )
+from twicc.cli._batch_runner import run_batch
 from twicc.cli._drop_request.settings_resolution import unset_help
 from twicc.cli._output import emit_error
-from twicc.cli.update_sessions._runner import run_batch_update
 
 
 # Load the user's providers + presets once so the ``settings`` --help strings
@@ -106,7 +106,7 @@ def _archive(
     agent (reason=archived) and any tmux terminal, may auto-unpin
     (autoUnpinOnArchive synced setting), broadcasts session_updated.
     """
-    run_batch_update(
+    run_batch(
         session_ids or [],
         kind="session:update_archived",
         prepare=lambda r: {"session_id": r.session_id, "archived": True},
@@ -128,7 +128,7 @@ def _unarchive(
     timeout: int = typer.Option(30, "--timeout", help=_TIMEOUT_HELP),
 ) -> None:
     """Unarchive every targeted session (flips archived back to False; no resume)."""
-    run_batch_update(
+    run_batch(
         session_ids or [],
         kind="session:update_archived",
         prepare=lambda r: {"session_id": r.session_id, "archived": False},
@@ -163,7 +163,7 @@ def _pin(
             f"Error: invalid --mode {mode!r}. Accepted: {list(_VALID_PIN_MODES)}.",
             code=1,
         )
-    run_batch_update(
+    run_batch(
         session_ids or [],
         kind="session:update_pinned",
         prepare=lambda r: {"session_id": r.session_id, "pinned": mode},
@@ -185,7 +185,7 @@ def _unpin(
     timeout: int = typer.Option(30, "--timeout", help=_TIMEOUT_HELP),
 ) -> None:
     """Unpin every targeted session (regardless of its current pin scope)."""
-    run_batch_update(
+    run_batch(
         session_ids or [],
         kind="session:update_pinned",
         prepare=lambda r: {"session_id": r.session_id, "pinned": None},
@@ -213,7 +213,7 @@ def _hide(
     question_widget) is rejected individually (status=rejected) while the
     others are hidden.
     """
-    run_batch_update(
+    run_batch(
         session_ids or [],
         kind="session:update_hidden",
         prepare=lambda r: {"session_id": r.session_id, "hidden": True},
@@ -235,7 +235,7 @@ def _unhide(
     timeout: int = typer.Option(30, "--timeout", help=_TIMEOUT_HELP),
 ) -> None:
     """Unhide every targeted session (re-enters lists / search / counters)."""
-    run_batch_update(
+    run_batch(
         session_ids or [],
         kind="session:update_hidden",
         prepare=lambda r: {"session_id": r.session_id, "hidden": False},
@@ -282,7 +282,7 @@ def _annotations(
             code=1,
         )
 
-    run_batch_update(
+    run_batch(
         session_ids or [],
         kind="session:update_annotations",
         prepare=lambda r: {
@@ -432,7 +432,7 @@ def _settings(
             "replace_all": replace_all,
         }
 
-    run_batch_update(
+    run_batch(
         session_ids or [],
         kind="session:update_settings",
         prepare=_prepare,

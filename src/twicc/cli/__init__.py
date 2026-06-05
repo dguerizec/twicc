@@ -952,6 +952,12 @@ from twicc.cli.send_message.command import send_message_cmd  # noqa: E402
 app.command(name="send-message")(send_message_cmd)
 
 
+# ``send-messages`` is the batch sibling: same message to several sessions,
+# selected with the same model as ``update-sessions``.
+from twicc.cli.send_messages import send_messages_cmd  # noqa: E402
+app.command(name="send-messages")(send_messages_cmd)
+
+
 # ``update-session`` is a Typer sub-app: ``twicc update-session <ID>
 # <subcommand>`` (only ``settings`` for now; ``title``, ``archive``,
 # ``pin``, ``stop`` will plug into the same sub-app later).

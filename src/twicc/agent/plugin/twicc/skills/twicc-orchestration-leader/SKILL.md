@@ -66,6 +66,7 @@ The shared scratch is internal plumbing of your tree, not a place the user can b
 - `$TWICC processes --spawned-by self` — track your direct children. Skill: `twicc-processes`.
 - `$TWICC processes wait --spawned-by self ...` / `processes stop --spawned-by self ...` — wait on or stop direct child batches. Skill: `twicc-processes`.
 - `$TWICC session <ID> messages` — pull a child's transcript. Skill: `twicc-session`.
-- `$TWICC send-message <ID> <TEXT>` — steer or follow up a child. Skill: `twicc-send-message`.
+- `$TWICC send-message <ID> <TEXT>` — steer or follow up one child. Skill: `twicc-send-message`.
+- `$TWICC send-messages --spawned-by self --message <TEXT>` — broadcast the same steer/correction to a whole batch of children. Skill: `twicc-send-messages`.
 - `$TWICC update-session <ID> annotations|archive|unhide` — annotate, archive, or unhide one session. Skill: `twicc-update-session`.
 - `$TWICC update-sessions {annotations|archive|unhide|hide|pin} --spawned-by self ...` — apply one such change to a whole batch of children. Skill: `twicc-update-sessions`.

@@ -166,6 +166,7 @@ Workers don't orchestrate, so they can ignore this.
 
 - `$TWICC create-session <PROMPT>` — spawn a child. Skill: `twicc-create-session`.
 - `$TWICC send-message <ID|parent> <TEXT>` — push to a session or to your parent. Skill: `twicc-send-message`.
+- `$TWICC send-messages --spawned-by self --message <TEXT>` — broadcast the same message to several children at once. Skill: `twicc-send-messages`.
 - `$TWICC session <ID> messages` — pull a child's transcript. Skill: `twicc-session`.
 - `$TWICC topology self` — map your spawn tree. Skill: `twicc-topology`.
 - `$TWICC processes --spawned-by self` — track your direct children. Skill: `twicc-processes`.

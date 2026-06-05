@@ -29,6 +29,7 @@ Orchestration is built entirely from the ordinary commands in [`SKILLS-AND-CLI.m
 
 - **Spawn** a child with `create-session` (its prompt carries the child's mode, job, and how to report back — a child starts with no memory of you, so every brief is self-contained).
 - **Push** results up with `send-message parent`.
+- **Broadcast** the same message to many children at once with `send-messages --spawned-by self --message "…"` — steer them, request status, or ask for a graceful wrap-up (`sent` ≠ done, so follow with `processes wait`).
 - **Pull** a child's transcript anytime with `session <id> messages --tail N` — independent of whether the child can push.
 - **Map** your tree with `topology self`, **track** your direct children with `processes --spawned-by self`, and **wait / stop** scoped batches with `processes wait --spawned-by self ...` or `processes stop --spawned-by self ...`.
 - **Tag** nodes with annotations (`update-session self annotations set:status=done`) so the tree stays legible — or change a whole batch of children at once (tag, hide, archive…) with `update-sessions <op> --spawned-by self ...`.

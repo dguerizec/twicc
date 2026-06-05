@@ -91,9 +91,10 @@ class Resolved(NamedTuple):
 #   (a session *named* "self" — implausible), so rejecting them is conservative
 #   but harmless: such an id is meaningless against a remote anyway.
 # - Variadic session-id positionals: ``processes stop`` (``session_ids``),
-#   ``processes wait`` (``items`` — a mixed list of ids and statuses), and
-#   ``update-sessions`` (``session_ids`` — every batch sub-command). Like
-#   ``update-session``, ``update-sessions`` truly RESOLVES ``self`` in its
+#   ``processes wait`` (``items`` — a mixed list of ids and statuses),
+#   ``update-sessions`` (``session_ids`` — every batch sub-command) and
+#   ``send-messages`` (``session_ids``). Like ``update-session``, both
+#   ``update-sessions`` and ``send-messages`` truly RESOLVE ``self`` in their
 #   explicit ids, so rejecting it over --remote is meaningful, not just
 #   conservative. The batch readers ``sessions get`` / ``processes get`` use
 #   plain ``session_ids`` too; including the name stays harmless there (they

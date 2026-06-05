@@ -6,7 +6,7 @@ argument-hint: <session_id|parent> <prompt>
 
 # TwiCC Send Message
 
-Send a message to an existing session. The message is delivered as if typed from the UI.
+Send a message to an existing session. The message is delivered as if typed from the UI. To send the same message to several sessions at once (by id or by `--spawned-by` / `--descendants` / `--annotation`), use `$TWICC send-messages` (skill: `twicc-send-messages`).
 
 ## When to use
 
@@ -119,6 +119,7 @@ A `sent` status only means the message was handed to the agent — not that the 
 ## Related commands
 
 - `$TWICC info commands [--provider <key>] [--project <PROJECT>]` — list slash / dollar commands available in the target session's scope before referencing them in the message. Skill: `twicc-info`.
+- `$TWICC send-messages [SESSION_ID...] --message <text>` — send the same message to several sessions at once (same selection model as `update-sessions`). Skill: `twicc-send-messages`.
 - `$TWICC create-session` — create a new session instead. Skill: `twicc-create-session`.
 - `$TWICC topology self` — discover sibling and descendant session ids. Skill: `twicc-topology`.
 - `$TWICC update-session <session_id> settings` — change agent settings before sending. Skill: `twicc-update-session`.

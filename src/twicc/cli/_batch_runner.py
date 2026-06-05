@@ -1,13 +1,13 @@
-"""Shared batch runner for the ``twicc update-sessions <op>`` sub-commands.
+"""Shared batch runner for fan-out CLI commands (``update-sessions``, ``send-messages``).
 
-Generalises the single-session ``twicc update-session <ID> <op>`` flow to a
-set of sessions: resolve the target ids (explicit ids merged with the optional
-``--spawned-by`` / ``--descendants`` / ``--annotation`` scope, same union
-semantics as ``twicc sessions`` / ``processes stop`` — explicit ids first,
-scope-selected ids appended, deduplicated), drop one request per id reusing the
-*exact same* ``kind`` + payload shape the singular command would emit, poll
-every status file under a single ``--timeout`` wall-clock budget (the watcher
-processes the drops in parallel), then emit one aggregated result.
+Generalises a single-session drop-request flow to a set of sessions: resolve the
+target ids (explicit ids merged with the optional ``--spawned-by`` /
+``--descendants`` / ``--annotation`` scope, same union semantics as ``twicc
+sessions`` / ``processes stop`` — explicit ids first, scope-selected ids
+appended, deduplicated), drop one request per id reusing the *exact same*
+``kind`` + payload the singular command would emit, poll every status file under
+a single ``--timeout`` wall-clock budget (the watcher processes the drops in
+parallel), then emit one aggregated result.
 
 The result is an object keyed by session_id::
 
@@ -16,21 +16,23 @@ The result is an object keyed by session_id::
       "results": {"<session_id>": <per-id outcome>, ...}
     }
 
-Each per-id outcome is exactly what ``update-session`` would have emitted for
-that id alone: ``updated`` / ``rejected`` / ``failed`` / ``timeout`` via
-:func:`twicc.cli._drop_request.output.build_final`, or ``validation_error``
-when the local ``lookup_session`` pre-check fails before any drop. A per-id
-failure never fails the batch — only command-level concerns do.
+Each per-id outcome is exactly what the singular command would have emitted for
+that id alone: the success status (``updated`` for ``update-session*``, ``sent``
+for ``send-message*``) / ``rejected`` / ``failed`` / ``timeout`` via
+:func:`twicc.cli._drop_request.output.build_final`, or ``validation_error`` when
+the local ``lookup_session`` pre-check (or the per-id ``prepare``) fails before
+any drop. A per-id failure never fails the batch — only command-level concerns
+do.
 
 Exit codes:
 
-- 0  — the batch ran and at least one session was updated, OR the resolved id
-       set was empty (nothing to do is not a failure)
+- 0  — the batch ran and at least one session succeeded, OR the resolved id set
+       was empty (nothing to do is not a failure)
 - 1  — local argument error (bad ``--timeout``, mutually-exclusive scopes,
        ``--annotation`` without a filiation scope, ``parent`` scope, neither
-       ids nor scope, or an unresolvable ``self`` / ``parent``)
+       ids nor scope, or an unresolvable ``self``)
 - 2  — TwiCC server is not running
-- 6  — the resolved id set was non-empty but NOT ONE session was updated
+- 6  — the resolved id set was non-empty but NOT ONE session succeeded
 - 64 — bad CLI usage (handled by Typer)
 """
 
@@ -48,24 +50,31 @@ from twicc.cli._output import emit_error, emit_json
 POLL_INTERVAL_SECONDS = 0.1
 
 
-def run_batch_update(
+def run_batch(
     session_ids: list[str],
     *,
     kind: str,
     prepare: Callable[..., dict | list],
     timeout: int,
+    success_status: str = "updated",
     spawned_by: str | None = None,
     descendants: str | None = None,
     annotation: list[str] | None = None,
 ) -> None:
-    """Apply one update ``kind`` to every resolved session and emit the batch result.
+    """Drop one ``kind`` request per resolved session and emit the batch result.
 
     ``prepare(resolved)`` returns either the per-id drop payload (a dict that
     must include ``session_id``) or a flat ``list`` of ``ValidationError`` when
-    this session can't accept the change (e.g. ``settings`` value invalid for
-    its provider) — in that case the id gets a per-id ``validation_error`` and
-    no drop, while the other sessions proceed. The provider-agnostic ops pass a
-    ``prepare`` that always returns a payload.
+    this session can't accept the request (e.g. a ``settings`` value invalid for
+    its provider, or an attachment its provider rejects) — in that case the id
+    gets a per-id ``validation_error`` and no drop, while the other sessions
+    proceed. The provider-agnostic ops pass a ``prepare`` that always returns a
+    payload.
+
+    ``success_status`` is the watcher's success token for this ``kind``
+    (``"updated"`` for the update services, ``"sent"`` for send-message): it is
+    what the poll loop treats as a final success and what ``summary.succeeded``
+    counts.
     """
     import os
     os.environ.setdefault("DJANGO_SETTINGS_MODULE", "twicc.settings")
@@ -91,7 +100,7 @@ def run_batch_update(
 
     if spawned_by == "parent" or descendants == "parent":
         emit_error(
-            "Error: update-sessions does not support parent-scoped filters. "
+            "Error: parent-scoped filters are not supported here. "
             "Use 'self' or an explicit session_id.",
             code=1,
         )
@@ -127,8 +136,8 @@ def run_batch_update(
 
     # --- Resolve 'self' in the explicit id list --------------------------
     # ``merge_session_scope_ids`` only resolves self/parent for the filiation
-    # filters, not for explicit ids. Mirror the singular ``update-session
-    # self`` ergonomics by resolving it here (deduplication happens in merge).
+    # filters, not for explicit ids. Mirror the singular ``<cmd> self``
+    # ergonomics by resolving it here (deduplication happens in merge).
     if session_ids and "self" in session_ids:
         from twicc.cli._drop_request.whoami import resolve_current_session
 
@@ -167,8 +176,8 @@ def run_batch_update(
     # --- Per-id pre-check + drop -----------------------------------------
 
     # ``results`` is keyed by sid so the final object keeps ``unique_ids``
-    # order. Lookup failures land here immediately (validation_error, no
-    # drop); survivors get a placeholder filled in after polling.
+    # order. Lookup / prepare failures land here immediately (validation_error,
+    # no drop); survivors get a placeholder filled in after polling.
     results: dict[str, dict | None] = {}
     pending: list[tuple[str, object, object]] = []  # (sid, drop, status_path)
 
@@ -188,7 +197,8 @@ def run_batch_update(
 
         outcome = prepare(resolved)
         if isinstance(outcome, list):
-            # Per-id validation errors (e.g. settings invalid for this provider).
+            # Per-id validation errors (e.g. settings invalid for this provider,
+            # or an attachment its provider rejects).
             results[sid] = {
                 "status": "validation_error",
                 "errors": [e._asdict() for e in outcome],
@@ -225,7 +235,7 @@ def run_batch_update(
                     received_seen[sid] = True
                     next_round.append((sid, drop, status_path))
                     continue
-                if status in ("updated", "rejected", "failed"):
+                if status in (success_status, "rejected", "failed"):
                     outcome = PollOutcome(
                         status=status, data=data,
                         received_seen=received_seen[sid],
@@ -259,7 +269,9 @@ def run_batch_update(
 
     ordered = {sid: results[sid] for sid in unique_ids}
     total = len(ordered)
-    succeeded = sum(1 for v in ordered.values() if v and v.get("status") == "updated")
+    succeeded = sum(
+        1 for v in ordered.values() if v and v.get("status") == success_status
+    )
     failed = total - succeeded
 
     emit_json({

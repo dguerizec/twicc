@@ -45,6 +45,7 @@ Everything else mirrors `twicc-orchestration-leader`: how you decompose, brief, 
 
 - `$TWICC create-session <PROMPT>` — spawn a manager or worker. Skill: `twicc-create-session`.
 - `$TWICC send-message parent <TEXT>` — report to your parent. Skill: `twicc-send-message`.
+- `$TWICC send-messages --spawned-by self --message <TEXT>` — broadcast the same message to several of your children at once. Skill: `twicc-send-messages`.
 - `$TWICC topology self` — map your subtree. Skill: `twicc-topology`.
 - `$TWICC processes --spawned-by self` — track your direct children. Skill: `twicc-processes`.
 - `$TWICC processes wait --spawned-by self ...` / `processes stop --spawned-by self ...` — wait on or stop direct child batches. Skill: `twicc-processes`.

@@ -2,8 +2,8 @@
 
 Watches ``<data_dir>/drop-requests/`` for new ``<request_uuid>.json`` files
 dropped by the TwiCC CLI (``create-session``, ``send-message``,
-``update-session``, ``update-sessions``, ``process stop``, ...). Reads the
-``payload.kind``,
+``send-messages``, ``update-session``, ``update-sessions``, ``process stop``,
+...). Reads the ``payload.kind``,
 dispatches to the matching service in ``twicc.core.services.*``, and
 writes a ``<request_uuid>.status.json`` file the CLI polls. Cleanup of
 both files is the CLI's responsibility in the nominal case; this watcher

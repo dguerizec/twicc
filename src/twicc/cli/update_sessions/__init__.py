@@ -6,6 +6,6 @@ sessions in one call. Each sub-command resolves its target ids (explicit
 / ``--annotation`` scope — union, explicit ids first), then fans out one
 drop-request per id reusing the EXACT same ``kind`` + payload the singular
 command would have produced (no new server-side handler). See
-:mod:`twicc.cli.update_sessions._runner` for the shared runner and
+:mod:`twicc.cli._batch_runner` for the shared runner and
 :mod:`twicc.cli.update_sessions.command` for the sub-app.
 """

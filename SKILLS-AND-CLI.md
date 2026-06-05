@@ -31,7 +31,7 @@ Then run `$TWICC <args>` — **never quote `$TWICC`** (it may expand to multiple
 
 Commands that target a session accept two keywords resolved via PID ancestry, so an agent never needs to know its own id:
 
-- **`self`** — the current session. Accepted by `update-session`, `update-sessions` (as an explicit id), `topology`, and the `--spawned-by` / `--spawn-tree` / `--descendants` filters.
+- **`self`** — the current session. Accepted by `update-session`, `update-sessions` / `send-messages` (as an explicit id), `topology`, and the `--spawned-by` / `--spawn-tree` / `--descendants` filters.
 - **`parent`** — the session that spawned the current one. Accepted by `send-message` and the filiation filters.
 
 `twicc whoami` is the explicit way for an agent to discover its own `session_id`, working directories, settings, and live process row.
@@ -151,6 +151,10 @@ Create a session. `PROMPT` is text or a path to a file whose content is the prom
 Send a message into an existing session (resurrects it if dead). Keeps the session's stored settings. `parent` targets the spawner of the calling session.
 - `--attach PATH` (repeatable), plus `--timeout`.
 - Skill: [`twicc-send-message`](src/twicc/agent/plugin/twicc/skills/twicc-send-message/SKILL.md).
+
+### `twicc send-messages [SESSION_ID...] --message <TEXT>`
+Batch sibling of `send-message`: the same message to several sessions at once, selected with the same model as `update-sessions` (positional `SESSION_ID...` ∪ `--spawned-by <ID|self>` / `--descendants <ID|self>` / `--annotation`; no `parent`). `--attach` is validated per session against its provider (a file one provider rejects becomes a per-id error). Each send starts/resumes an agent — a batch can cold-start many stopped sessions; and `sent` ≠ done, so chain with `processes wait`. Output is keyed by session id (`{summary, results}`); a per-session failure never fails the batch (exit `0`), exit `6` when nothing was sent.
+- Skill: [`twicc-send-messages`](src/twicc/agent/plugin/twicc/skills/twicc-send-messages/SKILL.md).
 
 ### `twicc update-session <SESSION_ID|self> <SUBCOMMAND>`
 Change a session without sending a message. `self` targets the current session. All subcommands accept `--timeout`.
