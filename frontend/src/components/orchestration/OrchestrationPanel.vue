@@ -2,9 +2,16 @@
 // Orchestration tab content: the full spawned-session tree (``spawned_by``
 // links) rooted at the session's top-level ancestor, fetched from
 // ``/api/projects/<pid>/sessions/<sid>/topology/`` (the same engine as
-// ``twicc topology``). Intentionally not live — it renders a snapshot fetched
-// on first open and refetched only when the user clicks Refresh.
-import { ref, computed, watch } from 'vue'
+// ``twicc topology``).
+//
+// Auto-refresh: while the tab is open we poll the topology every 15s, but only
+// as long as at least one node in the tree is still live (any process state
+// other than ``dead``). The moment the whole tree is stopped, polling halts; it
+// resumes on its own if a node comes back to life on a later fetch. The tab also
+// force-fetches once on every (re)activation, independently of that condition.
+// A small Live/Stopped indicator in the toolbar mirrors this state. (Polling is
+// a stop-gap until the tree is pushed over the WebSocket.)
+import { ref, computed, watch, onUnmounted } from 'vue'
 import OrchestrationNode from './OrchestrationNode.vue'
 import CostDisplay from '../ui/CostDisplay.vue'
 import { useSettingsStore } from '../../stores/settings'
@@ -22,6 +29,15 @@ const props = defineProps({
 const loading = ref(false)
 const error = ref(null)
 const topology = ref(null)
+
+// Auto-refresh cadence. Temporary fixed poll until the topology is pushed over
+// the WebSocket. Kept in a constant so the timer and the indicator copy agree.
+const AUTO_REFRESH_INTERVAL = 15000
+let autoTimer = null
+// In-flight request controller, so a newer load (manual Refresh or tab
+// activation) can abort a still-pending one and always win — no stale snapshot
+// clobbering a fresher one.
+let inFlightController = null
 
 const nodesById = computed(() => {
     const map = {}
@@ -64,34 +80,79 @@ const activitySummary = computed(() => {
     return buckets.map(b => `${b.count} ${b.label}`).join(' · ')
 })
 
-async function load() {
+// Auto-refresh gate: the tree is "live" while at least one node (root included)
+// is not ``dead``. This single signal drives both the poll timer and the
+// toolbar Live/Stopped indicator.
+const hasLiveNode = computed(() =>
+    (topology.value?.nodes ?? []).some(n => (n.process?.state ?? 'dead') !== 'dead'),
+)
+
+// ``silent`` ticks (background polls) never touch ``loading`` and keep the last
+// good snapshot on failure, so the tree never flashes a spinner or error banner
+// under the user. Manual Refresh and tab-activation loads are non-silent.
+async function load({ silent = false } = {}) {
     if (!props.projectId || !props.sessionId) return
-    loading.value = true
-    error.value = null
+    // A newer load supersedes any in-flight one (e.g. a manual Refresh landing
+    // on top of a background tick).
+    if (inFlightController) inFlightController.abort()
+    const controller = new AbortController()
+    inFlightController = controller
+    if (!silent) loading.value = true
     try {
         const url = `/api/projects/${encodeURIComponent(props.projectId)}/sessions/${encodeURIComponent(props.sessionId)}/topology/`
-        const response = await fetch(url)
+        const response = await fetch(url, { signal: controller.signal })
         if (!response.ok) {
             throw new Error(`Failed to load topology: ${response.status}`)
         }
         topology.value = await response.json()
+        error.value = null
     } catch (e) {
+        if (e.name === 'AbortError') return // superseded by a newer load
         console.error('Failed to load orchestration topology:', e)
-        error.value = 'Failed to load the orchestration topology.'
+        // A failed background tick keeps the last good snapshot on screen; only
+        // surface the error banner when there is nothing to fall back to.
+        if (!silent || !topology.value) {
+            error.value = 'Failed to load the orchestration topology.'
+        }
     } finally {
-        loading.value = false
+        if (inFlightController === controller) inFlightController = null
+        if (!silent) loading.value = false
     }
 }
 
-// Fetch on first open; keep the snapshot across tab switches. The user
-// refreshes manually to update (the tab is intentionally not live).
+// Start/stop the poll timer reactively: it runs only while the tab is active
+// AND the tree still has a live node. When the last node dies the timer stops;
+// if a node comes back to life on a later fetch, it restarts on its own.
+function stopAuto() {
+    if (autoTimer !== null) {
+        clearInterval(autoTimer)
+        autoTimer = null
+    }
+}
+function syncAuto() {
+    const shouldRun = props.active && hasLiveNode.value
+    if (shouldRun && autoTimer === null) {
+        autoTimer = setInterval(() => load({ silent: true }), AUTO_REFRESH_INTERVAL)
+    } else if (!shouldRun) {
+        stopAuto()
+    }
+}
+watch([() => props.active, hasLiveNode], syncAuto, { immediate: true })
+
+// Force a fresh fetch every time the tab becomes active, regardless of the poll
+// condition or any snapshot already held.
 watch(
     () => props.active,
     (active) => {
-        if (active && !topology.value && !loading.value) load()
+        if (active) load()
     },
-    { immediate: true }
+    { immediate: true },
 )
+
+onUnmounted(() => {
+    stopAuto()
+    if (inFlightController) inFlightController.abort()
+})
 </script>
 
 <template>
@@ -105,16 +166,30 @@ watch(
                         <CostDisplay :cost="totalCost" /> total
                     </span>
                 </div>
-                <wa-button
-                    size="small"
-                    appearance="plain"
-                    :loading="loading"
-                    :disabled="loading"
-                    @click="load"
-                >
-                    <wa-icon slot="start" name="arrow-rotate-right"></wa-icon>
-                    Refresh
-                </wa-button>
+                <div class="orch-toolbar-actions">
+                    <span
+                        v-if="nodeCount"
+                        class="orch-autorefresh"
+                        :class="hasLiveNode ? 'is-live' : 'is-stopped'"
+                        :title="hasLiveNode
+                            ? 'Auto-refreshing every 15s while sessions are live'
+                            : 'Auto-refresh stopped — every session is stopped'"
+                    >
+                        <span v-if="hasLiveNode" class="orch-autorefresh-dot"></span>
+                        <wa-icon v-else name="circle-stop"></wa-icon>
+                        {{ hasLiveNode ? 'Live' : 'Stopped' }}
+                    </span>
+                    <wa-button
+                        size="small"
+                        appearance="plain"
+                        :loading="loading"
+                        :disabled="loading"
+                        @click="load()"
+                    >
+                        <wa-icon slot="start" name="arrow-rotate-right"></wa-icon>
+                        Refresh
+                    </wa-button>
+                </div>
             </div>
             <div class="orch-note">
                 Read-only view — open a session to interact with it. Sessions marked
@@ -166,6 +241,43 @@ watch(
     align-items: center;
     justify-content: space-between;
     gap: var(--wa-space-s);
+}
+
+.orch-toolbar-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--wa-space-s);
+    flex-shrink: 0;
+}
+
+/* Auto-refresh state indicator. ``is-live`` shows a green pulsing dot + "Live";
+   ``is-stopped`` shows a neutral circle-stop + "Stopped" (the whole tree is
+   dead, so polling has halted). The dot pulse matches the awaiting-user pulse
+   used on the nodes (1.5s, 1→0.3). */
+.orch-autorefresh {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--wa-space-2xs);
+    font-size: var(--wa-font-size-s);
+    color: var(--wa-color-text-quiet);
+    white-space: nowrap;
+}
+
+.orch-autorefresh.is-live {
+    color: var(--wa-color-success-60);
+}
+
+.orch-autorefresh-dot {
+    width: 0.5rem;
+    height: 0.5rem;
+    border-radius: 50%;
+    background: var(--wa-color-success-60);
+    animation: orch-autorefresh-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes orch-autorefresh-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
 }
 
 .orch-note {
