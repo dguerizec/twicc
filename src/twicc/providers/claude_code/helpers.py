@@ -32,6 +32,7 @@ from twicc.providers.helpers import (
 
 from .compute import extract_command, get_message_content, get_message_content_list, strip_markdown
 from .constants import (
+    AGENT_SETTINGS_ALIASES as _AGENT_SETTINGS_ALIASES,
     AGENT_SETTINGS_CATEGORIES as _AGENT_SETTINGS_CATEGORIES,
     AGENT_SETTINGS_DESCRIPTIONS as _AGENT_SETTINGS_DESCRIPTIONS,
     AGENT_SETTINGS_FIELDS_MAPPING as _AGENT_SETTINGS_FIELDS_MAPPING,
@@ -195,6 +196,7 @@ class ClaudeCodeHelpers(BaseProviderHelpers):
     AGENT_SETTINGS_CATEGORIES: ClassVar[dict[AgentSettingCategory, list[str]]] = _AGENT_SETTINGS_CATEGORIES
     AGENT_SETTINGS_FIELDS_MAPPING: ClassVar[dict[str, str]] = _AGENT_SETTINGS_FIELDS_MAPPING
     AGENT_SETTINGS_DESCRIPTIONS: ClassVar[dict[str, dict]] = _AGENT_SETTINGS_DESCRIPTIONS
+    AGENT_SETTINGS_ALIASES: ClassVar[dict[str, dict[str, str]]] = _AGENT_SETTINGS_ALIASES
 
     # Claude Code permission modes that do not require interactive approval.
     NON_INTERACTIVE_PERMISSION_MODES: ClassVar[frozenset[str]] = frozenset({"bypassPermissions", "dontAsk"})

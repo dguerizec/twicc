@@ -18,6 +18,7 @@ class ProviderBootstrap(NamedTuple):
     is_disabled: bool
     agent_settings_categories: dict
     agent_settings_choices: dict
+    agent_settings_aliases: dict
     model_registry: list
     attachment_support: dict
     presets: list
@@ -46,6 +47,7 @@ def load_local_bootstrap() -> LocalBootstrap:
             is_disabled=provider.value in disabled,
             agent_settings_categories=provider_data.get("agent_settings_categories", {}),
             agent_settings_choices=provider_data.get("agent_settings_choices", {}),
+            agent_settings_aliases=provider_data.get("agent_settings_aliases", {}),
             model_registry=provider_data.get("model_registry", []),
             attachment_support=provider_data.get("attachment_support", {}),
             presets=presets,

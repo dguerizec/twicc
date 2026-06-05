@@ -24,6 +24,19 @@ _PROVIDER_LABELS = {
 }
 
 
+# Alias hints appended to the inline ``--effort`` / ``--permission-mode`` help in
+# every settings command. Kept here (single source) so the three commands
+# (create-session, update-session, update-sessions) stay in sync. The keys
+# themselves live in each provider's ``AGENT_SETTINGS_ALIASES`` — this is only
+# their human-facing summary, resolved to concrete values per provider.
+EFFORT_ALIAS_HINT = " Aliases (resolved per provider): 'min', 'max'."
+PERMISSION_ALIAS_HINT = (
+    " Aliases (resolved per provider): 'strict'/'safe' (most-locked, "
+    "non-interactive), 'open'/'full'/'yolo'/'bypass' (most permissive, "
+    "non-interactive), 'auto' (balanced, interactive)."
+)
+
+
 def provider_label(name: str) -> str:
     return _PROVIDER_LABELS.get(name, name)
 
@@ -114,6 +127,10 @@ def model_help(ctx: HelpContext) -> str:
         chunks.append(f"{provider_label(provider_name)}: {', '.join(rendered)}")
     if chunks:
         base += " " + ". ".join(chunks) + "."
+    base += (
+        " Aliases (resolved per provider): 'max'/'strongest' (top family), "
+        "'min'/'fastest'/'cheapest' (lightest family); always the latest version."
+    )
     base += default_suffix(ctx, "selected_model")
     return base
 
@@ -124,6 +141,7 @@ def context_max_help(ctx: HelpContext) -> str:
         "Claude Code: '200k' or '1m' (1m requires a 1m-capable model; "
         "otherwise silently capped to 200k) | Codex: '272k'."
     )
+    base += " Aliases (resolved per provider): 'min', 'max'."
     base += default_suffix(ctx, "context_max", formatter=format_tokens)
     return base
 

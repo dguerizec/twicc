@@ -112,6 +112,36 @@ AGENT_SETTINGS_DESCRIPTIONS: dict[str, dict] = {
     },
 }
 
+
+# Keyword aliases the CLI / skills accept in place of a concrete agent-settings
+# value, resolved against this provider before the request leaves the client.
+# Shape ``{field: {alias: concrete_value}}``. Only the ordered fields take
+# keywords; the booleans (thinking_enabled, fast_mode, claude_in_chrome,
+# question_widget) are passed through literally. Resolution is native-first: a
+# value Claude Code already accepts verbatim (e.g. effort "max") is never
+# reinterpreted as a keyword, so an alias only fires when it is NOT a native
+# value. ``context_max`` targets are token-count strings so they flow through
+# ``parse_context_max`` exactly like a literal ``--context-max 1m``. ``auto``
+# needs no entry — it is already a native permission_mode for this provider.
+AGENT_SETTINGS_ALIASES: dict[str, dict[str, str]] = {
+    "selected_model": {
+        "min": "sonnet", "fastest": "sonnet", "cheapest": "sonnet",
+        "max": "opus", "strongest": "opus",
+    },
+    "effort": {
+        "min": "low", "max": "max",
+    },
+    "context_max": {
+        "min": "200k", "max": "1m",
+    },
+    "permission_mode": {
+        "strict": "dontAsk", "safe": "dontAsk",
+        "full": "bypassPermissions", "open": "bypassPermissions",
+        "yolo": "bypassPermissions", "bypass": "bypassPermissions",
+    },
+}
+
+
 # ------------------------------------------------------------------
 # Model registry — supported model versions
 #

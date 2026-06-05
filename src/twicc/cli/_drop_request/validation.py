@@ -72,6 +72,13 @@ def validate_settings(provider: str, settings, bootstrap) -> list[ValidationErro
         all_supported.update(fields)
     choices = pb.agent_settings_choices or {}
     model_ids = {m.get("selected_model") for m in pb.model_registry or []}
+    aliases = pb.agent_settings_aliases or {}
+
+    def _alias_hint(field_name: str) -> str:
+        # Surface the provider's keyword aliases on an invalid value so a user
+        # who typed an unsupported keyword discovers the accepted ones.
+        keys = sorted((aliases.get(field_name) or {}).keys())
+        return f" Or a keyword: {keys}." if keys else ""
 
     for field, value in settings._asdict().items():
         if value is None:
@@ -87,39 +94,14 @@ def validate_settings(provider: str, settings, bootstrap) -> list[ValidationErro
                 ids = sorted(m for m in model_ids if m)
                 errors.append(ValidationError(
                     _field_to_flag(field), "invalid_choice",
-                    f"invalid value {value!r} for {provider}. Expected: {ids}.",
+                    f"invalid value {value!r} for {provider}. Expected: {ids}." + _alias_hint(field),
                 ))
         elif field in choices:
             if value not in choices[field]:
                 errors.append(ValidationError(
                     _field_to_flag(field), "invalid_choice",
-                    f"invalid value {value!r} for {provider}. Expected: {choices[field]}.",
+                    f"invalid value {value!r} for {provider}. Expected: {choices[field]}." + _alias_hint(field),
                 ))
-    return errors
-
-
-def validate_unset_fields(
-    provider: str, unset_fields: list[str], bootstrap,
-) -> list[ValidationError]:
-    """Check each ``--unset <field>`` token against the provider's supported fields.
-
-    Mirrors :func:`validate_settings` for the symmetric ``set`` case: a
-    provider that does not support a setting cannot accept ``--unset`` for it
-    either (the column on ``Session`` is provider-agnostic but ``null`` would
-    silently match what the row already has — better to fail loudly).
-    """
-    errors: list[ValidationError] = []
-    pb = bootstrap.providers[provider]
-    categories = pb.agent_settings_categories or {}
-    all_supported = set()
-    for fields in categories.values():
-        all_supported.update(fields)
-    for field in unset_fields:
-        if field not in all_supported:
-            errors.append(ValidationError(
-                f"--unset {_field_to_unset_token(field)}", "unsupported_field",
-                f"{field} is not supported by {provider}. Supported: {sorted(all_supported)}.",
-            ))
     return errors
 
 

@@ -6,14 +6,17 @@ same per-provider settings update. Split in two so the batch can reuse the
 exact same logic with a different error-handling shape:
 
 - :func:`parse_settings_flags` — **provider-independent** (global) validation of
-  the raw CLI flags: unknown ``--unset`` token, malformed ``--context-max``,
-  ``--<field>`` / ``--unset`` conflict, no-op. Same for every targeted session,
-  so the singular and the batch validate it once.
+  the raw CLI flags: unknown ``--unset`` token, ``--<field>`` / ``--unset``
+  conflict, no-op. Same for every targeted session, so the singular and the
+  batch validate it once. ``--context-max`` is NOT parsed here anymore: a
+  keyword like ``max`` only has meaning once the provider is known, so the raw
+  string is carried through to :func:`prepare_settings`.
 - :func:`prepare_settings` — **per-provider** resolution against one resolved
-  session: provider enabled, ``--unset`` field supported, preset resolution
-  (presets are provider-scoped), value validation, hidden invariants. The
-  singular runs it for one session; the batch runs it per id (a failure becomes
-  a per-id ``validation_error`` while the other sessions proceed).
+  session: provider enabled, keyword-alias resolution + ``context_max`` parse,
+  silent drop of fields the provider doesn't support (set or ``--unset``),
+  preset resolution (presets are provider-scoped), value validation, hidden
+  invariants. The singular runs it for one session; the batch runs it per id (a
+  failure becomes a per-id ``validation_error`` while the other sessions proceed).
 
 Both return either their successful product or a flat ``list[ValidationError]``
 so the caller decides how to surface it (emit + exit for the singular / global
@@ -25,15 +28,15 @@ from __future__ import annotations
 # Only Django-free modules at import time: this module is imported at the top of
 # ``settings_command`` (loaded when the CLI boots, before ``django.setup()``),
 # so the Django-heavy bits (``presets``, ``providers.helpers``) are imported
-# lazily inside :func:`prepare_settings`. ``help_strings`` and ``validation``
-# are Django-free at module top.
-from twicc.cli._drop_request.help_strings import parse_context_max
+# lazily inside :func:`prepare_settings`. ``aliases`` and ``validation`` are
+# Django-free at module top (``aliases`` only pulls ``help_strings`` and
+# ``validation`` in turn).
+from twicc.cli._drop_request.aliases import resolve_overrides, supported_fields
 from twicc.cli._drop_request.validation import (
     ValidationError,
     validate_no_set_unset_conflict,
     validate_provider,
     validate_settings,
-    validate_unset_fields,
 )
 
 
@@ -81,9 +84,10 @@ def parse_settings_flags(
     """Provider-independent parse + validation of the raw settings flags.
 
     Returns ``(overrides, unset_fields)`` on success, or a flat list of
-    :class:`ValidationError` (``unknown_unset_field`` / ``invalid_format`` /
-    ``unset_conflict`` / ``no_op``) when the flags are malformed on their own
-    — independent of any target session's provider.
+    :class:`ValidationError` (``unknown_unset_field`` / ``unset_conflict`` /
+    ``no_op``) when the flags are malformed on their own — independent of any
+    target session's provider. ``context_max`` is left as a raw string for
+    per-provider keyword resolution + parsing in :func:`prepare_settings`.
     """
     errors: list[ValidationError] = []
 
@@ -100,13 +104,6 @@ def parse_settings_flags(
         else:
             unset_fields.append(field)
 
-    # --context-max parse.
-    context_max_int: int | None = None
-    try:
-        context_max_int = parse_context_max(context_max)
-    except ValueError as e:
-        errors.append(ValidationError("--context-max", "invalid_format", str(e)))
-
     overrides: dict[str, object | None] = {
         "selected_model": model,
         "effort": effort,
@@ -114,7 +111,11 @@ def parse_settings_flags(
         "thinking_enabled": thinking,
         "claude_in_chrome": claude_in_chrome,
         "fast_mode": fast_mode,
-        "context_max": context_max_int,
+        # Raw string: keyword aliases (``max``/``min``) and the literal token
+        # forms (``200k``/``1m``/...) are both resolved + parsed per-provider in
+        # ``prepare_settings`` — a keyword only has meaning once we know which
+        # provider's table to consult.
+        "context_max": context_max,
         "question_widget": question_widget,
     }
 
@@ -155,10 +156,12 @@ def prepare_settings(
     """Resolve the settings update for one session against its provider.
 
     ``overrides`` / ``unset_fields`` come from :func:`parse_settings_flags`
-    (already globally validated). Returns ``(updates, replace_all)`` ready for a
+    (already globally validated). Keyword aliases are resolved and fields the
+    provider doesn't support are dropped silently (no-op) before validation.
+    Returns ``(updates, replace_all)`` ready for a
     ``kind="session:update_settings"`` payload, or a flat list of
     :class:`ValidationError` (``unknown_provider`` / ``provider_disabled`` /
-    ``unsupported_field`` / ``invalid_preset`` / ``invalid_choice`` / hidden
+    ``invalid_format`` / ``invalid_preset`` / ``invalid_choice`` / hidden
     invariants) when this session's provider rejects the requested change.
     """
     # Lazy (Django-heavy) imports — see the module note above.
@@ -168,12 +171,24 @@ def prepare_settings(
 
     provider = resolved.provider
 
-    # Provider still enabled + ``--unset`` fields supported by it.
+    # Provider still enabled. A disabled/unknown provider can't resolve a
+    # change, so bail before touching its aliases or choices.
     errors: list[ValidationError] = list(validate_provider(provider, bootstrap))
-    if provider in bootstrap.providers:
-        errors.extend(validate_unset_fields(provider, unset_fields, bootstrap))
     if errors:
         return errors
+    pb = bootstrap.providers[provider]
+
+    # Silent no-op: drop ``--unset`` tokens for fields this provider doesn't
+    # support (symmetric with the set-field drop done by ``resolve_overrides``).
+    unset_fields = [f for f in unset_fields if f in supported_fields(pb)]
+
+    # Per-provider keyword-alias resolution (``max`` → flagship, ``open`` →
+    # most permissive non-interactive mode, ...) + ``context_max`` parse +
+    # silent drop of unsupported set fields. After this, ``overrides`` holds
+    # only concrete, provider-valid literals.
+    overrides, alias_errors = resolve_overrides(overrides, pb)
+    if alias_errors:
+        return alias_errors
 
     # Resolve the final settings + updates dict.
     presets_for_provider = bootstrap.providers[provider].presets

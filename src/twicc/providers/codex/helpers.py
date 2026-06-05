@@ -27,6 +27,7 @@ from twicc.providers.helpers import (
 )
 
 from .constants import (
+    AGENT_SETTINGS_ALIASES as _AGENT_SETTINGS_ALIASES,
     AGENT_SETTINGS_CATEGORIES as _AGENT_SETTINGS_CATEGORIES,
     AGENT_SETTINGS_DESCRIPTIONS as _AGENT_SETTINGS_DESCRIPTIONS,
     AGENT_SETTINGS_FIELDS_MAPPING as _AGENT_SETTINGS_FIELDS_MAPPING,
@@ -103,6 +104,7 @@ class CodexHelpers(BaseProviderHelpers):
     AGENT_SETTINGS_CATEGORIES: ClassVar[dict[AgentSettingCategory, list[str]]] = _AGENT_SETTINGS_CATEGORIES
     AGENT_SETTINGS_FIELDS_MAPPING: ClassVar[dict[str, str]] = _AGENT_SETTINGS_FIELDS_MAPPING
     AGENT_SETTINGS_DESCRIPTIONS: ClassVar[dict[str, dict]] = _AGENT_SETTINGS_DESCRIPTIONS
+    AGENT_SETTINGS_ALIASES: ClassVar[dict[str, dict[str, str]]] = _AGENT_SETTINGS_ALIASES
 
     # Codex permission modes that do not require interactive approval.
     NON_INTERACTIVE_PERMISSION_MODES: ClassVar[frozenset[str]] = frozenset({"yolo", "strict"})

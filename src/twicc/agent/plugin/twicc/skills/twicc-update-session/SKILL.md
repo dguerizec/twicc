@@ -59,8 +59,17 @@ Agent settings flags (all optional; use `$TWICC info models agent-settings prese
 - `--fast-mode / --no-fast-mode` — Claude Code only (Opus only).
 - `--context-max VALUE` — Claude Code: `200k` or `1m`. Codex: `272k`.
 - `--question-widget / --no-question-widget` — Claude Code only (Decide to allow or not UI interactive widget for questions, to be answered by the user).
-- `--unset TOKEN` (repeatable) — reset a field to NULL. Accepted tokens: `model`, `effort`, `permission-mode`, `thinking`, `claude-in-chrome`, `fast-mode`, `context-max`, `question-widget` (provider-supported subset only).
+- `--unset TOKEN` (repeatable) — reset a field to NULL. Accepted tokens: `model`, `effort`, `permission-mode`, `thinking`, `claude-in-chrome`, `fast-mode`, `context-max`, `question-widget` (a token the session's provider doesn't support is silently ignored).
 - `--preset NAME` — apply a saved preset (replace mode). `__defaults__` resets all fields to the user-configured defaults. Use `$TWICC info presets` to list available presets (skill: `twicc-info`).
+
+### Aliases
+
+Some settings also accept provider-agnostic aliases, resolved to the session's provider:
+- `--model` — `max`/`strongest` → top family, `min`/`fastest`/`cheapest` → lightest family (latest version).
+- `--effort`, `--context-max` — `max` → highest/largest, `min` → lowest/smallest.
+- `--permission-mode` — `strict`/`safe` → most-locked (non-interactive), `open`/`full`/`yolo`/`bypass` → most permissive (non-interactive), `auto` → balanced (interactive).
+
+A flag the session's provider doesn't support (e.g. `--thinking` on Codex) is silently ignored (no-op).
 
 **How settings reach a live process:** if a session currently has a process attached (a running agent), changes are propagated immediately per field category:
 - *Live* (`permission_mode` on Claude Code) — applied immediately.
@@ -116,7 +125,7 @@ $TWICC update-session '<SESSION_ID>' hide
 $TWICC update-session '<SESSION_ID>' unhide
 ```
 
-`hide` requires a non-interactive `permission_mode` (Claude Code: `bypassPermissions` or `dontAsk`; Codex: `yolo` or `strict`) and `question_widget` disabled (Claude Code). If not met, update `settings` first. `unhide` has no preconditions.
+`hide` requires a non-interactive `permission_mode` (Claude Code: `bypassPermissions`/`dontAsk`; Codex: `yolo`/`strict`; alias `open` or `strict`) and `question_widget` disabled (Claude Code). If not met, update `settings` first. `unhide` has no preconditions.
 
 ## Errors
 
@@ -130,7 +139,7 @@ $TWICC update-session '<SESSION_ID>' unhide
 
 ### Local (exit 1) — sub-command specific
 
-- `settings`: `unknown_unset_field`, `unsupported_field`, `invalid_choice`, `invalid_format`, `unset_conflict`, `no_op`.
+- `settings`: `unknown_unset_field`, `invalid_choice`, `invalid_format`, `unset_conflict`, `no_op`.
 - `title`: `invalid_title` — empty after trim.
 - `annotations`: `invalid_annotation_operation`, `invalid_annotation`, `invalid_annotation_path`, `annotation_path_conflict`, `annotation_non_scalar`, `invalid_annotations_file`, `no_op`.
 - `pin`: `invalid_pin_mode` — MODE not in `{project, workspace, all}`.
@@ -144,15 +153,18 @@ Same codes, re-checked server-side. Additionally `invalid_title` (title too long
 
 ```json
 {"status":"updated","session_id":"...","provider":"...","project_id":"...","request_uuid":"..."}
+{"status":"noop","session_id":"..."}
 {"status":"validation_error","errors":[{"field":"--unset model","code":"unset_conflict","message":"..."}]}
 {"status":"rejected","errors":[{"field":"...","code":"...","message":"..."}],"request_uuid":"..."}
 {"status":"failed","error":"...","request_uuid":"..."}
 {"status":"timeout","received_seen":true,"message":"...","request_uuid":"..."}
 ```
 
+`noop` means every field you touched is a no-op for this session's provider (e.g. `--thinking` on Codex): nothing was written, and it exits `0`.
+
 ### Exit codes
 
-- `0` — Update applied
+- `0` — Update applied (or a no-op for this provider)
 - `1` — Local validation error
 - `2` — TwiCC server not running
 - `3` — Server rejected
@@ -195,5 +207,5 @@ $TWICC update-session self annotations set:role=worker
 ## How to present results
 
 1. On success, give a clickable link: `[link text](/project/{project_id}/session/{session_id})`.
-2. On `no_op` / `unset_conflict` / `unsupported_field`, the error message is self-explanatory.
+2. On `no_op` / `unset_conflict`, the error message is self-explanatory.
 3. Mention agent restart only when relevant (startup settings changed).

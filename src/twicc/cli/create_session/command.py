@@ -6,10 +6,11 @@ import typer
 
 from twicc.cli._drop_request.help_context import load_help_context
 from twicc.cli._drop_request.help_strings import (
+    EFFORT_ALIAS_HINT,
+    PERMISSION_ALIAS_HINT,
     context_max_help,
     default_suffix,
     model_help,
-    parse_context_max,
     preset_help,
     provider_help,
 )
@@ -61,6 +62,7 @@ def create_session_cmd(
             "Reasoning effort. Claude Code: 'low', 'medium', 'high', 'xhigh', 'max' "
             "(xhigh/max require a capable model; otherwise silently demoted). "
             "Codex: 'low', 'medium', 'high', 'xhigh'."
+            + EFFORT_ALIAS_HINT
             + default_suffix(_HELP_CTX,"effort")
         ),
     ),
@@ -71,6 +73,7 @@ def create_session_cmd(
             "Tool permission policy. Claude Code: 'default', 'acceptEdits', 'plan', "
             "'dontAsk', 'bypassPermissions'. Codex: 'read_only', 'strict', 'auto', "
             "'autonomous', 'yolo'."
+            + PERMISSION_ALIAS_HINT
             + default_suffix(_HELP_CTX,"permission_mode")
         ),
     ),
@@ -197,6 +200,7 @@ def create_session_cmd(
     import django
     django.setup()
 
+    from twicc.cli._drop_request.aliases import resolve_overrides
     from twicc.cli._drop_request.annotations import parse_annotations
     from twicc.cli._drop_request.attachments import (
         AttachmentResizeError,
@@ -241,15 +245,7 @@ def create_session_cmd(
             )
             raise typer.Exit(1)
 
-    # Parse --context-max early so other validation can see the int form.
-    try:
-        context_max_int = parse_context_max(context_max)
-    except ValueError as e:
-        emit_validation_errors(
-            [ValidationError("--context-max", "invalid_format", str(e))],
-        )
-        raise typer.Exit(1)
-
+    alias_errors: list[ValidationError] = []
     try:
         text = resolve_prompt(prompt)
         resolved_project = resolve_project(project)
@@ -260,9 +256,18 @@ def create_session_cmd(
             "thinking_enabled": thinking,
             "claude_in_chrome": claude_in_chrome,
             "fast_mode": fast_mode,
-            "context_max": context_max_int,
+            # Raw string: keyword aliases (``max``/``min``) and the literal
+            # token forms are resolved + parsed per-provider just below.
+            "context_max": context_max,
             "question_widget": question_widget,
         }
+        # Resolve keyword aliases (``max``/``open``/...), parse context_max, and
+        # drop fields this provider doesn't support — against the resolved
+        # provider, so the rest of the pipeline sees concrete literals only.
+        if provider in bootstrap.providers:
+            overrides, alias_errors = resolve_overrides(
+                overrides, bootstrap.providers[provider],
+            )
         preset_list = bootstrap.providers[provider].presets if provider in bootstrap.providers else []
         settings = apply_preset_and_overrides(preset, preset_list, overrides)
     except PromptError as e:
@@ -292,6 +297,7 @@ def create_session_cmd(
     errors.extend(annotation_errors)
     provider_errors = validate_provider(provider, bootstrap)
     errors.extend(provider_errors)
+    errors.extend(alias_errors)  # invalid_format from --context-max (per-provider)
     if not provider_errors:  # only validate settings if the provider is OK
         errors.extend(validate_settings(provider, settings, bootstrap))
 

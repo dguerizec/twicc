@@ -13,8 +13,10 @@ The semantics mirror the UI's settings-only update path:
   ``--unset`` forces a field back to ``NULL`` even if the preset set it.
 
 ``--model X`` combined with ``--unset model`` is rejected up-front
-(``unset_conflict``). ``--unset <field>`` is also rejected when the
-session's provider does not support the field (``unsupported_field``).
+(``unset_conflict``). ``--unset <field>`` for a field the session's provider
+doesn't support is silently ignored (no-op), as is a per-flag value for an
+unsupported field; keyword aliases (``max``, ``open``, ...) are resolved to the
+provider's concrete value before validation.
 
 The flag parsing (provider-independent) and the per-provider resolution both
 live in :mod:`twicc.cli._drop_request.settings_resolution`, shared with the
@@ -27,6 +29,8 @@ import typer
 
 from twicc.cli._drop_request.help_context import load_help_context
 from twicc.cli._drop_request.help_strings import (
+    EFFORT_ALIAS_HINT,
+    PERMISSION_ALIAS_HINT,
     context_max_help,
     default_suffix,
     model_help,
@@ -69,6 +73,7 @@ def update_settings_cmd(
             "Reasoning effort. Claude Code: 'low', 'medium', 'high', 'xhigh', 'max' "
             "(xhigh/max require a capable model; otherwise silently demoted). "
             "Codex: 'low', 'medium', 'high', 'xhigh'."
+            + EFFORT_ALIAS_HINT
             + default_suffix(_HELP_CTX, "effort")
         ),
     ),
@@ -79,6 +84,7 @@ def update_settings_cmd(
             "Tool permission policy. Claude Code: 'default', 'acceptEdits', 'plan', "
             "'dontAsk', 'bypassPermissions'. Codex: 'read_only', 'strict', 'auto', "
             "'autonomous', 'yolo'."
+            + PERMISSION_ALIAS_HINT
             + default_suffix(_HELP_CTX, "permission_mode")
         ),
     ),
@@ -167,7 +173,7 @@ def update_settings_cmd(
         parse_settings_flags, prepare_settings,
     )
     from twicc.cli._drop_request.validation import ValidationError
-    from twicc.cli._output import emit_error
+    from twicc.cli._output import emit_error, emit_json
 
     # Server-up check first (exit 2 wins over any validation error), matching
     # the original ordering of this command.
@@ -209,6 +215,13 @@ def update_settings_cmd(
         emit_validation_errors(result)
         raise typer.Exit(1)
     updates, replace_all = result
+
+    if not updates and not replace_all:
+        # Every field touched was a no-op for this session's provider (e.g.
+        # --thinking on Codex): nothing to write. Report a silent no-op rather
+        # than dropping an empty-updates request the server would reject.
+        emit_json({"status": "noop", "session_id": resolved.session_id})
+        raise typer.Exit(0)
 
     payload = {
         "session_id": resolved.session_id,

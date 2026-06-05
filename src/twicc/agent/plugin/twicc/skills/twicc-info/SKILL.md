@@ -164,7 +164,7 @@ $TWICC info models [--provider <key>] [--include-disabled-providers]
 }
 ```
 
-- `identifier` — the canonical `family-version` form. **Always valid** as a `selected_model` value (also accepted by `create-session` / `update-session settings`).
+- `identifier` — the canonical `family-version` form. **Always valid** as a `--model` value (accepted by `create-session` / `update-session settings`).
 - `alias` — the bare family name (`"opus"`, `"sonnet"`, `"gpt"`, …) for the latest entry of each family; `null` otherwise. Passing the alias means "always resolve to the family's current latest". Pin to `identifier` for a specific version; use `alias` for auto-upgrade on a new release.
 - `retirement_date` — ISO date when the model is retired, or `null` for evergreen / latest entries.
 - `extra` — provider-specific capability flags (every flag listed, including `false` values). Cross-references the `restricted_to` lists in `agent-settings`.
@@ -180,6 +180,14 @@ $TWICC info agent-settings [--provider <key>] [--include-disabled-providers]
 ```json
 "agent-settings": {
   "claude_code": {
+    "model": {
+      "values": [
+        {"value": "opus",     "latest": true},
+        {"value": "sonnet",   "latest": true},
+        {"value": "opus-4.7", "latest": false}
+      ],
+      "aliases": {"max": "opus", "strongest": "opus", "min": "sonnet", "fastest": "sonnet", "cheapest": "sonnet"}
+    },
     "effort": {
       "values": [
         {"value": "low",    "restricted_to": null},
@@ -187,28 +195,35 @@ $TWICC info agent-settings [--provider <key>] [--include-disabled-providers]
         {"value": "high",   "restricted_to": null},
         {"value": "xhigh",  "restricted_to": ["opus-4.8", "opus", "opus-4.7"]},
         {"value": "max",    "restricted_to": ["opus-4.8", "opus", "opus-4.7", "opus-4.6", "sonnet-4.6", "sonnet"]}
-      ]
+      ],
+      "aliases": {"min": "low", "max": "max"}
     },
     "permission_mode": {
       "values": [
         {"value": "default", "restricted_to": null, "description": "Prompts for permission on first use of each tool"},
         {"value": "auto",    "restricted_to": ["opus-4.8", "opus", ...], "description": "Auto-approves tools, with safety checks blocking risky actions"}
-      ]
+      ],
+      "aliases": {"strict": "dontAsk", "safe": "dontAsk", "open": "bypassPermissions", "full": "bypassPermissions"}
     },
     "context_max": {
       "values": [
         {"value": 200000,  "context_max_alias": "200k", "restricted_to": null},
         {"value": 1000000, "context_max_alias": "1m",   "restricted_to": ["opus-4.8", "opus", ...]}
-      ]
+      ],
+      "aliases": {"min": "200k", "max": "1m"}
     }
   }
 }
 ```
 
+Field keys match the CLI flags / presets: the model is `model` (not the wire name `selected_model`) and extended thinking is `thinking` (not `thinking_enabled`); the rest share the same name.
+
 - `restricted_to: null` — value is available on every model of this provider.
 - `restricted_to: [...]` — value applies **only** to those model identifiers / aliases (same vocabulary as `models.identifier` / `models.alias`).
 - `description` — present only for values that have a documented note (today: every `permission_mode` value across providers, plus `fast_mode=true` on Claude Code). Silently absent otherwise.
 - `context_max_alias` — only on entries of the `context_max` field: compact human-friendly form of `value` (`200000` → `"200k"`, `1000000` → `"1m"`, `272000` → `"272k"`). The `value` (raw integer) remains the canonical form; the alias is a convenience for display and matches the syntax accepted by `--context-max` in `create-session` / `update-session settings`.
+- `aliases` — alias → concrete-value map for the field (`{"max": "opus", ...}`): pass the alias to the matching `--<field>` flag in `create-session` / `update-session settings` / `update-sessions settings` and it resolves to the value for the session's provider.
+- `model.values` — each accepted `--model` value with a `latest` flag (the current flagship of its family); richer per-model metadata (family, version, capabilities, retirement) lives in the `models` section.
 
 This is the canonical "what can I set, and when does it apply" reference before calling `update-session settings` or building a preset.
 

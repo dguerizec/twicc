@@ -86,7 +86,7 @@ $TWICC update-sessions settings [SESSION_ID...] [FLAGS] [--spawned-by X|--descen
 
 Same flags as `update-session settings` (skill: `twicc-update-session`): `--preset`, `--model`, `--effort`, `--permission-mode`, `--thinking`, `--claude-in-chrome`, `--fast-mode`, `--question-widget`, `--context-max`, `--unset <field>`. Patch by default; `--preset` switches to replace mode. At least one flag or `--unset` is required.
 
-Resolution is **per session against its own provider**: the change is applied wherever the provider accepts it, and a session whose provider rejects a value (e.g. `--model opus` on a Codex session, or `--thinking` which Codex doesn't have) yields a per-id `validation_error` (`invalid_choice` / `unsupported_field` / `invalid_preset`) while the other sessions proceed. So a mixed-provider batch simply updates the sessions where the setting applies and flags the rest — no silently wrong setting (the providers' value spaces are disjoint). To target a single provider, pre-filter the ids with `twicc sessions --provider ...` (skill: `twicc-sessions`).
+Resolution is **per session against its own provider**, which makes a mixed-provider batch trivial. Provider-agnostic aliases resolve to each provider's concrete value — `--model max`, `--effort max`, `--permission-mode open`, `--context-max max` (and `min`, `strict`, `auto`, ...; see `twicc-create-session` for the full list) each land on the right value per session. A flag a session's provider doesn't support (e.g. `--thinking` on Codex) is silently ignored for that session — no error. A genuinely invalid value on a supported field (e.g. `--model opus` on a Codex session) yields a per-id `validation_error` (`invalid_choice` / `invalid_format` / `invalid_preset`) while the other sessions proceed.
 
 Startup settings (`effort`, `thinking`, `claude-in-chrome`, `fast-mode`, `question-widget` on Claude Code) are applied on the next restart: each live agent is stopped (at the end of its current assistant turn if working), so the next message it receives starts it with the new settings. No agent is interrupted mid-turn.
 
@@ -94,7 +94,7 @@ Startup settings (`effort`, `thinking`, `claude-in-chrome`, `fast-mode`, `questi
 
 Argument-level problems fail the whole command (exit 1, plain-text on stderr): bad `--timeout`, `--spawned-by`/`--descendants` together, `parent` scope, `--annotation` without a filiation scope, neither ids nor scope, invalid `--mode`, malformed `--op`, and (settings) a malformed flag shared by all ids (`unknown_unset_field`, `invalid_format`, `unset_conflict`, `no_op`).
 
-Per-session problems never fail the batch — they are reported in `results[<id>]` with `status` `validation_error` (local lookup failure: `session_not_found`, `is_subagent`, `session_stale`, `project_no_directory`, `unknown_provider`; settings not applicable to the session's provider: `provider_disabled`, `unsupported_field`, `invalid_choice`, `invalid_preset`) or `rejected` (server business rule, e.g. hidden constraints). Same code vocabulary as `twicc-update-session`.
+Per-session problems never fail the batch — they are reported in `results[<id>]` with `status` `validation_error` (local lookup failure: `session_not_found`, `is_subagent`, `session_stale`, `project_no_directory`, `unknown_provider`; settings not applicable to the session's provider: `provider_disabled`, `invalid_choice`, `invalid_format`, `invalid_preset`) or `rejected` (server business rule, e.g. hidden constraints). Same code vocabulary as `twicc-update-session`.
 
 ## Output format
 
@@ -111,14 +111,14 @@ A single object keyed by session_id, plus a summary:
 }
 ```
 
-Per-id `status`: `updated`, `rejected`, `failed`, `timeout`, or `validation_error`. `succeeded` counts `updated`; `failed` is everything else.
+Per-id `status`: `updated`, `noop` (nothing to apply for that session's provider — e.g. a Claude-only flag like `--thinking` on a Codex session), `rejected`, `failed`, `timeout`, or `validation_error`. `succeeded` counts `updated` and `noop`; `failed` is everything else.
 
 ### Exit codes
 
-- `0` — batch ran and at least one session was updated (or the resolved set was empty)
+- `0` — batch ran and at least one session was updated or skipped as a no-op (or the resolved set was empty)
 - `1` — local argument error
 - `2` — TwiCC server not running
-- `6` — resolved set was non-empty but no session was updated
+- `6` — resolved set was non-empty but no session was updated or skipped
 - `64` — bad CLI usage
 
 ## Examples

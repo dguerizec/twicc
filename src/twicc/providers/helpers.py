@@ -254,6 +254,14 @@ class BaseProviderHelpers:
     # ``.constants`` module so it stays Django-free.
     AGENT_SETTINGS_DESCRIPTIONS: ClassVar[dict[str, dict]] = {}
 
+    # Per-field keyword aliases the CLI/skills accept in place of a concrete
+    # agent-settings value (``max`` → the family flagship, ``open`` → the most
+    # permissive non-interactive mode, ...). Shape ``{field: {alias: value}}``.
+    # Each provider redeclares its own table from its ``.constants`` module so
+    # it stays Django-free and importable by the CLI. Empty by default — a
+    # provider with no aliases accepts only literal values.
+    AGENT_SETTINGS_ALIASES: ClassVar[dict[str, dict[str, str]]] = {}
+
     # Polling interval (seconds) for this provider's usage sync task, or
     # ``None`` when the provider has no usage tracking. The actual loop
     # lives in each provider's own orchestrator module; this ClassVar is
@@ -459,6 +467,16 @@ class BaseProviderHelpers:
         bootstrap (to populate select widgets).
         """
         raise NotImplementedError
+
+    def get_agent_settings_aliases(self) -> dict[str, dict[str, str]]:
+        """Return the per-field keyword aliases for this provider.
+
+        Shape ``{field: {alias: concrete_value}}``. Used by the CLI/skills to
+        resolve semantic keywords (``max``, ``open`` ...) into concrete,
+        provider-specific values before a request is written. Empty for
+        providers that declare no aliases.
+        """
+        return self.AGENT_SETTINGS_ALIASES
 
     def get_agent_settings_descriptions(self) -> dict[str, dict]:
         """Return the per-value human-readable descriptions.
@@ -805,6 +823,7 @@ class BaseProviderHelpers:
                 for category, keys in self.AGENT_SETTINGS_CATEGORIES.items()
             },
             "agent_settings_choices": self.get_agent_settings_choices(),
+            "agent_settings_aliases": self.get_agent_settings_aliases(),
             "attachment_support": self.get_attachment_support(),
             "model_registry": self.serialize_model_registry(),
         }

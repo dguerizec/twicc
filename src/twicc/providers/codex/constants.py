@@ -59,6 +59,30 @@ AGENT_SETTINGS_DESCRIPTIONS: dict[str, dict] = {
 }
 
 
+# Keyword aliases the CLI / skills accept in place of a concrete agent-settings
+# value, resolved against Codex before the request leaves the client. See the
+# matching table in ``twicc.providers.claude_code.constants`` for the full
+# rationale (native-first resolution, token-count strings for ``context_max``).
+# ``strict``, ``yolo`` and ``auto`` need no entry — they are already native
+# Codex permission modes, so native-first keeps them as-is.
+AGENT_SETTINGS_ALIASES: dict[str, dict[str, str]] = {
+    "selected_model": {
+        "min": "gpt-mini", "fastest": "gpt-mini", "cheapest": "gpt-mini",
+        "max": "gpt", "strongest": "gpt",
+    },
+    "effort": {
+        "min": "low", "max": "xhigh",
+    },
+    "context_max": {
+        "min": "272k", "max": "272k",
+    },
+    "permission_mode": {
+        "safe": "strict",
+        "full": "yolo", "open": "yolo", "bypass": "yolo",
+    },
+}
+
+
 # Codex CLI models the bundled binary accepts (verified at startup time
 # via ``codex.models()``). ``selected_model_value`` returns the bare
 # alias for ``latest=True`` entries (``"gpt"``, ``"gpt-mini"``) and the

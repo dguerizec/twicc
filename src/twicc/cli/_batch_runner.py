@@ -64,11 +64,14 @@ def run_batch(
     """Drop one ``kind`` request per resolved session and emit the batch result.
 
     ``prepare(resolved)`` returns either the per-id drop payload (a dict that
-    must include ``session_id``) or a flat ``list`` of ``ValidationError`` when
+    must include ``session_id``), a flat ``list`` of ``ValidationError`` when
     this session can't accept the request (e.g. a ``settings`` value invalid for
     its provider, or an attachment its provider rejects) — in that case the id
-    gets a per-id ``validation_error`` and no drop, while the other sessions
-    proceed. The provider-agnostic ops pass a ``prepare`` that always returns a
+    gets a per-id ``validation_error`` and no drop — or ``None`` when there is
+    nothing to apply for this session (every touched setting is a no-op for its
+    provider, e.g. ``--thinking`` on Codex) — that id gets a per-id ``noop``
+    status and no drop. A ``noop`` counts as a success (nothing-to-do is not a
+    failure). The provider-agnostic ops pass a ``prepare`` that always returns a
     payload.
 
     ``success_status`` is the watcher's success token for this ``kind``
@@ -196,6 +199,12 @@ def run_batch(
             continue
 
         outcome = prepare(resolved)
+        if outcome is None:
+            # Nothing to apply for this session (every touched field is a no-op
+            # for its provider, e.g. --thinking on Codex). Not an error, not a
+            # drop — a silent no-op, counted as a success below.
+            results[sid] = {"status": "noop", "session_id": sid}
+            continue
         if isinstance(outcome, list):
             # Per-id validation errors (e.g. settings invalid for this provider,
             # or an attachment its provider rejects).
@@ -269,8 +278,11 @@ def run_batch(
 
     ordered = {sid: results[sid] for sid in unique_ids}
     total = len(ordered)
+    # A ``noop`` (nothing to apply for the session's provider) is a success, not
+    # a failure: the request was honored, it just had no effect for that session.
     succeeded = sum(
-        1 for v in ordered.values() if v and v.get("status") == success_status
+        1 for v in ordered.values()
+        if v and v.get("status") in (success_status, "noop")
     )
     failed = total - succeeded
 

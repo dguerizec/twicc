@@ -58,9 +58,19 @@ All optional. Omit to use preset / user defined defaults. Use `$TWICC info model
 - `--context-max VALUE` — Claude Code: `200k` or `1m` (silently capped to 200k on unsupported models). Codex: `272k`.
 - `--question-widget / --no-question-widget` — Claude Code only. See below.
 
+### Aliases
+
+Some settings also accept provider-agnostic aliases, resolved to each provider's concrete value — useful for cross-provider scripting without knowing the exact values:
+
+- `--model` — `max`/`strongest` → top family, `min`/`fastest`/`cheapest` → lightest family (both always the latest version).
+- `--effort`, `--context-max` — `max` → highest/largest, `min` → lowest/smallest.
+- `--permission-mode` — `strict`/`safe` → most-locked (non-interactive), `open`/`full`/`yolo`/`bypass` → most permissive (non-interactive), `auto` → balanced (interactive).
+
+A flag the chosen provider doesn't support (e.g. `--thinking` on Codex) is silently ignored (no-op), so one command works across a mix of providers.
+
 ### `--hidden`
 
-Creates the session invisible in every user-facing listings, search, and broadcasts (still counted in cost aggregates). Requires a non-interactive `--permission-mode` (Claude Code: `bypassPermissions` or `dontAsk`; Codex: `yolo` or `strict`). `--hidden` forces `question_widget=False` automatically — passing `--question-widget` alongside is rejected.
+Creates the session invisible in every user-facing listings, search, and broadcasts (still counted in cost aggregates). Requires a non-interactive `--permission-mode` (Claude Code: `bypassPermissions`/`dontAsk`; Codex: `yolo`/`strict`; alias `open` for the permissive pair, `strict` for the read-only pair). `--hidden` forces `question_widget=False` automatically — passing `--question-widget` alongside is rejected.
 
 **Restrictive modes (`dontAsk` / `strict`) are heavily sandboxed.** A hidden child running in one of these modes can read files from the project but typically **cannot**:
 - write any file (anywhere, including scratch or temp directories),
@@ -69,7 +79,7 @@ Creates the session invisible in every user-facing listings, search, and broadca
 - therefore **invoke any TwiCC skill** (every skill goes through the `twicc` CLI),
 - therefore **send a message back to its parent** via `twicc-send-message`.
 
-The child's only output channel is the final assistant message of its turn. **The parent is responsible** for fetching it via `$TWICC session <ID> messages --tail 1` (skill: `twicc-session`). Use these modes for pure "analyst" workers (read code, return a synthesis as text); for anything that needs side effects, pick `bypassPermissions` (Claude Code) or `yolo` (Codex) and accept the broader latitude.
+The child's only output channel is the final assistant message of its turn. **The parent is responsible** for fetching it via `$TWICC session <ID> messages --tail 1` (skill: `twicc-session`). Use these modes for pure "analyst" workers (read code, return a synthesis as text); for anything that needs side effects, pick `bypassPermissions` (Claude Code) or `yolo` (Codex) — alias `open` for both — and accept the broader latitude.
 
 ### `--no-question-widget`
 
@@ -89,8 +99,7 @@ By default (Claude Code), questions from the agent surface as an interactive UI 
 
 ### Local (exit 1)
 
-- `unsupported_field` — flag not supported by the chosen provider.
-- `invalid_choice` — value out of the provider's allowed set.
+- `invalid_choice` — value out of the provider's allowed set (a typo on a supported field; a flag the provider doesn't support is silently ignored instead).
 - `hidden_constraint_violation` — `--hidden` used with an interactive permission mode or `--question-widget`.
 - `invalid_annotation` — `--annotation` must use `key=value`.
 - `invalid_annotation_path` — dotted annotation keys cannot contain empty segments.

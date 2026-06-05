@@ -25,6 +25,8 @@ import typer
 
 from twicc.cli._drop_request.help_context import load_help_context
 from twicc.cli._drop_request.help_strings import (
+    EFFORT_ALIAS_HINT,
+    PERMISSION_ALIAS_HINT,
     context_max_help,
     default_suffix,
     model_help,
@@ -318,6 +320,7 @@ def _settings(
         help=(
             "Reasoning effort. Claude Code: 'low', 'medium', 'high', 'xhigh', 'max'. "
             "Codex: 'low', 'medium', 'high', 'xhigh'."
+            + EFFORT_ALIAS_HINT
             + default_suffix(_HELP_CTX, "effort")
         ),
     ),
@@ -328,6 +331,7 @@ def _settings(
             "Tool permission policy. Claude Code: 'default', 'acceptEdits', 'plan', "
             "'dontAsk', 'bypassPermissions'. Codex: 'read_only', 'strict', 'auto', "
             "'autonomous', 'yolo'."
+            + PERMISSION_ALIAS_HINT
             + default_suffix(_HELP_CTX, "permission_mode")
         ),
     ),
@@ -379,9 +383,10 @@ def _settings(
 
     Flags mirror `update-session settings` (patch by default; `--preset`
     switches to replace mode). Resolution is per-session against each session's
-    provider: the change is applied wherever the provider accepts it, and a
-    session whose provider rejects a value yields a per-id validation_error
-    (invalid_choice / unsupported_field) while the others proceed.
+    provider: keyword aliases resolve to that provider's concrete value, fields
+    the provider doesn't support are dropped silently (no-op), and a session
+    whose provider rejects a value yields a per-id validation_error
+    (invalid_choice / invalid_format / invalid_preset) while the others proceed.
 
     Startup settings (effort, thinking, claude-in-chrome, fast-mode,
     question-widget on Claude Code) are applied on the next restart: the agent
@@ -426,6 +431,8 @@ def _settings(
         if isinstance(result, list):
             return result
         updates, replace_all = result
+        if not updates and not replace_all:
+            return None  # every touched field is a no-op for this provider
         return {
             "session_id": resolved.session_id,
             "updates": updates,

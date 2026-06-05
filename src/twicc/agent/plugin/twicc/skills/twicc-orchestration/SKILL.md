@@ -63,8 +63,10 @@ A spawned session starts with **no memory of you** — every prompt must be self
 
 Every session knows its own `permission_mode` from its injected context. For orchestration, use only the two **non-interactive** extremes of each provider — one that allows everything, one that allows nothing:
 
-- **Executor — allows everything** (Claude Code `bypassPermissions`, Codex `yolo`): can act, write, spawn children, and push to its parent.
-- **Read-only — allows only reading** (Claude Code `dontAsk`, Codex `strict`): pure read/analysis of the given project; cannot run commands, so cannot spawn, `send-message`, or write. Always a terminal leaf, read only by pull. Worth using only for pure code/content analysis.
+- **Executor — allows everything** (Claude Code `bypassPermissions`, Codex `yolo`; alias for both `open`): can act, write, spawn children, and push to its parent.
+- **Read-only — allows only reading** (Claude Code `dontAsk`, Codex `strict`; alias for both `strict`): pure read/analysis of the given project; cannot run commands, so cannot spawn, `send-message`, or write. Always a terminal leaf, read only by pull. Worth using only for pure code/content analysis.
+
+Those aliases are provider-agnostic: pass `--permission-mode open` or `--permission-mode strict` and each provider resolves it to the concrete value above — no need to remember `bypassPermissions`/`yolo`/`dontAsk` per provider.
 
 Avoid the interactive modes: they pause for per-tool approvals or questions, and a spawned session waiting on a user dialog is one you cannot reliably unblock or steer from a parent. Choose a child's mode by what it needs to do — a manager must be an executor (a read-only manager could neither create children nor report).
 
