@@ -8,18 +8,26 @@ JSON-RPC ``marketplace/add`` + ``plugin/install`` methods at TwiCC startup,
 which persist the config and materialise the plugin into
 ``$CODEX_HOME/plugins/cache/twicc/twicc/<version>/``.
 
-Both calls are idempotent:
+``marketplace/add`` is idempotent only while the registered ``source``
+path is unchanged: it reports ``alreadyAdded`` and leaves the persisted
+``[marketplaces.twicc]`` section alone. But TwiCC's plugin lives under a
+*volatile* path — the uv archive cache in UVX mode, the editable checkout
+in UV mode — which differs across run modes and even between two UVX
+versions (each version gets a fresh archive hash). When the source path
+differs from the one already registered, Codex rejects the add with
+``InvalidRequestError`` (-32600: "marketplace 'twicc' is already added from
+a different source"). We therefore catch that error, ``marketplace/remove``
+the stale registration, and re-add from the current source.
 
-- ``marketplace/add`` reports ``alreadyAdded`` when the marketplace is
-  already registered (the persisted ``[marketplaces.twicc]`` section is
-  left alone).
-- ``plugin/install`` re-materialises the cache. For non-curated
-  marketplaces the cache is keyed by the plugin's ``version`` field, so
-  bumping ``plugin.json``'s version is what forces stale skill names /
-  contents to refresh.
+``plugin/install`` re-materialises the cache. For non-curated marketplaces
+the cache is keyed by the plugin's ``version`` field, so bumping
+``plugin.json``'s version is what forces stale skill names / contents to
+refresh.
 
 Failures are logged but never raised — TwiCC must keep starting even when
-Codex is misconfigured or unreachable.
+Codex is misconfigured or unreachable. A failure during the remove/re-add
+recovery (or the re-add itself) aborts plugin setup: skills are
+unavailable, but startup proceeds.
 """
 
 from __future__ import annotations
@@ -54,8 +62,10 @@ async def ensure_twicc_plugin_installed() -> None:
 
     from openai_codex import CodexConfig
     from openai_codex.async_client import AsyncCodexClient
+    from openai_codex.errors import InvalidRequestError
     from openai_codex.generated.v2_all import (
         MarketplaceAddResponse,
+        MarketplaceRemoveResponse,
         PluginInstallResponse,
     )
 
@@ -81,11 +91,40 @@ async def ensure_twicc_plugin_installed() -> None:
             await client.initialize()
 
             # 1. Register the marketplace in ``~/.codex/config.toml``.
-            add_resp = await client.request(
-                "marketplace/add",
-                {"source": str(marketplace_dir)},
-                response_model=MarketplaceAddResponse,
-            )
+            #
+            # ``marketplace/add`` only stays idempotent while the registered
+            # ``source`` path is unchanged. TwiCC's plugin lives under a
+            # volatile path (uv archive cache in UVX, editable checkout in
+            # UV) that differs across run modes and between versions, so a
+            # changed source makes Codex reject the add with
+            # ``InvalidRequestError`` (-32600). Recover by removing the stale
+            # registration and re-adding from the current source. We catch
+            # only that error — any other failure propagates straight to the
+            # outer handler. A failure of the remove or the re-add likewise
+            # propagates and aborts plugin setup.
+            try:
+                add_resp = await client.request(
+                    "marketplace/add",
+                    {"source": str(marketplace_dir)},
+                    response_model=MarketplaceAddResponse,
+                )
+            except InvalidRequestError:
+                logger.info(
+                    "TwiCC marketplace registered from a different source; "
+                    "removing it and re-adding from %s",
+                    marketplace_dir,
+                )
+                await client.request(
+                    "marketplace/remove",
+                    {"marketplaceName": MARKETPLACE_NAME},
+                    response_model=MarketplaceRemoveResponse,
+                )
+                add_resp = await client.request(
+                    "marketplace/add",
+                    {"source": str(marketplace_dir)},
+                    response_model=MarketplaceAddResponse,
+                )
+
             if add_resp.already_added:
                 logger.debug(
                     "TwiCC marketplace already registered (name=%s)",
