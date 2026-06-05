@@ -50,22 +50,53 @@ const toolName = computed(() => props.pendingRequest.tool_name || 'unknown')
 // Wire params (as injected by make_pending_request).
 const toolInput = computed(() => props.pendingRequest.tool_input || {})
 
-// commandExecution-specific fields
-const command = computed(() => toolInput.value.command)
-const cwd = computed(() => toolInput.value.cwd)
-const reason = computed(() => toolInput.value.reason)
-const commandActions = computed(() => toolInput.value.commandActions || [])
-const networkApprovalContext = computed(() => toolInput.value.networkApprovalContext)
-const proposedExecpolicyAmendment = computed(() => toolInput.value.proposedExecpolicyAmendment)
-const proposedNetworkPolicyAmendments = computed(() => toolInput.value.proposedNetworkPolicyAmendments)
-
-// fileChange-specific fields
+// fileChange-specific fields. For a fileChange approval the diff isn't in the
+// wire params (spec §1.1.b) — it's spliced in as ``_item_payload`` (the
+// ``item/started`` payload of the correlated ApplyPatch item).
 const fileChanges = computed(() => {
     const payload = toolInput.value._item_payload
     if (!payload) return []
     const changes = payload.changes
     return Array.isArray(changes) ? changes : []
 })
+
+// Fallback for ``apply_patch`` run through the shell tool (``apply_patch <<'EOF'
+// …``): Codex still asks for a ``fileChange`` approval, but the correlated
+// ``item/started`` is a ``commandExecution`` ThreadItem, so ``_item_payload``
+// carries ``command``/``commandActions``/``cwd`` instead of ``changes``. When we
+// land in that state (fileChange approval, no usable changes, but a command
+// payload), render the command body instead of an empty "0 files" banner. The
+// wire decision stays a fileChange decision — only the body rendering switches.
+const renderAsCommand = computed(
+    () => toolName.value === 'fileChange'
+        && fileChanges.value.length === 0
+        && !!toolInput.value._item_payload?.command,
+)
+
+// Show the rich command body for native commandExecution approvals and for the
+// apply_patch-via-shell fallback above.
+const showCommandBody = computed(
+    () => toolName.value === 'commandExecution' || renderAsCommand.value,
+)
+
+// Where the command fields live: native commandExecution approvals carry them
+// in the wire params (spec §1.1.a); the fallback reads them off the indexed
+// item payload.
+const commandSource = computed(
+    () => (renderAsCommand.value ? toolInput.value._item_payload : toolInput.value),
+)
+
+// commandExecution-specific fields. ``command``/``cwd``/``commandActions`` follow
+// ``commandSource`` so the fallback pulls them from ``_item_payload``; the
+// amendment / network fields only exist on a real commandExecution approval's
+// params, so they stay on ``toolInput`` (absent → hidden in the fallback).
+const command = computed(() => commandSource.value.command)
+const cwd = computed(() => commandSource.value.cwd)
+const reason = computed(() => toolInput.value.reason)
+const commandActions = computed(() => commandSource.value.commandActions || [])
+const networkApprovalContext = computed(() => toolInput.value.networkApprovalContext)
+const proposedExecpolicyAmendment = computed(() => toolInput.value.proposedExecpolicyAmendment)
+const proposedNetworkPolicyAmendments = computed(() => toolInput.value.proposedNetworkPolicyAmendments)
 
 // permissions-specific fields
 const requestedPermissions = computed(() => toolInput.value.permissions || {})
@@ -202,9 +233,17 @@ onBeforeUnmount(() => {
 
 <template>
     <div class="codex-pending-body">
-        <!-- commandExecution rich body -->
-        <template v-if="toolName === 'commandExecution'">
+        <!-- commandExecution rich body (also the apply_patch-via-shell fallback) -->
+        <template v-if="showCommandBody">
             <div class="codex-pending-section">
+                <!-- Fallback header: surface the shell command so the banner
+                     isn't empty. Native commandExecution approvals keep their
+                     original chip-first layout (renderAsCommand is false). -->
+                <div v-if="renderAsCommand" class="codex-pending-summary">
+                    <span class="codex-summary-label">
+                        {{ providerLabel }} wants to run a command
+                    </span>
+                </div>
                 <!-- action chips first, at-a-glance summary -->
                 <div v-if="commandActions.length" class="codex-action-chips">
                     <wa-badge v-if="groupedActions.read.length" variant="neutral">
