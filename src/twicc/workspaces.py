@@ -256,6 +256,54 @@ async def auto_add_project_to_workspaces(project_id: str, directory: str) -> Non
     await _broadcast_workspaces_updated(workspaces)
 
 
+async def add_project_to_workspaces(project_id: str, workspace_ids: list[str]) -> None:
+    """Add a project to an explicit list of workspaces (by id).
+
+    The symmetric companion to :func:`auto_add_project_to_workspaces`: that
+    one adds a project to workspaces whose *patterns* match its directory,
+    this one to the workspaces the user *explicitly* picked (e.g. from the
+    project edit dialog at creation time). Both append under
+    ``_workspaces_lock`` so neither clobbers the other — nor a concurrent
+    whole-blob UI write. Doing the explicit add server-side (instead of a
+    frontend whole-blob write right after the project is created) is what
+    keeps it from racing with, and overwriting, the auto-add that
+    ``register_project`` runs at creation.
+
+    Idempotent: a workspace that already lists the project, or an id that
+    matches no workspace, is silently skipped. Broadcasts
+    ``workspaces_updated`` once, outside the lock, only if something changed.
+    """
+    wanted = [wid for wid in dict.fromkeys(workspace_ids) if wid]
+    if not wanted:
+        return
+
+    def _read_modify_write() -> list[dict] | None:
+        data = read_workspaces()
+        workspaces = data.get("workspaces", [])
+        wanted_set = set(wanted)
+        modified = False
+        for ws in workspaces:
+            if ws.get("id") not in wanted_set:
+                continue
+            if project_id in ws.get("projectIds", []):
+                continue
+            ws.setdefault("projectIds", []).append(project_id)
+            modified = True
+            logger.info("Added project %s to workspace %r (explicit)",
+                        project_id, ws.get("name", ws.get("id")))
+        if not modified:
+            return None
+        write_workspaces(data)
+        return workspaces
+
+    async with _workspaces_lock:
+        workspaces = await sync_to_async(_read_modify_write)()
+    if workspaces is None:
+        return
+
+    await _broadcast_workspaces_updated(workspaces)
+
+
 # ---------------------------------------------------------------------------
 # Atomic create / update / delete (CLI / future-WS entry points)
 # ---------------------------------------------------------------------------

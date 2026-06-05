@@ -2,7 +2,10 @@
 // ProjectEditDialog.vue - Dialog for editing/creating projects
 import { ref, computed, watch, nextTick, useId } from 'vue'
 import { useDataStore } from '../../stores/data'
+import { useWorkspacesStore } from '../../stores/workspaces'
+import { useSettingsStore } from '../../stores/settings'
 import { apiFetch } from '../../utils/api'
+import { matchPattern } from '../../utils/workspacePatterns'
 import DirectoryPickerPopup from '../files/DirectoryPickerPopup.vue'
 
 const props = defineProps({
@@ -15,6 +18,8 @@ const props = defineProps({
 const emit = defineEmits(['saved'])
 
 const store = useDataStore()
+const workspacesStore = useWorkspacesStore()
+const settingsStore = useSettingsStore()
 
 // Refs for the dialog and form elements
 const dialogRef = ref(null)
@@ -32,11 +37,118 @@ const isSaving = ref(false)
 const errorMessage = ref('')
 const directoryNotFound = ref(false)
 
+// Workspace membership (buffered until Save).
+// `selectedWorkspaceIds` is the working selection; `initialWorkspaceIds` is the
+// snapshot at open time, used in edit mode to compute add/remove deltas so a
+// workspace auto-added (or hidden behind the archived toggle) while the dialog
+// is open is never removed by accident.
+const selectedWorkspaceIds = ref([])
+let initialWorkspaceIds = []
+const localShowArchivedWorkspaces = ref(false)
+const workspaceScanFeedback = ref('')
+let workspaceScanFeedbackTimer = null
+
 // Mode detection
 const isCreateMode = computed(() => !props.project)
 // Unique form ID per instance to avoid conflicts when multiple dialog instances coexist in the DOM
 const instanceId = useId()
 const formId = `project-dialog-form-${instanceId}`
+
+// -- Workspace membership -----------------------------------------------------
+const allWorkspaces = computed(() => workspacesStore.getAllWorkspaces)
+const hasArchivedWorkspaces = computed(() => allWorkspaces.value.some(w => w.archived))
+
+/** Workspace IDs that currently list the given project (archived included). */
+function workspaceIdsContaining(projectId) {
+    return allWorkspaces.value.filter(ws => ws.projectIds.includes(projectId)).map(ws => ws.id)
+}
+
+function workspaceName(id) {
+    return workspacesStore.getWorkspaceById(id)?.name || id
+}
+
+function workspaceColor(id) {
+    return workspacesStore.getWorkspaceById(id)?.color || ''
+}
+
+/** Selected workspaces to render, paired with their source index, filtered by
+ *  the local "show archived" toggle (and dropping ids whose workspace no longer
+ *  exists). */
+const selectedWorkspaceEntries = computed(() => {
+    const showArchived = localShowArchivedWorkspaces.value
+    return selectedWorkspaceIds.value
+        .map((id, index) => ({ id, index }))
+        .filter(({ id }) => {
+            const ws = workspacesStore.getWorkspaceById(id)
+            if (!ws) return false
+            return showArchived || !ws.archived
+        })
+})
+
+/** Workspaces available to add (not already selected, respecting the toggle). */
+const availableWorkspaces = computed(() => {
+    const inSet = new Set(selectedWorkspaceIds.value)
+    const showArchived = localShowArchivedWorkspaces.value
+    return allWorkspaces.value.filter(ws => !inSet.has(ws.id) && (showArchived || !ws.archived))
+})
+
+function addWorkspace(event) {
+    const id = event.target.value
+    if (!id) return
+    if (!selectedWorkspaceIds.value.includes(id)) {
+        selectedWorkspaceIds.value.push(id)
+    }
+    // Reset the select back to placeholder
+    event.target.value = ''
+}
+
+function removeWorkspace(visibleIndex) {
+    const entries = selectedWorkspaceEntries.value
+    const realIdx = entries[visibleIndex]?.index
+    if (realIdx === undefined) return
+    selectedWorkspaceIds.value.splice(realIdx, 1)
+}
+
+/** Create mode only: add every workspace whose auto-add pattern matches the
+ *  chosen directory. A preview of what the backend auto-add will do anyway. */
+function scanMatchingWorkspaces() {
+    const dir = localDirectory.value.trim()
+    if (!dir) {
+        workspaceScanFeedback.value = 'Enter a directory first'
+        clearWorkspaceScanFeedbackLater()
+        return
+    }
+    let added = 0
+    for (const ws of allWorkspaces.value) {
+        const patterns = ws.autoProjectPatterns || []
+        if (!patterns.length || selectedWorkspaceIds.value.includes(ws.id)) continue
+        if (patterns.some(p => matchPattern(dir, p))) {
+            selectedWorkspaceIds.value.push(ws.id)
+            added++
+        }
+    }
+    workspaceScanFeedback.value = added > 0
+        ? `${added} workspace${added > 1 ? 's' : ''} added`
+        : 'No matching workspaces found'
+    clearWorkspaceScanFeedbackLater()
+}
+
+function clearWorkspaceScanFeedbackLater() {
+    if (workspaceScanFeedbackTimer) clearTimeout(workspaceScanFeedbackTimer)
+    workspaceScanFeedbackTimer = setTimeout(() => { workspaceScanFeedback.value = '' }, 4000)
+}
+
+/** Reset the workspace section for the current mode. Called from open(). */
+function resetWorkspaceState() {
+    initialWorkspaceIds = isCreateMode.value ? [] : workspaceIdsContaining(props.project.id)
+    selectedWorkspaceIds.value = [...initialWorkspaceIds]
+    localShowArchivedWorkspaces.value = settingsStore.isShowArchivedWorkspaces
+    workspaceScanFeedback.value = ''
+    if (workspaceScanFeedbackTimer) {
+        clearTimeout(workspaceScanFeedbackTimer)
+        workspaceScanFeedbackTimer = null
+    }
+}
 
 // Sync form values when project changes
 watch(
@@ -90,6 +202,20 @@ function focusFirstInput() {
     }
 }
 
+// Guard the dialog's show/after-show handlers against events bubbling up from
+// child wa-select / wa-dropdown (their dropdowns emit the same wa-show /
+// wa-after-show custom events). Without this, opening the Workspaces select
+// would run focusFirstInput(), steal focus from the dropdown, and close it.
+function handleDialogShow(e) {
+    if (e.target !== dialogRef.value) return
+    syncFormState()
+}
+
+function handleDialogAfterShow(e) {
+    if (e.target !== dialogRef.value) return
+    focusFirstInput()
+}
+
 /**
  * Open the dialog.
  */
@@ -107,6 +233,7 @@ function open() {
         localColor.value = props.project.color || ''
         localArchived.value = props.project.archived || false
     }
+    resetWorkspaceState()
     syncFormState()
     if (dialogRef.value) {
         dialogRef.value.open = true
@@ -168,6 +295,11 @@ async function submitCreate({ createDirectory = false } = {}) {
         directory: trimmedDirectory,
         name: trimmedName || null,
         color: localColor.value || null,
+    }
+    if (selectedWorkspaceIds.value.length > 0) {
+        // Backend adds these under _workspaces_lock alongside the pattern-based
+        // auto-add, so the two never race / clobber each other.
+        body.workspace_ids = [...selectedWorkspaceIds.value]
     }
     if (createDirectory) {
         body.create_directory = true
@@ -280,6 +412,17 @@ async function handleSave() {
 
         const updatedProject = await response.json()
         store.updateProject(updatedProject)
+
+        // Apply workspace membership as targeted add/remove deltas, so only
+        // what the user actually changed is touched.
+        const initial = new Set(initialWorkspaceIds)
+        const selected = new Set(selectedWorkspaceIds.value)
+        const toAdd = [...selected].filter(id => !initial.has(id))
+        const toRemove = [...initial].filter(id => !selected.has(id))
+        if (toAdd.length || toRemove.length) {
+            workspacesStore.applyProjectMembershipDeltas(props.project.id, toAdd, toRemove)
+        }
+
         emit('saved', updatedProject)
         isSaving.value = false
         close()
@@ -294,7 +437,7 @@ defineExpose({
 </script>
 
 <template>
-    <wa-dialog ref="dialogRef" :label="isCreateMode ? 'New Project' : 'Edit Project'" class="project-edit-dialog" @wa-show="syncFormState" @wa-after-show="focusFirstInput">
+    <wa-dialog ref="dialogRef" :label="isCreateMode ? 'New Project' : 'Edit Project'" class="project-edit-dialog" @wa-show="handleDialogShow" @wa-after-show="handleDialogAfterShow">
         <form :id="formId" class="dialog-content" @submit.prevent="handleSave">
             <!-- Create mode: directory input -->
             <div v-if="isCreateMode" class="form-group">
@@ -348,6 +491,85 @@ defineExpose({
                     :value.prop="localColor"
                     @change="onColorChange"
                 ></wa-color-picker>
+            </div>
+
+            <!-- Workspaces -->
+            <div class="form-group">
+                <div class="form-label-row">
+                    <label class="form-label">Workspaces</label>
+                    <wa-switch
+                        v-if="hasArchivedWorkspaces"
+                        :checked="localShowArchivedWorkspaces"
+                        @change="localShowArchivedWorkspaces = $event.target.checked"
+                        size="small"
+                    >
+                        Show archived
+                    </wa-switch>
+                </div>
+
+                <div v-if="selectedWorkspaceEntries.length > 0" class="workspace-list">
+                    <div
+                        v-for="(entry, visibleIndex) in selectedWorkspaceEntries"
+                        :key="entry.id"
+                        class="workspace-row"
+                    >
+                        <span class="workspace-row-name">
+                            <wa-icon name="layer-group" auto-width :style="workspaceColor(entry.id) ? { color: workspaceColor(entry.id) } : null"></wa-icon>
+                            {{ workspaceName(entry.id) }}
+                        </span>
+                        <button
+                            type="button"
+                            class="action-btn action-btn-danger"
+                            @click="removeWorkspace(visibleIndex)"
+                            title="Remove from workspace"
+                        >
+                            <wa-icon name="xmark" />
+                        </button>
+                    </div>
+                </div>
+
+                <div v-else-if="selectedWorkspaceIds.length > 0" class="empty-workspaces-message">
+                    All workspaces for this project are archived (hidden).
+                </div>
+
+                <div v-else class="empty-workspaces-message">
+                    {{ isCreateMode ? 'No workspaces selected.' : 'Not in any workspace.' }}
+                </div>
+
+                <!-- Add to a workspace -->
+                <wa-select
+                    v-if="availableWorkspaces.length > 0"
+                    value=""
+                    @change="addWorkspace"
+                    placeholder="Add to a workspace..."
+                    size="small"
+                    class="add-workspace-select"
+                >
+                    <wa-option
+                        v-for="ws in availableWorkspaces"
+                        :key="ws.id"
+                        :value="ws.id"
+                        :label="ws.name"
+                    >
+                        <wa-icon name="layer-group" auto-width :style="ws.color ? { color: ws.color } : null"></wa-icon>
+                        {{ ws.name }}
+                    </wa-option>
+                </wa-select>
+
+                <!-- Create mode: add workspaces whose auto-add pattern matches -->
+                <template v-if="isCreateMode">
+                    <div class="scan-row">
+                        <wa-button type="button" variant="neutral" size="small" @click="scanMatchingWorkspaces">
+                            <wa-icon name="magnifying-glass-plus" slot="start"></wa-icon>
+                            Add matching workspaces
+                        </wa-button>
+                        <span v-if="workspaceScanFeedback" class="scan-feedback">{{ workspaceScanFeedback }}</span>
+                    </div>
+                    <p class="form-hint">
+                        Workspaces whose auto-add pattern matches this directory will be added
+                        automatically on creation, even if you remove them here.
+                    </p>
+                </template>
             </div>
 
             <!-- Directory not found: ask user to create it -->
@@ -445,6 +667,82 @@ defineExpose({
 .directory-input {
     flex: 1;
     min-width: 0;
+}
+
+/* -- Workspaces ------------------------------------------------------------- */
+.form-label-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--wa-space-s);
+}
+
+.workspace-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--wa-space-3xs);
+}
+
+.workspace-row {
+    display: flex;
+    align-items: center;
+    gap: var(--wa-space-s);
+    background: var(--wa-color-surface-alt);
+    border-radius: var(--wa-border-radius-m);
+    padding: var(--wa-space-3xs) var(--wa-space-xs);
+}
+
+.workspace-row-name {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: var(--wa-space-2xs);
+    font-size: var(--wa-font-size-s);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.empty-workspaces-message {
+    font-size: var(--wa-font-size-s);
+    color: var(--wa-color-text-quiet);
+    padding: var(--wa-space-xs) 0;
+}
+
+.add-workspace-select {
+    max-width: 280px;
+}
+
+.scan-row {
+    display: flex;
+    align-items: center;
+    gap: var(--wa-space-s);
+}
+
+.scan-feedback {
+    font-size: var(--wa-font-size-s);
+    color: var(--wa-color-text-quiet);
+}
+
+.action-btn {
+    background: none;
+    border: none;
+    font-size: var(--wa-font-size-m);
+    padding: var(--wa-space-xs);
+    cursor: pointer;
+    line-height: 1;
+    transition: background-color 0.15s, color 0.15s;
+    color: var(--wa-color-text-quiet);
+}
+
+.action-btn:hover {
+    background: var(--wa-color-surface-base);
+    color: var(--wa-color-text-base);
+}
+
+.action-btn-danger:hover {
+    color: var(--wa-color-danger-text);
 }
 
 .clear-name-link {

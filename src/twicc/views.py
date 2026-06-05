@@ -33,7 +33,7 @@ from twicc.providers.sessions_watcher import mark_session_search_version_current
 from twicc.providers.state import ProviderDisabledError, ensure_provider_running
 from twicc.providers.helpers import get_provider_helpers, get_provider_helpers_registry
 from twicc.terminal import kill_all_tmux_terminals
-from twicc.workspaces import read_workspaces
+from twicc.workspaces import add_project_to_workspaces, read_workspaces
 
 logger = logging.getLogger(__name__)
 
@@ -201,7 +201,12 @@ async def project_list(request):
 async def _create_project(request):
     """Create a new project from a directory path.
 
-    Body: { "directory": "/absolute/path", "name": "optional", "color": "optional" }
+    Body: {
+        "directory": "/absolute/path",
+        "name": "optional",
+        "color": "optional",
+        "workspace_ids": ["optional", "list", "of", "workspace", "ids"]
+    }
     """
     try:
         data = orjson.loads(request.body)
@@ -279,6 +284,17 @@ async def _create_project(request):
         # Lost a race with another creator between the early exists-check
         # and now — same friendly 409 as the early-out.
         return JsonResponse({"error": "A project already exists for this directory"}, status=409)
+
+    # 7. Fold in the workspaces the user explicitly picked in the project
+    # dialog. ``register_project`` already ran the pattern-based auto-add
+    # (and broadcast it); this appends the manual picks under the same
+    # ``_workspaces_lock`` (idempotent), so the two never clobber each other
+    # — which a frontend whole-blob write right after creation could.
+    workspace_ids = data.get("workspace_ids")
+    if isinstance(workspace_ids, list):
+        ids = [w for w in workspace_ids if isinstance(w, str) and w]
+        if ids:
+            await add_project_to_workspaces(project.id, ids)
 
     return JsonResponse(serialize_project(project), status=201)
 

@@ -7,6 +7,7 @@ import { useDataStore } from '../../stores/data'
 import ProjectBadge from '../project/ProjectBadge.vue'
 import ProjectSelectOptions from '../project/ProjectSelectOptions.vue'
 import DirectoryPickerPopup from '../files/DirectoryPickerPopup.vue'
+import { matchPattern } from '../../utils/workspacePatterns'
 
 const workspacesStore = useWorkspacesStore()
 const settingsStore = useSettingsStore()
@@ -196,14 +197,6 @@ function addPattern() {
 
 function removePattern(index) {
     formData.value.autoProjectPatterns.splice(index, 1)
-}
-
-/** Check if a directory matches a pattern (* = any chars, case insensitive).
- *  Must stay in sync with match_pattern() in src/twicc/workspaces.py. */
-function matchPattern(directory, pattern) {
-    const effective = pattern.includes('*') ? pattern : pattern.replace(/\/+$/, '') + '/*'
-    const escaped = effective.split('*').map(s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
-    return new RegExp('^' + escaped.join('.*') + '$', 'i').test(directory)
 }
 
 function scanNow() {

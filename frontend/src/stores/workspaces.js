@@ -140,6 +140,28 @@ export const useWorkspacesStore = defineStore('workspaces', {
             this._sendWorkspaces()
         },
 
+        /** Apply targeted membership changes for a single project across workspaces.
+         *  Adds the project to each workspace in addWorkspaceIds (idempotent) and
+         *  removes it from each in removeWorkspaceIds, touching only this project's
+         *  entry — so concurrent changes to other projects' membership (or a
+         *  workspace auto-added meanwhile) are preserved. Sends a single whole-blob
+         *  update at the end. Used by the project edit dialog (edit mode). */
+        applyProjectMembershipDeltas(projectId, addWorkspaceIds = [], removeWorkspaceIds = []) {
+            const addSet = new Set(addWorkspaceIds)
+            const removeSet = new Set(removeWorkspaceIds)
+            let changed = false
+            for (const ws of this.workspaces) {
+                if (addSet.has(ws.id) && !ws.projectIds.includes(projectId)) {
+                    ws.projectIds.push(projectId)
+                    changed = true
+                } else if (removeSet.has(ws.id) && ws.projectIds.includes(projectId)) {
+                    ws.projectIds = ws.projectIds.filter(pid => pid !== projectId)
+                    changed = true
+                }
+            }
+            if (changed) this._sendWorkspaces()
+        },
+
         /** Reorder workspaces (move from fromIndex to toIndex). */
         reorderWorkspace(fromIndex, toIndex) {
             if (toIndex < 0 || toIndex >= this.workspaces.length) return
