@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Some entries include illustrative screenshots in nested sub-lists.
 
+## [Unreleased]
+
+### Added
+
+- A session can now show the time of each message and a divider when the day changes — enable it under Settings → Sessions → Message timestamps.
+- New batch CLI commands (+matching skills and API): `update-sessions` and `send-messages` to work on many sessions at once.
+- The session create/update CLI commands (+matching skills and API) now accept generic keywords (`max`, `min`, `open`, `strict`, …) in addition of each provider's exact settings, so a single call can configure or update a mix of Claude Code and Codex sessions at once.
+
+### Changed
+
+- The Orchestration tab now shows each node's project, turn count and context usage, and auto-refreshes while any session in the tree is live.
+- When using CLI/skills with `--remote`, file paths for a prompt or an attachment are resolved on your local machine by default; prefix the path with `remote:` to read it on the server instead.
+
+### Fixed
+
+- Codex approval banners now show the actual command when a patch is applied through the shell, instead of an empty "wants to modify 0 files".
+- Codex sessions no longer silently lose TwiCC's skills after a restart or a version change.
+
 ## [1.7.0] - 2026-06-05
 
 ### Added
