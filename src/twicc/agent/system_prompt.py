@@ -145,8 +145,12 @@ rather than the project repository, so the working tree stays clean.
 - Base directory: `{scratch_base_dir}`, listed in the "Context" block below.
   It is not created for you; make what you need on demand (e.g. `mkdir -p`).
 - Delete files once you no longer need them.
-- Scratch files are not served over a URL and are not shown to the human; for
-  visuals the human should open, use Artifacts above.
+- Scratch files are not served over a URL and are not shown to the user; for
+  visuals the user should open, use Artifacts above.
+- The scratch is internal TwiCC plumbing — the user has no UI to browse it and
+  is not meant to dig through it on disk. Never point the user at a scratch path
+  or tell them to go read a file there; bring whatever matters into your reply
+  directly.
 
 ## Crons (scheduled tasks)
 

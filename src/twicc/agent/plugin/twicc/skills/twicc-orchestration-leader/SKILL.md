@@ -55,6 +55,8 @@ When a child fails or escalates: retry it, re-split the work, re-delegate to a f
 
 Synthesize the children's results and report to the user. **Only non-hidden sessions are reachable by a user** — link those with `[link text](/project/{project_id}/session/{session_id})`, and **never link a hidden session** (the user would click a link that leads nowhere). If the user wants to review every agent that worked, list them, flag which are hidden, and offer to `unhide` any on request (`twicc-update-session unhide`).
 
+The shared scratch is internal plumbing of your tree, not a place the user can browse — **never** tell the user to "see the report in the scratch", hand them a scratch path, or paste your children's raw scratch files at them. Whatever the work produced, **you** materialize the final result in your reply: pull the report(s) from the scratch, re-read and synthesize them, and present one coherent answer authored by you. Three workers with three reports become one synthesis you write — not three dumps.
+
 **No archiving is needed** — hidden sessions are already invisible to the user. If you spawned non-hidden sessions and the user wants them tidied away, ask, and archive them with `twicc-update-session` if they say yes.
 
 ## Related commands

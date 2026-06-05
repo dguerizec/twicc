@@ -122,6 +122,8 @@ How the shared scratch works:
 
 Pattern: an executor (worker or manager) writes `<scratch_dir>/<session_id>-result.md`, then sends a short `send-message parent` ("done, see `<session_id>-result.md`"); the parent reads the file.
 
+The scratch is **internal to the tree** — a handoff channel between its sessions, not something the end user browses (they have no UI for it). Whatever must reach the user travels up the tree in messages and is finally surfaced by the leader in its own reply; never hand the user a scratch path. See `twicc-orchestration-leader`.
+
 ## Lifecycle
 
 A session goes `starting → assistant_turn → user_turn`, then `dead` when its process stops. A `dead` session is **resurrected automatically** when it receives a `send-message` — so you never need to keep a child alive; message it whenever you need it.
