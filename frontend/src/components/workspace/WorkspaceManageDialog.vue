@@ -27,6 +27,7 @@ const errorMessage = ref('')
 const deleteConfirmId = ref(null) // workspace ID pending delete confirmation
 const localShowArchived = ref(false) // local toggle, independent from the global setting
 const localShowArchivedProjects = ref(false) // local toggle for the projects list inside the form view
+let dialogShown = false // true between the dialog's after-show and hide; gates focusing on list→form switches
 
 // -- Form data (buffered until Save) -----------------------------------------
 const formData = ref({
@@ -110,7 +111,7 @@ function openAddForm() {
     errorMessage.value = ''
     localShowArchivedProjects.value = settingsStore.isShowArchivedProjects
     view.value = 'form'
-    nextTick(() => syncFormState())
+    nextTick(() => { syncFormState(); if (dialogShown) focusFirstInput() })
 }
 
 function openEditForm(workspace) {
@@ -127,7 +128,7 @@ function openEditForm(workspace) {
     errorMessage.value = ''
     localShowArchivedProjects.value = settingsStore.isShowArchivedProjects
     view.value = 'form'
-    nextTick(() => syncFormState())
+    nextTick(() => { syncFormState(); if (dialogShown) focusFirstInput() })
 }
 
 function cancelForm() {
@@ -295,12 +296,13 @@ function handleDialogShow(e) {
 
 function handleDialogAfterShow(e) {
     if (e.target !== dialogRef.value) return
+    dialogShown = true
     focusFirstInput()
 }
 
 function handleDialogHide(e) {
     if (e.target !== dialogRef.value) return
-    // Let the dialog close normally
+    dialogShown = false
 }
 
 function open() {
