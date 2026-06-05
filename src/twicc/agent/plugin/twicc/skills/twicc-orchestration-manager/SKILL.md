@@ -49,4 +49,5 @@ Everything else mirrors `twicc-orchestration-leader`: how you decompose, brief, 
 - `$TWICC processes --spawned-by self` — track your direct children. Skill: `twicc-processes`.
 - `$TWICC processes wait --spawned-by self ...` / `processes stop --spawned-by self ...` — wait on or stop direct child batches. Skill: `twicc-processes`.
 - `$TWICC session <ID> messages` — pull a child's transcript. Skill: `twicc-session`.
-- `$TWICC update-session <ID> annotations` — set tracking annotations. Skill: `twicc-update-session`.
+- `$TWICC update-session <ID> annotations` — set tracking annotations on one session. Skill: `twicc-update-session`.
+- `$TWICC update-sessions annotations --spawned-by self --op ...` — tag (or hide / archive) several children in one call. Skill: `twicc-update-sessions`.

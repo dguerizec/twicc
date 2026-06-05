@@ -30,7 +30,14 @@ _WORKSPACE_ID_FIELDS = ("workspace_id",)
 _PROJECT_ID_FIELDS = ("project_id",)
 
 
-def emit_final(outcome, *, request_uuid: str, timeout: int) -> None:
+def build_final(outcome, *, request_uuid: str, timeout: int) -> dict:
+    """Return the final JSON dict for one drop-request outcome.
+
+    Single source of truth for the per-request result shape. :func:`emit_final`
+    prints it (the singular ``update-session`` / ``send-message`` path); the
+    ``update-sessions`` batch runner reuses it verbatim so each per-id entry is
+    byte-for-byte what the singular command would have emitted.
+    """
     if outcome.status in ("created", "sent", "updated", "stopped", "deleted"):
         d = outcome.data
         # Dispatch by which id field is set. ``workspace_id`` is workspace-only;
@@ -46,31 +53,34 @@ def emit_final(outcome, *, request_uuid: str, timeout: int) -> None:
         payload = {"status": outcome.status, "request_uuid": request_uuid}
         for field in id_fields:
             payload[field] = d.get(field)
-        emit_json(payload)
-    elif outcome.status == "rejected":
+        return payload
+    if outcome.status == "rejected":
         d = outcome.data
-        emit_json({
+        return {
             "status": "rejected",
             "errors": d.get("errors", []),
             "request_uuid": request_uuid,
-        })
-    elif outcome.status == "failed":
+        }
+    if outcome.status == "failed":
         d = outcome.data
-        emit_json({
+        return {
             "status": "failed",
             "error": d.get("error"),
             "request_uuid": request_uuid,
-        })
+        }
+    # timeout
+    if outcome.received_seen:
+        msg = (f"Request was received but server did not respond within "
+               f"{timeout}s. Check server logs.")
     else:
-        # timeout
-        if outcome.received_seen:
-            msg = (f"Request was received but server did not respond within "
-                   f"{timeout}s. Check server logs.")
-        else:
-            msg = f"No confirmation from server after {timeout}s."
-        emit_json({
-            "status": "timeout",
-            "received_seen": outcome.received_seen,
-            "message": msg,
-            "request_uuid": request_uuid,
-        })
+        msg = f"No confirmation from server after {timeout}s."
+    return {
+        "status": "timeout",
+        "received_seen": outcome.received_seen,
+        "message": msg,
+        "request_uuid": request_uuid,
+    }
+
+
+def emit_final(outcome, *, request_uuid: str, timeout: int) -> None:
+    emit_json(build_final(outcome, request_uuid=request_uuid, timeout=timeout))

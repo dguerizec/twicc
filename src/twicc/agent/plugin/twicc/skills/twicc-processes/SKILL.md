@@ -212,6 +212,7 @@ $TWICC processes wait --spawned-by self user_turn dead --timeout 300
 ## Related commands
 
 - `$TWICC process <session_id>` — inspect/stop/wait for a single session. Skill: `twicc-process`.
+- `$TWICC update-sessions <op> [SESSION_ID...]` — batch-update session rows (hide, archive, pin, annotations…) with the same selection model. Skill: `twicc-update-sessions`.
 - `$TWICC session <session_id>` — session metadata. Skill: `twicc-session`.
 - `$TWICC sessions` — browse all sessions (including stopped). Skill: `twicc-sessions`.
 - `$TWICC topology <ID|self>` — show process states in tree context. Skill: `twicc-topology`.

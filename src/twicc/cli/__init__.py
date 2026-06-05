@@ -959,6 +959,13 @@ from twicc.cli.update_session.command import update_session_app  # noqa: E402
 app.add_typer(update_session_app)
 
 
+# ``update-sessions`` is the batch sibling: ``twicc update-sessions <subcommand>
+# [SESSION_ID...] [--spawned-by ...] [--descendants ...]`` applies the same
+# update to every resolved session at once.
+from twicc.cli.update_sessions.command import update_sessions_app  # noqa: E402
+app.add_typer(update_sessions_app)
+
+
 # ``password`` is a Typer sub-app (set/clear/status). The module is lightweight
 # (no Django setup) so importing it at module load is cheap.
 from twicc.cli.password import app as password_app  # noqa: E402

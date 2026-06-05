@@ -170,5 +170,6 @@ Workers don't orchestrate, so they can ignore this.
 - `$TWICC topology self` — map your spawn tree. Skill: `twicc-topology`.
 - `$TWICC processes --spawned-by self` — track your direct children. Skill: `twicc-processes`.
 - `$TWICC processes wait --spawned-by self ...` / `processes stop --spawned-by self ...` — wait on or stop scoped child batches. Skill: `twicc-processes`.
-- `$TWICC update-session <ID> annotations` — set tracking annotations. Skill: `twicc-update-session`.
+- `$TWICC update-session <ID> annotations` — set tracking annotations on one session. Skill: `twicc-update-session`.
+- `$TWICC update-sessions annotations --spawned-by self --op ...` — tag (or hide / archive) several children in one call. Skill: `twicc-update-sessions`.
 - `$TWICC whoami` — your own session id, settings, and permission mode. Skill: `twicc-whoami`.

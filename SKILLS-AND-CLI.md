@@ -31,7 +31,7 @@ Then run `$TWICC <args>` — **never quote `$TWICC`** (it may expand to multiple
 
 Commands that target a session accept two keywords resolved via PID ancestry, so an agent never needs to know its own id:
 
-- **`self`** — the current session. Accepted by `update-session`, `topology`, and the `--spawned-by` / `--spawn-tree` / `--descendants` filters.
+- **`self`** — the current session. Accepted by `update-session`, `update-sessions` (as an explicit id), `topology`, and the `--spawned-by` / `--spawn-tree` / `--descendants` filters.
 - **`parent`** — the session that spawned the current one. Accepted by `send-message` and the filiation filters.
 
 `twicc whoami` is the explicit way for an agent to discover its own `session_id`, working directories, settings, and live process row.
@@ -161,6 +161,10 @@ Change a session without sending a message. `self` targets the current session. 
 - `hide` / `unhide` — toggle hidden visibility (hide requires a non-interactive permission mode and `question_widget=False`).
 - `annotations <OPERATION...>` — ordered ops: `clear`, `replace-file:PATH`, `merge-file:PATH`, `set:KEY=VALUE`, `unset:KEY`.
 - Skill: [`twicc-update-session`](src/twicc/agent/plugin/twicc/skills/twicc-update-session/SKILL.md).
+
+### `twicc update-sessions <SUBCOMMAND> [SESSION_ID...]`
+Apply the same update to several sessions at once — the batch sibling of `update-session`. Sub-commands: `archive` / `unarchive`, `pin --mode <project|workspace|all>` / `unpin`, `hide` / `unhide`, `annotations --op <OPERATION>` (each `--op` repeatable). No `settings` / `title` (a shared value across sessions doesn't apply). Each sub-command takes a positional `SESSION_ID...` list merged (union) with the same scoped selection as `processes stop`: `--spawned-by <ID|self>` or `--descendants <ID|self>`, plus `--annotation` to narrow that scope. No `parent`, no `--spawn-tree`. `--timeout` is a wall-clock budget for the whole batch. Output is keyed by session id: `{summary: {total, succeeded, failed, all_succeeded}, results: {<id>: <per-id outcome>}}`. A per-session failure never fails the batch (exit `0`); exit `6` when no session was updated.
+- Skill: [`twicc-update-sessions`](src/twicc/agent/plugin/twicc/skills/twicc-update-sessions/SKILL.md).
 
 ## Live processes
 

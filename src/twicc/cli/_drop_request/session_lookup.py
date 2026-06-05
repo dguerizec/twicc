@@ -1,6 +1,7 @@
 """Local DB lookup of an existing session.
 
-Shared by ``twicc send-message`` and ``twicc update-session``. The CLI side
+Shared by ``twicc send-message``, ``twicc update-session`` and
+``twicc update-sessions``. The CLI side
 does this pre-check before dropping the request so the user gets an immediate,
 locally diagnosable error for the common cases (session id unknown, session
 stale because its JSONL was deleted, project without directory, subagent).

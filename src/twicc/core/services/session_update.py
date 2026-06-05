@@ -397,7 +397,8 @@ async def apply_session_archived_change(
 
     Single source of truth for the archive flow, shared by the HTTP
     ``PATCH /api/projects/.../sessions/<id>/`` endpoint and the CLI
-    ``twicc update-session <ID> archive`` sub-command. Performs:
+    ``twicc update-session <ID> archive`` / ``twicc update-sessions archive``
+    sub-commands. Performs:
 
     1. DB write under the lock — ``archived`` (and ``pinned=None`` when
        ``also_unpin`` is set) saved via ``Session.asave``.
@@ -526,7 +527,8 @@ async def apply_session_pinned_change(session, pinned) -> None:
 
     Single source of truth for the pin / unpin flow, shared by the HTTP
     ``PATCH /api/projects/.../sessions/<id>/`` endpoint and the CLI
-    ``twicc update-session <ID> pin / unpin`` sub-commands.
+    ``twicc update-session <ID> pin / unpin`` (and ``twicc update-sessions
+    pin / unpin``) sub-commands.
 
     ``pinned`` is ``None`` to unpin, or one of ``PinMode.values``
     (``"project"`` / ``"workspace"`` / ``"all"``). The caller is

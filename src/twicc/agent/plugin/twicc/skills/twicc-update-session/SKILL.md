@@ -6,7 +6,7 @@ argument-hint: <session_id|self> {settings|title|annotations|archive|unarchive|p
 
 # TwiCC Update Session
 
-Nine sub-commands: `settings`, `title`, `annotations`, `archive`, `unarchive`, `pin <MODE>`, `unpin`, `hide`, `unhide`. To stop the live agent without touching the row, use `$TWICC process <SESSION_ID> stop` (skill: `twicc-process`).
+Nine sub-commands: `settings`, `title`, `annotations`, `archive`, `unarchive`, `pin <MODE>`, `unpin`, `hide`, `unhide`. To stop the live agent without touching the row, use `$TWICC process <SESSION_ID> stop` (skill: `twicc-process`). To apply the same change to several sessions at once (all sub-commands except `settings` / `title`), use `$TWICC update-sessions` (skill: `twicc-update-sessions`).
 
 All sub-commands share the `--timeout SECONDS` output flag (default 30).
 
@@ -186,6 +186,7 @@ $TWICC update-session self annotations set:role=worker
 
 ## Related commands
 
+- `$TWICC update-sessions <op> [SESSION_ID...]` — apply the same update to several sessions at once (no `settings` / `title`). Skill: `twicc-update-sessions`.
 - `$TWICC info [models|agent-settings|presets]` — discover providers, models, agent-settings values and presets before editing a session. Skill: `twicc-info`.
 - `$TWICC process <session_id> stop` — stop the agent without touching the row. Skill: `twicc-process`.
 - `$TWICC send-message <session_id>` — send a message (settings unchanged). Skill: `twicc-send-message`.

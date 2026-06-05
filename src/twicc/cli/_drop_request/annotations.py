@@ -51,7 +51,7 @@ def parse_annotations(
 def parse_annotation_update_operations(
     operations: list[str],
 ) -> tuple[list[dict], list[ValidationError]]:
-    """Parse ordered annotation operations for update-session annotations."""
+    """Parse ordered annotation operations for update-session(s) annotations."""
     parsed_operations: list[dict] = []
     errors: list[ValidationError] = []
 

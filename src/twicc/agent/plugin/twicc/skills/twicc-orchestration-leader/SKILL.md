@@ -53,11 +53,11 @@ When a child fails or escalates: retry it, re-split the work, re-delegate to a f
 
 ## Report and finish
 
-Synthesize the children's results and report to the user. **Only non-hidden sessions are reachable by a user** — link those with `[link text](/project/{project_id}/session/{session_id})`, and **never link a hidden session** (the user would click a link that leads nowhere). If the user wants to review every agent that worked, list them, flag which are hidden, and offer to `unhide` any on request (`twicc-update-session unhide`).
+Synthesize the children's results and report to the user. **Only non-hidden sessions are reachable by a user** — link those with `[link text](/project/{project_id}/session/{session_id})`, and **never link a hidden session** (the user would click a link that leads nowhere). If the user wants to review every agent that worked, list them, flag which are hidden, and offer to `unhide` any on request (`twicc-update-session unhide`, or `twicc-update-sessions unhide --spawned-by self` to unhide a whole batch at once).
 
 The shared scratch is internal plumbing of your tree, not a place the user can browse — **never** tell the user to "see the report in the scratch", hand them a scratch path, or paste your children's raw scratch files at them. Whatever the work produced, **you** materialize the final result in your reply: pull the report(s) from the scratch, re-read and synthesize them, and present one coherent answer authored by you. Three workers with three reports become one synthesis you write — not three dumps.
 
-**No archiving is needed** — hidden sessions are already invisible to the user. If you spawned non-hidden sessions and the user wants them tidied away, ask, and archive them with `twicc-update-session` if they say yes.
+**No archiving is needed** — hidden sessions are already invisible to the user. If you spawned non-hidden sessions and the user wants them tidied away, ask, and archive them with `twicc-update-session` (or `twicc-update-sessions archive --spawned-by self` for the whole batch) if they say yes.
 
 ## Related commands
 
@@ -67,4 +67,5 @@ The shared scratch is internal plumbing of your tree, not a place the user can b
 - `$TWICC processes wait --spawned-by self ...` / `processes stop --spawned-by self ...` — wait on or stop direct child batches. Skill: `twicc-processes`.
 - `$TWICC session <ID> messages` — pull a child's transcript. Skill: `twicc-session`.
 - `$TWICC send-message <ID> <TEXT>` — steer or follow up a child. Skill: `twicc-send-message`.
-- `$TWICC update-session <ID> annotations|archive|unhide` — annotate, archive, or unhide a session. Skill: `twicc-update-session`.
+- `$TWICC update-session <ID> annotations|archive|unhide` — annotate, archive, or unhide one session. Skill: `twicc-update-session`.
+- `$TWICC update-sessions {annotations|archive|unhide|hide|pin} --spawned-by self ...` — apply one such change to a whole batch of children. Skill: `twicc-update-sessions`.
