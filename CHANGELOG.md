@@ -16,6 +16,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - The Orchestration tab now shows each node's project, turn count and context usage, and auto-refreshes while any session in the tree is live.
 - When using CLI/skills with `--remote`, file paths for a prompt or an attachment are resolved on your local machine by default; prefix the path with `remote:` to read it on the server instead.
+- Bump `claude-agent-sdk` from 0.2.90 to 0.2.91 (bundled Claude Code CLI: 2.1.163 → 2.1.165)
 
 ### Fixed
 
