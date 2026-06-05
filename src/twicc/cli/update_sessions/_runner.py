@@ -52,7 +52,7 @@ def run_batch_update(
     session_ids: list[str],
     *,
     kind: str,
-    build_payload: Callable[..., dict],
+    prepare: Callable[..., dict | list],
     timeout: int,
     spawned_by: str | None = None,
     descendants: str | None = None,
@@ -60,10 +60,12 @@ def run_batch_update(
 ) -> None:
     """Apply one update ``kind`` to every resolved session and emit the batch result.
 
-    ``build_payload(resolved)`` returns the per-id drop payload (must include
-    ``session_id``); it is called once per resolved session and is expected to
-    be pure — these batch ops carry no per-provider validation (that is why
-    ``settings`` is intentionally not part of the batch surface yet).
+    ``prepare(resolved)`` returns either the per-id drop payload (a dict that
+    must include ``session_id``) or a flat ``list`` of ``ValidationError`` when
+    this session can't accept the change (e.g. ``settings`` value invalid for
+    its provider) — in that case the id gets a per-id ``validation_error`` and
+    no drop, while the other sessions proceed. The provider-agnostic ops pass a
+    ``prepare`` that always returns a payload.
     """
     import os
     os.environ.setdefault("DJANGO_SETTINGS_MODULE", "twicc.settings")
@@ -184,7 +186,16 @@ def run_batch_update(
             }
             continue
 
-        drop = write_drop_file(build_payload(resolved), kind=kind)
+        outcome = prepare(resolved)
+        if isinstance(outcome, list):
+            # Per-id validation errors (e.g. settings invalid for this provider).
+            results[sid] = {
+                "status": "validation_error",
+                "errors": [e._asdict() for e in outcome],
+            }
+            continue
+
+        drop = write_drop_file(outcome, kind=kind)
         status_path = drop.path.with_name(f"{drop.request_uuid}.status.json")
         results[sid] = None
         pending.append((sid, drop, status_path))

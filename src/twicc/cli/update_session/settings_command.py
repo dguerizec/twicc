@@ -15,6 +15,10 @@ The semantics mirror the UI's settings-only update path:
 ``--model X`` combined with ``--unset model`` is rejected up-front
 (``unset_conflict``). ``--unset <field>`` is also rejected when the
 session's provider does not support the field (``unsupported_field``).
+
+The flag parsing (provider-independent) and the per-provider resolution both
+live in :mod:`twicc.cli._drop_request.settings_resolution`, shared with the
+batch ``twicc update-sessions settings`` so the two stay byte-for-byte aligned.
 """
 
 from __future__ import annotations
@@ -26,9 +30,9 @@ from twicc.cli._drop_request.help_strings import (
     context_max_help,
     default_suffix,
     model_help,
-    parse_context_max,
     preset_help,
 )
+from twicc.cli._drop_request.settings_resolution import unset_help
 
 
 # Load the user's current providers + presets at module import time so the
@@ -36,34 +40,6 @@ from twicc.cli._drop_request.help_strings import (
 # ``create_session.command`` — kept Django-free, ~30 ms cold, degrades to
 # "no info" on missing / malformed files.
 _HELP_CTX = load_help_context()
-
-
-# Public token (the user types after ``--unset``) -> AgentSettings field name.
-# The token is the dash-cased form of the public flag name without the
-# leading ``--``: ``--model`` becomes ``model``, ``--permission-mode`` becomes
-# ``permission-mode``, etc.
-_UNSET_TOKEN_TO_FIELD: dict[str, str] = {
-    "model": "selected_model",
-    "effort": "effort",
-    "permission-mode": "permission_mode",
-    "thinking": "thinking_enabled",
-    "claude-in-chrome": "claude_in_chrome",
-    "fast-mode": "fast_mode",
-    "context-max": "context_max",
-    "question-widget": "question_widget",
-}
-
-
-def _unset_help() -> str:
-    tokens = sorted(_UNSET_TOKEN_TO_FIELD.keys())
-    return (
-        "Reset a setting back to NULL (use the synced default). Repeatable: "
-        "pass once per setting to clear. Accepted tokens: "
-        + ", ".join(f"'{t}'" for t in tokens)
-        + ". Conflicts with the matching per-field flag (e.g. --unset model "
-        "and --model X cannot be combined). Allowed alongside --preset to "
-        "wipe a field the preset would otherwise have set."
-    )
 
 
 def update_settings_cmd(
@@ -152,7 +128,7 @@ def update_settings_cmd(
     unset: list[str] = typer.Option(
         [],
         "--unset",
-        help=_unset_help(),
+        help=unset_help(),
     ),
     timeout: int = typer.Option(
         30,
@@ -184,23 +160,17 @@ def update_settings_cmd(
     from twicc.cli._drop_request.drop_file import write_drop_file
     from twicc.cli._drop_request.output import emit_final, emit_validation_errors
     from twicc.cli._drop_request.polling import poll_status
-    from twicc.cli._drop_request.presets import (
-        apply_preset_and_overrides, PresetError,
-    )
     from twicc.cli._drop_request.session_lookup import (
         SessionLookupError, lookup_session,
     )
-    from twicc.cli._drop_request.validation import (
-        ValidationError,
-        validate_hidden_constraints,
-        validate_no_set_unset_conflict,
-        validate_provider,
-        validate_settings,
-        validate_unset_fields,
+    from twicc.cli._drop_request.settings_resolution import (
+        parse_settings_flags, prepare_settings,
     )
+    from twicc.cli._drop_request.validation import ValidationError
     from twicc.cli._output import emit_error
-    from twicc.providers.helpers import AgentSettings, get_provider_helpers
 
+    # Server-up check first (exit 2 wins over any validation error), matching
+    # the original ordering of this command.
     try:
         check_heartbeat()
     except ServerDownError as e:
@@ -215,135 +185,30 @@ def update_settings_cmd(
         emit_validation_errors([ValidationError("SESSION_ID", e.code, e.message)])
         raise typer.Exit(1)
 
+    # 1. Provider-independent flag validation (unknown --unset token, malformed
+    # --context-max, set/unset conflict, no-op).
+    parsed = parse_settings_flags(
+        model=model, effort=effort, permission_mode=permission_mode,
+        thinking=thinking, claude_in_chrome=claude_in_chrome,
+        fast_mode=fast_mode, question_widget=question_widget,
+        context_max=context_max, unset=unset, preset=preset,
+    )
+    if isinstance(parsed, list):
+        emit_validation_errors(parsed)
+        raise typer.Exit(1)
+    overrides, unset_fields = parsed
+
+    # 2. Per-provider resolution (provider enabled, --unset supported, preset
+    # resolution, value validation, hidden invariants).
     bootstrap = load_local_bootstrap()
-    provider = resolved.provider
-
-    errors: list[ValidationError] = []
-
-    # 1. Provider still enabled? (Race protection: the user may have disabled
-    # it after the session was created.)
-    errors.extend(validate_provider(provider, bootstrap))
-
-    # 2. Parse ``--unset`` tokens to internal field names.
-    unset_fields: list[str] = []
-    for token in unset:
-        field = _UNSET_TOKEN_TO_FIELD.get(token)
-        if field is None:
-            accepted = sorted(_UNSET_TOKEN_TO_FIELD.keys())
-            errors.append(ValidationError(
-                f"--unset {token}", "unknown_unset_field",
-                f"Unknown setting {token!r}. Accepted tokens: {accepted}.",
-            ))
-        else:
-            unset_fields.append(field)
-
-    # 3. Parse ``--context-max``.
-    context_max_int: int | None = None
-    try:
-        context_max_int = parse_context_max(context_max)
-    except ValueError as e:
-        errors.append(ValidationError("--context-max", "invalid_format", str(e)))
-
-    overrides: dict[str, object | None] = {
-        "selected_model": model,
-        "effort": effort,
-        "permission_mode": permission_mode,
-        "thinking_enabled": thinking,
-        "claude_in_chrome": claude_in_chrome,
-        "fast_mode": fast_mode,
-        "context_max": context_max_int,
-        "question_widget": question_widget,
-    }
-
-    # 4. Contradictory ``--<field> VALUE`` + ``--unset <field>``.
-    errors.extend(validate_no_set_unset_conflict(overrides, unset_fields))
-
-    # 5. ``--unset <field>`` for fields the session's provider doesn't support.
-    # Skipped if the provider isn't valid (would mask the real error).
-    if provider in bootstrap.providers:
-        errors.extend(validate_unset_fields(provider, unset_fields, bootstrap))
-
-    # 6. No-op: nothing to update at all.
-    # Use the raw user inputs (not the parsed / validated forms) so a
-    # malformed value — ``--context-max 999bogus``, ``--unset bogus``,
-    # ``--effort ultra``, ... — still counts as "the user tried to touch
-    # this field" and doesn't spuriously trigger no_op on top of the parse
-    # / validation error.
-    user_touched_something = (
-        preset is not None
-        or any(v is not None for v in (
-            model, effort, permission_mode, thinking, claude_in_chrome,
-            fast_mode, context_max, question_widget,
-        ))
-        or bool(unset)
+    result = prepare_settings(
+        resolved, overrides=overrides, unset_fields=unset_fields,
+        preset=preset, bootstrap=bootstrap,
     )
-    if not user_touched_something:
-        errors.append(ValidationError(
-            "<all>", "no_op",
-            "Nothing to update; pass at least one of --preset, a per-field "
-            "flag, or --unset <field>.",
-        ))
-
-    if errors:
-        emit_validation_errors(errors)
+    if isinstance(result, list):
+        emit_validation_errors(result)
         raise typer.Exit(1)
-
-    # 7. Resolve the final settings + updates dict.
-    presets_for_provider = (
-        bootstrap.providers[provider].presets
-        if provider in bootstrap.providers else []
-    )
-    if preset is not None:
-        try:
-            settings = apply_preset_and_overrides(
-                preset, presets_for_provider, overrides, unset=unset_fields,
-            )
-        except PresetError as e:
-            emit_validation_errors(
-                [ValidationError("--preset", "invalid_preset", str(e))],
-            )
-            raise typer.Exit(1)
-        updates = settings._asdict()
-        replace_all = True
-    else:
-        # Patch mode: only the explicitly-touched fields end up in the
-        # payload. ``settings`` is built solely so ``validate_settings``
-        # can vet the non-None values; it does not drive the DB write.
-        settings = AgentSettings(**{f: overrides.get(f) for f in AgentSettings._fields})
-        updates = {f: v for f, v in overrides.items() if v is not None}
-        for field in unset_fields:
-            updates[field] = None
-        replace_all = False
-
-    # 8. Validate each non-None setting against the provider's choices.
-    errors = validate_settings(provider, settings, bootstrap)
-    if errors:
-        emit_validation_errors(errors)
-        raise typer.Exit(1)
-
-    # 9. Hidden invariants: if the target session is currently hidden, the
-    # resulting settings must not break the non-interactive whitelist.
-    # We must check the EFFECTIVE settings after the update, not the raw
-    # user overrides (which have None for untouched fields). Build them
-    # the same way the server does in session_update.py:
-    #   1. Start from the current row's AgentSettings (baseline).
-    #   2. Overlay ``updates`` (the actual dict that will be written, with
-    #      None meaning "reset to synced default" for --unset fields).
-    #   3. resolve + enforce_consistency.
-    #   4. Validate.
-    if resolved.hidden:
-        merged_base = resolved.current_settings._asdict()
-        merged_base.update(updates)
-        merged_settings = AgentSettings(**merged_base)
-        helpers_obj = get_provider_helpers(resolved.provider)
-        effective_settings = helpers_obj.resolve_agent_settings(merged_settings)
-        effective_settings = helpers_obj.enforce_agent_settings_consistency(effective_settings)
-        hidden_errors = validate_hidden_constraints(
-            resolved.provider, effective_settings, hidden=True,
-        )
-        if hidden_errors:
-            emit_validation_errors(hidden_errors)
-            raise typer.Exit(1)
+    updates, replace_all = result
 
     payload = {
         "session_id": resolved.session_id,

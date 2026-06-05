@@ -1,20 +1,21 @@
 ---
 name: twicc-update-sessions
-description: Apply the same update to several TwiCC sessions at once — batch archive/unarchive, pin/unpin, hide/unhide, or annotations. Use when you or the user want to change many sessions in one call (e.g. hide a whole batch, or tag every worker in an orchestration).
-argument-hint: {archive|unarchive|pin|unpin|hide|unhide|annotations} [SESSION_ID...] [--spawned-by X|--descendants X] [--annotation ...]
+description: Apply the same update to several TwiCC sessions at once — batch archive/unarchive, pin/unpin, hide/unhide, annotations, or settings. Use when you or the user want to change many sessions in one call (e.g. hide a whole batch, tag every worker in an orchestration, or bump the model/effort of all your children).
+argument-hint: {archive|unarchive|pin|unpin|hide|unhide|annotations|settings} [SESSION_ID...] [--spawned-by X|--descendants X] [--annotation ...]
 ---
 
 # TwiCC Update Sessions
 
-Batch sibling of `update-session`: applies the SAME change to every targeted session in one call. Seven sub-commands: `archive`, `unarchive`, `pin`, `unpin`, `hide`, `unhide`, `annotations`. For a single session, prefer `update-session` (skill: `twicc-update-session`).
+Batch sibling of `update-session`: applies the SAME change to every targeted session in one call. Eight sub-commands: `archive`, `unarchive`, `pin`, `unpin`, `hide`, `unhide`, `annotations`, `settings`. For a single session, prefer `update-session` (skill: `twicc-update-session`).
 
-`settings` and `title` are intentionally not batchable here — use `update-session` per session for those.
+`title` is intentionally not batchable here (setting the same title on several sessions is meaningless) — use `update-session <ID> title` per session.
 
 ## When to use
 
 - Hide or unhide several sessions at once → `hide` / `unhide`.
 - Archive / unarchive, or pin / unpin a set of sessions → `archive` / `pin` / etc.
 - Tag every session in an orchestration with the same annotation → `annotations` with `--spawned-by self` or `--descendants self`.
+- Change model / effort / permission mode of a whole batch → `settings` (applied per session against its own provider).
 - You have a list of session_ids and one change to apply to all of them.
 
 ## How to invoke
@@ -77,11 +78,23 @@ $TWICC update-sessions annotations [SESSION_ID...] --op <OPERATION> [--op <OPERA
 
 Two distinct annotation flags here: `--op` is the **mutation** applied to each session; `--annotation` is a read-only **filter** on the scope. At least one `--op` is required; operations apply left-to-right (`clear`, `replace-file:PATH`, `merge-file:PATH`, `set:KEY=VALUE`, `unset:KEY` — same syntax as `update-session annotations`).
 
+### `settings`
+
+```bash
+$TWICC update-sessions settings [SESSION_ID...] [FLAGS] [--spawned-by X|--descendants X]
+```
+
+Same flags as `update-session settings` (skill: `twicc-update-session`): `--preset`, `--model`, `--effort`, `--permission-mode`, `--thinking`, `--claude-in-chrome`, `--fast-mode`, `--question-widget`, `--context-max`, `--unset <field>`. Patch by default; `--preset` switches to replace mode. At least one flag or `--unset` is required.
+
+Resolution is **per session against its own provider**: the change is applied wherever the provider accepts it, and a session whose provider rejects a value (e.g. `--model opus` on a Codex session, or `--thinking` which Codex doesn't have) yields a per-id `validation_error` (`invalid_choice` / `unsupported_field` / `invalid_preset`) while the other sessions proceed. So a mixed-provider batch simply updates the sessions where the setting applies and flags the rest — no silently wrong setting (the providers' value spaces are disjoint). To target a single provider, pre-filter the ids with `twicc sessions --provider ...` (skill: `twicc-sessions`).
+
+Startup settings (`effort`, `thinking`, `claude-in-chrome`, `fast-mode`, `question-widget` on Claude Code) are applied on the next restart: each live agent is stopped (at the end of its current assistant turn if working), so the next message it receives starts it with the new settings. No agent is interrupted mid-turn.
+
 ## Errors
 
-Argument-level problems fail the whole command (exit 1, plain-text on stderr): bad `--timeout`, `--spawned-by`/`--descendants` together, `parent` scope, `--annotation` without a filiation scope, neither ids nor scope, invalid `--mode`, malformed `--op`.
+Argument-level problems fail the whole command (exit 1, plain-text on stderr): bad `--timeout`, `--spawned-by`/`--descendants` together, `parent` scope, `--annotation` without a filiation scope, neither ids nor scope, invalid `--mode`, malformed `--op`, and (settings) a malformed flag shared by all ids (`unknown_unset_field`, `invalid_format`, `unset_conflict`, `no_op`).
 
-Per-session problems never fail the batch — they are reported in `results[<id>]` with `status` `validation_error` (local lookup failure: `session_not_found`, `is_subagent`, `session_stale`, `project_no_directory`, `unknown_provider`) or `rejected` (server business rule, e.g. hidden constraints). Same code vocabulary as `twicc-update-session`.
+Per-session problems never fail the batch — they are reported in `results[<id>]` with `status` `validation_error` (local lookup failure: `session_not_found`, `is_subagent`, `session_stale`, `project_no_directory`, `unknown_provider`; settings not applicable to the session's provider: `provider_disabled`, `unsupported_field`, `invalid_choice`, `invalid_preset`) or `rejected` (server business rule, e.g. hidden constraints). Same code vocabulary as `twicc-update-session`.
 
 ## Output format
 
@@ -119,11 +132,14 @@ $TWICC update-sessions pin abc123 def456 --mode workspace
 $TWICC update-sessions unpin --spawned-by self
 $TWICC update-sessions annotations --spawned-by self --op set:reviewed=true
 $TWICC update-sessions annotations abc123 def456 --op set:phase=done --op unset:wip
+$TWICC update-sessions settings --spawned-by self --effort high
+$TWICC update-sessions settings abc123 def456 --model opus
+$TWICC update-sessions settings --descendants self --preset 'deep think'
 ```
 
 ## Related commands
 
-- `$TWICC update-session <id|self> <op>` — update one session (and the only place for `settings` / `title`). Skill: `twicc-update-session`.
+- `$TWICC update-session <id|self> <op>` — update one session (and the only place for `title`). Skill: `twicc-update-session`.
 - `$TWICC processes stop [SESSION_ID...]` — batch-stop live agents (same selection model). Skill: `twicc-processes`.
 - `$TWICC sessions` — browse / filter sessions to pick the ids to update. Skill: `twicc-sessions`.
 - `$TWICC topology <id|self>` — see the spawn tree before targeting `--descendants` / `--spawned-by`. Skill: `twicc-topology`.

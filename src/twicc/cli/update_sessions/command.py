@@ -23,8 +23,21 @@ from __future__ import annotations
 
 import typer
 
+from twicc.cli._drop_request.help_context import load_help_context
+from twicc.cli._drop_request.help_strings import (
+    context_max_help,
+    default_suffix,
+    model_help,
+    preset_help,
+)
+from twicc.cli._drop_request.settings_resolution import unset_help
 from twicc.cli._output import emit_error
 from twicc.cli.update_sessions._runner import run_batch_update
+
+
+# Load the user's providers + presets once so the ``settings`` --help strings
+# can mention them (Django-free, ~30 ms cold). Same trick as the singular.
+_HELP_CTX = load_help_context()
 
 
 # Mirrors :class:`twicc.core.models.PinMode`. Kept as a flat tuple so ``pin``
@@ -96,7 +109,7 @@ def _archive(
     run_batch_update(
         session_ids or [],
         kind="session:update_archived",
-        build_payload=lambda r: {"session_id": r.session_id, "archived": True},
+        prepare=lambda r: {"session_id": r.session_id, "archived": True},
         timeout=timeout,
         spawned_by=spawned_by,
         descendants=descendants,
@@ -118,7 +131,7 @@ def _unarchive(
     run_batch_update(
         session_ids or [],
         kind="session:update_archived",
-        build_payload=lambda r: {"session_id": r.session_id, "archived": False},
+        prepare=lambda r: {"session_id": r.session_id, "archived": False},
         timeout=timeout,
         spawned_by=spawned_by,
         descendants=descendants,
@@ -153,7 +166,7 @@ def _pin(
     run_batch_update(
         session_ids or [],
         kind="session:update_pinned",
-        build_payload=lambda r: {"session_id": r.session_id, "pinned": mode},
+        prepare=lambda r: {"session_id": r.session_id, "pinned": mode},
         timeout=timeout,
         spawned_by=spawned_by,
         descendants=descendants,
@@ -175,7 +188,7 @@ def _unpin(
     run_batch_update(
         session_ids or [],
         kind="session:update_pinned",
-        build_payload=lambda r: {"session_id": r.session_id, "pinned": None},
+        prepare=lambda r: {"session_id": r.session_id, "pinned": None},
         timeout=timeout,
         spawned_by=spawned_by,
         descendants=descendants,
@@ -203,7 +216,7 @@ def _hide(
     run_batch_update(
         session_ids or [],
         kind="session:update_hidden",
-        build_payload=lambda r: {"session_id": r.session_id, "hidden": True},
+        prepare=lambda r: {"session_id": r.session_id, "hidden": True},
         timeout=timeout,
         spawned_by=spawned_by,
         descendants=descendants,
@@ -225,7 +238,7 @@ def _unhide(
     run_batch_update(
         session_ids or [],
         kind="session:update_hidden",
-        build_payload=lambda r: {"session_id": r.session_id, "hidden": False},
+        prepare=lambda r: {"session_id": r.session_id, "hidden": False},
         timeout=timeout,
         spawned_by=spawned_by,
         descendants=descendants,
@@ -272,9 +285,157 @@ def _annotations(
     run_batch_update(
         session_ids or [],
         kind="session:update_annotations",
-        build_payload=lambda r: {
+        prepare=lambda r: {
             "session_id": r.session_id, "operations": parsed_operations,
         },
+        timeout=timeout,
+        spawned_by=spawned_by,
+        descendants=descendants,
+        annotation=annotation,
+    )
+
+
+@update_sessions_app.command(name="settings")
+def _settings(
+    session_ids: list[str] | None = typer.Argument(
+        None, metavar="SESSION_ID...", help=_SESSION_IDS_HELP,
+    ),
+    preset: str | None = typer.Option(
+        None,
+        "--preset",
+        help=preset_help(_HELP_CTX) + (
+            " WARNING: --preset replaces every settings field on each session "
+            "(preset values set what it defines; absent fields become NULL / "
+            "synced default; per-flag options override the preset; --unset "
+            "forces NULL). Without --preset, only the fields you touch are "
+            "written; every other field keeps its current value."
+        ),
+    ),
+    model: str | None = typer.Option(None, "--model", help=model_help(_HELP_CTX)),
+    effort: str | None = typer.Option(
+        None,
+        "--effort",
+        help=(
+            "Reasoning effort. Claude Code: 'low', 'medium', 'high', 'xhigh', 'max'. "
+            "Codex: 'low', 'medium', 'high', 'xhigh'."
+            + default_suffix(_HELP_CTX, "effort")
+        ),
+    ),
+    permission_mode: str | None = typer.Option(
+        None,
+        "--permission-mode",
+        help=(
+            "Tool permission policy. Claude Code: 'default', 'acceptEdits', 'plan', "
+            "'dontAsk', 'bypassPermissions'. Codex: 'read_only', 'strict', 'auto', "
+            "'autonomous', 'yolo'."
+            + default_suffix(_HELP_CTX, "permission_mode")
+        ),
+    ),
+    thinking: bool | None = typer.Option(
+        None,
+        "--thinking/--no-thinking",
+        help=(
+            "Claude Code only. Enable extended thinking. Omit to leave unchanged."
+            + default_suffix(_HELP_CTX, "thinking_enabled")
+        ),
+    ),
+    claude_in_chrome: bool | None = typer.Option(
+        None,
+        "--claude-in-chrome/--no-claude-in-chrome",
+        help=(
+            "Claude Code only. Enable the Chrome MCP integration. Omit to leave "
+            "unchanged."
+            + default_suffix(_HELP_CTX, "claude_in_chrome")
+        ),
+    ),
+    fast_mode: bool | None = typer.Option(
+        None,
+        "--fast-mode/--no-fast-mode",
+        help=(
+            "Claude Code Opus models only. Enable fast mode. Omit to leave "
+            "unchanged."
+            + default_suffix(_HELP_CTX, "fast_mode")
+        ),
+    ),
+    question_widget: bool | None = typer.Option(
+        None,
+        "--question-widget/--no-question-widget",
+        help=(
+            "Enable interactive question widgets. Pass --no-question-widget to "
+            "force plain-text questions. Omit to leave unchanged."
+            + default_suffix(_HELP_CTX, "question_widget")
+        ),
+    ),
+    context_max: str | None = typer.Option(
+        None, "--context-max", help=context_max_help(_HELP_CTX),
+    ),
+    unset: list[str] = typer.Option([], "--unset", help=unset_help()),
+    spawned_by: str = typer.Option(None, "--spawned-by", help=_SPAWNED_BY_HELP),
+    descendants: str = typer.Option(None, "--descendants", help=_DESCENDANTS_HELP),
+    annotation: list[str] = typer.Option([], "--annotation", help=_ANNOTATION_HELP),
+    timeout: int = typer.Option(30, "--timeout", help=_TIMEOUT_HELP),
+) -> None:
+    """Apply the same agent-settings change to every targeted session.
+
+    Flags mirror `update-session settings` (patch by default; `--preset`
+    switches to replace mode). Resolution is per-session against each session's
+    provider: the change is applied wherever the provider accepts it, and a
+    session whose provider rejects a value yields a per-id validation_error
+    (invalid_choice / unsupported_field) while the others proceed.
+
+    Startup settings (effort, thinking, claude-in-chrome, fast-mode,
+    question-widget on Claude Code) are applied on the next restart: the agent
+    is stopped (at the end of its current assistant turn if working) so the
+    next message it receives starts it with the new settings.
+    """
+    # At least one of --preset / a per-field flag / --unset is required, like
+    # the singular command (enforced by parse_settings_flags' no_op check).
+    import os
+    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "twicc.settings")
+    import django
+    django.setup()
+
+    from twicc.cli._drop_request.bootstrap_local import load_local_bootstrap
+    from twicc.cli._drop_request.settings_resolution import (
+        parse_settings_flags, prepare_settings,
+    )
+
+    # Provider-independent flag validation (global, fatal — same for every id).
+    parsed = parse_settings_flags(
+        model=model, effort=effort, permission_mode=permission_mode,
+        thinking=thinking, claude_in_chrome=claude_in_chrome,
+        fast_mode=fast_mode, question_widget=question_widget,
+        context_max=context_max, unset=unset, preset=preset,
+    )
+    if isinstance(parsed, list):
+        emit_error(
+            "Error: invalid settings arguments:\n"
+            + "\n".join(f"  - {e.field}: {e.code}: {e.message}" for e in parsed),
+            code=1,
+        )
+    overrides, unset_fields = parsed
+
+    bootstrap = load_local_bootstrap()
+
+    def _prepare(resolved):
+        """Per-id: resolve against the session's provider → payload or errors."""
+        result = prepare_settings(
+            resolved, overrides=overrides, unset_fields=unset_fields,
+            preset=preset, bootstrap=bootstrap,
+        )
+        if isinstance(result, list):
+            return result
+        updates, replace_all = result
+        return {
+            "session_id": resolved.session_id,
+            "updates": updates,
+            "replace_all": replace_all,
+        }
+
+    run_batch_update(
+        session_ids or [],
+        kind="session:update_settings",
+        prepare=_prepare,
         timeout=timeout,
         spawned_by=spawned_by,
         descendants=descendants,

@@ -6,7 +6,7 @@ argument-hint: <session_id|self> {settings|title|annotations|archive|unarchive|p
 
 # TwiCC Update Session
 
-Nine sub-commands: `settings`, `title`, `annotations`, `archive`, `unarchive`, `pin <MODE>`, `unpin`, `hide`, `unhide`. To stop the live agent without touching the row, use `$TWICC process <SESSION_ID> stop` (skill: `twicc-process`). To apply the same change to several sessions at once (all sub-commands except `settings` / `title`), use `$TWICC update-sessions` (skill: `twicc-update-sessions`).
+Nine sub-commands: `settings`, `title`, `annotations`, `archive`, `unarchive`, `pin <MODE>`, `unpin`, `hide`, `unhide`. To stop the live agent without touching the row, use `$TWICC process <SESSION_ID> stop` (skill: `twicc-process`). To apply the same change to several sessions at once (every sub-command except `title`), use `$TWICC update-sessions` (skill: `twicc-update-sessions`).
 
 All sub-commands share the `--timeout SECONDS` output flag (default 30).
 
@@ -65,7 +65,7 @@ Agent settings flags (all optional; use `$TWICC info models agent-settings prese
 **How settings reach a live process:** if a session currently has a process attached (a running agent), changes are propagated immediately per field category:
 - *Live* (`permission_mode` on Claude Code) — applied immediately.
 - *Idle* (`model`, `context_max` on Claude Code; `model`, `effort`, `permission_mode`, `context_max` on Codex) — applied on next `user_turn`.
-- *Startup* (`effort`, `thinking`, `claude_in_chrome`, `fast_mode`, `question_widget` on Claude Code) — agent is restarted. If currently `awaiting_user_input`, the pending dialog is lost.
+- *Startup* (`effort`, `thinking`, `claude_in_chrome`, `fast_mode`, `question_widget` on Claude Code) — applied on the next restart: the agent is stopped (immediately if at `user_turn`, or at the end of its current `assistant_turn` if working), so the next message you send restarts it with the new settings. If currently `awaiting_user_input`, the pending dialog is lost.
 
 ### `title`
 
