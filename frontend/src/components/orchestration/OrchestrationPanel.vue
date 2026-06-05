@@ -7,6 +7,11 @@
 import { ref, computed, watch } from 'vue'
 import OrchestrationNode from './OrchestrationNode.vue'
 import CostDisplay from '../ui/CostDisplay.vue'
+import { useSettingsStore } from '../../stores/settings'
+
+const settingsStore = useSettingsStore()
+// Honour the global "Show costs" toggle, like the rest of the app.
+const showCosts = computed(() => settingsStore.areCostsShown)
 
 const props = defineProps({
     sessionId: { type: String, required: true },
@@ -96,7 +101,7 @@ watch(
                 <div class="orch-toolbar-meta">
                     <span class="orch-toolbar-title">Orchestration tree</span>
                     <span v-if="nodeCount" class="orch-meta-item">{{ nodeCount }} session{{ nodeCount > 1 ? 's' : '' }}<template v-if="activitySummary"> ({{ activitySummary }})</template></span>
-                    <span v-if="totalCost != null" class="orch-meta-item">
+                    <span v-if="showCosts && totalCost != null" class="orch-meta-item">
                         <CostDisplay :cost="totalCost" /> total
                     </span>
                 </div>

@@ -15,6 +15,14 @@ import JsonHumanView from '../json/JsonHumanView.vue'
 import AgentSettingsSummaryView from '../message/AgentSettingsSummaryView.vue'
 import { getProviderHelpers, getProviderStore } from '../../providers'
 import { formatDate, formatDuration } from '../../utils/date'
+import { useSettingsStore } from '../../stores/settings'
+
+const settingsStore = useSettingsStore()
+
+// Honour the global "Show costs" toggle, like every other cost display in the
+// app (SessionHeader, ProjectCard, SessionListItem, …). The orchestration tree
+// used to be the lone exception, leaking costs even when they were hidden.
+const showCosts = computed(() => settingsStore.areCostsShown)
 
 const props = defineProps({
     // Id-only tree node: { id, children: [...] }
@@ -179,7 +187,7 @@ const expanded = ref(true)
                         :class="status.pulse ? `orch-status-icon--pulse-${status.pulse}` : null"
                     ></wa-icon>
                     <span v-if="isCurrent" class="orch-current-badge">current</span>
-                    <span class="orch-cost">
+                    <span v-if="showCosts" class="orch-cost">
                         <CostDisplay :cost="ownCost" />
                         <span
                             v-if="hasChildren"
