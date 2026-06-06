@@ -65,6 +65,18 @@ const workspaceStatsProjectIds = computed(() =>
     workspaceId.value ? workspacesStore.getAllProjectIds(workspaceId.value) : null
 )
 
+// Project IDs aggregated for the stats panel (contribution heatmaps / graphs).
+// No archived filter — reflects the whole. Workspace: all members + their
+// worktrees. Single project with worktrees: the project + its worktrees. A
+// plain project or All-Projects returns null, so ContributionGraphs falls back
+// to its own per-project / global endpoint.
+const statsProjectIds = computed(() => {
+    if (isWorkspaceMode.value) return workspaceStatsProjectIds.value
+    if (props.projectId === ALL_PROJECTS_ID) return null
+    const scope = dataStore.getProjectScopeIds(props.projectId)
+    return scope.length > 1 ? scope : null
+})
+
 const terminalContextKey = computed(() => {
     if (props.projectId === ALL_PROJECTS_ID) {
         return 'global'
@@ -473,7 +485,7 @@ onBeforeUnmount(() => {
             <wa-tab-panel name="stats">
                 <ProjectDetailNavList :project-id="projectId" class="stats-nav-list" />
                 <wa-divider class="stats-nav-list-divider"></wa-divider>
-                <ContributionGraphs :project-id="projectId" :project-ids="workspaceStatsProjectIds" />
+                <ContributionGraphs :project-id="projectId" :project-ids="statsProjectIds" />
             </wa-tab-panel>
 
             <wa-tab-panel name="files">

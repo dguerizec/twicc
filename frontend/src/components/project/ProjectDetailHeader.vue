@@ -92,10 +92,6 @@ const workspaceProjectIds = computed(() =>
 const workspaceStatsProjectIds = computed(() =>
     workspaceId.value ? workspacesStore.getAllProjectIds(workspaceId.value) : []
 )
-const workspaceProjects = computed(() =>
-    workspaceProjectIds.value.map(pid => store.getProject(pid)).filter(Boolean)
-)
-
 // Single project data
 const project = computed(() => isSingleProjectMode.value ? store.getProject(props.projectId) : null)
 
@@ -115,47 +111,56 @@ const displayName = computed(() => {
 // Directory (single project only)
 const directory = computed(() => project.value?.directory || null)
 
-// The list of projects to aggregate over (for all-projects and workspace modes)
-const aggregatedProjects = computed(() => {
-    if (isWorkspaceMode.value) return workspaceProjects.value
+// Project IDs aggregated for this page's stats (counter, cost, last activity,
+// sparkline). No archived filter — these reflect the whole, including archived
+// projects and every worktree: a single project aggregates itself plus its
+// worktrees, a workspace all its members plus their worktrees.
+const statsProjectIds = computed(() => {
+    if (isAllProjectsMode.value) return null
+    if (isWorkspaceMode.value) return workspaceStatsProjectIds.value
+    return store.getProjectScopeIds(props.projectId)
+})
+const statsProjects = computed(() => {
     if (isAllProjectsMode.value) return allProjects.value
-    return []
+    return (statsProjectIds.value || []).map(pid => store.getProject(pid)).filter(Boolean)
 })
 
 // Sessions count
-const sessionsCount = computed(() => {
-    if (isSingleProjectMode.value) return project.value?.sessions_count || 0
-    return aggregatedProjects.value.reduce((sum, p) => sum + (p.sessions_count || 0), 0)
-})
+const sessionsCount = computed(() =>
+    statsProjects.value.reduce((sum, p) => sum + (p.sessions_count || 0), 0)
+)
 
 // Total cost
 const totalCost = computed(() => {
-    if (isSingleProjectMode.value) return project.value?.total_cost ?? null
-    const sum = aggregatedProjects.value.reduce((s, p) => s + (p.total_cost || 0), 0)
+    const sum = statsProjects.value.reduce((s, p) => s + (p.total_cost || 0), 0)
     return sum > 0 ? sum : null
 })
 
 // Last activity (mtime)
 const mtime = computed(() => {
-    if (isSingleProjectMode.value) return project.value?.mtime || null
-    if (aggregatedProjects.value.length === 0) return null
-    return Math.max(...aggregatedProjects.value.map(p => p.mtime || 0))
+    if (statsProjects.value.length === 0) return null
+    return Math.max(...statsProjects.value.map(p => p.mtime || 0))
 })
 
-// Weekly activity data — for workspace mode, aggregate from member projects
+// Weekly activity data — aggregated across the page's stats scope.
 const weeklyActivity = computed(() => {
     if (isAllProjectsMode.value) return store.weeklyActivity._global || []
-    if (isWorkspaceMode.value) {
-        return aggregateWeeklyActivity(workspaceStatsProjectIds.value, store.weeklyActivity)
-    }
-    return store.weeklyActivity[props.projectId] || []
+    return aggregateWeeklyActivity(statsProjectIds.value || [], store.weeklyActivity)
 })
 
-// Project IDs for indicators (unified for all modes)
+// Project IDs for the live process / unread indicators. Unlike the stats above,
+// these track the *visible* scope (matching the session list): a workspace's
+// visible members + their worktrees, or a single project + its visible
+// worktrees.
 const indicatorProjectIds = computed(() => {
-    if (isSingleProjectMode.value) return [props.projectId]
+    if (isAllProjectsMode.value) return []
     if (isWorkspaceMode.value) return workspaceProjectIds.value
-    return []
+    const showArchived = settingsStore.isShowArchivedProjects
+    const ids = [props.projectId]
+    for (const wt of store.getWorktreesOf(props.projectId)) {
+        if (showArchived || !wt.archived) ids.push(wt.id)
+    }
+    return ids
 })
 
 // Compact mode state

@@ -59,15 +59,30 @@ export const useWorkspacesStore = defineStore('workspaces', {
         },
 
         /**
-         * All project IDs of a workspace, regardless of archived state.
-         * Use for analytics views (heatmaps, sparklines) that must reflect
-         * the full workspace history, not just what is currently visible in
-         * lists.
+         * All project IDs of a workspace — every member plus each member's git
+         * worktrees — regardless of archived state. Use for the workspace home
+         * page aggregations (counter, cost, heatmaps, sparklines): they reflect
+         * the workspace as a whole, including archived projects and worktrees
+         * (a worktree's activity belongs to its main repository's whole).
          */
         getAllProjectIds() {
             return (workspaceId) => {
                 const ws = this.getWorkspaceById(workspaceId)
-                return ws ? ws.projectIds : []
+                if (!ws) return []
+                const dataStore = useDataStore()
+                const result = []
+                const seen = new Set()
+                const add = (id) => {
+                    if (!seen.has(id)) {
+                        seen.add(id)
+                        result.push(id)
+                    }
+                }
+                for (const pid of ws.projectIds) {
+                    add(pid)
+                    for (const wt of dataStore.getWorktreesOf(pid)) add(wt.id)
+                }
+                return result
             }
         },
 
