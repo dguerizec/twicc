@@ -46,7 +46,8 @@ const fullLabel = computed(() => formatFullDateTime(timestampMs.value))
     /* Always pinned to the right edge of the message (user and assistant alike). */
     margin-left: auto;
     cursor: default;
-    margin-right: -1rem;
-    margin-bottom: -1rem;
+    --offset: calc(-1 * var(--card-spacing) / 2);
+    margin-right: var(--offset);
+    margin-bottom: var(--offset);
 }
 </style>

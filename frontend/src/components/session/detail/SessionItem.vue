@@ -596,14 +596,14 @@ body:not([data-display-mode="debug"]) .json-toggle {
     .virtual-scroller-item:has(.session-item[data-kind="user_message"]) {
         + .virtual-scroller-item:has( > .day-separator) {
             .day-separator {
-                margin-top: calc(-1 * var(--wa-space-s));
+                margin-top: calc(-1 * (var(--card-spacing) - var(--main-shadow-size)) / 2);
             }
         }
     }
     .virtual-scroller-item:has(> .day-separator) {
         &:has(+ .virtual-scroller-item .session-item[data-kind="user_message"]) {
             .day-separator {
-                margin-bottom: calc(-1 * var(--wa-space-s));
+                margin-bottom: calc(-1 * (var(--card-spacing) - var(--main-shadow-size)) / 2);
             }
         }
     }
