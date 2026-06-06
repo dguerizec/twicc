@@ -13,16 +13,16 @@ const settingsStore = useSettingsStore()
 
 // Show archived projects setting
 const showArchivedProjects = computed(() => settingsStore.isShowArchivedProjects)
-const hasArchivedProjects = computed(() => store.getProjects.some(p => p.archived))
+const hasArchivedProjects = computed(() => store.getListableProjects.some(p => p.archived))
 
 // Named projects (have a user-assigned name), sorted by mtime desc (from store)
 const namedProjects = computed(() =>
-    store.getProjects.filter(p => p.name !== null && (showArchivedProjects.value || !p.archived))
+    store.getListableProjects.filter(p => p.name !== null && (showArchivedProjects.value || !p.archived))
 )
 
 // Unnamed projects organized as a directory tree
 const treeRoots = computed(() => {
-    const unnamed = store.getProjects.filter(p => p.name === null && (showArchivedProjects.value || !p.archived))
+    const unnamed = store.getListableProjects.filter(p => p.name === null && (showArchivedProjects.value || !p.archived))
     return buildProjectTree(unnamed)
 })
 

@@ -175,7 +175,7 @@ const searchIndexPercent = computed(() => {
 
 // ─── Projects and workspaces for filter dropdown ─────────────────────────
 const projects = computed(() =>
-    store.getProjects.filter(p => !p.archived)
+    store.getListableProjects.filter(p => !p.archived)
 )
 
 /** Active workspace project IDs (ordered), or null when no workspace is active. */

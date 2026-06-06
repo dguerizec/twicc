@@ -444,6 +444,13 @@ export const useDataStore = defineStore('data', {
     getters: {
         // Data getters (sorted by mtime descending - most recent first)
         getProjects: (state) => Object.values(state.projects).sort((a, b) => b.mtime - a.mtime),
+        // Projects shown in "all projects" pickers/lists: excludes git worktrees
+        // (those with `worktree_of` set), which are surfaced separately under
+        // their main repository. Use this for every surface that lists or counts
+        // top-level projects; keep `getProjects` (raw) for aggregates over
+        // sessions/cost and for uniqueness checks that must see every project.
+        getListableProjects: (state) =>
+            Object.values(state.projects).filter(p => !p.worktree_of).sort((a, b) => b.mtime - a.mtime),
         getProject: (state) => (id) => state.projects[id],
         getProjectSessions: (state) => (projectId) => {
             const projectState = state.localState.projects[projectId]

@@ -298,10 +298,10 @@ export function initStaticCommands(router) {
         return PROJECT_DETAIL_ROUTES.has(route.name)
     }
 
-    /** Projects for palette pickers: filter out archived unless the
-     *  "show archived projects" setting is enabled. */
+    /** Projects for palette pickers: worktrees are excluded (getListableProjects);
+     *  filter out archived too unless the "show archived projects" setting is enabled. */
     function pickerProjects() {
-        return data.getProjects.filter(p => settings.isShowArchivedProjects || !p.archived)
+        return data.getListableProjects.filter(p => settings.isShowArchivedProjects || !p.archived)
     }
 
     /** Map a project to a palette sub-item carrying the colored dot metadata

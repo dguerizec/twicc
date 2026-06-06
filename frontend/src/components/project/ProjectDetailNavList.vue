@@ -55,9 +55,10 @@ const items = computed(() => {
             result.push({ type: 'divider' })
         }
 
-        // 2. All visible projects: named first, then unnamed (both in mtime desc from store)
+        // 2. All visible projects: named first, then unnamed (both in mtime desc from store).
+        //    Worktrees are excluded from the project links (getListableProjects).
         const showArchived = settingsStore.isShowArchivedProjects
-        const projects = dataStore.getProjects.filter(p => showArchived || !p.archived)
+        const projects = dataStore.getListableProjects.filter(p => showArchived || !p.archived)
 
         const namedProjects = projects.filter(p => p.name !== null)
         const unnamedProjects = projects.filter(p => p.name === null && p.directory)
@@ -90,8 +91,9 @@ const items = computed(() => {
             to: { name: 'projects-all' },
         })
 
-        // Projects in workspace's custom order
+        // Projects in workspace's custom order (worktree links excluded)
         const projectIds = workspacesStore.getVisibleProjectIds(workspaceId.value)
+            .filter(pid => !dataStore.getProject(pid)?.worktree_of)
         if (projectIds.length) {
             result.push({ type: 'divider' })
         }

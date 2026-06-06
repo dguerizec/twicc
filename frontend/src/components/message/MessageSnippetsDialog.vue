@@ -47,9 +47,9 @@ const dialogLabel = computed(() => {
     return 'Add Snippet'
 })
 
-/** Active projects (non-stale, non-archived) — same filter as sidebar. */
+/** Active projects (non-stale, non-archived, worktrees excluded) — same filter as sidebar. */
 const activeProjects = computed(() =>
-    dataStore.getProjects.filter(p => !p.stale && !p.archived)
+    dataStore.getListableProjects.filter(p => !p.stale && !p.archived)
 )
 
 /** Named active projects (sorted by mtime desc — store order). */

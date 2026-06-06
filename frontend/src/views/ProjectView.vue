@@ -395,6 +395,13 @@ const isWorkspaceMode = computed(() => isAllProjectsMode.value && !!activeWorksp
 const workspaceVisibleProjectIds = computed(() =>
     activeWorkspaceId.value ? workspacesStore.getVisibleProjectIds(activeWorkspaceId.value) : []
 )
+// Same list, minus worktrees — used only for the workspace *project list* shown
+// in the sidebar selector. workspaceVisibleProjectIds itself stays unfiltered:
+// it scopes the workspace's sessions and drives show-project-name, where a
+// worktree's sessions still count toward the whole.
+const workspaceSelectorProjectIds = computed(() =>
+    workspaceVisibleProjectIds.value.filter(pid => !store.getProject(pid)?.worktree_of)
+)
 const activeWsLabel = computed(() =>
     activeWorkspace.value ? `${activeWorkspace.value.name} projects` : null
 )
@@ -406,9 +413,10 @@ const effectiveProjectId = computed(() => {
     return ALL_PROJECTS_ID
 })
 
-// All projects for the selector (already sorted by mtime desc in store)
+// All projects for the selector (already sorted by mtime desc in store).
+// Worktree projects are excluded from every project picker/selector.
 const allProjects = computed(() =>
-    store.getProjects.filter(p => showArchivedProjects.value || !p.archived)
+    store.getListableProjects.filter(p => showArchivedProjects.value || !p.archived)
 )
 // Non-stale projects only — used in "new session" dropdowns to prevent creating sessions in stale projects
 const nonStaleProjects = computed(() => allProjects.value.filter(p => !p.stale))
@@ -1291,7 +1299,7 @@ function updateSidebarClosedClass(closed) {
                                 All projects
                             </wa-dropdown-item>
                             <wa-dropdown-item
-                                v-for="pid in workspaceVisibleProjectIds"
+                                v-for="pid in workspaceSelectorProjectIds"
                                 :key="pid"
                                 :value="pid"
                             >

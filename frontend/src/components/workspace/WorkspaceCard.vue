@@ -38,6 +38,12 @@ const workspacesStore = useWorkspacesStore()
 const visibleProjectIds = computed(() =>
     workspacesStore.getVisibleProjectIds(props.workspace.id)
 )
+// Project badges exclude worktrees (they're subordinate to their main repo and
+// surfaced separately). Session/cost aggregates and the activity indicators
+// below keep the full visible set — a worktree's sessions belong to the whole.
+const listableProjectIds = computed(() =>
+    visibleProjectIds.value.filter(pid => !dataStore.getProject(pid)?.worktree_of)
+)
 // Stats (sparkline) include archived projects so the workspace history
 // reflects the full activity, not just what is currently visible.
 const statsProjectIds = computed(() =>
@@ -142,9 +148,9 @@ function handleMenuSelect(event) {
                     <AppTooltip :for="`workspace-menu-trigger-${workspace.id}`">Workspace actions</AppTooltip>
                 </div>
             </div>
-            <div v-if="visibleProjectIds.length" class="workspace-projects">
+            <div v-if="listableProjectIds.length" class="workspace-projects">
                 <ProjectBadge
-                    v-for="pid in visibleProjectIds"
+                    v-for="pid in listableProjectIds"
                     :key="pid"
                     :project-id="pid"
                     class="workspace-project-badge"

@@ -58,22 +58,31 @@ const visibleWorkspaces = computed(() => {
     return all.filter(w => !w.archived)
 })
 
-/** Projects available to add (not already in the form's projectIds, respecting the local archived toggle). */
+/** Projects available to add (not already in the form's projectIds, respecting the local archived toggle).
+ *  Worktrees are excluded — they are subordinate to their main repository, not standalone workspace members. */
 const availableProjects = computed(() => {
     const inSet = new Set(formData.value.projectIds)
     const showArchived = localShowArchivedProjects.value
-    return dataStore.getProjects.filter(p => !inSet.has(p.id) && (showArchived || !p.archived))
+    return dataStore.getListableProjects.filter(p => !inSet.has(p.id) && (showArchived || !p.archived))
 })
 
+/** Count of non-worktree projects in a workspace (worktrees don't count as projects). */
+function listableProjectCount(workspace) {
+    return workspace.projectIds.filter(pid => !dataStore.getProject(pid)?.worktree_of).length
+}
+
 /** Project entries to render in the form's project list, paired with their source index in formData.projectIds.
- *  Filtered by the local "show archived" toggle so archived projects can be hidden without being removed from the workspace. */
+ *  Worktrees are never listed as standalone members (even if auto-added or added before), and the local
+ *  "show archived" toggle can hide archived projects without removing them from the workspace. */
 const visibleProjectEntries = computed(() => {
     const showArchived = localShowArchivedProjects.value
     return formData.value.projectIds
         .map((pid, index) => ({ pid, index }))
         .filter(({ pid }) => {
-            if (showArchived) return true
             const project = dataStore.getProject(pid)
+            // Worktrees are subordinate to their main repo — never shown here.
+            if (project?.worktree_of) return false
+            if (showArchived) return true
             return !project?.archived
         })
 })
@@ -201,7 +210,8 @@ function removePattern(index) {
 }
 
 function scanNow() {
-    const projects = dataStore.getProjects
+    // Worktrees are never auto-added to a workspace by pattern.
+    const projects = dataStore.getListableProjects
     const patterns = formData.value.autoProjectPatterns
     if (patterns.length === 0) {
         scanFeedback.value = 'No patterns defined'
@@ -400,7 +410,7 @@ defineExpose({ open, close, openForWorkspace, openNew })
                     <div class="workspace-display">
                         <span class="workspace-name"><wa-icon name="layer-group" auto-width :style="workspace.color ? { color: workspace.color } : null"></wa-icon> {{ workspace.name }}</span>
                         <span class="workspace-project-count">
-                            {{ workspace.projectIds.length }} project{{ workspace.projectIds.length !== 1 ? 's' : '' }}
+                            {{ listableProjectCount(workspace) }} project{{ listableProjectCount(workspace) !== 1 ? 's' : '' }}
                         </span>
                     </div>
 
