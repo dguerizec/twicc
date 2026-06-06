@@ -126,6 +126,12 @@ Remote-specific behavior (the same limitations as above, from the client side):
 - **`--attach <local file>`** is read on the client and inlined as a base64
   `data:` URI, so a local — even relative — path works without the file existing
   on the server.
+- **`remote:` scheme** — the inverse of inlining: to point at a file that already
+  lives on the **server**, prefix an **absolute** server path with `remote:` (e.g.
+  `remote:/srv/data/audit.md`). The forwarder strips the scheme and sends the bare
+  path; the server reads it from its own filesystem. Supported on the prompt
+  (`create-session` / `send-message`), `--message` (`send-messages`), and
+  `--attach`. Only valid with `--remote`, and the path must be absolute.
 - **Path arguments** (`--project`, `--directory`) are resolved on the server, so
   they must be absolute (or, for `--project`, an id) — there is no caller working
   directory over HTTP.
