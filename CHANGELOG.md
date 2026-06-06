@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- The activity stats (overviews, heatmaps and graphs) can now be filtered by provider, or kept combined across all of them.
 - The `session content` CLI command (+matching skills and API) can now filter a session's raw items by their raw text content not just by line number.
 
 ## [1.7.2] - 2026-06-06

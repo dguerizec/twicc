@@ -11,6 +11,7 @@ import { useStartupPolling } from '../../composables/useStartupPolling'
 import ActivityDashboard from './ActivityDashboard.vue'
 import ContributionGraph from './ContributionGraph.vue'
 import ContributionSparklines from './ContributionSparklines.vue'
+import { getProviderOptions, getProviderIcon } from '../../providers'
 
 const settingsStore = useSettingsStore()
 const showCosts = computed(() => settingsStore.areCostsShown)
@@ -30,6 +31,26 @@ const props = defineProps({
 
 const dailyActivity = ref([])
 const activityTotals = ref(null)
+
+/**
+ * Provider filter: 'all' sums across every provider (current behaviour),
+ * or a specific provider key scopes the data + totals to that provider.
+ * Ephemeral: resets to 'all' each time the panel mounts. All registered
+ * providers are offered, even disabled ones — a provider can hold past
+ * activity while being currently disabled, and an empty graph is itself
+ * informative. The backend already supports the ``provider`` query param.
+ */
+const providerOptions = getProviderOptions()
+const showProviderSelect = providerOptions.length > 1
+const selectedProvider = ref('all')
+
+function providerIconFor(provider) {
+    return getProviderIcon(provider)
+}
+
+function onProviderChange(e) {
+    selectedProvider.value = e.target.value
+}
 
 /** View mode: 'heatmap' (default) or 'sparkline' */
 const viewMode = ref('heatmap')
@@ -124,12 +145,20 @@ function onSeparateLabelClick() {
 async function fetchDailyActivity() {
     try {
         let url
+        const params = []
         if (props.projectIds) {
-            url = `/api/daily-activity/?project_ids=${props.projectIds.map(encodeURIComponent).join(',')}`
+            url = '/api/daily-activity/'
+            params.push(`project_ids=${props.projectIds.map(encodeURIComponent).join(',')}`)
         } else if (props.projectId === ALL_PROJECTS_ID) {
             url = '/api/daily-activity/'
         } else {
             url = `/api/projects/${encodeURIComponent(props.projectId)}/daily-activity/`
+        }
+        if (selectedProvider.value !== 'all') {
+            params.push(`provider=${encodeURIComponent(selectedProvider.value)}`)
+        }
+        if (params.length) {
+            url += `?${params.join('&')}`
         }
 
         const res = await apiFetch(url)
@@ -153,12 +182,49 @@ async function fetchDailyActivity() {
 onMounted(fetchDailyActivity)
 watch(() => props.projectId, fetchDailyActivity)
 watch(() => props.projectIds, fetchDailyActivity)
+watch(selectedProvider, fetchDailyActivity)
 
 // Poll daily activity during startup so charts update as sessions are indexed
 useStartupPolling(fetchDailyActivity)
 </script>
 
 <template>
+    <!-- Provider filter — drives every widget below (overviews + heatmaps/graphs).
+         Always rendered (not gated on dailyActivity) so a provider with no data
+         can still be switched back to "All providers". -->
+    <div v-if="showProviderSelect" class="provider-filter">
+        <wa-select
+            class="provider-filter-select"
+            size="small"
+            :value.prop="selectedProvider"
+            @change="onProviderChange"
+        >
+            <wa-icon
+                v-if="selectedProvider !== 'all' && providerIconFor(selectedProvider)"
+                slot="start"
+                auto-width
+                family="brands"
+                :name="providerIconFor(selectedProvider)"
+            ></wa-icon>
+            <wa-option value="all" label="All providers">All providers</wa-option>
+            <wa-option
+                v-for="option in providerOptions"
+                :key="option.value"
+                :value="option.value"
+                :label="option.label"
+            >
+                <wa-icon
+                    v-if="providerIconFor(option.value)"
+                    auto-width
+                    family="brands"
+                    :name="providerIconFor(option.value)"
+                    class="provider-option-icon"
+                ></wa-icon>
+                {{ option.label }}
+            </wa-option>
+        </wa-select>
+    </div>
+
     <ActivityDashboard :daily-activity="dailyActivity" :totals="activityTotals" mode="sessions" />
     <ActivityDashboard :daily-activity="dailyActivity" :totals="activityTotals" mode="messages" />
 
@@ -238,6 +304,24 @@ useStartupPolling(fetchDailyActivity)
 </template>
 
 <style scoped>
+.provider-filter {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    display: flex;
+    justify-content: center;
+    padding: var(--wa-space-xs) 0 var(--wa-space-m);
+    background: var(--wa-color-surface-default);
+}
+
+.provider-filter-select {
+    min-width: 12rem;
+}
+
+.provider-option-icon {
+    margin-right: 0.5em;
+}
+
 .view-toggles {
     display: flex;
     align-items: center;
