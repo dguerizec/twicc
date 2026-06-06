@@ -7,8 +7,9 @@
 <script setup>
 import { ref, shallowRef, toRefs, nextTick, watch, inject, onMounted, onBeforeUnmount } from 'vue'
 import { EditorView, keymap } from '@codemirror/view'
-import { EditorSelection, Transaction, Compartment } from '@codemirror/state'
+import { EditorSelection, Transaction, Compartment, Prec } from '@codemirror/state'
 import { undoDepth } from '@codemirror/commands'
+import { gotoLine } from '@codemirror/search'
 import { resolveLanguage, detectIndent, useCodeMirrorExtensions, useSettingsWatcher, toggleSearchPanel } from '../../composables/useCodeMirror'
 import { createCodeCommentsExtension, syncCommentsEffect } from '../../extensions/codeComments'
 import { useSettingsStore } from '../../stores/settings'
@@ -181,10 +182,24 @@ onMounted(async () => {
         },
     }])
 
+    // 3b. Build Ctrl+G "go to line" keymap.
+    // Mod-g is bound to findNext by searchKeymap; override it (Prec.high) to open
+    // CodeMirror's native go-to-line dialog instead, matching classic IDE behavior.
+    // preventDefault stops the browser's native "Find next". findNext stays
+    // available on F3 (and on Mod-g while the search panel itself holds focus,
+    // since that binding is scoped to "search-panel"). Works in read-only mode:
+    // moving the selection and scrolling are allowed, and the editor is focusable.
+    const gotoLineKeymap = Prec.high(keymap.of([{
+        key: 'Mod-g',
+        run: gotoLine,
+        preventDefault: true,
+    }]))
+
     // 4. Assemble full extension array
     const allExtensions = [
         ...cmExtensions.extensions,
         saveKeymap,
+        gotoLineKeymap,
         updateListener,
         commentCompartment.of(buildCommentExt(props.commentContext)),
         ...props.extensions,

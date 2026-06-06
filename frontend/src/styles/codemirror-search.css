@@ -1,8 +1,12 @@
 /* ============================================================
-   CodeMirror 6 Search Panel — Web Awesome themed overrides
+   CodeMirror 6 Panels (Search + Go-to-line dialog)
+   — Web Awesome themed overrides
    ============================================================
    Overrides CM6's default baseTheme to match the Web Awesome 3
-   design system used throughout the app.
+   design system used throughout the app. Covers both the search
+   panel (.cm-search) and the go-to-line dialog (.cm-dialog), which
+   reuse the same .cm-textfield / .cm-button markup but live in a
+   different panel container.
 
    Applied globally because CM6 injects styles into document.head
    (via root: document) and the panel can live in external containers
@@ -15,7 +19,8 @@
 
 /* ── Panel container ─────────────────────────────────────────── */
 
-.cm-panel.cm-search {
+.cm-panel.cm-search,
+.cm-panel.cm-dialog {
     padding: var(--wa-space-xs) var(--wa-space-s) !important;
     padding-right: calc(var(--wa-space-s) + 28px) !important; /* Room for close button */
     background: var(--wa-color-neutral-fill-quiet);
@@ -32,10 +37,22 @@
     gap: var(--wa-space-2xs) var(--wa-space-xs);
 }
 
+/* The go-to-line dialog wraps its label + input + submit button in a <form>.
+   Lay that form out as an inline row so the pieces align cleanly. */
+.cm-panel.cm-dialog form {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--wa-space-2xs) var(--wa-space-xs);
+    margin: 0;
+    flex: 1 1 auto;
+}
+
 
 /* ── Text inputs (.cm-textfield) ─────────────────────────────── */
 
-.cm-panel.cm-search input.cm-textfield {
+.cm-panel.cm-search input.cm-textfield,
+.cm-panel.cm-dialog input.cm-textfield {
     /* Reset CM6 margins */
     margin: 0 !important;
     box-sizing: border-box;
@@ -72,12 +89,22 @@
     }
 }
 
-.cm-panel.cm-search input.cm-textfield::placeholder {
+/* The go-to-line dialog only needs a short line number; keep its input compact
+   so the "go" button stays on the same row instead of wrapping below. */
+.cm-panel.cm-dialog input.cm-textfield {
+    flex: 0 1 14ch;
+    min-width: 6ch;
+    max-width: 16ch;
+}
+
+.cm-panel.cm-search input.cm-textfield::placeholder,
+.cm-panel.cm-dialog input.cm-textfield::placeholder {
     color: var(--wa-color-gray-50);
     user-select: none;
 }
 
-.cm-panel.cm-search input.cm-textfield:focus {
+.cm-panel.cm-search input.cm-textfield:focus,
+.cm-panel.cm-dialog input.cm-textfield:focus {
     outline: var(--wa-focus-ring);
     outline-offset: var(--wa-focus-ring-offset);
     border-color: var(--wa-color-brand-border-loud);
@@ -86,7 +113,8 @@
 
 /* ── Buttons (.cm-button) ──────────────────────────────────── */
 
-.cm-panel.cm-search button.cm-button {
+.cm-panel.cm-search button.cm-button,
+.cm-panel.cm-dialog button.cm-button {
     /* Reset CM6 margins */
     margin: 0 !important;
     box-sizing: border-box;
@@ -121,24 +149,29 @@
 }
 
 @media (hover: hover) {
-    .cm-panel.cm-search button.cm-button:hover {
+    .cm-panel.cm-search button.cm-button:hover,
+    .cm-panel.cm-dialog button.cm-button:hover {
         background-color: var(--wa-color-surface-default);
     }
 }
 
-.cm-panel.cm-search button.cm-button:active {
+.cm-panel.cm-search button.cm-button:active,
+.cm-panel.cm-dialog button.cm-button:active {
     background-color: var(--wa-color-neutral-fill-normal);
 }
 
-.cm-panel.cm-search button.cm-button:focus-visible {
+.cm-panel.cm-search button.cm-button:focus-visible,
+.cm-panel.cm-dialog button.cm-button:focus-visible {
     outline: var(--wa-focus-ring);
     outline-offset: var(--wa-focus-ring-offset);
 }
 
 
 /* ── Close button ────────────────────────────────────────────── */
+/* Search panel uses button[name="close"]; the dialog uses .cm-dialog-close. */
 
-.cm-panel.cm-search button[name="close"] {
+.cm-panel.cm-search button[name="close"],
+.cm-panel.cm-dialog .cm-dialog-close {
     /* Override CM6 positioning and reset styles */
     all: unset;
     box-sizing: border-box;
@@ -168,25 +201,29 @@
 }
 
 @media (hover: hover) {
-    .cm-panel.cm-search button[name="close"]:hover {
+    .cm-panel.cm-search button[name="close"]:hover,
+    .cm-panel.cm-dialog .cm-dialog-close:hover {
         background-color: var(--wa-color-neutral-fill-normal);
         color: var(--wa-color-text-normal);
     }
 }
 
-.cm-panel.cm-search button[name="close"]:active {
+.cm-panel.cm-search button[name="close"]:active,
+.cm-panel.cm-dialog .cm-dialog-close:active {
     background-color: var(--wa-color-neutral-border-normal);
 }
 
-.cm-panel.cm-search button[name="close"]:focus-visible {
+.cm-panel.cm-search button[name="close"]:focus-visible,
+.cm-panel.cm-dialog .cm-dialog-close:focus-visible {
     outline: var(--wa-focus-ring);
     outline-offset: var(--wa-focus-ring-offset);
 }
 
 
-/* ── Checkbox labels ─────────────────────────────────────────── */
+/* ── Labels (search checkboxes + go-to-line "Go to line:" label) ── */
 
-.cm-panel.cm-search label {
+.cm-panel.cm-search label,
+.cm-panel.cm-dialog label {
     /* Reset CM6 margins and font-size */
     margin: 0 !important;
     font-size: inherit !important;
@@ -200,6 +237,15 @@
     cursor: pointer;
     user-select: none;
     white-space: nowrap !important;
+}
+
+/* The go-to-line dialog's label wraps "Go to line:" + the input. Size it to its
+   content (not the full panel width) so the "go" button stays on the same row. */
+.cm-panel.cm-dialog label {
+    flex: 0 0 auto;
+    width: auto;
+    max-width: max-content;
+    cursor: default;
 }
 
 
