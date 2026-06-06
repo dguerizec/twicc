@@ -72,8 +72,15 @@ function open() {
         const isAllProjectsMode = route.name?.startsWith('projects-') || !route.params.projectId
         if (wsId) {
             filters.projectId = 'workspace:' + wsId
+        } else if (isAllProjectsMode) {
+            filters.projectId = ''
         } else {
-            filters.projectId = isAllProjectsMode ? '' : (route.params.projectId || '')
+            // The dropdown lists main repos only (worktrees are hidden), and a
+            // project filter already covers a main repo's whole worktree family,
+            // so when the route is a worktree we scope to the main repository it
+            // belongs to.
+            const routeProjectId = route.params.projectId || ''
+            filters.projectId = store.getProject(routeProjectId)?.worktree_of || routeProjectId
         }
 
         dialogRef.value.open = true
@@ -245,7 +252,23 @@ async function performSearch(resetOffset = true) {
                 params.append('project_ids', pid)
             }
         } else if (filters.projectId) {
-            params.set('project_id', filters.projectId)
+            // A project filter covers the whole worktree family: the main repo
+            // plus its worktrees (getProjectScopeIds), resolving to the main repo
+            // first when the scope is itself a worktree. Archived worktrees are
+            // included only when "show archived projects" is on; the explicitly
+            // selected project is always kept. Session-level archived filtering
+            // stays independent (the include_archived param below).
+            const selected = filters.projectId
+            const root = store.getProject(selected)?.worktree_of || selected
+            const showArchived = settingsStore.isShowArchivedProjects
+            const family = store.getProjectScopeIds(root).filter(
+                id => id === selected || showArchived || !store.getProject(id)?.archived
+            )
+            if (family.length > 1) {
+                for (const pid of family) params.append('project_ids', pid)
+            } else {
+                params.set('project_id', selected)
+            }
         }
         if (filters.from) params.set('from', filters.from)
         if (filters.includeArchived) params.set('include_archived', 'true')
