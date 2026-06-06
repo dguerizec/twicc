@@ -451,6 +451,13 @@ export const useDataStore = defineStore('data', {
         // sessions/cost and for uniqueness checks that must see every project.
         getListableProjects: (state) =>
             Object.values(state.projects).filter(p => !p.worktree_of).sort((a, b) => b.mtime - a.mtime),
+        // Worktree projects whose main repository is `projectId` (i.e. their
+        // `worktree_of` points at it), sorted by mtime desc. Used to nest a
+        // project's worktrees under it in the sidebar selector / New Session.
+        getWorktreesOf: (state) => (projectId) =>
+            Object.values(state.projects)
+                .filter(p => p.worktree_of === projectId)
+                .sort((a, b) => b.mtime - a.mtime),
         getProject: (state) => (id) => state.projects[id],
         getProjectSessions: (state) => (projectId) => {
             const projectState = state.localState.projects[projectId]

@@ -12,6 +12,19 @@ const props = defineProps({
         type: Boolean,
         default: false,
     },
+    // Explicit label override. When set, it replaces the computed display name
+    // (the color dot still comes from the project). Used e.g. for worktree
+    // entries, which show their name or just their final folder name.
+    label: {
+        type: String,
+        default: null,
+    },
+    // Fallback dot color used when the project itself has no color. Used e.g.
+    // for worktree entries, which inherit their main repository's color.
+    fallbackColor: {
+        type: String,
+        default: null,
+    },
     gap: {
         type: String,
         default: null,
@@ -22,12 +35,15 @@ const store = useDataStore()
 
 const project = computed(() => store.getProject(props.projectId))
 const displayName = computed(() => {
+    if (props.label != null) {
+        return props.label
+    }
     if (props.useDirectoryForUnnamed && project.value && !project.value.name) {
         return project.value.directory || store.getProjectDisplayName(props.projectId)
     }
     return store.getProjectDisplayName(props.projectId)
 })
-const color = computed(() => project.value?.color || null)
+const color = computed(() => project.value?.color || props.fallbackColor || null)
 </script>
 
 <template>

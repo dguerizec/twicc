@@ -17,6 +17,7 @@ import { aggregateWeeklyActivity } from '../../utils/activityAggregation'
 import { formatDate } from '../../utils/date'
 import { SESSION_TIME_FORMAT } from '../../constants'
 import ProjectBadge from './ProjectBadge.vue'
+import WorktreeBadge from './WorktreeBadge.vue'
 import AggregatedProcessIndicator from '../ui/AggregatedProcessIndicator.vue'
 import CodeCommentsIndicator from '../ui/CodeCommentsIndicator.vue'
 import ProjectEditDialog from './ProjectEditDialog.vue'
@@ -97,6 +98,9 @@ const workspaceProjects = computed(() =>
 
 // Single project data
 const project = computed(() => isSingleProjectMode.value ? store.getProject(props.projectId) : null)
+
+// Whether the current single project is a git worktree of another project.
+const isWorktree = computed(() => !!project.value?.worktree_of)
 
 // All projects data (for aggregate mode)
 const allProjects = computed(() => store.getProjects)
@@ -209,7 +213,8 @@ function handleEditClick() {
 
                 <!-- Single project mode -->
                 <template v-if="isSingleProjectMode">
-                    <ProjectBadge :project-id="projectId" class="detail-title" />
+                    <WorktreeBadge v-if="isWorktree" :project-id="projectId" parent-link class="detail-title" />
+                    <ProjectBadge v-else :project-id="projectId" class="detail-title" />
                 </template>
                 <!-- Workspace or All Projects mode -->
                 <template v-else>

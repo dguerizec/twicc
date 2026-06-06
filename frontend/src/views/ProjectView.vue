@@ -18,6 +18,9 @@ import SessionList from '../components/session/list/SessionList.vue'
 import FetchErrorPanel from '../components/ui/FetchErrorPanel.vue'
 import SettingsPopover from '../components/app/SettingsPopover.vue'
 import ProjectBadge from '../components/project/ProjectBadge.vue'
+import ProjectSelectorRow from '../components/project/ProjectSelectorRow.vue'
+import WorktreeSelectorRows from '../components/project/WorktreeSelectorRows.vue'
+import WorktreeBadge from '../components/project/WorktreeBadge.vue'
 import ProjectDetailPanel from '../components/project/ProjectDetailPanel.vue'
 import SessionRenameDialog from '../components/session/detail/SessionRenameDialog.vue'
 import ProjectEditDialog from '../components/project/ProjectEditDialog.vue'
@@ -402,6 +405,33 @@ const workspaceVisibleProjectIds = computed(() =>
 const workspaceSelectorProjectIds = computed(() =>
     workspaceVisibleProjectIds.value.filter(pid => !store.getProject(pid)?.worktree_of)
 )
+
+// --- Worktree entries in the sidebar project selector --------------------
+// A project with worktrees gets a collapsible "Worktrees (N)" entry nested
+// under it in the selector list. Expansion state is ephemeral (not persisted);
+// the parent of the currently-open worktree is auto-expanded (watch below).
+const expandedWorktrees = ref(new Set())
+function isWorktreesExpanded(id) {
+    return expandedWorktrees.value.has(id)
+}
+function toggleWorktrees(id) {
+    if (expandedWorktrees.value.has(id)) {
+        expandedWorktrees.value.delete(id)
+    } else {
+        expandedWorktrees.value.add(id)
+    }
+}
+/** Worktrees of a project visible under the current archived setting (count + nested list). */
+function visibleWorktreesOf(id) {
+    return store.getWorktreesOf(id).filter(p => showArchivedProjects.value || !p.archived)
+}
+// Auto-expand a project's worktrees entry when the current project is one of
+// its worktrees, so the open worktree is visible in the selector. We watch the
+// resolved parent id (not just projectId) so it also fires once project data
+// finishes loading on a direct deep-link/reload into a worktree.
+watch(() => store.getProject(projectId.value)?.worktree_of, (parent) => {
+    if (parent) expandedWorktrees.value.add(parent)
+}, { immediate: true })
 const activeWsLabel = computed(() =>
     activeWorkspace.value ? `${activeWorkspace.value.name} projects` : null
 )
@@ -487,8 +517,21 @@ const isCurrentProjectStale = computed(() => {
 const selectedProjectColor = computed(() => {
     if (isAllProjectsMode.value) return null
     const project = store.getProject(projectId.value)
-    return project?.color || null
+    if (!project) return null
+    // A worktree inherits its main repository's color when it has none of its own.
+    if (project.worktree_of) {
+        return project.color || store.getProject(project.worktree_of)?.color || null
+    }
+    return project.color || null
 })
+
+// Whether the current single project is a git worktree. When so, the selector
+// trigger renders a <WorktreeBadge> ("<main repo> ⎇ <worktree folder>") instead
+// of the plain label below.
+const isCurrentProjectWorktree = computed(() => !!store.getProject(projectId.value)?.worktree_of)
+
+// Label shown in the selector trigger for a regular (non-worktree) single project.
+const selectedProjectLabel = computed(() => store.getProjectDisplayName(projectId.value))
 
 // Loading and error states for sessions
 // Only show initial loading spinner when we haven't fetched any sessions yet
@@ -649,6 +692,13 @@ function handleSessionOptionsSelect(event) {
 function handleSelectorSelect(event) {
     const value = event.detail?.item?.value
     if (!value) return
+
+    if (value.startsWith('worktrees-toggle:')) {
+        // Expand/collapse a project's worktrees inline — keep the dropdown open.
+        toggleWorktrees(value.slice('worktrees-toggle:'.length))
+        event.preventDefault()
+        return
+    }
 
     if (value === ALL_PROJECTS_ID) {
         if (isAllProjectsMode.value && !activeWorkspaceId.value && sessionId.value) {
@@ -1173,7 +1223,8 @@ function updateSidebarClosedClass(closed) {
                             <span v-if="!isAllProjectsMode" class="selected-project-dot" :style="selectedProjectColor ? { '--dot-color': selectedProjectColor } : null"></span>
                             <span v-if="isWorkspaceMode" class="project-selector-label"><wa-icon name="layer-group" auto-width :style="activeWorkspace?.color ? { color: activeWorkspace.color } : null"></wa-icon> {{ activeWorkspace?.name }}</span>
                             <span v-else-if="isAllProjectsMode" class="project-selector-label">All Projects</span>
-                            <span v-else class="project-selector-label">{{ store.getProjectDisplayName(projectId) }}</span>
+                            <span v-else-if="isCurrentProjectWorktree" class="project-selector-label"><WorktreeBadge :project-id="projectId" :dot="false" gap="var(--wa-space-2xs)" /></span>
+                            <span v-else class="project-selector-label">{{ selectedProjectLabel }}</span>
 
                             <wa-icon slot="end" name="chevron-down" class="project-selector-caret"></wa-icon>
                         </wa-button>
@@ -1213,20 +1264,17 @@ function updateSidebarClosedClass(closed) {
 
                             <!-- Named projects -->
                             <wa-divider v-if="selectorNamedProjects.length"></wa-divider>
-                            <wa-dropdown-item
-                                v-for="p in selectorNamedProjects"
-                                :key="p.id"
-                                :value="p.id"
-                            >
-                                <wa-icon slot="icon" name="check" :style="{ visibility: !isAllProjectsMode && projectId === p.id ? 'visible' : 'hidden' }"></wa-icon>
-                                <span class="selector-item-content">
-                                    <ProjectBadge :project-id="p.id" />
-                                    <span class="selector-item-indicators">
-                                        <CodeCommentsIndicator :project-ids="[p.id]" />
-                                        <AggregatedProcessIndicator :project-ids="[p.id]" size="small" />
-                                    </span>
-                                </span>
-                            </wa-dropdown-item>
+                            <template v-for="p in selectorNamedProjects" :key="p.id">
+                                <ProjectSelectorRow :project-id="p.id" :current-project-id="projectId" :is-all-projects-mode="isAllProjectsMode" />
+                                <WorktreeSelectorRows
+                                    :parent-id="p.id"
+                                    :worktrees="visibleWorktreesOf(p.id)"
+                                    :expanded="isWorktreesExpanded(p.id)"
+                                    :base-depth="0"
+                                    :current-project-id="projectId"
+                                    :is-all-projects-mode="isAllProjectsMode"
+                                />
+                            </template>
 
                             <!-- Unnamed projects (directory tree) -->
                             <wa-divider v-if="selectorFlatTree.length"></wa-divider>
@@ -1241,19 +1289,17 @@ function updateSidebarClosedClass(closed) {
                                         {{ item.segment }}
                                     </span>
                                 </wa-dropdown-item>
-                                <wa-dropdown-item
-                                    v-else
-                                    :value="item.project.id"
-                                >
-                                    <wa-icon slot="icon" name="check" :style="{ visibility: !isAllProjectsMode && projectId === item.project.id ? 'visible' : 'hidden' }"></wa-icon>
-                                    <span class="selector-item-content" :style="{ paddingLeft: `${item.depth * 12}px` }">
-                                        <ProjectBadge :project-id="item.project.id" />
-                                        <span class="selector-item-indicators">
-                                            <CodeCommentsIndicator :project-ids="[item.project.id]" />
-                                            <AggregatedProcessIndicator :project-ids="[item.project.id]" size="small" />
-                                        </span>
-                                    </span>
-                                </wa-dropdown-item>
+                                <template v-else>
+                                    <ProjectSelectorRow :project-id="item.project.id" :depth="item.depth" :current-project-id="projectId" :is-all-projects-mode="isAllProjectsMode" />
+                                    <WorktreeSelectorRows
+                                        :parent-id="item.project.id"
+                                        :worktrees="visibleWorktreesOf(item.project.id)"
+                                        :expanded="isWorktreesExpanded(item.project.id)"
+                                        :base-depth="item.depth"
+                                        :current-project-id="projectId"
+                                        :is-all-projects-mode="isAllProjectsMode"
+                                    />
+                                </template>
                             </template>
                         </template>
 
@@ -1298,20 +1344,17 @@ function updateSidebarClosedClass(closed) {
                                 <wa-icon slot="icon" name="check" :style="{ visibility: isAllProjectsMode ? 'visible' : 'hidden' }"></wa-icon>
                                 All projects
                             </wa-dropdown-item>
-                            <wa-dropdown-item
-                                v-for="pid in workspaceSelectorProjectIds"
-                                :key="pid"
-                                :value="pid"
-                            >
-                                <wa-icon slot="icon" name="check" :style="{ visibility: !isAllProjectsMode && projectId === pid ? 'visible' : 'hidden' }"></wa-icon>
-                                <span class="selector-item-content">
-                                    <ProjectBadge :project-id="pid" />
-                                    <span class="selector-item-indicators">
-                                        <CodeCommentsIndicator :project-ids="[pid]" />
-                                        <AggregatedProcessIndicator :project-ids="[pid]" size="small" />
-                                    </span>
-                                </span>
-                            </wa-dropdown-item>
+                            <template v-for="pid in workspaceSelectorProjectIds" :key="pid">
+                                <ProjectSelectorRow :project-id="pid" :current-project-id="projectId" :is-all-projects-mode="isAllProjectsMode" />
+                                <WorktreeSelectorRows
+                                    :parent-id="pid"
+                                    :worktrees="visibleWorktreesOf(pid)"
+                                    :expanded="isWorktreesExpanded(pid)"
+                                    :base-depth="0"
+                                    :current-project-id="projectId"
+                                    :is-all-projects-mode="isAllProjectsMode"
+                                />
+                            </template>
 
                             <!-- Other projects (not in workspace) -->
                             <template v-if="otherNamedProjects.length || otherFlatTree.length">
@@ -1322,20 +1365,17 @@ function updateSidebarClosedClass(closed) {
                                 </wa-dropdown-item>
                             </template>
                             <!-- Other named projects -->
-                            <wa-dropdown-item
-                                v-for="p in otherNamedProjects"
-                                :key="p.id"
-                                :value="p.id"
-                            >
-                                <wa-icon slot="icon" name="check" :style="{ visibility: !isAllProjectsMode && projectId === p.id ? 'visible' : 'hidden' }"></wa-icon>
-                                <span class="selector-item-content">
-                                    <ProjectBadge :project-id="p.id" />
-                                    <span class="selector-item-indicators">
-                                        <CodeCommentsIndicator :project-ids="[p.id]" />
-                                        <AggregatedProcessIndicator :project-ids="[p.id]" size="small" />
-                                    </span>
-                                </span>
-                            </wa-dropdown-item>
+                            <template v-for="p in otherNamedProjects" :key="p.id">
+                                <ProjectSelectorRow :project-id="p.id" :current-project-id="projectId" :is-all-projects-mode="isAllProjectsMode" />
+                                <WorktreeSelectorRows
+                                    :parent-id="p.id"
+                                    :worktrees="visibleWorktreesOf(p.id)"
+                                    :expanded="isWorktreesExpanded(p.id)"
+                                    :base-depth="0"
+                                    :current-project-id="projectId"
+                                    :is-all-projects-mode="isAllProjectsMode"
+                                />
+                            </template>
                             <!-- Other unnamed projects (directory tree) -->
                             <wa-divider v-if="otherNamedProjects.length && otherFlatTree.length"></wa-divider>
                             <template v-for="item in otherFlatTree" :key="item.key">
@@ -1349,19 +1389,17 @@ function updateSidebarClosedClass(closed) {
                                         {{ item.segment }}
                                     </span>
                                 </wa-dropdown-item>
-                                <wa-dropdown-item
-                                    v-else
-                                    :value="item.project.id"
-                                >
-                                    <wa-icon slot="icon" name="check" :style="{ visibility: !isAllProjectsMode && projectId === item.project.id ? 'visible' : 'hidden' }"></wa-icon>
-                                    <span class="selector-item-content" :style="{ paddingLeft: `${item.depth * 12}px` }">
-                                        <ProjectBadge :project-id="item.project.id" />
-                                        <span class="selector-item-indicators">
-                                            <CodeCommentsIndicator :project-ids="[item.project.id]" />
-                                            <AggregatedProcessIndicator :project-ids="[item.project.id]" size="small" />
-                                        </span>
-                                    </span>
-                                </wa-dropdown-item>
+                                <template v-else>
+                                    <ProjectSelectorRow :project-id="item.project.id" :depth="item.depth" :current-project-id="projectId" :is-all-projects-mode="isAllProjectsMode" />
+                                    <WorktreeSelectorRows
+                                        :parent-id="item.project.id"
+                                        :worktrees="visibleWorktreesOf(item.project.id)"
+                                        :expanded="isWorktreesExpanded(item.project.id)"
+                                        :base-depth="item.depth"
+                                        :current-project-id="projectId"
+                                        :is-all-projects-mode="isAllProjectsMode"
+                                    />
+                                </template>
                             </template>
                         </template>
                     </wa-dropdown>
