@@ -87,7 +87,15 @@ export function computeSidebarSessionBlocks({
     } else if (effectiveProjectId === ALL_PROJECTS_ID) {
         natural = data.getAllSessions
     } else if (effectiveProjectId) {
-        natural = data.getProjectSessions(effectiveProjectId)
+        // A main repo aggregates its worktrees' sessions (their content belongs
+        // to the whole); a plain project shows only its own.
+        const scopeIds = data.getProjectScopeIds(effectiveProjectId)
+        if (scopeIds.length > 1) {
+            const scopeSet = new Set(scopeIds)
+            natural = data.getAllSessions.filter(s => scopeSet.has(s.project_id))
+        } else {
+            natural = data.getProjectSessions(effectiveProjectId)
+        }
     } else {
         natural = data.getAllSessions
     }

@@ -67,7 +67,9 @@ const scopeProjectIds = computed(() => {
         return workspacesStore.getVisibleProjectIds(wsId)
     }
     if (props.projectId === ALL_PROJECTS_ID) return null
-    return [props.projectId]
+    // A main repo's scope also covers its worktrees, so their sessions aren't
+    // flagged as cross-filter and the project badge is shown to tell them apart.
+    return store.getProjectScopeIds(props.projectId)
 })
 
 // The currently "active" workspace for cross-filter `workspace`-mode pins. Set

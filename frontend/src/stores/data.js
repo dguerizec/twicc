@@ -458,6 +458,25 @@ export const useDataStore = defineStore('data', {
             Object.values(state.projects)
                 .filter(p => p.worktree_of === projectId)
                 .sort((a, b) => b.mtime - a.mtime),
+        // Session scope of a project: the project itself plus its own git
+        // worktrees. A worktree's sessions/cost/activity belong to its main
+        // repository's whole, so viewing a main repo aggregates its worktrees'
+        // sessions too — like a workspace aggregates its members, one level
+        // down. Worktrees are kept regardless of archived state: the
+        // session-level archive filter hides their sessions when "show archived"
+        // is off, so toggling the flag needs no refetch. Returns [projectId] for
+        // the All-Projects / workspace pseudo-ids (they scope sessions their own
+        // way), or [] when no project id is given.
+        getProjectScopeIds: (state) => (projectId) => {
+            if (!projectId || projectId === ALL_PROJECTS_ID || isWorkspaceProjectId(projectId)) {
+                return projectId ? [projectId] : []
+            }
+            const ids = [projectId]
+            for (const p of Object.values(state.projects)) {
+                if (p.worktree_of === projectId) ids.push(p.id)
+            }
+            return ids
+        },
         getProject: (state) => (id) => state.projects[id],
         getProjectSessions: (state) => (projectId) => {
             const projectState = state.localState.projects[projectId]
@@ -1416,8 +1435,16 @@ export const useDataStore = defineStore('data', {
         async _fetchSessionsPage(projectId) {
             const state = this._ensureProjectLocalState(projectId)
 
+            // A main repository with git worktrees fetches sessions across itself
+            // and its worktrees (their sessions belong to the whole) via the
+            // multi-project endpoint — like a workspace, one level down.
+            const scopeIds = this.getProjectScopeIds(projectId)
+            const isParentWithWorktrees = projectId !== ALL_PROJECTS_ID
+                && !isWorkspaceProjectId(projectId) && scopeIds.length > 1
+
             // Build URL based on project type
-            const isMultiProject = projectId === ALL_PROJECTS_ID || isWorkspaceProjectId(projectId)
+            const isMultiProject = projectId === ALL_PROJECTS_ID
+                || isWorkspaceProjectId(projectId) || isParentWithWorktrees
             const baseUrl = isMultiProject
                 ? '/api/sessions/'
                 : `/api/projects/${projectId}/sessions/`
@@ -1438,6 +1465,9 @@ export const useDataStore = defineStore('data', {
                 if (visibleIds.length) {
                     params.set('project_ids', visibleIds.join(','))
                 }
+            } else if (isParentWithWorktrees) {
+                // Main repo + its worktrees.
+                params.set('project_ids', scopeIds.join(','))
             }
 
             const url = params.toString() ? `${baseUrl}?${params}` : baseUrl
@@ -1515,6 +1545,16 @@ export const useDataStore = defineStore('data', {
                     const wsStore = useWorkspacesStore()
                     for (const realProjectId of wsStore.getVisibleProjectIds(wsId)) {
                         this._ensureProjectLocalState(realProjectId).sessionsFetched = true
+                    }
+                } else {
+                    // Same cascade for a main repo fetched with its worktrees: mark
+                    // each worktree project fetched so live session_updated events
+                    // for them aren't dropped by the areProjectSessionsFetched guard.
+                    const scopeIds = this.getProjectScopeIds(projectId)
+                    if (scopeIds.length > 1) {
+                        for (const id of scopeIds) {
+                            this._ensureProjectLocalState(id).sessionsFetched = true
+                        }
                     }
                 }
 

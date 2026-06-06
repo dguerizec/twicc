@@ -18,7 +18,18 @@ export const useWorkspacesStore = defineStore('workspaces', {
 
         /**
          * Visible project IDs for a given workspace, respecting "show archived projects".
-         * Returns the projects in their custom order, filtered to only visible ones.
+         * Returns the member projects in their custom order, each immediately
+         * followed by its own git worktrees.
+         *
+         * A worktree's content (sessions, cost, activity) belongs to its main
+         * repository's whole, so a member project's worktrees are part of the
+         * workspace's visible set even when the worktree itself was never added
+         * to the workspace — what matters is that the *parent* is a member.
+         * Worktrees are still subject to the archived filter, and are only
+         * pulled in for members that are themselves visible.
+         *
+         * Callers that need member projects only (counts, pickers, the member
+         * list) filter worktrees out via `!project.worktree_of`.
          */
         getVisibleProjectIds() {
             return (workspaceId) => {
@@ -27,10 +38,23 @@ export const useWorkspacesStore = defineStore('workspaces', {
                 const dataStore = useDataStore()
                 const settingsStore = useSettingsStore()
                 const showArchived = settingsStore.isShowArchivedProjects
-                return ws.projectIds.filter(pid => {
-                    const project = dataStore.getProject(pid)
-                    return project && (showArchived || !project.archived)
-                })
+                const passes = (p) => p && (showArchived || !p.archived)
+                const result = []
+                const seen = new Set()
+                const add = (id) => {
+                    if (!seen.has(id)) {
+                        seen.add(id)
+                        result.push(id)
+                    }
+                }
+                for (const pid of ws.projectIds) {
+                    if (!passes(dataStore.getProject(pid))) continue
+                    add(pid)
+                    for (const wt of dataStore.getWorktreesOf(pid)) {
+                        if (passes(wt)) add(wt.id)
+                    }
+                }
+                return result
             }
         },
 

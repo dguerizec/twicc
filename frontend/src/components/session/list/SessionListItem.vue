@@ -18,6 +18,7 @@ import { markSessionReadState, cancelSessionViewedThrottle } from '../../../comp
 import { stopSessionProcess } from '../../../composables/useStopSessionProcess'
 import { useDragHover } from '../../../composables/useDragHover'
 import ProjectBadge from '../../project/ProjectBadge.vue'
+import WorktreeBadge from '../../project/WorktreeBadge.vue'
 import ProcessIndicator from '../../ui/ProcessIndicator.vue'
 import ProcessDuration from '../../ui/ProcessDuration.vue'
 import CostDisplay from '../../ui/CostDisplay.vue'
@@ -111,6 +112,20 @@ const activeCronCount = computed(() => processState.value?.active_crons?.length 
 
 /** Project for this session — single lookup. */
 const project = computed(() => store.getProject(props.session.project_id))
+
+/** Whether this session's project is a git worktree of another project. */
+const isProjectWorktree = computed(() => !!project.value?.worktree_of)
+
+/**
+ * Color for the project dot. A worktree with no color of its own inherits its
+ * main repository's color (matching the dot shown elsewhere for worktrees).
+ */
+const projectDotColor = computed(() => {
+    const p = project.value
+    if (!p) return null
+    if (p.worktree_of) return p.color || store.getProject(p.worktree_of)?.color || null
+    return p.color || null
+})
 
 /**
  * Whether to show the project badge for this specific session.
@@ -363,9 +378,12 @@ function handleMenuSelect(event) {
                     v-if="compactView && effectiveShowProjectName"
                     :id="`compact-project-dot-${session.id}`"
                     class="compact-project-dot"
-                    :style="project?.color ? { '--dot-color': project.color } : null"
+                    :style="projectDotColor ? { '--dot-color': projectDotColor } : null"
                 ></span>
-                <AppTooltip v-if="compactView && effectiveShowProjectName" :for="`compact-project-dot-${session.id}`">{{ store.getProjectDisplayName(session.project_id) }}</AppTooltip>
+                <AppTooltip v-if="compactView && effectiveShowProjectName" :for="`compact-project-dot-${session.id}`">
+                    <WorktreeBadge v-if="isProjectWorktree" :project-id="session.project_id" :dot="false" />
+                    <template v-else>{{ store.getProjectDisplayName(session.project_id) }}</template>
+                </AppTooltip>
                 <wa-icon v-if="session.pinned" name="thumbtack" class="pinned-icon"></wa-icon>
                 <wa-tag v-if="session.archived" size="small" variant="neutral" class="archived-tag">Arch.</wa-tag>
                 <wa-tag v-else-if="session.draft && !processState" size="small" variant="warning" class="draft-tag">Draft</wa-tag>
@@ -409,7 +427,8 @@ function handleMenuSelect(event) {
             <!-- Project badge line (hidden in compact mode, dot is shown inline instead) -->
             <!-- When unread + no process: show unread indicator on the project line (right-aligned) -->
             <div v-if="!compactView && (effectiveShowProjectName || hasCodeComments || (hasUnread && !processState))" class="session-project-row">
-                <ProjectBadge v-if="effectiveShowProjectName" :project-id="session.project_id" class="session-project" />
+                <WorktreeBadge v-if="effectiveShowProjectName && isProjectWorktree" :project-id="session.project_id" class="session-project" />
+                <ProjectBadge v-else-if="effectiveShowProjectName" :project-id="session.project_id" class="session-project" />
                 <wa-icon
                     v-if="hasCodeComments"
                     name="comment"

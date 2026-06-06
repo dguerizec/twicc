@@ -398,13 +398,25 @@ const isWorkspaceMode = computed(() => isAllProjectsMode.value && !!activeWorksp
 const workspaceVisibleProjectIds = computed(() =>
     activeWorkspaceId.value ? workspacesStore.getVisibleProjectIds(activeWorkspaceId.value) : []
 )
-// Same list, minus worktrees — used only for the workspace *project list* shown
-// in the sidebar selector. workspaceVisibleProjectIds itself stays unfiltered:
-// it scopes the workspace's sessions and drives show-project-name, where a
-// worktree's sessions still count toward the whole.
+// Same set, minus worktrees — used only for the workspace *project list* shown
+// in the sidebar selector (worktrees are surfaced nested under their parent).
+// workspaceVisibleProjectIds keeps the worktrees: it scopes the workspace's
+// sessions and drives show-project-name, since a member's worktree sessions
+// count toward the whole.
 const workspaceSelectorProjectIds = computed(() =>
     workspaceVisibleProjectIds.value.filter(pid => !store.getProject(pid)?.worktree_of)
 )
+
+// Show the per-session project badge when the list aggregates more than one
+// project: all-projects mode (outside a single-project workspace), or a single
+// project that has visible worktrees (their sessions are mixed in, so the badge
+// tells parent vs worktree sessions apart).
+const showProjectNameInList = computed(() => {
+    if (isAllProjectsMode.value) {
+        return !activeWorkspace.value || workspaceVisibleProjectIds.value.length > 1
+    }
+    return visibleWorktreesOf(projectId.value).length > 0
+})
 
 // --- Worktree entries in the sidebar project selector --------------------
 // A project with worktrees gets a collapsible "Worktrees (N)" entry nested
@@ -639,6 +651,20 @@ watch(
         store.loadSessions(effectiveProjectId.value, { force: true })
     },
 )
+
+// Same idea one level down: while staying on a main repository, its set of
+// worktrees can change (a worktree project is synced/created), without
+// effectiveProjectId changing. Re-fetch so the new worktree's sessions surface.
+// Keyed on the sorted scope ids; null when the project has no worktrees.
+const singleProjectScopeKey = computed(() => {
+    if (isAllProjectsMode.value || !projectId.value) return null
+    const ids = store.getProjectScopeIds(projectId.value)
+    return ids.length > 1 ? ids.slice().sort().join(',') : null
+})
+watch(singleProjectScopeKey, (newKey, oldKey) => {
+    if (newKey == null || oldKey == null || newKey === oldKey) return
+    store.loadSessions(effectiveProjectId.value, { force: true })
+})
 
 // Retry loading sessions
 async function handleRetry() {
@@ -1509,7 +1535,7 @@ function updateSidebarClosedClass(closed) {
                     ref="sessionListRef"
                     :project-id="effectiveProjectId"
                     :session-id="sessionId"
-                    :show-project-name="isAllProjectsMode && (!activeWorkspace || workspaceVisibleProjectIds.length > 1)"
+                    :show-project-name="showProjectNameInList"
                     :search-query="searchQuery"
                     :show-archived="showArchivedSessions"
                     :show-archived-projects="showArchivedProjects"
