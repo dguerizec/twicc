@@ -1023,6 +1023,73 @@ from twicc.cli.info.command import info_cmd  # noqa: E402
 app.command(name="info")(info_cmd)
 
 
+# --- Advertise remote forwarding in each forwardable command's --help --------
+# ``--remote`` / ``--remote-token`` are global *leading* flags resolved in
+# ``main()`` before Typer ever runs (see ``_remote.parse_remote_invocation``), so
+# they cannot be declared as real per-command options. Instead we attach an
+# epilog note to every command the forwarder accepts — that is, everything except
+# the local-only commands — so ``twicc <command> --help`` advertises the
+# capability without polluting the root ``twicc --help``.
+#
+# Done as a one-shot post-registration sweep rather than an ``epilog=`` on each of
+# the ~40 registrations: it keeps the wording in one place, lets new commands
+# inherit the note automatically, and reuses the very gate the forwarder itself
+# uses (``LOCAL_ONLY_COMMANDS``). The two stay in lockstep — every non-local-only
+# command is exactly the set of routes in the RPC registry.
+from typer.main import get_command_name  # noqa: E402
+
+from twicc.cli._local_only import LOCAL_ONLY_COMMANDS  # noqa: E402
+
+_REMOTE_EPILOG = (
+    "Remote: this command can run against a remote TwiCC over its /rpc/ API. "
+    "Prefix it with --remote <url> (and optionally --remote-token <tok>); the "
+    "url and token also fall back to the TWICC_REMOTE_URL / TWICC_REMOTE_TOKEN "
+    "environment variables. The flags lead the command, e.g. "
+    "`twicc --remote <url> <command>`."
+)
+
+# Commands that accept a file path (the prompt / --message body and --attach):
+# over --remote those paths are read on the client and inlined, so they get an
+# extra note about the `remote:` scheme that defers resolution to the server.
+# Kept in lockstep with the inliner in _remote.py (_PROMPT_PARAM_NAMES + the
+# --attach option) — the only CLI commands that read a path from disk.
+_PATH_COMMANDS = frozenset({"create-session", "send-message", "send-messages"})
+
+_REMOTE_EPILOG_WITH_PATHS = _REMOTE_EPILOG + (
+    " File paths you pass (the prompt or --message body, and --attach files) are "
+    "read locally over --remote; prefix an absolute path with 'remote:' to read "
+    "it on the remote server instead, e.g. --attach remote:/abs/file."
+)
+
+
+def _registered_command_name(info) -> str | None:
+    """Resolve a registered command's CLI name (Typer derives it from the callback when unset)."""
+    if info.name:
+        return info.name
+    if info.callback is not None:
+        return get_command_name(info.callback.__name__)
+    return None
+
+
+def _advertise_remote_in_help() -> None:
+    """Stamp the remote epilog onto every forwardable command and sub-typer."""
+    for info in app.registered_commands:
+        name = _registered_command_name(info)
+        if name in LOCAL_ONLY_COMMANDS:
+            continue
+        info.epilog = _REMOTE_EPILOG_WITH_PATHS if name in _PATH_COMMANDS else _REMOTE_EPILOG
+    for group in app.registered_groups:
+        sub = group.typer_instance
+        if sub.info.name in LOCAL_ONLY_COMMANDS:
+            continue
+        group.epilog = _REMOTE_EPILOG
+        for info in sub.registered_commands:
+            info.epilog = _REMOTE_EPILOG
+
+
+_advertise_remote_in_help()
+
+
 def main() -> None:
     """Entry point for ``pyproject.toml`` scripts and ``__main__.py``.
 
