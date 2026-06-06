@@ -23,7 +23,8 @@ from django.db import IntegrityError, transaction
 
 from twicc.core.models import Project, Session, SessionType
 from twicc.core.serializers import serialize_project
-from twicc.git import resolve_git_from_path
+from twicc.git import resolve_git_from_path, resolve_worktree_main_repo
+from twicc.paths import path_to_project_id
 from twicc.workspaces import auto_add_project_to_workspaces
 
 logger = logging.getLogger(__name__)
@@ -324,8 +325,70 @@ async def register_project(
         await _broadcast_project_added(project)
     if (created or adopted) and project.directory:
         await auto_add_project_to_workspaces(project.id, project.directory)
+        await ensure_worktree_link(project.id, project.directory)
 
     return project, created
+
+
+def _set_worktree_of(project_id: str, parent_id: str) -> None:
+    """Point ``project_id.worktree_of`` at ``parent_id`` (sync DB write)."""
+    Project.objects.filter(id=project_id).update(worktree_of_id=parent_id)
+
+
+def _find_project_for_repo(main_repo: str) -> str | None:
+    """Return the id of an existing Project whose directory resolves to
+    *main_repo* (already an absolute realpath), or None.
+
+    Prefers the canonical id ``path_to_project_id(main_repo)`` so the common
+    case needs no scan. Falls back to matching by ``realpath(directory)`` so a
+    main repo already stored under a non-canonical path — e.g. its cwd was a
+    symlink and the codex/watcher flows store it unresolved, unlike the
+    realpath'd API/CLI flow — is reused instead of being duplicated.
+    """
+    canonical_id = path_to_project_id(main_repo)
+    if Project.objects.filter(id=canonical_id).exists():
+        return canonical_id
+    for pid, pdir in Project.objects.exclude(directory__isnull=True).values_list("id", "directory"):
+        if pdir and os.path.realpath(pdir) == main_repo:
+            return pid
+    return None
+
+
+async def ensure_worktree_link(project_id: str, directory: str) -> None:
+    """Link *project_id* to its main repository when *directory* is a worktree.
+
+    No-op when *directory* is not inside a linked git worktree (or its ``.git``
+    is unreadable because the folder is gone). Otherwise resolves the main
+    repository and picks its project id — **reusing an existing project that
+    already points there** (see :func:`_find_project_for_repo`), under any id,
+    so a symlinked/unresolved main-repo path is not duplicated — then calls
+    :func:`register_project` for it **unconditionally** (idempotent: creates it
+    if absent, adopts its directory + runs workspace auto-add if it was still in
+    the transient ``directory=None`` state, no-op if already complete) and
+    stores the ``worktree_of`` link on the child.
+
+    Async because it goes through ``register_project`` (broadcast + workspace
+    auto-add need the event loop). Call it right after the workspace auto-add
+    of *project_id*, in every context that performs one. Registering a parent
+    re-enters this helper for it, but a main repository is not a worktree, so
+    the recursion stops on the first call.
+    """
+    main_repo = resolve_worktree_main_repo(directory)
+    if not main_repo:
+        return
+    main_repo = os.path.realpath(main_repo)
+
+    parent_id = await sync_to_async(_find_project_for_repo)(main_repo)
+    if parent_id is None:
+        parent_id = path_to_project_id(main_repo)
+    if parent_id == project_id:
+        # Defensive: a repository is never its own worktree.
+        return
+    # Unconditional + idempotent: creates the parent if absent, completes it
+    # (directory adoption + workspace auto-add) if it existed in the transient
+    # ``directory=None`` state, and is a no-op if it is already complete.
+    await register_project(parent_id, directory=main_repo)
+    await sync_to_async(_set_worktree_of)(project_id, parent_id)
 
 
 def update_project_total_cost(project_id: str) -> None:

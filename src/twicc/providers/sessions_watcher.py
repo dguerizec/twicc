@@ -39,6 +39,7 @@ from twicc.core.serializers import (
 )
 from twicc.logging_context import current_provider
 from twicc.projects import (
+    ensure_worktree_link,
     load_project_directories,
     load_project_git_roots,
     register_project,
@@ -767,6 +768,7 @@ class BaseSessionsWatcher:
             project = await refresh_project(project)
             if project.directory:
                 await auto_add_project_to_workspaces(project.id, project.directory)
+                await ensure_worktree_link(project.id, project.directory)
 
         return indexing_request
 

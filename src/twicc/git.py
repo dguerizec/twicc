@@ -1090,5 +1090,79 @@ def read_head_branch(head_path: str) -> str | None:
     return None
 
 
+def resolve_worktree_main_repo(directory: str) -> str | None:
+    """If *directory* lives inside a linked git worktree, return the absolute
+    path of the worktree's MAIN repository root; otherwise return None.
+
+    A linked worktree's ``.git`` is a *file* (not a directory) reading
+    ``gitdir: <root>/.git/worktrees/<name>``. The main repository root is the
+    directory three levels above that gitdir, but only when the layout is
+    exactly ``<root>/.git/worktrees/<name>`` — verified by path segments so
+    other ``.git``-file shapes are rejected: submodules (gitdir under
+    ``.git/modules/``) and separate-git-dir repos (gitdir outside
+    ``<root>/.git``) both yield None instead of pointing at the wrong repo.
+    Walks up from *directory* to find the ``.git`` entry. Filesystem-only —
+    never shells out to ``git``. Returns None for an ordinary repository
+    (``.git`` is a directory) and for any layout it cannot safely interpret.
+    """
+    current = directory
+    while True:
+        git_path = os.path.join(current, '.git')
+        try:
+            if os.path.isdir(git_path):
+                # Ordinary repository, not a worktree.
+                return None
+            if os.path.isfile(git_path):
+                return _main_repo_from_worktree_gitfile(git_path)
+        except OSError:
+            return None
+
+        parent = os.path.dirname(current)
+        if parent == current:
+            # Reached the filesystem root without finding a .git entry.
+            return None
+        current = parent
+
+
+def _main_repo_from_worktree_gitfile(git_file_path: str) -> str | None:
+    """Resolve the main repository root from a worktree's ``.git`` file.
+
+    Accepts only the standard linked-worktree layout
+    ``<root>/.git/worktrees/<name>`` (checked by path segments), so a submodule
+    (gitdir under ``.git/modules/<name>``) or a separate-git-dir repo (gitdir
+    outside ``<root>/.git``) is rejected with None rather than mistaken for a
+    worktree of the wrong repository. The returned root is verified to exist.
+    """
+    try:
+        with open(git_file_path) as f:
+            content = f.read().strip()
+    except OSError:
+        return None
+
+    if not content.startswith('gitdir: '):
+        return None
+    gitdir = content[len('gitdir: '):].strip()
+    if not os.path.isabs(gitdir):
+        gitdir = os.path.join(os.path.dirname(git_file_path), gitdir)
+    gitdir = os.path.normpath(gitdir)
+
+    # Standard linked-worktree layout only: <root>/.git/worktrees/<name>.
+    # A submodule's gitdir is <super>/.git/modules/<name> (segment "modules"),
+    # so requiring "worktrees" then ".git" excludes it cleanly; a relocated
+    # (separate-git-dir) common dir won't be named ".git" and is rejected too.
+    worktrees_dir = os.path.dirname(gitdir)        # expected: <root>/.git/worktrees
+    common_git = os.path.dirname(worktrees_dir)    # expected: <root>/.git
+    if os.path.basename(worktrees_dir) != 'worktrees' or os.path.basename(common_git) != '.git':
+        return None
+
+    root = os.path.dirname(common_git)             # <root>
+    # Guard against a stale/corrupt pointer: require the gitdir itself to still
+    # exist (a ``.git`` file left behind after ``git worktree prune`` would
+    # otherwise still resolve a parent), and never link to a vanished repo.
+    if not root or not os.path.isdir(gitdir) or not os.path.isdir(common_git) or not os.path.isdir(root):
+        return None
+    return root
+
+
 class GitError(Exception):
     """Raised when a git operation fails."""

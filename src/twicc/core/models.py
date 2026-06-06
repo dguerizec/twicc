@@ -79,6 +79,16 @@ class Project(models.Model):
     color = models.CharField(max_length=50, null=True, blank=True)  # CSS color value (hex, hsl, etc.)
     archived = models.BooleanField(default=False)  # User can archive projects to hide from default list
     total_cost = models.DecimalField(max_digits=12, decimal_places=6, null=True, blank=True)  # Sum of all sessions total_cost in USD
+    # Non-null => this project is a git worktree; the link points at its main
+    # repository's project. Set by twicc.projects.ensure_worktree_link, called
+    # right after a project's workspace auto-add. V1: new projects only, no backfill.
+    worktree_of = models.ForeignKey(
+        "self",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="worktrees",
+    )
 
     class Meta:
         ordering = ["-mtime"]
