@@ -20,25 +20,25 @@ A leader or manager can create managers and/or workers; a worker is terminal. A 
 
 Each mode has its own skill, loaded on top of the shared `twicc-orchestration` skill:
 
-- [`twicc-orchestration`](src/twicc/agent/plugin/twicc/skills/twicc-orchestration/SKILL.md) — the shared model and conventions (load first).
-- [`twicc-orchestration-leader`](src/twicc/agent/plugin/twicc/skills/twicc-orchestration-leader/SKILL.md) / [`-manager`](src/twicc/agent/plugin/twicc/skills/twicc-orchestration-manager/SKILL.md) / [`-worker`](src/twicc/agent/plugin/twicc/skills/twicc-orchestration-worker/SKILL.md) — the playbook for your mode.
+- [`twicc-orchestration`](src/twicc/agent/plugin/twicc/skills/twicc-orchestration/SKILL.md) — the shared model and conventions (loaded first).
+- [`twicc-orchestration-leader`](src/twicc/agent/plugin/twicc/skills/twicc-orchestration-leader/SKILL.md) / [`-manager`](src/twicc/agent/plugin/twicc/skills/twicc-orchestration-manager/SKILL.md) / [`-worker`](src/twicc/agent/plugin/twicc/skills/twicc-orchestration-worker/SKILL.md) — the playbook for each mode.
 
 ## Building blocks
 
 Orchestration is built entirely from the ordinary commands in [`SKILLS-AND-CLI.md`](SKILLS-AND-CLI.md):
 
-- **Spawn** a child with `create-session` (its prompt carries the child's mode, job, and how to report back — a child starts with no memory of you, so every brief is self-contained).
-- **Push** results up with `send-message parent`.
-- **Broadcast** the same message to many children at once with `send-messages --spawned-by self --message "…"` — steer them, request status, or ask for a graceful wrap-up (`sent` ≠ done, so follow with `processes wait`).
-- **Pull** a child's transcript anytime with `session <id> messages --tail N` — independent of whether the child can push.
-- **Map** your tree with `topology self`, **track** your direct children with `processes --spawned-by self`, and **wait / stop** scoped batches with `processes wait --spawned-by self ...` or `processes stop --spawned-by self ...`.
-- **Tag** nodes with annotations (`update-session self annotations set:status=done`) so the tree stays legible — or change a whole batch of children at once (tag, hide, archive…) with `update-sessions <op> --spawned-by self ...`.
+- **Spawning** — a parent creates a child with `create-session`; the prompt carries the child's mode, job, and how to report back. A child starts with no memory of its parent, so every brief is self-contained.
+- **Pushing up** — a child reports results with `send-message parent`.
+- **Broadcasting** — one message reaches many children at once with `send-messages --spawned-by self --message "…"`: to steer them, request status, or ask for a graceful wrap-up (`sent` ≠ done, so a `processes wait` follows).
+- **Pulling** — a parent can read any child's transcript at will with `session <id> messages --tail N`, independent of whether the child can push.
+- **Mapping & tracking** — `topology self` maps the tree, `processes --spawned-by self` tracks the direct children, and `processes wait --spawned-by self ...` / `processes stop --spawned-by self ...` wait on or stop scoped batches.
+- **Tagging** — annotations keep the tree legible (`update-session self annotations set:status=done`), and a whole batch of children can be retagged, hidden, or archived at once with `update-sessions <op> --spawned-by self ...`.
 
 ## Communication
 
 - **Push / pull coexist.** An executor child reports with `send-message parent`; a parent can also pull any child's messages at will. A read-only child (below) cannot push, so pull is the only way to read it.
-- **Siblings never talk directly** — route through the common parent.
-- **Wait only on your direct children** in normal synchronization, never on grandchildren. Each level pilots its own children; `--descendants` is for exceptional subtree cleanup, not for routine barriers.
+- **Siblings never talk directly** — they route through the common parent.
+- **A node waits only on its direct children** in normal synchronization, never on grandchildren. Each level pilots its own children; `--descendants` is for exceptional subtree cleanup, not for routine barriers.
 
 ## Permission modes: the two extremes
 
@@ -49,12 +49,12 @@ Orchestration uses only the two **non-interactive** extremes of each provider �
 
 ## Visibility & propagation
 
-- **Strongly prefer `--hidden`** for spawned sessions: no UI clutter, and a hidden session can never get stuck on a UI dialog. Hidden sessions stay out of every list, search, and counter while their cost still flows into aggregates.
+- **`--hidden` is strongly preferred** for spawned sessions: no UI clutter, and a hidden session can never get stuck on a UI dialog. Hidden sessions stay out of every list, search, and counter while their cost still flows into aggregates.
 - **The user's choice wins and propagates.** If the user asks for visible sessions, or for a specific permission level, every descendant inherits the same rules.
 
 ## Annotations: a map of the tree
 
-Annotations are short key/value tags (free-form JSON) on a session. They turn a tree of opaque sessions into something you — and, on request, the user — can read at a glance, because `topology self` and `sessions --spawn-tree self` carry each node's annotations, and `sessions` / `processes` / `search` / `topology` can filter by them. For live processes, always pair annotations with a filiation scope, e.g. `processes --spawned-by self --annotation status=blocked` for direct children, or `processes wait --spawned-by self --annotation job=review user_turn dead --timeout 600` for a scoped barrier.
+Annotations are short key/value tags (free-form JSON) on a session. They turn a tree of opaque sessions into something an orchestrator — and, on request, the user — can read at a glance, because `topology self` and `sessions --spawn-tree self` carry each node's annotations, and `sessions` / `processes` / `search` / `topology` can filter by them. For live processes, an annotation is paired with a filiation scope, e.g. `processes --spawned-by self --annotation status=blocked` for direct children, or `processes wait --spawned-by self --annotation job=review user_turn dead --timeout 600` for a scoped barrier.
 
 Conventional keys (free, not enforced):
 
@@ -63,7 +63,7 @@ Conventional keys (free, not enforced):
 - `status` — `working` / `done` / `failed` / `blocked`, kept current as work progresses.
 - `task_id` — ties the session to a tracked unit of work.
 
-A parent tags a child at spawn; a session updates its own tags as it goes. Keep values short and single-line — annotations are metadata, not a message channel.
+A parent tags a child at spawn; a session updates its own tags as it goes. Values stay short and single-line — annotations are metadata, not a message channel.
 
 The same map is available visually in the TwiCC UI: any session that belongs to a spawn tree shows a read-only **Orchestration** tab, rendering the whole tree rooted at its top-level ancestor — each node's title, live status, own and cumulative cost, annotations, and timing — to follow the orchestration at a glance without opening each session.
 
@@ -71,29 +71,29 @@ The same map is available visually in the TwiCC UI: any session that belongs to 
 
 Each session's context block gives a `scratch_base_dir`:
 
-- **Private scratch** — your own working files go under `<scratch_base_dir>/<your_session_id>/` (yours alone, no prefix needed).
-- **Shared scratch** — to exchange bulky output (a large diff, a generated file, a long report) with the rest of the tree, use the directory passed down as the `scratch_dir` annotation. The leader picks one folder and propagates it through the subtree; create it on demand (`mkdir -p`), and prefix every file with your own session id so agents never clobber each other. Executors only — a read-only session keeps its result in its reply.
+- **Private scratch** — a session's own working files go under `<scratch_base_dir>/<session_id>/` (private to that session, no prefix needed).
+- **Shared scratch** — to exchange bulky output (a large diff, a generated file, a long report) with the rest of the tree, sessions use the directory passed down as the `scratch_dir` annotation. The leader picks one folder and propagates it through the subtree; it is created on demand (`mkdir -p`), and every file is prefixed with the writer's own session id so agents never clobber each other. Executors only — a read-only session keeps its result in its reply.
 
 The recurring pattern: an executor writes `<scratch_dir>/<session_id>-result.md`, then sends a short `send-message parent` ("done, see that file"); the parent reads it.
 
 ## Lifecycle
 
-A session goes `starting → assistant_turn → user_turn`, then `dead` when its process stops. A dead session is **resurrected automatically** when it receives a `send-message` — so you never keep a child alive on purpose; message it whenever you need it again.
+A session goes `starting → assistant_turn → user_turn`, then `dead` when its process stops. A dead session is **resurrected automatically** when it receives a `send-message` — so a parent never keeps a child alive on purpose; it simply messages the child again whenever it's needed.
 
 ## Process control in an orchestration
 
-Use live-process commands as scoped operations, never as global annotation searches:
+Live-process commands are scoped operations, never global annotation searches:
 
-- **Observe your direct children** with `processes --spawned-by self`, or narrow them with `processes --spawned-by self --annotation status=blocked`.
-- **Wait for your own direct children** with `processes wait --spawned-by self user_turn dead --timeout <N>`. Add `--annotation` when you launched a named phase or role and only that subset should participate.
-- **Stop a selected batch** with `processes stop --spawned-by self --annotation status=cancelled --timeout <N>`, or pass explicit session ids when you know exactly which children are losers/runaways.
-- **Clean up a subtree** only when you intentionally abort it: `processes stop <manager_id> --descendants <manager_id> --timeout <N>` stops the manager plus its proper descendants.
+- **Observing the direct children** with `processes --spawned-by self`, or narrowing them with `processes --spawned-by self --annotation status=blocked`.
+- **Waiting for the direct children** with `processes wait --spawned-by self user_turn dead --timeout <N>`. `--annotation` narrows the wait to a named phase or role when only that subset should participate.
+- **Stopping a selected batch** with `processes stop --spawned-by self --annotation status=cancelled --timeout <N>`, or explicit session ids when the losing or runaway children are known exactly.
+- **Cleaning up a subtree**, only when it is intentionally aborted: `processes stop <manager_id> --descendants <manager_id> --timeout <N>` stops the manager plus its proper descendants.
 
-`processes wait` and `processes stop` do not use `--spawn-tree` or `parent`; those controls are for your own children/subtree, not for your parent or the entire tree that includes you.
+`processes wait` and `processes stop` do not use `--spawn-tree` or `parent`; those controls act on a node's own children/subtree, not on its parent or the entire tree that includes it.
 
 ## Patterns
 
-Leaders and managers compose a structure from five axes — topology, channel, synchronization, aggregation, voice diversity. The recurring combinations are written up as bundled pattern files next to the `twicc-orchestration` skill (start with [`composing.md`](src/twicc/agent/plugin/twicc/skills/twicc-orchestration/patterns/composing.md)):
+Leaders and managers compose a structure from five axes — topology, channel, synchronization, aggregation, voice diversity. The recurring combinations are written up as bundled pattern files next to the `twicc-orchestration` skill (the entry point is [`composing.md`](src/twicc/agent/plugin/twicc/skills/twicc-orchestration/patterns/composing.md)):
 
 - **Distribute** — [scatter-gather](src/twicc/agent/plugin/twicc/skills/twicc-orchestration/patterns/scatter-gather.md), [multi-angle](src/twicc/agent/plugin/twicc/skills/twicc-orchestration/patterns/multi-angle.md), [divide-and-conquer](src/twicc/agent/plugin/twicc/skills/twicc-orchestration/patterns/divide-and-conquer.md)
 - **Gate phases** — [phase-gated-fanout](src/twicc/agent/plugin/twicc/skills/twicc-orchestration/patterns/phase-gated-fanout.md)
@@ -106,7 +106,7 @@ Leaders and managers compose a structure from five axes — topology, channel, s
 
 ## Examples
 
-For worked, end-to-end walkthroughs that combine these patterns on a real task, see the [`examples/`](src/twicc/agent/plugin/twicc/skills/twicc-orchestration/examples) files next to the `twicc-orchestration` skill — each applies a concrete combination of the patterns above:
+Worked, end-to-end walkthroughs that combine these patterns on a real task live in the [`examples/`](src/twicc/agent/plugin/twicc/skills/twicc-orchestration/examples) files next to the `twicc-orchestration` skill — each applies a concrete combination of the patterns above:
 
 - [`pr-review`](src/twicc/agent/plugin/twicc/skills/twicc-orchestration/examples/pr-review.md) — exhaustively review a pull request (multi-angle + produce-refute, then synthesize).
 - [`codebase-audit`](src/twicc/agent/plugin/twicc/skills/twicc-orchestration/examples/codebase-audit.md) — audit or refactor a large codebase (divide-and-conquer + worker-pool).
@@ -123,4 +123,4 @@ For worked, end-to-end walkthroughs that combine these patterns on a real task, 
 
 ## A note on freedom
 
-This is an unconstrained model: nothing here is enforced except the technical limits of read-only mode. The conventions above are what keep an orchestration legible and steerable — follow them, but the system will not stop you from doing otherwise.
+This is an unconstrained model: nothing here is enforced except the technical limits of read-only mode. The conventions above are what keep an orchestration legible and steerable; nothing else enforces them, and an agent is free to depart from them — at the cost of a tree that is harder to read and steer.
