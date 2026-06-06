@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Some entries include illustrative screenshots in nested sub-lists.
 
+## [1.7.2] - 2026-06-06
+
+### Fixed
+
+- The 1.7.1 wheel and sdist published to PyPI shipped a stale frontend build that was missing the latest UI changes; 1.7.2 republishes the same release with a correctly rebuilt frontend.
+
 ## [1.7.1] - 2026-06-06
 
 ### Added
