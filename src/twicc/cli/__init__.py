@@ -345,12 +345,21 @@ def _session_default(
 @session_app.command()
 def content(
     ctx: typer.Context,
-    range: str = typer.Argument(help="Line number or range (e.g. '5' or '10-20')."),
+    range: str = typer.Argument(None, help="Line number or range (e.g. '5' or '10-20'). Optional when --contains is given."),
+    contains: list[str] = typer.Option(
+        [],
+        "--contains",
+        help=(
+            "Case-insensitive substring filter on the raw item content. "
+            "Repeatable, AND-combined (an item must contain every term). "
+            "Combinable with a line/range to scope the search."
+        ),
+    ),
 ) -> None:
     """Show session item(s) content as JSON."""
     from twicc.cli.session import content as session_content
 
-    session_content(ctx.obj, range_str=range)
+    session_content(ctx.obj, range_str=range, contains=contains)
 
 
 @session_app.command()

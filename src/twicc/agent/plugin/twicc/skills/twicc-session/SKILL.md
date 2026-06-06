@@ -9,7 +9,7 @@ argument-hint: <session_id> [content|messages|agents]
 Inspect a single session. Four sub-commands:
 
 - Default — full session metadata.
-- `content <LINE_OR_RANGE>` — raw JSONL items by line number (provider-specific schema).
+- `content [LINE_OR_RANGE] [--contains TEXT ...]` — raw JSONL items by line number and/or content substring(s) (provider-specific schema).
 - `messages` — user/assistant messages only, uniform shape across providers.
 - `agents` — list subagents spawned by this session.
 
@@ -103,22 +103,36 @@ Works for regular sessions and subagents.
 ### Content — raw items
 
 ```bash
-$TWICC session <SESSION_ID> content <LINE_OR_RANGE>
+$TWICC session <SESSION_ID> content [LINE_OR_RANGE] [--contains TEXT ...]
 ```
+
+The lowest-level view: **every** raw item, including tool calls and results — unlike `messages` and `search`, which only ever see user/assistant text.
+
+Filter by line/range, by substring, or both:
 
 - Single line: `content 5`
 - Range: `content 10-20` (inclusive)
+- Substring: `content --contains "some text"` — every item whose raw content contains the text.
+- Multiple substrings: `content --contains foo --contains bar` — repeatable, **AND-combined** (an item must contain every term).
+- Combined: `content 10-20 --contains "some text"` — the line/range scopes the substring search.
 
-Returns a JSON array of raw JSONL objects. Schema depends on provider:
+At least one of `LINE_OR_RANGE` / `--contains` is required.
+
+`--contains` is **case-insensitive** and matches the **raw JSONL string** (the verbatim line as stored). Consequences: it also matches JSON keys (e.g. `"role"`, `"type"`), and embedded newlines are escaped (`\n`), so a query spanning a line break won't match. This is the only way to substring-search across all raw items (tool_use/tool_result included).
+
+Returns a JSON array. Each entry is `{line_num, content}`, where `content` is the raw JSONL object. Schema of `content` depends on provider:
 - `claude_code` — Claude API objects (user/assistant messages, tool_use, tool_result, …).
 - `codex` — Codex schema (user/assistant messages, function_call, function_call_output, …).
 
 ```json
 [
   {
-    "type": "user",
-    "message": {"role": "user", "content": [{"type": "text", "text": "Hello"}]},
-    "timestamp": "2025-03-10T14:30:00.000Z"
+    "line_num": 5,
+    "content": {
+      "type": "user",
+      "message": {"role": "user", "content": [{"type": "text", "text": "Hello"}]},
+      "timestamp": "2025-03-10T14:30:00.000Z"
+    }
   }
 ]
 ```
@@ -165,6 +179,9 @@ Only valid on parent sessions (errors on subagents). Returns provider-internal s
 $TWICC session abc123-def456
 $TWICC session abc123 content 5
 $TWICC session abc123 content 10-20
+$TWICC session abc123 content --contains "TypeError"
+$TWICC session abc123 content --contains TypeError --contains "auth.py"
+$TWICC session abc123 content 10-200 --contains "TypeError"
 $TWICC session abc123 messages --tail 1
 $TWICC session abc123 messages --role user
 $TWICC session abc123 agents

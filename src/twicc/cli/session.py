@@ -57,27 +57,41 @@ def main(session_id: str) -> None:
     emit_json(data)
 
 
-def content(session_id: str, *, range_str: str) -> None:
-    """Fetch session item(s) by line number or range and print as JSON to stdout."""
+def content(session_id: str, *, range_str: str | None = None, contains: list[str] | None = None) -> None:
+    """Fetch session item(s) by line/range and/or content substring(s), print as JSON to stdout.
+
+    ``range_str`` and ``contains`` are both optional but at least one must be
+    given; when both are present they are combined (the line/range scopes the
+    substring search). ``contains`` is a list of case-insensitive substrings
+    AND-combined (an item must contain every term) matched against the raw JSONL
+    string stored in ``SessionItem.content`` (so it also matches JSON keys and
+    sees escaped sequences like ``\\n``).
+    """
     import django
 
     django.setup()
 
     from twicc.core.models import SessionItem
 
+    contains = contains or []
+    if range_str is None and not contains:
+        emit_error("Error: provide a line/range argument or --contains.", code=1)
+
     _get_session(session_id)
 
-    items = (
-        SessionItem.objects
-        .filter(session_id=session_id, **_parse_range_filter(range_str))
-        .order_by("line_num")
-    )
+    items = SessionItem.objects.filter(session_id=session_id)
+    if range_str is not None:
+        items = items.filter(**_parse_range_filter(range_str))
+    for term in contains:
+        # Chained filters AND together; each term must appear in the raw content.
+        items = items.filter(content__icontains=term)
+    items = items.order_by("line_num")
 
-    # Parse each item's content string into real JSON objects
-    data = [orjson.loads(item.content) for item in items]
+    # Wrap each item with its line number; parse the raw content string into a real JSON object.
+    data = [{"line_num": item.line_num, "content": orjson.loads(item.content)} for item in items]
 
     if not data:
-        emit_error("Error: no items found for the given range.", code=1)
+        emit_error("Error: no items found for the given filter.", code=1)
 
     emit_json(data)
 

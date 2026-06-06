@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Some entries include illustrative screenshots in nested sub-lists.
 
+## [Unreleased]
+
+### Added
+
+- The `session content` CLI command (+matching skills and API) can now filter a session's raw items by their raw text content not just by line number.
+
 ## [1.7.2] - 2026-06-06
 
 ### Fixed
