@@ -356,6 +356,18 @@ def main():
         call_command("migrate", verbosity=0)
         logger.info("Migrations applied")
 
+        # Backfill Project.worktree_of from strong filesystem signals. Must run
+        # AFTER migrate (the column ships in a migration) and is idempotent —
+        # only projects without a link are considered. Each newly-created link is
+        # logged by the helper (via logger.info); see twicc.worktree_backfill.
+        from twicc.worktree_backfill import backfill_worktree_links
+        _, _wt_linked, _wt_unresolved = asyncio.run(backfill_worktree_links())
+        if _wt_linked or _wt_unresolved:
+            logger.info(
+                "Worktree backfill: %d link(s) created, %d look like a worktree but unlinked",
+                _wt_linked, len(_wt_unresolved),
+            )
+
         # Each provider's auth_task handles CLI authentication detection: it logs
         # the current state and broadcasts it to connected clients. Sending
         # messages is disabled in the UI when the owning provider is not

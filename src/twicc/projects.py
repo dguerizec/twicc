@@ -354,18 +354,38 @@ def _find_project_for_repo(main_repo: str) -> str | None:
     return None
 
 
+async def link_worktree_to_repo(project_id: str, main_repo: str) -> str | None:
+    """Point *project_id*'s ``worktree_of`` at the project of *main_repo*.
+
+    *main_repo* is the absolute realpath of a main repository root. Reuses an
+    existing project that already points there (see :func:`_find_project_for_repo`),
+    under any id, so a symlinked/unresolved main-repo path is not duplicated;
+    otherwise falls back to the canonical id and **registers it unconditionally**
+    (idempotent: creates the parent if absent, completes it — directory adoption
+    + workspace auto-add — if it was still in the transient ``directory=None``
+    state, no-op if already complete). Returns the parent id, or None when it
+    would be a self-link (a repository is never its own worktree).
+
+    Shared by live detection (:func:`ensure_worktree_link`) and the worktree
+    backfill (:mod:`twicc.worktree_backfill`).
+    """
+    parent_id = await sync_to_async(_find_project_for_repo)(main_repo)
+    if parent_id is None:
+        parent_id = path_to_project_id(main_repo)
+    if parent_id == project_id:
+        return None
+    await register_project(parent_id, directory=main_repo)
+    await sync_to_async(_set_worktree_of)(project_id, parent_id)
+    return parent_id
+
+
 async def ensure_worktree_link(project_id: str, directory: str) -> None:
-    """Link *project_id* to its main repository when *directory* is a worktree.
+    """Link *project_id* to its main repository when *directory* is a live git
+    worktree (its ``.git`` pointer file is readable).
 
     No-op when *directory* is not inside a linked git worktree (or its ``.git``
     is unreadable because the folder is gone). Otherwise resolves the main
-    repository and picks its project id — **reusing an existing project that
-    already points there** (see :func:`_find_project_for_repo`), under any id,
-    so a symlinked/unresolved main-repo path is not duplicated — then calls
-    :func:`register_project` for it **unconditionally** (idempotent: creates it
-    if absent, adopts its directory + runs workspace auto-add if it was still in
-    the transient ``directory=None`` state, no-op if already complete) and
-    stores the ``worktree_of`` link on the child.
+    repository and delegates to :func:`link_worktree_to_repo`.
 
     Async because it goes through ``register_project`` (broadcast + workspace
     auto-add need the event loop). Call it right after the workspace auto-add
@@ -376,19 +396,7 @@ async def ensure_worktree_link(project_id: str, directory: str) -> None:
     main_repo = resolve_worktree_main_repo(directory)
     if not main_repo:
         return
-    main_repo = os.path.realpath(main_repo)
-
-    parent_id = await sync_to_async(_find_project_for_repo)(main_repo)
-    if parent_id is None:
-        parent_id = path_to_project_id(main_repo)
-    if parent_id == project_id:
-        # Defensive: a repository is never its own worktree.
-        return
-    # Unconditional + idempotent: creates the parent if absent, completes it
-    # (directory adoption + workspace auto-add) if it existed in the transient
-    # ``directory=None`` state, and is a no-op if it is already complete.
-    await register_project(parent_id, directory=main_repo)
-    await sync_to_async(_set_worktree_of)(project_id, parent_id)
+    await link_worktree_to_repo(project_id, os.path.realpath(main_repo))
 
 
 def update_project_total_cost(project_id: str) -> None:

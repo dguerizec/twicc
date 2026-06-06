@@ -6,6 +6,7 @@ and file diff retrieval for the Monaco diff editor.
 
 import base64
 import os
+import re
 import subprocess
 
 from twicc.file_content import IMAGE_EXTENSIONS, MAX_FILE_SIZE
@@ -1162,6 +1163,88 @@ def _main_repo_from_worktree_gitfile(git_file_path: str) -> str | None:
     if not root or not os.path.isdir(gitdir) or not os.path.isdir(common_git) or not os.path.isdir(root):
         return None
     return root
+
+
+# ---------------------------------------------------------------------------
+# Worktree detection from a path marker (deleted-worktree backfill)
+# ---------------------------------------------------------------------------
+# When a worktree directory is gone AND git has pruned its admin record, the
+# only thing left is the path string. A path *segment* that names a worktree
+# container (``.worktrees`` and friends) or a directly-named ``worktree-*``
+# folder is a strong signal that the project was a worktree — strong enough to
+# tell it apart from an ordinary deleted subdirectory of a repo, which carries
+# no such marker. The marker's position also locates the main repo: everything
+# before it is the repo candidate. Used only by the worktree backfill, never by
+# live detection (which has the real ``.git`` to read).
+
+# A worktree container segment: ``worktree``/``worktrees`` with an optional
+# leading ``.``/``-``/``_`` (e.g. ``.worktrees``).
+_WORKTREE_CONTAINER_RE = re.compile(r'^[-._]?worktrees?$', re.IGNORECASE)
+# A directly-named worktree folder: the same stem followed by a ``-``/``.``/``_``
+# separator and at least one more character (e.g. ``worktree-feature-x``).
+_WORKTREE_NAMED_RE = re.compile(r'^[-._]?worktrees?[-._].+$', re.IGNORECASE)
+
+
+def _is_worktree_marker_segment(segment: str, *, is_last: bool) -> bool:
+    """True if *segment* marks a worktree. A directly-named ``worktree-*`` folder
+    counts anywhere; a bare container (``.worktrees``) only counts when it is not
+    the last segment — the worktree itself must live inside it."""
+    if _WORKTREE_NAMED_RE.match(segment):
+        return True
+    if not is_last and _WORKTREE_CONTAINER_RE.match(segment):
+        return True
+    return False
+
+
+def _nearest_repo_root(start_dir: str) -> str | None:
+    """Walk up from *start_dir* (inclusive) to the nearest directory whose
+    ``.git`` is a directory (a real repository root); return its realpath, or
+    None if none is found before the filesystem root. Lets a container nested in
+    a subfolder (``<repo>/.claude/worktrees/<wt>``) still resolve to ``<repo>``."""
+    current = start_dir
+    while True:
+        try:
+            if os.path.isdir(os.path.join(current, '.git')):
+                return os.path.realpath(current)
+        except OSError:
+            return None
+        parent = os.path.dirname(current)
+        if parent == current:
+            return None
+        current = parent
+
+
+def resolve_worktree_repo_from_marker(directory: str) -> str | None:
+    """Resolve the main-repo root of a (possibly deleted) worktree from a
+    worktree marker in its *directory* path. Returns the repo root realpath, or
+    None when the path carries no marker or no repository exists above it.
+
+    Splits at the leftmost marker segment — everything before it is the repo
+    candidate — then walks up from there to the nearest existing ``.git``
+    directory on disk. Filesystem-only; *directory* itself need not exist.
+    """
+    segments = os.path.normpath(directory).split(os.sep)
+    last = len(segments) - 1
+    for i in range(1, len(segments)):
+        seg = segments[i]
+        if not seg:
+            continue
+        if _is_worktree_marker_segment(seg, is_last=(i == last)):
+            prefix = os.sep.join(segments[:i]) or os.sep
+            return _nearest_repo_root(prefix)
+    return None
+
+
+def path_has_worktree_marker(directory: str) -> bool:
+    """True if any segment of *directory* looks like a worktree marker (a
+    container like ``.worktrees`` or a directly-named ``worktree-*`` folder),
+    regardless of position. Looser than :func:`resolve_worktree_repo_from_marker`
+    (no position constraint, no repo walk-up): used only to flag, in the
+    backfill logs, a path that *looks* like a worktree but could not be linked."""
+    for seg in os.path.normpath(directory).split(os.sep):
+        if seg and (_WORKTREE_NAMED_RE.match(seg) or _WORKTREE_CONTAINER_RE.match(seg)):
+            return True
+    return False
 
 
 class GitError(Exception):
