@@ -11,7 +11,12 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 echo "=== Cleaning previous artifacts ==="
-rm -rf dist/
+# Drop the built frontend too, so the hatch hook always rebuilds it from
+# source. The hook skips the npm build whenever src/twicc/static/frontend/
+# already holds an index.html — great for the sdist→wheel and pip-install
+# paths, but in this repo a stale dev build left there would otherwise be
+# packaged as-is, silently shipping an outdated UI.
+rm -rf dist/ src/twicc/static/frontend/
 
 echo
 echo "=== Building sdist + wheel ==="

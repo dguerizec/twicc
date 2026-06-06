@@ -296,6 +296,8 @@ When the user asks to make a new release, follow these steps in order:
 
    The Codex CLI binary comes from `openai-codex-cli-bin` on PyPI (manylinux/macOS/Windows wheels since 0.133.0), so TwiCC itself does not need per-platform wheels anymore. The sdist embeds the pre-built frontend assets so `pip install` from source does not need npm. See `hatch_build.py` and `docs/codex-vendoring.md`.
 
+   **Fresh frontend, always:** `build-release.sh` deletes `src/twicc/static/frontend/` before `uv build`. The `hatch_build.py` hook skips the npm build whenever that directory already holds an `index.html` (needed for the sdist→wheel and pip-install-from-sdist paths). Without the wipe, a stale dev build sitting there would be packaged as-is, silently shipping an outdated UI — exactly how 1.7.1 went out with a frontend missing its latest changes. Never package a release without that clean rebuild.
+
 5. **User testing (mandatory):** Ask the user to test the build before continuing:
    ```
    uvx --from dist/twicc-{version}-py3-none-any.whl twicc

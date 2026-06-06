@@ -150,7 +150,7 @@ When the user asks for a release:
 1. Verify the branch is `main`; stop if it is not.
 2. Update the version in `pyproject.toml` and the `twicc` package entry in `uv.lock`.
 3. Update `CHANGELOG.md`: convert `[Unreleased]` to the release version and date.
-4. Run `./scripts/build-release.sh`.
+4. Run `./scripts/build-release.sh`. It deletes `src/twicc/static/frontend/` before `uv build` so the frontend is always rebuilt from source — the `hatch_build.py` hook otherwise reuses a stale build sitting there and silently ships an outdated UI (how 1.7.1 went out broken). Never package a release without that clean rebuild.
 5. Ask the user to test the built wheel with the appropriate `uvx --from dist/... twicc` command. Do not run this yourself.
 6. Continue only after the user confirms testing passed.
 7. Commit with `release: v{version}`.
