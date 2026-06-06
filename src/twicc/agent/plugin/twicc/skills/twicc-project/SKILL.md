@@ -46,6 +46,7 @@ $TWICC project <PROJECT>
   "color": "#4a90d9",
   "archived": false,
   "total_cost": 12.345678,
+  "worktree_of": null,
   "workspaces": ["backend", "home-side-projects"]
 }
 ```
@@ -57,6 +58,7 @@ $TWICC project <PROJECT>
 - `name` — may be `null`.
 - `color` — may be `null`.
 - `total_cost` — total cost in USD across all sessions (may be `null`).
+- `worktree_of` — when this project is a git worktree, the project id of its main repository; `null` otherwise.
 - `workspaces` — workspace IDs this project belongs to (empty if none).
 
 ## Examples

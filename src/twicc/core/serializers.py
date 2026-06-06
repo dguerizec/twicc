@@ -23,6 +23,12 @@ def serialize_project(project):
         "color": project.color,
         "archived": project.archived,
         "total_cost": float(project.total_cost) if project.total_cost else None,
+        # Non-null => this project is a git worktree; the value is the id of its
+        # main repository's project (or None when it is not a worktree). We read
+        # the raw FK id (``worktree_of_id``) rather than ``worktree_of`` to avoid
+        # the lazy relationship load — keeping this serializer query-free and
+        # safe to call from async contexts (see module docstring).
+        "worktree_of": project.worktree_of_id,
     }
 
 

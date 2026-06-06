@@ -256,7 +256,7 @@ function computeLastToolVisible(items, lastStartedToolId, mode, expandedGroups, 
 export const useDataStore = defineStore('data', {
     state: () => ({
         // Server data
-        projects: {},       // { id: { id, sessions_count, mtime, stale } }
+        projects: {},       // { id: { id, sessions_count, mtime, stale, worktree_of } } — worktree_of: parent project id when this project is a git worktree, else null
         sessions: {},       // { id: { id, project_id, provider, last_line, mtime, stale } }
         // Session items indexed by session ID.
         // { sessionId: [{ line_num, content, display_level, ... }] } - line_num is 1-based
