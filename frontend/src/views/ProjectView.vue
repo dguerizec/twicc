@@ -20,6 +20,7 @@ import SettingsPopover from '../components/app/SettingsPopover.vue'
 import ProjectBadge from '../components/project/ProjectBadge.vue'
 import ProjectSelectorRow from '../components/project/ProjectSelectorRow.vue'
 import WorktreeSelectorRows from '../components/project/WorktreeSelectorRows.vue'
+import WorktreePickerRows from '../components/project/WorktreePickerRows.vue'
 import WorktreeBadge from '../components/project/WorktreeBadge.vue'
 import ProjectDetailPanel from '../components/project/ProjectDetailPanel.vue'
 import SessionRenameDialog from '../components/session/detail/SessionRenameDialog.vue'
@@ -444,6 +445,34 @@ function visibleWorktreesOf(id) {
 watch(() => store.getProject(projectId.value)?.worktree_of, (parent) => {
     if (parent) expandedWorktrees.value.add(parent)
 }, { immediate: true })
+
+// --- Worktree entries in the "New session" project pickers ----------------
+// Same collapsible "Worktrees (N)" entry as the navigation selector above, but
+// for the two "New session" project pickers (the split-button dropdown in
+// single-project mode and the standalone dropdown in all-projects mode — only
+// one is rendered at a time, so they share one expansion set). Expansion is
+// ephemeral and starts collapsed: these pickers choose where to create a
+// session, so there is no "current" worktree to auto-expand.
+const newSessionExpandedWorktrees = ref(new Set())
+function isNewSessionWorktreesExpanded(id) {
+    return newSessionExpandedWorktrees.value.has(id)
+}
+function toggleNewSessionWorktrees(id) {
+    if (newSessionExpandedWorktrees.value.has(id)) {
+        newSessionExpandedWorktrees.value.delete(id)
+    } else {
+        newSessionExpandedWorktrees.value.add(id)
+    }
+}
+/**
+ * Worktrees of a project that can host a new session: same archived rule as the
+ * picker's parent projects, and stale worktrees excluded (their directory is
+ * gone — you cannot create a session there), mirroring `nonStaleProjects`.
+ */
+function pickableWorktreesOf(id) {
+    return store.getWorktreesOf(id).filter(p => (showArchivedProjects.value || !p.archived) && !p.stale)
+}
+
 const activeWsLabel = computed(() =>
     activeWorkspace.value ? `${activeWorkspace.value.name} projects` : null
 )
@@ -855,6 +884,12 @@ const manageWorkspacesDialogRef = ref(null)
 
 function handleNewSessionSelect(e) {
     const value = e.detail.item.value
+    if (value.startsWith('worktrees-toggle:')) {
+        // Expand/collapse a project's worktrees inline — keep the dropdown open.
+        toggleNewSessionWorktrees(value.slice('worktrees-toggle:'.length))
+        e.preventDefault()
+        return
+    }
     if (value === '__new_project__') {
         createProjectDialogRef.value?.open()
     } else {
@@ -1591,13 +1626,17 @@ function updateSidebarClosedClass(closed) {
                             <wa-divider></wa-divider>
                             <wa-dropdown-item v-if="activeWsLabel" disabled class="section-header-item"><wa-icon name="layer-group" auto-width :style="activeWorkspace?.color ? { color: activeWorkspace.color } : null"></wa-icon> {{ activeWsLabel }}</wa-dropdown-item>
                         </template>
-                        <wa-dropdown-item
-                            v-for="p in splitNamedProjects.prioritized"
-                            :key="p.id"
-                            :value="p.id"
-                        >
-                            <ProjectBadge :project-id="p.id" />
-                        </wa-dropdown-item>
+                        <template v-for="p in splitNamedProjects.prioritized" :key="p.id">
+                            <wa-dropdown-item :value="p.id">
+                                <ProjectBadge :project-id="p.id" />
+                            </wa-dropdown-item>
+                            <WorktreePickerRows
+                                :parent-id="p.id"
+                                :worktrees="pickableWorktreesOf(p.id)"
+                                :expanded="isNewSessionWorktreesExpanded(p.id)"
+                                :base-depth="0"
+                            />
+                        </template>
                         <template v-for="item in splitFlatTree.prioritized" :key="'wsp-' + item.key">
                             <wa-dropdown-item
                                 v-if="item.isFolder"
@@ -1608,14 +1647,19 @@ function updateSidebarClosedClass(closed) {
                                     {{ item.segment }}
                                 </span>
                             </wa-dropdown-item>
-                            <wa-dropdown-item
-                                v-else
-                                :value="item.project.id"
-                            >
-                                <span :style="{ paddingLeft: `${item.depth * 12}px` }">
-                                    <ProjectBadge :project-id="item.project.id" />
-                                </span>
-                            </wa-dropdown-item>
+                            <template v-else>
+                                <wa-dropdown-item :value="item.project.id">
+                                    <span :style="{ paddingLeft: `${item.depth * 12}px` }">
+                                        <ProjectBadge :project-id="item.project.id" />
+                                    </span>
+                                </wa-dropdown-item>
+                                <WorktreePickerRows
+                                    :parent-id="item.project.id"
+                                    :worktrees="pickableWorktreesOf(item.project.id)"
+                                    :expanded="isNewSessionWorktreesExpanded(item.project.id)"
+                                    :base-depth="item.depth"
+                                />
+                            </template>
                         </template>
 
                         <!-- Other projects -->
@@ -1624,13 +1668,17 @@ function updateSidebarClosedClass(closed) {
                             <wa-dropdown-item disabled class="section-header-item">Other projects</wa-dropdown-item>
                         </template>
                         <wa-divider v-else-if="splitNamedProjects.others.length"></wa-divider>
-                        <wa-dropdown-item
-                            v-for="p in splitNamedProjects.others"
-                            :key="p.id"
-                            :value="p.id"
-                        >
-                            <ProjectBadge :project-id="p.id" />
-                        </wa-dropdown-item>
+                        <template v-for="p in splitNamedProjects.others" :key="p.id">
+                            <wa-dropdown-item :value="p.id">
+                                <ProjectBadge :project-id="p.id" />
+                            </wa-dropdown-item>
+                            <WorktreePickerRows
+                                :parent-id="p.id"
+                                :worktrees="pickableWorktreesOf(p.id)"
+                                :expanded="isNewSessionWorktreesExpanded(p.id)"
+                                :base-depth="0"
+                            />
+                        </template>
 
                         <!-- Other unnamed projects (flattened tree) -->
                         <wa-divider v-if="splitFlatTree.others.length"></wa-divider>
@@ -1644,14 +1692,19 @@ function updateSidebarClosedClass(closed) {
                                     {{ item.segment }}
                                 </span>
                             </wa-dropdown-item>
-                            <wa-dropdown-item
-                                v-else
-                                :value="item.project.id"
-                            >
-                                <span :style="{ paddingLeft: `${item.depth * 12}px` }">
-                                    <ProjectBadge :project-id="item.project.id" />
-                                </span>
-                            </wa-dropdown-item>
+                            <template v-else>
+                                <wa-dropdown-item :value="item.project.id">
+                                    <span :style="{ paddingLeft: `${item.depth * 12}px` }">
+                                        <ProjectBadge :project-id="item.project.id" />
+                                    </span>
+                                </wa-dropdown-item>
+                                <WorktreePickerRows
+                                    :parent-id="item.project.id"
+                                    :worktrees="pickableWorktreesOf(item.project.id)"
+                                    :expanded="isNewSessionWorktreesExpanded(item.project.id)"
+                                    :base-depth="item.depth"
+                                />
+                            </template>
                         </template>
                     </wa-dropdown>
                 </wa-button-group>
@@ -1690,13 +1743,17 @@ function updateSidebarClosedClass(closed) {
                         <wa-divider></wa-divider>
                         <wa-dropdown-item v-if="activeWsLabel" disabled class="section-header-item"><wa-icon name="layer-group" auto-width :style="activeWorkspace?.color ? { color: activeWorkspace.color } : null"></wa-icon> {{ activeWsLabel }}</wa-dropdown-item>
                     </template>
-                    <wa-dropdown-item
-                        v-for="p in splitNamedProjects.prioritized"
-                        :key="p.id"
-                        :value="p.id"
-                    >
-                        <ProjectBadge :project-id="p.id" />
-                    </wa-dropdown-item>
+                    <template v-for="p in splitNamedProjects.prioritized" :key="p.id">
+                        <wa-dropdown-item :value="p.id">
+                            <ProjectBadge :project-id="p.id" />
+                        </wa-dropdown-item>
+                        <WorktreePickerRows
+                            :parent-id="p.id"
+                            :worktrees="pickableWorktreesOf(p.id)"
+                            :expanded="isNewSessionWorktreesExpanded(p.id)"
+                            :base-depth="0"
+                        />
+                    </template>
                     <template v-for="item in splitFlatTree.prioritized" :key="'wsp-' + item.key">
                         <wa-dropdown-item
                             v-if="item.isFolder"
@@ -1707,14 +1764,19 @@ function updateSidebarClosedClass(closed) {
                                 {{ item.segment }}
                             </span>
                         </wa-dropdown-item>
-                        <wa-dropdown-item
-                            v-else
-                            :value="item.project.id"
-                        >
-                            <span :style="{ paddingLeft: `${item.depth * 12}px` }">
-                                <ProjectBadge :project-id="item.project.id" />
-                            </span>
-                        </wa-dropdown-item>
+                        <template v-else>
+                            <wa-dropdown-item :value="item.project.id">
+                                <span :style="{ paddingLeft: `${item.depth * 12}px` }">
+                                    <ProjectBadge :project-id="item.project.id" />
+                                </span>
+                            </wa-dropdown-item>
+                            <WorktreePickerRows
+                                :parent-id="item.project.id"
+                                :worktrees="pickableWorktreesOf(item.project.id)"
+                                :expanded="isNewSessionWorktreesExpanded(item.project.id)"
+                                :base-depth="item.depth"
+                            />
+                        </template>
                     </template>
 
                     <!-- Other projects -->
@@ -1723,13 +1785,17 @@ function updateSidebarClosedClass(closed) {
                         <wa-dropdown-item disabled class="section-header-item">Other projects</wa-dropdown-item>
                     </template>
                     <wa-divider v-else-if="splitNamedProjects.others.length"></wa-divider>
-                    <wa-dropdown-item
-                        v-for="p in splitNamedProjects.others"
-                        :key="p.id"
-                        :value="p.id"
-                    >
-                        <ProjectBadge :project-id="p.id" />
-                    </wa-dropdown-item>
+                    <template v-for="p in splitNamedProjects.others" :key="p.id">
+                        <wa-dropdown-item :value="p.id">
+                            <ProjectBadge :project-id="p.id" />
+                        </wa-dropdown-item>
+                        <WorktreePickerRows
+                            :parent-id="p.id"
+                            :worktrees="pickableWorktreesOf(p.id)"
+                            :expanded="isNewSessionWorktreesExpanded(p.id)"
+                            :base-depth="0"
+                        />
+                    </template>
 
                     <!-- Other unnamed projects (flattened tree) -->
                     <wa-divider v-if="splitFlatTree.others.length"></wa-divider>
@@ -1743,14 +1809,19 @@ function updateSidebarClosedClass(closed) {
                                 {{ item.segment }}
                             </span>
                         </wa-dropdown-item>
-                        <wa-dropdown-item
-                            v-else
-                            :value="item.project.id"
-                        >
-                            <span :style="{ paddingLeft: `${item.depth * 12}px` }">
-                                <ProjectBadge :project-id="item.project.id" />
-                            </span>
-                        </wa-dropdown-item>
+                        <template v-else>
+                            <wa-dropdown-item :value="item.project.id">
+                                <span :style="{ paddingLeft: `${item.depth * 12}px` }">
+                                    <ProjectBadge :project-id="item.project.id" />
+                                </span>
+                            </wa-dropdown-item>
+                            <WorktreePickerRows
+                                :parent-id="item.project.id"
+                                :worktrees="pickableWorktreesOf(item.project.id)"
+                                :expanded="isNewSessionWorktreesExpanded(item.project.id)"
+                                :base-depth="item.depth"
+                            />
+                        </template>
                     </template>
                 </wa-dropdown>
                 <AppTooltip v-if="isAllProjectsMode" for="new-session-all-projects-button">Create a new session</AppTooltip>
