@@ -69,19 +69,32 @@ const nestedResults = computed(() => {
     const items = parentCommand.value.items()
     if (!query.value) {
         // Always produce escaped HTML for safe v-html rendering
-        return items.map((item) => ({ ...item, highlighted: escapeHtml(item.label) }))
+        return items.map((item) => ({
+            ...item,
+            highlighted: escapeHtml(item.label),
+            ...(item.path ? { pathHighlighted: escapeHtml(item.path) } : {}),
+        }))
     }
-    // Filter by fuzzy match
+    // Filter by fuzzy match against the label and, when the item carries one
+    // (project sub-items), its absolute path too. An item passes if either
+    // matches; the kept score is the better of the two.
     const results = []
     for (const item of items) {
-        const result = fuzzyMatch(query.value, item.label)
-        if (result.match) {
-            results.push({
-                ...item,
-                score: result.score,
-                highlighted: highlightMatches(item.label, result.ranges),
-            })
-        }
+        const labelResult = fuzzyMatch(query.value, item.label)
+        const pathResult = item.path ? fuzzyMatch(query.value, item.path) : null
+        if (!labelResult.match && !pathResult?.match) continue
+        results.push({
+            ...item,
+            score: Math.max(labelResult.score, pathResult?.score ?? 0),
+            highlighted: labelResult.match
+                ? highlightMatches(item.label, labelResult.ranges)
+                : escapeHtml(item.label),
+            ...(item.path ? {
+                pathHighlighted: pathResult?.match
+                    ? highlightMatches(item.path, pathResult.ranges)
+                    : escapeHtml(item.path),
+            } : {}),
+        })
     }
     results.sort((a, b) => b.score - a.score)
     return results
@@ -439,7 +452,12 @@ defineExpose({ open, close })
                                 <span v-else class="command-icon-spacer" />
                             </template>
 
-                            <span class="command-label" v-html="item.highlighted" />
+                            <!-- Project sub-item: name on top, absolute path below (muted). -->
+                            <span v-if="item.path" class="command-text-col">
+                                <span class="command-label" v-html="item.highlighted" />
+                                <span class="command-path" v-html="item.pathHighlighted" />
+                            </span>
+                            <span v-else class="command-label" v-html="item.highlighted" />
 
                             <!-- Session / workspace row: aggregated process state or unread flag on the right -->
                             <template v-if="item.session || item.workspace">
@@ -565,6 +583,32 @@ wa-divider {
     white-space: nowrap;
 }
 .command-label :deep(mark) {
+    background: transparent;
+    color: var(--wa-color-success-60);
+    font-weight: 600;
+    padding: 0;
+}
+/* Project sub-item: stack the name and its absolute path on two lines. The
+   column takes the label's flex slot; min-width:0 lets both lines ellipsize. */
+.command-text-col {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    overflow: hidden;
+}
+.command-text-col .command-label {
+    flex: 0 0 auto;
+}
+.command-path {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: var(--wa-font-size-2xs);
+    color: var(--wa-color-text-muted);
+}
+.command-path :deep(mark) {
     background: transparent;
     color: var(--wa-color-success-60);
     font-weight: 600;

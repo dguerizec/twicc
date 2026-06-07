@@ -305,11 +305,13 @@ export function initStaticCommands(router) {
     }
 
     /** Map a project to a palette sub-item carrying the colored dot metadata
-     *  (mirrors the session list dot). */
+     *  (mirrors the session list dot) plus the absolute directory path, shown
+     *  under the name and included in the palette's fuzzy search. */
     function toProjectItem(p, action) {
         return {
             id: p.id,
             label: data.getProjectDisplayName(p.id),
+            path: p.directory ?? null,
             action,
             project: { color: p.color ?? null },
         }
