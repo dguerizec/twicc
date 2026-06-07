@@ -133,11 +133,13 @@ router.beforeEach(async (to, from) => {
     // Check if the destination has a projectId (works for both /project/:id and /projects/:id/session/:id routes)
     const targetProjectId = to.params?.projectId
     if (targetProjectId) {
-        // Any route with a projectId: keep workspace only if the project belongs to it
+        // Any route with a projectId: keep workspace only if the project belongs
+        // to it. A git worktree of a member counts as part of the workspace too
+        // (see workspaceContainsProject), so navigating into a worktree of a
+        // member keeps the workspace sticky.
         const { useWorkspacesStore } = await import('./stores/workspaces')
         const wsStore = useWorkspacesStore()
-        const ws = wsStore.getWorkspaceById(currentWs)
-        if (ws?.projectIds.includes(targetProjectId)) {
+        if (wsStore.workspaceContainsProject(currentWs, targetProjectId)) {
             return { ...to, query: { ...to.query, workspace: currentWs } }
         }
         // Project not in workspace → workspace dropped

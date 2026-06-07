@@ -746,8 +746,9 @@ function handleSelectorSelect(event) {
         if (activeWorkspaceId.value === wsId && sessionId.value) {
             router.push({ name: 'projects-all', query: { workspace: wsId } })
         } else if (sessionId.value && projectId.value) {
-            const ws = workspacesStore.getWorkspaceById(wsId)
-            if (ws?.projectIds.includes(projectId.value)) {
+            // A worktree of a member counts as part of the workspace, so keep
+            // the user on the current session when its project belongs to it.
+            if (workspacesStore.workspaceContainsProject(wsId, projectId.value)) {
                 router.push({ name: 'projects-session', params: { projectId: projectId.value, sessionId: sessionId.value }, query: { workspace: wsId } })
             } else {
                 router.push({ name: 'projects-all', query: { workspace: wsId } })

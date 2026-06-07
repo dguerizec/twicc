@@ -104,6 +104,30 @@ export const useWorkspacesStore = defineStore('workspaces', {
         getWorkspacesForProject: (state) => (projectId) =>
             state.workspaces.filter(ws => !ws.archived && ws.projectIds.includes(projectId)),
 
+        /**
+         * Whether a workspace contains a project, treating a member's git
+         * worktrees as belonging to the workspace too: a worktree is "in" the
+         * workspace when its main repository (`worktree_of`) is a member, even
+         * if the worktree itself was never added to `projectIds`. This is the
+         * single membership test used for workspace stickiness (router guard)
+         * and for surfacing `workspace`-pinned sessions in the sidebar.
+         *
+         * Both the project id and its main-repo id are checked, so a worktree
+         * that *was* explicitly added to the workspace still matches. Unknown
+         * projects degrade to the plain explicit-membership check (since
+         * `getMainRepoProjectId` returns the id unchanged). Archived state is
+         * intentionally ignored — membership does not depend on it.
+         */
+        workspaceContainsProject() {
+            return (workspaceId, projectId) => {
+                const ws = this.getWorkspaceById(workspaceId)
+                if (!ws || !projectId) return false
+                if (ws.projectIds.includes(projectId)) return true
+                const mainRepoId = useDataStore().getMainRepoProjectId(projectId)
+                return mainRepoId !== projectId && ws.projectIds.includes(mainRepoId)
+            }
+        },
+
         /** Whether any archived workspace exists (to show/hide the toggle). */
         hasArchivedWorkspaces: (state) => state.workspaces.some(w => w.archived),
     },

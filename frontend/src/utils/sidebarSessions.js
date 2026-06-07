@@ -115,7 +115,8 @@ export function computeSidebarSessionBlocks({
         if (naturalIds.has(s.id)) return false
         if (s.pinned === 'all') return true
         if (s.pinned === 'workspace' && activeWs) {
-            return activeWs.projectIds.includes(s.project_id)
+            // A worktree of a member counts as part of the workspace too.
+            return workspaces.workspaceContainsProject(activeWorkspaceId, s.project_id)
         }
         return false
     })
