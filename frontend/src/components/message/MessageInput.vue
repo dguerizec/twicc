@@ -1291,18 +1291,26 @@ const placeholderContext = computed(() => {
     return { session: s, project, projectName }
 })
 
-/** Workspace IDs for snippet display: active workspace, or all workspaces containing this project. */
+/**
+ * Project id used to SELECT which snippet lists to show: in a worktree session
+ * we borrow the main repository's workspaces and project-scoped snippets (a
+ * worktree has none of its own). Placeholders are still resolved against the
+ * real session project (see `placeholderContext`), not this one.
+ */
+const snippetListProjectId = computed(() => store.getMainRepoProjectId(props.projectId))
+
+/** Workspace IDs for snippet display: active workspace, or all workspaces containing the (main repo) project. */
 const snippetWorkspaceIds = computed(() => {
     const wsId = route.query.workspace
     if (wsId) return [wsId]
-    if (!props.projectId) return []
+    if (!snippetListProjectId.value) return []
     const workspacesStore = useWorkspacesStore()
-    return workspacesStore.getWorkspacesForProject(props.projectId).map(ws => ws.id)
+    return workspacesStore.getWorkspacesForProject(snippetListProjectId.value).map(ws => ws.id)
 })
 
 /** Snippets for this project, enriched with _disabled / _disabledReason for unresolvable placeholders. */
 const snippetsForProject = computed(() => {
-    const raw = props.projectId ? messageSnippetsStore.getSnippetsForProject(props.projectId, snippetWorkspaceIds.value) : []
+    const raw = snippetListProjectId.value ? messageSnippetsStore.getSnippetsForProject(snippetListProjectId.value, snippetWorkspaceIds.value) : []
     const ctx = placeholderContext.value
 
     return raw.map(snippet => {
@@ -1450,7 +1458,7 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
         <Teleport to="body">
             <MessageSnippetsDialog
                 ref="messageSnippetsDialogRef"
-                :current-project-id="projectId"
+                :current-project-id="snippetListProjectId"
             />
         </Teleport>
 

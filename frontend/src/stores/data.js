@@ -478,6 +478,14 @@ export const useDataStore = defineStore('data', {
             return ids
         },
         getProject: (state) => (id) => state.projects[id],
+        // Resolve a project id to its main repository's project id: if the
+        // project is a git worktree (`worktree_of` set), return the parent's id,
+        // else the id itself. Used to display snippet/preset lists based on the
+        // main repo while in a worktree session — a worktree has no workspaces or
+        // project-scoped snippets of its own, so it borrows the main
+        // repository's. Falls back to the id as-is when the project is unknown.
+        getMainRepoProjectId: (state) => (projectId) =>
+            (projectId && state.projects[projectId]?.worktree_of) || projectId,
         getProjectSessions: (state) => (projectId) => {
             const projectState = state.localState.projects[projectId]
             // Only apply the mtime lower-bound when there are more pages to load.

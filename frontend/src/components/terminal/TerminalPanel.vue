@@ -56,6 +56,11 @@ const insertTextAtCursor = inject('insertTextAtCursor', null)
 
 const session = computed(() => props.sessionId ? dataStore.getSession(props.sessionId) : null)
 const resolvedProjectId = computed(() => props.projectId || session.value?.project_id)
+// Project id used to SELECT which snippet lists to show: in a worktree session
+// we borrow the main repository's workspaces and project-scoped snippets (a
+// worktree has none of its own). Placeholders are still resolved against the
+// real terminal project (see `buildPlaceholderContext`), not this one.
+const snippetListProjectId = computed(() => dataStore.getMainRepoProjectId(resolvedProjectId.value))
 
 // Build a placeholder resolution context for a given snippet.
 // For snippets scoped to a project (scope "project:<id>"), use THAT project's data
@@ -63,9 +68,14 @@ const resolvedProjectId = computed(() => props.projectId || session.value?.proje
 // from multiple projects. Session is always from props (null for non-session terminals).
 function buildPlaceholderContext(snippet) {
     const s = session.value
-    // Extract project from snippet scope (e.g. "project:abc" → "abc")
+    // Project used to resolve {project-*} placeholders:
+    // - Session/project terminal: always the terminal's own project (e.g. the
+    //   worktree itself), even though the displayed snippets may be borrowed
+    //   from the main repository's scope.
+    // - Workspace/global terminal (no single project): each project-scoped
+    //   snippet resolves against its own scope project.
     let pid = resolvedProjectId.value
-    if (snippet?._scope?.startsWith('project:')) {
+    if (!pid && snippet?._scope?.startsWith('project:')) {
         pid = snippet._scope.slice('project:'.length)
     }
     const project = pid ? dataStore.getProject(pid) : null
@@ -88,7 +98,7 @@ const snippetWorkspaceIds = computed(() => {
     if (props.contextKey.startsWith('w:')) {
         return [props.contextKey.slice(2)]
     }
-    const pid = resolvedProjectId.value
+    const pid = snippetListProjectId.value
     if (!pid) return []
     return workspacesStore.getWorkspacesForProject(pid).map(ws => ws.id)
 })
@@ -98,8 +108,9 @@ const snippetWorkspaceIds = computed(() => {
 const snippetsForProject = computed(() => {
     let raw
     if (resolvedProjectId.value) {
-        // Session or project terminal: snippets for that project
-        raw = terminalConfigStore.getSnippetsForProject(resolvedProjectId.value, snippetWorkspaceIds.value)
+        // Session or project terminal: snippets for that project (the main repo
+        // when the terminal's project is a git worktree).
+        raw = terminalConfigStore.getSnippetsForProject(snippetListProjectId.value, snippetWorkspaceIds.value)
     } else if (props.contextKey.startsWith('w:')) {
         // Workspace terminal: merge snippets from all projects in the workspace
         const wsId = props.contextKey.slice(2)
@@ -981,7 +992,7 @@ defineExpose({ activeIndex })
         <TerminalCombosDialog ref="manageCombosDialogRef" />
         <TerminalSnippetsDialog
             ref="manageSnippetsDialogRef"
-            :current-project-id="resolvedProjectId"
+            :current-project-id="snippetListProjectId"
         />
         <TerminalSnippetSendDialog
             ref="snippetSendDialogRef"
