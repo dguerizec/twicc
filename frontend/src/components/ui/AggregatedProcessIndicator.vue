@@ -16,6 +16,7 @@
  */
 import { computed, useId } from 'vue'
 import { useDataStore } from '../../stores/data'
+import { isSessionUnread } from '../../utils/sessions'
 import AppTooltip from './AppTooltip.vue'
 import ProcessIndicator from './ProcessIndicator.vue'
 
@@ -40,8 +41,24 @@ const props = defineProps({
 
 const dataStore = useDataStore()
 
-/** Set of project IDs for fast lookup. */
-const projectIdSet = computed(() => new Set(props.projectIds))
+/**
+ * Worktree-expanded set of project IDs for fast lookup. Every id passed in is
+ * expanded to its badge scope (the project plus its visible worktrees), so a
+ * project's badge aggregates its worktrees one level down — like a workspace
+ * aggregates its members. Expansion is idempotent (a worktree expands to
+ * itself; an already-listed worktree dedupes), so callers that pass an
+ * already-expanded workspace set stay correct. Aggregations below test
+ * membership against this Set, so a duplicate id never double-counts.
+ */
+const projectIdSet = computed(() => {
+    const set = new Set()
+    for (const id of props.projectIds) {
+        for (const scopeId of dataStore.getProjectIndicatorScopeIds(id)) {
+            set.add(scopeId)
+        }
+    }
+    return set
+})
 
 /** Aggregated process info: scans all process states for relevant projects. */
 const processInfo = computed(() => {
@@ -70,13 +87,7 @@ const unreadCount = computed(() => {
     let count = 0
     for (const session of Object.values(dataStore.sessions)) {
         if (!projectIdSet.value.has(session.project_id)) continue
-        if (session.draft || session.archived || session.parent_session_id) continue
-        if (!session.last_new_content_at) continue
-        if (session.last_viewed_at && session.last_new_content_at <= session.last_viewed_at) continue
-        // If process is running, only count when in user_turn
-        const processState = dataStore.processStates[session.id]
-        if (processState && processState.state !== 'user_turn') continue
-        count++
+        if (isSessionUnread(session, dataStore.processStates[session.id])) count++
     }
     return count
 })

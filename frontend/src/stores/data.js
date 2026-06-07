@@ -6,7 +6,7 @@ import { getPrefixSuffixBoundaries } from '../utils/contentVisibility'
 import { computeVisualItems, visualItemEqual, insertDaySeparators } from '../utils/visualItems'
 import { DISPLAY_LEVEL, DISPLAY_MODE, PROCESS_STATE, SYNTHETIC_ITEM } from '../constants'
 import { getProviderHelpers } from '../providers'
-import { getSessionCutoffMs } from '../utils/sessions'
+import { getSessionCutoffMs, isSessionUnread } from '../utils/sessions'
 import { useSettingsStore } from './settings'
 import {
     saveDraftMessage,
@@ -477,6 +477,28 @@ export const useDataStore = defineStore('data', {
             }
             return ids
         },
+        // Indicator/badge scope of a project: the project itself plus its
+        // *visible* git worktrees, respecting the "show archived projects"
+        // setting. Mirrors `getProjectScopeIds` but archived-aware — process /
+        // unread badges and unread counts reflect what the user can see, while
+        // `getProjectScopeIds` (archived-blind) drives session fetching and
+        // whole-project stats. This is the single definition of a project
+        // badge's scope: `AggregatedProcessIndicator` expands every project id
+        // it receives through it, so a project's badge aggregates its worktrees
+        // exactly like a workspace aggregates its members one level down.
+        // Returns [projectId] for the All-Projects / workspace pseudo-ids (they
+        // scope their own way), or [] when no project id is given.
+        getProjectIndicatorScopeIds: (state) => (projectId) => {
+            if (!projectId || projectId === ALL_PROJECTS_ID || isWorkspaceProjectId(projectId)) {
+                return projectId ? [projectId] : []
+            }
+            const showArchived = useSettingsStore().isShowArchivedProjects
+            const ids = [projectId]
+            for (const p of Object.values(state.projects)) {
+                if (p.worktree_of === projectId && (showArchived || !p.archived)) ids.push(p.id)
+            }
+            return ids
+        },
         getProject: (state) => (id) => state.projects[id],
         // Resolve a project id to its main repository's project id: if the
         // project is a git worktree (`worktree_of` set), return the parent's id,
@@ -581,28 +603,25 @@ export const useDataStore = defineStore('data', {
             state.processStates[sessionId]?.pending_requests || [],
 
         /**
-         * Count sessions with unread content in a project.
-         * A session is unread when last_new_content_at > last_viewed_at (or last_viewed_at is null).
-         * Only counts non-draft, non-archived, non-subagent sessions.
-         * If a process is running for the session, only counts when in user_turn.
+         * Count sessions with unread content for a project's badge — its own
+         * sessions plus those of its visible git worktrees (a project's badge
+         * aggregates its worktrees like a workspace aggregates its members).
+         * Uses the canonical `isSessionUnread` predicate. Membership is tested
+         * against the scope set, so a worktree counted once never double-counts.
          * @param {string} projectId - The project ID
          * @returns {number} The number of unread sessions
          */
-        getProjectUnreadCount: (state) => (projectId) => {
-            if (hasActiveStartupPhase(state.startupProgress)) return 0
-            let count = 0
-            for (const session of Object.values(state.sessions)) {
-                if (session.project_id !== projectId) continue
-                if (session.hidden) continue
-                if (session.draft || session.archived || session.parent_session_id) continue
-                if (!session.last_new_content_at) continue
-                if (session.last_viewed_at && session.last_new_content_at <= session.last_viewed_at) continue
-                // If process is running, only count when in user_turn
-                const processState = state.processStates[session.id]
-                if (processState && processState.state !== 'user_turn') continue
-                count++
+        getProjectUnreadCount() {
+            return (projectId) => {
+                if (hasActiveStartupPhase(this.startupProgress)) return 0
+                const scope = new Set(this.getProjectIndicatorScopeIds(projectId))
+                let count = 0
+                for (const session of Object.values(this.sessions)) {
+                    if (!scope.has(session.project_id)) continue
+                    if (isSessionUnread(session, this.processStates[session.id])) count++
+                }
+                return count
             }
-            return count
         },
 
         /**
@@ -664,14 +683,7 @@ export const useDataStore = defineStore('data', {
             if (hasActiveStartupPhase(state.startupProgress)) return 0
             let count = 0
             for (const session of Object.values(state.sessions)) {
-                if (session.hidden) continue
-                if (session.draft || session.archived || session.parent_session_id) continue
-                if (!session.last_new_content_at) continue
-                if (session.last_viewed_at && session.last_new_content_at <= session.last_viewed_at) continue
-                // If process is running, only count when in user_turn
-                const processState = state.processStates[session.id]
-                if (processState && processState.state !== 'user_turn') continue
-                count++
+                if (isSessionUnread(session, state.processStates[session.id])) count++
             }
             return count
         },

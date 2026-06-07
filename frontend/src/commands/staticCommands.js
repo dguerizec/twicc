@@ -15,6 +15,7 @@ import { getRegisteredProviders, getProviderHelpers, getProviderOptions } from '
 import { useRoute } from 'vue-router'
 import { clearTabRouteParams } from '../utils/granularRoutes'
 import { computeSidebarSessionBlocks } from '../utils/sidebarSessions'
+import { isSessionUnread } from '../utils/sessions'
 import { toWorkspaceProjectId } from '../utils/workspaceIds'
 import {
     DISPLAY_MODE,
@@ -131,8 +132,13 @@ const PROCESS_STATE_PRIORITY = { starting: 3, assistant_turn: 2, user_turn: 1 }
  *     session of the workspace, or `null` when no session is running. The
  *     priority mirrors the sidebar's "what requires attention first"
  *     ordering: starting → assistant_turn → user_turn. `dead` is ignored.
- *   - `hasUnread`: true as soon as any session has content added after it
- *     was last viewed (or never viewed).
+ *   - `hasUnread`: true as soon as any session reads as unread per the shared
+ *     `isSessionUnread` predicate (content added after last view, excluding
+ *     drafts/archived/subagents/hidden, and not while the agent is working).
+ *
+ * Callers pass the workspace's *visible* scope — members plus their git
+ * worktrees, deduped (`getVisibleProjectIds`) — so the indicator aggregates a
+ * member's worktree sessions one level down, like every other badge surface.
  */
 function aggregateWorkspaceActivity(data, projectIds) {
     const projectSet = new Set(projectIds || [])
@@ -144,9 +150,7 @@ function aggregateWorkspaceActivity(data, projectIds) {
     const processStates = data.processStates
     for (const s of Object.values(data.sessions)) {
         if (!projectSet.has(s.project_id)) continue
-        if (s.parent_session_id) continue
-        if (s.draft) continue
-        if (s.archived) continue
+        if (s.parent_session_id || s.draft || s.archived) continue
         const ps = processStates[s.id]
         if (ps && ps.state && ps.state !== 'dead') {
             const priority = PROCESS_STATE_PRIORITY[ps.state] ?? -1
@@ -155,11 +159,7 @@ function aggregateWorkspaceActivity(data, projectIds) {
                 bestPriority = priority
             }
         }
-        if (!hasUnread
-            && s.last_new_content_at
-            && (!s.last_viewed_at || s.last_new_content_at > s.last_viewed_at)) {
-            hasUnread = true
-        }
+        if (!hasUnread && isSessionUnread(s, ps)) hasUnread = true
     }
     return {
         processState: bestState ? { state: bestState } : null,
@@ -377,7 +377,7 @@ export function initStaticCommands(router) {
             icon: 'layer-group',
             category: 'navigation',
             items: () => workspaces.getSelectableWorkspaces.map(ws => {
-                const { processState, hasUnread } = aggregateWorkspaceActivity(data, ws.projectIds)
+                const { processState, hasUnread } = aggregateWorkspaceActivity(data, workspaces.getVisibleProjectIds(ws.id))
                 return {
                     id: ws.id,
                     label: ws.name,

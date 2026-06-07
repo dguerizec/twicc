@@ -11,6 +11,7 @@
  */
 import { computed, useId } from 'vue'
 import { useCodeCommentsStore } from '../../stores/codeComments'
+import { useDataStore } from '../../stores/data'
 import AppTooltip from './AppTooltip.vue'
 
 const props = defineProps({
@@ -41,10 +42,29 @@ const props = defineProps({
 })
 
 const codeCommentsStore = useCodeCommentsStore()
+const dataStore = useDataStore()
+
+/**
+ * Worktree-expanded, deduped project ids: each id passed in is expanded to its
+ * badge scope (the project plus its visible worktrees) so a project's comment
+ * badge aggregates its worktrees one level down — consistent with the process
+ * indicator placed alongside it. The Set dedup is mandatory here (unlike the
+ * process indicator): `countByProjects` sums per-project counts, so the
+ * idempotent re-expansion of an already-expanded workspace set would otherwise
+ * double-count a worktree.
+ */
+const effectiveProjectIds = computed(() => {
+    if (!props.projectIds) return null
+    const set = new Set()
+    for (const id of props.projectIds) {
+        for (const scopeId of dataStore.getProjectIndicatorScopeIds(id)) set.add(scopeId)
+    }
+    return [...set]
+})
 
 const effectiveCount = computed(() => {
     if (props.count !== null) return props.count
-    if (props.projectIds) return codeCommentsStore.countByProjects(props.projectIds)
+    if (effectiveProjectIds.value) return codeCommentsStore.countByProjects(effectiveProjectIds.value)
     return 0
 })
 

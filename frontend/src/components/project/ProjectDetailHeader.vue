@@ -150,17 +150,12 @@ const weeklyActivity = computed(() => {
 
 // Project IDs for the live process / unread indicators. Unlike the stats above,
 // these track the *visible* scope (matching the session list): a workspace's
-// visible members + their worktrees, or a single project + its visible
-// worktrees.
+// visible members + their worktrees, or a single project (whose own visible
+// worktrees AggregatedProcessIndicator expands in, archived-aware).
 const indicatorProjectIds = computed(() => {
     if (isAllProjectsMode.value) return []
     if (isWorkspaceMode.value) return workspaceProjectIds.value
-    const showArchived = settingsStore.isShowArchivedProjects
-    const ids = [props.projectId]
-    for (const wt of store.getWorktreesOf(props.projectId)) {
-        if (showArchived || !wt.archived) ids.push(wt.id)
-    }
-    return ids
+    return [props.projectId]
 })
 
 // Compact mode state
