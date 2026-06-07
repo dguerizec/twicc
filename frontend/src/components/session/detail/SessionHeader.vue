@@ -9,6 +9,7 @@ import { getAgentDisplayLabel } from '../../../utils/agentLabel'
 import { stopSubagent } from '../../../composables/useWebSocket'
 import { stopSessionProcess } from '../../../composables/useStopSessionProcess'
 import ProjectBadge from '../../project/ProjectBadge.vue'
+import WorktreeBadge from '../../project/WorktreeBadge.vue'
 import ProcessIndicator from '../../ui/ProcessIndicator.vue'
 import CodeCommentsIndicator from '../../ui/CodeCommentsIndicator.vue'
 import ProcessDuration from '../../ui/ProcessDuration.vue'
@@ -52,6 +53,10 @@ const showCosts = computed(() => settingsStore.areCostsShown)
 
 // Session data from store
 const session = computed(() => store.getSession(props.sessionId))
+// Whether the session's project is a git worktree of another project — drives
+// the worktree-style title badge (parent name + branch icon + worktree folder),
+// matching the project home header.
+const isProjectWorktree = computed(() => !!store.getProject(session.value?.project_id)?.worktree_of)
 const providerLabel = computed(() => getProviderLabel(session.value?.provider))
 const providerIcon = computed(() => getProviderIcon(session.value?.provider))
 
@@ -471,7 +476,8 @@ defineExpose({
                 <AppTooltip :for="`session-header-${sessionId}-title`">{{ displayName }}</AppTooltip>
 
                 <router-link v-if="session.project_id" :to="{ name: 'project', params: { projectId: session.project_id } }" class="session-project" @click.stop>
-                    <ProjectBadge :project-id="session.project_id" />
+                    <WorktreeBadge v-if="isProjectWorktree" :project-id="session.project_id" />
+                    <ProjectBadge v-else :project-id="session.project_id" />
                 </router-link>
 
                 <!-- Context usage ring duplicate for compact mode (visible only on small viewports when not expanded) -->
