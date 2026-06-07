@@ -64,6 +64,9 @@ function labelFor(wt) {
                 <span class="selector-item-indicators">
                     <AggregatedProcessIndicator :project-ids="worktreeIds" size="small" />
                 </span>
+                <!-- This row carries no "…" menu, but reserves the same width so
+                     its indicators stay aligned with the project/workspace rows. -->
+                <span class="row-menu-placeholder" aria-hidden="true"></span>
             </span>
         </wa-dropdown-item>
         <template v-if="expanded">
@@ -106,5 +109,12 @@ function labelFor(wt) {
 
 .worktrees-toggle-caret {
     font-size: var(--wa-font-size-xs);
+}
+
+/* Reserves the exact width of a row's "…" actions button so the "Worktrees (N)"
+   header — which has no menu — keeps its indicators aligned with the other rows. */
+.row-menu-placeholder {
+    flex-shrink: 0;
+    width: var(--selector-row-action-size, 1.5rem);
 }
 </style>

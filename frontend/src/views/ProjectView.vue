@@ -882,6 +882,77 @@ const createProjectDialogRef = ref(null)
 // Workspace management dialog
 const manageWorkspacesDialogRef = ref(null)
 
+// ----- Project selector per-row "…" action menus -----
+// Each project / workspace row in the selector carries a nested wa-dropdown
+// (its actions menu). Web Awesome auto-closes sibling dropdowns when a new one
+// opens, which would also tear down the selector itself. We keep a count of how
+// many row menus are currently open (their wa-show / wa-after-hide bubble up to
+// the selector) and veto the selector's own wa-hide while any is open.
+const selectorEl = ref(null)
+const openSelectorRowMenus = ref(0)
+// Edit dialog dedicated to the sidebar selector (distinct from the create one).
+const sidebarProjectEditRef = ref(null)
+const sidebarEditingProject = ref(null)
+
+function onSelectorRowMenuShow(event) {
+    // A child (row) dropdown opened — not the selector itself.
+    if (event.target !== selectorEl.value) openSelectorRowMenus.value++
+}
+
+function onSelectorRowMenuAfterHide(event) {
+    if (event.target === selectorEl.value) {
+        // The selector itself fully closed: reset the guard.
+        openSelectorRowMenus.value = 0
+    } else {
+        openSelectorRowMenus.value = Math.max(0, openSelectorRowMenus.value - 1)
+    }
+}
+
+function onSelectorHide(event) {
+    // Veto only the selector's own close, and only while a row menu is open.
+    // A child menu's wa-hide (different target) must pass through untouched.
+    if (event.target === selectorEl.value && openSelectorRowMenus.value > 0) {
+        event.preventDefault()
+    }
+}
+
+// Force the selector closed (used right before opening a dialog over it).
+function closeSelector() {
+    openSelectorRowMenus.value = 0
+    if (selectorEl.value) selectorEl.value.open = false
+}
+
+// Provided to ProjectSelectorRow (named / tree / worktree rows) so they can open
+// the shared edit dialog from their "…" menu without per-level event forwarding.
+function openProjectEditDialog(projectId) {
+    sidebarEditingProject.value = store.getProject(projectId)
+    closeSelector()
+    sidebarProjectEditRef.value?.open()
+}
+provide('openProjectEditDialog', openProjectEditDialog)
+
+// Provided to ProjectSelectorRow so a row's "…" menu can spin up a draft session
+// directly in that project — same action as the bottom "New session" button.
+// Only offered for non-stale projects (the row hides the entry otherwise).
+function createSessionInProject(projectId) {
+    closeSelector()
+    handleNewSession(projectId)
+}
+provide('createSessionInProject', createSessionInProject)
+
+// Workspace row "…" menu actions (workspace rows are inline in this template).
+function onWorkspaceRowMenuSelect(event, ws) {
+    const value = event.detail?.item?.value
+    if (value === 'edit') {
+        closeSelector()
+        manageWorkspacesDialogRef.value?.openForWorkspace(ws.id)
+    } else if (value === 'archive') {
+        workspacesStore.updateWorkspace(ws.id, { archived: true })
+    } else if (value === 'unarchive') {
+        workspacesStore.updateWorkspace(ws.id, { archived: false })
+    }
+}
+
 function handleNewSessionSelect(e) {
     const value = e.detail.item.value
     if (value.startsWith('worktrees-toggle:')) {
@@ -1271,9 +1342,13 @@ function updateSidebarClosedClass(closed) {
                     </wa-button>
                     <AppTooltip for="back-button">Back to projects list</AppTooltip>
                     <wa-dropdown
+                        ref="selectorEl"
                         id="project-selector"
                         class="project-selector"
                         @wa-select="handleSelectorSelect"
+                        @wa-show="onSelectorRowMenuShow"
+                        @wa-hide="onSelectorHide"
+                        @wa-after-hide="onSelectorRowMenuAfterHide"
                     >
                         <wa-button
                             slot="trigger"
@@ -1315,6 +1390,25 @@ function updateSidebarClosedClass(closed) {
                                         <span class="selector-item-indicators">
                                             <CodeCommentsIndicator :project-ids="workspacesStore.getVisibleProjectIds(ws.id)" />
                                             <AggregatedProcessIndicator :project-ids="workspacesStore.getVisibleProjectIds(ws.id)" size="small" />
+                                        </span>
+                                        <span class="row-menu" @click.stop>
+                                            <wa-dropdown placement="bottom-end" @wa-select.stop="onWorkspaceRowMenuSelect($event, ws)">
+                                                <wa-button slot="trigger" appearance="plain" size="small" class="row-menu-trigger">
+                                                    <wa-icon name="ellipsis" label="Workspace actions"></wa-icon>
+                                                </wa-button>
+                                                <wa-dropdown-item value="edit">
+                                                    <wa-icon slot="icon" name="pencil"></wa-icon>
+                                                    Edit
+                                                </wa-dropdown-item>
+                                                <wa-dropdown-item v-if="!ws.archived" value="archive">
+                                                    <wa-icon slot="icon" name="box-archive"></wa-icon>
+                                                    Archive
+                                                </wa-dropdown-item>
+                                                <wa-dropdown-item v-else value="unarchive">
+                                                    <wa-icon slot="icon" name="box-open"></wa-icon>
+                                                    Unarchive
+                                                </wa-dropdown-item>
+                                            </wa-dropdown>
                                         </span>
                                     </span>
                                 </wa-dropdown-item>
@@ -1388,6 +1482,25 @@ function updateSidebarClosedClass(closed) {
                                     <span class="selector-item-indicators">
                                         <CodeCommentsIndicator :project-ids="workspacesStore.getVisibleProjectIds(ws.id)" />
                                         <AggregatedProcessIndicator :project-ids="workspacesStore.getVisibleProjectIds(ws.id)" size="small" />
+                                    </span>
+                                    <span class="row-menu" @click.stop>
+                                        <wa-dropdown placement="bottom-end" @wa-select.stop="onWorkspaceRowMenuSelect($event, ws)">
+                                            <wa-button slot="trigger" appearance="plain" size="small" class="row-menu-trigger">
+                                                <wa-icon name="ellipsis" label="Workspace actions"></wa-icon>
+                                            </wa-button>
+                                            <wa-dropdown-item value="edit">
+                                                <wa-icon slot="icon" name="pencil"></wa-icon>
+                                                Edit
+                                            </wa-dropdown-item>
+                                            <wa-dropdown-item v-if="!ws.archived" value="archive">
+                                                <wa-icon slot="icon" name="box-archive"></wa-icon>
+                                                Archive
+                                            </wa-dropdown-item>
+                                            <wa-dropdown-item v-else value="unarchive">
+                                                <wa-icon slot="icon" name="box-open"></wa-icon>
+                                                Unarchive
+                                            </wa-dropdown-item>
+                                        </wa-dropdown>
                                     </span>
                                 </span>
                             </wa-dropdown-item>
@@ -2045,6 +2158,9 @@ function updateSidebarClosedClass(closed) {
     <!-- Create project dialog (opened from "New session" dropdown) -->
     <ProjectEditDialog ref="createProjectDialogRef" @saved="handleProjectCreated" />
 
+    <!-- Edit project dialog (opened from a selector row's "…" menu) -->
+    <ProjectEditDialog ref="sidebarProjectEditRef" :project="sidebarEditingProject" />
+
     <!-- Usage graph dialog -->
     <UsageGraphDialog ref="usageGraphDialogRef" :provider="currentUsageProvider" />
 
@@ -2164,6 +2280,11 @@ wa-split-panel::part(divider) {
 }
 
 .project-selector {
+    /* Square size reserved for each row's "…" actions button. Inherited by the
+       row components (ProjectSelectorRow, WorktreeSelectorRows) so the menu and
+       the worktree-header spacer all reserve the exact same width and keep every
+       row's indicators aligned. */
+    --selector-row-action-size: 1.5rem;
     flex: 1;
     overflow: hidden;
     display: inline-flex;
@@ -2251,6 +2372,34 @@ wa-split-panel::part(divider) {
     gap: var(--wa-space-2xs);
     margin-left: auto;
     flex-shrink: 0;
+}
+
+/* Per-row "…" actions menu on workspace rows. Always visible (discreet), and
+   occupying a fixed square so every row's indicators stay aligned. */
+.row-menu {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: var(--selector-row-action-size, 1.5rem);
+}
+
+.row-menu-trigger {
+    opacity: 0.55;
+    font-size: var(--wa-font-size-s);
+    transition: opacity 0.12s ease;
+}
+
+.row-menu-trigger::part(base) {
+    padding: 0;
+    min-height: 0;
+    width: var(--selector-row-action-size, 1.5rem);
+    height: var(--selector-row-action-size, 1.5rem);
+}
+
+wa-dropdown-item:hover .row-menu-trigger,
+.row-menu:focus-within .row-menu-trigger {
+    opacity: 1;
 }
 
 .tree-folder-dropdown-item {
