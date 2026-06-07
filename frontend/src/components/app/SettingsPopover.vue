@@ -2067,7 +2067,14 @@ wa-popover > wa-divider {
     }
 }
 
-@container sidebar (width <= 13rem) {
+/* Sidebar footer fits, in order of decreasing width:
+   1. toggle + command palette + full Settings (with the "Settings" label)
+   2. toggle + command palette + Settings compacted to its gear icon  (here)
+   3. toggle + Settings (the palette button drops out — see CommandPaletteButton)
+   So this "compact Settings" threshold must stay ABOVE the palette button's
+   own hide threshold; tune both together. (Only applies inside the `sidebar`
+   container, i.e. the footer — not the home screen's fixed Settings button.) */
+@container sidebar (width <= 15rem) {
     #settings-trigger {
         &::part(base) {
             padding: var(--wa-space-s);

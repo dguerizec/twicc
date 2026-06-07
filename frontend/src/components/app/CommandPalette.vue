@@ -357,11 +357,18 @@ defineExpose({ open, close })
         <div class="command-palette">
             <!-- Header with search -->
             <div class="palette-header">
-                <span v-if="parentCommand" class="breadcrumb">
+                <button
+                    v-if="parentCommand"
+                    type="button"
+                    class="breadcrumb breadcrumb-back"
+                    @click="goBack"
+                    aria-label="Back to previous level"
+                >
+                    <wa-icon name="chevron-left" class="breadcrumb-back-icon" />
                     <wa-icon :name="parentCommand.icon" />
                     <span>{{ parentCommand.label }}</span>
                     <wa-icon name="chevron-right" />
-                </span>
+                </button>
                 <input
                     ref="searchInputRef"
                     type="text"
@@ -547,6 +554,31 @@ wa-dialog::part(overlay) {
     color: var(--wa-color-text-muted);
     font-size: var(--wa-font-size-s);
     white-space: nowrap;
+}
+
+/* The breadcrumb doubles as a clickable/tappable "back" control: clicking
+   anywhere on it returns to the previous level (mirrors Esc / ← / Backspace),
+   so navigating back no longer requires the keyboard. */
+.breadcrumb-back {
+    border: none;
+    background: transparent;
+    font: inherit;
+    font-size: var(--wa-font-size-s);
+    cursor: pointer;
+    padding: var(--wa-space-2xs) var(--wa-space-xs);
+    margin-inline-start: calc(-1 * var(--wa-space-xs));
+    border-radius: var(--wa-border-radius-s);
+    transition: background-color 0.1s ease, color 0.1s ease;
+}
+.breadcrumb-back:hover {
+    background: var(--wa-color-surface-lowered);
+    color: var(--wa-color-text-normal);
+}
+.breadcrumb-back:active {
+    background: var(--wa-color-surface-border);
+}
+.breadcrumb-back-icon {
+    color: var(--wa-color-text-normal);
 }
 
 wa-divider {
