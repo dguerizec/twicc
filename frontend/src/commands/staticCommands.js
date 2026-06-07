@@ -16,6 +16,7 @@ import { useRoute } from 'vue-router'
 import { clearTabRouteParams } from '../utils/granularRoutes'
 import { computeSidebarSessionBlocks } from '../utils/sidebarSessions'
 import { isSessionUnread } from '../utils/sessions'
+import { worktreeLabel } from '../utils/worktree'
 import { toWorkspaceProjectId } from '../utils/workspaceIds'
 import {
     DISPLAY_MODE,
@@ -298,10 +299,11 @@ export function initStaticCommands(router) {
         return PROJECT_DETAIL_ROUTES.has(route.name)
     }
 
-    /** Projects for palette pickers: worktrees are excluded (getListableProjects);
-     *  filter out archived too unless the "show archived projects" setting is enabled. */
-    function pickerProjects() {
-        return data.getListableProjects.filter(p => settings.isShowArchivedProjects || !p.archived)
+    /** Projects + worktrees for palette pickers, mixed and sorted by mtime desc
+     *  (getProjects is the raw list, worktrees included). Archived entries are
+     *  dropped unless the "show archived projects" setting is enabled. */
+    function pickerEntries() {
+        return data.getProjects.filter(p => settings.isShowArchivedProjects || !p.archived)
     }
 
     /** Map a project to a palette sub-item carrying the colored dot metadata
@@ -315,6 +317,29 @@ export function initStaticCommands(router) {
             action,
             project: { color: p.color ?? null },
         }
+    }
+
+    /** Map a git worktree to a palette sub-item. Mirrors WorktreeBadge: the dot
+     *  uses the worktree's own color falling back to the parent's; the label is
+     *  the worktree's own name or its final directory segment; `worktree.parentName`
+     *  is rendered as a prefix (parent name + code-branch icon) and is searchable
+     *  alongside the label and the path. */
+    function toWorktreeItem(wt, action) {
+        const parent = wt.worktree_of ? data.getProject(wt.worktree_of) : null
+        return {
+            id: wt.id,
+            label: worktreeLabel(wt) || data.getProjectDisplayName(wt.id),
+            path: wt.directory ?? null,
+            action,
+            project: { color: wt.color ?? parent?.color ?? null },
+            worktree: { parentName: parent ? data.getProjectDisplayName(parent.id) : '' },
+        }
+    }
+
+    /** Dispatch a picker entry to the right item mapper based on whether it is a
+     *  worktree. The action closure is supplied by each command. */
+    function toPickerItem(p, action) {
+        return p.worktree_of ? toWorktreeItem(p, action) : toProjectItem(p, action)
     }
 
     // ── Display mode labels ───────────────────────────────────────────────
@@ -352,7 +377,7 @@ export function initStaticCommands(router) {
             label: 'Go to Project\u2026',
             icon: 'folder',
             category: 'navigation',
-            items: () => pickerProjects().map(p => toProjectItem(p,
+            items: () => pickerEntries().map(p => toPickerItem(p,
                 () => router.push({ name: 'project', params: { projectId: p.id } })
             )),
         },
@@ -576,7 +601,7 @@ export function initStaticCommands(router) {
             label: 'New Session in\u2026',
             icon: 'square-plus',
             category: 'creation',
-            items: () => pickerProjects().map(p => toProjectItem(p, () => {
+            items: () => pickerEntries().map(p => toPickerItem(p, () => {
                 const sessionId = data.createDraftSession(p.id)
                 // Preserve the current sidebar filter: the draft lives in
                 // project p.id (data), but we keep the URL's projectId on

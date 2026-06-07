@@ -73,19 +73,24 @@ const nestedResults = computed(() => {
             ...item,
             highlighted: escapeHtml(item.label),
             ...(item.path ? { pathHighlighted: escapeHtml(item.path) } : {}),
+            ...(item.worktree ? {
+                worktree: { ...item.worktree, parentHighlighted: escapeHtml(item.worktree.parentName) },
+            } : {}),
         }))
     }
-    // Filter by fuzzy match against the label and, when the item carries one
-    // (project sub-items), its absolute path too. An item passes if either
-    // matches; the kept score is the better of the two.
+    // Filter by fuzzy match against the label and, when present, the item's
+    // absolute path and (for worktree sub-items) its parent project name. An
+    // item passes if any of them matches; the kept score is the best of them.
     const results = []
     for (const item of items) {
+        const parentName = item.worktree?.parentName || ''
         const labelResult = fuzzyMatch(query.value, item.label)
         const pathResult = item.path ? fuzzyMatch(query.value, item.path) : null
-        if (!labelResult.match && !pathResult?.match) continue
+        const parentResult = parentName ? fuzzyMatch(query.value, parentName) : null
+        if (!labelResult.match && !pathResult?.match && !parentResult?.match) continue
         results.push({
             ...item,
-            score: Math.max(labelResult.score, pathResult?.score ?? 0),
+            score: Math.max(labelResult.score, pathResult?.score ?? 0, parentResult?.score ?? 0),
             highlighted: labelResult.match
                 ? highlightMatches(item.label, labelResult.ranges)
                 : escapeHtml(item.label),
@@ -93,6 +98,14 @@ const nestedResults = computed(() => {
                 pathHighlighted: pathResult?.match
                     ? highlightMatches(item.path, pathResult.ranges)
                     : escapeHtml(item.path),
+            } : {}),
+            ...(item.worktree ? {
+                worktree: {
+                    ...item.worktree,
+                    parentHighlighted: parentResult?.match
+                        ? highlightMatches(parentName, parentResult.ranges)
+                        : escapeHtml(parentName),
+                },
             } : {}),
         })
     }
@@ -452,10 +465,19 @@ defineExpose({ open, close })
                                 <span v-else class="command-icon-spacer" />
                             </template>
 
-                            <!-- Project sub-item: name on top, absolute path below (muted). -->
-                            <span v-if="item.path" class="command-text-col">
-                                <span class="command-label" v-html="item.highlighted" />
-                                <span class="command-path" v-html="item.pathHighlighted" />
+                            <!-- Project / worktree sub-item: name on top (a worktree
+                                 prefixes it with its parent name + a code-branch
+                                 icon), absolute path below (muted). -->
+                            <span v-if="item.path || item.worktree" class="command-text-col">
+                                <span v-if="item.worktree" class="command-label command-wt-line">
+                                    <template v-if="item.worktree.parentName">
+                                        <span class="command-wt-parent" v-html="item.worktree.parentHighlighted"></span>
+                                        <wa-icon name="code-branch" auto-width class="command-wt-sep"></wa-icon>
+                                    </template>
+                                    <span class="command-wt-folder" v-html="item.highlighted"></span>
+                                </span>
+                                <span v-else class="command-label" v-html="item.highlighted" />
+                                <span v-if="item.path" class="command-path" v-html="item.pathHighlighted" />
                             </span>
                             <span v-else class="command-label" v-html="item.highlighted" />
 
@@ -613,6 +635,30 @@ wa-divider {
     color: var(--wa-color-success-60);
     font-weight: 600;
     padding: 0;
+}
+/* Worktree sub-item first line: [parent] [code-branch] [folder], mirroring
+   WorktreeBadge. It stands in for the plain label, so it keeps .command-label
+   (for mark styling); flex lets the parent and folder names ellipsize while the
+   separator icon stays fixed. */
+.command-wt-line {
+    display: flex;
+    align-items: center;
+    gap: var(--wa-space-2xs);
+    min-width: 0;
+    overflow: visible;
+    white-space: normal;
+}
+.command-wt-parent,
+.command-wt-folder {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+}
+.command-wt-sep {
+    flex-shrink: 0;
+    color: var(--wa-color-text-quiet);
+    font-size: 0.85em;
 }
 .command-chevron,
 .command-toggle {
