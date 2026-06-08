@@ -849,6 +849,7 @@ const SESSION_COMMAND_IDS = [
     'session.thinking',
     'session.context',
     'session.chrome',
+    'session.fast-mode',
 ]
 
 function registerSessionCommands() {
