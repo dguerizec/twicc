@@ -104,6 +104,19 @@ const availableCommands = computed(() => {
 })
 
 /**
+ * Lookup map: category key -> display label, following CATEGORIES.
+ * Used to annotate flat search results with their group label (the
+ * category headers shown in root mode are absent in search mode).
+ */
+const categoryLabelByKey = computed(() => {
+    const map = new Map()
+    for (const category of CATEGORIES.value) {
+        map.set(category.key, category.label)
+    }
+    return map
+})
+
+/**
  * Available commands grouped by category, following CATEGORIES display order.
  * Empty categories are omitted.
  */
@@ -218,6 +231,7 @@ export function useCommandRegistry() {
         // Computed
         availableCommands,
         commandsByCategory,
+        categoryLabelByKey,
 
         // Methods
         registerCommand,

@@ -20,7 +20,7 @@ import { useCommandRegistry } from '../../composables/useCommandRegistry'
 import { fuzzyMatch } from '../../utils/fuzzyMatch'
 import ProcessIndicator from '../ui/ProcessIndicator.vue'
 
-const { isOpen, availableCommands, commandsByCategory, openPalette, closePalette } = useCommandRegistry()
+const { isOpen, availableCommands, commandsByCategory, categoryLabelByKey, openPalette, closePalette } = useCommandRegistry()
 
 const dialogRef = ref(null)
 const searchInputRef = ref(null)
@@ -55,6 +55,7 @@ const searchResults = computed(() => {
                 cmd,
                 score: result.score,
                 highlighted: highlightMatches(cmd.label, result.ranges),
+                categoryLabel: categoryLabelByKey.value.get(cmd.category) ?? '',
             })
         }
     }
@@ -417,6 +418,7 @@ defineExpose({ open, close })
                     >
                         <wa-icon :name="result.cmd.icon" class="command-icon" />
                         <span class="command-label" v-html="result.highlighted" />
+                        <span v-if="result.categoryLabel" class="command-category">{{ result.categoryLabel }}</span>
                         <span v-if="result.cmd.toggled" class="command-toggle">
                             <wa-icon v-if="result.cmd.toggled()" name="check" />
                         </span>
@@ -697,6 +699,18 @@ wa-divider {
     color: var(--wa-color-text-muted);
     flex-shrink: 0;
     font-size: 0.85em;
+}
+
+/* Search-mode only: the command's group label, right-aligned and muted, so
+   identically-labelled commands (e.g. "Change Default Model…" for Claude vs
+   Codex) can be told apart — the category headers shown in root mode are
+   absent once results are flattened by the fuzzy search. */
+.command-category {
+    flex-shrink: 0;
+    color: var(--wa-color-text-muted);
+    font-size: var(--wa-font-size-xs);
+    white-space: nowrap;
+    user-select: none;
 }
 .active-check {
     color: var(--wa-color-success-60);
