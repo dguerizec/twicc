@@ -719,6 +719,14 @@ export function initStaticCommands(router) {
             action: () => settings.setShowArchivedSessions(!settings.showArchivedSessions),
         },
         {
+            id: 'display.toggle-show-archived-projects',
+            label: 'Toggle Show Archived Projects',
+            icon: 'box-archive',
+            category: 'display',
+            toggled: () => settings.isShowArchivedProjects,
+            action: () => settings.setShowArchivedProjects(!settings.showArchivedProjects),
+        },
+        {
             id: 'display.toggle-active-across-filters',
             label: 'Toggle Show Active Sessions Across Projects',
             icon: 'signal',
