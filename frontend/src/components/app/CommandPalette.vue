@@ -386,7 +386,9 @@ defineExpose({ open, close })
                 <!-- Root category mode -->
                 <template v-if="!query && !parentCommand">
                     <template v-for="group in commandsByCategory" :key="group.key">
-                        <div class="category-label">{{ group.label }}</div>
+                        <div class="category-sticky">
+                            <div class="category-label">{{ group.label }}</div>
+                        </div>
                         <div
                             v-for="cmd in group.commands"
                             :key="cmd.id"
@@ -590,22 +592,41 @@ wa-divider {
 .palette-list {
     max-height: min(400px, 60dvh);
     overflow-y: auto;
-    padding: var(--wa-space-xs) 0;
+    padding: 0 0 var(--wa-space-xs) 0;
 }
 
+/* Sticky wrapper: pins the group header to the top of the scroll area while
+   its commands scroll past. `container-type: scroll-state` makes it a query
+   container so the inner label can react to being stuck (see the scroll-state
+   query below). The wrapper carries the positioning; the label keeps the
+   visual styling. */
+.category-sticky {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    container-type: scroll-state;
+    padding-block: var(--wa-space-xs) var(--wa-space-2xs);
+    background: var(--wa-color-surface-default);
+}
 .category-label {
     padding: var(--wa-space-2xs) var(--wa-space-m);
+    background: var(--wa-color-surface-default);
     font-size: var(--wa-font-size-xs);
     color: var(--wa-color-text-muted);
     text-transform: uppercase;
     letter-spacing: 0.05em;
     font-weight: 600;
     user-select: none;
+    transition: box-shadow 0.15s ease;
 }
-.category-label:not(:first-child) {
-    margin-top: var(--wa-space-xs);
-    border-top: 1px solid var(--wa-color-surface-border);
-    padding-top: var(--wa-space-s);
+/* Progressive enhancement: only when the header is actually stuck to the top,
+   lift it off the scrolling content with a soft, theme-aware shadow. Where
+   scroll-state queries aren't supported the header still pins — just without
+   the shadow. */
+@container scroll-state(stuck: top) {
+    .category-label {
+        box-shadow: 0 2px 5px -2px color-mix(in srgb, var(--wa-color-text-normal) 18%, transparent);
+    }
 }
 
 .command-item {
@@ -617,6 +638,10 @@ wa-divider {
     border-radius: var(--wa-border-radius-s);
     margin: 1px var(--wa-space-xs);
     user-select: none;
+    /* Keyboard nav scrolls the active row into view; reserve the sticky
+       category header's height on top so it lands below the header, not under
+       it (harmless in search/nested modes, which have no sticky header). */
+    scroll-margin-top: 2rem;
 }
 .command-item.active {
     background: var(--wa-color-surface-lowered);
