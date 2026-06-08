@@ -158,6 +158,40 @@ class CodexHelpers(BaseProviderHelpers):
 
     MODEL_VERSIONS: ClassVar[list[ModelVersion]] = _MODEL_VERSIONS
 
+    # Env vars Codex injects into the *commands it runs under its sandbox*
+    # (verified empirically on Linux: ``codex sandbox env`` only sets
+    # ``CODEX_SANDBOX_NETWORK_DISABLED``; ``CODEX_SANDBOX`` itself is the
+    # macOS/seatbelt marker). When TwiCC is launched from inside such a
+    # sandboxed command (e.g. a Codex agent restarting TwiCC), these would
+    # be inherited and make a freshly-spawned Codex CLI think it is already
+    # inside a sandbox. Each var name *starts with* one of these prefixes.
+    #
+    # These are deliberately narrow — NOT a blanket ``CODEX_`` — so user
+    # config / auth (``CODEX_HOME``, ``CODEX_API_KEY``, ``CODEX_*_TOKEN``,
+    # ``CODEX_*_URL``, ``CODEX_OSS_*``, ``CODEX_CA_*`` …) is left untouched
+    # and still reaches the spawned Codex CLI. ``CODEX_ESCALATE`` /
+    # ``CODEX_NETWORK_`` are runtime sandbox/exec state (never config) and
+    # are included as zero-risk insurance against the in-session exec path
+    # injecting them under approval configs we could not reproduce here.
+    _ENV_VAR_PREFIXES: ClassVar[tuple[str, ...]] = (
+        "CODEX_SANDBOX",
+        "CODEX_ESCALATE",
+        "CODEX_NETWORK_",
+    )
+
+    def purge_env_vars(self, env: dict) -> None:
+        """Strip Codex sandbox/exec env vars from ``env`` in place.
+
+        See :attr:`_ENV_VAR_PREFIXES` for the affected names (and why the
+        prefixes are narrow rather than a blanket ``CODEX_``). Called
+        before TwiCC spawns any subprocess (login shell, tmux server, the
+        provider CLI itself) that must start with a clean Codex
+        environment.
+        """
+        for key in list(env):
+            if key.startswith(self._ENV_VAR_PREFIXES):
+                del env[key]
+
     @property
     def current_compute_version(self) -> int | None:
         """Return :data:`settings.CODEX_COMPUTE_VERSION`.

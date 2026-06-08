@@ -53,6 +53,21 @@ from twicc.providers.helpers import get_provider_helpers_registry  # noqa: E402
 
 get_provider_helpers_registry().purge_env_vars(os.environ)
 
+# Strip our own ``DJANGO_SETTINGS_MODULE`` from the environment the server
+# process passes on to everything it spawns. Like the provider markers above,
+# every agent / terminal / subprocess inherits this server's ``os.environ``;
+# leaving ``DJANGO_SETTINGS_MODULE=twicc.settings`` in it would override the
+# settings module of *another* Django project an agent might be working on
+# (e.g. its ``manage.py`` would load twicc's settings instead of its own).
+#
+# Safe to drop here: ``django.setup()`` above has already cached the settings
+# for this process, and the in-process uvicorn / migrations never re-read the
+# env var. The one process that still needs it — the spawned compute worker
+# (multiprocessing "spawn") — sets it itself before its own ``django.setup()``
+# (see ``twicc.providers.background_compute_task.compute_worker_main``), so it
+# no longer relies on inheriting it from here.
+os.environ.pop("DJANGO_SETTINGS_MODULE", None)
+
 # Logger must be created AFTER django.setup() so LOGGING config is applied
 logger = logging.getLogger("twicc.run")
 

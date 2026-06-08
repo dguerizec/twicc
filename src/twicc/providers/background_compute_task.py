@@ -247,6 +247,13 @@ def compute_worker_main(command_queue, result_queue, stop_event, compute_factory
     signal.signal(signal.SIGTERM, signal.SIG_DFL)
     signal.signal(signal.SIGINT, signal.SIG_DFL)
 
+    # This "spawn" worker inherits the server's os.environ, but the server
+    # strips DJANGO_SETTINGS_MODULE from it (see twicc.cli.run) so the var does
+    # not leak into agents working on other Django projects. Set it ourselves
+    # before django.setup() so this worker still resolves twicc's settings.
+    import os
+    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "twicc.settings")
+
     import django
     django.setup()
 
