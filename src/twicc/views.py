@@ -299,8 +299,58 @@ async def _create_project(request):
     return JsonResponse(serialize_project(project), status=201)
 
 
+def _clean_project_agent_defaults(default_provider, default_agent_settings):
+    """Validate + normalize the per-project agent defaults from a PUT payload.
+
+    Returns ``(provider_or_None, settings_or_None, error_or_None)``:
+
+    - ``provider``: ``None`` or a valid :class:`Provider` value.
+    - ``settings``: ``None`` or ``{ "<provider>": { "<AgentSettings field>": value } }``
+      with hidden fields stripped, unknown providers/fields rejected, ``None``
+      values and empty bundles dropped (so storage stays sparse).
+
+    Each argument is validated independently — callers updating only one field
+    pass ``None`` for the other.
+    """
+    from twicc.core.enums import Provider
+    from twicc.providers.helpers import AGENT_SETTINGS_HIDDEN_FROM_FRONTEND, AgentSettings
+
+    valid_providers = {p.value for p in Provider}
+
+    clean_provider = None
+    if default_provider is not None:
+        if not isinstance(default_provider, str) or default_provider not in valid_providers:
+            return None, None, f"Invalid default_provider: {default_provider!r}"
+        clean_provider = default_provider or None
+
+    clean_settings = None
+    if default_agent_settings is not None:
+        if not isinstance(default_agent_settings, dict):
+            return None, None, "default_agent_settings must be an object or null"
+        allowed_fields = set(AgentSettings._fields) - set(AGENT_SETTINGS_HIDDEN_FROM_FRONTEND)
+        cleaned: dict = {}
+        for prov, bundle in default_agent_settings.items():
+            if prov not in valid_providers:
+                return None, None, f"Unknown provider in default_agent_settings: {prov!r}"
+            if not isinstance(bundle, dict):
+                return None, None, f"default_agent_settings[{prov!r}] must be an object"
+            prov_bundle: dict = {}
+            for field, value in bundle.items():
+                if field in AGENT_SETTINGS_HIDDEN_FROM_FRONTEND:
+                    continue  # strip hidden fields defensively
+                if field not in allowed_fields:
+                    return None, None, f"Unknown agent settings field: {field!r}"
+                if value is not None:
+                    prov_bundle[field] = value
+            if prov_bundle:
+                cleaned[prov] = prov_bundle
+        clean_settings = cleaned or None
+
+    return clean_provider, clean_settings, None
+
+
 async def project_detail(request, project_id):
-    """GET/PUT/PATCH /api/projects/<id>/ - Detail of a project, update name/color, or archive."""
+    """GET/PUT/PATCH /api/projects/<id>/ - Detail of a project, update name/color/agent defaults, or archive."""
     try:
         project = await Project.objects.aget(id=project_id)
     except Project.DoesNotExist:
@@ -334,6 +384,18 @@ async def project_detail(request, project_id):
             project.archived = archived
 
         update_fields = ["name", "color", "archived"]
+        if "default_provider" in data:
+            clean_provider, _unused, err = _clean_project_agent_defaults(data["default_provider"], None)
+            if err is not None:
+                return JsonResponse({"error": err}, status=400)
+            project.default_provider = clean_provider
+            update_fields.append("default_provider")
+        if "default_agent_settings" in data:
+            _unused, clean_settings, err = _clean_project_agent_defaults(None, data["default_agent_settings"])
+            if err is not None:
+                return JsonResponse({"error": err}, status=400)
+            project.default_agent_settings = clean_settings
+            update_fields.append("default_agent_settings")
         await run_under_db_write_lock(
             lambda: project.asave(update_fields=update_fields)
         )

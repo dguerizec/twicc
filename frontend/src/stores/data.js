@@ -7,6 +7,7 @@ import { computeVisualItems, visualItemEqual, insertDaySeparators } from '../uti
 import { DISPLAY_LEVEL, DISPLAY_MODE, PROCESS_STATE, SYNTHETIC_ITEM } from '../constants'
 import { getProviderHelpers } from '../providers'
 import { getSessionCutoffMs, isSessionUnread } from '../utils/sessions'
+import { resolveProjectDefaultProvider } from '../utils/projectAgentDefaults'
 import { useSettingsStore } from './settings'
 import {
     saveDraftMessage,
@@ -1027,7 +1028,10 @@ export const useDataStore = defineStore('data', {
         createDraftSession(projectId) {
             const id = generateUUID()
             const now = Date.now() / 1000  // Unix timestamp in seconds
-            const provider = useSettingsStore().defaultProvider
+            // Provider preselect: the project's inherited default provider
+            // (walking the worktree/path chain), else the global default.
+            const provider = resolveProjectDefaultProvider(projectId, this.projects)
+                ?? useSettingsStore().defaultProvider
             this.sessions[id] = {
                 id,
                 project_id: projectId,
@@ -3588,7 +3592,9 @@ export const useDataStore = defineStore('data', {
                     this.sessions[sessionId] = {
                         id: sessionId,
                         project_id: projectId,
-                        provider: provider || defaultProvider,
+                        // Stored provider wins; else the project's inherited
+                        // default (legacy drafts saved without one), else global.
+                        provider: provider || resolveProjectDefaultProvider(projectId, this.projects) || defaultProvider,
                         title: title || null,  // null = user hasn't set a title yet
                         mtime: now,
                         last_line: 0,

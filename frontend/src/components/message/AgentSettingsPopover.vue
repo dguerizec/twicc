@@ -45,6 +45,7 @@ const {
     handlePresetSelect,
     restoreSettings,
     resetAllToDefaults,
+    resetStack,
     startupChanges,
     providerHelpers,
     providerStore,
@@ -392,10 +393,27 @@ onBeforeUnmount(() => {
                     Reset / Presets
                     <wa-icon slot="end" name="caret-down"></wa-icon>
                 </wa-button>
-                <wa-dropdown-item value="__reset__" :disabled="!anySettingForced">
-                    <wa-icon slot="icon" name="arrow-rotate-left"></wa-icon>
-                    Reset to defaults
-                </wa-dropdown-item>
+                <!-- Reset stack: follow the project's defaults, or pin to an
+                     ancestor project's / the global defaults. Collapses to a
+                     single item when no project in the chain sets defaults.
+                     See useSessionAgentSettings.resetStack. -->
+                <template v-if="resetStack.length === 1">
+                    <wa-dropdown-item :value="resetStack[0].key" :disabled="!anySettingForced">
+                        <wa-icon slot="icon" name="arrow-rotate-left"></wa-icon>
+                        {{ resetStack[0].label }}
+                    </wa-dropdown-item>
+                </template>
+                <template v-else>
+                    <wa-dropdown-item disabled>Reset to…</wa-dropdown-item>
+                    <wa-dropdown-item
+                        v-for="target in resetStack"
+                        :key="target.key"
+                        :value="target.key"
+                    >
+                        <wa-icon slot="icon" name="arrow-rotate-left"></wa-icon>
+                        {{ target.label }}
+                    </wa-dropdown-item>
+                </template>
                 <wa-divider></wa-divider>
                 <wa-dropdown-item v-if="hasPresets" disabled>Presets</wa-dropdown-item>
                 <wa-dropdown-item

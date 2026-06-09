@@ -35,6 +35,12 @@ def serialize_project(project):
         # and intentionally not exposed.
         "trust": project.trust,
         "trust_propagation": project.trust_propagation,
+        # Per-project agent settings defaults (optional). default_provider is
+        # the provider a new session defaults to (None = inherit). The front
+        # resolves both by walking the project chain (worktree_of / path
+        # ancestors); see frontend/src/utils/projectAgentDefaults.js.
+        "default_provider": project.default_provider,
+        "default_agent_settings": project.default_agent_settings,
     }
 
 

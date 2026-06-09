@@ -194,6 +194,14 @@ async def update_session_settings_from_payload(payload: dict) -> UpdateSessionRe
 
     from twicc.core.models import Session
     from twicc.core.serializers import serialize_session
+    from twicc.project_hierarchy import project_agent_defaults
+
+    # Per-project agent-settings defaults (inherited up the hierarchy), used to
+    # fill NULL fields when resolving — the same value for the hidden-constraints
+    # check and the live-agent propagation below, so they stay consistent.
+    project_defaults = await sync_to_async(project_agent_defaults)(
+        session.project_id, provider.value,
+    )
 
     # --- Hidden invariants guard (defence in depth) --------------------
     # The CLI pre-validates this too; the server re-checks because the
@@ -207,7 +215,9 @@ async def update_session_settings_from_payload(payload: dict) -> UpdateSessionRe
         merged_base.update(updates)
         merged_settings = AgentSettings(**merged_base)
         helpers_for_hidden = get_provider_helpers(provider)
-        resolved_for_hidden = helpers_for_hidden.resolve_agent_settings(merged_settings)
+        resolved_for_hidden = helpers_for_hidden.resolve_agent_settings(
+            merged_settings, project_defaults=project_defaults,
+        )
         resolved_for_hidden = helpers_for_hidden.enforce_agent_settings_consistency(resolved_for_hidden)
         hidden_errors = validate_hidden_constraints(
             provider.value, resolved_for_hidden, hidden=True,
@@ -266,7 +276,7 @@ async def update_session_settings_from_payload(payload: dict) -> UpdateSessionRe
     # Rehydrate from the freshly reloaded row so the manager sees exactly
     # what the DB now contains (including fields untouched by this update).
     agent_settings = AgentSettings.from_session(updated_session or session)
-    effective = helpers.resolve_agent_settings(agent_settings)
+    effective = helpers.resolve_agent_settings(agent_settings, project_defaults=project_defaults)
     effective = helpers.enforce_agent_settings_consistency(effective)
 
     try:

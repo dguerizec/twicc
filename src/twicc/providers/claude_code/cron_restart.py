@@ -105,8 +105,12 @@ def _collect_restart_data(session_id: str) -> dict | None:
         return None
 
     helpers = get_provider_helpers(Provider.CLAUDE_CODE)
+    from twicc.project_hierarchy import project_agent_defaults
+    project_defaults = project_agent_defaults(session.project_id, helpers.provider.value)
     agent_settings = helpers.enforce_agent_settings_consistency(
-        helpers.resolve_agent_settings(AgentSettings.from_session(session)),
+        helpers.resolve_agent_settings(
+            AgentSettings.from_session(session), project_defaults=project_defaults,
+        ),
     )
 
     return {

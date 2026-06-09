@@ -8,6 +8,7 @@ import { apiFetch } from '../../utils/api'
 import { matchPattern } from '../../utils/workspacePatterns'
 import DirectoryPickerPopup from '../files/DirectoryPickerPopup.vue'
 import { resolveProjectTrust } from '../../utils/trust'
+import ProjectAgentDefaultsSection from './ProjectAgentDefaultsSection.vue'
 
 const props = defineProps({
     project: {
@@ -28,6 +29,11 @@ const directoryInputRef = ref(null)
 const nameInputRef = ref(null)
 const colorPickerRef = ref(null)
 const saveButtonRef = ref(null)
+const agentDefaultsRef = ref(null)
+// Active main tab ('general' | 'agent'), controlled so we can reset to the
+// Project tab on every open. Kept in sync with user clicks via @wa-tab-show
+// (safe because the inner per-provider tab-group stops its own tab events).
+const mainTab = ref('general')
 
 // Local state for form values
 const localDirectory = ref('')
@@ -249,6 +255,7 @@ function handleDialogAfterShow(e) {
 function open() {
     errorMessage.value = ''
     directoryNotFound.value = false
+    mainTab.value = 'general'
     if (isCreateMode.value) {
         localDirectory.value = ''
         localName.value = ''
@@ -261,6 +268,7 @@ function open() {
         localArchived.value = props.project.archived || false
         localTrustChoice.value = trustChoiceFromValue(props.project.trust)
         localTrustPropagation.value = props.project.trust_propagation ?? false
+        agentDefaultsRef.value?.reset()
     }
     resetWorkspaceState()
     syncFormState()
@@ -445,16 +453,20 @@ async function handleSave() {
         isSaving.value = true
         errorMessage.value = ''
 
+        const body = {
+            name: trimmedName || null,
+            color: localColor.value || null,
+            archived: localArchived.value,
+            // Per-project agent defaults: only the keys the user actually changed
+            // (the PUT handler updates a field only when it is present).
+            ...(agentDefaultsRef.value?.getChangedFields?.() || {}),
+        }
         let response
         try {
             response = await apiFetch(`/api/projects/${props.project.id}/`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    name: trimmedName || null,
-                    color: localColor.value || null,
-                    archived: localArchived.value,
-                }),
+                body: JSON.stringify(body),
             })
         } catch (error) {
             errorMessage.value = 'Network error. Please try again.'
@@ -499,193 +511,213 @@ defineExpose({
 
 <template>
     <wa-dialog ref="dialogRef" :label="isCreateMode ? 'New Project' : 'Edit Project'" class="project-edit-dialog" @wa-show="handleDialogShow" @wa-after-show="handleDialogAfterShow">
+        <!-- Custom header: title + (edit mode) the project path, small, underneath. -->
+        <div slot="label" class="dialog-title">
+            <span class="dialog-title-text">{{ isCreateMode ? 'New Project' : 'Edit Project' }}</span>
+            <span v-if="!isCreateMode && project?.directory" class="dialog-title-path">{{ project.directory }}</span>
+        </div>
         <form :id="formId" class="dialog-content" @submit.prevent="handleSave">
-            <!-- Create mode: directory input -->
-            <div v-if="isCreateMode" class="form-group">
-                <label class="form-label">Directory</label>
-                <div class="directory-input-row">
-                    <wa-input
-                        ref="directoryInputRef"
-                        :value.prop="localDirectory"
-                        @input="onDirectoryInput"
-                        placeholder="/path/to/your/project"
-                        class="directory-input"
-                    ></wa-input>
-                    <DirectoryPickerPopup v-model="localDirectory" />
-                </div>
-                <div class="form-hint">Absolute path to the project directory</div>
-            </div>
+            <!-- Two main tabs: "Project" holds everything; "Agent settings" the
+                 per-provider defaults. In create mode there is no agent tab, and
+                 the nav bar is hidden (single tab → looks like a flat form). -->
+            <wa-tab-group
+                class="project-main-tabs"
+                :class="{ 'hide-nav': isCreateMode }"
+                :active="mainTab"
+                @wa-tab-show="mainTab = $event.detail?.name ?? mainTab"
+            >
+                <wa-tab slot="nav" panel="general">Project</wa-tab>
+                <wa-tab v-if="!isCreateMode" slot="nav" panel="agent">Agent settings</wa-tab>
 
-            <!-- Edit mode: read-only info -->
-            <template v-else>
-                <div v-if="project.directory" class="info-group">
-                    <label class="info-label">Directory</label>
-                    <div class="info-value">{{ project.directory }}</div>
-                </div>
+                <wa-tab-panel name="general">
+                    <div class="tab-body">
+                        <!-- Create mode: directory input -->
+                        <div v-if="isCreateMode" class="form-group">
+                            <label class="form-label">Directory</label>
+                            <div class="directory-input-row">
+                                <wa-input
+                                    ref="directoryInputRef"
+                                    :value.prop="localDirectory"
+                                    @input="onDirectoryInput"
+                                    placeholder="/path/to/your/project"
+                                    class="directory-input"
+                                ></wa-input>
+                                <DirectoryPickerPopup v-model="localDirectory" />
+                            </div>
+                            <div class="form-hint">Absolute path to the project directory</div>
+                        </div>
 
-                <wa-divider></wa-divider>
-            </template>
+                        <!-- (Edit mode shows the path under the dialog title, not here.) -->
 
-            <!-- Editable fields: name + color share one row -->
-            <div class="name-color-row">
-                <div class="form-group name-group">
-                    <label class="form-label">Name</label>
-                    <wa-input
-                        ref="nameInputRef"
-                        :value.prop="localName"
-                        @input="onNameInput"
-                        placeholder="Project name"
-                        maxlength="25"
-                    ></wa-input>
-                    <div class="form-hint">
-                        Optional display name (max 25 characters)
-                        — Named projects will always be displayed above unnamed ones.
-                        <template v-if="!isCreateMode && localName.trim()">
-                            — <a href="#" class="clear-name-link" @click.prevent="localName = ''">Remove name</a>
-                        </template>
+                        <!-- Editable fields: name + color share one row -->
+                        <div class="name-color-row">
+                            <div class="form-group name-group">
+                                <label class="form-label">Name</label>
+                                <wa-input
+                                    ref="nameInputRef"
+                                    :value.prop="localName"
+                                    @input="onNameInput"
+                                    placeholder="Project name"
+                                    maxlength="25"
+                                ></wa-input>
+                                <div class="form-hint">
+                                    Optional display name (max 25 characters)
+                                    — Named projects will always be displayed above unnamed ones.
+                                    <template v-if="!isCreateMode && localName.trim()">
+                                        — <a href="#" class="clear-name-link" @click.prevent="localName = ''">Remove name</a>
+                                    </template>
+                                </div>
+                            </div>
+
+                            <div class="form-group color-group">
+                                <label class="form-label">Color</label>
+                                <wa-color-picker
+                                    ref="colorPickerRef"
+                                    :value.prop="localColor"
+                                    @change="onColorChange"
+                                ></wa-color-picker>
+                            </div>
+                        </div>
+
+                        <wa-divider></wa-divider>
+
+                        <!-- Trust (edit mode only) -->
+                        <div v-if="!isCreateMode" class="form-group">
+                            <label class="form-label">Trust</label>
+                            <p class="trust-intro">
+                                Is this a project you created or trust (your own code, a well-known
+                                open-source project, or your team's work)? Claude Code and Codex will be
+                                able to read, edit and run files here.
+                            </p>
+                            <wa-select
+                                :value.prop="localTrustChoice"
+                                @change="localTrustChoice = $event.target.value"
+                                size="small"
+                                class="trust-select"
+                            >
+                                <wa-option value="inherit" label="Inherit">
+                                    Inherit
+                                    <small>No own decision — inherits the trust of a parent project.</small>
+                                </wa-option>
+                                <wa-option value="trusted">Trusted</wa-option>
+                                <wa-option value="untrusted">Untrusted</wa-option>
+                            </wa-select>
+                            <div v-if="localTrustChoice === 'inherit'" class="form-hint">
+                                <template v-if="resolvedTrust?.state === true">
+                                    Inherited: <strong>trusted</strong><template v-if="resolvedSourceName"> (from {{ resolvedSourceName }})</template>
+                                </template>
+                                <template v-else-if="resolvedTrust?.state === false">
+                                    Inherited: <strong>untrusted</strong><template v-if="resolvedSourceName"> (from {{ resolvedSourceName }})</template>
+                                </template>
+                                <template v-else>
+                                    Not resolved — you'll be asked when starting a session here.
+                                </template>
+                            </div>
+                            <wa-switch
+                                v-else
+                                class="trust-propagate-switch"
+                                :checked="localTrustPropagation"
+                                @change="localTrustPropagation = $event.target.checked"
+                                size="small"
+                            >
+                                Apply to sub-folders and worktrees
+                                <span class="trust-propagate-hint">
+                                    — descendants inherit this decision until you decide otherwise.
+                                </span>
+                            </wa-switch>
+                        </div>
+
+                        <wa-divider v-if="!isCreateMode"></wa-divider>
+
+                        <!-- Workspaces -->
+                        <div class="form-group">
+                            <div class="form-label-row">
+                                <label class="form-label">Workspaces</label>
+                                <wa-switch
+                                    v-if="hasArchivedWorkspaces"
+                                    :checked="localShowArchivedWorkspaces"
+                                    @change="localShowArchivedWorkspaces = $event.target.checked"
+                                    size="small"
+                                >
+                                    Show archived
+                                </wa-switch>
+                            </div>
+
+                            <div v-if="selectedWorkspaceEntries.length > 0" class="workspace-list">
+                                <div
+                                    v-for="(entry, visibleIndex) in selectedWorkspaceEntries"
+                                    :key="entry.id"
+                                    class="workspace-row"
+                                >
+                                    <span class="workspace-row-name">
+                                        <wa-icon name="layer-group" auto-width :style="workspaceColor(entry.id) ? { color: workspaceColor(entry.id) } : null"></wa-icon>
+                                        {{ workspaceName(entry.id) }}
+                                    </span>
+                                    <button
+                                        type="button"
+                                        class="action-btn action-btn-danger"
+                                        @click="removeWorkspace(visibleIndex)"
+                                        title="Remove from workspace"
+                                    >
+                                        <wa-icon name="xmark" />
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div v-else-if="selectedWorkspaceIds.length > 0" class="empty-workspaces-message">
+                                All workspaces for this project are archived (hidden).
+                            </div>
+
+                            <div v-else class="empty-workspaces-message">
+                                {{ isCreateMode ? 'No workspaces selected.' : 'Not in any workspace.' }}
+                            </div>
+
+                            <!-- Add to a workspace -->
+                            <wa-select
+                                v-if="availableWorkspaces.length > 0"
+                                value=""
+                                @change="addWorkspace"
+                                placeholder="Add to a workspace..."
+                                size="small"
+                                class="add-workspace-select"
+                            >
+                                <wa-option
+                                    v-for="ws in availableWorkspaces"
+                                    :key="ws.id"
+                                    :value="ws.id"
+                                    :label="ws.name"
+                                >
+                                    <wa-icon name="layer-group" auto-width :style="ws.color ? { color: ws.color } : null"></wa-icon>
+                                    {{ ws.name }}
+                                </wa-option>
+                            </wa-select>
+
+                            <!-- Create mode: add workspaces whose auto-add pattern matches -->
+                            <template v-if="isCreateMode">
+                                <div class="scan-row">
+                                    <wa-button type="button" variant="neutral" size="small" @click="scanMatchingWorkspaces">
+                                        <wa-icon name="magnifying-glass-plus" slot="start"></wa-icon>
+                                        Add matching workspaces
+                                    </wa-button>
+                                    <span v-if="workspaceScanFeedback" class="scan-feedback">{{ workspaceScanFeedback }}</span>
+                                </div>
+                                <p class="form-hint">
+                                    Workspaces whose auto-add pattern matches this directory will be added
+                                    automatically on creation, even if you remove them here.
+                                </p>
+                            </template>
+                        </div>
                     </div>
-                </div>
+                </wa-tab-panel>
 
-                <div class="form-group color-group">
-                    <label class="form-label">Color</label>
-                    <wa-color-picker
-                        ref="colorPickerRef"
-                        :value.prop="localColor"
-                        @change="onColorChange"
-                    ></wa-color-picker>
-                </div>
-            </div>
-
-            <wa-divider></wa-divider>
-
-            <!-- Trust (edit mode only) -->
-            <div v-if="!isCreateMode" class="form-group">
-                <label class="form-label">Trust</label>
-                <p class="trust-intro">
-                    Is this a project you created or trust (your own code, a well-known
-                    open-source project, or your team's work)? Claude Code and Codex will be
-                    able to read, edit and run files here.
-                </p>
-                <wa-select
-                    :value.prop="localTrustChoice"
-                    @change="localTrustChoice = $event.target.value"
-                    size="small"
-                    class="trust-select"
-                >
-                    <wa-option value="inherit" label="Inherit">
-                        Inherit
-                        <small>No own decision — inherits the trust of a parent project.</small>
-                    </wa-option>
-                    <wa-option value="trusted">Trusted</wa-option>
-                    <wa-option value="untrusted">Untrusted</wa-option>
-                </wa-select>
-                <div v-if="localTrustChoice === 'inherit'" class="form-hint">
-                    <template v-if="resolvedTrust?.state === true">
-                        Inherited: <strong>trusted</strong><template v-if="resolvedSourceName"> (from {{ resolvedSourceName }})</template>
-                    </template>
-                    <template v-else-if="resolvedTrust?.state === false">
-                        Inherited: <strong>untrusted</strong><template v-if="resolvedSourceName"> (from {{ resolvedSourceName }})</template>
-                    </template>
-                    <template v-else>
-                        Not resolved — you'll be asked when starting a session here.
-                    </template>
-                </div>
-                <wa-switch
-                    v-else
-                    class="trust-propagate-switch"
-                    :checked="localTrustPropagation"
-                    @change="localTrustPropagation = $event.target.checked"
-                    size="small"
-                >
-                    Apply to sub-folders and worktrees
-                    <span class="trust-propagate-hint">
-                        — descendants inherit this decision until you decide otherwise.
-                    </span>
-                </wa-switch>
-            </div>
-
-            <wa-divider v-if="!isCreateMode"></wa-divider>
-
-            <!-- Workspaces -->
-            <div class="form-group">
-                <div class="form-label-row">
-                    <label class="form-label">Workspaces</label>
-                    <wa-switch
-                        v-if="hasArchivedWorkspaces"
-                        :checked="localShowArchivedWorkspaces"
-                        @change="localShowArchivedWorkspaces = $event.target.checked"
-                        size="small"
-                    >
-                        Show archived
-                    </wa-switch>
-                </div>
-
-                <div v-if="selectedWorkspaceEntries.length > 0" class="workspace-list">
-                    <div
-                        v-for="(entry, visibleIndex) in selectedWorkspaceEntries"
-                        :key="entry.id"
-                        class="workspace-row"
-                    >
-                        <span class="workspace-row-name">
-                            <wa-icon name="layer-group" auto-width :style="workspaceColor(entry.id) ? { color: workspaceColor(entry.id) } : null"></wa-icon>
-                            {{ workspaceName(entry.id) }}
-                        </span>
-                        <button
-                            type="button"
-                            class="action-btn action-btn-danger"
-                            @click="removeWorkspace(visibleIndex)"
-                            title="Remove from workspace"
-                        >
-                            <wa-icon name="xmark" />
-                        </button>
+                <wa-tab-panel v-if="!isCreateMode" name="agent">
+                    <div class="tab-body">
+                        <ProjectAgentDefaultsSection ref="agentDefaultsRef" :project="project" />
                     </div>
-                </div>
+                </wa-tab-panel>
+            </wa-tab-group>
 
-                <div v-else-if="selectedWorkspaceIds.length > 0" class="empty-workspaces-message">
-                    All workspaces for this project are archived (hidden).
-                </div>
-
-                <div v-else class="empty-workspaces-message">
-                    {{ isCreateMode ? 'No workspaces selected.' : 'Not in any workspace.' }}
-                </div>
-
-                <!-- Add to a workspace -->
-                <wa-select
-                    v-if="availableWorkspaces.length > 0"
-                    value=""
-                    @change="addWorkspace"
-                    placeholder="Add to a workspace..."
-                    size="small"
-                    class="add-workspace-select"
-                >
-                    <wa-option
-                        v-for="ws in availableWorkspaces"
-                        :key="ws.id"
-                        :value="ws.id"
-                        :label="ws.name"
-                    >
-                        <wa-icon name="layer-group" auto-width :style="ws.color ? { color: ws.color } : null"></wa-icon>
-                        {{ ws.name }}
-                    </wa-option>
-                </wa-select>
-
-                <!-- Create mode: add workspaces whose auto-add pattern matches -->
-                <template v-if="isCreateMode">
-                    <div class="scan-row">
-                        <wa-button type="button" variant="neutral" size="small" @click="scanMatchingWorkspaces">
-                            <wa-icon name="magnifying-glass-plus" slot="start"></wa-icon>
-                            Add matching workspaces
-                        </wa-button>
-                        <span v-if="workspaceScanFeedback" class="scan-feedback">{{ workspaceScanFeedback }}</span>
-                    </div>
-                    <p class="form-hint">
-                        Workspaces whose auto-add pattern matches this directory will be added
-                        automatically on creation, even if you remove them here.
-                    </p>
-                </template>
-            </div>
-
-            <!-- Directory not found: ask user to create it -->
+            <!-- Callouts live outside the tabs so they stay visible on either tab -->
             <wa-callout v-if="directoryNotFound" variant="warning" size="small" class="directory-not-found-callout">
                 <div class="directory-not-found-content">
                     <span>This directory does not exist. Do you want to create it?</span>
@@ -738,20 +770,30 @@ defineExpose({
     gap: var(--wa-space-m);
 }
 
-.info-group {
+/* Body of each main tab panel: same vertical rhythm as the old flat form. */
+.tab-body {
     display: flex;
     flex-direction: column;
-    gap: var(--wa-space-2xs);
+    gap: var(--wa-space-m);
 }
 
-.info-label {
-    font-size: var(--wa-font-size-s);
-    font-weight: var(--wa-font-weight-semibold);
+/* Create mode has a single tab — hide the nav bar so it reads as a flat form. */
+.project-main-tabs.hide-nav::part(nav) {
+    display: none;
+}
+
+/* Dialog header: title with the project path as a small line underneath. */
+.dialog-title {
+    display: flex;
+    flex-direction: column;
+    gap: var(--wa-space-3xs);
+    min-width: 0;
+}
+
+.dialog-title-path {
+    font-size: var(--wa-font-size-xs);
+    font-weight: var(--wa-font-weight-normal);
     color: var(--wa-color-text-quiet);
-}
-
-.info-value {
-    font-size: var(--wa-font-size-m);
     word-break: break-all;
 }
 

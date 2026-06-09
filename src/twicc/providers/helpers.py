@@ -412,16 +412,27 @@ class BaseProviderHelpers:
         """
         return False, "This provider does not support reading usage from a file"
 
-    def resolve_agent_settings(self, source: AgentSettings) -> AgentSettings:
-        """Return the effective per-agent settings, with synced defaults as fallback.
+    def resolve_agent_settings(
+        self, source: AgentSettings, project_defaults: dict | None = None,
+    ) -> AgentSettings:
+        """Return the effective per-agent settings, with inherited fallbacks.
 
-        For each field of :class:`AgentSettings`, the explicit override
-        in ``source`` wins if non-``None``; otherwise the corresponding
-        synced settings default is used (looked up via
-        :attr:`AGENT_SETTINGS_FIELDS_MAPPING`), with the helper's own
-        :attr:`SYNCED_SETTINGS_DEFAULTS` as a last-resort fallback.
-        Fields not listed in the mapping (i.e. unsupported by this
-        provider) are returned as ``None``.
+        For each field of :class:`AgentSettings`, the fallback order is:
+
+        1. the explicit override in ``source`` (wins if non-``None``);
+        2. the per-project default for this provider, when ``project_defaults``
+           is provided — the chain-resolved map from
+           :func:`twicc.project_hierarchy.project_agent_defaults` (keyed by
+           ``AgentSettings`` field name). This is inheritance, not enforcement:
+           it only fills fields the session left ``None``;
+        3. the global synced settings default (looked up via
+           :attr:`AGENT_SETTINGS_FIELDS_MAPPING`), with the helper's own
+           :attr:`SYNCED_SETTINGS_DEFAULTS` as a last-resort fallback.
+
+        Fields not listed in the mapping (i.e. unsupported by this provider) are
+        returned as ``None``. ``project_defaults`` is loaded by the caller (it
+        needs DB access and the session's ``project_id``); passing ``None``
+        reproduces the pre-project behaviour exactly.
         """
         from twicc.synced_settings import read_synced_settings
 
@@ -429,6 +440,8 @@ class BaseProviderHelpers:
         resolved: dict = {}
         for field in AgentSettings._fields:
             value = getattr(source, field)
+            if value is None and project_defaults:
+                value = project_defaults.get(field)
             if value is None:
                 default_key = self.AGENT_SETTINGS_FIELDS_MAPPING.get(field)
                 if default_key is not None:

@@ -109,6 +109,26 @@ class Project(models.Model):
     # This is what prevents a materialized provider entry from being re-adopted
     # as a fresh decision after an inheritance change.
     trust_imported = models.BooleanField(default=False)
+    # ---- Per-project agent settings defaults ------------------------
+    # Optional, inherited UP the project hierarchy (worktree_of main repo
+    # first, else nearest path ancestor, recursively — see
+    # twicc.project_hierarchy) to seed a new session's agent settings.
+    # Resolution lives in BaseProviderHelpers.resolve_agent_settings
+    # (backend, authoritative) and is mirrored for display in
+    # frontend/src/utils/projectAgentDefaults.js. There is no propagation
+    # flag (unlike trust): every NULL field walks the chain unconditionally.
+    #
+    # Which provider a NEW session in this project defaults to. NULL =
+    # inherit from the chain, ultimately the global defaultProvider. Only
+    # consumed where a provider is picked (the frontend new-session flow);
+    # an explicit provider always wins.
+    default_provider = models.CharField(max_length=50, null=True, blank=True, default=None)
+    # Per-provider partial agent-settings bundles:
+    #   { "<provider>": { "<AgentSettings field>": value | null, ... }, ... }
+    # A field that is NULL/absent inherits from the parent chain. Storing one
+    # bundle PER provider (not just default_provider's) lets a session created
+    # with a non-default provider still pick up that provider's project bundle.
+    default_agent_settings = models.JSONField(null=True, blank=True, default=None)
 
     class Meta:
         ordering = ["-mtime"]

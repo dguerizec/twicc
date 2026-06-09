@@ -815,9 +815,16 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
                 if not has_content and not has_process:
                     return
 
-                # Resolve effective values for the process manager
-                # (null → global default, so the process gets concrete values)
-                effective_agent_settings = helpers.resolve_agent_settings(agent_settings)
+                # Resolve effective values for the process manager (null →
+                # per-project default, inherited up the project hierarchy, →
+                # global default, so the process gets concrete values)
+                from twicc.project_hierarchy import project_agent_defaults
+                project_defaults = await sync_to_async(project_agent_defaults)(
+                    project_id, helpers.provider.value,
+                )
+                effective_agent_settings = helpers.resolve_agent_settings(
+                    agent_settings, project_defaults=project_defaults,
+                )
 
                 # Auto-upgrade retired models + enforce provider capability rules
                 # (single safety net — front should have corrected, but just in case)

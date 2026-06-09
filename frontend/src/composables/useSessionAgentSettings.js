@@ -2,6 +2,7 @@ import { ref, computed, watch, toValue } from 'vue'
 import { useDataStore } from '../stores/data'
 import { useAgentSettingsPresetsStore } from '../stores/agentSettingsPresets'
 import { getProviderHelpers, getProviderStore } from '../providers'
+import { resolveProjectAgentDefaults, ancestorChain } from '../utils/projectAgentDefaults'
 
 // Sentinel value used by the popover selects to encode the "follow global
 // default" choice. When set, the corresponding selected ref is null.
@@ -76,11 +77,53 @@ export function useSessionAgentSettings(sessionIdSource) {
         context_max: activeContextMax,
     }
 
+    // ─── Resolved defaults (project chain → global) ──────────────────────────
+    // The baseline a NULL ("follow default") field resolves to: the inherited
+    // per-project default (walking worktree_of / path ancestors, mirroring the
+    // backend twicc.project_hierarchy) when the project sets one, else the
+    // provider's global default. This is what the popover shows as "default",
+    // what diff-marking compares against, and what "reset to default" lands on.
+    // The session still stores NULL and the backend re-resolves the same chain
+    // at create/resume (option B), so this stays display-only.
+    // The provider's GLOBAL defaults (synced settings), with no project layer.
+    // The bottom of every resolution: resolvedDefaults falls through to it, and
+    // the reset stack's "Global defaults" target pins to it.
+    const globalDefaults = computed(() => {
+        const pStore = providerStore.value
+        return {
+            selected_model: pStore?.defaultModel,
+            permission_mode: pStore?.defaultPermissionMode,
+            effort: pStore?.defaultEffort,
+            thinking_enabled: pStore?.defaultThinking,
+            claude_in_chrome: pStore?.defaultClaudeInChrome,
+            fast_mode: pStore?.defaultFastMode,
+            context_max: pStore?.defaultContextMax,
+        }
+    })
+
+    const resolvedDefaults = computed(() => {
+        const g = globalDefaults.value
+        const provider = session.value?.provider
+        const projectId = session.value?.project_id
+        const chain = (projectId && provider)
+            ? resolveProjectAgentDefaults(projectId, provider, store.projects)
+            : {}
+        return {
+            selected_model: chain.selected_model ?? g.selected_model,
+            permission_mode: chain.permission_mode ?? g.permission_mode,
+            effort: chain.effort ?? g.effort,
+            thinking_enabled: chain.thinking_enabled ?? g.thinking_enabled,
+            claude_in_chrome: chain.claude_in_chrome ?? g.claude_in_chrome,
+            fast_mode: chain.fast_mode ?? g.fast_mode,
+            context_max: chain.context_max ?? g.context_max,
+        }
+    })
+
     // The model that's effectively in use right now: the user's selection if
-    // any, otherwise the provider's global default. Used to feed
+    // any, otherwise the resolved (project → global) default. Used to feed
     // ``context.effectiveModel`` into rendering hooks (capability gates,
     // help text, etc.).
-    const effectiveModel = computed(() => selectedModel.value ?? providerStore.value?.defaultModel)
+    const effectiveModel = computed(() => selectedModel.value ?? resolvedDefaults.value.selected_model)
 
     // Whether the provider's auto-promote rule would kick in for the user's
     // current selection in the popover. The rule itself is provider-specific
@@ -91,7 +134,7 @@ export function useSessionAgentSettings(sessionIdSource) {
     // current pick and would otherwise trigger false positives on drafts.
     const isContextMaxForced = computed(() => {
         if (!session.value || !providerHelpers.value) return false
-        const baseValue = selectedContextMax.value ?? providerStore.value?.defaultContextMax
+        const baseValue = selectedContextMax.value ?? resolvedDefaults.value.context_max
         return providerHelpers.value.isContextMaxAutoPromoted(
             session.value, baseValue, effectiveModel.value,
         )
@@ -124,7 +167,6 @@ export function useSessionAgentSettings(sessionIdSource) {
     // (not on the helpers) because it depends on this session's selections —
     // helpers operate over the rendered values, not the live refs.
     const summaryState = computed(() => {
-        const pStore = providerStore.value
         return {
             selected: {
                 selected_model: selectedModel.value,
@@ -135,15 +177,10 @@ export function useSessionAgentSettings(sessionIdSource) {
                 fast_mode: selectedFastMode.value,
                 context_max: selectedContextMax.value,
             },
-            defaults: {
-                selected_model: pStore?.defaultModel,
-                permission_mode: pStore?.defaultPermissionMode,
-                effort: pStore?.defaultEffort,
-                thinking_enabled: pStore?.defaultThinking,
-                claude_in_chrome: pStore?.defaultClaudeInChrome,
-                fast_mode: pStore?.defaultFastMode,
-                context_max: pStore?.defaultContextMax,
-            },
+            // Diff-marking compares against the RESOLVED default (project chain →
+            // global), so a field equal to its inherited project default reads as
+            // "default" rather than as an override.
+            defaults: resolvedDefaults.value,
         }
     })
 
@@ -161,8 +198,8 @@ export function useSessionAgentSettings(sessionIdSource) {
         const item = event.detail?.item
         const value = item?.value
         if (value === undefined || value === null || value === '') return
-        if (value === '__reset__') {
-            resetAllToDefaults()
+        if (typeof value === 'string' && value.startsWith('__reset__')) {
+            applyResetTarget(resetStack.value.find(t => t.key === value))
             return
         }
         if (value === '__manage__') {
@@ -192,6 +229,78 @@ export function useSessionAgentSettings(sessionIdSource) {
         selectedContextMax.value = null
     }
 
+    // Resolve a full concrete bundle starting at a chain slice (nearest node
+    // first), filling unset fields from the global defaults. Powers the reset
+    // stack: "reset to <ancestor>" pins the draft to that ancestor's resolved
+    // defaults, skipping the overrides of nearer projects.
+    function resolveFromChainSlice(slice, provider, global) {
+        const resolved = {}
+        for (const node of slice) {
+            const bundle = node.default_agent_settings?.[provider] || {}
+            for (const field in bundle) {
+                if (bundle[field] != null && !(field in resolved)) resolved[field] = bundle[field]
+            }
+        }
+        return { ...global, ...resolved }
+    }
+
+    // The stack of reset targets surfaced under "Reset" in the popover:
+    //   • "Project defaults"  — clear every override → follow the project's
+    //     resolved defaults (NULL, so the fields render as "default").
+    //   • one entry per ANCESTOR project that defines its own defaults — pins the
+    //     draft to that ancestor's resolved defaults (concrete; skips the
+    //     overrides of nearer projects).
+    //   • "Global defaults"   — pins to the provider's global defaults (concrete).
+    // When no project in the chain defines any defaults, collapses to a single
+    // plain "Reset to defaults" (the follow target) — the pre-feature UX.
+    const resetStack = computed(() => {
+        const provider = session.value?.provider
+        const projectId = session.value?.project_id
+        const g = globalDefaults.value
+        const chain = (provider && projectId) ? ancestorChain(projectId, store.projects) : []
+        const ancestorSources = []
+        for (let i = 1; i < chain.length; i++) {
+            const node = chain[i]
+            const bundle = node.default_agent_settings?.[provider]
+            if (bundle && Object.keys(bundle).length) {
+                ancestorSources.push({
+                    key: `__reset__node:${node.id}`,
+                    label: node.name || node.directory || node.id,
+                    bundle: resolveFromChainSlice(chain.slice(i), provider, g),
+                })
+            }
+        }
+        const selfBundle = chain[0]?.default_agent_settings?.[provider]
+        const hasProjectDefaults = (selfBundle && Object.keys(selfBundle).length) || ancestorSources.length > 0
+        if (!hasProjectDefaults) {
+            return [{ key: '__reset__follow', label: 'Reset to defaults', follow: true }]
+        }
+        return [
+            { key: '__reset__follow', label: 'Project defaults', follow: true },
+            ...ancestorSources,
+            { key: '__reset__global', label: 'Global defaults', bundle: { ...g } },
+        ]
+    })
+
+    // Apply a reset target: a "follow" target clears every override (NULL); a
+    // concrete target forces the bundle's values so they override the project
+    // resolution (that's why ancestor/global targets are concrete, not NULL).
+    function applyResetTarget(target) {
+        if (!target) return
+        if (target.follow) {
+            resetAllToDefaults()
+            return
+        }
+        const b = target.bundle || {}
+        selectedModel.value = b.selected_model ?? null
+        selectedContextMax.value = b.context_max ?? null
+        selectedEffort.value = b.effort ?? null
+        selectedThinking.value = b.thinking_enabled ?? null
+        selectedPermissionMode.value = b.permission_mode ?? null
+        selectedClaudeInChrome.value = b.claude_in_chrome ?? null
+        selectedFastMode.value = b.fast_mode ?? null
+    }
+
     function restoreSettings() {
         selectedModel.value = activeModel.value
         selectedPermissionMode.value = activePermissionMode.value
@@ -202,18 +311,19 @@ export function useSessionAgentSettings(sessionIdSource) {
         selectedContextMax.value = activeContextMax.value
     }
 
-    // Resolve null → global default for a settings dict (so ``classify``
-    // compares concrete values instead of "raw null vs explicit").
+    // Resolve null → resolved default (project chain → global) for a settings
+    // dict, so ``classify`` compares concrete values instead of "raw null vs
+    // explicit".
     function resolveSettingsDefaults(settings) {
-        const pStore = providerStore.value
+        const d = resolvedDefaults.value
         return {
-            permission_mode: settings.permission_mode ?? pStore?.defaultPermissionMode,
-            selected_model: settings.selected_model ?? pStore?.defaultModel,
-            effort: settings.effort ?? pStore?.defaultEffort,
-            thinking_enabled: settings.thinking_enabled ?? pStore?.defaultThinking,
-            claude_in_chrome: settings.claude_in_chrome ?? pStore?.defaultClaudeInChrome,
-            fast_mode: settings.fast_mode ?? pStore?.defaultFastMode,
-            context_max: settings.context_max ?? pStore?.defaultContextMax,
+            permission_mode: settings.permission_mode ?? d.permission_mode,
+            selected_model: settings.selected_model ?? d.selected_model,
+            effort: settings.effort ?? d.effort,
+            thinking_enabled: settings.thinking_enabled ?? d.thinking_enabled,
+            claude_in_chrome: settings.claude_in_chrome ?? d.claude_in_chrome,
+            fast_mode: settings.fast_mode ?? d.fast_mode,
+            context_max: settings.context_max ?? d.context_max,
         }
     }
 
@@ -292,11 +402,11 @@ export function useSessionAgentSettings(sessionIdSource) {
     // corrected on mount.
     watch(
         () => ({
-            selectedModel: selectedModel.value ?? providerStore.value?.defaultModel,
-            contextMax: selectedContextMax.value ?? providerStore.value?.defaultContextMax,
-            effort: selectedEffort.value ?? providerStore.value?.defaultEffort,
-            fastMode: selectedFastMode.value ?? providerStore.value?.defaultFastMode,
-            permissionMode: selectedPermissionMode.value ?? providerStore.value?.defaultPermissionMode,
+            selectedModel: selectedModel.value ?? resolvedDefaults.value.selected_model,
+            contextMax: selectedContextMax.value ?? resolvedDefaults.value.context_max,
+            effort: selectedEffort.value ?? resolvedDefaults.value.effort,
+            fastMode: selectedFastMode.value ?? resolvedDefaults.value.fast_mode,
+            permissionMode: selectedPermissionMode.value ?? resolvedDefaults.value.permission_mode,
         }),
         (current) => {
             const helpers = providerHelpers.value
@@ -354,6 +464,7 @@ export function useSessionAgentSettings(sessionIdSource) {
         ACTIVE_REFS,
         // derived
         effectiveModel,
+        resolvedDefaults,
         isContextMaxForced,
         // aggregates
         anySettingForced,
@@ -368,6 +479,7 @@ export function useSessionAgentSettings(sessionIdSource) {
         handlePresetSelect,
         // handlers
         resetAllToDefaults,
+        resetStack,
         restoreSettings,
         resolveSettingsDefaults,
     }
