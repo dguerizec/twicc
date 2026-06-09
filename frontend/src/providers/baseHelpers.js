@@ -572,11 +572,19 @@ export class BaseProviderHelpers {
      * active, even if the user's persisted value is null/200K).
      *
      * Returns the same string the matching ``<wa-option :value>`` exposes —
-     * the popover uses it directly via ``:value.prop``. The sentinel for
-     * "follow default" is the literal string ``'__default__'``.
+     * the popover uses it directly via ``:value.prop``. The sentinel for the
+     * "Default: X" option is the literal string ``'__default__'``.
+     *
+     * Snapshot model: a stored value equal to the current resolved default
+     * (``context.defaultValue``) renders as that sentinel — i.e. "unforced" —
+     * even though it is stored concrete. Only a value that diverges from the
+     * resolved default shows as an explicit "Force to: …" pick (which is what
+     * surfaces the per-field reset link). ``null`` (legacy "follow") also maps
+     * to the sentinel.
      */
-    getDisplayedSelectValue(_field, selectedValue /* , context */) {
-        return selectedValue === null ? '__default__' : String(selectedValue)
+    getDisplayedSelectValue(_field, selectedValue, context) {
+        if (selectedValue === null || selectedValue === context?.defaultValue) return '__default__'
+        return String(selectedValue)
     }
 
     /**

@@ -213,13 +213,8 @@ async def create_session_from_payload(payload: dict) -> SessionCreationResult:
     #     the Session row from the JSONL) ---------------------------
     set_pending_agent_settings(session_id, agent_settings)
 
-    # --- resolve to effective settings: None -> per-project default
-    #     (inherited up the project hierarchy) -> global synced default --
-    from twicc.project_hierarchy import project_agent_defaults
-    project_defaults = await sync_to_async(project_agent_defaults)(
-        project_id, helpers.provider.value,
-    )
-    effective = helpers.resolve_agent_settings(agent_settings, project_defaults=project_defaults)
+    # --- resolve to effective settings: None -> global synced default --
+    effective = helpers.resolve_agent_settings(agent_settings)
     # enforce_agent_settings_consistency RETURNS an AgentSettings (may be
     # the same instance if no demotion was needed, or a fresh one via
     # _replace). Capture it.

@@ -154,11 +154,7 @@ async def send_message_to_session_from_payload(payload: dict) -> SendMessageResu
     agent_settings = AgentSettings(**{
         field: getattr(session, field) for field in AgentSettings._fields
     })
-    from twicc.project_hierarchy import project_agent_defaults
-    project_defaults = await sync_to_async(project_agent_defaults)(
-        session.project_id, helpers.provider.value,
-    )
-    effective = helpers.resolve_agent_settings(agent_settings, project_defaults=project_defaults)
+    effective = helpers.resolve_agent_settings(agent_settings)
     effective = helpers.enforce_agent_settings_consistency(effective)
 
     from twicc.agent.registry import get_agent_manager_registry

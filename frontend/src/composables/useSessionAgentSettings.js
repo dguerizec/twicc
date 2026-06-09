@@ -80,11 +80,13 @@ export function useSessionAgentSettings(sessionIdSource) {
     // ─── Resolved defaults (project chain → global) ──────────────────────────
     // The baseline a NULL ("follow default") field resolves to: the inherited
     // per-project default (walking worktree_of / path ancestors, mirroring the
-    // backend twicc.project_hierarchy) when the project sets one, else the
-    // provider's global default. This is what the popover shows as "default",
-    // what diff-marking compares against, and what "reset to default" lands on.
-    // The session still stores NULL and the backend re-resolves the same chain
-    // at create/resume (option B), so this stays display-only.
+    // frontend/src/utils/projectAgentDefaults.js) when the project sets one, else
+    // the provider's global default. This is what the popover renders as the
+    // "Default: X" option, what diff-marking compares against, and what every
+    // reset lands on. In the snapshot model (option A) a NEW session is created
+    // with these values FROZEN as concrete columns, so the baseline is purely a
+    // display/diff reference — changing a default never moves a launched session.
+    // See docs/plans/2026-06-09-project-agent-defaults-design.md.
     // The provider's GLOBAL defaults (synced settings), with no project layer.
     // The bottom of every resolution: resolvedDefaults falls through to it, and
     // the reset stack's "Global defaults" target pins to it.
@@ -141,15 +143,22 @@ export function useSessionAgentSettings(sessionIdSource) {
     })
 
     // ─── Aggregate state ─────────────────────────────────────────────────────
-    const anySettingForced = computed(() =>
-        selectedPermissionMode.value !== null ||
-        selectedModel.value !== null ||
-        selectedEffort.value !== null ||
-        selectedThinking.value !== null ||
-        selectedClaudeInChrome.value !== null ||
-        selectedFastMode.value !== null ||
-        selectedContextMax.value !== null
-    )
+    // A field is "forced" when it diverges from its resolved default (project
+    // chain → global). In the snapshot model every field is concrete, so this is
+    // NOT "non-null" but "differs from the current resolved default" — matching
+    // the summary's dashed-underline marking and gating the "Reset to defaults"
+    // entry (disabled when nothing diverges).
+    const anySettingForced = computed(() => {
+        const d = resolvedDefaults.value
+        const forced = (sel, def) => sel !== null && sel !== undefined && sel !== def
+        return forced(selectedPermissionMode.value, d.permission_mode) ||
+            forced(selectedModel.value, d.selected_model) ||
+            forced(selectedEffort.value, d.effort) ||
+            forced(selectedThinking.value, d.thinking_enabled) ||
+            forced(selectedClaudeInChrome.value, d.claude_in_chrome) ||
+            forced(selectedFastMode.value, d.fast_mode) ||
+            forced(selectedContextMax.value, d.context_max)
+    })
 
     const hasDropdownsChanged = computed(() =>
         selectedModel.value !== activeModel.value ||
@@ -219,14 +228,19 @@ export function useSessionAgentSettings(sessionIdSource) {
         selectedFastMode.value = preset.fast_mode
     }
 
+    // Re-pin every field to the current resolved default (project chain →
+    // global) as CONCRETE values. The snapshot model has no "follow" (null);
+    // resetting re-applies today's resolved defaults. Also used when the draft's
+    // provider switches, to re-pin to the new provider's defaults.
     function resetAllToDefaults() {
-        selectedPermissionMode.value = null
-        selectedModel.value = null
-        selectedEffort.value = null
-        selectedThinking.value = null
-        selectedClaudeInChrome.value = null
-        selectedFastMode.value = null
-        selectedContextMax.value = null
+        const d = resolvedDefaults.value
+        selectedPermissionMode.value = d.permission_mode
+        selectedModel.value = d.selected_model
+        selectedEffort.value = d.effort
+        selectedThinking.value = d.thinking_enabled
+        selectedClaudeInChrome.value = d.claude_in_chrome
+        selectedFastMode.value = d.fast_mode
+        selectedContextMax.value = d.context_max
     }
 
     // Resolve a full concrete bundle starting at a chain slice (nearest node
@@ -244,15 +258,15 @@ export function useSessionAgentSettings(sessionIdSource) {
         return { ...global, ...resolved }
     }
 
-    // The stack of reset targets surfaced under "Reset" in the popover:
-    //   • "Project defaults"  — clear every override → follow the project's
-    //     resolved defaults (NULL, so the fields render as "default").
-    //   • one entry per ANCESTOR project that defines its own defaults — pins the
-    //     draft to that ancestor's resolved defaults (concrete; skips the
-    //     overrides of nearer projects).
-    //   • "Global defaults"   — pins to the provider's global defaults (concrete).
+    // The stack of reset targets surfaced under "Reset" in the popover. Every
+    // target re-applies a CONCRETE resolved bundle (the snapshot model has no
+    // "follow"/NULL):
+    //   • "Project defaults" — the project's own resolved defaults (full chain).
+    //   • one entry per ANCESTOR project that defines its own defaults — that
+    //     ancestor's resolved defaults (skips the overrides of nearer projects).
+    //   • "Global defaults"  — the provider's global defaults.
     // When no project in the chain defines any defaults, collapses to a single
-    // plain "Reset to defaults" (the follow target) — the pre-feature UX.
+    // "Reset to defaults" that re-applies the global bundle.
     const resetStack = computed(() => {
         const provider = session.value?.provider
         const projectId = session.value?.project_id
@@ -273,24 +287,20 @@ export function useSessionAgentSettings(sessionIdSource) {
         const selfBundle = chain[0]?.default_agent_settings?.[provider]
         const hasProjectDefaults = (selfBundle && Object.keys(selfBundle).length) || ancestorSources.length > 0
         if (!hasProjectDefaults) {
-            return [{ key: '__reset__follow', label: 'Reset to defaults', follow: true }]
+            return [{ key: '__reset__global', label: 'Reset to defaults', bundle: { ...g } }]
         }
         return [
-            { key: '__reset__follow', label: 'Project defaults', follow: true },
+            { key: '__reset__project', label: 'Project defaults', bundle: resolveFromChainSlice(chain, provider, g) },
             ...ancestorSources,
             { key: '__reset__global', label: 'Global defaults', bundle: { ...g } },
         ]
     })
 
-    // Apply a reset target: a "follow" target clears every override (NULL); a
-    // concrete target forces the bundle's values so they override the project
-    // resolution (that's why ancestor/global targets are concrete, not NULL).
+    // Apply a reset target by forcing its concrete bundle onto every field. In
+    // the snapshot model there is no "follow" target — each reset re-pins the
+    // session to a resolved bundle (project / ancestor / global).
     function applyResetTarget(target) {
         if (!target) return
-        if (target.follow) {
-            resetAllToDefaults()
-            return
-        }
         const b = target.bundle || {}
         selectedModel.value = b.selected_model ?? null
         selectedContextMax.value = b.context_max ?? null

@@ -8,12 +8,13 @@
 // ``BaseProviderHelpers``.
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { vPopoverFocusFix } from '../../directives/vPopoverFocusFix'
-import { formatPresetSummary } from '../../utils/presetFormat'
+import { presetSummaryParts, bundleSummaryParts } from '../../utils/presetFormat'
 import { DEFAULT_SENTINEL } from '../../composables/useSessionAgentSettings'
 import { getProviderOptions, getProviderHelpers, getProviderIcon } from '../../providers'
 import { useDataStore } from '../../stores/data'
 import { useSettingsStore } from '../../stores/settings'
 import AgentSettingsPresetsDialog from '../app/AgentSettingsPresetsDialog.vue'
+import AgentSettingsSummaryView from './AgentSettingsSummaryView.vue'
 
 const props = defineProps({
     for: { type: String, required: true },
@@ -148,6 +149,25 @@ const SIMPLE_FIELDS = ['context_max', 'effort', 'thinking_enabled', 'permission_
 
 const defaults = computed(() => summaryState.value.defaults)
 
+// The session's current EFFECTIVE value per wire field (the user's selection,
+// else the resolved default). Fed to the preset / reset summaries so each can
+// dashed-underline the fields that DIFFER from the current choice — i.e. what
+// applying that preset / reset would actually change.
+const currentEffective = computed(() => {
+    const sel = summaryState.value.selected
+    const def = summaryState.value.defaults
+    const pick = (f) => sel[f] ?? def[f]
+    return {
+        selected_model: pick('selected_model'),
+        context_max: pick('context_max'),
+        effort: pick('effort'),
+        thinking_enabled: pick('thinking_enabled'),
+        permission_mode: pick('permission_mode'),
+        claude_in_chrome: pick('claude_in_chrome'),
+        fast_mode: pick('fast_mode'),
+    }
+})
+
 // Render-time context fed to the rendering hooks. Hooks ignore keys they
 // don't need; this lets us assemble it once per render and pass it through.
 const baseContext = computed(() => ({
@@ -246,7 +266,9 @@ function onSelectChange(field, event) {
     if (!ref_) return
     const raw = event.target.value
     if (raw === DEFAULT_SENTINEL) {
-        ref_.value = null
+        // Snapshot model: "Default: X" pins the field to the current resolved
+        // default (concrete), not a NULL "follow".
+        ref_.value = defaults.value[field]
         return
     }
     // Look the option up by stringified value so the typed (boolean / number /
@@ -258,12 +280,12 @@ function onSelectChange(field, event) {
 
 function onModelChange(event) {
     const raw = event.target.value
-    selectedModel.value = raw === DEFAULT_SENTINEL ? null : raw
+    selectedModel.value = raw === DEFAULT_SENTINEL ? defaults.value.selected_model : raw
 }
 
 function resetField(field) {
     const ref_ = SELECTED_REFS[field]
-    if (ref_) ref_.value = null
+    if (ref_) ref_.value = defaults.value[field]
 }
 
 const popoverRef = ref(null)
@@ -393,14 +415,16 @@ onBeforeUnmount(() => {
                     Reset / Presets
                     <wa-icon slot="end" name="caret-down"></wa-icon>
                 </wa-button>
-                <!-- Reset stack: follow the project's defaults, or pin to an
-                     ancestor project's / the global defaults. Collapses to a
-                     single item when no project in the chain sets defaults.
-                     See useSessionAgentSettings.resetStack. -->
+                <!-- Reset stack: re-apply the project's resolved defaults, an
+                     ancestor project's, or the global defaults — each shown with
+                     the concrete values it would set (like a preset). Collapses
+                     to a single "Reset to defaults" when no project in the chain
+                     sets any. See useSessionAgentSettings.resetStack. -->
                 <template v-if="resetStack.length === 1">
-                    <wa-dropdown-item :value="resetStack[0].key" :disabled="!anySettingForced">
+                    <wa-dropdown-item :value="resetStack[0].key" :disabled="!anySettingForced" class="reset-item">
                         <wa-icon slot="icon" name="arrow-rotate-left"></wa-icon>
-                        {{ resetStack[0].label }}
+                        <span>{{ resetStack[0].label }}</span>
+                        <AgentSettingsSummaryView class="option-description" :parts="bundleSummaryParts(resetStack[0].bundle, providerHelpers, currentEffective)" />
                     </wa-dropdown-item>
                 </template>
                 <template v-else>
@@ -409,9 +433,11 @@ onBeforeUnmount(() => {
                         v-for="target in resetStack"
                         :key="target.key"
                         :value="target.key"
+                        class="reset-item"
                     >
                         <wa-icon slot="icon" name="arrow-rotate-left"></wa-icon>
-                        {{ target.label }}
+                        <span>{{ target.label }}</span>
+                        <AgentSettingsSummaryView class="option-description" :parts="bundleSummaryParts(target.bundle, providerHelpers, currentEffective)" />
                     </wa-dropdown-item>
                 </template>
                 <wa-divider></wa-divider>
@@ -423,7 +449,7 @@ onBeforeUnmount(() => {
                     class="preset-item"
                 >
                     <span>{{ preset.name }}</span>
-                    <span class="option-description">{{ formatPresetSummary(preset, providerHelpers) }}</span>
+                    <AgentSettingsSummaryView class="option-description" :parts="presetSummaryParts(preset, providerHelpers, currentEffective)" />
                 </wa-dropdown-item>
                 <wa-divider v-if="hasPresets"></wa-divider>
                 <wa-dropdown-item value="__manage__">
@@ -480,7 +506,7 @@ onBeforeUnmount(() => {
                     </template>
                 </wa-select>
                 <span v-if="modelRow.helpText" class="setting-help">{{ modelRow.helpText }}</span>
-                <a v-else-if="selectedModel !== null" class="reset-setting-link" @click.prevent="selectedModel = null">Reset to default: {{ modelRow.defaultLabel }}</a>
+                <a v-else-if="modelRow.value !== DEFAULT_SENTINEL" class="reset-setting-link" @click.prevent="resetField('selected_model')">Reset to default: {{ modelRow.defaultLabel }}</a>
             </div>
 
             <!-- Other rows -->
@@ -510,7 +536,7 @@ onBeforeUnmount(() => {
                     </wa-option>
                 </wa-select>
                 <span v-if="row.helpText" class="setting-help">{{ row.helpText }}</span>
-                <a v-else-if="row.selectedValue !== null" class="reset-setting-link" @click.prevent="resetField(row.field)">Reset to default: {{ row.defaultLabel }}</a>
+                <a v-else-if="row.value !== DEFAULT_SENTINEL" class="reset-setting-link" @click.prevent="resetField(row.field)">Reset to default: {{ row.defaultLabel }}</a>
             </div>
         </div>
 
@@ -648,7 +674,8 @@ onBeforeUnmount(() => {
     color: var(--wa-color-text-quiet);
 }
 
-.preset-item::part(label) {
+.preset-item::part(label),
+.reset-item::part(label) {
     white-space: normal;
     max-width: 25rem;
 }

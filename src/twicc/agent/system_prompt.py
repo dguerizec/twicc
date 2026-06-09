@@ -550,12 +550,8 @@ async def mutable_context_fields_for_session(session_id: str) -> dict[str, str] 
         except ValueError:
             return None
         helpers = get_provider_helpers(provider)
-        from twicc.project_hierarchy import project_agent_defaults
-        project_defaults = project_agent_defaults(row.project_id, helpers.provider.value)
         resolved = helpers.enforce_agent_settings_consistency(
-            helpers.resolve_agent_settings(
-                AgentSettings.from_session(row), project_defaults=project_defaults,
-            )
+            helpers.resolve_agent_settings(AgentSettings.from_session(row))
         )
         fields = mutable_context_fields_from_resolved(
             provider=provider,
@@ -607,10 +603,8 @@ def seed_environment_baseline(
     from twicc.context_injection import seed_baseline
 
     helpers = get_provider_helpers(provider)
-    from twicc.project_hierarchy import project_agent_defaults
-    project_defaults = project_agent_defaults(project_id, helpers.provider.value)
     resolved = helpers.enforce_agent_settings_consistency(
-        helpers.resolve_agent_settings(agent_settings, project_defaults=project_defaults)
+        helpers.resolve_agent_settings(agent_settings)
     )
     fields = mutable_context_fields_from_resolved(
         provider=provider,

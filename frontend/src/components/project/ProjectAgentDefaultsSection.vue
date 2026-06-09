@@ -22,6 +22,7 @@ import { useSettingsStore } from '../../stores/settings'
 import { getProviderHelpers, getProviderStore, getProviderOptions, getProviderLabel, getProviderIcon } from '../../providers'
 import { useAgentSettingsPresetsStore } from '../../stores/agentSettingsPresets'
 import { ancestorChain } from '../../utils/projectAgentDefaults'
+import { formatBundleSummary } from '../../utils/presetFormat'
 import { DEFAULT_SENTINEL } from '../../composables/useSessionAgentSettings'
 
 const props = defineProps({
@@ -129,8 +130,30 @@ function setField(provider, field, rawValue) {
 }
 
 // ─── "Load from…" (named presets + ancestor projects' bundles) ────────────────
+// Resolve a source key to its wire-named bundle — shared by the picker's value
+// summary and the actual load, so the two never drift.
+function sourceBundle(provider, key) {
+    if (key === 'inherit-all') return {}  // clear every field → inherit
+    if (key.startsWith('preset:')) {
+        const index = Number(key.slice('preset:'.length))
+        const preset = (presetsStore.getPresets(provider) || [])[index]
+        return preset ? presetToBundle(preset) : {}
+    }
+    if (key.startsWith('ancestor:')) {
+        const nodeId = key.slice('ancestor:'.length)
+        return { ...(store.getProject(nodeId)?.default_agent_settings?.[provider] || {}) }
+    }
+    if (key === 'global') return globalBundleFor(provider)
+    return {}
+}
 function loadSources(provider) {
+    const h = helpersFor(provider)
     const sources = []
+    // "Reset all to inherit": clear every field for this provider. Only shown
+    // when at least one field is currently set, since otherwise it's a no-op.
+    if (Object.keys(localSettings.value[provider] || {}).length) {
+        sources.push({ key: 'inherit-all', label: 'Reset all to inherit', summary: 'every field inherits' })
+    }
     // Ancestor projects that define their own defaults for this provider.
     for (const node of ancestorChain(props.project.id, store.projects)) {
         if (node.id === props.project.id) continue
@@ -147,7 +170,12 @@ function loadSources(provider) {
     presets.forEach((preset, index) => {
         sources.push({ key: `preset:${index}`, label: `Preset: ${preset.name}` })
     })
-    return sources
+    // Attach a value summary (only the fields each source would set, filtered to
+    // the provider's supported ones) so the user sees what loading it brings in.
+    // Entries that already carry a summary (the synthetic "inherit" one) keep it.
+    return h
+        ? sources.map(s => s.summary !== undefined ? s : { ...s, summary: formatBundleSummary(sourceBundle(provider, s.key), h) })
+        : sources
 }
 function presetToBundle(preset) {
     const bundle = {}
@@ -174,18 +202,7 @@ function loadFrom(provider, event) {
     const key = event.target.value
     event.target.value = ''  // reset back to the placeholder
     if (!key) return
-    let bundle = {}
-    if (key.startsWith('preset:')) {
-        const index = Number(key.slice('preset:'.length))
-        const preset = (presetsStore.getPresets(provider) || [])[index]
-        if (!preset) return
-        bundle = presetToBundle(preset)
-    } else if (key.startsWith('ancestor:')) {
-        const nodeId = key.slice('ancestor:'.length)
-        bundle = { ...(store.getProject(nodeId)?.default_agent_settings?.[provider] || {}) }
-    } else if (key === 'global') {
-        bundle = globalBundleFor(provider)
-    }
+    const bundle = sourceBundle(provider, key)
     const clean = {}
     for (const field of FIELD_ORDER) {
         if (bundle[field] != null) clean[field] = bundle[field]
@@ -309,7 +326,8 @@ defineExpose({ getChangedFields, reset: initLocal })
                     class="ad-load-select"
                 >
                     <wa-option v-for="src in loadSources(p.value)" :key="src.key" :value="src.key" :label="src.label">
-                        {{ src.label }}
+                        <span>{{ src.label }}</span>
+                        <span v-if="src.summary" class="ad-option-description">{{ src.summary }}</span>
                     </wa-option>
                 </wa-select>
 

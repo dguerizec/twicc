@@ -900,16 +900,11 @@ class ClaudeCodeAgentManager(BaseAgentManager):
             return
 
         provider_helpers = get_provider_helpers(Provider.CLAUDE_CODE)
-        # Resolve effective settings (null → per-project default, inherited up
-        # the project hierarchy, → global default), then enforce provider-
-        # specific capability rules
-        from twicc.project_hierarchy import project_agent_defaults
-        project_defaults = await asyncio.to_thread(
-            project_agent_defaults, session.project_id, provider_helpers.provider.value,
-        )
+        # Resolve effective settings (null → global synced default), then
+        # enforce provider-specific capability rules
         requested_settings = provider_helpers.enforce_agent_settings_consistency(
             provider_helpers.resolve_agent_settings(
-                AgentSettings.from_session(session), project_defaults=project_defaults,
+                AgentSettings.from_session(session),
             ),
         )
 

@@ -5,9 +5,9 @@ import { toRaw } from 'vue'
 import { getPrefixSuffixBoundaries } from '../utils/contentVisibility'
 import { computeVisualItems, visualItemEqual, insertDaySeparators } from '../utils/visualItems'
 import { DISPLAY_LEVEL, DISPLAY_MODE, PROCESS_STATE, SYNTHETIC_ITEM } from '../constants'
-import { getProviderHelpers } from '../providers'
+import { getProviderHelpers, getProviderStore } from '../providers'
 import { getSessionCutoffMs, isSessionUnread } from '../utils/sessions'
-import { resolveProjectDefaultProvider } from '../utils/projectAgentDefaults'
+import { resolveProjectDefaultProvider, resolveProjectAgentDefaults } from '../utils/projectAgentDefaults'
 import { useSettingsStore } from './settings'
 import {
     saveDraftMessage,
@@ -929,13 +929,24 @@ export const useDataStore = defineStore('data', {
 
         // Projects
         addProject(project) {
-            this.$patch({ projects: { [project.id]: project } })
-            // Invalidate display name cache so it gets recomputed
-            delete this.localState.projectDisplayNames[project.id]
+            // Upsert via updateProject so a project_created that happens to target
+            // an already-known project replaces fields instead of deep-merging
+            // (see updateProject's note on removed nested keys).
+            this.updateProject(project)
         },
         updateProject(project) {
-            // $patch does a deep merge: only modified props trigger a re-render
-            this.$patch({ projects: { [project.id]: project } })
+            // Replace fields wholesale — do NOT $patch here. $patch DEEP-merges,
+            // which keeps keys that were REMOVED from a nested object. Concretely:
+            // setting a default_agent_settings field back to "inherit" drops it
+            // from the bundle, but as long as another field keeps the bundle
+            // non-null, the deep-merge would preserve the removed key with its
+            // old value — so the project edit dialog re-shows it instead of
+            // "Inherit". Object.assign replaces each top-level key (nested objects
+            // by reference, so removals propagate), while preserving any
+            // client-only keys the payload doesn't carry.
+            const existing = this.projects[project.id]
+            if (existing) Object.assign(existing, project)
+            else this.projects[project.id] = project
             // Invalidate display name cache so it gets recomputed
             delete this.localState.projectDisplayNames[project.id]
         },
@@ -970,7 +981,7 @@ export const useDataStore = defineStore('data', {
                 }
 
                 const updatedProject = await response.json()
-                this.$patch({ projects: { [projectId]: updatedProject } })
+                this.updateProject(updatedProject)
 
             } catch (error) {
                 // Rollback on error
@@ -1020,6 +1031,47 @@ export const useDataStore = defineStore('data', {
             this.removeMruSession(sessionId)
         },
         /**
+         * Resolve a project's inherited agent-settings defaults into a CONCRETE
+         * 7-field bundle to FREEZE onto a new draft (the snapshot taken at draft
+         * creation — see docs/plans/2026-06-09-project-agent-defaults-design.md).
+         * Field by field: the project chain's value (worktree / path ancestors)
+         * wins, else the provider's global default. The model is the alias (e.g.
+         * "opus"), never a pinned version, so version auto-upgrade is preserved.
+         * Fields the provider's global store doesn't expose resolve to null (e.g.
+         * thinking / chrome / fast for Codex) — the backend treats those as
+         * unsupported anyway.
+         * @param {string} projectId
+         * @param {string} provider - Wire key of the session's provider
+         * @returns {Object} the 7 agent-settings fields, all concrete or null
+         */
+        _resolveDraftAgentSettings(projectId, provider) {
+            const chain = resolveProjectAgentDefaults(projectId, provider, this.projects)
+            const pStore = getProviderStore(provider)
+            return {
+                selected_model: chain.selected_model ?? pStore?.defaultModel ?? null,
+                permission_mode: chain.permission_mode ?? pStore?.defaultPermissionMode ?? null,
+                effort: chain.effort ?? pStore?.defaultEffort ?? null,
+                thinking_enabled: chain.thinking_enabled ?? pStore?.defaultThinking ?? null,
+                claude_in_chrome: chain.claude_in_chrome ?? pStore?.defaultClaudeInChrome ?? null,
+                fast_mode: chain.fast_mode ?? pStore?.defaultFastMode ?? null,
+                context_max: chain.context_max ?? pStore?.defaultContextMax ?? null,
+            }
+        },
+
+        /** Pick the 7 agent-settings fields off a (draft) session object. */
+        _pickAgentSettings(session) {
+            return {
+                selected_model: session.selected_model ?? null,
+                permission_mode: session.permission_mode ?? null,
+                effort: session.effort ?? null,
+                thinking_enabled: session.thinking_enabled ?? null,
+                claude_in_chrome: session.claude_in_chrome ?? null,
+                fast_mode: session.fast_mode ?? null,
+                context_max: session.context_max ?? null,
+            }
+        },
+
+        /**
          * Create a draft session for a project.
          * Draft sessions exist only in the frontend until the first message is sent.
          * @param {string} projectId - The project ID
@@ -1032,6 +1084,10 @@ export const useDataStore = defineStore('data', {
             // (walking the worktree/path chain), else the global default.
             const provider = resolveProjectDefaultProvider(projectId, this.projects)
                 ?? useSettingsStore().defaultProvider
+            // Snapshot the resolved agent settings onto the draft (concrete), so
+            // launching the session freezes today's project → global defaults
+            // regardless of later default changes (option A).
+            const settings = this._resolveDraftAgentSettings(projectId, provider)
             this.sessions[id] = {
                 id,
                 project_id: projectId,
@@ -1040,20 +1096,21 @@ export const useDataStore = defineStore('data', {
                 mtime: now,
                 last_line: 0,
                 draft: true,
+                ...settings,
             }
             // Persist to IndexedDB
-            saveDraftSession(id, { projectId, provider }).catch(err =>
+            saveDraftSession(id, { projectId, provider, ...settings }).catch(err =>
                 console.warn('Failed to save draft session to IndexedDB:', err)
             )
             return id
         },
 
         /**
-         * Change the provider of an existing draft session.
-         * No-op if the session is not a draft. Persists the new provider to
-         * IndexedDB so it survives reloads. Caller is responsible for resetting
-         * the per-session agent settings (selected_*) so they follow the new
-         * provider's defaults.
+         * Change the provider of an existing draft session, re-snapshotting the
+         * agent settings to the new provider's resolved defaults (project chain →
+         * global). No-op if the session is not a draft. Persists provider +
+         * settings to IndexedDB so they survive reloads. The popover additionally
+         * re-pins its live refs via ``resetAllToDefaults`` for an immediate update.
          * @param {string} sessionId
          * @param {string} provider - Wire key of the new provider
          */
@@ -1062,10 +1119,15 @@ export const useDataStore = defineStore('data', {
             if (!session?.draft) return
             if (session.provider === provider) return
             session.provider = provider
+            // Re-snapshot the agent settings for the NEW provider (the previous
+            // bundle held the old provider's resolved defaults).
+            const settings = this._resolveDraftAgentSettings(session.project_id, provider)
+            Object.assign(session, settings)
             saveDraftSession(sessionId, {
                 projectId: session.project_id,
                 title: session.title,
                 provider,
+                ...settings,
             }).catch(err =>
                 console.warn('Failed to save draft session provider to IndexedDB:', err)
             )
@@ -3533,11 +3595,13 @@ export const useDataStore = defineStore('data', {
             const session = this.sessions[sessionId]
             if (!session?.draft) return
 
-            // Update IndexedDB with projectId, title, and provider (fire and forget)
+            // Persist projectId, title, provider + the frozen agent-settings
+            // snapshot (so a title edit doesn't drop them). Fire and forget.
             saveDraftSession(sessionId, {
                 projectId: session.project_id,
                 title,
                 provider: session.provider,
+                ...this._pickAgentSettings(session),
             }).catch(err =>
                 console.warn('Failed to save draft session title to IndexedDB:', err)
             )
@@ -3588,17 +3652,28 @@ export const useDataStore = defineStore('data', {
                 const draftSessions = await getAllDraftSessions()
                 const now = Date.now() / 1000
                 const defaultProvider = useSettingsStore().defaultProvider
-                for (const [sessionId, { projectId, title, provider }] of Object.entries(draftSessions)) {
+                for (const [sessionId, draft] of Object.entries(draftSessions)) {
+                    const { projectId, title } = draft
+                    // Stored provider wins; else the project's inherited default
+                    // (legacy drafts saved without one), else global.
+                    const provider = draft.provider
+                        || resolveProjectDefaultProvider(projectId, this.projects)
+                        || defaultProvider
+                    // Restore the frozen agent-settings snapshot. Legacy drafts
+                    // saved before option A carry none → resolve now (they were
+                    // never launched, so freezing today's defaults is correct).
+                    const settings = draft.selected_model !== undefined
+                        ? this._pickAgentSettings(draft)
+                        : this._resolveDraftAgentSettings(projectId, provider)
                     this.sessions[sessionId] = {
                         id: sessionId,
                         project_id: projectId,
-                        // Stored provider wins; else the project's inherited
-                        // default (legacy drafts saved without one), else global.
-                        provider: provider || resolveProjectDefaultProvider(projectId, this.projects) || defaultProvider,
+                        provider,
                         title: title || null,  // null = user hasn't set a title yet
                         mtime: now,
                         last_line: 0,
                         draft: true,
+                        ...settings,
                     }
                 }
             } catch (err) {
