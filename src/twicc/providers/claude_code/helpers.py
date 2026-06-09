@@ -40,6 +40,8 @@ from .constants import (
     OBSOLETE_SYNCED_SETTINGS_KEYS as _OBSOLETE_SYNCED_SETTINGS_KEYS,
     RENAMED_SYNCED_SETTINGS_KEYS as _RENAMED_SYNCED_SETTINGS_KEYS,
     SYNCED_SETTINGS_DEFAULTS as _SYNCED_SETTINGS_DEFAULTS,
+    UNTRUSTED_PERMISSION_MODE_SYNCED_KEY as _UNTRUSTED_PERMISSION_MODE_SYNCED_KEY,
+    UNTRUSTED_PERMISSION_MODES as _UNTRUSTED_PERMISSION_MODES,
     ClaudeCodeModelExtra,
 )
 from .pricing import CLAUDE_FAMILIES, extract_model_info
@@ -200,6 +202,11 @@ class ClaudeCodeHelpers(BaseProviderHelpers):
 
     # Claude Code permission modes that do not require interactive approval.
     NON_INTERACTIVE_PERMISSION_MODES: ClassVar[frozenset[str]] = frozenset({"bypassPermissions", "dontAsk"})
+
+    # Permission modes allowed in untrusted projects + the synced key of the
+    # untrusted default (see ``.constants`` for the rationale).
+    UNTRUSTED_PERMISSION_MODES: ClassVar[frozenset[str]] = _UNTRUSTED_PERMISSION_MODES
+    UNTRUSTED_PERMISSION_MODE_SYNCED_KEY: ClassVar[str | None] = _UNTRUSTED_PERMISSION_MODE_SYNCED_KEY
 
     # Per-(field, value) capability flag in :class:`ClaudeCodeModelExtra`
     # gating the value. Values not listed here are universally available.

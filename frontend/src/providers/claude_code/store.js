@@ -2,7 +2,7 @@
 
 import { defineStore, acceptHMRUpdate } from 'pinia'
 import { ref } from 'vue'
-import { CONTEXT_MAX, EFFORT, PERMISSION_MODE } from './constants'
+import { CONTEXT_MAX, EFFORT, PERMISSION_MODE, UNTRUSTED_PERMISSION_MODES } from './constants'
 
 export const useClaudeCodeStore = defineStore('claudeCode', () => {
     // ─── Auth ────────────────────────────────────────────────────────────
@@ -60,6 +60,10 @@ export const useClaudeCodeStore = defineStore('claudeCode', () => {
     // so the orchestrator dispatches incoming/outgoing values here).
 
     const defaultPermissionMode = ref(null)
+    // Default permission mode seeded when a session is created in an
+    // UNTRUSTED (or unknown-trust) project. Restricted to the
+    // untrusted-allowed set (trust design §13.1).
+    const defaultUntrustedPermissionMode = ref(null)
     const defaultModel = ref(null)
     const defaultContextMax = ref(null)
     const defaultEffort = ref(null)
@@ -69,6 +73,9 @@ export const useClaudeCodeStore = defineStore('claudeCode', () => {
 
     function setDefaultPermissionMode(value) {
         if (Object.values(PERMISSION_MODE).includes(value)) defaultPermissionMode.value = value
+    }
+    function setDefaultUntrustedPermissionMode(value) {
+        if (UNTRUSTED_PERMISSION_MODES.includes(value)) defaultUntrustedPermissionMode.value = value
     }
     function setDefaultModel(value) {
         if (typeof value === 'string' && value.length > 0) defaultModel.value = value
@@ -167,6 +174,7 @@ export const useClaudeCodeStore = defineStore('claudeCode', () => {
         usageRefreshing,
         setUsageRefreshing,
         defaultPermissionMode,
+        defaultUntrustedPermissionMode,
         defaultModel,
         defaultContextMax,
         defaultEffort,
@@ -174,6 +182,7 @@ export const useClaudeCodeStore = defineStore('claudeCode', () => {
         defaultClaudeInChrome,
         defaultFastMode,
         setDefaultPermissionMode,
+        setDefaultUntrustedPermissionMode,
         setDefaultModel,
         setDefaultContextMax,
         setDefaultEffort,

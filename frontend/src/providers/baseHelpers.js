@@ -412,11 +412,31 @@ export class BaseProviderHelpers {
     }
 
     /**
+     * Permission modes allowed for sessions in an UNTRUSTED (or
+     * unknown-trust) project. Empty means the provider has no trust-based
+     * restriction (and the ``permission_mode_if_untrusted`` pseudo-field is
+     * unsupported). Mirrors the backend ``UNTRUSTED_PERMISSION_MODES``.
+     */
+    getUntrustedPermissionModes() {
+        return []
+    }
+
+    /**
      * Return the list of choice entries for ``field``, or ``[]`` when the
      * provider doesn't declare any. Order is preserved (used to drive the
      * select option order).
+     *
+     * ``permission_mode_if_untrusted`` is a default-shaping pseudo-field (not
+     * part of the closed bundle / Session columns): it reuses the
+     * ``permission_mode`` catalogue filtered down to the untrusted-allowed
+     * set. See docs/plans/2026-06-09-project-trust-design.md §13.1.
      */
     getFieldChoices(field) {
+        if (field === 'permission_mode_if_untrusted') {
+            const allowed = this.getUntrustedPermissionModes()
+            return (this.getAgentSettingsChoices().permission_mode ?? [])
+                .filter(choice => allowed.includes(choice.value))
+        }
         return this.getAgentSettingsChoices()[field] ?? []
     }
 
@@ -447,6 +467,10 @@ export class BaseProviderHelpers {
      * hide selects/commands the provider doesn't own.
      */
     supportsAgentSetting(field) {
+        if (field === 'permission_mode_if_untrusted') {
+            return this.supportsAgentSetting('permission_mode')
+                && this.getUntrustedPermissionModes().length > 0
+        }
         const categories = this.getAgentSettingsCategories()
         for (const fields of Object.values(categories)) {
             if (fields.includes(field)) return true
@@ -515,6 +539,7 @@ export class BaseProviderHelpers {
         const defaults = {
             selected_model: 'Model',
             permission_mode: 'Permission',
+            permission_mode_if_untrusted: 'Permission (untrusted)',
             effort: 'Effort',
             thinking_enabled: 'Thinking',
             claude_in_chrome: 'Claude built-in Chrome MCP',
@@ -538,9 +563,16 @@ export class BaseProviderHelpers {
     /**
      * Whether a single choice option of a select should be disabled. The
      * popover surfaces a "(not available)" suffix on disabled options so
-     * the user understands why. Default: never disabled.
+     * the user understands why. Default: only the trust clamp — in an
+     * untrusted project (``context.untrusted``) permission modes outside the
+     * untrusted-allowed set are disabled. Providers overriding this should
+     * chain ``super.isChoiceDisabled(...)``.
      */
-    isChoiceDisabled(/* field, choiceValue, context */) {
+    isChoiceDisabled(field, choiceValue, context) {
+        if (field === 'permission_mode' && context?.untrusted) {
+            const allowed = this.getUntrustedPermissionModes()
+            if (allowed.length && !allowed.includes(choiceValue)) return true
+        }
         return false
     }
 

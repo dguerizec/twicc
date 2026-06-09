@@ -24,6 +24,18 @@ export const PERMISSION_MODE = {
 }
 
 /**
+ * Permission modes allowed for sessions in an UNTRUSTED (or unknown-trust)
+ * project. Mirrors the backend ``UNTRUSTED_PERMISSION_MODES`` in
+ * ``providers/codex/constants.py`` — keep in sync.
+ */
+export const UNTRUSTED_PERMISSION_MODES = [
+    PERMISSION_MODE.READ_ONLY,
+    PERMISSION_MODE.STRICT,
+    PERMISSION_MODE.AUTO,
+    PERMISSION_MODE.AUTONOMOUS,
+]
+
+/**
  * Effort level values for Codex sessions.
  */
 export const EFFORT = {

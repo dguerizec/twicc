@@ -207,6 +207,67 @@ def _load_resolution(project_id: str):
     return target, resolution, source_directory
 
 
+# --- enforcement (Part 2) ---------------------------------------------------
+#
+# Sync helpers used by the agent build paths to clamp permission settings in
+# untrusted projects. The clamp is the backend security floor: it never trusts
+# the frontend (which filters choices for UX only). Unknown trust is treated as
+# untrusted — the session-creation gate normally forces a decision first, so an
+# unresolved state here means the gate was bypassed.
+# See docs/plans/2026-06-09-project-trust-design.md §13.
+
+
+def project_is_untrusted(project_id: str) -> bool:
+    """True when the project's effective trust is NOT trusted (sync, DB reads).
+
+    Pure resolution — no provider-config seeding (the gate already did it).
+    """
+    from twicc.trust import resolve_project
+
+    return resolve_project(project_id).state is not True
+
+
+def untrusted_permission_mode_default(provider) -> str:
+    """The provider's configured default permission mode for untrusted projects.
+
+    Reads the global synced setting; falls back to the provider's hard default.
+    A configured value outside the provider's untrusted-allowed set (stale or
+    hand-edited settings.json) is ignored in favor of the hard default.
+    """
+    from twicc.providers.helpers import get_provider_helpers
+    from twicc.synced_settings import read_synced_settings
+
+    helpers = get_provider_helpers(provider)
+    key = helpers.UNTRUSTED_PERMISSION_MODE_SYNCED_KEY
+    if key is None:
+        raise ValueError(f"Provider {provider!r} has no untrusted permission mode")
+    value = read_synced_settings().get(key)
+    if value in helpers.UNTRUSTED_PERMISSION_MODES:
+        return value
+    return helpers.SYNCED_SETTINGS_DEFAULTS[key]
+
+
+def clamp_permission_mode_for_untrusted(provider, permission_mode: str | None) -> str:
+    """Clamp a permission mode to the provider's untrusted-allowed set.
+
+    In-set values pass through; anything else (including ``None``) falls back to
+    the global untrusted default. Callers apply this only when the project
+    resolved untrusted (:func:`project_is_untrusted`).
+    """
+    from twicc.providers.helpers import get_provider_helpers
+
+    helpers = get_provider_helpers(provider)
+    if permission_mode in helpers.UNTRUSTED_PERMISSION_MODES:
+        return permission_mode
+    clamped = untrusted_permission_mode_default(provider)
+    if permission_mode is not None:
+        logger.warning(
+            "Untrusted project: permission_mode %r clamped to %r (%s)",
+            permission_mode, clamped, provider,
+        )
+    return clamped
+
+
 # --- public entry points --------------------------------------------------
 
 
@@ -322,5 +383,8 @@ async def decide_project_trust(
 __all__ = [
     "resolve_project_trust",
     "decide_project_trust",
+    "project_is_untrusted",
+    "untrusted_permission_mode_default",
+    "clamp_permission_mode_for_untrusted",
     "TrustResolution",
 ]

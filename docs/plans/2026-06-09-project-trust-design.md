@@ -241,3 +241,193 @@ Codex : retirer `auto`/`autonomous`/`yolo` → `read_only`/`strict`) ; réductio
 `allow-dangerously-skip-permissions` en untrusted ; setting « default permission mode untrusted » ;
 **activation des outils worktree** + gestion du cas **worktree de PR externe** (distinction à la
 création). Les outils worktree Claude sont déjà auto-désactivés par le binaire hors trust.
+
+## 13. Part 2 — enforcement (detailed)
+
+> Written in English (project doc-language standard). Supersedes the §12 stub.
+
+### 13.0 Scope & non-goals
+
+Phase 2 does exactly two things, no more:
+1. **Declare** trust to the providers' configs — done in Part 1 (`hasTrustDialogAccepted` / `trust_level`).
+2. **Clamp** the permission settings that make no sense for an untrusted project.
+
+It is **not** our job to police what the agent does once launched (content-level
+prompt injection, a malicious `AGENTS.md`/`CLAUDE.md`, harness/model reliability).
+We declare trust and remove the modes/sources that don't belong in untrusted; the
+rest is the provider's responsibility. This boundary is deliberate.
+
+Driving intent of "untrusted" (user framing): **don't let repo-controlled
+config/tooling hijack the agent** (`.mcp.json`, project hooks, project agents,
+project commands, project settings). Writing files is **not** the threat.
+
+Two enforcement layers, different responsibilities:
+- **Frontend** — UX: pre-fill the right default, clamp the offered choices,
+  surface the forced value. Convenience, not security.
+- **Backend** — the security floor: a forged WS payload must not be able to run
+  `bypassPermissions` in an untrusted project. Mandatory, independent of the front.
+
+### 13.1 The dual permission-mode default
+
+Introduce a second default, **`permission_mode_if_untrusted`**, alongside the
+existing `permission_mode`. It exists, **per provider**, at three levels: global
+synced settings, presets, per-project `default_agent_settings[provider]`.
+
+- **Not a closed-bundle field.** The 7-field bundle maps 1:1 to `Session`
+  columns; a session stores a single resolved `permission_mode`.
+  `permission_mode_if_untrusted` is a *default-shaping* field — it lives only in
+  the default/preset/project-default configs, never on `Session`.
+- **Both fields inherit up the same chain** (`projectAgentDefaults.js`:
+  self → `worktree_of`/path-ancestor → … → global).
+- **Independent of the project's own trust state.** Both are always editable and
+  meaningful in the editor — neither is clamped by the project's current trust.
+  Which one is *used* is decided at session-creation time by the effective trust.
+- **Allowed values of the untrusted field = the untrusted-allowed set** (§13.2).
+  The trusted field keeps the full set.
+
+### 13.2 Untrusted-allowed sets + hard defaults (per provider)
+
+The criterion (agreed after implementation, superseding the earlier stricter
+sets): **every mode that keeps at least one structural guardrail is allowed** —
+a permission prompt, read-only, auto-deny, the CLI's safety checks (Claude
+`auto`) or the workspace-write sandbox (Codex `auto`/`autonomous`). Only the
+no-guardrail-at-all modes are removed. Untrusted is about not loading
+repo-controlled config, not about forbidding reads/writes.
+
+| Provider | Full set | Untrusted-allowed | Removed | Hard default (untrusted) |
+| --- | --- | --- | --- | --- |
+| Claude | default, auto, acceptEdits, plan, dontAsk, bypassPermissions | default, auto, acceptEdits, plan, dontAsk | **bypassPermissions** | **`default`** |
+| Codex | read_only, strict, auto, autonomous, yolo | read_only, strict, auto, autonomous | **yolo** | **`read_only`** |
+
+The hard default is the read-only-ish mode **that still asks** (Claude `default`
+prompts before each write/exec; Codex `read_only` = read-only sandbox +
+`on-request`, asks to write/escalate) — **not** the silent-reject one (`dontAsk` /
+`strict`). It lives in:
+- backend `SYNCED_SETTINGS_DEFAULTS` (`providers/claude_code/constants.py:42`,
+  `providers/codex/constants.py:14`) — add `claudeCodeDefaultUntrustedPermissionMode
+  = "default"`, `codexDefaultUntrustedPermissionMode = "read_only"`, with the
+  matching `AGENT_SETTINGS_FIELDS_MAPPING`-style entries;
+- frontend provider store (`providers/{provider}/store.js`) — a
+  `defaultUntrustedPermissionMode` ref + setter, sibling of `defaultPermissionMode`.
+
+### 13.3 Trust-dependent field selection (the resolution rule)
+
+Wherever a `permission_mode` is materialized from a default/preset, pick the field
+by effective trust of the target project:
+- effective trust **trusted** → use `permission_mode`;
+- effective trust **untrusted / unknown** → use `permission_mode_if_untrusted`
+  (unknown is treated as untrusted, agreed).
+
+Applies at **three** interaction points, not just creation:
+1. **Draft pre-fill** — `stores/data.js:createDraftSession` (option A snapshot).
+2. **Apply preset** — `AgentSettingsPopover.vue` preset application.
+3. **Reset** — the reset stack in `useSessionAgentSettings.js`.
+
+The session stores the single chosen value (snapshot). The model alias rule is
+unchanged.
+
+### 13.4 Backend security clamp (mandatory floor)
+
+At the agent-build points, re-resolve effective trust (backend `twicc.trust`
+resolver, Part 1) and clamp. This is the security boundary; it does not trust the
+frontend.
+
+**Claude** — `providers/claude_code/agent/agent.py`, just before
+`ClaudeAgentOptions(...)` (~l.823):
+- `permission_mode`: if untrusted/unknown and the incoming value ∉ untrusted-allowed
+  → replace with the **global** untrusted-default. (Normal flow never hits this:
+  the frontend already baked a safe value at creation.)
+- `setting_sources`: `["user"]` (currently `["user","project","local"]`, l.830) —
+  drops project/local settings, hooks, `.mcp.json`, project agents.
+- `extra_args`: drop `allow-dangerously-skip-permissions` (currently always set,
+  l.768) — paired with removing `bypassPermissions`.
+- Slash commands: expose only the user/managed set (`discover_global_commands`),
+  drop `discover_project_commands`.
+
+**Codex** — `providers/codex/permission_modes.py` (`resolve_codex_policy` +
+`resolve_codex_turn_overrides`): if untrusted/unknown, clamp `(sandbox, approval)`
+to the untrusted-allowed set (fallback = global untrusted-default). The native
+`trust_level` gate (written in Part 1) already cuts project-local config/MCP/hooks
+(see §13.5), so there is nothing else to do for the config-injection surface.
+
+**Floor uses the global default, not the project chain.** Option A stays intact
+(frontend resolves the chain, backend = floor + legacy): the clamp's fallback is
+the *global* untrusted-default, never a re-resolved per-project value. The
+per-project untrusted-default is honored via the frontend snapshot at creation; the
+backend only catches anomalies (forged payload, legacy session, post-revocation
+resume).
+
+**Resume.** Same clamp on the build path: if a project became untrusted after
+creation, a now-too-permissive stored `permission_mode` is clamped (→ global
+untrusted-default) and surfaced as **forced** (reuse the `isContextMaxForced`
+machinery) + a **toast**. No live re-clamp of a running process (decided:
+resume-only; Codex re-clamps per-turn for free).
+
+### 13.5 Codex enforcement facts (empirical, from the Rust source)
+
+Checked against `~/dev/codex`, the app-server v2 path TwiCC uses.
+- The binary **does not** clamp the `sandbox`/`approval` we pass explicitly:
+  `derive_permission_profile` (`config/src/config_toml.rs`) and the approval
+  default (`core/src/config/mod.rs`) apply the trust-based default **only when the
+  value is unset**; an explicit override always wins (the `requirements` clamp is
+  gated `!was_explicit`). ⇒ Codex enforcement is **entirely on us**.
+- `trust_level != Trusted` **natively gates** "project-local config, hooks, and
+  exec policies" (incl. project-defined MCP) — `config/src/loader/mod.rs:833`.
+  Part 1 already writes `trusted`/`untrusted`, so this is wired for free.
+- Writing `untrusted` also **neutralizes Codex auto-trust**: `thread_processor.rs`
+  auto-persists `Trusted` on an elevated request only when `trust_level.is_none()`;
+  an explicit `untrusted` blocks it.
+- `AGENTS.md` is loaded regardless of trust (`core/src/agents_md.rs`) — **out of
+  scope** (policing instructions is not our job; see §13.0).
+
+### 13.6 Insertion points (file:line)
+
+Backend:
+- `providers/claude_code/constants.py` (`SYNCED_SETTINGS_DEFAULTS` l.42,
+  `AGENT_SETTINGS_FIELDS_MAPPING` l.94) — add the untrusted-default key/mapping;
+  same for `providers/codex/constants.py` (l.14 / l.38).
+- `views.py:_clean_project_agent_defaults` (l.302) — **whitelist
+  `permission_mode_if_untrusted`** as an allowed key (it is *not* in
+  `AgentSettings._fields`, so the current `allowed_fields` check at ~l.341 rejects
+  it), and validate its value against the provider's untrusted-allowed set.
+- New helper `clamp_for_trust(provider, project, settings)` + call sites: Claude
+  `agent/agent.py` (before `ClaudeAgentOptions`), Codex `permission_modes.py`
+  (`resolve_codex_policy` / `resolve_codex_turn_overrides`). Reuses
+  `twicc.trust` / `core.services.trust`.
+- `enforce_agent_settings_consistency` stays the capability clamp; the trust clamp
+  is a *sibling* applied where the project is in scope, not threaded into it.
+
+Frontend:
+- `providers/{provider}/store.js` — `defaultUntrustedPermissionMode` state + setter.
+- `utils/projectAgentDefaults.js` — resolve `permission_mode_if_untrusted` up the
+  chain like the other fields.
+- `composables/useSessionAgentSettings.js` — trust-aware field selection at
+  pre-fill/preset/reset; forced display when clamped.
+- `stores/data.js:createDraftSession` — pick the field by effective trust.
+- `components/project/ProjectAgentDefaultsSection.vue` — paired field per provider
+  ("Permission mode (trusted)" / "(untrusted)", Inherit sentinel; untrusted choices
+  limited to the allowed set).
+- the global agent-defaults UI (same surface that edits `defaultPermissionMode`) —
+  add the sibling field.
+- `utils/presetFormat.js` — carry `permission_mode_if_untrusted` in the preset
+  shape/summary.
+- `AgentSettingsPopover.vue` — forced display + toast on clamp.
+
+Validation/choices are enforced **both** front (choices) and back
+(`_clean_project_agent_defaults` + the clamp).
+
+### 13.7 Open sequencing detail
+
+Gate (Part 1) and draft pre-fill both fire at session creation. The pre-fill must
+read trust **as resolved by the gate** (unknown → untrusted); if call order makes
+pre-fill run first, re-seed after the gate resolves. Pure wiring, no design impact.
+
+### 13.8 Deferred / out of scope
+
+- **Worktree tools** (`EnterWorktree`/`ExitWorktree`) activation + the external-PR
+  worktree distinction — related but separate; not part of this enforcement spec.
+- **Untrusted badge** on project/session — end of Phase 2.
+- **CLI-created sessions** inheriting the untrusted default — same "CLI inheritance
+  deferred" trade as project-defaults (§9 of the agent-defaults doc).
+- Policing agent behavior / `AGENTS.md` / content injection — explicitly not ours
+  (§13.0).

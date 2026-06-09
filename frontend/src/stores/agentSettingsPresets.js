@@ -19,6 +19,7 @@ const PRESET_FIELDS = [
     'effort',
     'thinking',
     'permission_mode',
+    'permission_mode_if_untrusted',
     'claude_in_chrome',
     'fast_mode',
 ]

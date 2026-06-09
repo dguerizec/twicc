@@ -313,7 +313,11 @@ def _clean_project_agent_defaults(default_provider, default_agent_settings):
     pass ``None`` for the other.
     """
     from twicc.core.enums import Provider
-    from twicc.providers.helpers import AGENT_SETTINGS_HIDDEN_FROM_FRONTEND, AgentSettings
+    from twicc.providers.helpers import (
+        AGENT_SETTINGS_HIDDEN_FROM_FRONTEND,
+        AgentSettings,
+        get_provider_helpers,
+    )
 
     valid_providers = {p.value for p in Provider}
 
@@ -338,6 +342,19 @@ def _clean_project_agent_defaults(default_provider, default_agent_settings):
             for field, value in bundle.items():
                 if field in AGENT_SETTINGS_HIDDEN_FROM_FRONTEND:
                     continue  # strip hidden fields defensively
+                if field == "permission_mode_if_untrusted":
+                    # Default-shaping field, not part of the closed bundle: the
+                    # permission mode seeded when the project resolves untrusted
+                    # (trust design §13.1). Value must be in the provider's
+                    # untrusted-allowed set.
+                    if value is not None:
+                        helpers = get_provider_helpers(prov)
+                        if value not in helpers.UNTRUSTED_PERMISSION_MODES:
+                            return None, None, (
+                                f"Invalid permission_mode_if_untrusted for {prov!r}: {value!r}"
+                            )
+                        prov_bundle[field] = value
+                    continue
                 if field not in allowed_fields:
                     return None, None, f"Unknown agent settings field: {field!r}"
                 if value is not None:
@@ -525,13 +542,20 @@ async def commands(request, project_id):
 
     from django.db.models import Q
 
+    from twicc.core.services.trust import project_is_untrusted
+
     qs = (
         Command.objects
         .filter(provider=provider.value, activation_char=activation_char)
-        .filter(Q(project__isnull=True) | Q(project_id=project_id))
         .order_by("name")
         .values("name", "plugin_name", "description", "argument_hint", "is_builtin", "project_id")
     )
+    # Untrusted (or unknown-trust) projects only get the global (user/managed)
+    # commands — project-scoped ones are repo-controlled (trust design §13.4).
+    if await sync_to_async(project_is_untrusted)(project_id):
+        qs = qs.filter(project__isnull=True)
+    else:
+        qs = qs.filter(Q(project__isnull=True) | Q(project_id=project_id))
     cmds = await sync_to_async(list)(qs)
 
     return JsonResponse({

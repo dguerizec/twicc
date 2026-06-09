@@ -3,6 +3,7 @@ import { useDataStore } from '../stores/data'
 import { useAgentSettingsPresetsStore } from '../stores/agentSettingsPresets'
 import { getProviderHelpers, getProviderStore } from '../providers'
 import { resolveProjectAgentDefaults, ancestorChain } from '../utils/projectAgentDefaults'
+import { resolveProjectTrust } from '../utils/trust'
 
 // Sentinel value used by the popover selects to encode the "follow global
 // default" choice. When set, the corresponding selected ref is null.
@@ -39,6 +40,16 @@ export function useSessionAgentSettings(sessionIdSource) {
 
     const providerHelpers = computed(() => getProviderHelpers(session.value?.provider))
     const providerStore = computed(() => getProviderStore(session.value?.provider))
+
+    // Effective trust of the session's project. NOT trusted (untrusted or
+    // unknown) flips every permission-mode default source to the
+    // `permission_mode_if_untrusted` layer and clamps the offered choices
+    // (trust design §13.3). The backend independently enforces the same floor.
+    const sessionIsUntrusted = computed(() => {
+        const projectId = session.value?.project_id
+        if (!projectId) return false
+        return resolveProjectTrust(projectId, store.projects).state !== true
+    })
 
     // ─── Selected (per-session override) and active (currently applied) refs ──
     // null = "follow global default", explicit value = "forced for this session"
@@ -95,6 +106,9 @@ export function useSessionAgentSettings(sessionIdSource) {
         return {
             selected_model: pStore?.defaultModel,
             permission_mode: pStore?.defaultPermissionMode,
+            // Default-shaping pseudo-field (never a Session column): the
+            // permission default used when the project is untrusted.
+            permission_mode_if_untrusted: pStore?.defaultUntrustedPermissionMode,
             effort: pStore?.defaultEffort,
             thinking_enabled: pStore?.defaultThinking,
             claude_in_chrome: pStore?.defaultClaudeInChrome,
@@ -103,6 +117,17 @@ export function useSessionAgentSettings(sessionIdSource) {
         }
     })
 
+    // Collapse the trust-dependent permission layer of a resolved bundle: in an
+    // untrusted project the effective permission default is the
+    // `permission_mode_if_untrusted` value (falling back to the trusted one
+    // only when nothing defines the untrusted layer — the backend clamp then
+    // catches it). The pseudo-field never leaks out of the returned bundle.
+    function collapseTrustPermission(bundle, untrusted) {
+        const { permission_mode_if_untrusted: untrustedMode, ...rest } = bundle
+        if (untrusted) rest.permission_mode = untrustedMode ?? rest.permission_mode
+        return rest
+    }
+
     const resolvedDefaults = computed(() => {
         const g = globalDefaults.value
         const provider = session.value?.provider
@@ -110,15 +135,17 @@ export function useSessionAgentSettings(sessionIdSource) {
         const chain = (projectId && provider)
             ? resolveProjectAgentDefaults(projectId, provider, store.projects)
             : {}
-        return {
+        return collapseTrustPermission({
             selected_model: chain.selected_model ?? g.selected_model,
             permission_mode: chain.permission_mode ?? g.permission_mode,
+            permission_mode_if_untrusted:
+                chain.permission_mode_if_untrusted ?? g.permission_mode_if_untrusted,
             effort: chain.effort ?? g.effort,
             thinking_enabled: chain.thinking_enabled ?? g.thinking_enabled,
             claude_in_chrome: chain.claude_in_chrome ?? g.claude_in_chrome,
             fast_mode: chain.fast_mode ?? g.fast_mode,
             context_max: chain.context_max ?? g.context_max,
-        }
+        }, sessionIsUntrusted.value)
     })
 
     // The model that's effectively in use right now: the user's selection if
@@ -223,7 +250,14 @@ export function useSessionAgentSettings(sessionIdSource) {
         selectedContextMax.value = preset.context_max
         selectedEffort.value = preset.effort
         selectedThinking.value = preset.thinking
-        selectedPermissionMode.value = preset.permission_mode
+        // Trust-dependent field selection (trust design §13.3): an untrusted
+        // project applies the preset's untrusted permission layer instead of
+        // the trusted one (falling back to the global untrusted default).
+        selectedPermissionMode.value = sessionIsUntrusted.value
+            ? (preset.permission_mode_if_untrusted
+                ?? globalDefaults.value.permission_mode_if_untrusted
+                ?? preset.permission_mode)
+            : preset.permission_mode
         selectedClaudeInChrome.value = preset.claude_in_chrome
         selectedFastMode.value = preset.fast_mode
     }
@@ -255,7 +289,7 @@ export function useSessionAgentSettings(sessionIdSource) {
                 if (bundle[field] != null && !(field in resolved)) resolved[field] = bundle[field]
             }
         }
-        return { ...global, ...resolved }
+        return collapseTrustPermission({ ...global, ...resolved }, sessionIsUntrusted.value)
     }
 
     // The stack of reset targets surfaced under "Reset" in the popover. Every
@@ -286,13 +320,14 @@ export function useSessionAgentSettings(sessionIdSource) {
         }
         const selfBundle = chain[0]?.default_agent_settings?.[provider]
         const hasProjectDefaults = (selfBundle && Object.keys(selfBundle).length) || ancestorSources.length > 0
+        const globalBundle = collapseTrustPermission({ ...g }, sessionIsUntrusted.value)
         if (!hasProjectDefaults) {
-            return [{ key: '__reset__global', label: 'Reset to defaults', bundle: { ...g } }]
+            return [{ key: '__reset__global', label: 'Reset to defaults', bundle: globalBundle }]
         }
         return [
             { key: '__reset__project', label: 'Project defaults', bundle: resolveFromChainSlice(chain, provider, g) },
             ...ancestorSources,
-            { key: '__reset__global', label: 'Global defaults', bundle: { ...g } },
+            { key: '__reset__global', label: 'Global defaults', bundle: globalBundle },
         ]
     })
 
@@ -476,6 +511,7 @@ export function useSessionAgentSettings(sessionIdSource) {
         effectiveModel,
         resolvedDefaults,
         isContextMaxForced,
+        sessionIsUntrusted,
         // aggregates
         anySettingForced,
         hasDropdownsChanged,

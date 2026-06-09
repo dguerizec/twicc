@@ -2,7 +2,7 @@
 
 import { defineStore, acceptHMRUpdate } from 'pinia'
 import { ref } from 'vue'
-import { CONTEXT_MAX, EFFORT, PERMISSION_MODE } from './constants'
+import { CONTEXT_MAX, EFFORT, PERMISSION_MODE, UNTRUSTED_PERMISSION_MODES } from './constants'
 
 export const useCodexStore = defineStore('codex', () => {
     // ─── Auth ────────────────────────────────────────────────────────────
@@ -91,6 +91,10 @@ export const useCodexStore = defineStore('codex', () => {
     const defaultModel = ref(null)
     const defaultEffort = ref(null)
     const defaultPermissionMode = ref(null)
+    // Default permission mode seeded when a session is created in an
+    // UNTRUSTED (or unknown-trust) project. Restricted to the
+    // untrusted-allowed set (trust design §13.1).
+    const defaultUntrustedPermissionMode = ref(null)
     const defaultContextMax = ref(null)
 
     function setDefaultModel(value) {
@@ -101,6 +105,9 @@ export const useCodexStore = defineStore('codex', () => {
     }
     function setDefaultPermissionMode(value) {
         if (Object.values(PERMISSION_MODE).includes(value)) defaultPermissionMode.value = value
+    }
+    function setDefaultUntrustedPermissionMode(value) {
+        if (UNTRUSTED_PERMISSION_MODES.includes(value)) defaultUntrustedPermissionMode.value = value
     }
     function setDefaultContextMax(value) {
         if (Object.values(CONTEXT_MAX).includes(value)) defaultContextMax.value = value
@@ -151,10 +158,12 @@ export const useCodexStore = defineStore('codex', () => {
         defaultModel,
         defaultEffort,
         defaultPermissionMode,
+        defaultUntrustedPermissionMode,
         defaultContextMax,
         setDefaultModel,
         setDefaultEffort,
         setDefaultPermissionMode,
+        setDefaultUntrustedPermissionMode,
         setDefaultContextMax,
         agentSettingsCategories,
         setAgentSettingsCategories,

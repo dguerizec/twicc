@@ -38,6 +38,7 @@ const {
     summaryState,
     effectiveModel,
     isContextMaxForced,
+    sessionIsUntrusted,
     anySettingForced,
     hasDropdownsChanged,
     presets,
@@ -175,6 +176,9 @@ const baseContext = computed(() => ({
     isStarting: isStarting.value,
     isContextMaxForced: isContextMaxForced.value,
     effectiveModel: effectiveModel.value,
+    // Trust clamp (trust design §13.3): disables permission modes outside the
+    // untrusted-allowed set via the base ``isChoiceDisabled``.
+    untrusted: sessionIsUntrusted.value,
 }))
 
 function fieldContext(field) {

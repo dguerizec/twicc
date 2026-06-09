@@ -8,6 +8,7 @@ import { DISPLAY_LEVEL, DISPLAY_MODE, PROCESS_STATE, SYNTHETIC_ITEM } from '../c
 import { getProviderHelpers, getProviderStore } from '../providers'
 import { getSessionCutoffMs, isSessionUnread } from '../utils/sessions'
 import { resolveProjectDefaultProvider, resolveProjectAgentDefaults } from '../utils/projectAgentDefaults'
+import { resolveProjectTrust } from '../utils/trust'
 import { useSettingsStore } from './settings'
 import {
     saveDraftMessage,
@@ -1047,9 +1048,17 @@ export const useDataStore = defineStore('data', {
         _resolveDraftAgentSettings(projectId, provider) {
             const chain = resolveProjectAgentDefaults(projectId, provider, this.projects)
             const pStore = getProviderStore(provider)
+            // Trust-dependent permission seed (trust design §13.3): a project
+            // whose effective trust is NOT trusted (untrusted or unknown) seeds
+            // from the `permission_mode_if_untrusted` chain — same inheritance,
+            // different field — falling back to the global untrusted default.
+            const untrusted = resolveProjectTrust(projectId, this.projects).state !== true
+            const permissionMode = untrusted
+                ? (chain.permission_mode_if_untrusted ?? pStore?.defaultUntrustedPermissionMode ?? null)
+                : (chain.permission_mode ?? pStore?.defaultPermissionMode ?? null)
             return {
                 selected_model: chain.selected_model ?? pStore?.defaultModel ?? null,
-                permission_mode: chain.permission_mode ?? pStore?.defaultPermissionMode ?? null,
+                permission_mode: permissionMode,
                 effort: chain.effort ?? pStore?.defaultEffort ?? null,
                 thinking_enabled: chain.thinking_enabled ?? pStore?.defaultThinking ?? null,
                 claude_in_chrome: chain.claude_in_chrome ?? pStore?.defaultClaudeInChrome ?? null,

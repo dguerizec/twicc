@@ -17,6 +17,7 @@ const PRESET_SUMMARY_FIELDS = [
     { presetKey: 'effort',           wireField: 'effort',          summaryLabel: 'effort',     formatValue: (v, h) => h.getChoiceLabel('effort', v) ?? v },
     { presetKey: 'thinking',         wireField: 'thinking_enabled', summaryLabel: 'thinking',  formatValue: (v, h) => h.getChoiceLabel('thinking_enabled', v) ?? v },
     { presetKey: 'permission_mode',  wireField: 'permission_mode', summaryLabel: 'permission', formatValue: (v, h) => h.getChoiceLabel('permission_mode', v) ?? v },
+    { presetKey: 'permission_mode_if_untrusted', wireField: 'permission_mode_if_untrusted', summaryLabel: 'permission (untrusted)', formatValue: (v, h) => h.getChoiceLabel('permission_mode', v) ?? v },
     { presetKey: 'claude_in_chrome', wireField: 'claude_in_chrome', summaryLabel: 'chrome',    formatValue: (v, h) => h.getChoiceLabel('claude_in_chrome', v) ?? v },
     { presetKey: 'fast_mode',        wireField: 'fast_mode',       summaryLabel: 'fast',      formatValue: (v, h) => h.getChoiceLabel('fast_mode', v) ?? v },
 ]
@@ -39,7 +40,12 @@ function summaryParts(helpers, getValue, current) {
         if (!helpers.supportsAgentSetting(spec.wireField)) continue
         const value = getValue(spec)
         if (value === null || value === undefined) continue
-        const forced = current ? value !== current[spec.wireField] : false
+        // ``permission_mode_if_untrusted`` is a default-shaping pseudo-field —
+        // sessions have no effective value for it, so diff-marking against
+        // ``current`` is meaningless (it would read as always-forced).
+        const forced = (current && spec.wireField !== 'permission_mode_if_untrusted')
+            ? value !== current[spec.wireField]
+            : false
         parts.push({ text: `${spec.summaryLabel}: ${spec.formatValue(value, helpers)}`, forced })
     }
     return parts

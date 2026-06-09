@@ -15,6 +15,7 @@ SYNCED_SETTINGS_DEFAULTS: dict = {
     "codexDefaultModel": "gpt",
     "codexDefaultEffort": "medium",
     "codexDefaultPermissionMode": "read_only",
+    "codexDefaultUntrustedPermissionMode": "read_only",
     "codexDefaultContextMax": 272_000,
     "codexUsageReadFileEnabled": False,
     "codexUsageReadFilePath": "",
@@ -33,6 +34,17 @@ AGENT_SETTINGS_CATEGORIES: dict[AgentSettingCategory, list[str]] = {
     ],
     AgentSettingCategory.STARTUP: [],
 }
+
+
+# Permission modes a session may use in an UNTRUSTED (or unknown-trust) project:
+# every mode that keeps at least one structural guardrail (permission prompt,
+# read-only, or the workspace-write sandbox for ``auto``/``autonomous``). Only
+# ``yolo`` — no guardrail at all — is excluded. The untrusted default seeds
+# sessions created in untrusted projects and is the fallback the backend trust
+# clamp applies to out-of-set values.
+# See docs/plans/2026-06-09-project-trust-design.md §13.2.
+UNTRUSTED_PERMISSION_MODES: frozenset[str] = frozenset({"read_only", "strict", "auto", "autonomous"})
+UNTRUSTED_PERMISSION_MODE_SYNCED_KEY: str = "codexDefaultUntrustedPermissionMode"
 
 
 AGENT_SETTINGS_FIELDS_MAPPING: dict[str, str] = {

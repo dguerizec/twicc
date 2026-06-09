@@ -34,7 +34,10 @@ const settingsStore = useSettingsStore()
 const presetsStore = useAgentSettingsPresetsStore()
 
 // Canonical wire field names (the same order/shape as the preset form).
-const FIELD_ORDER = ['selected_model', 'context_max', 'effort', 'thinking_enabled', 'permission_mode', 'claude_in_chrome', 'fast_mode']
+// ``permission_mode_if_untrusted`` is the default-shaping pseudo-field used
+// when the project resolves untrusted (trust design §13.1) — stored in the
+// bundle like any other field, but never a Session column.
+const FIELD_ORDER = ['selected_model', 'context_max', 'effort', 'thinking_enabled', 'permission_mode', 'permission_mode_if_untrusted', 'claude_in_chrome', 'fast_mode']
 // Preset records use historical key names; default_agent_settings uses wire names.
 const PRESET_TO_WIRE = {
     model: 'selected_model',
@@ -42,6 +45,7 @@ const PRESET_TO_WIRE = {
     effort: 'effort',
     thinking: 'thinking_enabled',
     permission_mode: 'permission_mode',
+    permission_mode_if_untrusted: 'permission_mode_if_untrusted',
     claude_in_chrome: 'claude_in_chrome',
     fast_mode: 'fast_mode',
 }
@@ -194,6 +198,7 @@ function globalBundleFor(provider) {
         effort: s.defaultEffort,
         thinking_enabled: s.defaultThinking,
         permission_mode: s.defaultPermissionMode,
+        permission_mode_if_untrusted: s.defaultUntrustedPermissionMode,
         claude_in_chrome: s.defaultClaudeInChrome,
         fast_mode: s.defaultFastMode,
     }

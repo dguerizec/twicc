@@ -390,6 +390,27 @@ class CodexAgentManager(BaseAgentManager):
         # the caller (``BaseAgentManager._start_agent`` covers the rest of
         # the startup sequence via its own cleanup wrapper).
         try:
+            # Trust clamp (security floor, trust design §13.4): in an untrusted
+            # (or unknown-trust) project the thread never binds a no-guardrail
+            # policy (``yolo``), whatever mode the bundle carries. The stored
+            # Session value is left untouched — the frontend derives the forced
+            # display itself.
+            def _resolve_trust_clamp() -> tuple[bool, str | None]:
+                from twicc.core.services.trust import (
+                    clamp_permission_mode_for_untrusted,
+                    project_is_untrusted,
+                )
+
+                untrusted = project_is_untrusted(project_id)
+                mode = settings.permission_mode
+                if untrusted:
+                    mode = clamp_permission_mode_for_untrusted(Provider.CODEX, mode)
+                return untrusted, mode
+
+            untrusted, clamped_mode = await sync_to_async(_resolve_trust_clamp)()
+            if clamped_mode != settings.permission_mode:
+                settings = settings._replace(permission_mode=clamped_mode)
+
             # Translate the user's preset (Session.permission_mode) into
             # the SDK couple. Unset / unknown modes fall on
             # ``permission_modes.DEFAULT_MODE`` (currently ``"auto"`` =
@@ -471,6 +492,7 @@ class CodexAgentManager(BaseAgentManager):
                 settings=settings,
                 codex=codex,
                 thread=thread,
+                untrusted=untrusted,
             )
 
             # Prime the environment-reconciliation baseline (best-effort; the

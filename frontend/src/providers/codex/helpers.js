@@ -2,7 +2,7 @@ import { BaseProviderHelpers } from '../baseHelpers'
 import { PROVIDER, SYNTHETIC_ITEM } from '../../constants'
 import { getTwiccLaunchPrefix } from '../../utils/twiccLaunch'
 import { SUPPORTED_IMAGE_TYPES } from '../../utils/fileUtils'
-import { CONTEXT_MAX, EFFORT, PERMISSION_MODE } from './constants'
+import { CONTEXT_MAX, EFFORT, PERMISSION_MODE, UNTRUSTED_PERMISSION_MODES } from './constants'
 import { useCodexStore } from './store'
 
 // TwiCC-handled hardcoded commands for Codex, invoked with ``/``. Unlike
@@ -35,6 +35,7 @@ const FIELD_TO_DEFAULT_STORE_BINDING = {
     selected_model:  { getter: 'defaultModel',          setter: 'setDefaultModel' },
     effort:          { getter: 'defaultEffort',         setter: 'setDefaultEffort' },
     permission_mode: { getter: 'defaultPermissionMode', setter: 'setDefaultPermissionMode' },
+    permission_mode_if_untrusted: { getter: 'defaultUntrustedPermissionMode', setter: 'setDefaultUntrustedPermissionMode' },
     context_max:     { getter: 'defaultContextMax',     setter: 'setDefaultContextMax' },
 }
 
@@ -45,6 +46,7 @@ const SYNCED_SETTING_KEYS_TO_STORE = {
     codexDefaultModel:          { setter: 'setDefaultModel',          getter: 'defaultModel' },
     codexDefaultEffort:         { setter: 'setDefaultEffort',         getter: 'defaultEffort' },
     codexDefaultPermissionMode: { setter: 'setDefaultPermissionMode', getter: 'defaultPermissionMode' },
+    codexDefaultUntrustedPermissionMode: { setter: 'setDefaultUntrustedPermissionMode', getter: 'defaultUntrustedPermissionMode' },
     codexDefaultContextMax:     { setter: 'setDefaultContextMax',     getter: 'defaultContextMax' },
     codexUsageReadFileEnabled:  { setter: 'setUsageReadFileEnabled',  getter: 'usageReadFileEnabled' },
     codexUsageReadFilePath:     { setter: 'setUsageReadFilePath',     getter: 'usageReadFilePath' },
@@ -203,6 +205,10 @@ export class CodexHelpers extends BaseProviderHelpers {
         // helpers).
         const { sendCheckAuth } = await import('./ws')
         sendCheckAuth()
+    }
+
+    getUntrustedPermissionModes() {
+        return UNTRUSTED_PERMISSION_MODES
     }
 
     getDefaultValue(field) {

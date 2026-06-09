@@ -122,6 +122,12 @@ class ClaudeCodeAgent(BaseAgent):
         super().__init__(session_id, project_id, cwd, agent_settings=settings)
 
         self._client: ClaudeSDKClient | None = None
+        # Effective trust of the project, resolved once per process start (trust
+        # design §13.4: clamp at build/resume, no live re-clamp on revocation).
+        # While True, every permission-mode entry point clamps to the
+        # untrusted-allowed set, project/local setting sources are dropped and
+        # the bypassPermissions opt-in flag is withheld.
+        self._untrusted = False
         self._interrupting = False  # Set when interrupt() is called, suppresses error toast
         self._message_loop_task: asyncio.Task[None] | None = None
         self._active_tools: dict[str, dict[str, Any]] = {}
@@ -538,6 +544,10 @@ class ClaudeCodeAgent(BaseAgent):
                 self.agent_settings.selected_model,
             )
             candidate_modes = ("default", "auto", "acceptEdits", "bypassPermissions")
+            if self._untrusted:
+                candidate_modes = tuple(
+                    m for m in candidate_modes if m in helpers.UNTRUSTED_PERMISSION_MODES
+                )
             mode_options = [
                 m for m in candidate_modes
                 if m != current_mode and (m != "auto" or supports_auto)
@@ -718,6 +728,29 @@ class ClaudeCodeAgent(BaseAgent):
         try:
             self._active_tools = {}
             self._last_started_tool_id = None
+
+            # Trust clamp (security floor, trust design §13.4): resolve the
+            # project's effective trust and clamp the permission mode before it
+            # reaches the SDK. The frontend normally bakes a safe value at
+            # creation; this catches forged payloads, legacy sessions and
+            # post-revocation resumes. The stored Session value is left
+            # untouched — the frontend derives the forced display itself.
+            def _resolve_trust_clamp() -> tuple[bool, str]:
+                from twicc.core.services.trust import (
+                    clamp_permission_mode_for_untrusted,
+                    project_is_untrusted,
+                )
+
+                untrusted = project_is_untrusted(self.project_id)
+                mode = self.agent_settings.permission_mode
+                if untrusted:
+                    mode = clamp_permission_mode_for_untrusted(Provider.CLAUDE_CODE, mode)
+                return untrusted, mode
+
+            self._untrusted, clamped_mode = await sync_to_async(_resolve_trust_clamp)()
+            if clamped_mode != self.agent_settings.permission_mode:
+                self.agent_settings = self.agent_settings._replace(permission_mode=clamped_mode)
+
             # Create options - either resume existing session or create new with custom ID
             # Build thinking config from boolean flag
             thinking_config = None
@@ -765,9 +798,12 @@ class ClaudeCodeAgent(BaseAgent):
                 return {"continue_": True}
 
             extra_args: dict[str, str | None] = {
-                "allow-dangerously-skip-permissions": None,
                 ("chrome" if self.agent_settings.claude_in_chrome else "no-chrome"): None
             }
+            if not self._untrusted:
+                # Opt-in for ``bypassPermissions``. Withheld in untrusted
+                # projects together with the mode itself (trust design §13.4).
+                extra_args["allow-dangerously-skip-permissions"] = None
 
             # Always pass ``fastMode`` explicitly (true or false) via the
             # flag-settings layer so the per-session choice overrides any
@@ -827,7 +863,10 @@ class ClaudeCodeAgent(BaseAgent):
                 model=self.sdk_model,
                 effort=self.agent_settings.effort,
                 thinking=thinking_config,
-                setting_sources=["user", "project", "local"],
+                # Untrusted projects load only the user-level settings: project/
+                # local settings, hooks, ``.mcp.json`` and project agents are
+                # repo-controlled and must not shape the session (trust §13.4).
+                setting_sources=["user"] if self._untrusted else ["user", "project", "local"],
                 settings=fast_mode_settings,
                 plugins=[{"type": "local", "path": str(get_plugin_dir())}],
                 can_use_tool=self._handle_pending_request,
@@ -921,6 +960,15 @@ class ClaudeCodeAgent(BaseAgent):
         """
         if self._client is None:
             raise RuntimeError("Process not started")
+
+        if self._untrusted:
+            # Security floor: no live escalation past the untrusted-allowed set,
+            # whatever the source of the request (trust design §13.4).
+            from twicc.core.services.trust import clamp_permission_mode_for_untrusted
+
+            mode = await sync_to_async(clamp_permission_mode_for_untrusted)(
+                Provider.CLAUDE_CODE, mode,
+            )
 
         logger.debug(
             "Setting permission mode to '%s' for session %s",

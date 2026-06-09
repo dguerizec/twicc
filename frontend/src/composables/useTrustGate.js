@@ -40,7 +40,16 @@ export async function ensureProjectTrust(projectId) {
         const res = await apiFetch(`/api/projects/${projectId}/trust/resolve/`, { method: 'POST' })
         if (res.ok) {
             const data = await res.json()
-            if (data.state != null) return true
+            if (data.state != null) {
+                // Optimistic local patch on a seed: the authoritative
+                // project_updated broadcast may land after the caller seeds the
+                // draft's settings, and those need the settled trust (§13.3).
+                if (data.via === 'seed') {
+                    const project = store.getProject(projectId)
+                    if (project) project.trust = data.state
+                }
+                return true
+            }
         }
     } catch (err) {
         console.warn('Trust resolve failed; proceeding without gate', err)
@@ -66,5 +75,9 @@ export async function ensureProjectTrust(projectId) {
         // The decision didn't persist, but the user expressed intent — proceed.
         console.warn('Trust decide failed', err)
     }
+    // Optimistic local patch (same reason as the seed case above): the caller
+    // is about to seed a draft and must see the decision the user just made.
+    project.trust = decision.trusted
+    project.trust_propagation = decision.propagation
     return true
 }

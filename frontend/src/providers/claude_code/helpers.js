@@ -1,6 +1,6 @@
 import { BaseProviderHelpers } from '../baseHelpers'
 import { PROVIDER, SYNTHETIC_ITEM } from '../../constants'
-import { CONTEXT_MAX, EFFORT, PERMISSION_MODE } from './constants'
+import { CONTEXT_MAX, EFFORT, PERMISSION_MODE, UNTRUSTED_PERMISSION_MODES } from './constants'
 import { useClaudeCodeStore } from './store'
 import { getTwiccLaunchPrefix } from '../../utils/twiccLaunch'
 import {
@@ -57,6 +57,7 @@ const FIELD_TO_DEFAULT_STORE_BINDING = {
     effort:           { getter: 'defaultEffort',          setter: 'setDefaultEffort' },
     thinking_enabled: { getter: 'defaultThinking',        setter: 'setDefaultThinking' },
     permission_mode:  { getter: 'defaultPermissionMode',  setter: 'setDefaultPermissionMode' },
+    permission_mode_if_untrusted: { getter: 'defaultUntrustedPermissionMode', setter: 'setDefaultUntrustedPermissionMode' },
     context_max:      { getter: 'defaultContextMax',      setter: 'setDefaultContextMax' },
     claude_in_chrome: { getter: 'defaultClaudeInChrome',  setter: 'setDefaultClaudeInChrome' },
     fast_mode:        { getter: 'defaultFastMode',        setter: 'setDefaultFastMode' },
@@ -67,6 +68,7 @@ const FIELD_TO_DEFAULT_STORE_BINDING = {
 // ``getSyncedSettings`` (output) so the two sides can never drift apart.
 const SYNCED_SETTING_KEYS_TO_STORE = {
     claudeCodeDefaultPermissionMode: { setter: 'setDefaultPermissionMode', getter: 'defaultPermissionMode' },
+    claudeCodeDefaultUntrustedPermissionMode: { setter: 'setDefaultUntrustedPermissionMode', getter: 'defaultUntrustedPermissionMode' },
     claudeCodeDefaultModel:          { setter: 'setDefaultModel',          getter: 'defaultModel' },
     claudeCodeDefaultContextMax:     { setter: 'setDefaultContextMax',     getter: 'defaultContextMax' },
     claudeCodeDefaultEffort:         { setter: 'setDefaultEffort',         getter: 'defaultEffort' },
@@ -273,6 +275,10 @@ export class ClaudeCodeHelpers extends BaseProviderHelpers {
             url: 'https://status.claude.com/',
             tooltip: "Claude Code status on Anthropic's side",
         }
+    }
+
+    getUntrustedPermissionModes() {
+        return UNTRUSTED_PERMISSION_MODES
     }
 
     getDefaultValue(field) {
@@ -507,6 +513,7 @@ export class ClaudeCodeHelpers extends BaseProviderHelpers {
     }
 
     isChoiceDisabled(field, choiceValue, context) {
+        if (super.isChoiceDisabled(field, choiceValue, context)) return true
         if (field === 'effort') {
             if (choiceValue === EFFORT.X_HIGH) return !this.modelSupportsEffortXhigh(context?.effectiveModel)
             if (choiceValue === EFFORT.MAX) return !this.modelSupportsEffortMax(context?.effectiveModel)

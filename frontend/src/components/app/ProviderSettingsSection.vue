@@ -26,14 +26,16 @@ const props = defineProps({
 const helpers = computed(() => getProviderHelpers(props.provider))
 const providerIcon = computed(() => getProviderIcon(props.provider))
 
-// Field order matches the session popover for consistency. Fields a
-// provider doesn't support (per ``supportsAgentSetting``) are skipped.
+// Field order matches the session popover / presets / project defaults for
+// consistency. Fields a provider doesn't support (per
+// ``supportsAgentSetting``) are skipped.
 const FIELD_ORDER = [
-    'permission_mode',
     'selected_model',
     'context_max',
     'effort',
     'thinking_enabled',
+    'permission_mode',
+    'permission_mode_if_untrusted',
     'claude_in_chrome',
     'fast_mode',
 ]
@@ -43,6 +45,7 @@ const FIELD_ORDER = [
 // than "Default Permission", etc.).
 const FIELD_DEFAULT_LABELS = {
     permission_mode: 'Default permission mode',
+    permission_mode_if_untrusted: 'Default permission mode (untrusted projects)',
     selected_model: 'Default model',
     context_max: 'Default context size',
     effort: 'Default effort',

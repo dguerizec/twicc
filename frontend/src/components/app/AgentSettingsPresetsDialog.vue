@@ -38,10 +38,11 @@ const WIRE_TO_PRESET_KEY = {
     effort: 'effort',
     thinking_enabled: 'thinking',
     permission_mode: 'permission_mode',
+    permission_mode_if_untrusted: 'permission_mode_if_untrusted',
     claude_in_chrome: 'claude_in_chrome',
     fast_mode: 'fast_mode',
 }
-const FIELD_ORDER = ['selected_model', 'context_max', 'effort', 'thinking_enabled', 'permission_mode', 'claude_in_chrome', 'fast_mode']
+const FIELD_ORDER = ['selected_model', 'context_max', 'effort', 'thinking_enabled', 'permission_mode', 'permission_mode_if_untrusted', 'claude_in_chrome', 'fast_mode']
 
 const view = ref('list')
 const editIndex = ref(null)
@@ -82,6 +83,7 @@ function emptyFormData() {
         effort: null,
         thinking_enabled: null,
         permission_mode: null,
+        permission_mode_if_untrusted: null,
         claude_in_chrome: null,
         fast_mode: null,
     }

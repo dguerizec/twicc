@@ -33,6 +33,8 @@ from .constants import (
     AGENT_SETTINGS_FIELDS_MAPPING as _AGENT_SETTINGS_FIELDS_MAPPING,
     MODEL_VERSIONS as _MODEL_VERSIONS,
     SYNCED_SETTINGS_DEFAULTS as _SYNCED_SETTINGS_DEFAULTS,
+    UNTRUSTED_PERMISSION_MODE_SYNCED_KEY as _UNTRUSTED_PERMISSION_MODE_SYNCED_KEY,
+    UNTRUSTED_PERMISSION_MODES as _UNTRUSTED_PERMISSION_MODES,
 )
 from .pricing import extract_model_info
 from .streaming_registry import get_streamed_item_registry
@@ -108,6 +110,11 @@ class CodexHelpers(BaseProviderHelpers):
 
     # Codex permission modes that do not require interactive approval.
     NON_INTERACTIVE_PERMISSION_MODES: ClassVar[frozenset[str]] = frozenset({"yolo", "strict"})
+
+    # Permission modes allowed in untrusted projects + the synced key of the
+    # untrusted default (see ``.constants`` for the rationale).
+    UNTRUSTED_PERMISSION_MODES: ClassVar[frozenset[str]] = _UNTRUSTED_PERMISSION_MODES
+    UNTRUSTED_PERMISSION_MODE_SYNCED_KEY: ClassVar[str | None] = _UNTRUSTED_PERMISSION_MODE_SYNCED_KEY
 
     # Polled every 5 minutes by ``codex.usage_task`` against ChatGPT's
     # ``/backend-api/wham/usage`` endpoint (the same one the Codex CLI's

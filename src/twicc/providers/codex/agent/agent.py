@@ -39,6 +39,8 @@ from openai_codex.generated.v2_all import (
     ResponseStreamConnectionFailedCodexErrorInfo,
 )
 
+from asgiref.sync import sync_to_async
+
 from twicc.agent import AgentState, BaseAgent, StateChangeCallback
 from twicc.context_injection import apply_pending_context
 from twicc.core.enums import Provider
@@ -178,10 +180,16 @@ class CodexAgent(BaseAgent):
         settings: AgentSettings,
         codex: TwiccAsyncCodex,
         thread: TwiccAsyncThread,
+        untrusted: bool = False,
     ) -> None:
         super().__init__(session_id, project_id, cwd, agent_settings=settings)
         self._codex = codex
         self._thread = thread
+        # Effective trust of the project, resolved once by the manager at
+        # thread start/resume (trust design §13.4). While True, the per-turn
+        # policy overrides are clamped to the untrusted-allowed set — which
+        # also catches live settings updates that would escalate the mode.
+        self._untrusted = untrusted
         # Tracked so ``interrupt_or_kill`` can fire ``turn/interrupt`` on the
         # active turn instead of yanking the whole transport.
         self._current_turn: AsyncTurnHandle | None = None
@@ -468,9 +476,17 @@ class CodexAgent(BaseAgent):
         # ``thread_start``, so the current turn keeps its policy but the
         # next one picks up the new picker value.
         effort = self._sdk_effort(self.agent_settings.effort)
-        sandbox_policy, approval_policy = resolve_codex_turn_overrides(
-            self.agent_settings.permission_mode,
-        )
+        turn_mode = self.agent_settings.permission_mode
+        if self._untrusted:
+            # Security floor (trust design §13.4): live settings updates refresh
+            # the bundle between turns, so re-clamp at every turn — an untrusted
+            # project never escalates past the untrusted-allowed set.
+            from twicc.core.services.trust import clamp_permission_mode_for_untrusted
+
+            turn_mode = await sync_to_async(clamp_permission_mode_for_untrusted)(
+                Provider.CODEX, turn_mode,
+            )
+        sandbox_policy, approval_policy = resolve_codex_turn_overrides(turn_mode)
         sdk_model = get_provider_helpers(Provider.CODEX).resolve_sdk_model(
             self.agent_settings.selected_model,
         )

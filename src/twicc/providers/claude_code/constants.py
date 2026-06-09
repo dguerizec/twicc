@@ -41,6 +41,7 @@ class ClaudeCodeModelExtra(NamedTuple):
 
 SYNCED_SETTINGS_DEFAULTS: dict = {
     "claudeCodeDefaultPermissionMode": "default",
+    "claudeCodeDefaultUntrustedPermissionMode": "default",
     "claudeCodeDefaultModel": "opus",
     "claudeCodeDefaultEffort": "medium",
     "claudeCodeDefaultThinking": True,
@@ -89,6 +90,17 @@ AGENT_SETTINGS_CATEGORIES: dict[AgentSettingCategory, list[str]] = {
         "question_widget",
     ],
 }
+
+
+# Permission modes a session may use in an UNTRUSTED (or unknown-trust) project:
+# every mode that keeps at least one structural guardrail (permission prompt,
+# read-only, auto-deny, or the CLI's safety checks for ``auto``). Only
+# ``bypassPermissions`` — no guardrail at all — is excluded. The untrusted
+# default seeds sessions created in untrusted projects and is the fallback the
+# backend trust clamp applies to out-of-set values.
+# See docs/plans/2026-06-09-project-trust-design.md §13.2.
+UNTRUSTED_PERMISSION_MODES: frozenset[str] = frozenset({"default", "auto", "acceptEdits", "plan", "dontAsk"})
+UNTRUSTED_PERMISSION_MODE_SYNCED_KEY: str = "claudeCodeDefaultUntrustedPermissionMode"
 
 
 AGENT_SETTINGS_FIELDS_MAPPING: dict[str, str] = {
