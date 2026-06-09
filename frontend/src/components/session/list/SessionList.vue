@@ -72,6 +72,16 @@ const scopeProjectIds = computed(() => {
     return store.getProjectScopeIds(props.projectId)
 })
 
+// The single real project the sidebar is filtering on, or null in workspace /
+// all-projects mode. Passed down so SessionListItem can hide the worktree
+// marker only when we're filtering directly on that worktree (where every
+// session already belongs to it, so the marker would be noise).
+const filterProjectId = computed(() => {
+    if (isWorkspaceProjectId(props.projectId)) return null
+    if (props.projectId === ALL_PROJECTS_ID) return null
+    return props.projectId
+})
+
 // The currently "active" workspace for cross-filter `workspace`-mode pins. Set
 // when the sidebar is on a workspace view (projectId `workspace:X`) OR when a
 // single-project view preserves the workspace via the `?workspace=X` query.
@@ -559,6 +569,7 @@ defineExpose({
                     :compact-view="compactView"
                     :show-project-name="showProjectName"
                     :scope-project-ids="scopeProjectIds"
+                    :filter-project-id="filterProjectId"
                     @select="handleSelect"
                     @drop-data="handleDropData"
                 />

@@ -55,6 +55,14 @@ const props = defineProps({
     scopeProjectIds: {
         type: Array,
         default: null
+    },
+    // The single real project the sidebar is filtering on, or null in workspace /
+    // all-projects mode. Used to hide the worktree marker when we're filtering
+    // directly on this session's worktree (every session there is already from
+    // it, so the marker would be noise).
+    filterProjectId: {
+        type: String,
+        default: null
     }
 })
 
@@ -115,6 +123,17 @@ const project = computed(() => store.getProject(props.session.project_id))
 
 /** Whether this session's project is a git worktree of another project. */
 const isProjectWorktree = computed(() => !!project.value?.worktree_of)
+
+/**
+ * Whether to show the worktree marker (a code-branch icon) before the title.
+ * Shown for any worktree session in every filter context, except when we're
+ * filtering directly on that worktree — there, all sessions belong to it, so
+ * the marker would add nothing. (filterProjectId is null in workspace /
+ * all-projects mode, so the marker shows there too.)
+ */
+const showWorktreeIcon = computed(() =>
+    isProjectWorktree.value && props.session.project_id !== props.filterProjectId
+)
 
 /**
  * Color for the project dot. A worktree with no color of its own inherits its
@@ -388,6 +407,16 @@ function handleMenuSelect(event) {
                 <wa-tag v-if="session.archived" size="small" variant="neutral" class="archived-tag">Arch.</wa-tag>
                 <wa-tag v-else-if="session.draft && !processState" size="small" variant="warning" class="draft-tag">Draft</wa-tag>
                 <wa-icon v-if="providerIcon" auto-width family="brands" :name="providerIcon" class="provider-icon"></wa-icon>
+                <wa-icon
+                    v-if="showWorktreeIcon"
+                    :id="`session-worktree-${session.id}`"
+                    name="code-branch"
+                    auto-width
+                    class="session-worktree-icon"
+                ></wa-icon>
+                <AppTooltip v-if="showWorktreeIcon" :for="`session-worktree-${session.id}`">
+                    <WorktreeBadge :project-id="session.project_id" :dot="false" />
+                </AppTooltip>
                 <span class="session-name">{{ getSessionDisplayName(session) }}</span>
                 <!-- Compact mode: code comments indicator -->
                 <wa-icon
@@ -625,6 +654,13 @@ function handleMenuSelect(event) {
 
 .provider-icon {
     flex-shrink: 0;
+}
+
+/* Marker shown before the title when the session lives in a git worktree. */
+.session-worktree-icon {
+    flex-shrink: 0;
+    color: var(--wa-color-text-quiet);
+    font-size: 0.85em;
 }
 
 .draft-tag,
