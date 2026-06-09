@@ -382,6 +382,51 @@ async def project_detail(request, project_id):
     return JsonResponse(serialize_project(project))
 
 
+async def project_trust_resolve(request, project_id):
+    """POST /api/projects/<id>/trust/resolve/ — resolve the project's effective trust.
+
+    Resolves from the DB; if unresolved, seeds once from the provider configs
+    (guarded by ``trust_imported``). Returns ``{state, via, source_id}`` where
+    ``state`` is true / false / null (null → the caller should prompt the user).
+    """
+    if request.method != "POST":
+        return JsonResponse({"error": "Method not allowed"}, status=405)
+    if not await Project.objects.filter(id=project_id).aexists():
+        raise Http404("Project not found")
+    from twicc.core.services.trust import resolve_project_trust
+
+    return JsonResponse(await resolve_project_trust(project_id))
+
+
+async def project_trust_decide(request, project_id):
+    """POST /api/projects/<id>/trust/decide/ — record an explicit trust decision.
+
+    Body: ``{trusted: bool, propagation?: bool}``. Persists the decision and
+    projects it onto both providers' configs (``propagation`` defaults to "the
+    project is under git").
+    """
+    if request.method != "POST":
+        return JsonResponse({"error": "Method not allowed"}, status=405)
+    if not await Project.objects.filter(id=project_id).aexists():
+        raise Http404("Project not found")
+    try:
+        data = orjson.loads(request.body)
+    except orjson.JSONDecodeError:
+        return JsonResponse({"error": "Invalid JSON"}, status=400)
+    trusted = data.get("trusted")
+    if not isinstance(trusted, bool):
+        return JsonResponse({"error": "'trusted' must be a boolean"}, status=400)
+    propagation = data.get("propagation")
+    if propagation is not None and not isinstance(propagation, bool):
+        return JsonResponse({"error": "'propagation' must be a boolean"}, status=400)
+    from twicc.core.services.trust import decide_project_trust
+
+    result = await decide_project_trust(project_id, trusted, propagation)
+    if not result.get("ok"):
+        return JsonResponse({"error": result.get("error", "decision_failed")}, status=400)
+    return JsonResponse(result)
+
+
 async def commands(request, project_id):
     """GET /api/projects/<id>/commands/?provider=<key>&activation_char=<char> — commands for a project.
 

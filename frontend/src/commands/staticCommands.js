@@ -8,6 +8,7 @@
  */
 
 import { useCommandRegistry } from '../composables/useCommandRegistry'
+import { ensureProjectTrust } from '../composables/useTrustGate'
 import { useSettingsStore } from '../stores/settings'
 import { useDataStore, ALL_PROJECTS_ID } from '../stores/data'
 import { useWorkspacesStore } from '../stores/workspaces'
@@ -589,8 +590,9 @@ export function initStaticCommands(router) {
             icon: 'plus',
             category: 'creation',
             when: () => !!routeProjectId(),
-            action: () => {
+            action: async () => {
                 const projectId = routeProjectId()
+                if (!(await ensureProjectTrust(projectId))) return
                 const sessionId = data.createDraftSession(projectId)
                 const name = isAllProjectsMode() ? 'projects-session' : 'session'
                 router.push({ name, params: { projectId, sessionId } })
@@ -601,7 +603,8 @@ export function initStaticCommands(router) {
             label: 'New Session in\u2026',
             icon: 'square-plus',
             category: 'creation',
-            items: () => pickerEntries().map(p => toPickerItem(p, () => {
+            items: () => pickerEntries().map(p => toPickerItem(p, async () => {
+                if (!(await ensureProjectTrust(p.id))) return
                 const sessionId = data.createDraftSession(p.id)
                 // Preserve the current sidebar filter: the draft lives in
                 // project p.id (data), but we keep the URL's projectId on

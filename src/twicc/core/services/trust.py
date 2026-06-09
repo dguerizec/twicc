@@ -17,6 +17,7 @@ import os
 
 from asgiref.sync import sync_to_async
 
+from twicc.providers.db_writer import run_under_db_write_lock
 from twicc.trust import TrustResolution, effective_trust, load_trust_rows
 
 logger = logging.getLogger(__name__)
@@ -125,6 +126,36 @@ async def _materialize(target, source_directory: str | None, state: bool) -> Non
         await _codex_write(project_key, state)
 
 
+# --- broadcast ------------------------------------------------------------
+
+
+async def _broadcast_project_updated(project_id: str) -> None:
+    """Emit a ``project_updated`` WS event so all clients see the new trust."""
+    from channels.layers import get_channel_layer
+
+    from twicc.core.models import Project
+    from twicc.core.serializers import serialize_project
+
+    layer = get_channel_layer()
+    if layer is None:
+        return
+    try:
+        project = await Project.objects.filter(id=project_id).afirst()
+        if project is not None:
+            await layer.group_send(
+                "updates",
+                {
+                    "type": "broadcast",
+                    "data": {
+                        "type": "project_updated",
+                        "project": serialize_project(project),
+                    },
+                },
+            )
+    except Exception:
+        logger.exception("Failed to broadcast project_updated for %s", project_id)
+
+
 # --- DB load --------------------------------------------------------------
 
 
@@ -168,7 +199,11 @@ async def resolve_project_trust(project_id: str) -> dict:
         project = await Project.objects.filter(id=project_id).afirst()
         if project is not None and not project.trust_imported:
             await _materialize(target, source_directory, resolution.state)
-            await Project.objects.filter(id=project_id).aupdate(trust_imported=True)
+            await run_under_db_write_lock(
+                lambda: Project.objects.filter(id=project_id).aupdate(
+                    trust_imported=True
+                )
+            )
         return {
             "state": resolution.state,
             "via": resolution.via,
@@ -185,11 +220,14 @@ async def resolve_project_trust(project_id: str) -> dict:
     seeded = await sync_to_async(_seed_read)(target.directory)
     if seeded is not None:
         propagation = await sync_to_async(_is_git)(target.directory) if target.directory else False
-        await Project.objects.filter(id=project_id).aupdate(
-            trust=seeded, trust_propagation=propagation, trust_imported=True
+        await run_under_db_write_lock(
+            lambda: Project.objects.filter(id=project_id).aupdate(
+                trust=seeded, trust_propagation=propagation, trust_imported=True
+            )
         )
         # Reconcile the project's own provider entries to the adopted value.
         await _project_decision(target.directory, seeded)
+        await _broadcast_project_updated(project_id)
         return {"state": seeded, "via": "seed", "source_id": project_id}
 
     # Nothing to import → ask. Do NOT mark imported; decide() will.
@@ -216,10 +254,13 @@ async def decide_project_trust(
             else False
         )
 
-    await Project.objects.filter(id=project_id).aupdate(
-        trust=trusted, trust_propagation=bool(propagation), trust_imported=True
+    await run_under_db_write_lock(
+        lambda: Project.objects.filter(id=project_id).aupdate(
+            trust=trusted, trust_propagation=bool(propagation), trust_imported=True
+        )
     )
     await _project_decision(project.directory, trusted)
+    await _broadcast_project_updated(project_id)
     return {"ok": True, "state": trusted, "propagation": bool(propagation)}
 
 

@@ -19,6 +19,8 @@ import SearchOverlay from './components/app/SearchOverlay.vue'
 import StopProcessConfirmDialog from './components/app/StopProcessConfirmDialog.vue'
 import ProviderActivationDialog from './components/app/ProviderActivationDialog.vue'
 import GlobalMediaPreview from './components/media/GlobalMediaPreview.vue'
+import ProjectTrustDialog from './components/project/ProjectTrustDialog.vue'
+import { registerTrustDialog } from './composables/useTrustGate'
 import { initStaticCommands } from './commands/staticCommands'
 import {
     pendingConfirmation,
@@ -350,8 +352,11 @@ function handleGlobalKeydown(e) {
     }
 }
 
+const trustDialogRef = ref(null)
+
 onMounted(() => {
     document.addEventListener('keydown', handleGlobalKeydown, { capture: true })
+    registerTrustDialog(trustDialogRef.value)
 })
 onBeforeUnmount(() => {
     document.removeEventListener('keydown', handleGlobalKeydown, { capture: true })
@@ -403,6 +408,8 @@ const toastTheme = computed(() => {
          (and any other "open this media fullscreen" call site that doesn't
          own its own MediaPreviewDialog instance). -->
     <GlobalMediaPreview />
+    <!-- Global trust gate dialog, driven by composables/useTrustGate. -->
+    <ProjectTrustDialog ref="trustDialogRef" />
     <!-- Prevent browser default drop behavior (e.g. navigating to a dropped image).
          Our specific drop handlers in SessionItemsList call preventDefault themselves;
          this catches any drops that miss those zones. -->

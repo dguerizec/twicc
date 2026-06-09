@@ -10,6 +10,7 @@ import { useCommandRegistry } from '../composables/useCommandRegistry'
 import { useStartupPolling } from '../composables/useStartupPolling'
 import { useToast } from '../composables/useToast'
 import { useProviderActivation } from '../composables/useProviderActivation'
+import { ensureProjectTrust } from '../composables/useTrustGate'
 import { useTerminalCommandStore } from '../stores/terminalCommand'
 import { getRegisteredProviders, getProviderHelpers, getProviderStore, getProviderLabel, getProviderIcon } from '../providers'
 import { toWorkspaceProjectId } from '../utils/workspaceIds'
@@ -848,9 +849,12 @@ function handleBackHome() {
 // In all projects mode: requires an explicit targetProjectId, used both for
 // the draft and for the URL's canonical projectId (the sidebar stays on
 // "All Projects" because the route name carries that mode).
-function handleNewSession(targetProjectId = null) {
+async function handleNewSession(targetProjectId = null) {
     const projectIdToUse = targetProjectId || projectId.value
     if (!projectIdToUse) return
+
+    // Trust gate: settle the project's trust before starting a session in it.
+    if (!(await ensureProjectTrust(projectIdToUse))) return
 
     const newSessionId = store.createDraftSession(projectIdToUse)
 
