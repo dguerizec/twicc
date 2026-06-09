@@ -561,12 +561,21 @@ defineExpose({
             <!-- Trust (edit mode only) -->
             <div v-if="!isCreateMode" class="form-group">
                 <label class="form-label">Trust</label>
+                <p class="trust-intro">
+                    Is this a project you created or trust (your own code, a well-known
+                    open-source project, or your team's work)? Claude Code and Codex will be
+                    able to read, edit and run files here.
+                </p>
                 <wa-select
                     :value.prop="localTrustChoice"
                     @change="localTrustChoice = $event.target.value"
                     size="small"
+                    class="trust-select"
                 >
-                    <wa-option value="inherit">Inherit</wa-option>
+                    <wa-option value="inherit" label="Inherit">
+                        Inherit
+                        <small>No own decision — inherits the trust of a parent project.</small>
+                    </wa-option>
                     <wa-option value="trusted">Trusted</wa-option>
                     <wa-option value="untrusted">Untrusted</wa-option>
                 </wa-select>
@@ -581,14 +590,18 @@ defineExpose({
                         Not resolved — you'll be asked when starting a session here.
                     </template>
                 </div>
-                <label v-else class="trust-propagate-row">
-                    <wa-switch
-                        :checked="localTrustPropagation"
-                        @change="localTrustPropagation = $event.target.checked"
-                        size="small"
-                    ></wa-switch>
-                    <span>Apply to sub-folders and worktrees</span>
-                </label>
+                <wa-switch
+                    v-else
+                    class="trust-propagate-switch"
+                    :checked="localTrustPropagation"
+                    @change="localTrustPropagation = $event.target.checked"
+                    size="small"
+                >
+                    Apply to sub-folders and worktrees
+                    <span class="trust-propagate-hint">
+                        — descendants inherit this decision until you decide otherwise.
+                    </span>
+                </wa-switch>
             </div>
 
             <wa-divider v-if="!isCreateMode"></wa-divider>
@@ -774,12 +787,29 @@ defineExpose({
     color: var(--wa-color-text-quiet);
 }
 
-.trust-propagate-row {
-    display: flex;
-    align-items: center;
-    gap: var(--wa-space-s);
+.trust-intro {
+    margin: 0;
     font-size: var(--wa-font-size-s);
-    cursor: pointer;
+    color: var(--wa-color-text-quiet);
+}
+
+/* Per-option helptext inside the trust select dropdown (e.g. "Inherit"). The
+   explicit `label` on the option keeps the collapsed display clean; this only
+   styles the dropdown description line. */
+.trust-select small {
+    display: block;
+    margin-top: var(--wa-space-3xs);
+    font-size: var(--wa-font-size-xs);
+    opacity: 0.7;
+    white-space: normal;
+}
+
+.trust-propagate-switch {
+    font-size: var(--wa-font-size-s);
+}
+
+.trust-propagate-hint {
+    color: var(--wa-color-text-quiet);
 }
 
 .directory-input-row {

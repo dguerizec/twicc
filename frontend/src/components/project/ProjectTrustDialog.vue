@@ -67,19 +67,17 @@ defineExpose({ requestDecision })
                 <div class="project-dir">{{ project.directory }}</div>
             </div>
 
-            <label class="propagate-row">
-                <wa-switch
-                    :checked="propagation"
-                    @change="propagation = $event.target.checked"
-                    size="small"
-                ></wa-switch>
-                <span class="propagate-label">
-                    Apply to sub-folders and worktrees
-                    <span class="propagate-hint">
-                        — descendants inherit this decision until you decide otherwise.
-                    </span>
+            <wa-switch
+                class="propagate-switch"
+                :checked="propagation"
+                @change="propagation = $event.target.checked"
+                size="small"
+            >
+                Apply to sub-folders and worktrees
+                <span class="propagate-hint">
+                    — descendants inherit this decision until you decide otherwise.
                 </span>
-            </label>
+            </wa-switch>
         </div>
 
         <div slot="footer" class="dialog-footer">
@@ -133,14 +131,7 @@ defineExpose({ requestDecision })
     word-break: break-all;
 }
 
-.propagate-row {
-    display: flex;
-    align-items: flex-start;
-    gap: var(--wa-space-s);
-    cursor: pointer;
-}
-
-.propagate-label {
+.propagate-switch {
     font-size: var(--wa-font-size-s);
 }
 
