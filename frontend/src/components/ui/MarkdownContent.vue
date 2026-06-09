@@ -2,6 +2,7 @@
 import { ref, inject, watch, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { splitMarkdownBlocks, renderBlockToHtml } from '../../utils/markdown.js'
+import { useSettingsStore } from '../../stores/settings'
 import { vHighlight } from '../../directives/vHighlight.js'
 import { toast } from '../../composables/useToast'
 import { openMediaPreview } from '../../composables/useMediaPreview'
@@ -24,6 +25,7 @@ const props = defineProps({
 const emit = defineEmits(['rendered'])
 
 const router = useRouter()
+const settingsStore = useSettingsStore()
 
 // Search highlight terms injected from SessionItemsList (empty when no search active)
 const highlightTerms = inject('searchHighlightTerms', ref([]))
@@ -69,6 +71,31 @@ async function getMermaid() {
     return mermaidModule
 }
 
+// Detect whether a mermaid source already pins a theme — via a `theme:` key in
+// YAML front-matter (--- ... ---) or a `theme` field inside an %%{init: ...}%%
+// directive. When it does, the author's choice is left untouched (same diagram
+// in both light and dark).
+function sourceHasOwnTheme(source) {
+    const fm = source.match(/^\s*---\r?\n([\s\S]*?)\r?\n---/)
+    if (fm && /\btheme\s*:/.test(fm[1])) return true
+    return /%%\{\s*init\s*:[\s\S]*?\btheme\b/i.test(source)
+}
+
+// Make a mermaid source render with the given native theme ('dark' or
+// 'default') by injecting an %%{init: {'theme': ...}}%% directive. The directive
+// overrides the global mermaid config per-diagram, so rendering is stateless (no
+// global re-init race between concurrently rendering blocks) and the SVG is
+// fully determined by (source, theme) — exactly what the render cache keys on.
+// Front-matter must stay at the very start of the source, so when present the
+// directive is inserted right after it; otherwise it is prepended.
+function applyMermaidTheme(source, theme) {
+    if (sourceHasOwnTheme(source)) return source
+    const directive = `%%{init: {'theme': '${theme}'}}%%\n`
+    const fm = source.match(/^\s*---\r?\n[\s\S]*?\r?\n---[ \t]*\r?\n?/)
+    if (fm) return source.slice(0, fm[0].length) + directive + source.slice(fm[0].length)
+    return directive + source
+}
+
 // Render mermaid diagrams found inside a (possibly detached) root node. Replaces
 // each <pre><code class="language-mermaid"> with a <div class="mermaid-diagram">
 // holding the SVG string returned by mermaid.render. Works on a detached node:
@@ -76,7 +103,7 @@ async function getMermaid() {
 // is inlined into the block HTML before it ever reaches the live DOM (no flash).
 // Returns true if every mermaid diagram rendered (or there were none), false if
 // any failed — the caller uses this to avoid caching a failed render.
-async function renderMermaidIn(root) {
+async function renderMermaidIn(root, theme) {
     const mermaidBlocks = root.querySelectorAll('code.language-mermaid')
     if (mermaidBlocks.length === 0) return true
 
@@ -87,7 +114,7 @@ async function renderMermaidIn(root) {
         const pre = block.closest('pre')
         if (!pre) continue
 
-        const source = block.textContent
+        const source = applyMermaidTheme(block.textContent, theme)
         const id = `twicc-mermaid-${Math.random().toString(36).slice(2, 11)}`
 
         try {
@@ -140,17 +167,31 @@ function annotateFileLinksIn(root) {
     }
 }
 
-// Render one block to its final HTML (post-mermaid), memoized by source. The
-// whole post-process runs on a DETACHED node, so the Mermaid SVG is inlined into
-// the cached string before it reaches the DOM — no flash, even on first paint.
-async function renderOneBlock(src, env) {
-    const cached = renderCache.get(src)
+// Matches a fenced mermaid block (``` or ~~~) at the start of a line. No `g`
+// flag, so `.test()` stays stateless across calls.
+const MERMAID_FENCE_RE = /(?:^|\n)[ \t]*(?:`{3,}|~{3,})[ \t]*mermaid\b/i
+
+// Cache key for a block's rendered HTML. Mermaid blocks render to theme-specific
+// SVG, so their key folds in the active theme; every other block renders
+// identically in light and dark (Shiki ships dual-theme CSS), so it keys on the
+// raw source alone and stays a cache hit across a theme toggle.
+function cacheKeyFor(src, theme) {
+    return MERMAID_FENCE_RE.test(src) ? `${theme} ${src}` : src
+}
+
+// Render one block to its final HTML (post-mermaid), memoized by source (plus the
+// active theme for mermaid blocks). The whole post-process runs on a DETACHED
+// node, so the Mermaid SVG is inlined into the cached string before it reaches
+// the DOM — no flash, even on first paint.
+async function renderOneBlock(src, env, theme) {
+    const key = cacheKeyFor(src, theme)
+    const cached = renderCache.get(key)
     if (cached !== undefined) return cached
 
     let html = await renderBlockToHtml(src, env)
     const tmp = document.createElement('div')
     tmp.innerHTML = html
-    const mermaidOk = await renderMermaidIn(tmp)
+    const mermaidOk = await renderMermaidIn(tmp, theme)
     addLanguageLabelsIn(tmp)
     annotateFileLinksIn(tmp)
     html = tmp.innerHTML
@@ -158,8 +199,16 @@ async function renderOneBlock(src, env) {
     // Cache only a fully-successful render. A failed mermaid (incomplete block
     // mid-stream, or a transient during concurrent renders) must stay retryable,
     // never frozen into the cache as an error state.
-    if (mermaidOk) renderCache.set(src, html)
+    if (mermaidOk) renderCache.set(key, html)
     return html
+}
+
+// Mermaid's native theme matching the app's current color scheme: 'dark' for
+// dark mode, 'default' (Mermaid's light theme) otherwise. Captured once per
+// render() so the theme used to render and the theme folded into the cache key
+// can never diverge mid-render.
+function mermaidTheme() {
+    return settingsStore._effectiveColorScheme === 'dark' ? 'dark' : 'default'
 }
 
 // Monotonic render token: while streaming, render() fires every animation frame
@@ -170,6 +219,7 @@ let renderSeq = 0
 async function render() {
     rendering.value = true
     const mySeq = ++renderSeq
+    const theme = mermaidTheme()
     try {
         const { blocks: raw, env } = splitMarkdownBlocks(props.source)
 
@@ -179,7 +229,7 @@ async function render() {
         const occurrences = new Map()
         const result = []
         for (const block of raw) {
-            const html = await renderOneBlock(block.src, env)
+            const html = await renderOneBlock(block.src, env, theme)
             // Disambiguate identical blocks (e.g. two `---`) for a unique Vue key.
             const n = occurrences.get(block.hash) ?? 0
             occurrences.set(block.hash, n + 1)
@@ -191,9 +241,11 @@ async function render() {
 
         // Evict cache entries whose block is gone — chiefly the growing last
         // block, which otherwise leaves one stale entry per intermediate version.
-        const liveSrcs = new Set(raw.map((block) => block.src))
+        // Keys are theme-aware for mermaid blocks, so a theme toggle also evicts
+        // the previous theme's now-superseded mermaid renders here.
+        const liveKeys = new Set(raw.map((block) => cacheKeyFor(block.src, theme)))
         for (const key of renderCache.keys()) {
-            if (!liveSrcs.has(key)) renderCache.delete(key)
+            if (!liveKeys.has(key)) renderCache.delete(key)
         }
 
         blocks.value = result
@@ -206,7 +258,10 @@ async function render() {
     }
 }
 
-watch(() => props.source, render)
+// Re-render on source changes and on color-scheme changes: mermaid diagrams are
+// static SVG baked at render time, so they need a fresh render to follow a
+// dark/light toggle (non-mermaid blocks stay cache hits — see cacheKeyFor).
+watch([() => props.source, () => settingsStore._effectiveColorScheme], render)
 onMounted(render)
 
 const showRaw = ref(false)
