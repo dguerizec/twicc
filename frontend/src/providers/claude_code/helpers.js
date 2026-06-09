@@ -560,7 +560,7 @@ export class ClaudeCodeHelpers extends BaseProviderHelpers {
             }
             return null
         }
-        return null
+        return super.getFieldHelpText(field, context)
     }
 
     getDisplayedSelectValue(field, selectedValue, context) {

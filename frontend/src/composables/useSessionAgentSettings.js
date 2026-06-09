@@ -169,6 +169,27 @@ export function useSessionAgentSettings(sessionIdSource) {
         )
     })
 
+    // Trust clamp surfacing (trust design §13.4, same machinery as
+    // isContextMaxForced): when the session's stored permission mode falls
+    // outside the untrusted-allowed set (e.g. the project became untrusted
+    // after creation), the backend silently runs it on the clamped value —
+    // the popover must show THAT value, not the inert stored one.
+    const isPermissionModeForced = computed(() => {
+        if (!sessionIsUntrusted.value) return false
+        const allowed = providerHelpers.value?.getUntrustedPermissionModes() ?? []
+        if (!allowed.length) return false
+        const value = selectedPermissionMode.value ?? resolvedDefaults.value.permission_mode
+        return value != null && !allowed.includes(value)
+    })
+
+    // The value the backend actually applies when forced: the global untrusted
+    // default (mirrors clamp_permission_mode_for_untrusted). Null when not
+    // forced (or before the synced settings bootstrap).
+    const clampedPermissionMode = computed(() => {
+        if (!isPermissionModeForced.value) return null
+        return providerStore.value?.defaultUntrustedPermissionMode ?? null
+    })
+
     // ─── Aggregate state ─────────────────────────────────────────────────────
     // A field is "forced" when it diverges from its resolved default (project
     // chain → global). In the snapshot model every field is concrete, so this is
@@ -206,7 +227,9 @@ export function useSessionAgentSettings(sessionIdSource) {
         return {
             selected: {
                 selected_model: selectedModel.value,
-                permission_mode: selectedPermissionMode.value,
+                // When the trust clamp overrides the stored mode, the strip
+                // shows the value the agent actually runs with.
+                permission_mode: clampedPermissionMode.value ?? selectedPermissionMode.value,
                 effort: selectedEffort.value,
                 thinking_enabled: selectedThinking.value,
                 claude_in_chrome: selectedClaudeInChrome.value,
@@ -512,6 +535,8 @@ export function useSessionAgentSettings(sessionIdSource) {
         resolvedDefaults,
         isContextMaxForced,
         sessionIsUntrusted,
+        isPermissionModeForced,
+        clampedPermissionMode,
         // aggregates
         anySettingForced,
         hasDropdownsChanged,

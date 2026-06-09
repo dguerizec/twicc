@@ -588,11 +588,17 @@ export class BaseProviderHelpers {
 
     /**
      * Help text rendered under a wa-select (between select and reset link).
-     * Returns a string or null. Default: null. Providers override to surface
-     * runtime-driven explanations like "1M not available for this model
-     * version".
+     * Returns a string or null. Default: only the trust-clamp explanation on
+     * ``permission_mode`` (see ``getDisplayedSelectValue``). Providers
+     * overriding this should chain ``super.getFieldHelpText(...)`` to keep it.
      */
-    getFieldHelpText(/* field, context */) {
+    getFieldHelpText(field, context) {
+        if (field === 'permission_mode' && context?.permissionModeForced
+            && context?.clampedPermissionMode != null) {
+            const label = this.getChoiceLabel('permission_mode', context.clampedPermissionMode)
+                ?? String(context.clampedPermissionMode)
+            return `Clamped to ${label} — untrusted project.`
+        }
         return null
     }
 
@@ -614,7 +620,15 @@ export class BaseProviderHelpers {
      * surfaces the per-field reset link). ``null`` (legacy "follow") also maps
      * to the sentinel.
      */
-    getDisplayedSelectValue(_field, selectedValue, context) {
+    getDisplayedSelectValue(field, selectedValue, context) {
+        // Trust clamp (trust design §13.4): when the stored mode is outside
+        // the untrusted-allowed set, the backend runs the session on the
+        // clamped value — show THAT, not the inert stored one (same pattern
+        // as Claude's auto-promoted context_max).
+        if (field === 'permission_mode' && context?.permissionModeForced
+            && context?.clampedPermissionMode != null) {
+            return String(context.clampedPermissionMode)
+        }
         if (selectedValue === null || selectedValue === context?.defaultValue) return '__default__'
         return String(selectedValue)
     }
