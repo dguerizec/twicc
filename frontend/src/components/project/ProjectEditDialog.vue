@@ -526,33 +526,37 @@ defineExpose({
                 <wa-divider></wa-divider>
             </template>
 
-            <!-- Editable fields -->
-            <div class="form-group">
-                <label class="form-label">Name</label>
-                <wa-input
-                    ref="nameInputRef"
-                    :value.prop="localName"
-                    @input="onNameInput"
-                    placeholder="Project name"
-                    maxlength="25"
-                ></wa-input>
-                <div class="form-hint">
-                    Optional display name (max 25 characters)
-                    — Named projects will always be displayed above unnamed ones.
-                    <template v-if="!isCreateMode && localName.trim()">
-                        — <a href="#" class="clear-name-link" @click.prevent="localName = ''">Remove name</a>
-                    </template>
+            <!-- Editable fields: name + color share one row -->
+            <div class="name-color-row">
+                <div class="form-group name-group">
+                    <label class="form-label">Name</label>
+                    <wa-input
+                        ref="nameInputRef"
+                        :value.prop="localName"
+                        @input="onNameInput"
+                        placeholder="Project name"
+                        maxlength="25"
+                    ></wa-input>
+                    <div class="form-hint">
+                        Optional display name (max 25 characters)
+                        — Named projects will always be displayed above unnamed ones.
+                        <template v-if="!isCreateMode && localName.trim()">
+                            — <a href="#" class="clear-name-link" @click.prevent="localName = ''">Remove name</a>
+                        </template>
+                    </div>
+                </div>
+
+                <div class="form-group color-group">
+                    <label class="form-label">Color</label>
+                    <wa-color-picker
+                        ref="colorPickerRef"
+                        :value.prop="localColor"
+                        @change="onColorChange"
+                    ></wa-color-picker>
                 </div>
             </div>
 
-            <div class="form-group">
-                <label class="form-label">Color</label>
-                <wa-color-picker
-                    ref="colorPickerRef"
-                    :value.prop="localColor"
-                    @change="onColorChange"
-                ></wa-color-picker>
-            </div>
+            <wa-divider></wa-divider>
 
             <!-- Trust (edit mode only) -->
             <div v-if="!isCreateMode" class="form-group">
@@ -586,6 +590,8 @@ defineExpose({
                     <span>Apply to sub-folders and worktrees</span>
                 </label>
             </div>
+
+            <wa-divider v-if="!isCreateMode"></wa-divider>
 
             <!-- Workspaces -->
             <div class="form-group">
@@ -745,6 +751,22 @@ defineExpose({
 .form-label {
     font-size: var(--wa-font-size-s);
     font-weight: var(--wa-font-weight-semibold);
+}
+
+/* Name + color side by side: name takes the remaining width, color hugs its swatch. */
+.name-color-row {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--wa-space-m);
+}
+
+.name-color-row .name-group {
+    flex: 1;
+    min-width: 0;
+}
+
+.name-color-row .color-group {
+    flex: 0 0 auto;
 }
 
 .form-hint {

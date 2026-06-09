@@ -453,27 +453,31 @@ defineExpose({ open, close, openForWorkspace, openNew })
 
         <!-- === FORM VIEW === -->
         <form v-else :id="formId" class="dialog-content" @submit.prevent="handleSave">
-            <!-- Name field -->
-            <div class="form-group">
-                <label class="form-label">Name</label>
-                <wa-input
-                    ref="nameInputRef"
-                    :value="formData.name"
-                    @input="formData.name = $event.target.value"
-                    placeholder="e.g. &quot;Frontend work&quot;"
-                    size="small"
-                    maxlength="20"
-                />
+            <!-- Name + color share one row -->
+            <div class="name-color-row">
+                <div class="form-group name-group">
+                    <label class="form-label">Name</label>
+                    <wa-input
+                        ref="nameInputRef"
+                        :value="formData.name"
+                        @input="formData.name = $event.target.value"
+                        placeholder="e.g. &quot;Frontend work&quot;"
+                        size="small"
+                        maxlength="20"
+                    />
+                </div>
+
+                <div class="form-group color-group">
+                    <label class="form-label">Color</label>
+                    <wa-color-picker
+                        :value.prop="formData.color"
+                        @change="formData.color = $event.target.value"
+                        size="small"
+                    ></wa-color-picker>
+                </div>
             </div>
 
-            <!-- Color picker -->
-            <div class="form-group">
-                <label class="form-label">Color</label>
-                <wa-color-picker
-                    :value.prop="formData.color"
-                    @change="formData.color = $event.target.value"
-                ></wa-color-picker>
-            </div>
+            <wa-divider></wa-divider>
 
             <!-- Project list -->
             <div class="form-group">
@@ -551,6 +555,8 @@ defineExpose({ open, close, openForWorkspace, openNew })
                     <ProjectSelectOptions :projects="availableProjects" />
                 </wa-select>
             </div>
+
+            <wa-divider></wa-divider>
 
             <!-- Auto-add project patterns -->
             <div class="form-group">
@@ -815,6 +821,22 @@ defineExpose({ open, close, openForWorkspace, openNew })
 .form-label {
     font-size: var(--wa-font-size-s);
     font-weight: var(--wa-font-weight-semibold);
+}
+
+/* Name + color side by side: name takes the remaining width, color hugs its swatch. */
+.name-color-row {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--wa-space-m);
+}
+
+.name-color-row .name-group {
+    flex: 1;
+    min-width: 0;
+}
+
+.name-color-row .color-group {
+    flex: 0 0 auto;
 }
 
 .form-label-row {
