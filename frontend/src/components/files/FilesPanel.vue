@@ -6,6 +6,8 @@ import FileTreePanel from './FileTreePanel.vue'
 import FilePane from './FilePane.vue'
 import { useCodeCommentsStore, buildCommentedPathsSet } from '../../stores/codeComments'
 import { useSettingsStore } from '../../stores/settings'
+import { useDataStore } from '../../stores/data'
+import { deriveFileRoots, getWorktreeParent } from '../../utils/projectRoots'
 
 const emit = defineEmits(['navigate'])
 
@@ -102,88 +104,26 @@ let syncingFromRoute = false
 
 // ─── Root directory selection ────────────────────────────────────────────────
 
+const dataStore = useDataStore()
+
 /**
- * Available root directories.
- * Each entry: { key, label, path }
+ * Available root directories for the Files tab. Each entry: { key, label, path, roles }.
  *
- * Candidates (in priority order depending on context):
- *   - session.git_directory — git root detected from tool_use analysis
- *   - session.cwd — the session's current working directory
- *   - project.directory — the Claude project directory
- *   - project.git_root — git root found by walking up from project.directory
- *     (only used when session.git_directory is absent, to avoid redundancy)
- *
- * When session.git_directory exists, it is the default (listed first):
- *   [git_directory, cwd, project.directory]
- * Otherwise, the project directory is the default:
- *   [project.directory, cwd, project.git_root]
- *
- * Paths that resolve to the same value are merged into a single entry with
- * a composite label (e.g. "Project directory (git root, cwd)").
+ * Built from the session/project roots plus — when the project is a git
+ * worktree — the main repository's directories (see utils/projectRoots.js).
+ * In workspace / all-projects mode the caller supplies externalRoots instead.
  */
 const availableRoots = computed(() => {
     if (props.externalRoots) return props.externalRoots
-
-    const sessionGit = props.gitDirectory
-    const cwd = props.sessionCwd
-    const projectGitRoot = props.projectGitRoot
-    const project = props.projectDirectory
-
-    // Step 1: Register each path with its role(s).
-    // When multiple candidates share the same path, roles are merged.
-    const pathRoles = new Map()  // path → { key, roles: Set }
-
-    function register(path, role, key) {
-        if (!path) return
-        if (pathRoles.has(path)) {
-            pathRoles.get(path).roles.add(role)
-        } else {
-            pathRoles.set(path, { key, roles: new Set([role]) })
-        }
-    }
-
-    if (sessionGit) {
-        register(sessionGit, 'git_root', 'git-root')
-    }
-    register(cwd, 'cwd', 'session')
-    register(project, 'project_dir', 'project')
-    if (!sessionGit) {
-        register(projectGitRoot, 'git_root', 'git-root')
-    }
-
-    // Step 2: Build a human-readable label from the set of roles.
-    function buildLabel(roles) {
-        const isGit = roles.has('git_root')
-        const isCwd = roles.has('cwd')
-        const isProject = roles.has('project_dir')
-
-        if (isProject && isGit) return 'Project directory (git root)'
-        if (isProject)         return 'Project directory'
-        if (isGit)             return 'Git root'
-        if (isCwd)             return 'Working directory'
-        return 'Directory'
-    }
-
-    // Step 3: Build the ordered list. Priority depends on whether the session
-    // has its own git context. Duplicates are naturally skipped (already in pathRoles).
-    const order = sessionGit
-        ? [sessionGit, cwd, project]
-        : [project, cwd, projectGitRoot]
-
-    const roots = []
-    const seen = new Set()
-    for (const path of order) {
-        if (!path || seen.has(path)) continue
-        seen.add(path)
-        const info = pathRoles.get(path)
-        roots.push({
-            key: info.key,
-            label: buildLabel(info.roles),
-            path,
-        })
-    }
-
-    return roots
+    const parent = getWorktreeParent(dataStore.getProject(props.projectId), dataStore)
+    return deriveFileRoots({
+        gitDirectory: props.gitDirectory,
+        cwd: props.sessionCwd,
+        projectDirectory: props.projectDirectory,
+        projectGitRoot: props.projectGitRoot,
+        parentDirectory: parent?.directory,
+        parentGitRoot: parent?.git_root,
+    })
 })
 
 const selectedRootKey = ref(null)

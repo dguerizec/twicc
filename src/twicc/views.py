@@ -1790,18 +1790,20 @@ async def _resolve_session_git_directory(project_id, session_id=None, *, request
 
     Resolution order:
     1. If ``requested_git_dir`` is provided, validate it matches one of the
-       known roots (session git_directory or project git_root) and use it.
-    2. Session git_directory (from tool_use analysis), if directory still exists
+       known git roots (session git_directory, project git_root, or — for a
+       worktree — the main repo's git root) and use it.
+    2. Session git_directory (from tool_use analysis), if it still exists
     3. Project git_root (resolved from project directory walking up)
+    4. Main repo git root, when the project is a worktree (last resort)
 
-    When session_id is None (project-level, e.g. draft sessions), only the
-    project git_root is used.
+    When session_id is None (project-level, e.g. draft sessions), the session
+    git_directory is not considered.
 
     Returns the git_directory path or raises Http404.
     """
-    session_git = None
-    project_git = None
+    from twicc.roots import git_roots_for
 
+    session = None
     if session_id:
         try:
             session = await Session.objects.aget(id=session_id, project_id=project_id)
@@ -1812,32 +1814,34 @@ async def _resolve_session_git_directory(project_id, session_id=None, *, request
         if session.parent_session_id is not None:
             raise Http404("Session not found")
 
-        if session.git_directory and os.path.isdir(session.git_directory):
-            session_git = session.git_directory
-
-    # Always fetch project (needed for requested_git_dir validation)
     try:
         project = await Project.objects.aget(id=project_id)
     except Project.DoesNotExist:
         raise Http404("Project not found")
 
-    if project.git_root and os.path.isdir(project.git_root):
-        project_git = project.git_root
+    # When the project is a git worktree, the main repo's git root is offered too.
+    parent = None
+    if project.worktree_of_id:
+        try:
+            parent = await Project.objects.aget(id=project.worktree_of_id)
+        except Project.DoesNotExist:
+            parent = None
 
-    # If a specific directory was requested, validate it against known roots
+    # Ordered candidate git roots (worktree first, main repo last), restricted to
+    # those that still exist on disk.
+    candidates = git_roots_for(project, session, parent)
+    existing = [d for d in candidates if os.path.isdir(d)]
+
     if requested_git_dir:
-        allowed = {d for d in (session_git, project_git) if d}
-        if requested_git_dir in allowed:
-            return requested_git_dir
+        requested = os.path.normpath(requested_git_dir)
+        if requested in existing:
+            return requested
         # Requested directory is not among known/existing roots — reject with 404
         # so the frontend can mark it as missing and fall back to another root.
         raise Http404("No git repository found")
 
-    # Default resolution: session git first, then project git
-    if session_git:
-        return session_git
-    if project_git:
-        return project_git
+    if existing:
+        return existing[0]
 
     raise Http404("No git repository found")
 

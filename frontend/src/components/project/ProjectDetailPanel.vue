@@ -14,6 +14,7 @@ import ContributionGraphs from '../activity/ContributionGraphs.vue'
 import FilesPanel from '../files/FilesPanel.vue'
 import GitPanel from '../git/GitPanel.vue'
 import TerminalPanel from '../terminal/TerminalPanel.vue'
+import { deriveFileRoots, getWorktreeParent } from '../../utils/projectRoots'
 import {
     buildFilesRouteParams,
     buildGitRouteParams,
@@ -193,14 +194,18 @@ const filesAvailableRoots = computed(() => {
         return roots
     }
 
-    // Single project mode
+    // Single project mode — canonical derivation, including worktree main-repo
+    // roots (utils/projectRoots.js). The project view passes these as
+    // externalRoots, so FilesPanel's own worktree lookup is bypassed here.
     const project = dataStore.getProject(props.projectId)
     if (!project?.directory) return []
-    const roots = [{ key: 'project', label: 'Project directory', path: project.directory }]
-    if (project.git_root && project.git_root !== project.directory) {
-        roots.push({ key: 'git-root', label: 'Git root', path: project.git_root })
-    }
-    return roots
+    const parent = getWorktreeParent(project, dataStore)
+    return deriveFileRoots({
+        projectDirectory: project.directory,
+        projectGitRoot: project.git_root,
+        parentDirectory: parent?.directory,
+        parentGitRoot: parent?.git_root,
+    })
 })
 
 // Tab management — derived from route (like SessionView)

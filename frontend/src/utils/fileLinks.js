@@ -67,13 +67,16 @@ function isSpaRoute(href, router) {
 
 function findMatchingRoot(absolutePath, roots) {
     for (const root of roots) {
-        if (root && absolutePath.startsWith(root + '/')) return root
+        if (root?.path && absolutePath.startsWith(root.path + '/')) return root
     }
     return null
 }
 
 /**
  * Classify a markdown link href.
+ *
+ * ``roots`` is the ordered descriptor array from utils/projectRoots.js
+ * (``{ key, label, path, roles }``), so worktree main-repo roots are honored.
  *
  * Returns one of:
  *   - { kind: 'spa' }
@@ -87,8 +90,8 @@ function findMatchingRoot(absolutePath, roots) {
  * Decision flow:
  *   1. If Vue Router can resolve the href → SPA.
  *   2. Else strip the line suffix and require a file extension; otherwise SPA.
- *   3. Absolute path: match against the session roots; no match → file-broken.
- *   4. Relative path: anchor to the first available root (cwd preferred); if
+ *   3. Absolute path: match against the roots; no match → file-broken.
+ *   4. Relative path: anchor to the cwd-role root (else the first root); if
  *      no root is available, file-broken.
  */
 export function classifyHref(href, { router, roots }) {
@@ -104,17 +107,12 @@ export function classifyHref(href, { router, roots }) {
     if (!looksLikeFilePath(path)) return { kind: 'spa' }
 
     if (path.startsWith('/')) {
-        const matchingRoot = findMatchingRoot(path, [
-            roots.gitDirectory,
-            roots.cwd,
-            roots.projectDirectory,
-            roots.projectGitRoot,
-        ])
-        if (matchingRoot) return { kind: 'file', absolutePath: path, lineNum }
+        if (findMatchingRoot(path, roots)) return { kind: 'file', absolutePath: path, lineNum }
         return { kind: 'file-broken', lineNum }
     }
 
-    const baseRoot = roots.cwd || roots.projectDirectory || roots.projectGitRoot || roots.gitDirectory
+    const cwdRoot = roots.find(r => r.roles?.includes('cwd'))
+    const baseRoot = (cwdRoot || roots[0])?.path
     if (!baseRoot) return { kind: 'file-broken', lineNum }
     return { kind: 'file', absolutePath: `${baseRoot}/${path}`, lineNum }
 }

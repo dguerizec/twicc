@@ -16,6 +16,8 @@ import FilePane from '../files/FilePane.vue'
 import { searchTreeFiles } from '../../utils/treeSearch'
 import { useCodeCommentsStore, buildCommentedPathsSet } from '../../stores/codeComments'
 import { usePanZoom, useSyncedPanZoom } from '../../composables/usePanZoom'
+import { useDataStore } from '../../stores/data'
+import { deriveGitRoots, getWorktreeParent } from '../../utils/projectRoots'
 
 const emit = defineEmits(['navigate'])
 
@@ -61,6 +63,7 @@ const props = defineProps({
 
 const settingsStore = useSettingsStore()
 const codeCommentsStore = useCodeCommentsStore()
+const dataStore = useDataStore()
 const refreshButtonId = useId()
 const gitDirButtonId = useId()
 let syncingFromRoute = false
@@ -81,27 +84,17 @@ const routeIssueMessage = computed(() =>
 // ---------------------------------------------------------------------------
 
 /**
- * Available git roots for the directory selector.
- * Only includes paths that are actual git repositories.
- * When session git_directory and project git_root are the same, they are merged.
+ * Available git roots for the directory selector. When the project is a git
+ * worktree, the main repository's git root is offered too (see
+ * utils/projectRoots.js → deriveGitRoots).
  */
 const availableGitRoots = computed(() => {
-    const sessionGit = props.gitDirectory
-    const projectGit = props.projectGitRoot
-
-    // Same path — merge into one entry
-    if (sessionGit && projectGit && sessionGit === projectGit) {
-        return [{ key: 'session', label: 'Git root', path: sessionGit }]
-    }
-
-    const roots = []
-    if (sessionGit) {
-        roots.push({ key: 'session', label: 'Session git root', path: sessionGit })
-    }
-    if (projectGit && projectGit !== sessionGit) {
-        roots.push({ key: 'project', label: 'Project git root', path: projectGit })
-    }
-    return roots
+    const parent = getWorktreeParent(dataStore.getProject(props.projectId), dataStore)
+    return deriveGitRoots({
+        gitDirectory: props.gitDirectory,
+        projectGitRoot: props.projectGitRoot,
+        parentGitRoot: parent?.git_root,
+    })
 })
 
 const selectedRootKey = ref(null)

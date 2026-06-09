@@ -10,6 +10,7 @@ import { apiFetch } from '../../../utils/api'
 import { getParsedContent, hasContent } from '../../../utils/parsedContent'
 import { pendingSessionSearch } from '../../../utils/pendingSearch'
 import { classifyHref } from '../../../utils/fileLinks.js'
+import { fileRootsFromStore } from '../../../utils/projectRoots'
 import VirtualScroller from '../../virtual-scroller/VirtualScroller.vue'
 import SessionItem from './SessionItem.vue'
 import DaySeparator from './items/DaySeparator.vue'
@@ -1036,12 +1037,7 @@ const openFileInFilesTab = inject('viewFileInFilesTab', null)
 provide('markdownFileLinks', {
     classifyHref: (href) => classifyHref(href, {
         router: fileLinksRouter,
-        roots: {
-            gitDirectory: session.value?.git_directory,
-            cwd: session.value?.cwd,
-            projectDirectory: project.value?.directory,
-            projectGitRoot: project.value?.git_root,
-        },
+        roots: fileRootsFromStore(project.value, session.value, store),
     }),
     openFile: openFileInFilesTab,
 })

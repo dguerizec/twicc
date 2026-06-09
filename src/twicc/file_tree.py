@@ -10,6 +10,7 @@ from collections import deque
 from django.http import Http404, JsonResponse
 
 from twicc.core.models import Project, Session
+from twicc.roots import allowed_base_dirs
 
 NODE_THRESHOLD = 200  # Max cumulative nodes before stopping expansion
 
@@ -18,14 +19,15 @@ def validate_path(project_id, dir_path, session_id=None):
     """Validate that a directory path is allowed for a given project and optional session.
 
     When session_id is provided, also checks session-specific directories (cwd, git_directory).
-    When session_id is None (project-level / draft sessions), only checks project.directory.
+    When the project is a git worktree, the main repository's directories are
+    allowed too (see twicc.roots.allowed_base_dirs).
 
     Checks that:
     1. The project exists (and the session exists and is associated, if provided).
-    2. The requested path is within one of the allowed base directories:
-       - project.directory (always)
-       - session.cwd (if session provided and set)
-       - session.git_directory (if session provided and set)
+    2. The requested path is within one of the allowed base directories (see
+       twicc.roots.allowed_base_dirs): the project git_root/directory, the
+       session's cwd and git_directory, and — for a worktree — the main repo's
+       directories.
 
     Returns (session, dir_path, error_response) where error_response is None on success.
     Session is None when no session_id is provided.
@@ -47,17 +49,12 @@ def validate_path(project_id, dir_path, session_id=None):
 
     dir_path = os.path.normpath(dir_path)
 
-    # Build list of allowed base directories
-    allowed_bases = []
-    if project.git_root:
-        allowed_bases.append(os.path.normpath(project.git_root))
-    elif project.directory:
-        allowed_bases.append(os.path.normpath(project.directory))
-    if session:
-        if session.cwd:
-            allowed_bases.append(os.path.normpath(session.cwd))
-        if session.git_directory:
-            allowed_bases.append(os.path.normpath(session.git_directory))
+    # Build list of allowed base directories. For a git worktree, the main
+    # repository's directories are included too (fetched here for the helper).
+    parent = None
+    if project.worktree_of_id:
+        parent = Project.objects.filter(id=project.worktree_of_id).first()
+    allowed_bases = allowed_base_dirs(project, session, parent)
 
     # Check that the requested path is within at least one allowed base
     path_allowed = False

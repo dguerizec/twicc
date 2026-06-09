@@ -23,6 +23,7 @@ import { useDataStore } from '../../stores/data'
 import { useSettingsStore } from '../../stores/settings'
 import { apiFetch } from '../../utils/api'
 import FileTreePanel from './FileTreePanel.vue'
+import { deriveFileRoots, getWorktreeParent } from '../../utils/projectRoots'
 
 const props = defineProps({
     sessionId: {
@@ -79,63 +80,19 @@ function optionsQuery() {
 }
 
 // ─── Root directory selection ─────────────────────────────────────────────
-// Same logic as FilesPanel's availableRoots.
+// Canonical derivation shared with FilesPanel (utils/projectRoots.js),
+// including the worktree main-repo roots.
 
 const availableRoots = computed(() => {
-    const sessionGit = session.value?.git_directory
-    const cwd = session.value?.cwd
-    const projectGitRoot = project.value?.git_root
-    const projectDir = project.value?.directory
-
-    const pathRoles = new Map()
-
-    function register(path, role, key) {
-        if (!path) return
-        if (pathRoles.has(path)) {
-            pathRoles.get(path).roles.add(role)
-        } else {
-            pathRoles.set(path, { key, roles: new Set([role]) })
-        }
-    }
-
-    if (sessionGit) {
-        register(sessionGit, 'git_root', 'git')
-    }
-    register(cwd, 'cwd', 'cwd')
-    register(projectDir, 'project_dir', 'project')
-    if (!sessionGit) {
-        register(projectGitRoot, 'git_root', 'git')
-    }
-
-    function buildLabel(roles) {
-        const isGitRole = roles.has('git_root')
-        const isProject = roles.has('project_dir')
-        const isCwd = roles.has('cwd')
-
-        if (isProject && isGitRole) return 'Project directory (git root)'
-        if (isProject)              return 'Project directory'
-        if (isGitRole)              return 'Git root'
-        if (isCwd)                  return 'Working directory'
-        return 'Directory'
-    }
-
-    const order = sessionGit
-        ? [sessionGit, cwd, projectDir]
-        : [projectDir, cwd, projectGitRoot]
-
-    const roots = []
-    const seen = new Set()
-    for (const path of order) {
-        if (!path || seen.has(path)) continue
-        seen.add(path)
-        const info = pathRoles.get(path)
-        roots.push({
-            key: info.key,
-            label: buildLabel(info.roles),
-            path,
-        })
-    }
-    return roots
+    const parent = getWorktreeParent(project.value, store)
+    return deriveFileRoots({
+        gitDirectory: session.value?.git_directory,
+        cwd: session.value?.cwd,
+        projectDirectory: project.value?.directory,
+        projectGitRoot: project.value?.git_root,
+        parentDirectory: parent?.directory,
+        parentGitRoot: parent?.git_root,
+    })
 })
 
 const selectedRootKey = ref(null)

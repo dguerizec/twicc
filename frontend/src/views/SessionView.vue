@@ -34,6 +34,7 @@ import {
 } from '../utils/granularRoutes'
 import { getAgentDisplayLabel } from '../utils/agentLabel'
 import { focusChatPrimary } from '../utils/focusChat'
+import { fileRootsFromStore } from '../utils/projectRoots'
 
 const route = useRoute()
 const router = useRouter()
@@ -126,21 +127,11 @@ provide('sessionActive', readonly(isActive))
  * @param {string} absolutePath — the absolute filesystem path to reveal
  */
 async function viewFileInFilesTab(absolutePath, { lineNum = null } = {}) {
-    const gitDir = session.value?.git_directory
-    const sessionCwd = session.value?.cwd
-    const projectGitRoot = store.getProject(session.value?.project_id)?.git_root
-    const projectDir = store.getProject(session.value?.project_id)?.directory
-    const matchingRoot = [gitDir, sessionCwd, projectDir, projectGitRoot].find(
-        root => root && absolutePath.startsWith(root + '/')
-    )
-    let rootKey
-    if (matchingRoot === gitDir || matchingRoot === projectGitRoot) rootKey = 'git-root'
-    else if (matchingRoot === sessionCwd) rootKey = 'session'
-    else if (matchingRoot === projectDir) rootKey = 'project'
-
-    const relativePath = matchingRoot && absolutePath.startsWith(matchingRoot + '/')
-        ? absolutePath.slice(matchingRoot.length + 1)
-        : undefined
+    const project = store.getProject(session.value?.project_id)
+    const roots = fileRootsFromStore(project, session.value, store)
+    const match = roots.find(r => absolutePath.startsWith(r.path + '/'))
+    const rootKey = match?.key
+    const relativePath = match ? absolutePath.slice(match.path.length + 1) : undefined
 
     navigateInTab('files', buildFilesRouteParams({ rootKey, filePath: relativePath }))
     await nextTick()

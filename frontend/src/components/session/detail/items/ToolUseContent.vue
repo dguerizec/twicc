@@ -11,6 +11,7 @@ import { stopSubagent } from '../../../../composables/useWebSocket'
 import { getSessionCutoffMs } from '../../../../utils/sessions'
 import { getParsedContent, hasContent } from '../../../../utils/parsedContent'
 import { getToolHelpers, getProviderHelpers } from '../../../../providers'
+import { fileRootsFromStore } from '../../../../utils/projectRoots'
 import JsonHumanView from '../../../json/JsonHumanView.vue'
 import MarkdownContent from '../../../ui/MarkdownContent.vue'
 import AppTooltip from '../../../ui/AppTooltip.vue'
@@ -478,13 +479,8 @@ const canViewInFilesTab = computed(() => {
     const mainSessionId = props.parentSessionId || props.sessionId
     const mainSession = dataStore.getSession(mainSessionId)
     const project = dataStore.getProject(mainSession?.project_id || props.projectId)
-    const roots = [
-        mainSession?.git_directory,
-        mainSession?.cwd,
-        project?.directory,
-        project?.git_root,
-    ].filter(Boolean)
-    return roots.some(root => target.filePath.startsWith(root + '/'))
+    const roots = fileRootsFromStore(project, mainSession, dataStore)
+    return roots.some(root => target.filePath.startsWith(root.path + '/'))
 })
 
 function openInFilesTab() {

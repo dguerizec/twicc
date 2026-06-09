@@ -6,6 +6,7 @@ import { applyStructuredPatch, reconstructFromHunks } from '../../../../../utils
 import { parseApplyPatchEnvelope } from '../../../../../providers/codex/parsePatch'
 import { parseUnifiedDiff } from '../../../../../providers/codex/parseUnifiedDiff'
 import { formatRelativePath, fileIconFor } from '../../../../../providers/utils/path'
+import { fileRootsFromStore } from '../../../../../utils/projectRoots'
 import ApplyPatchFileEntry from './ApplyPatchFileEntry.vue'
 
 /**
@@ -56,15 +57,12 @@ const sessionBaseDir = computed(() => (
     session.value?.git_directory || session.value?.cwd || null
 ))
 
-// Roots considered safe targets for the View-in-Files button. Same
-// list the shell uses for its own button (see ``ToolUseContent.vue``)
-// so each per-file header has the same eligibility check.
-const fileTabRoots = computed(() => [
-    session.value?.git_directory,
-    session.value?.cwd,
-    project.value?.directory,
-    project.value?.git_root,
-].filter(Boolean))
+// Roots considered safe targets for the View-in-Files button. Same canonical
+// derivation the shell uses for its own button (see ``ToolUseContent.vue`` and
+// utils/projectRoots.js) so each per-file header has the same eligibility check.
+const fileTabRoots = computed(() =>
+    fileRootsFromStore(project.value, session.value, dataStore).map(r => r.path)
+)
 
 /**
  * Look up the ``event_msg.patch_apply_end`` line that pairs with our
