@@ -198,7 +198,7 @@ Key models in `src/twicc/core/models.py`:
 
 ## Code Quality
 
-- **Language:** All code content (UI strings, comments, variable names) must be in English. Only documentation files (*.md) may contain French. **Important:** Even when the user speaks French, always write UI text and code in English.
+- **Language:** All written artifacts — code, UI strings, comments, variable names, and documentation including design/plan/spec files (e.g. under `docs/plans/`) — must be in English. French is reserved for live chat with the user (and the developer's personal `CLAUDE.local.md`). **Important:** Even when the user speaks French, always write UI text, code, and docs in English.
 - Python: ruff (line-length=120)
 - Tests: pytest with pytest-django
 - Vue components use Composition API with `<script setup>`

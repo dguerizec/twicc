@@ -16,7 +16,7 @@ Main stack:
 - Do not implement code unless the user explicitly asks you to do so. If the user is explaining requirements or thinking aloud, wait, ask clarifying questions if needed, and do not treat it as permission to edit.
 - Preserve existing work. The worktree may already be dirty; never revert or overwrite changes you did not make unless the user explicitly asks.
 - Never rebase on remote branches such as `origin/main` unless explicitly requested. If rebasing is requested and a local branch exists, rebase on the local branch.
-- Code, comments, variable names, and UI strings must be in English. Documentation files may contain French.
+- Code, comments, variable names, UI strings, and documentation — design/plan/spec files included — must be in English. French is only for live chat with the user (and the developer's personal `AGENTS.local.md`).
 - The project prefers high-quality implementation. The only accepted shortcuts called out by the project are no mandatory tests and no mandatory linting.
 
 ## Commit Conventions

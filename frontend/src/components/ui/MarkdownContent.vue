@@ -1,7 +1,7 @@
 <script setup>
-import { ref, inject, watch, onMounted, nextTick } from 'vue'
+import { ref, inject, watch, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { renderMarkdown } from '../../utils/markdown.js'
+import { splitMarkdownBlocks, renderBlockToHtml } from '../../utils/markdown.js'
 import { vHighlight } from '../../directives/vHighlight.js'
 import { toast } from '../../composables/useToast'
 import { openMediaPreview } from '../../composables/useMediaPreview'
@@ -34,9 +34,15 @@ const highlightTerms = inject('searchHighlightTerms', ref([]))
 // default SPA behavior.
 const fileLinks = inject('markdownFileLinks', null)
 
-const renderedHtml = ref('')
+const blocks = ref([])
 const container = ref(null)
 const rendering = ref(true)
+
+// Per-block rendered-HTML cache, keyed by raw block source (content-addressed:
+// identical blocks share a render, and a key can never serve the wrong HTML).
+// Component-level and non-reactive: it lives for the component's lifetime and is
+// rebuilt on remount — matching the "streaming only" scope (no cross-mount cache).
+const renderCache = new Map()
 
 // Lazy-loaded mermaid instance (dynamic import to avoid ~500KB in main bundle)
 let mermaidModule = null
@@ -63,14 +69,19 @@ async function getMermaid() {
     return mermaidModule
 }
 
-// Render mermaid diagrams found in the parsed HTML
-async function renderMermaidDiagrams() {
-    if (!container.value) return
-
-    const mermaidBlocks = container.value.querySelectorAll('code.language-mermaid')
-    if (mermaidBlocks.length === 0) return
+// Render mermaid diagrams found inside a (possibly detached) root node. Replaces
+// each <pre><code class="language-mermaid"> with a <div class="mermaid-diagram">
+// holding the SVG string returned by mermaid.render. Works on a detached node:
+// mermaid renders into its own offscreen sandbox and returns a string, so the SVG
+// is inlined into the block HTML before it ever reaches the live DOM (no flash).
+// Returns true if every mermaid diagram rendered (or there were none), false if
+// any failed — the caller uses this to avoid caching a failed render.
+async function renderMermaidIn(root) {
+    const mermaidBlocks = root.querySelectorAll('code.language-mermaid')
+    if (mermaidBlocks.length === 0) return true
 
     const mermaid = await getMermaid()
+    let ok = true
 
     for (const block of mermaidBlocks) {
         const pre = block.closest('pre')
@@ -86,17 +97,18 @@ async function renderMermaidDiagrams() {
             wrapper.innerHTML = svg
             pre.replaceWith(wrapper)
         } catch {
-            // If mermaid fails, leave the code block as-is (it will show as plain code)
+            // If mermaid fails (e.g. an incomplete block mid-stream), leave the
+            // code block as-is (it will show as plain code).
             pre.classList.add('mermaid-error')
+            ok = false
         }
     }
+    return ok
 }
 
-// Add data-language attribute to code blocks for the language label
-function addLanguageLabels() {
-    if (!container.value) return
-
-    for (const pre of container.value.querySelectorAll('pre.shiki')) {
+// Add data-language attribute to code blocks (inside the given root) for the label.
+function addLanguageLabelsIn(root) {
+    for (const pre of root.querySelectorAll('pre.shiki')) {
         const code = pre.querySelector('code[class*="language-"]')
         if (!code) continue
         const lang = code.className.match(/language-(\S+)/)?.[1]
@@ -104,12 +116,13 @@ function addLanguageLabels() {
     }
 }
 
-// Annotate file-path links so handleLinkClick can route them to the Files tab.
-// Skips external (http/mailto/...), anchor-only, and Vue Router routes.
-function annotateFileLinks() {
-    if (!container.value || !fileLinks) return
+// Annotate file-path links (inside the given root) so handleLinkClick can route
+// them to the Files tab. Skips external (http/mailto/...), anchor-only, and Vue
+// Router routes.
+function annotateFileLinksIn(root) {
+    if (!fileLinks) return
 
-    for (const a of container.value.querySelectorAll('a')) {
+    for (const a of root.querySelectorAll('a')) {
         if (a.getAttribute('target') === '_blank') continue
         const href = a.getAttribute('href')
         if (!href) continue
@@ -127,17 +140,69 @@ function annotateFileLinks() {
     }
 }
 
+// Render one block to its final HTML (post-mermaid), memoized by source. The
+// whole post-process runs on a DETACHED node, so the Mermaid SVG is inlined into
+// the cached string before it reaches the DOM — no flash, even on first paint.
+async function renderOneBlock(src, env) {
+    const cached = renderCache.get(src)
+    if (cached !== undefined) return cached
+
+    let html = await renderBlockToHtml(src, env)
+    const tmp = document.createElement('div')
+    tmp.innerHTML = html
+    const mermaidOk = await renderMermaidIn(tmp)
+    addLanguageLabelsIn(tmp)
+    annotateFileLinksIn(tmp)
+    html = tmp.innerHTML
+
+    // Cache only a fully-successful render. A failed mermaid (incomplete block
+    // mid-stream, or a transient during concurrent renders) must stay retryable,
+    // never frozen into the cache as an error state.
+    if (mermaidOk) renderCache.set(src, html)
+    return html
+}
+
+// Monotonic render token: while streaming, render() fires every animation frame
+// and successive calls overlap on their awaits. Only the latest call may commit
+// its result / evict / emit, so a slow older frame can never clobber a newer one.
+let renderSeq = 0
+
 async function render() {
     rendering.value = true
+    const mySeq = ++renderSeq
     try {
-        renderedHtml.value = await renderMarkdown(props.source)
-        await nextTick()
-        annotateFileLinks()
-        addLanguageLabels()
-        await renderMermaidDiagrams()
+        const { blocks: raw, env } = splitMarkdownBlocks(props.source)
+
+        // Sequential (not Promise.all): the streaming hot path is cache-hit
+        // dominated (only the last block actually renders), and going one block
+        // at a time sidesteps any concurrent mermaid.render concerns.
+        const occurrences = new Map()
+        const result = []
+        for (const block of raw) {
+            const html = await renderOneBlock(block.src, env)
+            // Disambiguate identical blocks (e.g. two `---`) for a unique Vue key.
+            const n = occurrences.get(block.hash) ?? 0
+            occurrences.set(block.hash, n + 1)
+            result.push({ key: `${block.hash}:${n}`, html })
+        }
+
+        // A newer render() superseded us mid-await: drop our now-stale result.
+        if (mySeq !== renderSeq) return
+
+        // Evict cache entries whose block is gone — chiefly the growing last
+        // block, which otherwise leaves one stale entry per intermediate version.
+        const liveSrcs = new Set(raw.map((block) => block.src))
+        for (const key of renderCache.keys()) {
+            if (!liveSrcs.has(key)) renderCache.delete(key)
+        }
+
+        blocks.value = result
     } finally {
-        rendering.value = false
-        emit('rendered')
+        // Only the latest render owns the lifecycle flag and the event.
+        if (mySeq === renderSeq) {
+            rendering.value = false
+            emit('rendered')
+        }
     }
 }
 
@@ -327,10 +392,16 @@ function handleLinkClick(event) {
             v-show="!showRaw"
             ref="container"
             class="markdown-body"
-            v-html="renderedHtml"
             v-highlight="highlightTerms"
             @click="handleLinkClick"
-        ></div>
+        >
+            <div
+                v-for="block in blocks"
+                :key="block.key"
+                class="markdown-block"
+                v-html="block.html"
+            ></div>
+        </div>
     </div>
 </template>
 
@@ -349,6 +420,23 @@ function handleLinkClick(event) {
     background: transparent;
     /* Override github-markdown-css fixed 16px to inherit from :root */
     font-size: 1rem;
+}
+
+/* Each top-level markdown block renders in its own keyed wrapper so Vue diffs
+   blocks independently (no full re-render / Mermaid flash while streaming).
+   `display: contents` removes the wrapper from the box tree, so github-markdown-css's
+   direct-child rules and inter-block margin-collapsing behave as if unwrapped. */
+.markdown-body > .markdown-block {
+    display: contents;
+}
+/* Re-apply github-markdown-css's first/last-child margin reset one level deeper:
+   `.markdown-body > *:first-child` now matches the (box-less) wrapper, not the
+   block element inside it. */
+.markdown-body > .markdown-block:first-child > :first-child {
+    margin-top: 0 !important;
+}
+.markdown-body > .markdown-block:last-child > :last-child {
+    margin-bottom: 0 !important;
 }
 
 /* -- Floating toolbar (raw toggle + copy) ---------------------------- */

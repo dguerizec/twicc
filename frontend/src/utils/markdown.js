@@ -96,6 +96,62 @@ export async function renderMarkdown(source) {
     return DOMPurify.sanitize(rawHtml, DOMPURIFY_CONFIG)
 }
 
+// Small non-cryptographic string hash (FNV-1a, base36). Used to build compact,
+// stable Vue :key values per block. The render cache is keyed by the raw block
+// source (not this hash), so a hash collision can never serve the wrong HTML.
+function hashString(str) {
+    let h = 0x811c9dc5
+    for (let i = 0; i < str.length; i++) {
+        h ^= str.charCodeAt(i)
+        h = Math.imul(h, 0x01000193)
+    }
+    return (h >>> 0).toString(36)
+}
+
+/**
+ * Split a markdown document into its top-level blocks, using markdown-it's own
+ * tokenization. Each root block token carries a `.map = [startLine, endLine]`
+ * line range computed by markdown-it; we slice the source accordingly. We do not
+ * reimplement any markdown parsing — only collect markdown-it's block boundaries.
+ *
+ * The returned `env` is filled by the parse (notably `env.references` for link
+ * reference definitions) and MUST be passed back to `renderBlockToHtml`, so that
+ * a reference defined in one block resolves when used in another block.
+ *
+ * @param {string} source - Raw markdown text
+ * @returns {{ blocks: Array<{src: string, hash: string}>, env: object }}
+ */
+export function splitMarkdownBlocks(source) {
+    const env = {}
+    if (!source) return { blocks: [], env }
+    const tokens = md.parse(source, env)
+    const lines = source.split('\n')
+    const blocks = []
+    for (const token of tokens) {
+        // Root-level block tokens (level 0) carry a source line range in `.map`.
+        // Closing tokens (paragraph_close, etc.) are level 0 too but have no map.
+        if (token.level === 0 && token.map) {
+            const src = lines.slice(token.map[0], token.map[1]).join('\n')
+            blocks.push({ src, hash: hashString(src) })
+        }
+    }
+    return { blocks, env }
+}
+
+/**
+ * Render a single markdown block to sanitized HTML. Reuses the shared `env`
+ * (from splitMarkdownBlocks) so cross-block link references resolve. Async
+ * because shiki highlighting is async (same mechanism as renderMarkdown).
+ *
+ * @param {string} src - One block's raw markdown
+ * @param {object} env - The shared markdown-it env from splitMarkdownBlocks
+ * @returns {Promise<string>} Sanitized HTML for the block
+ */
+export async function renderBlockToHtml(src, env) {
+    const rawHtml = await md.renderAsync(src, env)
+    return DOMPurify.sanitize(rawHtml, DOMPURIFY_CONFIG)
+}
+
 /**
  * Check if a string likely contains markdown formatting.
  * Used to decide whether to render as markdown or plain text.
