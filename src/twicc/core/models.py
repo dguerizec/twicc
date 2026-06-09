@@ -89,6 +89,26 @@ class Project(models.Model):
         blank=True,
         related_name="worktrees",
     )
+    # ---- Cross-provider trust ---------------------------------------
+    # The DB is the source of truth; the provider configs (~/.claude.json,
+    # ~/.codex/config.toml) are a write-mostly projection. The effective trust
+    # of a NULL (inherited) project is always computed live, never stored.
+    # See docs/plans/2026-06-09-project-trust-design.md.
+    #
+    # True = trusted (explicit decision), False = untrusted (explicit decision),
+    # NULL = no own decision → inherited from an ancestor / worktree main repo,
+    # or asked at the session gate.
+    trust = models.BooleanField(null=True, blank=True, default=None)
+    # Whether an explicit trust decision cascades to NULL descendants. The
+    # default is set at decision time (= "project is under git"); the column
+    # default is False. Meaningful only when ``trust`` is non-NULL.
+    trust_propagation = models.BooleanField(default=False)
+    # Bookkeeping: True once TwiCC has handled this project's trust at least once
+    # at the gate (resolved / imported / decided / materialized). Once True, the
+    # provider config is never re-read for this project — the DB is authoritative.
+    # This is what prevents a materialized provider entry from being re-adopted
+    # as a fresh decision after an inheritance change.
+    trust_imported = models.BooleanField(default=False)
 
     class Meta:
         ordering = ["-mtime"]

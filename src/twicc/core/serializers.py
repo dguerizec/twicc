@@ -29,6 +29,12 @@ def serialize_project(project):
         # the lazy relationship load — keeping this serializer query-free and
         # safe to call from async contexts (see module docstring).
         "worktree_of": project.worktree_of_id,
+        # Cross-provider trust: True/False = explicit decision, None = no own
+        # decision (the front resolves the effective value by walking ancestors
+        # / the worktree_of link). ``trust_imported`` is internal bookkeeping
+        # and intentionally not exposed.
+        "trust": project.trust,
+        "trust_propagation": project.trust_propagation,
     }
 
 

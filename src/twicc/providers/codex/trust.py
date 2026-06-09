@@ -1,0 +1,99 @@
+"""Read/write the Codex per-project ``trust_level`` in ``~/.codex/config.toml``.
+
+Read = the project's own ``[projects."<root>"].trust_level`` via ``tomllib``.
+Write = the app-server RPC ``config/batchWrite`` (so the Codex binary owns the
+lock / atomicity / format preservation), keyed by the **canonical realpath** of
+the project root. The path segment is double-quoted in the dotted key path. See
+docs/plans/2026-06-09-project-trust-design.md §7 (validated against the Codex
+Rust source: ``set_project_trust_level`` / ``config_manager_service``).
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import tomllib
+from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
+
+def _config_path() -> Path:
+    return Path.home() / ".codex" / "config.toml"
+
+
+def read_trust(root: str) -> bool | None:
+    """Return the project root's ``trust_level`` as a bool, else None.
+
+    Tries the canonical (realpath) key first, then the raw key — matching the
+    way Codex resolves trust keys. None means no own decision recorded.
+    """
+    path = _config_path()
+    try:
+        data = tomllib.loads(path.read_text())
+    except FileNotFoundError:
+        return None
+    except (tomllib.TOMLDecodeError, OSError):
+        logger.warning("Could not read %s for trust seeding", path, exc_info=True)
+        return None
+    projects = data.get("projects") or {}
+    if not isinstance(projects, dict):
+        return None
+    for key in (os.path.realpath(root), root):
+        entry = projects.get(key)
+        if isinstance(entry, dict) and "trust_level" in entry:
+            level = entry.get("trust_level")
+            if level == "trusted":
+                return True
+            if level == "untrusted":
+                return False
+    return None
+
+
+def _key_path(root: str) -> str:
+    """Dotted config key path ``projects."<realpath>".trust_level``.
+
+    The path segment is double-quoted; inside double quotes the Codex parser
+    only treats ``\\`` and ``"`` specially (``.`` and ``/`` are literal), so we
+    escape just those two.
+    """
+    canon = os.path.realpath(root)
+    escaped = canon.replace("\\", "\\\\").replace('"', '\\"')
+    return f'projects."{escaped}".trust_level'
+
+
+async def write_trust(root: str, trusted: bool) -> None:
+    """Set the project root's ``trust_level`` via ``config/batchWrite`` (upsert).
+
+    Spawns a short-lived app-server client (same pattern as ``plugin_install``).
+    Failures are logged, not raised: the DB stays the source of truth, so a
+    failed projection degrades (Codex won't load project layers) but never
+    blocks the session.
+    """
+    from openai_codex import CodexConfig
+    from openai_codex.async_client import AsyncCodexClient
+    from openai_codex.generated.v2_all import ConfigWriteResponse
+
+    from twicc.providers.codex.bin import resolve_bundled_binary
+
+    bundled = resolve_bundled_binary()
+    config = CodexConfig(codex_bin=str(bundled), cwd=str(Path.home()))
+    try:
+        async with AsyncCodexClient(config=config) as client:
+            await client.initialize()
+            await client.request(
+                "config/batchWrite",
+                {
+                    "edits": [
+                        {
+                            "keyPath": _key_path(root),
+                            "mergeStrategy": "upsert",
+                            "value": "trusted" if trusted else "untrusted",
+                        }
+                    ]
+                },
+                response_model=ConfigWriteResponse,
+            )
+        logger.info("Set Codex trust for %s -> %s", root, trusted)
+    except Exception:
+        logger.exception("Failed to write Codex trust for %s", root)
