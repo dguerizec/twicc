@@ -12,6 +12,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - When viewing a file, Ctrl+G (Cmd+G on macOS) jumps straight to a given line number, like in a code editor.
 - The `session content` CLI command (+matching skills and API) can now filter a session's raw items by their raw text content not just by line number.
 
+### Changed
+
+- Bump `claude-agent-sdk` from 0.2.91 to 0.2.95 (bundled Claude Code CLI: 2.1.165 → 2.1.170)
+
 ## [1.7.2] - 2026-06-06
 
 ### Fixed
