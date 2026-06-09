@@ -68,6 +68,7 @@ AGENT_SETTINGS_DESCRIPTIONS: dict[str, dict] = {
 AGENT_SETTINGS_ALIASES: dict[str, dict[str, str]] = {
     "selected_model": {
         "min": "gpt-mini", "fastest": "gpt-mini", "cheapest": "gpt-mini",
+        "medium": "gpt-5.4", "balanced": "gpt-5.4",
         "max": "gpt", "strongest": "gpt",
     },
     "effort": {

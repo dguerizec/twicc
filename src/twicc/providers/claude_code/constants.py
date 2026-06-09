@@ -28,6 +28,15 @@ class ClaudeCodeModelExtra(NamedTuple):
     supports_effort_max: bool
     supports_fast: bool
     supports_permission_auto: bool
+    # Native vision resolution: True ⇒ ship images at MAX_IMAGE_DIMENSION
+    # (2576 px); False ⇒ downscale client-side to 1568 px. Replaces the old
+    # ``_is_opus_47_plus`` family/version hardcode.
+    supports_highres_images: bool
+    # Whether the model allows turning thinking off. False ⇒ adaptive
+    # thinking is always on and ``thinking:{type:disabled}`` is rejected by
+    # the API (Fable 5), so the ``thinking_enabled=False`` choice is
+    # constrained out and the toggle is forced on.
+    supports_thinking_disabled: bool
 
 
 SYNCED_SETTINGS_DEFAULTS: dict = {
@@ -126,7 +135,8 @@ AGENT_SETTINGS_DESCRIPTIONS: dict[str, dict] = {
 AGENT_SETTINGS_ALIASES: dict[str, dict[str, str]] = {
     "selected_model": {
         "min": "sonnet", "fastest": "sonnet", "cheapest": "sonnet",
-        "max": "opus", "strongest": "opus",
+        "medium": "opus", "balanced": "opus",
+        "max": "fable", "strongest": "fable",
     },
     "effort": {
         "min": "low", "max": "max",
@@ -147,7 +157,7 @@ AGENT_SETTINGS_ALIASES: dict[str, dict[str, str]] = {
 #
 # The ``selected_model`` value stored in settings and session DB
 # fields uses:
-# - bare alias for latest: ``"opus"``, ``"sonnet"``
+# - bare alias for latest: ``"fable"``, ``"opus"``, ``"sonnet"``
 # - versioned alias for non-latest: ``"opus-4.5"``, ``"sonnet-4.5"``
 #
 # When communicating with the SDK, latest aliases are passed as-is
@@ -160,12 +170,24 @@ AGENT_SETTINGS_ALIASES: dict[str, dict[str, str]] = {
 MODEL_VERSIONS: list[ModelVersion] = [
     ModelVersion(
         provider=Provider.CLAUDE_CODE,
+        model="fable", version="5", full_name="claude-fable-5",
+        retirement_date=None,
+        latest=True,
+        provider_extra=ClaudeCodeModelExtra(
+            supports_1m=True, supports_effort_xhigh=True, supports_effort_max=True,
+            supports_fast=False, supports_permission_auto=True,
+            supports_highres_images=True, supports_thinking_disabled=False,
+        ),
+    ),
+    ModelVersion(
+        provider=Provider.CLAUDE_CODE,
         model="opus", version="4.8", full_name="claude-opus-4-8",
         retirement_date=None,
         latest=True,
         provider_extra=ClaudeCodeModelExtra(
             supports_1m=True, supports_effort_xhigh=True, supports_effort_max=True,
             supports_fast=True, supports_permission_auto=True,
+            supports_highres_images=True, supports_thinking_disabled=True,
         ),
     ),
     ModelVersion(
@@ -176,6 +198,7 @@ MODEL_VERSIONS: list[ModelVersion] = [
         provider_extra=ClaudeCodeModelExtra(
             supports_1m=True, supports_effort_xhigh=True, supports_effort_max=True,
             supports_fast=True, supports_permission_auto=True,
+            supports_highres_images=True, supports_thinking_disabled=True,
         ),
     ),
     ModelVersion(
@@ -186,6 +209,7 @@ MODEL_VERSIONS: list[ModelVersion] = [
         provider_extra=ClaudeCodeModelExtra(
             supports_1m=True, supports_effort_xhigh=False, supports_effort_max=True,
             supports_fast=True, supports_permission_auto=True,
+            supports_highres_images=False, supports_thinking_disabled=True,
         ),
     ),
     ModelVersion(
@@ -196,6 +220,7 @@ MODEL_VERSIONS: list[ModelVersion] = [
         provider_extra=ClaudeCodeModelExtra(
             supports_1m=False, supports_effort_xhigh=False, supports_effort_max=False,
             supports_fast=False, supports_permission_auto=False,
+            supports_highres_images=False, supports_thinking_disabled=True,
         ),
     ),
     ModelVersion(
@@ -206,6 +231,7 @@ MODEL_VERSIONS: list[ModelVersion] = [
         provider_extra=ClaudeCodeModelExtra(
             supports_1m=True, supports_effort_xhigh=False, supports_effort_max=True,
             supports_fast=False, supports_permission_auto=True,
+            supports_highres_images=False, supports_thinking_disabled=True,
         ),
     ),
     ModelVersion(
@@ -216,6 +242,7 @@ MODEL_VERSIONS: list[ModelVersion] = [
         provider_extra=ClaudeCodeModelExtra(
             supports_1m=False, supports_effort_xhigh=False, supports_effort_max=False,
             supports_fast=False, supports_permission_auto=False,
+            supports_highres_images=False, supports_thinking_disabled=True,
         ),
     ),
 ]

@@ -49,7 +49,7 @@ $TWICC create-session [OPTIONS] '<PROMPT>'
 
 All optional. Omit to use preset / user defined defaults. Use `$TWICC info models agent-settings` for authoritative model lists, valid values, and per-value restrictions (skill: `twicc-info`). The lists below are indicative.
 
-- `--model VALUE` — Claude Code: `opus`, `sonnet`, `opus-4.7`, `opus-4.6`, `opus-4.5`, `sonnet-4.5`. Codex: `gpt`, `gpt-mini`, `gpt-5.4`.
+- `--model VALUE` — Claude Code: `fable`, `opus`, `sonnet`, `opus-4.7`, `opus-4.6`, `opus-4.5`, `sonnet-4.5`. Codex: `gpt`, `gpt-mini`, `gpt-5.4`.
 - `--effort VALUE` — Claude Code: `low`, `medium`, `high`, `xhigh`, `max`. Codex: `low`, `medium`, `high`, `xhigh`.
 - `--permission-mode VALUE` — Claude Code: `default`, `auto`, `acceptEdits`, `plan`, `dontAsk`, `bypassPermissions`. Codex: `read_only`, `strict`, `auto`, `autonomous`, `yolo`.
 - `--thinking / --no-thinking` — Claude Code only.
@@ -62,7 +62,7 @@ All optional. Omit to use preset / user defined defaults. Use `$TWICC info model
 
 Some settings also accept provider-agnostic aliases, resolved to each provider's concrete value — useful for cross-provider scripting without knowing the exact values:
 
-- `--model` — `max`/`strongest` → top family, `min`/`fastest`/`cheapest` → lightest family (both always the latest version).
+- `--model` — `max`/`strongest` → top family, `medium`/`balanced` → middle family, `min`/`fastest`/`cheapest` → lightest family.
 - `--effort`, `--context-max` — `max` → highest/largest, `min` → lowest/smallest.
 - `--permission-mode` — `strict`/`safe` → most-locked (non-interactive), `open`/`full`/`yolo`/`bypass` → most permissive (non-interactive), `auto` → balanced (interactive).
 

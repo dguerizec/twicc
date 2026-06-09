@@ -396,6 +396,18 @@ export class ClaudeCodeHelpers extends BaseProviderHelpers {
         return entry ? entry.provider_extra.supports_permission_auto : false
     }
 
+    modelSupportsHighresImages(selectedModel) {
+        const entry = this._resolveRegistryEntry(selectedModel)
+        return entry ? entry.provider_extra.supports_highres_images : false
+    }
+
+    modelSupportsThinkingDisabled(selectedModel) {
+        // Default ``true`` (allow disabling) when the registry isn't seeded
+        // yet, so we never lock the toggle on a model we can't resolve.
+        const entry = this._resolveRegistryEntry(selectedModel)
+        return entry ? entry.provider_extra.supports_thinking_disabled : true
+    }
+
     /**
      * Pipeline mirroring the backend ``ClaudeCodeHelpers.enforce_agent_settings_consistency``:
      *
@@ -409,9 +421,11 @@ export class ClaudeCodeHelpers extends BaseProviderHelpers {
      * 5. Demote ``permissionMode === AUTO`` to ``DEFAULT`` when the
      *    (post-upgrade) model doesn't support auto (only Opus 4.6+ /
      *    Sonnet 4.6+).
+     * 6. Force ``thinkingEnabled`` on when the (post-upgrade) model can't
+     *    disable thinking (Fable 5: adaptive thinking is always on).
      *
-     * Fields not in the input are left absent in the output. ``thinkingEnabled``
-     * and ``claudeInChrome`` are passed through.
+     * Fields not in the input are left absent in the output.
+     * ``claudeInChrome`` is passed through.
      */
     enforceAgentSettingsConsistency(settings) {
         const result = { ...settings }
@@ -439,6 +453,10 @@ export class ClaudeCodeHelpers extends BaseProviderHelpers {
 
         if (result.permissionMode === PERMISSION_MODE.AUTO && !this.modelSupportsPermissionAuto(model)) {
             result.permissionMode = PERMISSION_MODE.DEFAULT
+        }
+
+        if (result.thinkingEnabled === false && !this.modelSupportsThinkingDisabled(model)) {
+            result.thinkingEnabled = true
         }
 
         return result
@@ -496,6 +514,9 @@ export class ClaudeCodeHelpers extends BaseProviderHelpers {
         if (field === 'permission_mode' && choiceValue === PERMISSION_MODE.AUTO) {
             return !this.modelSupportsPermissionAuto(context?.effectiveModel)
         }
+        if (field === 'thinking_enabled' && choiceValue === false) {
+            return !this.modelSupportsThinkingDisabled(context?.effectiveModel)
+        }
         return false
     }
 
@@ -524,6 +545,12 @@ export class ClaudeCodeHelpers extends BaseProviderHelpers {
             // When fast mode is available, the cost note lives under the
             // ``Enabled`` option (see ``AGENT_SETTINGS_CHOICES.fast_mode``)
             // so the field-level help stays empty to avoid duplication.
+            return null
+        }
+        if (field === 'thinking_enabled') {
+            if (!this.modelSupportsThinkingDisabled(context?.effectiveModel)) {
+                return 'Always on for this model — thinking cannot be disabled.'
+            }
             return null
         }
         return null
@@ -614,46 +641,25 @@ export class ClaudeCodeHelpers extends BaseProviderHelpers {
      * Send-time long-edge cap for Claude. The rules track Anthropic's
      * published limits (see the vision docs):
      *
-     *   - Models < Opus 4.7 (Sonnet / Haiku / older Opus): native
-     *     resolution is 1568 px, so anything larger is downscaled
-     *     server-side anyway. Resize client-side to save bandwidth
-     *     and keep token usage predictable.
-     *   - Opus 4.7+: native resolution is 2576 px (the storage
-     *     dimension). Ship as-is.
+     *   - Models without ``supports_highres_images`` (Sonnet / Haiku /
+     *     older Opus): native resolution is 1568 px, so anything larger
+     *     is downscaled server-side anyway. Resize client-side to save
+     *     bandwidth and keep token usage predictable.
+     *   - Models with ``supports_highres_images`` (Fable, Opus 4.7+):
+     *     native resolution is 2576 px (the storage dimension). Ship
+     *     as-is.
      *   - Whenever the request carries more than 20 images, Anthropic
      *     caps every image at 2000 px regardless of model. Apply the
      *     tighter of {model cap, 2000} in that case.
      */
     getEffectiveImageDimension({ model, numImages } = {}) {
         const upgraded = this.getRetiredModelUpgrade(model) ?? model
-        const isOpus47Plus = this._isOpus47Plus(upgraded)
-        let cap = isOpus47Plus ? null : 1568
+        const highres = this.modelSupportsHighresImages(upgraded)
+        let cap = highres ? null : 1568
         if ((numImages ?? 0) > 20) {
             cap = cap === null ? 2000 : Math.min(cap, 2000)
         }
         return cap
-    }
-
-    /**
-     * Whether ``selectedModel`` belongs to Opus 4.7 or any future major/
-     * minor revision past it. Used by ``getEffectiveImageDimension`` to
-     * grant images the full 2576 px storage resolution rather than
-     * downscaling to 1568. We can't read this off the registry's
-     * ``provider_extra`` directly (no flag yet for high-res image
-     * support) so we parse the version string. Returns false on any
-     * unparseable input — the conservative side falls back to 1568.
-     */
-    _isOpus47Plus(selectedModel) {
-        if (!selectedModel || typeof selectedModel !== 'string') return false
-        if (!selectedModel.startsWith('opus-')) return false
-        const version = selectedModel.slice('opus-'.length)
-        const [majorStr, minorStr] = version.split('.', 2)
-        const major = Number(majorStr)
-        const minor = Number(minorStr ?? '0')
-        if (!Number.isFinite(major) || !Number.isFinite(minor)) return false
-        if (major > 4) return true
-        if (major < 4) return false
-        return minor >= 7
     }
 
     getRetiredModelUpgrade(selectedModel) {

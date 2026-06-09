@@ -31,7 +31,7 @@ from twicc.pricing import TokenUsage
 # positionally rather than infer it from layout. Shared between the
 # OpenRouter id parser on ``ClaudeCodeHelpers`` and the JSONL name
 # parser :func:`extract_model_info` below.
-CLAUDE_FAMILIES = frozenset({"opus", "sonnet", "haiku"})
+CLAUDE_FAMILIES = frozenset({"fable", "opus", "sonnet", "haiku"})
 
 
 class ModelInfo(NamedTuple):

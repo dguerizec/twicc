@@ -147,8 +147,9 @@ export const useClaudeCodeStore = defineStore('claudeCode', () => {
     // carries selection metadata (``selected_model``, ``model``, ``version``,
     // ``latest``, ``retirement_date``) and capability flags under
     // ``provider_extra`` (``supports_1m``, ``supports_effort_xhigh``,
-    // ``supports_effort_max``). Consumed via ``ClaudeCodeHelpers``' capability
-    // and retired-model methods.
+    // ``supports_effort_max``, ``supports_fast``, ``supports_permission_auto``,
+    // ``supports_highres_images``, ``supports_thinking_disabled``). Consumed via
+    // ``ClaudeCodeHelpers``' capability and retired-model methods.
 
     const modelRegistry = ref([])
 

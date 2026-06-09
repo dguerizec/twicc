@@ -204,11 +204,12 @@ class ClaudeCodeHelpers(BaseProviderHelpers):
     # Per-(field, value) capability flag in :class:`ClaudeCodeModelExtra`
     # gating the value. Values not listed here are universally available.
     CONSTRAINT_FLAG_MAPPING: ClassVar[dict[tuple[str, Any], str]] = {
-        ("effort", "max"):           "supports_effort_max",
-        ("effort", "xhigh"):         "supports_effort_xhigh",
-        ("context_max", 1_000_000):  "supports_1m",
-        ("fast_mode", True):         "supports_fast",
-        ("permission_mode", "auto"): "supports_permission_auto",
+        ("effort", "max"):            "supports_effort_max",
+        ("effort", "xhigh"):          "supports_effort_xhigh",
+        ("context_max", 1_000_000):   "supports_1m",
+        ("fast_mode", True):          "supports_fast",
+        ("permission_mode", "auto"):  "supports_permission_auto",
+        ("thinking_enabled", False):  "supports_thinking_disabled",
     }
 
     USAGE_SYNC_INTERVAL: ClassVar[int | None] = 5 * 60
@@ -223,14 +224,21 @@ class ClaudeCodeHelpers(BaseProviderHelpers):
 
     # Default per-family prices (USD per million tokens) — fallback when no
     # ``ModelPrice`` row matches and no other version of the same family is
-    # in the DB. Based on Anthropic's published pricing as of January 2026.
+    # in the DB. Based on Anthropic's published pricing as of June 2026.
     DEFAULT_FAMILY_PRICES: ClassVar[dict[str, FamilyPrices]] = {
+        "fable": FamilyPrices(
+            input_price=Decimal("10.00"),
+            output_price=Decimal("50.00"),
+            cache_read_price=Decimal("1.00"),
+            cache_write_5m_price=Decimal("12.50"),
+            cache_write_1h_price=Decimal("20.00"),
+        ),
         "opus": FamilyPrices(
-            input_price=Decimal("15.00"),
-            output_price=Decimal("75.00"),
-            cache_read_price=Decimal("1.50"),
-            cache_write_5m_price=Decimal("18.75"),
-            cache_write_1h_price=Decimal("30.00"),
+            input_price=Decimal("5.00"),
+            output_price=Decimal("25.00"),
+            cache_read_price=Decimal("0.50"),
+            cache_write_5m_price=Decimal("6.25"),
+            cache_write_1h_price=Decimal("10.00"),
         ),
         "sonnet": FamilyPrices(
             input_price=Decimal("3.00"),
@@ -420,6 +428,31 @@ class ClaudeCodeHelpers(BaseProviderHelpers):
             mv = self._resolve_to_default_model_version()
         return bool(mv and mv.provider_extra.supports_permission_auto)
 
+    def selected_model_supports_highres_images(self, selected_model: str | None) -> bool:
+        """Return ``True`` if the model ships images at native ``MAX_IMAGE_DIMENSION`` (2576 px).
+
+        ``False`` models are downscaled client-side to 1568 px (the older
+        Claude vision resolution). Reads the per-model capability flag rather
+        than parsing the version string, so a new family opts in via the
+        registry just like ``supports_1m`` & co.
+        """
+        mv = self.find_model(selected_model) if selected_model else None
+        if mv is None:
+            mv = self._resolve_to_default_model_version()
+        return bool(mv and mv.provider_extra.supports_highres_images)
+
+    def selected_model_supports_thinking_disabled(self, selected_model: str | None) -> bool:
+        """Return ``True`` if the model lets you turn thinking off.
+
+        ``False`` ⇒ adaptive thinking is always on and
+        ``thinking:{type:disabled}`` is rejected by the API (Fable 5), so
+        ``thinking_enabled`` is forced on for that model.
+        """
+        mv = self.find_model(selected_model) if selected_model else None
+        if mv is None:
+            mv = self._resolve_to_default_model_version()
+        return bool(mv and mv.provider_extra.supports_thinking_disabled)
+
     def enforce_synced_settings_consistency(self, synced: dict, changes: dict) -> None:
         """Normalise ``claudeCodeDefault*`` keys when the default model changed.
 
@@ -494,6 +527,9 @@ class ClaudeCodeHelpers(BaseProviderHelpers):
         5. Demotes ``permission_mode == "auto"`` to ``"default"`` when
            the model doesn't support auto (Opus 4.5 / Sonnet 4.5 and
            earlier are rejected by the SDK / CLI).
+        6. Forces ``thinking_enabled`` on when the model can't disable
+           thinking (Fable 5: adaptive thinking is always on and
+           ``thinking:{type:disabled}`` is rejected by the API).
         """
         settings = super().enforce_agent_settings_consistency(settings)
 
@@ -502,6 +538,7 @@ class ClaudeCodeHelpers(BaseProviderHelpers):
         effort = settings.effort
         fast_mode = settings.fast_mode
         permission_mode = settings.permission_mode
+        thinking_enabled = settings.thinking_enabled
 
         if context_max == 1_000_000 and not self.selected_model_supports_1m(model):
             context_max = 200_000
@@ -517,11 +554,15 @@ class ClaudeCodeHelpers(BaseProviderHelpers):
         if permission_mode == "auto" and not self.selected_model_supports_permission_auto(model):
             permission_mode = "default"
 
+        if thinking_enabled is False and not self.selected_model_supports_thinking_disabled(model):
+            thinking_enabled = True
+
         if (
             context_max == settings.context_max
             and effort == settings.effort
             and fast_mode == settings.fast_mode
             and permission_mode == settings.permission_mode
+            and thinking_enabled == settings.thinking_enabled
         ):
             return settings
         return settings._replace(
@@ -529,6 +570,7 @@ class ClaudeCodeHelpers(BaseProviderHelpers):
             effort=effort,
             fast_mode=fast_mode,
             permission_mode=permission_mode,
+            thinking_enabled=thinking_enabled,
         )
 
     def get_agent_settings_choices(self) -> dict[str, list]:
@@ -547,8 +589,8 @@ class ClaudeCodeHelpers(BaseProviderHelpers):
 
         Anthropic vision rules in play:
 
-        - Opus 4.7+ accepts native ``MAX_IMAGE_DIMENSION`` (2576 px); we
-          ship at full resolution.
+        - Models flagged ``supports_highres_images`` accept native
+          ``MAX_IMAGE_DIMENSION`` (2576 px); we ship at full resolution.
         - Older Claude models downscale server-side to 1568 px; we cap
           there ahead of time to save bandwidth and keep token usage
           predictable.
@@ -561,8 +603,8 @@ class ClaudeCodeHelpers(BaseProviderHelpers):
         capability check uses the post-upgrade alias.
         """
         upgraded = self._upgrade_retired_model(model) or model
-        is_opus_47_plus = self._is_opus_47_plus(upgraded)
-        cap = MAX_IMAGE_DIMENSION if is_opus_47_plus else 1568
+        highres = self.selected_model_supports_highres_images(upgraded)
+        cap = MAX_IMAGE_DIMENSION if highres else 1568
         if num_images > 20:
             cap = min(cap, 2000)
         return cap
@@ -597,29 +639,6 @@ class ClaudeCodeHelpers(BaseProviderHelpers):
             if candidate_parts > current_parts:
                 return self.selected_model_value(candidate)
         return None
-
-    @staticmethod
-    def _is_opus_47_plus(model: str | None) -> bool:
-        """Whether ``model`` is Opus 4.7 or any later major/minor revision.
-
-        Mirrors ``_isOpus47Plus`` in
-        ``frontend/src/providers/claude_code/helpers.js``. Returns ``False``
-        on unparseable inputs (conservative fallback to the 1568 cap).
-        """
-        if not isinstance(model, str) or not model.startswith("opus-"):
-            return False
-        version = model[len("opus-"):]
-        parts = version.split(".", 1)
-        try:
-            major = int(parts[0])
-            minor = int(parts[1]) if len(parts) > 1 else 0
-        except ValueError:
-            return False
-        if major > 4:
-            return True
-        if major < 4:
-            return False
-        return minor >= 7
 
     def serialize_model_extra(self, mv: ModelVersion) -> dict:
         """Expose Claude Code's :class:`ClaudeCodeModelExtra` flags on the wire."""
