@@ -63,7 +63,20 @@ def _key_path(root: str) -> str:
 
 
 async def write_trust(root: str, trusted: bool) -> None:
-    """Set the project root's ``trust_level`` via ``config/batchWrite`` (upsert).
+    """Set the project root's ``trust_level`` via ``config/batchWrite`` (upsert)."""
+    await _write_value(root, "trusted" if trusted else "untrusted")
+
+
+async def clear_trust(root: str) -> None:
+    """Remove the project root's ``trust_level`` entry (reset to inherit).
+
+    A ``null`` value deletes the key on the Codex side.
+    """
+    await _write_value(root, None)
+
+
+async def _write_value(root: str, value: str | None) -> None:
+    """Write (or delete, when *value* is ``None``) ``trust_level`` for *root*.
 
     Spawns a short-lived app-server client (same pattern as ``plugin_install``).
     Failures are logged, not raised: the DB stays the source of truth, so a
@@ -88,12 +101,12 @@ async def write_trust(root: str, trusted: bool) -> None:
                         {
                             "keyPath": _key_path(root),
                             "mergeStrategy": "upsert",
-                            "value": "trusted" if trusted else "untrusted",
+                            "value": value,
                         }
                     ]
                 },
                 response_model=ConfigWriteResponse,
             )
-        logger.info("Set Codex trust for %s -> %s", root, trusted)
+        logger.info("Codex trust for %s -> %s", root, value)
     except Exception:
         logger.exception("Failed to write Codex trust for %s", root)

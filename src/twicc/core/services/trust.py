@@ -60,6 +60,18 @@ async def _codex_write(root_key: str, trusted: bool) -> None:
     await codex_trust.write_trust(root_key, trusted)
 
 
+def _claude_clear(directory: str) -> None:
+    from twicc.providers.claude_code import trust as claude_trust
+
+    claude_trust.clear_trust(directory)
+
+
+async def _codex_clear(root_key: str) -> None:
+    from twicc.providers.codex import trust as codex_trust
+
+    await codex_trust.clear_trust(root_key)
+
+
 def _seed_read(directory: str) -> bool | None:
     """Read the project's OWN trust from both providers and collapse it.
 
@@ -92,11 +104,33 @@ def _seed_read(directory: str) -> bool | None:
 
 
 async def _project_decision(directory: str, trusted: bool) -> None:
-    """Write an EXPLICIT decision onto both providers (the project's own keys)."""
+    """Write an EXPLICIT decision onto the providers (the project's own keys).
+
+    Codex is keyed by the git root, so we only write it when the project IS its
+    own root — for a subdir of a repo the entry would belong to (and clobber) the
+    repo, and Codex cannot represent a subdir's trust independently anyway (design
+    §10). Claude is keyed per-directory, so it always records the decision.
+    """
     if not directory:
         return
     await sync_to_async(_claude_write)(directory, trusted)
-    await _codex_write(_codex_root_key(directory), trusted)
+    key = await sync_to_async(_codex_root_key)(directory)
+    if key == os.path.realpath(directory):
+        await _codex_write(key, trusted)
+
+
+async def _clear_project_entries(directory: str) -> None:
+    """Remove the project's own provider entries (used when resetting to inherit).
+
+    Same own-root guard as ``_project_decision`` for Codex so we never clear an
+    ancestor repo's entry.
+    """
+    if not directory:
+        return
+    await sync_to_async(_claude_clear)(directory)
+    key = await sync_to_async(_codex_root_key)(directory)
+    if key == os.path.realpath(directory):
+        await _codex_clear(key)
 
 
 async def _materialize(target, source_directory: str | None, state: bool) -> None:
@@ -235,17 +269,38 @@ async def resolve_project_trust(project_id: str) -> dict:
 
 
 async def decide_project_trust(
-    project_id: str, trusted: bool, propagation: bool | None = None
+    project_id: str, trusted: bool | None, propagation: bool | None = None
 ) -> dict:
-    """Persist an explicit user decision and project it onto both providers.
+    """Persist a trust decision (or reset to inherit) and re-project it.
 
-    ``propagation`` defaults to "the project is under git" when not provided.
+    ``trusted`` is True / False for an explicit decision, or ``None`` to reset the
+    project to inheritance. ``propagation`` defaults to "the project is under git"
+    for an explicit decision (ignored on reset).
     """
     from twicc.core.models import Project
 
     project = await Project.objects.filter(id=project_id).afirst()
     if project is None:
         return {"ok": False, "error": "project_not_found"}
+
+    if trusted is None:
+        # Reset to inherit: drop the explicit decision (keep trust_imported so we
+        # never re-seed), then reconcile the providers to the NEW effective trust —
+        # clear the project's own entries, then materialize the inherited value
+        # where the providers cannot inherit it (worktrees / above-git-root).
+        await run_under_db_write_lock(
+            lambda: Project.objects.filter(id=project_id).aupdate(
+                trust=None, trust_imported=True
+            )
+        )
+        await _clear_project_entries(project.directory)
+        target, resolution, source_directory = await sync_to_async(_load_resolution)(
+            project_id
+        )
+        if target is not None and resolution.state is not None:
+            await _materialize(target, source_directory, resolution.state)
+        await _broadcast_project_updated(project_id)
+        return {"ok": True, "state": None}
 
     if propagation is None:
         propagation = (

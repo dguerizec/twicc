@@ -399,11 +399,12 @@ async def project_trust_resolve(request, project_id):
 
 
 async def project_trust_decide(request, project_id):
-    """POST /api/projects/<id>/trust/decide/ — record an explicit trust decision.
+    """POST /api/projects/<id>/trust/decide/ — record a trust decision.
 
-    Body: ``{trusted: bool, propagation?: bool}``. Persists the decision and
-    projects it onto both providers' configs (``propagation`` defaults to "the
-    project is under git").
+    Body: ``{trusted: bool|null, propagation?: bool}``. ``trusted`` true/false is
+    an explicit decision; ``null`` resets the project to inheritance. Persists the
+    decision and projects it onto both providers' configs (``propagation``
+    defaults to "the project is under git").
     """
     if request.method != "POST":
         return JsonResponse({"error": "Method not allowed"}, status=405)
@@ -413,9 +414,11 @@ async def project_trust_decide(request, project_id):
         data = orjson.loads(request.body)
     except orjson.JSONDecodeError:
         return JsonResponse({"error": "Invalid JSON"}, status=400)
+    if "trusted" not in data:
+        return JsonResponse({"error": "'trusted' is required (true, false or null)"}, status=400)
     trusted = data.get("trusted")
-    if not isinstance(trusted, bool):
-        return JsonResponse({"error": "'trusted' must be a boolean"}, status=400)
+    if not (trusted is None or isinstance(trusted, bool)):
+        return JsonResponse({"error": "'trusted' must be true, false or null"}, status=400)
     propagation = data.get("propagation")
     if propagation is not None and not isinstance(propagation, bool):
         return JsonResponse({"error": "'propagation' must be a boolean"}, status=400)

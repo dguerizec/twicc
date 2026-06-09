@@ -48,12 +48,26 @@ def read_trust(directory: str) -> bool | None:
 
 
 def write_trust(directory: str, trusted: bool) -> None:
-    """Set ``projects[directory].hasTrustDialogAccepted`` to *trusted*.
+    """Set ``projects[directory].hasTrustDialogAccepted`` to *trusted*."""
+    _mutate_trust(directory, trusted)
 
-    Atomic (temp + ``os.replace``) under an advisory sidecar lock, re-reading the
-    file *inside* the lock to minimize the lost-update window versus the Claude
-    CLI. Preserves every other key. Refuses to write (rather than clobber) a file
-    it cannot parse as a JSON object. Idempotent — a no-op when already correct.
+
+def clear_trust(directory: str) -> None:
+    """Remove ``projects[directory].hasTrustDialogAccepted`` (reset to inherit).
+
+    Leaves any other keys of the project entry intact; with no own flag the CLI
+    falls back to its parent walk-up at runtime.
+    """
+    _mutate_trust(directory, None)
+
+
+def _mutate_trust(directory: str, value: bool | None) -> None:
+    """Set (bool) or remove (``None``) the trust flag for *directory*, atomically.
+
+    Read-modify-write (temp + ``os.replace``) under an advisory sidecar lock,
+    re-reading the file *inside* the lock to minimize the lost-update window
+    versus the Claude CLI. Preserves every other key. Refuses to write (rather
+    than clobber) a file it cannot parse as a JSON object. Idempotent.
     """
     path = _config_path()
     lock_path = path.with_name(path.name + ".twicc.lock")
@@ -71,23 +85,31 @@ def write_trust(directory: str, trusted: bool) -> None:
         if not isinstance(data, dict):
             logger.error("Refusing to write %s: top-level is not an object", path)
             return
-        projects = data.setdefault("projects", {})
-        if not isinstance(projects, dict):
-            logger.error("Refusing to write %s: 'projects' is not an object", path)
-            return
-        entry = projects.get(directory)
-        if not isinstance(entry, dict):
-            entry = projects[directory] = {}
-        if entry.get("hasTrustDialogAccepted") is trusted:
-            return  # idempotent
-        entry["hasTrustDialogAccepted"] = trusted
+
+        projects = data.get("projects")
+        if value is None:
+            # Clear: only act if the flag is actually present.
+            entry = projects.get(directory) if isinstance(projects, dict) else None
+            if not isinstance(entry, dict) or "hasTrustDialogAccepted" not in entry:
+                return
+            del entry["hasTrustDialogAccepted"]
+        else:
+            if not isinstance(projects, dict):
+                projects = data["projects"] = {}
+            entry = projects.get(directory)
+            if not isinstance(entry, dict):
+                entry = projects[directory] = {}
+            if entry.get("hasTrustDialogAccepted") is value:
+                return  # idempotent
+            entry["hasTrustDialogAccepted"] = value
+
         tmp = path.with_name(f"{path.name}.twicc.tmp.{os.getpid()}")
         try:
             tmp.write_bytes(orjson.dumps(data, option=orjson.OPT_INDENT_2))
             os.replace(str(tmp), str(path))
         finally:
             tmp.unlink(missing_ok=True)
-        logger.info("Set Claude trust for %s -> %s", directory, trusted)
+        logger.info("Claude trust for %s -> %s", directory, value)
     finally:
         fcntl.flock(lock_fd, fcntl.LOCK_UN)
         os.close(lock_fd)

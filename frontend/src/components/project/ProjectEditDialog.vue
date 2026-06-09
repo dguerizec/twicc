@@ -7,6 +7,7 @@ import { useSettingsStore } from '../../stores/settings'
 import { apiFetch } from '../../utils/api'
 import { matchPattern } from '../../utils/workspacePatterns'
 import DirectoryPickerPopup from '../files/DirectoryPickerPopup.vue'
+import { resolveProjectTrust } from '../../utils/trust'
 
 const props = defineProps({
     project: {
@@ -33,6 +34,9 @@ const localDirectory = ref('')
 const localName = ref('')
 const localColor = ref('')
 const localArchived = ref(false)
+// Trust (edit mode): 'inherit' | 'trusted' | 'untrusted' + propagation flag.
+const localTrustChoice = ref('inherit')
+const localTrustPropagation = ref(false)
 const isSaving = ref(false)
 const errorMessage = ref('')
 const directoryNotFound = ref(false)
@@ -53,6 +57,25 @@ const isCreateMode = computed(() => !props.project)
 // Unique form ID per instance to avoid conflicts when multiple dialog instances coexist in the DOM
 const instanceId = useId()
 const formId = `project-dialog-form-${instanceId}`
+
+// -- Trust --------------------------------------------------------------------
+function trustChoiceFromValue(trust) {
+    if (trust === true) return 'trusted'
+    if (trust === false) return 'untrusted'
+    return 'inherit'
+}
+
+// Effective trust resolved from the projects in the store, shown when the choice
+// is "inherit" (no own decision) so the user sees what it falls back to.
+const resolvedTrust = computed(() =>
+    props.project ? resolveProjectTrust(props.project.id, store.projects) : null
+)
+const resolvedSourceName = computed(() => {
+    const id = resolvedTrust.value?.sourceId
+    if (!id || id === props.project?.id) return null
+    const p = store.getProject(id)
+    return p?.name || p?.directory || id
+})
 
 // -- Workspace membership -----------------------------------------------------
 const allWorkspaces = computed(() => workspacesStore.getAllWorkspaces)
@@ -159,12 +182,16 @@ watch(
             localName.value = newProject.name || ''
             localColor.value = newProject.color || ''
             localArchived.value = newProject.archived || false
+            localTrustChoice.value = trustChoiceFromValue(newProject.trust)
+            localTrustPropagation.value = newProject.trust_propagation ?? false
         } else {
             // Create mode: reset all fields
             localDirectory.value = ''
             localName.value = ''
             localColor.value = ''
             localArchived.value = false
+            localTrustChoice.value = 'inherit'
+            localTrustPropagation.value = false
         }
     },
     { immediate: true }
@@ -232,6 +259,8 @@ function open() {
         localName.value = props.project.name || ''
         localColor.value = props.project.color || ''
         localArchived.value = props.project.archived || false
+        localTrustChoice.value = trustChoiceFromValue(props.project.trust)
+        localTrustPropagation.value = props.project.trust_propagation ?? false
     }
     resetWorkspaceState()
     syncFormState()
@@ -341,6 +370,36 @@ async function submitCreate({ createDirectory = false } = {}) {
 }
 
 /**
+ * Persist a trust / propagation change via the dedicated endpoint (edit mode).
+ * Kept separate from the name/color PUT; the project_updated broadcast syncs the
+ * store. ``trusted`` is true / false / null (null = reset to inherit).
+ */
+async function saveTrustIfChanged() {
+    if (!props.project) return
+    const currentChoice = trustChoiceFromValue(props.project.trust)
+    const choiceChanged = localTrustChoice.value !== currentChoice
+    const propChanged = localTrustChoice.value !== 'inherit'
+        && localTrustPropagation.value !== (props.project.trust_propagation ?? false)
+    if (!choiceChanged && !propChanged) return
+
+    const trusted = localTrustChoice.value === 'trusted' ? true
+        : localTrustChoice.value === 'untrusted' ? false
+        : null
+    const body = { trusted }
+    if (trusted !== null) body.propagation = localTrustPropagation.value
+    try {
+        await apiFetch(`/api/projects/${props.project.id}/trust/decide/`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        })
+    } catch (err) {
+        // Non-fatal: name/color already saved; trust will reconcile on next action.
+        console.warn('Failed to save project trust', err)
+    }
+}
+
+/**
  * Save the project (create or update).
  */
 async function handleSave() {
@@ -423,6 +482,8 @@ async function handleSave() {
             workspacesStore.applyProjectMembershipDeltas(props.project.id, toAdd, toRemove)
         }
 
+        await saveTrustIfChanged()
+
         emit('saved', updatedProject)
         isSaving.value = false
         close()
@@ -491,6 +552,39 @@ defineExpose({
                     :value.prop="localColor"
                     @change="onColorChange"
                 ></wa-color-picker>
+            </div>
+
+            <!-- Trust (edit mode only) -->
+            <div v-if="!isCreateMode" class="form-group">
+                <label class="form-label">Trust</label>
+                <wa-select
+                    :value.prop="localTrustChoice"
+                    @change="localTrustChoice = $event.target.value"
+                    size="small"
+                >
+                    <wa-option value="inherit">Inherit</wa-option>
+                    <wa-option value="trusted">Trusted</wa-option>
+                    <wa-option value="untrusted">Untrusted</wa-option>
+                </wa-select>
+                <div v-if="localTrustChoice === 'inherit'" class="form-hint">
+                    <template v-if="resolvedTrust?.state === true">
+                        Inherited: <strong>trusted</strong><template v-if="resolvedSourceName"> (from {{ resolvedSourceName }})</template>
+                    </template>
+                    <template v-else-if="resolvedTrust?.state === false">
+                        Inherited: <strong>untrusted</strong><template v-if="resolvedSourceName"> (from {{ resolvedSourceName }})</template>
+                    </template>
+                    <template v-else>
+                        Not resolved — you'll be asked when starting a session here.
+                    </template>
+                </div>
+                <label v-else class="trust-propagate-row">
+                    <wa-switch
+                        :checked="localTrustPropagation"
+                        @change="localTrustPropagation = $event.target.checked"
+                        size="small"
+                    ></wa-switch>
+                    <span>Apply to sub-folders and worktrees</span>
+                </label>
             </div>
 
             <!-- Workspaces -->
@@ -656,6 +750,14 @@ defineExpose({
 .form-hint {
     font-size: var(--wa-font-size-xs);
     color: var(--wa-color-text-quiet);
+}
+
+.trust-propagate-row {
+    display: flex;
+    align-items: center;
+    gap: var(--wa-space-s);
+    font-size: var(--wa-font-size-s);
+    cursor: pointer;
 }
 
 .directory-input-row {
