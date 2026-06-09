@@ -434,6 +434,7 @@ def search(
     spawned_by: str | None = None,
     spawn_tree: str | None = None,
     descendants: set[str] | None = None,
+    siblings: set[str] | None = None,
     limit: int = 20,
     offset: int = 0,
 ) -> SearchResults:
@@ -461,18 +462,22 @@ def search(
         descendants: Filter to this explicit set of session_ids (proper descendants of some target,
             resolved by the caller). An empty set means "no descendants" — returns no results.
             Mutually exclusive with ``spawned_by`` and ``spawn_tree``.
+        siblings: Filter to this explicit set of session_ids (the siblings of some target — the
+            other sessions spawned by the same parent, target excluded — resolved by the caller).
+            An empty set means "no siblings" — returns no results. Mutually exclusive with
+            ``spawned_by``, ``spawn_tree`` and ``descendants``.
         limit: Max number of session groups to return (default 20).
         offset: Pagination offset for session groups (default 0).
 
     Returns:
         SearchResults with grouped, scored, and snippet-annotated results.
     """
-    if sum(x is not None for x in (spawned_by, spawn_tree, descendants)) > 1:
+    if sum(x is not None for x in (spawned_by, spawn_tree, descendants, siblings)) > 1:
         raise ValueError(
-            "search(): spawned_by, spawn_tree and descendants are mutually exclusive"
+            "search(): spawned_by, spawn_tree, descendants and siblings are mutually exclusive"
         )
 
-    if descendants is not None and not descendants:
+    if (descendants is not None and not descendants) or (siblings is not None and not siblings):
         return SearchResults(query=query_str, total_sessions=0, results=[])
 
     _check_index()
@@ -523,6 +528,7 @@ def search(
         and spawned_by is None
         and spawn_tree is None
         and descendants is None
+        and siblings is None
     ):
         clauses.append((Occur.Must, Query.term_query(_schema, "hidden", False)))
 
@@ -547,6 +553,15 @@ def search(
             for sid in descendants
         ]
         clauses.append((Occur.Must, Query.boolean_query(descendant_clauses)))
+
+    if siblings is not None:
+        # Same shape as descendants: an explicit id set matched on session_id.
+        # Empty set is short-circuited above; here we always have at least one id.
+        sibling_clauses = [
+            (Occur.Should, Query.term_query(_schema, "session_id", sid))
+            for sid in siblings
+        ]
+        clauses.append((Occur.Must, Query.boolean_query(sibling_clauses)))
 
     # Date range filters via parsed query syntax (tantivy-py's range_query doesn't
     # accept datetime objects for date fields, but the query parser handles ISO dates)
@@ -700,6 +715,7 @@ def raw_search(
     spawned_by: str | None = None,
     spawn_tree: str | None = None,
     descendants: set[str] | None = None,
+    siblings: set[str] | None = None,
     annotation_filters: list | None = None,
 ) -> dict | str:
     """Execute a raw Tantivy query and return JSON-serializable results.
@@ -726,6 +742,10 @@ def raw_search(
         descendants: If set, restrict results to this explicit set of session_ids
             (proper descendants of some target, resolved by the caller). An empty set
             returns no results. Mutually exclusive with ``spawned_by`` and ``spawn_tree``.
+        siblings: If set, restrict results to this explicit set of session_ids (the siblings
+            of some target — the other sessions spawned by the same parent, target excluded,
+            resolved by the caller). An empty set returns no results. Mutually exclusive with
+            ``spawned_by``, ``spawn_tree`` and ``descendants``.
         annotation_filters: If set (non-empty list), run an oversample-and-post-filter loop:
             Tantivy ranks the corpus, then Django ORM filters on ``Session.annotations``.
             The result dict gains ``annotation_filtered``, ``exhausted``, and ``partial`` keys.
@@ -737,12 +757,12 @@ def raw_search(
         and ``hits`` keys. Each hit contains ``score``, ``session_id``, ``project_id``,
         ``line_num``, ``from_role``, ``timestamp``, ``archived``, and ``snippet``.
     """
-    if sum(x is not None for x in (spawned_by, spawn_tree, descendants)) > 1:
+    if sum(x is not None for x in (spawned_by, spawn_tree, descendants, siblings)) > 1:
         raise ValueError(
-            "raw_search(): spawned_by, spawn_tree and descendants are mutually exclusive"
+            "raw_search(): spawned_by, spawn_tree, descendants and siblings are mutually exclusive"
         )
 
-    if descendants is not None and not descendants:
+    if (descendants is not None and not descendants) or (siblings is not None and not siblings):
         result_dict = {
             "query": query_str,
             "total_hits": 0,
@@ -789,6 +809,7 @@ def raw_search(
         and spawned_by is None
         and spawn_tree is None
         and descendants is None
+        and siblings is None
     ):
         clauses.append((Occur.Must, Query.term_query(schema, "hidden", False)))
 
@@ -814,6 +835,15 @@ def raw_search(
             for sid in descendants
         ]
         clauses.append((Occur.Must, Query.boolean_query(descendant_clauses)))
+
+    if siblings is not None:
+        # Same shape as descendants: an explicit id set matched on session_id.
+        # Empty set is short-circuited above; here we always have at least one id.
+        sibling_clauses = [
+            (Occur.Should, Query.term_query(schema, "session_id", sid))
+            for sid in siblings
+        ]
+        clauses.append((Occur.Must, Query.boolean_query(sibling_clauses)))
 
     if len(clauses) == 1:
         parsed_query = clauses[0][1]

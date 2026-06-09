@@ -2,9 +2,9 @@
 
 Generalises a single-session drop-request flow to a set of sessions: resolve the
 target ids (explicit ids merged with the optional ``--spawned-by`` /
-``--descendants`` / ``--annotation`` scope, same union semantics as ``twicc
-sessions`` / ``processes stop`` — explicit ids first, scope-selected ids
-appended, deduplicated), drop one request per id reusing the *exact same*
+``--descendants`` / ``--siblings`` / ``--annotation`` scope, same union semantics
+as ``twicc sessions`` / ``processes stop`` — explicit ids first, scope-selected
+ids appended, deduplicated), drop one request per id reusing the *exact same*
 ``kind`` + payload the singular command would emit, poll every status file under
 a single ``--timeout`` wall-clock budget (the watcher processes the drops in
 parallel), then emit one aggregated result.
@@ -29,8 +29,9 @@ Exit codes:
 - 0  — the batch ran and at least one session succeeded, OR the resolved id set
        was empty (nothing to do is not a failure)
 - 1  — local argument error (bad ``--timeout``, mutually-exclusive scopes,
-       ``--annotation`` without a filiation scope, ``parent`` scope, neither
-       ids nor scope, or an unresolvable ``self``)
+       ``--annotation`` without a filiation scope, ``parent`` scope (on
+       ``--spawned-by`` / ``--descendants``, or any value on ``--siblings``),
+       neither ids nor scope, or an unresolvable ``self``)
 - 2  — TwiCC server is not running
 - 6  — the resolved id set was non-empty but NOT ONE session succeeded
 - 64 — bad CLI usage (handled by Typer)
@@ -59,6 +60,7 @@ def run_batch(
     success_status: str = "updated",
     spawned_by: str | None = None,
     descendants: str | None = None,
+    siblings: str | None = None,
     annotation: list[str] | None = None,
 ) -> None:
     """Drop one ``kind`` request per resolved session and emit the batch result.
@@ -101,23 +103,27 @@ def run_batch(
     if timeout <= 0:
         emit_error(f"Error: --timeout must be > 0 (got {timeout}).", code=1)
 
-    if spawned_by == "parent" or descendants == "parent":
+    # ``--siblings`` rejects ``parent`` at the resolver level too, but catch it
+    # here so every parent rejection lands up-front (exit 1) before the
+    # server-up check — same ordering as --spawned-by / --descendants, instead
+    # of leaking through to a misleading "server down" (exit 2) when offline.
+    if spawned_by == "parent" or descendants == "parent" or siblings == "parent":
         emit_error(
             "Error: parent-scoped filters are not supported here. "
             "Use 'self' or an explicit session_id.",
             code=1,
         )
 
-    if spawned_by is not None and descendants is not None:
+    if sum(x is not None for x in (spawned_by, descendants, siblings)) > 1:
         emit_error(
-            "Error: --spawned-by and --descendants are mutually exclusive.",
+            "Error: --spawned-by, --descendants and --siblings are mutually exclusive.",
             code=1,
         )
 
-    filiation_scope = any((spawned_by, descendants))
+    filiation_scope = any((spawned_by, descendants, siblings))
     if annotation and not filiation_scope:
         emit_error(
-            "Error: --annotation requires --spawned-by or --descendants.",
+            "Error: --annotation requires --spawned-by, --descendants or --siblings.",
             code=1,
         )
 
@@ -125,8 +131,8 @@ def run_batch(
     if not session_ids and not has_scope:
         emit_error(
             "Error: no session_ids or filters given. Pass at least one "
-            "session_id, or select sessions with --spawned-by or "
-            "--descendants. Use --annotation only to narrow that scope.",
+            "session_id, or select sessions with --spawned-by, --descendants "
+            "or --siblings. Use --annotation only to narrow that scope.",
             code=1,
         )
 
@@ -162,6 +168,7 @@ def run_batch(
             session_ids,
             spawned_by=spawned_by,
             descendants=descendants,
+            siblings=siblings,
             annotation=annotation,
         )
     except (RuntimeError, ValueError) as e:

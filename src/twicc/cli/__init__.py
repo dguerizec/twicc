@@ -245,8 +245,20 @@ def _sessions_default(
             "transitively spawned by it, at any depth, target excluded), 'self' for "
             "the descendants of the current session, or 'parent' for the descendants "
             "of the current session's spawner (= my siblings, their subtrees, and my "
-            "own subtree). Mutually exclusive with --spawned-by and --spawn-tree. "
-            "Implies --include-hidden by default."
+            "own subtree). Mutually exclusive with --spawned-by, --spawn-tree and "
+            "--siblings. Implies --include-hidden by default."
+        ),
+    ),
+    siblings: str = typer.Option(
+        None,
+        "--siblings",
+        help=(
+            "Filter to the siblings of the given session_id — the other sessions "
+            "spawned by the same parent — or 'self' for the current session's "
+            "siblings. The target itself is always excluded (use --spawned-by "
+            "parent to include yourself). 'parent' is not supported. Mutually "
+            "exclusive with --spawned-by, --spawn-tree and --descendants. Implies "
+            "--include-hidden by default."
         ),
     ),
     annotation: list[str] = typer.Option(
@@ -268,9 +280,9 @@ def _sessions_default(
     if include_hidden and only_hidden:
         emit_error("Error: --include-hidden and --only-hidden are mutually exclusive.", code=2)
 
-    if sum(x is not None for x in (spawned_by, spawn_tree, descendants)) > 1:
+    if sum(x is not None for x in (spawned_by, spawn_tree, descendants, siblings)) > 1:
         emit_error(
-            "Error: --spawned-by, --spawn-tree and --descendants are mutually exclusive.",
+            "Error: --spawned-by, --spawn-tree, --descendants and --siblings are mutually exclusive.",
             code=2,
         )
 
@@ -287,6 +299,7 @@ def _sessions_default(
         spawned_by=spawned_by,
         spawn_tree=spawn_tree,
         descendants=descendants,
+        siblings=siblings,
         annotation=annotation,
     )
 
@@ -439,11 +452,27 @@ def topology(
             "create-session --annotation. See twicc-sessions skill for details."
         ),
     ),
+    siblings: bool = typer.Option(
+        False,
+        "--siblings",
+        help=(
+            "Mark the anchor session's siblings (the other sessions spawned by "
+            "its parent, anchor excluded) with a `matches_siblings` flag on "
+            "every node. The full tree is preserved — this annotates, it does "
+            "not prune. Combinable with --annotation."
+        ),
+    ),
 ) -> None:
     """Show the spawned-session tree containing a session as JSON."""
     from twicc.cli.topology import main as topology_main
 
-    topology_main(session_id, include_processes=processes, full_sessions=full_sessions, annotation=annotation)
+    topology_main(
+        session_id,
+        include_processes=processes,
+        full_sessions=full_sessions,
+        annotation=annotation,
+        siblings=siblings,
+    )
 
 
 processes_app = typer.Typer(
@@ -503,7 +532,19 @@ def _processes_default(
             "excluded), 'self' for the descendants of the current session, or "
             "'parent' for the descendants of the current session's spawner (= my "
             "siblings, their subtrees, and my own subtree). Mutually exclusive with "
-            "--spawned-by and --spawn-tree. Implies --include-hidden by default."
+            "--spawned-by, --spawn-tree and --siblings. Implies --include-hidden by default."
+        ),
+    ),
+    siblings: str = typer.Option(
+        None,
+        "--siblings",
+        help=(
+            "Filter to processes of the siblings of the given session_id — the "
+            "other sessions spawned by the same parent — or 'self' for the current "
+            "session's siblings. The target itself is always excluded (use "
+            "--spawned-by parent to include yourself). 'parent' is not supported. "
+            "Mutually exclusive with --spawned-by, --spawn-tree and --descendants. "
+            "Implies --include-hidden by default."
         ),
     ),
     annotation: list[str] = typer.Option(
@@ -515,7 +556,7 @@ def _processes_default(
             "KEY:in:V1,V2. KEY is a dotted path. Values are typed "
             "(true/false/null/int/float/string), same rules as "
             "create-session --annotation. Requires --spawned-by, --spawn-tree, "
-            "or --descendants. See twicc-sessions skill for details."
+            "--descendants, or --siblings. See twicc-sessions skill for details."
         ),
     ),
 ) -> None:
@@ -526,16 +567,16 @@ def _processes_default(
     if include_hidden and only_hidden:
         emit_error("Error: --include-hidden and --only-hidden are mutually exclusive.", code=2)
 
-    if sum(x is not None for x in (spawned_by, spawn_tree, descendants)) > 1:
+    if sum(x is not None for x in (spawned_by, spawn_tree, descendants, siblings)) > 1:
         emit_error(
-            "Error: --spawned-by, --spawn-tree and --descendants are mutually exclusive.",
+            "Error: --spawned-by, --spawn-tree, --descendants and --siblings are mutually exclusive.",
             code=2,
         )
 
-    if annotation and not any((spawned_by, spawn_tree, descendants)):
+    if annotation and not any((spawned_by, spawn_tree, descendants, siblings)):
         emit_error(
-            "Error: --annotation requires --spawned-by, --spawn-tree, or "
-            "--descendants on processes listing.",
+            "Error: --annotation requires --spawned-by, --spawn-tree, "
+            "--descendants, or --siblings on processes listing.",
             code=2,
         )
 
@@ -551,6 +592,7 @@ def _processes_default(
         spawned_by=spawned_by,
         spawn_tree=spawn_tree,
         descendants=descendants,
+        siblings=siblings,
         annotation=annotation,
     )
 
@@ -908,7 +950,20 @@ def search(
             "excluded), 'self' for the descendants of the current session, or "
             "'parent' for the descendants of the current session's spawner (= my "
             "siblings, their subtrees, and my own subtree). Mutually exclusive "
-            "with --spawned-by and --spawn-tree. Implies --include-hidden by default."
+            "with --spawned-by, --spawn-tree and --siblings. Implies --include-hidden "
+            "by default."
+        ),
+    ),
+    siblings: str = typer.Option(
+        None,
+        "--siblings",
+        help=(
+            "Filter to hits in the siblings of the given session_id — the other "
+            "sessions spawned by the same parent — or 'self' for the current "
+            "session's siblings. The target itself is always excluded (use "
+            "--spawned-by parent to include yourself). 'parent' is not supported. "
+            "Mutually exclusive with --spawned-by, --spawn-tree and --descendants. "
+            "Implies --include-hidden by default."
         ),
     ),
     annotation: list[str] = typer.Option(
@@ -927,9 +982,9 @@ def search(
     if include_hidden and only_hidden:
         emit_error("Error: --include-hidden and --only-hidden are mutually exclusive.", code=2)
 
-    if sum(x is not None for x in (spawned_by, spawn_tree, descendants)) > 1:
+    if sum(x is not None for x in (spawned_by, spawn_tree, descendants, siblings)) > 1:
         emit_error(
-            "Error: --spawned-by, --spawn-tree and --descendants are mutually exclusive.",
+            "Error: --spawned-by, --spawn-tree, --descendants and --siblings are mutually exclusive.",
             code=2,
         )
 
@@ -944,6 +999,7 @@ def search(
         spawned_by=spawned_by,
         spawn_tree=spawn_tree,
         descendants=descendants,
+        siblings=siblings,
         annotation=annotation,
     )
 

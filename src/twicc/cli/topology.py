@@ -35,6 +35,7 @@ def main(
     include_processes: bool = True,
     full_sessions: bool = False,
     annotation: list[str] | None = None,
+    siblings: bool = False,
 ) -> None:
     """Emit the spawned-session tree containing ``session_id`` as JSON."""
     import django
@@ -64,6 +65,7 @@ def main(
         include_processes=include_processes,
         full_sessions=full_sessions,
         annotation_filters=annotation_filters,
+        mark_siblings=siblings,
     )
     emit_json(data)
 
@@ -75,6 +77,7 @@ def build_topology(
     full_sessions: bool = False,
     twicc_pid: int | None = None,
     annotation_filters: list | None = None,
+    mark_siblings: bool = False,
 ) -> dict:
     """Build the spawned-session topology containing ``seed``.
 
@@ -84,6 +87,11 @@ def build_topology(
 
     ``annotation_filters`` preserves the full tree but enriches every node with
     a ``matches_annotations`` flag when provided.
+
+    ``mark_siblings`` similarly preserves the full tree but enriches every node
+    with a ``matches_siblings`` flag — True for the ``seed``'s siblings (the
+    other sessions spawned by the seed's parent, seed excluded). A seed with no
+    spawner (a root) has no siblings, so every flag is False.
     """
     from twicc.core.models import ProcessRun
 
@@ -116,6 +124,22 @@ def build_topology(
             ).values_list("id", flat=True)
         )
 
+    # The seed's siblings are the other sessions sharing the seed's parent.
+    # The whole tree is already loaded in memory (sessions_by_id), so the set is
+    # derived without an extra query. A rootless seed (no spawned_by) has none.
+    sibling_ids: set[str] | None = None
+    if mark_siblings:
+        seed_parent_id = seed.spawned_by_id
+        sibling_ids = (
+            {
+                sid
+                for sid, session in sessions_by_id.items()
+                if session.spawned_by_id == seed_parent_id and sid != seed.id
+            }
+            if seed_parent_id is not None
+            else set()
+        )
+
     tree = _build_tree(root.id, children_by_parent)
     ordered_ids = list(_walk_tree_ids(tree))
     metrics_by_id = _compute_node_metrics(
@@ -144,6 +168,7 @@ def build_topology(
             metrics=metrics_by_id[session_id],
             full_sessions=full_sessions,
             matching_ids=matching_ids,
+            sibling_ids=sibling_ids,
         )
         for session_id in ordered_ids
     ]
@@ -352,6 +377,7 @@ def _serialize_topology_node(
     metrics: dict,
     full_sessions: bool,
     matching_ids: set[str] | None = None,
+    sibling_ids: set[str] | None = None,
 ) -> dict:
     from twicc.core.serializers import serialize_session
 
@@ -366,6 +392,8 @@ def _serialize_topology_node(
     }
     if matching_ids is not None:
         node["matches_annotations"] = session.id in matching_ids
+    if sibling_ids is not None:
+        node["matches_siblings"] = session.id in sibling_ids
     return node
 
 

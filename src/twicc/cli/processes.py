@@ -14,6 +14,7 @@ def main(
     spawned_by: str | None = None,
     spawn_tree: str | None = None,
     descendants: str | None = None,
+    siblings: str | None = None,
     annotation: list[str] | None = None,
 ) -> None:
     """List currently running processes (live ProcessRuns) of the running TwiCC.
@@ -42,11 +43,11 @@ def main(
 
     django.setup()
 
-    filiation_scope = any((spawned_by, spawn_tree, descendants))
+    filiation_scope = any((spawned_by, spawn_tree, descendants, siblings))
     if annotation and not filiation_scope:
         emit_error(
             "Error: --annotation on processes listing requires --spawned-by, "
-            "--spawn-tree, or --descendants.",
+            "--spawn-tree, --descendants, or --siblings.",
             code=1,
         )
 
@@ -60,6 +61,7 @@ def main(
                 spawned_by=spawned_by,
                 spawn_tree=spawn_tree,
                 descendants=descendants,
+                siblings=siblings,
                 annotation=annotation,
             )
         except RuntimeError as e:

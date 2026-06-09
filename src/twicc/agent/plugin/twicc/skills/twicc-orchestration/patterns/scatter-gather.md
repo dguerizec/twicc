@@ -23,7 +23,9 @@ and you are doing divide-and-conquer instead.)
 
 ## Use it when
 Pieces are independent and the merge is mechanical (concat, dedup, sum).
-Not when pieces are sequential (→ pipeline) or must agree on one answer (→ quorum).
+Not when pieces are sequential (→ pipeline), must agree on one answer (→ quorum), or
+have a few real cross-dependencies the workers can resolve between themselves
+(→ peer-coordination).
 
 ## Pitfalls
 - A read-only worker can't push — pull it instead.

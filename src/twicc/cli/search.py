@@ -13,23 +13,26 @@ def main(
     spawned_by: str | None = None,
     spawn_tree: str | None = None,
     descendants: str | None = None,
+    siblings: str | None = None,
     annotation: list[str] | None = None,
 ) -> None:
     """Execute a raw Tantivy search and print JSON results to stdout.
 
     ``spawned_by`` and ``descendants`` are raw CLI values (``None``, a
     session_id, or ``"self"`` / ``"parent"``). ``spawn_tree`` accepts
-    ``None``, a session_id, or ``"self"``. When any value needs DB access
-    (a keyword on ``spawned_by``, any value on ``spawn_tree`` — the
-    resolver always looks the id up to find the tree's root — or any value
-    on ``descendants`` which always walks the spawn tree), we
-    ``django.setup()`` so an ordinary full-text query stays Django-free.
-    The typer wrapper guarantees they are mutually exclusive.
+    ``None``, a session_id, or ``"self"``; ``siblings`` accepts ``None``, a
+    session_id, or ``"self"``. When any value needs DB access (a keyword on
+    ``spawned_by``, any value on ``spawn_tree`` — the resolver always looks
+    the id up to find the tree's root — or any value on ``descendants`` /
+    ``siblings`` which always walk the DB), we ``django.setup()`` so an
+    ordinary full-text query stays Django-free. The typer wrapper guarantees
+    they are mutually exclusive.
     """
     if (
         spawned_by in ("self", "parent")
         or spawn_tree is not None
         or descendants is not None
+        or siblings is not None
         or annotation
     ):
         import django
@@ -38,6 +41,7 @@ def main(
 
     from twicc.cli._drop_request.whoami import (
         resolve_descendants_filter,
+        resolve_siblings_filter,
         resolve_spawn_tree_filter,
         resolve_spawned_by_filter,
     )
@@ -46,6 +50,7 @@ def main(
         spawned_by_id = resolve_spawned_by_filter(spawned_by)
         spawn_root_id = resolve_spawn_tree_filter(spawn_tree)
         descendants_ids = resolve_descendants_filter(descendants)
+        siblings_ids = resolve_siblings_filter(siblings)
     except RuntimeError as e:
         emit_error(str(e), code=1)
 
@@ -70,6 +75,7 @@ def main(
             spawned_by=spawned_by_id,
             spawn_tree=spawn_root_id,
             descendants=descendants_ids,
+            siblings=siblings_ids,
             annotation_filters=annotation_filters,
         )
     except RuntimeError as exc:

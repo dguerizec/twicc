@@ -15,13 +15,15 @@ def main(
     spawned_by: str | None = None,
     spawn_tree: str | None = None,
     descendants: str | None = None,
+    siblings: str | None = None,
     annotation: list[str] | None = None,
 ) -> None:
     """List sessions as JSON to stdout.
 
     ``spawned_by`` and ``descendants`` are raw CLI values (``None``, a
     session_id, or ``"self"`` / ``"parent"``). ``spawn_tree`` accepts
-    ``None``, a session_id, or ``"self"``. They are resolved here, after
+    ``None``, a session_id, or ``"self"``; ``siblings`` accepts ``None``, a
+    session_id, or ``"self"``. They are resolved here, after
     ``django.setup()``, so callers don't need to bootstrap Django
     themselves. The typer wrapper guarantees they are mutually exclusive.
     """
@@ -31,6 +33,7 @@ def main(
 
     from twicc.cli._drop_request.whoami import (
         resolve_descendants_filter,
+        resolve_siblings_filter,
         resolve_spawn_tree_filter,
         resolve_spawned_by_filter,
     )
@@ -39,6 +42,7 @@ def main(
         spawned_by_id = resolve_spawned_by_filter(spawned_by)
         spawn_root_id = resolve_spawn_tree_filter(spawn_tree)
         descendants_ids = resolve_descendants_filter(descendants)
+        siblings_ids = resolve_siblings_filter(siblings)
     except RuntimeError as e:
         emit_error(str(e), code=1)
 
@@ -68,6 +72,7 @@ def main(
         and spawned_by_id is None
         and spawn_root_id is None
         and descendants_ids is None
+        and siblings_ids is None
     ):
         qs = qs.filter(hidden=False)
 
@@ -85,6 +90,11 @@ def main(
         # An empty set means "the target has no descendants"; ``id__in=[]``
         # returns nothing without hitting the DB, which is exactly what we want.
         qs = qs.filter(id__in=descendants_ids)
+
+    if siblings_ids is not None:
+        # An empty set means "the target has no siblings" — same ``id__in=[]``
+        # returns-nothing semantics as descendants above.
+        qs = qs.filter(id__in=siblings_ids)
 
     if annotation:
         from twicc.cli._annotation_filters import apply_annotation_filters, parse_annotation_filter

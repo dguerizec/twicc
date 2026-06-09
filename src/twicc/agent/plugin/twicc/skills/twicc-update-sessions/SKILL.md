@@ -140,7 +140,7 @@ $TWICC update-sessions settings --descendants self --preset 'deep think'
 ## Related commands
 
 - `$TWICC update-session <id|self> <op>` — update one session (and the only place for `title`). Skill: `twicc-update-session`.
-- `$TWICC send-messages [SESSION_ID...] --message <text>` — send the same message to several sessions (same selection model). Skill: `twicc-send-messages`.
+- `$TWICC send-messages [SESSION_ID...] --message <text>` — send the same message to several sessions (same selection model, plus a `--siblings self` peer broadcast this command does not have). Skill: `twicc-send-messages`.
 - `$TWICC processes stop [SESSION_ID...]` — batch-stop live agents (same selection model). Skill: `twicc-processes`.
 - `$TWICC sessions` — browse / filter sessions to pick the ids to update. Skill: `twicc-sessions`.
 - `$TWICC topology <id|self>` — see the spawn tree before targeting `--descendants` / `--spawned-by`. Skill: `twicc-topology`.

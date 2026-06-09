@@ -1,7 +1,7 @@
 ---
 name: twicc-send-messages
-description: Send the SAME message (and optional attachments) to several TwiCC sessions at once, selected by id and/or --spawned-by / --descendants / --annotation. Use to broadcast a steering instruction, status request, or correction to a batch of sessions (e.g. every worker in an orchestration).
-argument-hint: [SESSION_ID...] --message <text> [--spawned-by X|--descendants X] [--annotation ...] [--attach PATH...]
+description: Send the SAME message (and optional attachments) to several TwiCC sessions at once, selected by id and/or --spawned-by / --descendants / --siblings / --annotation. Use to broadcast a steering instruction, status request, or correction to a batch of sessions (e.g. every worker in an orchestration), or for a worker to message its peers with --siblings self.
+argument-hint: [SESSION_ID...] --message <text> [--spawned-by X|--descendants X|--siblings X] [--annotation ...] [--attach PATH...]
 ---
 
 # TwiCC Send Messages
@@ -16,6 +16,7 @@ Batch sibling of `send-message`: delivers the SAME message to every targeted ses
 - Ask every worker for status: "what's your progress and ETA?"
 - Graceful wrap-up (vs the hard kill of `processes stop`): "finish your current step, write your report, and reply DONE."
 - Push a uniform follow-up to a fan-out group after delegating the same task.
+- **Talk to your peers** (worker → worker): `--siblings self` broadcasts to the other sessions your parent spawned, you excluded — e.g. "I finished the auth module, you can wire against `/v2/login` now." This is the direct peer channel; you do not have to route everything back through the manager.
 
 ## How to invoke
 
@@ -31,7 +32,7 @@ Then run `$TWICC <args>` — **never quote `$TWICC`** (use `$TWICC args`, never 
 ## Usage
 
 ```bash
-$TWICC send-messages [SESSION_ID...] --message <TEXT> [--attach PATH...] [--spawned-by X|--descendants X] [--annotation ...]
+$TWICC send-messages [SESSION_ID...] --message <TEXT> [--attach PATH...] [--spawned-by X|--descendants X|--siblings X] [--annotation ...]
 ```
 
 Selection is identical to `update-sessions` (skill: `twicc-update-sessions`): a positional `SESSION_ID...` list merged (union, explicit first) with the scope filters. `self` means the current session.
@@ -40,6 +41,7 @@ Selection is identical to `update-sessions` (skill: `twicc-update-sessions`): a 
 - `--message TEXT` — **required**. Message text, or a path to a UTF-8 file whose content is the message. Same text for every recipient. Over `--remote` the file is read locally; prefix an absolute path with `remote:` to read it on the remote server instead.
 - `--attach PATH` (repeatable) — attach a file to every message. **Validated per session against its provider** (Claude Code: PNG/JPEG/GIF/WebP/PDF/text up to 5 MB; Codex: images only), so a file one provider rejects yields a per-id `validation_error` while the others still receive it. Local path or a `data:<mime>;base64,...` URI for remote/API callers. Over `--remote`, prefix an absolute path with `remote:` to read it on the remote server instead.
 - `--spawned-by <ID|self>` / `--descendants <ID|self>` — also target children / proper descendants. `parent` is **not** supported (use `send-message parent`). Mutually exclusive.
+- `--siblings <ID|self>` — also target the siblings of the given session: the *other* sessions spawned by the same parent, **reference always excluded**. `self` broadcasts to your peers (the canonical worker → worker channel). `parent` is **not** supported. Mutually exclusive with `--spawned-by` / `--descendants`. Note `--spawned-by parent` (the same set but including yourself) is **not** available here, so `--siblings self` is the way to reach your peers from this command.
 - `--annotation KEY[OP]VALUE` — narrow the filiation scope by annotation; repeatable, AND-combined; requires a filiation scope; does not filter explicit ids. Same syntax as `twicc sessions --annotation` (skill: `twicc-sessions`).
 - `--timeout SECONDS` — wall-clock budget for the whole batch (default 30; drops run in parallel server-side).
 
@@ -47,7 +49,7 @@ If neither ids nor a filiation scope is given, the command errors (exit 1). An e
 
 ## Errors
 
-Argument-level problems fail the whole command (exit 1, plain-text on stderr): empty/unreadable `--message`, bad `--timeout`, `--spawned-by`/`--descendants` together, `parent` scope, `--annotation` without a filiation scope, neither ids nor scope.
+Argument-level problems fail the whole command (exit 1, plain-text on stderr): empty/unreadable `--message`, bad `--timeout`, two of `--spawned-by`/`--descendants`/`--siblings` together, `parent` scope (on `--spawned-by`/`--descendants`, or any value on `--siblings`), `--annotation` without a filiation scope, neither ids nor scope.
 
 Per-session problems never fail the batch — reported in `results[<id>]` with `status` `validation_error` (local lookup: `session_not_found`, `is_subagent`, `session_stale`, `project_no_directory`; or an attachment its provider rejects) or `rejected` (server: `awaiting_user_input` — the session has a pending UI dialog a CLI message can't unblock; `manager_busy` — transient, retry; `provider_disabled`). Same vocabulary as `twicc-send-message`.
 
@@ -81,6 +83,7 @@ Per-id `status`: `sent`, `rejected`, `failed`, `timeout`, or `validation_error`.
 ```bash
 $TWICC send-messages abc123 def456 --message 'The spec changed: API base is now /v2. Re-check your work.'
 $TWICC send-messages --spawned-by self --message "What's your status and ETA?"
+$TWICC send-messages --siblings self --message 'Auth module done — wire against /v2/login.'  # worker → peers
 $TWICC send-messages --descendants self --annotation status=working --message 'Wrap up, write your report, reply DONE.'
 $TWICC send-messages --spawned-by self --message 'Review this mockup.' --attach /home/twidi/mockup.png
 $TWICC send-messages --spawned-by self --message /home/twidi/prompts/broadcast.md

@@ -8,7 +8,7 @@ Shape: star · pull or push · barrier · vote · homogeneous or mixed.
 - **Leader or manager** — pose one well-defined question to N children that cannot
   see each other, collect their answers, take the majority (or flag a tie /
   no-consensus for a closer look).
-- **Workers** — each answers on its own. Independence is the point — never let them confer.
+- **Workers** — each answers on its own. Independence is the point — never let them confer. (This isolation is a **deliberate exception**: siblings can normally talk directly — see `patterns/peer-coordination.md` — but here any cross-talk would destroy the vote, so you suppress it on purpose.)
 
 ## Protocol
 1. Frame a question with a crisp answer space (yes/no, pick-one, a value).

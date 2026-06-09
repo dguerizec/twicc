@@ -282,3 +282,82 @@ def resolve_descendants_filter(value: str | None) -> set[str] | None:
         out.add(node)
         stack.extend(adj.get(node, ()))
     return out
+
+
+def resolve_siblings_filter(value: str | None) -> set[str] | None:
+    """Translate a ``--siblings`` CLI value into a session_id set filter.
+
+    The siblings of a target session S are the *other* sessions spawned by
+    the same parent (sharing S's ``spawned_by_id``). It is pure: their
+    subtrees are NOT included — use ``--descendants`` for whole branches.
+
+    - ``None``  → ``None`` (no filter).
+    - ``"self"`` → siblings of the current session (resolved via whoami).
+      Raises ``RuntimeError`` if the current session has no spawner: a root
+      session has no parent, so the sibling scope is undefined (same spirit
+      as ``--spawned-by parent`` / ``--descendants parent`` on a rootless
+      session).
+    - ``"parent"`` → rejected. ``--siblings`` is inherently relative to a
+      node's own parent; "siblings of my parent" (aunts/uncles) is not a
+      supported concept and would clash with the "scope relative to parent"
+      meaning ``parent`` carries on the other filters.
+    - any other string → looked up as a session_id; its siblings. An unknown
+      id, or a target that has no spawner (a root, hence no siblings),
+      resolves to an empty set — the same silent-no-match behavior as
+      ``--descendants`` for unknown ids.
+
+    The target itself is ALWAYS excluded from the returned set (to include
+    yourself, use ``--spawned-by parent`` where allowed). An empty set means
+    "the target has no siblings"; callers must treat that as a strict match
+    against an empty pool (returns nothing), not as "no filter".
+    """
+    if value is None:
+        return None
+
+    from twicc.core.models import Session
+
+    if value == "parent":
+        raise RuntimeError(
+            "--siblings parent is not supported; siblings are relative to a "
+            "node's own parent. Use --siblings self for the current session's "
+            "siblings, or an explicit session_id.",
+        )
+
+    if value == "self":
+        try:
+            session = resolve_current_session()
+        except Exception as e:
+            raise RuntimeError(
+                "--siblings self: could not resolve the current "
+                f"session: {type(e).__name__}: {e}",
+            ) from e
+        if session is None:
+            raise RuntimeError(
+                "--siblings self: no TwiCC session found in PID ancestry. "
+                "This flag is only meaningful from inside an active session.",
+            )
+        if session.spawned_by_id is None:
+            raise RuntimeError(
+                f"--siblings self: current session {session.id!r} has no "
+                f"spawned_by — it is a root session, so it has no siblings.",
+            )
+        target_id = session.id
+        parent_id = session.spawned_by_id
+    else:
+        row = (
+            Session.objects.filter(pk=value)
+            .values("id", "spawned_by_id")
+            .first()
+        )
+        if row is None or row["spawned_by_id"] is None:
+            # Unknown id, or a root with no parent → no siblings. Silent
+            # no-match, consistent with --descendants for unknown ids.
+            return set()
+        target_id = row["id"]
+        parent_id = row["spawned_by_id"]
+
+    return set(
+        Session.objects.filter(type="session", spawned_by_id=parent_id)
+        .exclude(id=target_id)
+        .values_list("id", flat=True)
+    )

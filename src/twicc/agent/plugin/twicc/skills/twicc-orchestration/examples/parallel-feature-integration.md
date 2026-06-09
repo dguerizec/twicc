@@ -24,3 +24,10 @@ and verifies → refuter tries to break the result.
 - This avoids parallel writers racing on the same files.
 - Producers can be read-only if they only inspect and propose.
 - The integrator must have write permission and enough context to say no.
+- **Let producers align a shared contract directly.** When two slices share an
+  interface (an API shape, a type, a fixture), the producers that define and consume
+  it can settle it **between themselves** — `send-message <sibling_id>` or
+  `send-messages --siblings self` — before they produce, instead of each guessing and
+  leaving the integrator to reconcile two mismatched takes. Discover peers with
+  `sessions --siblings self`. Integration still funnels through the single writer;
+  this is just cheaper agreement up front. See `patterns/peer-coordination.md`.

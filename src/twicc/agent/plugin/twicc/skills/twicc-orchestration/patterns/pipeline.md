@@ -19,6 +19,17 @@ Shape: chain · files (+ short messages) · staged · chain (no merge) · often 
    then start stage K+1.
 4. The last stage's artifact is the result.
 
+## Variant: peer handoff (no central baton)
+Instead of relaying between stages yourself, spawn all stages up front and let each
+one hand **directly** to the next: when stage K finishes it messages stage K+1
+(`send-message <next_stage_id> 'done — input at <scratch_dir>/<id>-out.md'`) rather
+than reporting to you for relay. You step back to supervising and only wait on the
+final stage. This trades your turn-by-turn control of the cadence for lower latency
+(no parent round-trip between stages) — worth it for long chains where each handoff
+is just "next, here's the artifact". Brief each stage with its successor's id (or
+have it discover the successor via `sessions --siblings self`). See
+`patterns/peer-coordination.md`.
+
 ## Use it when
 Work is inherently sequential — transform, then validate, then format.
 Not when stages are independent (→ scatter-gather).

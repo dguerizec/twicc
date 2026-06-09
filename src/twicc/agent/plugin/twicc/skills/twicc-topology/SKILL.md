@@ -1,7 +1,7 @@
 ---
 name: twicc-topology
 description: Show the spawned-session tree around a session, rooted at its top-level ancestor, with session metadata, process state, and aggregate child/cost data.
-argument-hint: <session_id|self> [--no-processes] [--full-sessions]
+argument-hint: <session_id|self> [--no-processes] [--full-sessions] [--siblings]
 ---
 
 # TwiCC Topology
@@ -49,6 +49,8 @@ $TWICC topology <SESSION_ID|self> [OPTIONS]
   - Values are inferred as typed: `true`/`false` → boolean, `null` → null, integers and floats parsed numerically, everything else → string (same rules as `create-session --annotation`).
   - `matches_annotations` is absent from each `nodes[]` entry when no `--annotation` is passed.
   - Example: `$TWICC topology self --annotation role=implementer`
+- `--siblings` — annotate every node with a `matches_siblings` boolean: `true` for the **anchor's** siblings (the other sessions spawned by the anchor's parent, anchor excluded). Like `--annotation`, this **marks, it does not prune** — the full tree is always returned. A rootless anchor (no parent) has no siblings, so every flag is `false`. Combinable with `--annotation` (the two flags are independent dimensions). `matches_siblings` is absent from each `nodes[]` entry when `--siblings` is not passed.
+  - Example: `$TWICC topology self --siblings`
 
 ## Output format
 
@@ -127,6 +129,7 @@ $TWICC topology <SESSION_ID|self> [OPTIONS]
 - `nodes[].descendant_count` — spawned descendants across all levels.
 - `nodes[].subtree_total_cost` — sum of `session.total_cost` for this node and all descendants, or `null` when none has cost.
 - `nodes[].matches_annotations` — `true` if this node's annotations match all `--annotation` predicates; `false` otherwise. Absent when no `--annotation` is passed. The tree is never pruned: all nodes are present regardless.
+- `nodes[].matches_siblings` — `true` if this node is a sibling of the anchor (shares the anchor's parent, anchor itself excluded); `false` otherwise. Absent when `--siblings` is not passed. The tree is never pruned.
 - `process.state` — `starting`, `assistant_turn`, `awaiting_user_input`, `user_turn`, or `dead`; `process` is `null` when process data is unavailable or not requested.
 - `cycle_detected` — defensive flag for corrupt `spawned_by` data.
 
@@ -145,6 +148,7 @@ $TWICC topology self --no-processes
 $TWICC topology self --full-sessions
 $TWICC topology self --annotation role=implementer
 $TWICC topology self --annotation status:exists --annotation priority:in:high,critical
+$TWICC topology self --siblings
 ```
 
 ## Related commands

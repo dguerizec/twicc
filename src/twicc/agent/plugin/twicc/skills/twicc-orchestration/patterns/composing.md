@@ -8,10 +8,15 @@ common, useful combinations to start from. When none fits, compose your own.
 
 - **Topology** — the shape of the tree: star (you → N children), chain (each step
   feeds the next), deep tree (children that recurse into their own subtrees), or
-  panel (N voices + one judge).
+  panel (N voices + one judge). The tree is the **control** shape (who spawns, who
+  waits, who aggregates) — children may still hold **lateral links** to each other
+  on top of it (a mesh), see Channel.
 - **Channel** — how information moves: push (`send-message parent`), pull (you read
   a child anytime with `session <id> messages`), files (bulky exchange through the
-  shared `scratch_dir`), steering (you message a child mid-`assistant_turn` to redirect it).
+  shared `scratch_dir`), steering (you message a child mid-`assistant_turn` to
+  redirect it), and **sideways** (siblings talk to each other directly with
+  `send-message <sibling_id>` / `send-messages --siblings self`, or pull a peer) —
+  no rule forces every exchange through the parent. See `patterns/peer-coordination.md`.
 - **Synchronization** — when you move on: barrier (wait for all,
   `processes wait --spawned-by self ... --all`), phase gate (wait on one
   annotation-scoped batch, validate, then advance), first-wins (`--first`, then
@@ -28,6 +33,9 @@ common, useful combinations to start from. When none fits, compose your own.
 
 - **You wait on, and aggregate from, your direct children only.** A manager's
   subtree is its own business; you see its single deliverable, not its internals.
+  This is about **control** (synchronization and the final merge), not about who may
+  talk to whom: children are free to coordinate sideways with their siblings
+  (`patterns/peer-coordination.md`) — you still only wait on and aggregate your own.
 - **Read-only children can't push or spawn.** A `strict`/`dontAsk` child is a
   pull-only leaf — design around that.
 

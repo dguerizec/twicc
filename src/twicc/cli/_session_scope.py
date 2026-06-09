@@ -13,6 +13,7 @@ def merge_session_scope_ids(
     spawned_by: str | None = None,
     spawn_tree: str | None = None,
     descendants: str | None = None,
+    siblings: str | None = None,
     annotation: list[str] | None = None,
 ) -> list[str]:
     """Return explicit ids plus ids selected by filiation / annotation filters.
@@ -22,6 +23,7 @@ def merge_session_scope_ids(
     """
     from twicc.cli._drop_request.whoami import (
         resolve_descendants_filter,
+        resolve_siblings_filter,
         resolve_spawn_tree_filter,
         resolve_spawned_by_filter,
     )
@@ -35,12 +37,13 @@ def merge_session_scope_ids(
         seen.add(sid)
         out.append(sid)
 
-    if not any((spawned_by, spawn_tree, descendants, annotation)):
+    if not any((spawned_by, spawn_tree, descendants, siblings, annotation)):
         return out
 
     spawned_by_id = resolve_spawned_by_filter(spawned_by)
     spawn_root_id = resolve_spawn_tree_filter(spawn_tree)
     descendants_ids = resolve_descendants_filter(descendants)
+    siblings_ids = resolve_siblings_filter(siblings)
 
     qs = Session.objects.filter(type="session")
 
@@ -52,6 +55,9 @@ def merge_session_scope_ids(
 
     if descendants_ids is not None:
         qs = qs.filter(id__in=descendants_ids)
+
+    if siblings_ids is not None:
+        qs = qs.filter(id__in=siblings_ids)
 
     if annotation:
         from twicc.cli._annotation_filters import (

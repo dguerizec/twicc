@@ -31,6 +31,16 @@ You know your own `permission_mode` from your injected context.
 
 For bulky output (a large diff, a generated file), an executor writes it to the shared scratch space and sends a short message pointing to the file — see `twicc-orchestration`.
 
+## Talk to your peers
+
+Your parent is who you **report** to — but it is not the only session you can reach. The sessions your parent spawned alongside you are your **siblings**, and you can talk to them **directly** when the work calls for it, with no obligation to route through the parent:
+
+- Discover them: `$TWICC sessions --siblings self` (or `$TWICC topology self --siblings` to see them in the tree).
+- Message one peer: `$TWICC send-message <sibling_id> '<text>'`. Broadcast to all of them: `$TWICC send-messages --siblings self --message '<text>'` (you are always excluded).
+- Read a peer without waiting on it: `$TWICC session <sibling_id> messages --tail N`.
+
+Use it for real coordination — hand off a result a sibling is waiting on, share a discovery, flag that an interface you own is ready. It does **not** replace reporting: your own result still goes to your parent. (Read-only analyst? You can't send — peers can only pull you.) If your task was framed as deliberately independent — e.g. you are one vote in a quorum — then **don't** confer; independence is the point there. Full picture: `twicc-orchestration` › *Talking between sessions* and `patterns/peer-coordination.md`.
+
 If you can run commands, keep your own annotations current as you go — `$TWICC update-session self annotations set:status=working`, then `set:status=done` (or `failed`) when finished. Short single-line values only; see `twicc-orchestration` for what annotations are for. (A read-only session can't run commands, so it keeps whatever its parent tagged it with.)
 
 ## If the task is too big
@@ -40,5 +50,8 @@ Don't spin in circles, and don't push on indefinitely. If the task is larger tha
 ## Related commands
 
 - `$TWICC send-message parent <TEXT>` — report to or escalate to your parent (executor only). Skill: `twicc-send-message`.
+- `$TWICC send-message <SIBLING_ID> <TEXT>` / `$TWICC send-messages --siblings self --message <TEXT>` — coordinate directly with one peer or all of them (executor only). Skill: `twicc-send-message` / `twicc-send-messages`.
+- `$TWICC sessions --siblings self` / `$TWICC topology self --siblings` — discover your peers. Skill: `twicc-sessions` / `twicc-topology`.
+- `$TWICC session <SIBLING_ID> messages` — pull a peer's transcript. Skill: `twicc-session`.
 - `$TWICC whoami` — your own session id, settings, and permission mode. Skill: `twicc-whoami`.
 - `$TWICC update-session self annotations` — update your own tracking annotations. Skill: `twicc-update-session`.

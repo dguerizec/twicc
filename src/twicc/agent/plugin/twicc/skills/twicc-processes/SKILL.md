@@ -43,7 +43,8 @@ $TWICC processes [OPTIONS]
 - `--spawned-by <ID|self|parent>` — filter to direct child sessions spawned by the given session ID. `self` is the current session (= my children); `parent` is the session that spawned the current one (= my siblings, myself included). Implies `--include-hidden`. Mutually exclusive with `--spawn-tree` and `--descendants`.
 - `--spawn-tree <ID|self>` — filter to processes of every session in the spawn tree that contains the given session ID. Any id in the tree works — root, middle, or leaf: the CLI looks it up and resolves to the tree it belongs to. A standalone session (no children, never spawned) queried by its own id is returned as a single-node tree. `self` resolves to the tree that contains the current session. Implies `--include-hidden`. Mutually exclusive with `--spawned-by` and `--descendants`.
 - `--descendants <ID|self|parent>` — filter to processes of the proper descendants of the given session (every session transitively spawned by it, target excluded). `self` is the current session; `parent` is the current session's spawner (= my siblings, their subtrees, and my own subtree). Implies `--include-hidden`. Mutually exclusive with `--spawned-by` and `--spawn-tree`. Use this when you want "everything under X" but not X itself.
-- `--annotation KEY[OP]VALUE` — filter to processes whose session's `annotations` object matches the expression. Requires one filiation scope (`--spawned-by`, `--spawn-tree`, or `--descendants`) so annotations cannot accidentally select sessions from another orchestration. Repeatable; multiple flags are AND-combined. Does **not** imply `--include-hidden` (orthogonal). Five operators:
+- `--siblings <ID|self>` — filter to processes of the siblings of the given session: the *other* sessions spawned by the same parent, **target always excluded**. `self` is the current session's peers. `parent` is **not** supported. Implies `--include-hidden`. Mutually exclusive with `--spawned-by`, `--spawn-tree` and `--descendants`. Use this to watch what your peers are running; `--spawned-by parent` is the same set but includes yourself. (Listing only — `processes stop` / `processes wait` do **not** take `--siblings`: you observe peers, you don't control them.)
+- `--annotation KEY[OP]VALUE` — filter to processes whose session's `annotations` object matches the expression. Requires one filiation scope (`--spawned-by`, `--spawn-tree`, `--descendants`, or `--siblings`) so annotations cannot accidentally select sessions from another orchestration. Repeatable; multiple flags are AND-combined. Does **not** imply `--include-hidden` (orthogonal). Five operators:
   - `KEY=VALUE` — annotation key equals VALUE.
   - `KEY!=VALUE` — annotation key differs from VALUE (or key absent).
   - `KEY:exists` — annotation key is present (any value).
@@ -197,6 +198,7 @@ $TWICC processes --spawned-by parent
 $TWICC processes --spawn-tree self
 $TWICC processes --descendants self
 $TWICC processes --descendants parent
+$TWICC processes --siblings self
 $TWICC processes --spawn-tree self --annotation role=implementer
 $TWICC processes --spawn-tree self --annotation status:exists --annotation priority:in:high,critical
 $TWICC processes get abc123 def456 ghi789

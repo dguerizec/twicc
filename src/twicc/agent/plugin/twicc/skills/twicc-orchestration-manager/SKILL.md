@@ -24,6 +24,7 @@ A manager has to spawn children and report up — a read-only session (`strict`/
   - a **sub-manager** child → load `twicc-orchestration` + `twicc-orchestration-manager`.
 - Put each child's mandate (the actual work and context) in the message — never in annotations — tell it to report to you, set short tracking annotations for visibility (see `twicc-orchestration`), and **propagate the visibility and permission rules you were given**. Pick its permission mode by need; **read-only is worth it only for pure code analysis**.
 - Aggregate the children's results into one deliverable. Your parent sees the deliverable, not your internal tree — keep your subtree encapsulated.
+- **Let your children coordinate directly when it helps.** You don't have to relay every exchange between them. If two children have a real cross-dependency — one defines an interface the other consumes, one's discovery unblocks another — tell them in their briefs that they are **siblings who may talk directly** (`send-message <sibling_id>`, `send-messages --siblings self`, discover via `sessions --siblings self`) and let them handle the handoff laterally. You still wait on and aggregate them as usual: encapsulation is about your single deliverable, not a ban on sideways chat. See `patterns/peer-coordination.md`. (Keep them isolated only when independence is the point — e.g. a quorum.)
 
 ## Report up
 

@@ -31,8 +31,8 @@ Then run `$TWICC <args>` — **never quote `$TWICC`** (it may expand to multiple
 
 Commands that target a session accept two keywords resolved via PID ancestry, so an agent never needs to know its own id:
 
-- **`self`** — the current session. Accepted by `update-session`, `update-sessions` / `send-messages` (as an explicit id), `topology`, and the `--spawned-by` / `--spawn-tree` / `--descendants` filters.
-- **`parent`** — the session that spawned the current one. Accepted by `send-message` and the filiation filters.
+- **`self`** — the current session. Accepted by `update-session`, `update-sessions` / `send-messages` (as an explicit id), `topology`, and the `--spawned-by` / `--spawn-tree` / `--descendants` / `--siblings` filters.
+- **`parent`** — the session that spawned the current one. Accepted by `send-message` and the filiation filters (except `--spawn-tree` and `--siblings`, which reject `parent`).
 
 `twicc whoami` is the explicit way for an agent to discover its own `session_id`, working directories, settings, and live process row.
 
@@ -177,7 +177,7 @@ Send a message into an existing session (resurrects it if dead). Keeps the sessi
 - Skill: [`twicc-send-message`](src/twicc/agent/plugin/twicc/skills/twicc-send-message/SKILL.md).
 
 ### `twicc send-messages [SESSION_ID...] --message <TEXT>`
-Batch sibling of `send-message`: the same message to several sessions at once, selected with the same model as `update-sessions` (positional `SESSION_ID...` ∪ `--spawned-by <ID|self>` / `--descendants <ID|self>` / `--annotation`; no `parent`). `--attach` is validated per session against its provider (a file one provider rejects becomes a per-id error). Over `--remote`, a file-path `--message` and any `--attach` accept the `remote:` prefix on an absolute path to read it on the server instead of inlining the client's copy. Each send starts/resumes an agent — a batch can cold-start many stopped sessions; and `sent` ≠ done, so chain with `processes wait`. Output is keyed by session id (`{summary, results}`); a per-session failure never fails the batch (exit `0`), exit `6` when nothing was sent.
+Batch sibling of `send-message`: the same message to several sessions at once, selected with the same model as `update-sessions` plus a peer channel (positional `SESSION_ID...` ∪ `--spawned-by <ID|self>` / `--descendants <ID|self>` / `--siblings <ID|self>` / `--annotation`; no `parent`). `--siblings self` is the canonical worker → peers broadcast (unique to `send-messages` among the batch commands; the reference session is always excluded). `--attach` is validated per session against its provider (a file one provider rejects becomes a per-id error). Over `--remote`, a file-path `--message` and any `--attach` accept the `remote:` prefix on an absolute path to read it on the server instead of inlining the client's copy. Each send starts/resumes an agent — a batch can cold-start many stopped sessions; and `sent` ≠ done, so chain with `processes wait`. Output is keyed by session id (`{summary, results}`); a per-session failure never fails the batch (exit `0`), exit `6` when nothing was sent.
 - Skill: [`twicc-send-messages`](src/twicc/agent/plugin/twicc/skills/twicc-send-messages/SKILL.md).
 
 ### `twicc update-session <SESSION_ID|self> <SUBCOMMAND>`
@@ -191,7 +191,7 @@ Change a session without sending a message. `self` targets the current session. 
 - Skill: [`twicc-update-session`](src/twicc/agent/plugin/twicc/skills/twicc-update-session/SKILL.md).
 
 ### `twicc update-sessions <SUBCOMMAND> [SESSION_ID...]`
-Apply the same update to several sessions at once — the batch sibling of `update-session`. Sub-commands: `archive` / `unarchive`, `pin --mode <project|workspace|all>` / `unpin`, `hide` / `unhide`, `annotations --op <OPERATION>` (each `--op` repeatable), and `settings` (same flags as the singular). No `title` (a shared title across sessions doesn't apply). Each sub-command takes a positional `SESSION_ID...` list merged (union) with the same scoped selection as `processes stop`: `--spawned-by <ID|self>` or `--descendants <ID|self>`, plus `--annotation` to narrow that scope. No `parent`, no `--spawn-tree`. `--timeout` is a wall-clock budget for the whole batch. `settings` resolves per session against its own provider — provider-agnostic aliases (`max`/`min`/`open`/`strict`/…) land on the right value per session, a field a session's provider doesn't support is a silent no-op for that session (per-id status `noop`, counted as success), and a genuinely invalid value on a supported field becomes a per-id error (the other sessions still update). Output is keyed by session id: `{summary: {total, succeeded, failed, all_succeeded}, results: {<id>: <per-id outcome>}}`. A per-session failure never fails the batch (exit `0`); exit `6` when no session was updated.
+Apply the same update to several sessions at once — the batch sibling of `update-session`. Sub-commands: `archive` / `unarchive`, `pin --mode <project|workspace|all>` / `unpin`, `hide` / `unhide`, `annotations --op <OPERATION>` (each `--op` repeatable), and `settings` (same flags as the singular). No `title` (a shared title across sessions doesn't apply). Each sub-command takes a positional `SESSION_ID...` list merged (union) with the same scoped selection as `processes stop`: `--spawned-by <ID|self>` or `--descendants <ID|self>`, plus `--annotation` to narrow that scope. No `parent`, no `--spawn-tree`, no `--siblings` (unlike `send-messages`: you don't batch-mutate your peers). `--timeout` is a wall-clock budget for the whole batch. `settings` resolves per session against its own provider — provider-agnostic aliases (`max`/`min`/`open`/`strict`/…) land on the right value per session, a field a session's provider doesn't support is a silent no-op for that session (per-id status `noop`, counted as success), and a genuinely invalid value on a supported field becomes a per-id error (the other sessions still update). Output is keyed by session id: `{summary: {total, succeeded, failed, all_succeeded}, results: {<id>: <per-id outcome>}}`. A per-session failure never fails the batch (exit `0`); exit `6` when no session was updated.
 - Skill: [`twicc-update-sessions`](src/twicc/agent/plugin/twicc/skills/twicc-update-sessions/SKILL.md).
 
 ## Live processes
@@ -216,21 +216,25 @@ Inspect or control one session's live process. Bare `twicc process <id>` prints 
 Show the spawned-session tree containing a session, rooted at its top-level ancestor: an id-only tree first, then per-node metadata, process state, and aggregate child/cost data. Any id in the tree resolves to the whole tree.
 - `--processes/--no-processes` (default on) — include compact live process state.
 - `--full-sessions/--no-full-sessions` (default off) — full `session` serialization per node vs. a slim subset.
-- `--annotation` — filter (see below).
+- `--annotation` — mark nodes with `matches_annotations` (see below).
+- `--siblings` — mark the anchor's siblings with `matches_siblings` (see below). Boolean flag; the tree is preserved, not pruned.
 - Skill: [`twicc-topology`](src/twicc/agent/plugin/twicc/skills/twicc-topology/SKILL.md).
 
 ### Shared filiation, visibility & annotation filters
 
-`sessions`, `processes` listing, `search`, and (for annotations) `topology` accept these cross-cutting filters:
+`sessions`, `processes` listing, and `search` accept these cross-cutting filters (`topology` takes the annotation/siblings variants as node markers, see below):
 
 - `--spawned-by <ID|self|parent>` — direct children of a session.
 - `--spawn-tree <ID|self>` — every session in the tree containing that id (any id resolves to its tree).
 - `--descendants <ID|self|parent>` — every session transitively spawned by a session, target excluded.
-- The three filiation filters are mutually exclusive and each implies `--include-hidden`.
+- `--siblings <ID|self>` — the *other* sessions spawned by the same parent, target always excluded. `parent` is not supported. The direct way to address your peers; `--spawned-by parent` is the same set but includes yourself.
+- The four filiation filters are mutually exclusive and each implies `--include-hidden`.
 - `--include-hidden` / `--only-hidden` — opt hidden sessions into (or restrict to) the results.
 - `--annotation KEY[OP]VALUE` (repeatable, AND-combined) — operators `=`, `!=`, `:exists`, `:not-exists`, `:in:V1,V2`; `KEY` is a dotted path; values are typed (`true`/`false`/`null`/int/float/string).
 
-Process-control subcommands are narrower on purpose: `processes stop` and `processes wait` accept `--spawned-by <ID|self>` or `--descendants <ID|self>` plus optional `--annotation`, but not `parent` and not `--spawn-tree`.
+`topology` preserves the full tree but marks nodes: `--annotation` adds a `matches_annotations` flag, `--siblings` adds a `matches_siblings` flag (the anchor's siblings).
+
+Process-control and batch-mutation subcommands are narrower on purpose: `processes stop`, `processes wait`, and `update-sessions` accept `--spawned-by <ID|self>` or `--descendants <ID|self>` plus optional `--annotation`, but not `parent`, not `--spawn-tree`, and not `--siblings` — you observe and message peers, you don't stop or mutate them. `send-messages` is the one batch command that does take `--siblings` (peer broadcast).
 
 ## Run the provider CLIs directly
 

@@ -40,6 +40,8 @@ Who creates whom:
 
 A node never changes mode after birth. If a worker turns out to need help, it does not become a manager — it tells its parent.
 
+The tree is your **control and accountability** structure: who spawns whom, who waits on and aggregates whom, who reports to whom. It is **not** a restriction on who may talk to whom. Any session can reach any other — a child to its parent, a parent to a child, **and siblings to each other directly** — see *Talking between sessions* below and `patterns/peer-coordination.md`. Control flows along the tree; communication does not have to.
+
 ## Mode vs job
 
 **Mode** (leader/manager/worker) is the orchestration position — a level above the work itself, deciding which skill the session loads. It is orthogonal to the session's **job** (or **role**): the functional hat it wears in the work (project lead, reviewer, designer, backend dev, …). When a parent spawns a child it picks both: the mode (which skill to load) and the job (what the child is there to do).
@@ -57,7 +59,7 @@ A spawned session starts with **no memory of you** — every prompt must be self
 - **Push** — an executor child reports up with `send-message parent` (the `parent` keyword resolves to its spawner). Skill: `twicc-send-message`.
 - **Pull** — a parent can read any child's messages at any time with `$TWICC session <child_id> messages --tail N`, whether or not the child can push. The two coexist: you can look in on a child without waiting for its report.
 - A **read-only** child (see below) cannot push — pull is the only way to read it.
-- Siblings never talk directly: route through the common parent.
+- **Sideways** — siblings *can* talk to each other directly; there is no rule that exchanges must go through the parent. An executor reaches one peer with `send-message <sibling_id>` or broadcasts to all of them with `send-messages --siblings self` (the reference session is always excluded); any session can pull a peer with `$TWICC session <sibling_id> messages`. Discover your peers first with `sessions --siblings self`, `processes --siblings self`, or `topology self --siblings`. Use it for genuine peer coordination — a handoff, a heads-up, sharing a result — not as a replacement for reporting: control and aggregation still flow up to the common parent. Some patterns (e.g. independent quorum advisors) deliberately keep siblings isolated for independence — don't wire peer chat there. Full pattern: `patterns/peer-coordination.md`.
 
 ## Permission modes — use only the two extremes
 
@@ -154,6 +156,7 @@ You compose a structure from five axes — topology, channel, synchronization, a
 - Distribute — `patterns/scatter-gather.md`, `patterns/multi-angle.md`, `patterns/divide-and-conquer.md`
 - Gate phases — `patterns/phase-gated-fanout.md`
 - Chain — `patterns/pipeline.md`, `patterns/plan-then-execute.md`
+- Coordinate laterally — `patterns/peer-coordination.md`
 - Decide / verify — `patterns/quorum.md`, `patterns/debate.md`, `patterns/produce-refute.md`
 - Watch & steer — `patterns/supervisor.md`
 - Survive failure / scale — `patterns/speculative-race.md`, `patterns/worker-pool.md`

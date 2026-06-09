@@ -82,13 +82,17 @@ class Resolved(NamedTuple):
 #
 # Audited from the CLI command signatures:
 # - Filiation filter options ``--spawned-by`` / ``--spawn-tree`` /
-#   ``--descendants`` (Click param names ``spawned_by`` / ``spawn_tree`` /
-#   ``descendants``) — interpreted by ``resolve_spawned_by_filter`` /
-#   ``resolve_spawn_tree_filter`` / ``resolve_descendants_filter`` in
+#   ``--descendants`` / ``--siblings`` (Click param names ``spawned_by`` /
+#   ``spawn_tree`` / ``descendants`` / ``siblings``) — interpreted by
+#   ``resolve_spawned_by_filter`` / ``resolve_spawn_tree_filter`` /
+#   ``resolve_descendants_filter`` / ``resolve_siblings_filter`` in
 #   ``cli/_drop_request/whoami.py``. Present on ``sessions``, ``search``,
-#   ``processes`` (all three keywords), and ``processes stop`` / ``processes
-#   wait`` (``spawned_by`` / ``descendants`` only). ``spawn_tree`` rejects
-#   ``parent`` itself, but it still accepts ``self`` — so it belongs here.
+#   ``processes`` (all four keywords), ``processes stop`` / ``processes wait``
+#   (``spawned_by`` / ``descendants`` only), and ``send-messages``
+#   (``spawned_by`` / ``descendants`` / ``siblings``). ``spawn_tree`` and
+#   ``siblings`` reject ``parent`` themselves, but they still accept ``self`` —
+#   so both belong here. (On ``topology`` ``siblings`` is a boolean flag, never
+#   a ``self`` / ``parent`` string, so listing it here can't misfire there.)
 # - Session-id positionals (Click param name ``session_id``). ``send-message``,
 #   ``update-session`` and ``topology`` truly RESOLVE ``self`` / ``parent`` from
 #   the local session, so they must be rejected over --remote. ``session`` and
@@ -114,6 +118,7 @@ HOST_BOUND_PARAMS: frozenset[str] = frozenset(
         "spawned_by",
         "spawn_tree",
         "descendants",
+        "siblings",
         # session-id positionals (scalar)
         "session_id",
         # session-id positionals (variadic / mixed)

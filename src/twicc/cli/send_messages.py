@@ -3,9 +3,11 @@
 Sends the SAME message (and optional attachments) to several sessions at once,
 selected with the same model as ``update-sessions``: a positional
 ``SESSION_ID...`` list merged (union) with ``--spawned-by`` / ``--descendants``
-/ ``--annotation``. Fans out one ``kind="session:send_message"`` drop per id via
-the shared :func:`twicc.cli._batch_runner.run_batch` (no server-side change),
-polls every status under one ``--timeout``, and emits an aggregated result.
+/ ``--annotation``, plus ``--siblings`` — unique to ``send-messages`` — which
+lets a worker broadcast to its peers (the other sessions spawned by its parent).
+Fans out one ``kind="session:send_message"`` drop per id via the shared
+:func:`twicc.cli._batch_runner.run_batch` (no server-side change), polls every
+status under one ``--timeout``, and emits an aggregated result.
 
 The message text is resolved once (inline or a file path → its content). The
 attachments are validated/encoded **per session** against that session's
@@ -77,17 +79,29 @@ def send_messages_cmd(
         help=(
             "Also target the proper descendants of the given session_id, or "
             "'self'. Merged (union) with explicit SESSION_IDs. 'parent' is not "
-            "supported. Mutually exclusive with --spawned-by."
+            "supported. Mutually exclusive with --spawned-by and --siblings."
+        ),
+    ),
+    siblings: str = typer.Option(
+        None,
+        "--siblings",
+        help=(
+            "Also target the siblings of the given session_id — the other "
+            "sessions spawned by the same parent — or 'self' (the canonical way "
+            "for a worker to broadcast to its peers). The reference session "
+            "itself is always excluded. Merged (union) with explicit "
+            "SESSION_IDs. 'parent' is not supported. Mutually exclusive with "
+            "--spawned-by and --descendants."
         ),
     ),
     annotation: list[str] = typer.Option(
         [],
         "--annotation",
         help=(
-            "Narrow the --spawned-by / --descendants scope by annotation. "
-            "Repeatable, AND-combined. Requires a filiation scope; does NOT "
-            "filter explicit SESSION_IDs. Same syntax as `twicc sessions "
-            "--annotation`."
+            "Narrow the --spawned-by / --descendants / --siblings scope by "
+            "annotation. Repeatable, AND-combined. Requires a filiation scope; "
+            "does NOT filter explicit SESSION_IDs. Same syntax as `twicc "
+            "sessions --annotation`."
         ),
     ),
     timeout: int = typer.Option(
@@ -105,8 +119,9 @@ def send_messages_cmd(
 
     Selection, output shape, and exit codes match `update-sessions`: a positional
     SESSION_ID list merged (union) with `--spawned-by` / `--descendants` /
-    `--annotation`. Output is keyed by session id with a summary; a per-session
-    failure never fails the batch (exit 0), exit 6 if no session was sent.
+    `--annotation` (plus `--siblings`, unique to send-messages). Output is keyed
+    by session id with a summary; a per-session failure never fails the batch
+    (exit 0), exit 6 if no session was sent.
 
     Heads-up: each send starts/resumes an agent (real work, token spend); a
     batch can cold-start many stopped sessions at once.
@@ -186,5 +201,6 @@ def send_messages_cmd(
         success_status="sent",
         spawned_by=spawned_by,
         descendants=descendants,
+        siblings=siblings,
         annotation=annotation,
     )
