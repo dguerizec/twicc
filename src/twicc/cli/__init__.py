@@ -206,7 +206,7 @@ def _sessions_default(
             "leading dash) or a directory path (absolute or relative)."
         ),
     ),
-    workspace: str = typer.Option(None, "--workspace", help="Filter by workspace ID (only sessions of projects in that workspace). Can be combined with --project."),
+    workspace: str = typer.Option(None, "--workspace", help="Filter by workspace ID (only sessions of projects in that workspace, worktrees included). Mutually exclusive with --project."),
     limit: int = typer.Option(20, help="Max number of sessions to return."),
     offset: int = typer.Option(0, help="Skip first N sessions."),
     include_archived: bool = typer.Option(False, "--include-archived", help="Include archived sessions."),
@@ -285,6 +285,13 @@ def _sessions_default(
             "Error: --spawned-by, --spawn-tree, --descendants and --siblings are mutually exclusive.",
             code=2,
         )
+
+    if project is not None and workspace is not None:
+        # Their scopes (project + its worktrees / workspace members + their
+        # worktrees) only ever intersect to "the project's scope" (when the
+        # project belongs to the workspace) or to nothing — never a useful
+        # different subset. Reject rather than silently return either.
+        emit_error("Error: --project and --workspace are mutually exclusive.", code=2)
 
     from twicc.cli.sessions import main as sessions_main
 
@@ -914,6 +921,24 @@ def codex(ctx: typer.Context) -> None:
 @app.command()
 def search(
     query: str = typer.Argument(help="Tantivy query string (e.g. 'websocket', 'body:websocket AND from_role:user')"),
+    project: str = typer.Option(
+        None,
+        help=(
+            "Scope the search to a project: either a project ID (with or "
+            "without leading dash) or a directory path (absolute or relative). "
+            "A normal project also includes its git worktrees' sessions; a "
+            "worktree project is scoped to its own only. Mutually exclusive "
+            "with --workspace."
+        ),
+    ),
+    workspace: str = typer.Option(
+        None,
+        "--workspace",
+        help=(
+            "Scope the search to all projects in the given workspace, each "
+            "member's git worktrees included. Mutually exclusive with --project."
+        ),
+    ),
     limit: int = typer.Option(20, help="Max number of session groups to return."),
     offset: int = typer.Option(0, help="Skip first N session groups."),
     include_hidden: bool = typer.Option(False, "--include-hidden", help="Include hidden sessions in search results."),
@@ -988,6 +1013,11 @@ def search(
             code=2,
         )
 
+    if project is not None and workspace is not None:
+        # Same redundant-or-empty intersection as ``twicc sessions``: scoping to
+        # a project and a workspace at once never yields a useful different set.
+        emit_error("Error: --project and --workspace are mutually exclusive.", code=2)
+
     from twicc.cli.search import main as search_main
 
     search_main(
@@ -1000,6 +1030,8 @@ def search(
         spawn_tree=spawn_tree,
         descendants=descendants,
         siblings=siblings,
+        project=derive_project_id(project)[0] if project is not None else None,
+        workspace=workspace,
         annotation=annotation,
     )
 

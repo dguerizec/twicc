@@ -34,6 +34,8 @@ $TWICC search '<query>' [OPTIONS]
 
 - `--limit N` — max hits (default: 20).
 - `--offset N` — skip first N for pagination (default: 0).
+- `--project <PROJECT>` — scope hits to a project (path or id; **drop the leading dash** on ids). A normal project also includes its git worktrees' sessions (a worktree's sessions belong to its main repository); a worktree project is scoped to its own only. Mutually exclusive with `--workspace`. Combines (AND) with the query and every other filter. For an arbitrary set of unrelated projects, use `project_id:` query terms instead.
+- `--workspace ID` — scope hits to all projects in the given workspace, each member project's git worktrees included. Mutually exclusive with `--project`.
 - `--include-hidden` — include hits from hidden sessions (excluded by default).
 - `--only-hidden` — hits only from hidden sessions. Mutually exclusive with `--include-hidden`.
 - `--spawned-by <ID|self|parent>` — filter hits to direct child sessions spawned by the given session ID. `self` is the current session (= my children); `parent` is the session that spawned the current one (= my siblings, myself included). Implies `--include-hidden`. Mutually exclusive with `--spawn-tree` and `--descendants`.
@@ -100,6 +102,8 @@ Default field is `body` (message content) — bare keywords search there automat
 ```bash
 $TWICC search 'websocket'
 $TWICC search 'body:websocket AND from_role:user'
+$TWICC search 'websocket' --project .
+$TWICC search 'websocket' --workspace backend
 $TWICC search 'project_id:-home-twidi-dev-a OR project_id:-home-twidi-dev-b'
 $TWICC search 'websocket' --spawned-by self
 $TWICC search 'websocket' --spawned-by parent

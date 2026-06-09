@@ -14,6 +14,8 @@ def main(
     spawn_tree: str | None = None,
     descendants: str | None = None,
     siblings: str | None = None,
+    project: str | None = None,
+    workspace: str | None = None,
     annotation: list[str] | None = None,
 ) -> None:
     """Execute a raw Tantivy search and print JSON results to stdout.
@@ -21,18 +23,25 @@ def main(
     ``spawned_by`` and ``descendants`` are raw CLI values (``None``, a
     session_id, or ``"self"`` / ``"parent"``). ``spawn_tree`` accepts
     ``None``, a session_id, or ``"self"``; ``siblings`` accepts ``None``, a
-    session_id, or ``"self"``. When any value needs DB access (a keyword on
-    ``spawned_by``, any value on ``spawn_tree`` — the resolver always looks
-    the id up to find the tree's root — or any value on ``descendants`` /
-    ``siblings`` which always walk the DB), we ``django.setup()`` so an
-    ordinary full-text query stays Django-free. The typer wrapper guarantees
-    they are mutually exclusive.
+    session_id, or ``"self"``. ``project`` is an already-derived project id
+    (the typer wrapper resolves a path/id input via ``derive_project_id``),
+    expanded here to the project's session scope (itself plus its own
+    worktrees); ``workspace`` is a workspace id, expanded to its members plus
+    each member's worktrees. They are mutually exclusive (enforced by the typer
+    wrapper). When any value needs DB access (a keyword on ``spawned_by``, any
+    value on ``spawn_tree`` — the resolver always looks the id up to find the
+    tree's root — any value on ``descendants`` / ``siblings`` which always walk
+    the DB, or a ``project`` / ``workspace`` scope which expands worktrees), we
+    ``django.setup()`` so an ordinary full-text query stays Django-free. The
+    typer wrapper guarantees the filiation filters are mutually exclusive.
     """
     if (
         spawned_by in ("self", "parent")
         or spawn_tree is not None
         or descendants is not None
         or siblings is not None
+        or project is not None
+        or workspace is not None
         or annotation
     ):
         import django
@@ -62,6 +71,28 @@ def main(
         except ValueError as exc:
             emit_error(f"Error: {exc}", code=2)
 
+    # Scope hits to a set of project ids, mirroring the UI. ``--project`` folds
+    # in the project's own worktrees (a worktree scopes to just itself);
+    # ``--workspace`` expands to its members plus each member's worktrees. The
+    # two are mutually exclusive. ``None`` leaves the search unscoped; an empty
+    # workspace yields ``[]``, which ``raw_search`` treats as "no candidates".
+    project_ids = None
+    if project is not None:
+        from twicc.projects import project_scope_ids
+
+        project_ids = project_scope_ids(project)
+    elif workspace is not None:
+        from twicc.projects import expand_project_ids_with_worktrees
+        from twicc.workspaces import read_workspaces
+
+        ws = next(
+            (w for w in read_workspaces().get("workspaces", []) if w.get("id") == workspace),
+            None,
+        )
+        if ws is None:
+            emit_error(f"Error: workspace '{workspace}' not found.", code=1)
+        project_ids = expand_project_ids_with_worktrees(ws.get("projectIds", []))
+
     from twicc.search import raw_search
 
     try:
@@ -76,6 +107,7 @@ def main(
             spawn_tree=spawn_root_id,
             descendants=descendants_ids,
             siblings=siblings_ids,
+            project_ids=project_ids,
             annotation_filters=annotation_filters,
         )
     except RuntimeError as exc:

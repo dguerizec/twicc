@@ -34,8 +34,8 @@ $TWICC sessions [OPTIONS]
 
 Results are ordered by most recently active.
 
-- `--project <PROJECT>` — filter by project (path or id; **drop the leading dash** on ids). Non-existent project returns empty, no error.
-- `--workspace ID` — filter to sessions of projects in the given workspace.
+- `--project <PROJECT>` — filter by project (path or id; **drop the leading dash** on ids). A normal project also returns its git worktrees' sessions (a worktree's sessions belong to its main repository); a worktree project returns only its own. Non-existent project returns empty, no error.
+- `--workspace ID` — filter to sessions of projects in the given workspace, including each member project's git worktrees. Mutually exclusive with `--project`.
 - `--limit N` — max results (default: 20).
 - `--offset N` — skip first N for pagination (default: 0).
 - `--include-archived` — include archived sessions (excluded by default).

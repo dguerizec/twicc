@@ -17,6 +17,7 @@ def main(
 
     from twicc.core.models import Project
     from twicc.core.serializers import serialize_project
+    from twicc.projects import worktree_children_by_main
     from twicc.workspaces import read_workspaces
 
     # Read workspaces once: used both for the optional --workspace filter
@@ -34,7 +35,7 @@ def main(
             emit_error(f"Error: workspace '{workspace}' not found.", code=1)
         qs = qs.filter(id__in=ws.get("projectIds", []))
 
-    projects = qs[offset : offset + limit]
+    projects = list(qs[offset : offset + limit])
 
     # Build project_id -> [workspace_id] index for the listing.
     workspaces_by_project: dict[str, list[str]] = {}
@@ -42,10 +43,16 @@ def main(
         for pid in ws.get("projectIds", []):
             workspaces_by_project.setdefault(pid, []).append(ws["id"])
 
+    # Reverse of ``worktree_of``: main-repo id -> [worktree child ids] for the
+    # projects on this page (one query). Each main repo's entry then carries
+    # the ids of its git worktrees, like ``workspaces`` carries memberships.
+    worktrees_by_main = worktree_children_by_main([p.id for p in projects])
+
     data = []
     for p in projects:
         serialized = serialize_project(p)
         serialized["workspaces"] = workspaces_by_project.get(p.id, [])
+        serialized["worktrees"] = worktrees_by_main.get(p.id, [])
         data.append(serialized)
 
     emit_json(data)

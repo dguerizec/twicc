@@ -47,7 +47,8 @@ $TWICC project <PROJECT>
   "archived": false,
   "total_cost": 12.345678,
   "worktree_of": null,
-  "workspaces": ["backend", "home-side-projects"]
+  "workspaces": ["backend", "home-side-projects"],
+  "worktrees": ["-home-twidi-dev-myproject--worktrees-feature-x"]
 }
 ```
 
@@ -59,6 +60,7 @@ $TWICC project <PROJECT>
 - `color` — may be `null`.
 - `total_cost` — total cost in USD across all sessions (may be `null`).
 - `worktree_of` — when this project is a git worktree, the project id of its main repository; `null` otherwise.
+- `worktrees` — the project ids of this project's own git worktrees (the reverse of `worktree_of`); empty when it has none. A worktree's sessions, cost and activity count toward its main repository.
 - `workspaces` — workspace IDs this project belongs to (empty if none).
 
 ## Examples

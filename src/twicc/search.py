@@ -716,6 +716,7 @@ def raw_search(
     spawn_tree: str | None = None,
     descendants: set[str] | None = None,
     siblings: set[str] | None = None,
+    project_ids: list[str] | None = None,
     annotation_filters: list | None = None,
 ) -> dict | str:
     """Execute a raw Tantivy query and return JSON-serializable results.
@@ -746,6 +747,10 @@ def raw_search(
             of some target — the other sessions spawned by the same parent, target excluded,
             resolved by the caller). An empty set returns no results. Mutually exclusive with
             ``spawned_by``, ``spawn_tree`` and ``descendants``.
+        project_ids: If set, restrict results to hits in any of these projects — typically a
+            project (plus its git worktrees) or a whole workspace's projects, resolved by the
+            caller. An empty list returns no results (e.g. an empty workspace). Combines (AND)
+            with every other filter, including the filiation ones.
         annotation_filters: If set (non-empty list), run an oversample-and-post-filter loop:
             Tantivy ranks the corpus, then Django ORM filters on ``Session.annotations``.
             The result dict gains ``annotation_filtered``, ``exhausted``, and ``partial`` keys.
@@ -762,7 +767,15 @@ def raw_search(
             "raw_search(): spawned_by, spawn_tree, descendants and siblings are mutually exclusive"
         )
 
-    if (descendants is not None and not descendants) or (siblings is not None and not siblings):
+    if (
+        (descendants is not None and not descendants)
+        or (siblings is not None and not siblings)
+        or (project_ids is not None and not project_ids)
+    ):
+        # An empty explicit id/project set means "no candidates" — return
+        # nothing without touching the index. For ``project_ids`` this covers an
+        # empty workspace scope; a non-empty list falls through to the filter
+        # clause below.
         result_dict = {
             "query": query_str,
             "total_hits": 0,
@@ -844,6 +857,17 @@ def raw_search(
             for sid in siblings
         ]
         clauses.append((Occur.Must, Query.boolean_query(sibling_clauses)))
+
+    if project_ids:
+        # Scope to a set of projects (a project plus its git worktrees, resolved
+        # by the caller). AND-ed with every other clause; within the set the
+        # term queries are OR-ed (Should). Mirrors the project-folding the UI
+        # applies when listing a project's sessions.
+        project_clauses = [
+            (Occur.Should, Query.term_query(schema, "project_id", pid))
+            for pid in project_ids
+        ]
+        clauses.append((Occur.Must, Query.boolean_query(project_clauses)))
 
     if len(clauses) == 1:
         parsed_query = clauses[0][1]

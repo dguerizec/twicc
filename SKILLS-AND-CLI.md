@@ -89,7 +89,7 @@ Print details of the session that owns the calling process — `session_id`, `ti
 
 ### `twicc projects` / `twicc projects get <PROJECT...>`
 List projects, or batch-look up specific ones.
-- Listing: `--limit` (default 20), `--offset`, `--include-archived`, `--workspace TEXT` (only projects in that workspace).
+- Listing: `--limit` (default 20), `--offset`, `--include-archived`, `--workspace TEXT` (only projects in that workspace). Git worktrees appear as their own entries; every entry carries `worktree_of` (its main repo's id, or `null`) and main repos carry `worktrees` (their worktree child ids).
 - `get`: takes one or more project ids or directory paths (no filter flags); each input yields one entry in input order, archived included, with `known: false` placeholders for misses.
 - Skill: [`twicc-projects`](src/twicc/agent/plugin/twicc/skills/twicc-projects/SKILL.md).
 
@@ -142,7 +142,7 @@ Delete a workspace by id. Projects are **not** deleted — only the grouping dis
 
 ### `twicc sessions` / `twicc sessions get <SESSION_ID...>`
 List sessions, or batch-look up specific ones.
-- Listing: `--project TEXT`, `--workspace TEXT`, `--limit` (default 20), `--offset`, `--include-archived`, plus the shared filiation/visibility/annotation filters (see below).
+- Listing: `--project TEXT`, `--workspace TEXT`, `--limit` (default 20), `--offset`, `--include-archived`, plus the shared filiation/visibility/annotation filters (see below). `--project` and `--workspace` (mutually exclusive) each fold in git worktrees — a worktree's sessions belong to its main repository — mirroring the UI.
 - `get`: one or more ids (no filter flags), input order preserved; subagents, archived and hidden sessions all returned, `known: false` for misses.
 - Skill: [`twicc-sessions`](src/twicc/agent/plugin/twicc/skills/twicc-sessions/SKILL.md).
 
@@ -155,7 +155,7 @@ Inspect a single session.
 
 ### `twicc search "<QUERY>"`
 Full-text search across all session history using Tantivy query syntax (e.g. `websocket`, `body:websocket AND from_role:user`).
-- `--limit` (default 20), `--offset`, plus the shared filiation/visibility/annotation filters.
+- `--limit` (default 20), `--offset`, `--project TEXT` / `--workspace TEXT` (mutually exclusive; scope to a project plus its git worktrees, or a whole workspace including its members' worktrees), plus the shared filiation/visibility/annotation filters.
 - Skill: [`twicc-search`](src/twicc/agent/plugin/twicc/skills/twicc-search/SKILL.md).
 
 ## Sessions — create & drive

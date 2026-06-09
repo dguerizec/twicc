@@ -29,17 +29,19 @@ _PLACEHOLDER_TEMPLATE: dict | None = None
 def _build_placeholder_template() -> dict:
     """Derive a {field: None} dict matching the listing's per-project shape.
 
-    The listing adds a ``workspaces`` field on top of ``serialize_project``
-    — we mirror that here so the placeholder has the same keys.
+    The listing adds ``workspaces`` and ``worktrees`` fields on top of
+    ``serialize_project`` — we mirror that here so the placeholder has the
+    same keys.
     """
     from twicc.core.models import Project
     from twicc.core.serializers import serialize_project
 
     sample = Project.objects.first()
     if sample is None:
-        return {"id": None, "workspaces": None}
+        return {"id": None, "workspaces": None, "worktrees": None}
     template = {k: None for k in serialize_project(sample).keys()}
     template["workspaces"] = None
+    template["worktrees"] = None
     return template
 
 
@@ -55,6 +57,7 @@ def main(project_ids: list[str]) -> None:
 
     from twicc.core.models import Project
     from twicc.core.serializers import serialize_project
+    from twicc.projects import worktree_children_by_main
     from twicc.workspaces import read_workspaces
 
     # Dedupe while preserving caller order: the output mirrors the input
@@ -82,6 +85,10 @@ def main(project_ids: list[str]) -> None:
         for pid in ws.get("projectIds", []):
             workspaces_by_project.setdefault(pid, []).append(ws["id"])
 
+    # Reverse of ``worktree_of``: main-repo id -> [worktree child ids] for the
+    # requested ids (one query), so each known entry carries its git worktrees.
+    worktrees_by_main = worktree_children_by_main(unique_ids)
+
     global _PLACEHOLDER_TEMPLATE
     if _PLACEHOLDER_TEMPLATE is None:
         _PLACEHOLDER_TEMPLATE = _build_placeholder_template()
@@ -96,6 +103,7 @@ def main(project_ids: list[str]) -> None:
         else:
             entry = serialize_project(project)
             entry["workspaces"] = workspaces_by_project.get(pid, [])
+            entry["worktrees"] = worktrees_by_main.get(pid, [])
             entry["known"] = True
         results.append(entry)
 

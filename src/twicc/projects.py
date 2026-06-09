@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Iterable
 from typing import NamedTuple
 
 from asgiref.sync import sync_to_async
@@ -397,6 +398,92 @@ async def ensure_worktree_link(project_id: str, directory: str) -> None:
     if not main_repo:
         return
     await link_worktree_to_repo(project_id, os.path.realpath(main_repo))
+
+
+# ---------------------------------------------------------------------------
+# Worktree scope helpers (sync reads — mirror the frontend store getters)
+# ---------------------------------------------------------------------------
+#
+# A git worktree's sessions/cost/activity belong to its main repository's
+# whole: viewing a main repo aggregates its worktrees' sessions, like a
+# workspace aggregates its members one level down. These helpers are the
+# backend equivalents of the Pinia getters that drive that aggregation in the
+# UI (``getProjectScopeIds`` / ``getAllProjectIds`` / ``getWorktreesOf``), so
+# the CLI/API report the same scope the UI shows. All are sync ORM reads,
+# meant to be called after ``django.setup()`` from the CLI command bodies.
+
+
+def worktree_child_ids(main_project_id: str) -> list[str]:
+    """Ids of the git worktrees whose main repository is *main_project_id*.
+
+    Mirrors the frontend ``getWorktreesOf`` getter: every project whose
+    ``worktree_of`` points at *main_project_id*, most-recently-active first.
+    Returns ``[]`` when the project has no worktrees (or does not exist).
+    """
+    return list(
+        Project.objects.filter(worktree_of_id=main_project_id)
+        .order_by("-mtime")
+        .values_list("id", flat=True)
+    )
+
+
+def worktree_children_by_main(main_project_ids: Iterable[str]) -> dict[str, list[str]]:
+    """Batch form of :func:`worktree_child_ids` for serializing a page of projects.
+
+    Returns a ``{main_repo_id: [worktree_child_id, ...]}`` map (each list in
+    ``-mtime`` order). Main ids with no worktrees are simply absent from the
+    map. One query whatever the page size.
+    """
+    children: dict[str, list[str]] = {}
+    for child_id, main_id in (
+        Project.objects.filter(worktree_of_id__in=list(main_project_ids))
+        .order_by("-mtime")
+        .values_list("id", "worktree_of_id")
+    ):
+        children.setdefault(main_id, []).append(child_id)
+    return children
+
+
+def project_scope_ids(project_id: str) -> list[str]:
+    """The session scope of *project_id*: itself plus its own git worktrees.
+
+    Mirrors the frontend ``getProjectScopeIds`` exactly: a normal project folds
+    in its worktrees (whose sessions belong to its main repository's whole),
+    while a worktree — having no worktrees of its own — scopes to just its own
+    sessions. The expansion is strictly downward: passing a worktree id does
+    **not** pull in its main repository or its sibling worktrees.
+
+    *project_id* comes first; its worktree child ids follow, most-recently-
+    active first. An unknown id degrades to ``[project_id]``.
+    """
+    return [project_id, *worktree_child_ids(project_id)]
+
+
+def expand_project_ids_with_worktrees(project_ids: Iterable[str]) -> list[str]:
+    """Expand a set of project ids with each project's git worktrees.
+
+    Mirrors the frontend workspace getter ``getAllProjectIds``: a workspace's
+    scope is every member plus each member's worktrees. The input order is
+    preserved, each member immediately followed by its worktrees; duplicates
+    are dropped. Archived state is ignored (archived-blind), like the UI's
+    whole-workspace aggregation — the session-level archived filter handles
+    hiding.
+    """
+    ids = list(project_ids)
+    if not ids:
+        return []
+    children = worktree_children_by_main(ids)
+    result: list[str] = []
+    seen: set[str] = set()
+    for pid in ids:
+        if pid not in seen:
+            seen.add(pid)
+            result.append(pid)
+        for child_id in children.get(pid, []):
+            if child_id not in seen:
+                seen.add(child_id)
+                result.append(child_id)
+    return result
 
 
 def update_project_total_cost(project_id: str) -> None:

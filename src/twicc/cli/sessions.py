@@ -113,10 +113,19 @@ def main(
         )
         if ws is None:
             emit_error(f"Error: workspace '{workspace}' not found.", code=1)
-        qs = qs.filter(project_id__in=ws.get("projectIds", []))
+        # A workspace's session scope = its members plus each member's git
+        # worktrees, mirroring the UI (``getAllProjectIds``).
+        from twicc.projects import expand_project_ids_with_worktrees
+
+        qs = qs.filter(project_id__in=expand_project_ids_with_worktrees(ws.get("projectIds", [])))
 
     if project is not None:
-        qs = qs.filter(project_id=project)
+        # A project's session scope = itself plus its own git worktrees,
+        # mirroring the UI (``getProjectScopeIds``). Strictly downward: a normal
+        # project folds in its worktrees; a worktree scopes to just itself.
+        from twicc.projects import project_scope_ids
+
+        qs = qs.filter(project_id__in=project_scope_ids(project))
 
     sessions = qs[offset : offset + limit]
     data = [serialize_session(s) for s in sessions]
