@@ -38,7 +38,7 @@ $TWICC create-session [OPTIONS] '<PROMPT>'
 ### Options
 
 - `--project PATH-OR-ID` — directory path or project id (**drop the leading dash** on ids). Non-existent directories are auto-created as projects. Defaults to the current working directory.
-- `--provider claude_code|codex` — falls back to the target project's `default_provider` (inherited through parent projects / git worktree main repo), then the user's global default. Use `$TWICC info` to check available providers, which is the default, and which are disabled (skill: `twicc-info`).
+- `--provider claude_code|codex` — falls back to the target project's `default_provider` (inherited through parent projects / git worktree main repo), then the user's global default. Use `$TWICC info` to check available providers, which is the default, and which are disabled (skill: `twicc-info`). When orchestrating and choosing the provider **yourself**, prefer providers flagged `orchestration: true` there; an explicit user choice prevails for any enabled provider (see `twicc-orchestration`).
 - `--preset NAME` — saved agent-settings preset. Per-flag options override preset values. `__defaults__` forces the user-configured defaults explicitly. Use `$TWICC info presets` to list available presets (skill: `twicc-info`).
 - `--title TEXT` — **always pass this.** A concise 5–7 word title derived from the prompt. Don't rely on the auto-derived title.
 - `--annotation KEY=VALUE` — add a free-form session annotation; repeatable.

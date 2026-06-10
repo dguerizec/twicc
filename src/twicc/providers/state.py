@@ -121,6 +121,36 @@ def is_provider_enabled(provider: Provider) -> bool:
     return provider in get_enabled_providers()
 
 
+def get_orchestration_disabled_providers() -> set[Provider]:
+    """Return the providers the user opted OUT of orchestration.
+
+    Read from the ``orchestrationDisabledProviders`` synced-settings key
+    (same shape and same defensive parsing as ``disabledProviders``).
+    This is a *soft* preference: nothing in the backend or CLI blocks a
+    provider based on it — agents are simply told (via ``twicc info``)
+    not to pick it on their own.
+    """
+    raw = read_synced_settings().get("orchestrationDisabledProviders") or []
+    if not isinstance(raw, list):
+        return set()
+    valid = {p.value for p in Provider}
+    return {Provider(v) for v in raw if v in valid}
+
+
+def get_orchestration_providers() -> set[Provider]:
+    """Return the enabled providers preferred for orchestration.
+
+    Effective set = enabled providers minus the orchestration opt-outs.
+    If that intersection is empty (reachable despite the UI guard, e.g.
+    by globally disabling the last orchestration-enabled provider), fall
+    back to every enabled provider — an empty preference is no usable
+    preference, and the setting is advisory anyway.
+    """
+    enabled = get_enabled_providers()
+    preferred = enabled - get_orchestration_disabled_providers()
+    return preferred or enabled
+
+
 def apply_auto_enable_providers_bootstrap() -> None:
     """Simulate the activation dialog being validated with every provider checked.
 

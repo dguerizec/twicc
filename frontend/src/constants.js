@@ -200,7 +200,7 @@ export const WA_BRAND_LABELS = {
  * All other settings remain local to the browser (localStorage only).
  */
 export const SYNCED_SETTINGS_KEYS = new Set([
-    'defaultProvider', 'disabledProviders',
+    'defaultProvider', 'disabledProviders', 'orchestrationDisabledProviders',
     'titleGenerationEnabled', 'titleAutoApply',
     'titleSystemPrompt', 'autoUnpinOnArchive',
     'defaultWorktreeDirectory',

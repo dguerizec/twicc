@@ -66,7 +66,7 @@ Host-only commands that manage the Bearer tokens gating `/rpc/` — never expose
 ## Discovery & self-knowledge
 
 ### `twicc info [SECTION...]`
-Inspect TwiCC's per-provider catalogues. Sections: `presets`, `commands`, `models`, `agent-settings`, `all`. Output always carries `twicc_version` and `providers` (with enabled/disabled + default flags); each named section adds its key.
+Inspect TwiCC's per-provider catalogues. Sections: `presets`, `commands`, `models`, `agent-settings`, `all`. Output always carries `twicc_version` and `providers` (with enabled/disabled + default + orchestration flags — `orchestration` is the user's soft preference for which providers agents should pick on their own when orchestrating; an explicit user request for another enabled provider still wins); each named section adds its key.
 - `--provider TEXT` — filter every section by provider key (naming one bypasses the disabled-provider filter).
 - `--project TEXT` — only for the `commands` section: also list commands scoped to that project.
 - `--filter TEXT` — case-insensitive substring filter for `commands` (whitespace-separated tokens are ANDed).

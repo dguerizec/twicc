@@ -51,8 +51,8 @@ Every invocation returns at minimum:
   "twicc_version": "1.7.0",
   "twicc_executable": "uvx twicc",
   "providers": {
-    "claude_code": {"identifier": "claude_code", "name": "Claude Code", "disabled": false, "default": true},
-    "codex":       {"identifier": "codex",       "name": "Codex",       "disabled": true,  "default": false}
+    "claude_code": {"identifier": "claude_code", "name": "Claude Code", "disabled": false, "default": true, "orchestration": true},
+    "codex":       {"identifier": "codex",       "name": "Codex",       "disabled": true,  "default": false, "orchestration": false}
   },
   "available_info_arguments": {}
 }
@@ -65,6 +65,7 @@ Every invocation returns at minimum:
   - `name` — human-readable label.
   - `disabled` — `true` when the user has disabled the provider; `create-session` and similar calls will refuse it.
   - `default` — `true` for the user's default provider; `false` otherwise.
+  - `orchestration` — `true` when the provider is fair game for agents picking providers **on their own** while orchestrating sessions (see `twicc-orchestration`). Soft preference: an explicit user request for an `orchestration: false` provider still works as long as it is not `disabled`. Always `false` for disabled providers.
 - `available_info_arguments` — discovery dict for the positional sections this command itself accepts (`presets`, `commands`, `models`, `agent-settings`, `all`). The reserved `__description` key explains the dict; every other key is an accepted argument paired with a one-line summary of what it adds to the payload.
 
 ## Section payloads

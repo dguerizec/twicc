@@ -95,11 +95,12 @@ def info_cmd(
     from twicc.cli.info._common import emit_json
     from twicc.cli.info._meta import AVAILABLE_INFO_ARGUMENTS
     from twicc.providers.helpers import get_provider_helpers_registry
-    from twicc.providers.state import is_provider_enabled
+    from twicc.providers.state import get_orchestration_providers, is_provider_enabled
     from twicc.synced_settings import read_synced_settings
     from twicc.version import get_version
 
     default_provider = read_synced_settings().get("defaultProvider")
+    orchestration_providers = get_orchestration_providers()
 
     providers: dict[str, dict] = {}
     for prov, helpers in get_provider_helpers_registry().items():
@@ -108,6 +109,7 @@ def info_cmd(
             "name": helpers.LABEL,
             "disabled": not is_provider_enabled(prov),
             "default": prov.value == default_provider,
+            "orchestration": prov in orchestration_providers,
         }
 
     output: dict = {

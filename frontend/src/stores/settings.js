@@ -49,6 +49,7 @@ export const SETTINGS_SCHEMA = {
     // --- Synced settings (defaults from backend, null as placeholder) ---
     defaultProvider: null,
     disabledProviders: [],
+    orchestrationDisabledProviders: [],
     titleGenerationEnabled: null,
     titleAutoApply: null,
     titleSystemPrompt: null,
@@ -78,6 +79,8 @@ export const SETTINGS_SCHEMA = {
 const SETTINGS_VALIDATORS = {
     defaultProvider: (v) => typeof v === 'string' && getRegisteredProviders().includes(v),
     disabledProviders: (v) =>
+        Array.isArray(v) && v.every(item => typeof item === 'string' && getRegisteredProviders().includes(item)),
+    orchestrationDisabledProviders: (v) =>
         Array.isArray(v) && v.every(item => typeof item === 'string' && getRegisteredProviders().includes(item)),
     displayMode: (v) => [DISPLAY_MODE.CONVERSATION, DISPLAY_MODE.SIMPLIFIED, DISPLAY_MODE.NORMAL, DISPLAY_MODE.DEBUG].includes(v),
     fontSize: (v) => typeof v === 'number' && v >= 12 && v <= 32,
@@ -286,6 +289,16 @@ export const useSettingsStore = defineStore('settings', {
         enabledProviders: (state) => {
             const disabled = new Set(state.disabledProviders || [])
             return getRegisteredProviders().filter(p => !disabled.has(p))
+        },
+        /**
+         * Enabled providers the user has NOT opted out of orchestration.
+         * Soft preference only — nothing blocks the others; agents are just
+         * told (via ``twicc info``) not to pick them on their own.
+         */
+        orchestrationProviders: (state) => {
+            const disabled = new Set(state.disabledProviders || [])
+            const orchestrationDisabled = new Set(state.orchestrationDisabledProviders || [])
+            return getRegisteredProviders().filter(p => !disabled.has(p) && !orchestrationDisabled.has(p))
         },
         /**
          * Whether the backend is running in dev mode (source layout) vs installed package.
@@ -828,6 +841,7 @@ export function initSettings() {
     const collectAllSyncedSettings = () => {
         const dict = {
             defaultProvider: store.defaultProvider,
+            orchestrationDisabledProviders: store.orchestrationDisabledProviders,
             displayMode: store.displayMode,
             fontSize: store.fontSize,
             colorScheme: store.colorScheme,

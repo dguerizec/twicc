@@ -14,6 +14,7 @@
  */
 import { computed, ref } from 'vue'
 import { getProviderHelpers, getProviderIcon } from '../../providers'
+import { useSettingsStore } from '../../stores/settings'
 import AgentSettingsPresetsDialog from './AgentSettingsPresetsDialog.vue'
 
 const props = defineProps({
@@ -107,6 +108,37 @@ const presetsDialogOpen = ref(false)
 function openPresetsDialog() {
     presetsDialogOpen.value = true
 }
+
+// --- Orchestration opt-out (soft preference, synced) -----------------------
+// Whether agents may pick this provider on their own when orchestrating
+// sessions. Soft: an explicit user request for the provider still works.
+const settingsStore = useSettingsStore()
+
+const orchestrationEnabled = computed(
+    () => !(settingsStore.orchestrationDisabledProviders || []).includes(props.provider),
+)
+
+// The last orchestration-enabled provider cannot be switched off — the
+// orchestration pool must never end up empty from the UI.
+const isLastOrchestrationProvider = computed(
+    () => orchestrationEnabled.value && settingsStore.orchestrationProviders.length <= 1,
+)
+
+function onOrchestrationToggle(event) {
+    const enabled = event.target.checked
+    const current = new Set(settingsStore.orchestrationDisabledProviders || [])
+    if (enabled) {
+        current.delete(props.provider)
+    } else {
+        if (isLastOrchestrationProvider.value) {
+            // Race guard (e.g. stale UI before a WS resync): revert the switch.
+            event.target.checked = true
+            return
+        }
+        current.add(props.provider)
+    }
+    settingsStore.orchestrationDisabledProviders = [...current].sort()
+}
 </script>
 
 <template>
@@ -168,6 +200,8 @@ function openPresetsDialog() {
             </span>
         </div>
 
+        <wa-divider></wa-divider>
+
         <div class="setting-group">
             <label class="setting-group-label">Presets</label>
             <span class="setting-group-hint">
@@ -177,6 +211,24 @@ function openPresetsDialog() {
                 <wa-icon slot="start" name="sliders"></wa-icon>
                 Manage presets…
             </wa-button>
+        </div>
+
+        <wa-divider></wa-divider>
+
+        <div class="setting-group">
+            <label class="setting-group-label">Orchestration</label>
+            <wa-switch
+                :checked="orchestrationEnabled"
+                :disabled="isLastOrchestrationProvider"
+                @change="onOrchestrationToggle"
+            >Enabled in orchestration</wa-switch>
+            <span class="setting-group-hint">
+                When off, agents won't pick {{ helpers.constructor.label }} on their own when
+                orchestrating sessions. You can still explicitly ask an agent to use it.
+            </span>
+            <span v-if="isLastOrchestrationProvider" class="setting-group-hint">
+                At least one provider must remain enabled in orchestration.
+            </span>
         </div>
 
         <AgentSettingsPresetsDialog

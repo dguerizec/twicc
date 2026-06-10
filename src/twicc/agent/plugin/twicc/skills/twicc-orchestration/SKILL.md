@@ -61,6 +61,10 @@ A spawned session starts with **no memory of you** — every prompt must be self
 - A **read-only** child (see below) cannot push — pull is the only way to read it.
 - **Sideways** — siblings *can* talk to each other directly; there is no rule that exchanges must go through the parent. An executor reaches one peer with `send-message <sibling_id>` or broadcasts to all of them with `send-messages --siblings self` (the reference session is always excluded); any session can pull a peer with `$TWICC session <sibling_id> messages`. Discover your peers first with `sessions --siblings self`, `processes --siblings self`, or `topology self --siblings`. Use it for genuine peer coordination — a handoff, a heads-up, sharing a result — not as a replacement for reporting: control and aggregation still flow up to the common parent. Some patterns (e.g. independent quorum advisors) deliberately keep siblings isolated for independence — don't wire peer chat there. Full pattern: `patterns/peer-coordination.md`.
 
+## Choosing a provider
+
+The user can exclude providers from orchestration (a per-provider switch in the TwiCC settings). `$TWICC info` reports the result as an `orchestration` boolean on each entry of its `providers` dict. When **you** pick the provider for a child (the user named none), spawn only on providers with `orchestration: true`. An explicit user request always prevails: if the user asks for a specific provider, use it even when its flag is `orchestration: false` — only `disabled: true` providers are actually unusable (the CLI refuses them).
+
 ## Permission modes — use only the two extremes
 
 Every session knows its own `permission_mode` from its injected context. For orchestration, use only the two **non-interactive** extremes of each provider — one that allows everything, one that allows nothing:

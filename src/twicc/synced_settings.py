@@ -59,6 +59,12 @@ _GENERIC_SYNCED_SETTINGS_DEFAULTS: dict = {
     "terminalTmuxConfigPath": "",
     "waTheme": "default",
     "waBrand": "cyan",
+    # Providers the user opted OUT of orchestration (soft preference, mirrors
+    # the shape of `disabledProviders`). Agents picking providers on their own
+    # for orchestration skip these; an explicit user request still wins as
+    # long as the provider itself is enabled. Empty = every enabled provider
+    # is fair game. See `twicc.providers.state.get_orchestration_providers`.
+    "orchestrationDisabledProviders": [],
 }
 
 # Note: `disabledProviders` (list[str]) is intentionally NOT listed here.
