@@ -57,6 +57,29 @@ const pathPlaceholder = computed(() => {
     return `e.g. ${root}/.worktrees/<branch>`
 })
 
+// Branch name turned into a single safe folder name (the project convention:
+// slashes and whitespace become dashes, e.g. "feature/add-x" → "feature-add-x").
+const branchDirName = computed(() =>
+    trimmedBranch.value
+        .replace(/[/\s]+/g, '-')
+        .replace(/-+/g, '-')
+        .replace(/^[-.]+|[-.]+$/g, '')
+)
+
+// "Append branch name" is offered when both fields are usable and the path
+// doesn't already end with the resolved folder name.
+const canAppendBranch = computed(() => {
+    const dir = branchDirName.value
+    const base = localPath.value.trim().replace(/\/+$/, '')
+    return !!dir && !!base && !base.endsWith(`/${dir}`)
+})
+
+function appendBranchToPath() {
+    if (!canAppendBranch.value) return
+    const base = localPath.value.trim().replace(/\/+$/, '')
+    localPath.value = `${base}/${branchDirName.value}`
+}
+
 /**
  * Set form attribute on the create button when the dialog opens.
  * wa-button doesn't expose `form` as a property, so we must use setAttribute.
@@ -243,7 +266,12 @@ defineExpose({
                     ></wa-input>
                     <DirectoryPickerPopup v-model="localPath" :fallback-path="parentProject?.git_root || ''" />
                 </div>
-                <div class="form-hint">Absolute path where the worktree will be created</div>
+                <div class="form-hint">
+                    Absolute path where the worktree will be created
+                    <template v-if="canAppendBranch">
+                        — <a href="#" class="append-branch-link" @click.prevent="appendBranchToPath">Append branch name ("{{ branchDirName }}")</a>
+                    </template>
+                </div>
             </div>
 
             <div v-if="branchIsNew && branches.length > 0" class="form-group">
@@ -370,6 +398,15 @@ defineExpose({
 .branch-suggestion-hint {
     font-size: var(--wa-font-size-xs);
     color: var(--wa-color-text-quiet);
+}
+
+.append-branch-link {
+    color: var(--wa-color-brand-text);
+    text-decoration: none;
+}
+
+.append-branch-link:hover {
+    text-decoration: underline;
 }
 
 .dialog-footer {

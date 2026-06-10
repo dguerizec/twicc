@@ -50,13 +50,17 @@ const loading = ref(false)
 const error = ref(null)
 const rootPath = ref(null)
 const fileTreePanelRef = ref(null)
+// Show hidden (dot) directories — e.g. a `.worktrees/` folder would otherwise
+// be unreachable from the picker.
+const showHidden = ref(false)
 
 /**
  * Fetch a directory tree from the standalone endpoint.
  */
 async function fetchTree(dirPath) {
+    const hidden = showHidden.value ? '&show_hidden=1' : ''
     const res = await apiFetch(
-        `/api/directory-tree/?path=${encodeURIComponent(dirPath)}&directories_only=1`
+        `/api/directory-tree/?path=${encodeURIComponent(dirPath)}&directories_only=1${hidden}`
     )
     if (!res.ok) {
         const data = await res.json().catch(() => ({}))
@@ -167,6 +171,24 @@ function closePopup() {
     tree.value = null
     rootPath.value = null
     error.value = null
+}
+
+// ─── Hidden directories toggle ───────────────────────────────────────────────
+
+/** Toggle hidden (dot) directories and reload the tree from the current root.
+ *  A full refetch is required: lazily-loaded children are cached in `tree`. */
+async function toggleHidden() {
+    showHidden.value = !showHidden.value
+    if (!rootPath.value) return
+    loading.value = true
+    error.value = null
+    try {
+        tree.value = await fetchTree(rootPath.value)
+    } catch (e) {
+        error.value = e.message || 'Failed to load directory'
+    } finally {
+        loading.value = false
+    }
 }
 
 // ─── Navigate up ─────────────────────────────────────────────────────────────
@@ -304,6 +326,17 @@ onBeforeUnmount(() => {
                         <wa-icon name="arrow-up" label="Go to parent directory"></wa-icon>
                     </wa-button>
                     <span class="picker-path" :title="rootPath">{{ rootPath || '...' }}</span>
+                    <wa-button
+                        variant="neutral"
+                        appearance="plain"
+                        size="small"
+                        class="hidden-toggle"
+                        :class="{ 'hidden-toggle-active': showHidden }"
+                        :title="showHidden ? 'Hide hidden directories' : 'Show hidden directories'"
+                        @click="toggleHidden"
+                    >
+                        <wa-icon :name="showHidden ? 'eye' : 'eye-slash'" label="Toggle hidden directories"></wa-icon>
+                    </wa-button>
                 </div>
 
                 <!-- Tree -->
@@ -370,5 +403,15 @@ onBeforeUnmount(() => {
     white-space: nowrap;
     min-width: 0;
     flex: 1;
+}
+
+.hidden-toggle {
+    flex-shrink: 0;
+    opacity: 0.7;
+}
+
+.hidden-toggle-active {
+    opacity: 1;
+    color: var(--wa-color-brand-text);
 }
 </style>
