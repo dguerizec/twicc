@@ -45,7 +45,7 @@ from django.db.models import Count, F, Max, QuerySet
 from twicc.context_injection import strip_context_blocks_in_place
 from twicc.core.enums import ItemDisplayLevel, ItemKind, Provider
 from twicc.core.models import AgentLink, Session, SessionItem, SessionType, ToolResultLink
-from twicc.git import read_head_branch, resolve_git_from_path
+from twicc.git import is_git_root_related, read_head_branch, resolve_git_from_path
 from twicc.projects import (
     ensure_project_directory,
     ensure_project_git_root,
@@ -1306,7 +1306,7 @@ class BaseSessionCompute:
         raise NotImplementedError
 
     def resolve_git_for_item(
-        self, parsed_json: dict, *, use_cache: bool = True
+        self, parsed_json: dict, *, anchor_dir: str | None = None, use_cache: bool = True
     ) -> tuple[str, str] | None:
         """
         Resolve ``(git_directory, git_branch)`` for the item, or ``None``.
@@ -1317,6 +1317,13 @@ class BaseSessionCompute:
         frequently-resolved git root (in case the item references several
         files in different repos). Only the path extraction is
         provider-specific.
+
+        ``anchor_dir`` is the session's working directory (its launch
+        directory). When given, candidates unrelated to it are discarded
+        via :func:`twicc.git.is_git_root_related`, so a session that merely
+        touches files in a foreign repository does not adopt that repo as
+        its git directory. When ``None`` (no cwd known yet), no filtering
+        is applied.
 
         ``use_cache`` is forwarded to :func:`resolve_git_from_path`; the
         watcher path passes ``False`` to bypass the cache for fresh
@@ -1331,8 +1338,13 @@ class BaseSessionCompute:
             # Use the directory part of the path (for files)
             dir_path = os.path.dirname(path) if not os.path.isdir(path) else path
             result = resolve_git_from_path(dir_path, use_cache=use_cache)
-            if result is not None:
-                resolutions.append(result)
+            if result is None:
+                continue
+            if anchor_dir is not None and not is_git_root_related(
+                result[0], anchor_dir, use_cache=use_cache
+            ):
+                continue
+            resolutions.append(result)
 
         if not resolutions:
             return None
@@ -2205,12 +2217,15 @@ class BaseSessionCompute:
             if item.context_usage is not None:
                 last_context_usage = item.context_usage
 
-            # Resolve git directory/branch from tool_use paths
+            # Resolve git directory/branch from tool_use paths, anchored to the
+            # session's cwd so unrelated repos merely touched by the session
+            # are ignored (cwd is extracted above, so last_cwd is already set
+            # when the session's JSONL carries one).
             if item.git_directory is not None:
                 last_resolved_git_directory = item.git_directory
                 last_resolved_git_branch = item.git_branch
             else:
-                git_resolution = self.resolve_git_for_item(parsed)
+                git_resolution = self.resolve_git_for_item(parsed, anchor_dir=last_cwd)
                 if git_resolution is not None:
                     item.git_directory, item.git_branch = git_resolution
                     last_resolved_git_directory = item.git_directory
@@ -2975,8 +2990,12 @@ class BaseSessionCompute:
             # item, mirroring the bulk-compute path. This must happen
             # outside the COLLAPSIBLE/ALWAYS gate so DEBUG_ONLY items
             # carrying tool paths (e.g. Codex's event_msg.patch_apply_end)
-            # also contribute to git resolution.
-            git_resolution = self.resolve_git_for_item(parsed, use_cache=False)
+            # also contribute to git resolution. Anchored to the session's
+            # cwd (falling back to this batch's cwd on the first sync) so
+            # unrelated repos merely touched by the session are ignored.
+            git_resolution = self.resolve_git_for_item(
+                parsed, anchor_dir=session.cwd or last_cwd, use_cache=False
+            )
             if git_resolution is not None:
                 item.git_directory, item.git_branch = git_resolution
                 update_fields['git_directory'] = item.git_directory

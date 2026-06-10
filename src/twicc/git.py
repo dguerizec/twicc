@@ -1231,6 +1231,66 @@ def _main_repo_from_worktree_gitfile(git_file_path: str) -> str | None:
     return root
 
 
+def get_git_common_dir(git_root: str) -> str | None:
+    """Return the realpath of the COMMON git directory for *git_root*.
+
+    For an ordinary repository (``.git`` is a directory) this is the ``.git``
+    directory itself. For a linked worktree (``.git`` is a file pointing at
+    ``<root>/.git/worktrees/<name>``) this is the main repository's ``.git``.
+    Two git roots sharing the same common dir belong to the same repository
+    (main checkout + its worktrees). Returns None when there is no ``.git``
+    entry or the layout cannot be safely interpreted.
+    """
+    git_path = os.path.join(git_root, '.git')
+    try:
+        if os.path.isdir(git_path):
+            return os.path.realpath(git_path)
+        if os.path.isfile(git_path):
+            main_root = _main_repo_from_worktree_gitfile(git_path)
+            if main_root is not None:
+                return os.path.realpath(os.path.join(main_root, '.git'))
+    except OSError:
+        pass
+    return None
+
+
+def _is_path_within(path: str, base: str) -> bool:
+    """True when *path* equals *base* or lives underneath it (both pre-normalized)."""
+    return path == base or path.startswith(base + os.sep)
+
+
+def is_git_root_related(git_root: str, anchor_dir: str, *, use_cache: bool = True) -> bool:
+    """Whether *git_root* is a plausible git root for a session anchored at *anchor_dir*.
+
+    Guards session git resolution against unrelated repositories: a session
+    launched in ``/home/user/foo`` that merely reads a file under
+    ``/home/user/bar`` (a separate repo) must not adopt ``bar`` as its git
+    directory. A candidate is accepted when:
+
+    - it is the anchor itself, one of its ancestors (the normal walk-up
+      case: the anchor lives inside the candidate repo), or one of its
+      descendants (a worktree created inside the anchor directory), or
+    - it shares its common git directory with the repository containing the
+      anchor — a worktree of the anchor's repo checked out elsewhere
+      (e.g. ``/tmp/toto`` for a repo in ``/home/user/foo``).
+
+    ``use_cache`` is forwarded to :func:`resolve_git_from_path` when
+    resolving the anchor's own repository.
+    """
+    root = os.path.normpath(git_root)
+    anchor = os.path.normpath(anchor_dir)
+    if _is_path_within(anchor, root) or _is_path_within(root, anchor):
+        return True
+
+    anchor_git = resolve_git_from_path(anchor, use_cache=use_cache)
+    if anchor_git is None:
+        return False
+    anchor_common = get_git_common_dir(anchor_git[0])
+    if anchor_common is None:
+        return False
+    return get_git_common_dir(root) == anchor_common
+
+
 # ---------------------------------------------------------------------------
 # Worktree detection from a path marker (deleted-worktree backfill)
 # ---------------------------------------------------------------------------
