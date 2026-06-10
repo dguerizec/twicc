@@ -325,6 +325,20 @@ async def project_branches(request, project_id):
     )
 
 
+# Worktree-creation error code -> HTTP status. The service is
+# transport-agnostic (it returns structured codes); the endpoint maps
+# them here. Anything unmapped is a 400 (client-side input fault).
+_WORKTREE_ERROR_STATUS: dict[str, int] = {
+    "project_not_found": 404,
+    "not_git_repo": 400,
+    "invalid_path": 400,
+    "branch_required": 400,
+    "project_already_exists": 409,
+    "start_from_not_found": 400,
+    "git_error": 400,
+}
+
+
 async def project_worktrees(request, project_id):
     """POST /api/projects/<id>/worktrees/ - Create a git worktree of the project.
 
@@ -334,71 +348,32 @@ async def project_worktrees(request, project_id):
         "start_from": "optional existing branch the new branch starts from"
     }
 
-    Runs ``git worktree add`` then registers the directory as a project
-    explicitly linked to this one (``worktree_of``). Returns the serialized
-    new project (201).
+    Delegates to
+    :func:`twicc.core.services.worktree_creation.create_worktree_from_source`
+    — the same orchestration the CLI ``create-session --worktree-branch``
+    flow uses — and serialises the new worktree project (201).
     """
-    from twicc.git import create_worktree, get_branches
+    from twicc.core.services.worktree_creation import create_worktree_from_source
 
     if request.method != "POST":
         return JsonResponse({"error": "Method not allowed"}, status=405)
-    try:
-        project = await Project.objects.aget(id=project_id)
-    except Project.DoesNotExist:
-        return JsonResponse({"error": "Project not found"}, status=404)
-    if not project.git_root:
-        return JsonResponse({"error": "Project is not a git repository"}, status=400)
-
     try:
         data = orjson.loads(request.body)
     except orjson.JSONDecodeError:
         return JsonResponse({"error": "Invalid JSON"}, status=400)
 
-    path = (data.get("path") or "").strip()
-    branch = (data.get("branch") or "").strip()
-    start_from = (data.get("start_from") or "").strip() or None
-
-    if not path or not os.path.isabs(path):
-        return JsonResponse({"error": "Path must be an absolute path"}, status=400)
-    if not branch:
-        return JsonResponse({"error": "Branch is required"}, status=400)
-
-    resolved = os.path.realpath(path)
-    new_project_id = path_to_project_id(resolved)
-    if await Project.objects.filter(id=new_project_id).aexists():
-        return JsonResponse({"error": "A project already exists for this directory"}, status=409)
-
-    local_branches = await sync_to_async(get_branches)(project.git_root)
-    if branch in local_branches:
-        start_from = None  # meaningless for an existing-branch checkout
-    elif start_from and start_from not in local_branches:
-        return JsonResponse({"error": "Start-from branch does not exist"}, status=400)
-
-    # Whether the target path exists / is an empty directory is left to git:
-    # ``git worktree add`` rejects a non-empty target with a clear message.
-    ok, git_error = await sync_to_async(create_worktree)(
-        project.git_root, resolved, branch, start_from
+    result = await create_worktree_from_source(
+        source_project_id=project_id,
+        path=data.get("path") or "",
+        branch=data.get("branch") or "",
+        start_from=data.get("start_from") or None,
     )
-    if not ok:
-        return JsonResponse({"error": git_error}, status=400)
+    if not result.success:
+        err = result.errors[0]
+        return JsonResponse({"error": err.message},
+                            status=_WORKTREE_ERROR_STATUS.get(err.code, 400))
 
-    # The explicit ``worktree_of_id`` sets the link at row creation: the
-    # ``project_added`` broadcast and the 201 body both carry it, and the
-    # filesystem detection (``ensure_worktree_link``) is skipped. ``created``
-    # is deliberately not checked (unlike ``_create_project``): the early
-    # exists-check covers the normal duplicate case, and once the worktree
-    # exists on disk, adopting a directory-less row in a lost race is benign —
-    # a 409 here would orphan a freshly created worktree.
-    try:
-        new_project, _created = await run_under_db_write_lock(
-            lambda: register_project(
-                new_project_id, directory=resolved, worktree_of_id=project.id,
-            )
-        )
-    except IntegrityError:
-        return JsonResponse({"error": "A project already exists for this directory"}, status=409)
-
-    return JsonResponse(serialize_project(new_project), status=201)
+    return JsonResponse(serialize_project(result.project), status=201)
 
 
 async def project_detail(request, project_id):

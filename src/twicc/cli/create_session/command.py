@@ -40,6 +40,34 @@ def create_session_cmd(
             "working directory."
         ),
     ),
+    worktree_branch: str | None = typer.Option(
+        None,
+        "--worktree-branch",
+        help=(
+            "Create the session in a NEW git worktree of --project on this "
+            "branch (existing local branch => checked out; new => created with "
+            "-b). --project is then the source repository and the session lands "
+            "in the worktree, registered as its own project linked back to it. "
+            "Requires --worktree-path."
+        ),
+    ),
+    worktree_path: str | None = typer.Option(
+        None,
+        "--worktree-path",
+        help=(
+            "Absolute path of the new git worktree's directory. Required with "
+            "--worktree-branch; git rejects a non-empty target."
+        ),
+    ),
+    worktree_start_from: str | None = typer.Option(
+        None,
+        "--worktree-start-from",
+        help=(
+            "Branch/revision the new branch starts from (only when "
+            "--worktree-branch does not yet exist). Defaults to the source "
+            "repo's current HEAD. Ignored for an existing-branch checkout."
+        ),
+    ),
     provider: str | None = typer.Option(
         None,
         "--provider",
@@ -373,6 +401,32 @@ def create_session_cmd(
     for err in attach_result.errors:
         errors.append(ValidationError(f"--attach {err.file}", err.code, err.message))
 
+    # Worktree flags: --worktree-branch turns --project into the source repo
+    # and creates the session in a new worktree. The path is required and must
+    # be absolute (no caller CWD to resolve it against, like every other path
+    # the CLI hands the server). Git-level checks (branch already checked out,
+    # non-empty target, source not a repo) are the server's authority.
+    wt_branch = (worktree_branch or "").strip()
+    wt_path = (worktree_path or "").strip()
+    wt_start_from = (worktree_start_from or "").strip()
+    if (wt_path or wt_start_from) and not wt_branch:
+        errors.append(ValidationError(
+            "--worktree-branch", "missing_worktree_branch",
+            "--worktree-path / --worktree-start-from require --worktree-branch.",
+        ))
+    if wt_branch:
+        if not wt_path:
+            errors.append(ValidationError(
+                "--worktree-path", "missing_worktree_path",
+                "--worktree-branch requires --worktree-path (absolute path of "
+                "the new worktree directory).",
+            ))
+        elif not os.path.isabs(wt_path):
+            errors.append(ValidationError(
+                "--worktree-path", "invalid_worktree_path",
+                "--worktree-path must be an absolute path.",
+            ))
+
     if errors:
         emit_validation_errors(errors)
         raise typer.Exit(1)
@@ -404,6 +458,13 @@ def create_session_cmd(
         "annotations": annotations,
         **settings._asdict(),
     }
+    # ``project_id``/``directory`` stay the SOURCE repo; the server creates the
+    # worktree from it and retargets the session at the resulting worktree.
+    if wt_branch:
+        payload["worktree_branch"] = wt_branch
+        payload["worktree_path"] = wt_path
+        if wt_start_from:
+            payload["worktree_start_from"] = wt_start_from
 
     drop = write_drop_file(payload, kind="session:create")
 

@@ -45,6 +45,16 @@ $TWICC create-session [OPTIONS] '<PROMPT>'
 - `--annotations-file PATH` — load session annotations from a JSON object file.
 - `--timeout SECONDS` — seconds to wait for the server's response (default 30). If the CLI times out, the session may still get created.
 
+### Worktree
+
+Create the session in a brand-new git worktree of `--project`, in one command — the CLI counterpart of the UI's "new worktree" button:
+
+- `--worktree-branch BRANCH` — create the session in a NEW git worktree of `--project` on `BRANCH` (an existing local branch is checked out; a new one is created with `-b`). `--project` then names the **source repository**; the session lands in the worktree, which is registered as its own project linked back to the source (`worktree_of`) and inherits the source's agent defaults and trust. Requires `--worktree-path`.
+- `--worktree-path PATH` — absolute path of the new worktree's directory. **Required** with `--worktree-branch`. Git rejects a non-empty target.
+- `--worktree-start-from REF` — branch/revision the new branch starts from (only when `--worktree-branch` does not yet exist). Defaults to the source repo's current HEAD. Ignored for an existing-branch checkout.
+
+The settings flags below still resolve against `--project` (the source) — the worktree inherits from it, so the effective values match a UI draft opened in the worktree.
+
 ### Agent settings
 
 All optional. A field you omit (and the preset doesn't set) takes the target project's `default_agent_settings` for the chosen provider (inherited through parent projects / git worktree main repo — see `twicc-project`), then the user's global default. The resolved values are frozen onto the session at creation, exactly like a session created from the UI. Use `$TWICC info models agent-settings` for authoritative model lists, valid values, and per-value restrictions (skill: `twicc-info`). The lists below are indicative.
@@ -108,6 +118,9 @@ By default (Claude Code), questions from the agent surface as an interactive UI 
 - `annotation_path_conflict` — an annotation path conflicts with an existing scalar or object.
 - `annotation_non_scalar` — use `--annotations-file` for list or object values.
 - `invalid_annotations_file` — file missing, invalid JSON, or root value is not an object.
+- `missing_worktree_branch` — `--worktree-path` / `--worktree-start-from` given without `--worktree-branch`.
+- `missing_worktree_path` — `--worktree-branch` given without `--worktree-path`.
+- `invalid_worktree_path` — `--worktree-path` must be an absolute path.
 
 ### Server (exit 3)
 
@@ -115,6 +128,10 @@ By default (Claude Code), questions from the agent surface as an interactive UI 
 - `project_not_found` / `project_no_directory` — `--project` didn't resolve.
 - `invalid_annotations` — annotations must be a JSON object.
 - `manager_busy` — transient; retry.
+- `not_git_repo` — `--worktree-branch` used but `--project` is not a git repository.
+- `project_already_exists` — a project is already registered for `--worktree-path`.
+- `start_from_not_found` — `--worktree-start-from` is not an existing local branch.
+- `git_error` — `git worktree add` failed (branch already checked out, non-empty target, …); the git message is relayed verbatim.
 
 ## Output format
 
@@ -147,6 +164,7 @@ $TWICC create-session --provider claude_code --attach /home/twidi/screenshot.png
 $TWICC create-session --annotation role=reviewer --annotation task.priority=2 'Review this change'
 $TWICC create-session --annotations-file /home/twidi/session-annotations.json 'Run the annotated task'
 $TWICC create-session --provider claude_code --no-question-widget 'Resize images — ask me before overwriting'
+$TWICC create-session --project /home/twidi/dev/myproj --worktree-branch feature/login --worktree-path /home/twidi/dev/myproj.worktrees/feature-login 'Implement the login flow'
 $TWICC create-session --provider claude_code 'Hello'
 # → {"status":"created","session_id":"...","provider":"claude_code","project_id":"...","request_uuid":"..."}
 ```

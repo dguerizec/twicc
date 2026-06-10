@@ -69,6 +69,11 @@ async def create_session_from_payload(payload: dict) -> SessionCreationResult:
     - ``title``: optional, max 200 chars.
     - ``images``, ``documents``: lists of SDK block dicts (already validated
       by the caller — the service does not re-validate attachments).
+    - ``worktree_branch``, ``worktree_path``, ``worktree_start_from``:
+      optional (CLI only). When ``worktree_branch`` is set, a new git
+      worktree of the source project is created at ``worktree_path`` and the
+      session is retargeted at it (``project_id``/``directory`` then name the
+      source repo). ``worktree_start_from`` defaults to the source HEAD.
     - Plus all six ``AgentSettings`` fields (``None`` = use synced default).
     """
     # --- payload extraction (defensive, no schema validation) ----
@@ -128,7 +133,32 @@ async def create_session_from_payload(payload: dict) -> SessionCreationResult:
     # exist in DB already (created via ``POST /api/projects/`` or detected
     # by the sessions watcher).
     from twicc.core.models import Project
-    if directory_hint:
+
+    # Worktree flow (CLI ``create-session --worktree-branch ...``): create a
+    # new git worktree of the source project first, then retarget the session
+    # at the resulting worktree project. Only the CLI sends these keys — the UI
+    # creates the worktree via ``POST /api/projects/<id>/worktrees/`` and opens
+    # a draft against it. The worktree inherits the source's agent defaults /
+    # trust through ``worktree_of``, so the settings the CLI resolved against
+    # the source still apply.
+    worktree_branch = (payload.get("worktree_branch") or "").strip()
+    if worktree_branch:
+        from twicc.core.services.worktree_creation import create_worktree_from_source
+        wt_result = await create_worktree_from_source(
+            source_project_id=project_id,
+            source_directory=directory_hint,
+            path=payload.get("worktree_path") or "",
+            branch=worktree_branch,
+            start_from=payload.get("worktree_start_from"),
+        )
+        if not wt_result.success:
+            return SessionCreationResult(False, None, None, None, [
+                SessionCreationError(e.field, e.code, e.message)
+                for e in (wt_result.errors or [])
+            ])
+        project = wt_result.project
+        project_id = wt_result.project_id
+    elif directory_hint:
         # ``register_project`` is the only direct DB write in this
         # service before the manager handoff — everything else here is
         # reads or in-memory caches. (``manager.create_session`` below
