@@ -891,42 +891,49 @@ const manageWorkspacesDialogRef = ref(null)
 
 // ----- Project selector per-row "…" action menus -----
 // Each project / workspace row in the selector carries a nested wa-dropdown
-// (its actions menu). Web Awesome auto-closes sibling dropdowns when a new one
-// opens, which would also tear down the selector itself. We keep a count of how
-// many row menus are currently open (their wa-show / wa-after-hide bubble up to
-// the selector) and veto the selector's own wa-hide while any is open.
+// (its actions menu). Web Awesome auto-closes other open dropdowns when a new one
+// opens, which would also tear down the selector itself. We veto the selector's
+// own wa-hide while one of those row menus is actually open.
+//
+// "Actually open" is read from the live DOM (the nested wa-dropdown's `open`
+// attribute, reflected by Web Awesome) rather than tracked with a counter: a row
+// can be unmounted in the middle of its close — e.g. archiving a project flips
+// `archived`, which filters its row out before the row menu's wa-after-hide can
+// fire — so any +1/-1 bookkeeping leaks and wedges the selector permanently open.
+// A DOM query can't desync that way.
 const selectorEl = ref(null)
-const openSelectorRowMenus = ref(0)
+// Set while closeSelector() forces the selector shut, so onSelectorHide lets that
+// close through. Needed because closeSelector() runs from a row "…" menu's wa-select
+// handler (edit / new session), at which point Web Awesome has NOT yet flipped that
+// row menu's own `open` to false — so the DOM still shows an open child dropdown and
+// the veto below would otherwise keep the selector wedged open.
+let forceClosingSelector = false
 // Edit dialog dedicated to the sidebar selector (distinct from the create one).
 const sidebarProjectEditRef = ref(null)
 const sidebarEditingProject = ref(null)
 
-function onSelectorRowMenuShow(event) {
-    // A child (row) dropdown opened — not the selector itself.
-    if (event.target !== selectorEl.value) openSelectorRowMenus.value++
-}
-
-function onSelectorRowMenuAfterHide(event) {
-    if (event.target === selectorEl.value) {
-        // The selector itself fully closed: reset the guard.
-        openSelectorRowMenus.value = 0
-    } else {
-        openSelectorRowMenus.value = Math.max(0, openSelectorRowMenus.value - 1)
-    }
-}
-
 function onSelectorHide(event) {
-    // Veto only the selector's own close, and only while a row menu is open.
+    // Veto only the selector's own close, and only while a row "…" menu is open.
     // A child menu's wa-hide (different target) must pass through untouched.
-    if (event.target === selectorEl.value && openSelectorRowMenus.value > 0) {
+    if (event.target !== selectorEl.value) return
+    if (forceClosingSelector) {
+        // Explicit programmatic close (closeSelector) — never veto it.
+        forceClosingSelector = false
+        return
+    }
+    if (selectorEl.value.querySelector('wa-dropdown[open]')) {
         event.preventDefault()
     }
 }
 
-// Force the selector closed (used right before opening a dialog over it).
+// Force the selector closed (used right before opening a dialog over it, or when a
+// row menu picks an action that should dismiss the selector — edit / new session).
 function closeSelector() {
-    openSelectorRowMenus.value = 0
-    if (selectorEl.value) selectorEl.value.open = false
+    const el = selectorEl.value
+    if (el && el.open) {
+        forceClosingSelector = true
+        el.open = false
+    }
 }
 
 // Provided to ProjectSelectorRow (named / tree / worktree rows) so they can open
@@ -1371,9 +1378,7 @@ function updateSidebarClosedClass(closed) {
                         id="project-selector"
                         class="project-selector"
                         @wa-select="handleSelectorSelect"
-                        @wa-show="onSelectorRowMenuShow"
                         @wa-hide="onSelectorHide"
-                        @wa-after-hide="onSelectorRowMenuAfterHide"
                     >
                         <wa-button
                             slot="trigger"
