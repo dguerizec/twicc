@@ -417,6 +417,13 @@ defineExpose({ open, close })
                                                 <wa-icon name="code-branch" auto-width class="command-wt-sep"></wa-icon>
                                             </template>
                                             <span class="command-wt-folder">{{ t.label }}</span>
+                                            <wa-icon
+                                                v-if="t.project?.untrusted"
+                                                name="lock"
+                                                label="Untrusted project"
+                                                title="This project is not trusted"
+                                                class="palette-trust-icon"
+                                            ></wa-icon>
                                         </span>
                                         <span v-if="t.path" class="command-path">{{ t.path }}</span>
                                     </span>
@@ -533,8 +540,24 @@ defineExpose({ open, close })
                                         <wa-icon name="code-branch" auto-width class="command-wt-sep"></wa-icon>
                                     </template>
                                     <span class="command-wt-folder" v-html="item.highlighted"></span>
+                                    <wa-icon
+                                        v-if="item.project?.untrusted"
+                                        name="lock"
+                                        label="Untrusted project"
+                                        title="This project is not trusted"
+                                        class="palette-trust-icon"
+                                    ></wa-icon>
                                 </span>
-                                <span v-else class="command-label" v-html="item.highlighted" />
+                                <span v-else class="command-label command-name-line">
+                                    <span class="command-name-text" v-html="item.highlighted"></span>
+                                    <wa-icon
+                                        v-if="item.project?.untrusted"
+                                        name="lock"
+                                        label="Untrusted project"
+                                        title="This project is not trusted"
+                                        class="palette-trust-icon"
+                                    ></wa-icon>
+                                </span>
                                 <span v-if="item.path" class="command-path" v-html="item.pathHighlighted" />
                             </span>
                             <span v-else class="command-label" v-html="item.highlighted" />
@@ -766,6 +789,32 @@ wa-divider {
     flex-shrink: 0;
     color: var(--wa-color-text-quiet);
     font-size: 0.85em;
+}
+
+/* Untrusted-project marker (mirrors ProjectBadge/WorktreeBadge): faint closed
+   lock — normal text colour at low opacity, so it adapts to light/dark and every
+   theme on its own (quieter than --wa-color-text-quiet). */
+.palette-trust-icon {
+    flex-shrink: 0;
+    color: var(--wa-color-text-normal);
+    opacity: 0.2;
+    font-size: 0.85em;
+}
+
+/* Plain project nested row: hold the name and the untrusted marker on one line
+   while letting the name ellipsize (the marker stays fixed). Keeps .command-label
+   so its :deep(mark) highlight styling still applies to the name. */
+.command-name-line {
+    display: flex;
+    align-items: center;
+    gap: var(--wa-space-2xs);
+    min-width: 0;
+}
+.command-name-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
 }
 
 /* Top-level command rendered as a project/worktree badge (e.g. "New Session in

@@ -356,6 +356,7 @@ export function initStaticCommands(router) {
             action,
             project: {
                 color: p.color ?? null,
+                untrusted: data.untrustedProjectIds.has(p.id),
                 processState: activity?.processState ?? null,
                 hasUnread: activity?.hasUnread ?? false,
             },
@@ -377,6 +378,7 @@ export function initStaticCommands(router) {
             action,
             project: {
                 color: wt.color ?? parent?.color ?? null,
+                untrusted: data.untrustedProjectIds.has(wt.id),
                 processState: activity?.processState ?? null,
                 hasUnread: activity?.hasUnread ?? false,
             },
@@ -684,7 +686,7 @@ export function initStaticCommands(router) {
                         prefix: 'New Session in',
                         label: worktreeLabel(p) || data.getProjectDisplayName(p.id),
                         path: p.directory ?? null,
-                        project: { color: p.color ?? parent?.color ?? null },
+                        project: { color: p.color ?? parent?.color ?? null, untrusted: data.untrustedProjectIds.has(p.id) },
                         worktree: { parentName: parent ? data.getProjectDisplayName(parent.id) : '' },
                     }
                 }
@@ -692,7 +694,7 @@ export function initStaticCommands(router) {
                     prefix: 'New Session in',
                     label: data.getProjectDisplayName(p.id),
                     path: p.directory ?? null,
-                    project: { color: p.color ?? null },
+                    project: { color: p.color ?? null, untrusted: data.untrustedProjectIds.has(p.id) },
                 }
             },
             action: async () => {

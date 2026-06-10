@@ -55,6 +55,9 @@ const color = computed(() => {
     const own = props.colorOverride !== null ? props.colorOverride : project.value?.color
     return own || props.fallbackColor || null
 })
+// Whether to flag this project as untrusted (effective trust ≠ trusted, i.e.
+// explicitly untrusted OR unknown). Resolved from the store's cached set.
+const untrusted = computed(() => store.untrustedProjectIds.has(props.projectId))
 </script>
 
 <template>
@@ -64,6 +67,13 @@ const color = computed(() => {
             :style="color ? { '--dot-color': color } : null"
         ></span>
         <span class="project-badge-name">{{ displayName }}</span>
+        <wa-icon
+            v-if="untrusted"
+            name="lock"
+            label="Untrusted project"
+            title="This project is not trusted"
+            class="project-badge-trust"
+        ></wa-icon>
     </span>
 </template>
 
@@ -90,5 +100,14 @@ const color = computed(() => {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+/* Untrusted marker: normal text colour at low opacity — faint, and adapts to
+   light/dark and every theme on its own (quieter than --wa-color-text-quiet). */
+.project-badge-trust {
+    flex-shrink: 0;
+    color: var(--wa-color-text-normal);
+    opacity: 0.2;
+    font-size: 0.85em;
 }
 </style>

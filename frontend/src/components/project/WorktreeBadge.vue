@@ -50,6 +50,9 @@ const color = computed(() => {
     const own = props.colorOverride !== null ? props.colorOverride : project.value?.color
     return own || parent.value?.color || null
 })
+// Flag the worktree as untrusted (effective trust ≠ trusted). The resolver
+// already inherits the main repo's trust through `worktree_of`.
+const untrusted = computed(() => store.untrustedProjectIds.has(props.projectId))
 </script>
 
 <template>
@@ -70,6 +73,13 @@ const color = computed(() => {
             <wa-icon name="code-branch" auto-width class="worktree-badge-sep"></wa-icon>
         </template>
         <span class="worktree-badge-name">{{ folder }}</span>
+        <wa-icon
+            v-if="untrusted"
+            name="lock"
+            label="Untrusted project"
+            title="This project is not trusted"
+            class="worktree-badge-trust"
+        ></wa-icon>
     </span>
 </template>
 
@@ -102,6 +112,15 @@ const color = computed(() => {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+/* Untrusted marker: normal text colour at low opacity — faint, and adapts to
+   light/dark and every theme on its own (quieter than --wa-color-text-quiet). */
+.worktree-badge-trust {
+    flex-shrink: 0;
+    color: var(--wa-color-text-normal);
+    opacity: 0.2;
+    font-size: 0.85em;
 }
 
 .worktree-badge-parent-link {

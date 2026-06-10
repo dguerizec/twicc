@@ -502,6 +502,22 @@ export const useDataStore = defineStore('data', {
             return ids
         },
         getProject: (state) => (id) => state.projects[id],
+        // Set of project ids whose *effective* trust is NOT trusted — i.e.
+        // explicitly untrusted (`trust === false`) OR unknown (no own decision
+        // and nothing resolvable up the chain). Drives the untrusted-project
+        // indicator shown on project/worktree badges and in the command palette.
+        // Computed once and cached by Pinia; thanks to Vue's fine-grained
+        // reactivity it only recomputes when a trust-relevant field
+        // (`trust`/`trust_propagation`/`worktree_of`/`directory`) of some project
+        // changes value or a project is added/removed — never on a plain `mtime`
+        // bump (the resolver reads none of those churny fields).
+        untrustedProjectIds: (state) => {
+            const ids = new Set()
+            for (const id in state.projects) {
+                if (resolveProjectTrust(id, state.projects).state !== true) ids.add(id)
+            }
+            return ids
+        },
         // Resolve a project id to its main repository's project id: if the
         // project is a git worktree (`worktree_of` set), return the parent's id,
         // else the id itself. Used to display snippet/preset lists based on the
