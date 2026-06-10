@@ -8,13 +8,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
-- The activity stats (overviews, heatmaps and graphs) can now be filtered by provider, or kept combined across all of them.
-- When viewing a file, Ctrl+G (Cmd+G on macOS) jumps straight to a given line number, like in a code editor.
-- The `session content` CLI command (+matching skills and API) can now filter a session's raw items by their raw text content not just by line number.
+- **Claude Fable 5** — support for the new model family.
+- **Git worktrees** — full worktree support across the app.
+  - ![Worktrees selector](frontend/public/whats-new/v1.8/worktrees-selector.webp)
+  - ![Worktree creation](frontend/public/whats-new/v1.8/worktrees-creation.webp)
+- **Project trust** — a TwiCC-level trust model that builds on Claude Code's and Codex's one, gating session permissions per project.
+  - ![Trust edition](frontend/public/whats-new/v1.8/trust-edit.webp)
+- **Per-project agent defaults** — default provider and agent settings set per project, inherited when a session is created.
+  - ![Project agent settings](frontend/public/whats-new/v1.8/projects-agent-settings.webp)
+- **Command palette** — significantly expanded (project/workspace management, worktrees, read-state, archived projects, richer search), now also mouse and mobile-accessible.
+- **Session list** — multi-select with batch actions.
+  - ![Multi sessions select](frontend/public/whats-new/v1.8/sessions-multi-select.webp)
+- **Project selector** — each entry has its own actions menu.
+  - ![Projects selector menu](frontend/public/whats-new/v1.8/projects-selector-menu.webp)
+- **Message input** — collapsible once it grows beyond a certain size, to free up space for reading; also stays usable while a pending request is shown.
+- **Orchestration, CLI & skills** — session content filter (`--contains`), `--siblings` filter with peer communication, and a per-provider orchestration opt-out.
+- **Code line comment** — Ctrl/Cmd+Enter to insert the comment into the message input.
+- **Activity stats** — provider filter.
+- **File editor** — Ctrl+G to jump to a line.
 
 ### Changed
 
+- **Mermaid** — reduced flickering during streaming, and diagram theme now follows the active color scheme.
+- **Question widget** — the "Other" field is now a textarea instead of a single-line input.
 - Bump `claude-agent-sdk` from 0.2.91 to 0.2.96 (bundled Claude Code CLI: 2.1.165 → 2.1.172)
+
+### Fixed
+
+- **git** — fixed session git roots that could land on the wrong or unrelated folders.
+- **Codex** — usage sync recovers when the OAuth token cache is stale.
 
 ## [1.7.2] - 2026-06-06
 
