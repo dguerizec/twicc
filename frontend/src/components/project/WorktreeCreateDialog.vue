@@ -2,7 +2,7 @@
 // WorktreeCreateDialog.vue - Dialog to create a git worktree of a project.
 // A single mounted instance serves every project row: the parent project is
 // passed to open(project), not as a prop.
-import { ref, computed, nextTick, useId } from 'vue'
+import { ref, computed, watch, nextTick, useId } from 'vue'
 import { useDataStore } from '../../stores/data'
 import { useSettingsStore } from '../../stores/settings'
 import { apiFetch } from '../../utils/api'
@@ -29,6 +29,16 @@ const localStartFrom = ref('')
 const branches = ref([]) // [{ name, checked_out }]
 const isCreating = ref(false)
 const errorMessage = ref('')
+
+// --- Path auto-fill -----------------------------------------------------------
+// When a base worktree directory is available (the project's own setting, the
+// global default, or a folder picked via the directory picker), the path's last
+// segment tracks the branch name automatically — no manual "Append" click.
+// `pathBase` is that parent directory; `pathAutoFill` is true while we own the
+// path. Typing in the path field by hand hands control back to the user (auto
+// off, the "Append" button takes over as a fallback); the picker re-arms it.
+const pathBase = ref('')
+const pathAutoFill = ref(false)
 
 // Unique form ID per instance to avoid conflicts when multiple dialog instances coexist in the DOM
 const instanceId = useId()
@@ -72,18 +82,39 @@ const branchDirName = computed(() =>
 )
 
 // "Append branch name" is offered when both fields are usable and the path
-// doesn't already end with the resolved folder name.
+// doesn't already end with the resolved folder name. With auto-fill on, the
+// segment is always present, so this stays hidden — it only resurfaces as a
+// manual fallback once the user has taken control of the path field.
 const canAppendBranch = computed(() => {
     const dir = branchDirName.value
     const base = localPath.value.trim().replace(/\/+$/, '')
     return !!dir && !!base && !base.endsWith(`/${dir}`)
 })
 
+// Join a base directory and a (possibly empty) branch folder segment, dropping
+// any trailing slashes on the base. An empty segment yields the bare base.
+function joinPath(base, seg) {
+    const b = (base || '').replace(/\/+$/, '')
+    return seg ? `${b}/${seg}` : b
+}
+
 function appendBranchToPath() {
     if (!canAppendBranch.value) return
-    const base = localPath.value.trim().replace(/\/+$/, '')
-    localPath.value = `${base}/${branchDirName.value}`
+    localPath.value = joinPath(localPath.value.trim(), branchDirName.value)
 }
+
+// Auto-fill: while in auto mode, keep the path as `<base>/<branch-folder>` as the
+// user types the branch, replacing the last segment (not appending). Falls back
+// to the bare base when the branch is emptied.
+watch(branchDirName, (seg) => {
+    if (!pathAutoFill.value || !pathBase.value) return
+    localPath.value = joinPath(pathBase.value, seg)
+})
+
+// Shown under the path field when no base directory could be resolved (no
+// per-project worktree directory and no global default) and the user hasn't
+// typed or picked a path yet — points them to where a default can be set.
+const showNoDefaultHint = computed(() => !pathBase.value && !localPath.value.trim())
 
 /**
  * Set form attribute on the create button when the dialog opens.
@@ -129,8 +160,8 @@ async function fetchBranches() {
 
 // Initial value for the path field: the project's own absolute worktree
 // directory if set, else the global default composed against the project's git
-// root (resolving any "../"), else empty. The user then adds the branch folder
-// via the "Append branch name" button.
+// root (resolving any "../"), else empty. When non-empty it becomes the auto-fill
+// base, so the branch folder is appended live as the user types the branch.
 function resolveInitialWorktreePath(project) {
     if (!project) return ''
     const projDir = (project.worktree_directory || '').trim()
@@ -144,7 +175,12 @@ function resolveInitialWorktreePath(project) {
 function open(project) {
     parentProject.value = project
     localBranch.value = ''
-    localPath.value = resolveInitialWorktreePath(project)
+    const initialPath = resolveInitialWorktreePath(project)
+    localPath.value = initialPath
+    // Arm auto-fill only when we actually resolved a base directory; the branch
+    // folder will then be appended/replaced live as the user types.
+    pathBase.value = initialPath
+    pathAutoFill.value = !!initialPath
     localStartFrom.value = ''
     errorMessage.value = ''
     isCreating.value = false
@@ -167,6 +203,24 @@ function onBranchInput(event) {
 
 function onPathInput(event) {
     localPath.value = event.target.value
+    // Hand control back to the user: stop auto-deriving the last segment so we
+    // never overwrite what they are typing. The "Append" button is the fallback.
+    pathAutoFill.value = false
+}
+
+// The directory picker selected a folder: treat it as a fresh base and re-arm
+// auto-fill. If the picked folder already ends with the current branch segment
+// (the user clicked the worktree folder itself), unwrap it so we don't end up
+// with `<base>/<branch>/<branch>`.
+function onPickerPath(picked) {
+    const trimmed = (picked || '').replace(/\/+$/, '')
+    const seg = branchDirName.value
+    const base = seg && trimmed.endsWith(`/${seg}`)
+        ? trimmed.slice(0, -(seg.length + 1))
+        : trimmed
+    pathBase.value = base
+    pathAutoFill.value = true
+    localPath.value = joinPath(base, seg)
 }
 
 function applySuggestion(suggestion) {
@@ -296,10 +350,23 @@ defineExpose({
                         :placeholder="pathPlaceholder"
                         class="directory-input"
                     ></wa-input>
-                    <DirectoryPickerPopup v-model="localPath" :fallback-path="parentProject?.git_root || ''" />
+                    <DirectoryPickerPopup
+                        :model-value="localPath"
+                        @update:model-value="onPickerPath"
+                        :fallback-path="parentProject?.git_root || ''"
+                    />
                 </div>
                 <div class="form-hint">
                     Absolute path where the worktree will be created
+                </div>
+                <div v-if="showNoDefaultHint" class="form-hint path-no-default-hint">
+                    <wa-icon name="circle-info" auto-width></wa-icon>
+                    <span>
+                        No default worktree directory set — set one per project
+                        (Edit project → Worktree directory) or globally
+                        (Settings → Default worktree directory) to pre-fill this path
+                        and append the branch name automatically.
+                    </span>
                 </div>
                 <wa-button
                     v-if="canAppendBranch"
@@ -403,6 +470,19 @@ defineExpose({
 .form-hint {
     font-size: var(--wa-font-size-xs);
     color: var(--wa-color-text-quiet);
+}
+
+/* "No default worktree directory" notice: icon + text on one row, the icon
+   pinned to the first line. */
+.path-no-default-hint {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--wa-space-2xs);
+}
+
+.path-no-default-hint wa-icon {
+    margin-top: 0.15em;
+    flex-shrink: 0;
 }
 
 .directory-input-row {
