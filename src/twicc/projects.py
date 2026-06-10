@@ -244,6 +244,26 @@ async def _broadcast_project_added(project: Project) -> None:
     })
 
 
+async def _broadcast_project_updated(project_id: str) -> None:
+    """Re-read *project_id* from the DB and broadcast ``project_updated``.
+
+    Unlike :func:`_broadcast_project_added`, this takes an id and re-fetches:
+    the only caller (:func:`link_worktree_to_repo`) patched the row with a bare
+    ``UPDATE`` (:func:`_set_worktree_of`), so there is no up-to-date in-memory
+    instance to serialise. Silent no-op if the row vanished. A broadcast to a
+    channel layer with no subscribers (e.g. worktree backfill before any WS
+    client connects) is itself a no-op.
+    """
+    project = await sync_to_async(Project.objects.filter(id=project_id).first)()
+    if project is None:
+        return
+    channel_layer = get_channel_layer()
+    await channel_layer.group_send("updates", {
+        "type": "broadcast",
+        "data": {"type": "project_updated", "project": serialize_project(project)},
+    })
+
+
 def _adopt_directory_sync(project: Project, directory: str) -> None:
     """Patch ``project.directory`` in DB + cache (sync). Caller checks that
     the project actually lacks a directory before invoking. The cache refresh
@@ -343,7 +363,17 @@ async def register_project(
         await auto_add_project_to_workspaces(project.id, project.directory)
         if worktree_of_id is None:
             # Explicit link already set at creation — skip filesystem detection.
-            await ensure_worktree_link(project.id, project.directory)
+            detected_parent_id = await ensure_worktree_link(project.id, project.directory)
+            if detected_parent_id is not None:
+                # ensure_worktree_link patched ``worktree_of`` in the DB only
+                # (bare UPDATE via _set_worktree_of). Mirror it onto the
+                # in-memory instance so a caller serialising this object —
+                # notably the POST /api/projects/ 201 response — reports the
+                # worktree link. Without this the response carries a stale
+                # ``worktree_of = None`` that the frontend writes over the
+                # correct ``project_updated`` broadcast, leaving the worktree
+                # unmarked in the live UI until a reload.
+                project.worktree_of_id = detected_parent_id
 
     return project, created
 
@@ -394,12 +424,22 @@ async def link_worktree_to_repo(project_id: str, main_repo: str) -> str | None:
         return None
     await register_project(parent_id, directory=main_repo)
     await sync_to_async(_set_worktree_of)(project_id, parent_id)
+    # The link is now in the DB, but the child's ``project_added`` already went
+    # out with ``worktree_of = None`` (the link is resolved *after* creation,
+    # see :func:`register_project`). Re-broadcast the child so connected clients
+    # pick up the worktree link immediately, instead of only when some unrelated
+    # event (e.g. its first session syncing) next re-serialises the project.
+    await _broadcast_project_updated(project_id)
     return parent_id
 
 
-async def ensure_worktree_link(project_id: str, directory: str) -> None:
+async def ensure_worktree_link(project_id: str, directory: str) -> str | None:
     """Link *project_id* to its main repository when *directory* is a live git
     worktree (its ``.git`` pointer file is readable).
+
+    Returns the parent (main repository) project id when a link is established,
+    else ``None`` — so a caller holding the freshly-created ``Project`` instance
+    can mirror the link onto it (``_set_worktree_of`` only patches the DB).
 
     No-op when *directory* is not inside a linked git worktree (or its ``.git``
     is unreadable because the folder is gone). Otherwise resolves the main
@@ -413,8 +453,8 @@ async def ensure_worktree_link(project_id: str, directory: str) -> None:
     """
     main_repo = resolve_worktree_main_repo(directory)
     if not main_repo:
-        return
-    await link_worktree_to_repo(project_id, os.path.realpath(main_repo))
+        return None
+    return await link_worktree_to_repo(project_id, os.path.realpath(main_repo))
 
 
 # ---------------------------------------------------------------------------
