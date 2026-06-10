@@ -41,6 +41,9 @@ def serialize_project(project):
         # ancestors); see frontend/src/utils/projectAgentDefaults.js.
         "default_provider": project.default_provider,
         "default_agent_settings": project.default_agent_settings,
+        # Absolute base directory for new git worktrees of this project (None =
+        # inherit the global defaultWorktreeDirectory composed against git_root).
+        "worktree_directory": project.worktree_directory,
     }
 
 

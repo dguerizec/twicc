@@ -53,6 +53,7 @@ export const SETTINGS_SCHEMA = {
     titleAutoApply: null,
     titleSystemPrompt: null,
     autoUnpinOnArchive: null,
+    defaultWorktreeDirectory: null,
     terminalUseTmux: null,
     terminalTmuxConfigPath: null,
     waTheme: null,
@@ -89,6 +90,7 @@ const SETTINGS_VALIDATORS = {
     extraUsageOnlyWhenNeeded: (v) => typeof v === 'boolean',
     maxCachedSessions: (v) => typeof v === 'number' && Number.isInteger(v) && v >= 1 && v <= 50,
     autoUnpinOnArchive: (v) => typeof v === 'boolean',
+    defaultWorktreeDirectory: (v) => typeof v === 'string',
     terminalUseTmux: (v) => typeof v === 'boolean',
     terminalTmuxConfigPath: (v) => typeof v === 'string',
     showDiffs: (v) => typeof v === 'boolean',
@@ -250,6 +252,7 @@ export const useSettingsStore = defineStore('settings', {
         isExtraUsageOnlyWhenNeeded: (state) => state.extraUsageOnlyWhenNeeded,
         getMaxCachedSessions: (state) => state.maxCachedSessions,
         isAutoUnpinOnArchive: (state) => state.autoUnpinOnArchive,
+        getDefaultWorktreeDirectory: (state) => state.defaultWorktreeDirectory,
         isTerminalUseTmux: (state) => state.terminalUseTmux,
         getTerminalTmuxConfigPath: (state) => state.terminalTmuxConfigPath,
         isShowDiffs: (state) => state.showDiffs,
@@ -455,6 +458,17 @@ export const useSettingsStore = defineStore('settings', {
         setTerminalTmuxConfigPath(path) {
             if (SETTINGS_VALIDATORS.terminalTmuxConfigPath(path)) {
                 this.terminalTmuxConfigPath = path
+            }
+        },
+
+        /**
+         * Set the default base directory for new git worktrees, relative to
+         * each project's git root. Empty string means "no default".
+         * @param {string} path
+         */
+        setDefaultWorktreeDirectory(path) {
+            if (SETTINGS_VALIDATORS.defaultWorktreeDirectory(path)) {
+                this.defaultWorktreeDirectory = path
             }
         },
 
@@ -825,6 +839,7 @@ export function initSettings() {
             extraUsageOnlyWhenNeeded: store.extraUsageOnlyWhenNeeded,
             maxCachedSessions: store.maxCachedSessions,
             autoUnpinOnArchive: store.autoUnpinOnArchive,
+            defaultWorktreeDirectory: store.defaultWorktreeDirectory,
             terminalUseTmux: store.terminalUseTmux,
             terminalTmuxConfigPath: store.terminalTmuxConfigPath,
             showDiffs: store.showDiffs,

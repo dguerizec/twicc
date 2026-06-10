@@ -137,6 +137,14 @@ class Project(models.Model):
     # bundle PER provider (not just default_provider's) lets a session created
     # with a non-default provider still pick up that provider's project bundle.
     default_agent_settings = models.JSONField(null=True, blank=True, default=None)
+    # ---- Worktree creation ------------------------------------------
+    # Absolute base directory under which new git worktrees of this project
+    # are created from the UI. Free-form and intentionally unconstrained: a
+    # user may keep worktrees anywhere, not necessarily under git_root.
+    # NULL/empty = no project-level choice, so the worktree-create dialog
+    # falls back to the global ``defaultWorktreeDirectory`` synced setting,
+    # composed against this project's git_root. Web-UI only (no CLI surface).
+    worktree_directory = models.CharField(max_length=500, null=True, blank=True)
 
     class Meta:
         ordering = ["-mtime"]

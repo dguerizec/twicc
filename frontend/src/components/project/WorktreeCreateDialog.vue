@@ -4,12 +4,15 @@
 // passed to open(project), not as a prop.
 import { ref, computed, nextTick, useId } from 'vue'
 import { useDataStore } from '../../stores/data'
+import { useSettingsStore } from '../../stores/settings'
 import { apiFetch } from '../../utils/api'
+import { composeWorktreeDir } from '../../utils/worktreePath'
 import DirectoryPickerPopup from '../files/DirectoryPickerPopup.vue'
 
 const emit = defineEmits(['created'])
 
 const store = useDataStore()
+const settingsStore = useSettingsStore()
 
 const dialogRef = ref(null)
 const branchInputRef = ref(null)
@@ -122,13 +125,24 @@ async function fetchBranches() {
     branches.value = Array.isArray(data.branches) ? data.branches : []
 }
 
+// Initial value for the path field: the project's own absolute worktree
+// directory if set, else the global default composed against the project's git
+// root (resolving any "../"), else empty. The user then adds the branch folder
+// via the "Append branch name" button.
+function resolveInitialWorktreePath(project) {
+    if (!project) return ''
+    const projDir = (project.worktree_directory || '').trim()
+    if (projDir) return projDir
+    return composeWorktreeDir(project.git_root || '', settingsStore.getDefaultWorktreeDirectory || '')
+}
+
 /**
  * Open the dialog for the given parent project (the repo to create a worktree of).
  */
 function open(project) {
     parentProject.value = project
     localBranch.value = ''
-    localPath.value = ''
+    localPath.value = resolveInitialWorktreePath(project)
     localStartFrom.value = ''
     errorMessage.value = ''
     isCreating.value = false
@@ -268,10 +282,18 @@ defineExpose({
                 </div>
                 <div class="form-hint">
                     Absolute path where the worktree will be created
-                    <template v-if="canAppendBranch">
-                        — <a href="#" class="append-branch-link" @click.prevent="appendBranchToPath">Append branch name ("{{ branchDirName }}")</a>
-                    </template>
                 </div>
+                <wa-button
+                    v-if="canAppendBranch"
+                    type="button"
+                    class="append-branch-btn"
+                    variant="neutral"
+                    size="small"
+                    @click="appendBranchToPath"
+                >
+                    <wa-icon slot="start" name="plus"></wa-icon>
+                    Append branch name ("{{ branchDirName }}")
+                </wa-button>
             </div>
 
             <div v-if="branchIsNew && branches.length > 0" class="form-group">
@@ -400,13 +422,16 @@ defineExpose({
     color: var(--wa-color-text-quiet);
 }
 
-.append-branch-link {
-    color: var(--wa-color-brand-text);
-    text-decoration: none;
+.append-branch-btn {
+    margin-top: var(--wa-space-2xs);
+    align-self: flex-start;
+    max-width: 100%;
 }
 
-.append-branch-link:hover {
-    text-decoration: underline;
+.append-branch-btn::part(label) {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .dialog-footer {

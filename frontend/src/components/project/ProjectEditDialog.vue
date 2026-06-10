@@ -7,6 +7,7 @@ import { useSettingsStore } from '../../stores/settings'
 import { apiFetch } from '../../utils/api'
 import { matchPattern } from '../../utils/workspacePatterns'
 import DirectoryPickerPopup from '../files/DirectoryPickerPopup.vue'
+import { composeWorktreeDir } from '../../utils/worktreePath'
 import { resolveProjectTrust } from '../../utils/trust'
 import ProjectAgentDefaultsSection from './ProjectAgentDefaultsSection.vue'
 
@@ -40,6 +41,9 @@ const localDirectory = ref('')
 const localName = ref('')
 const localColor = ref('')
 const localArchived = ref(false)
+// Absolute base directory for this project's git worktrees (edit mode, git
+// projects only). Empty = inherit the global defaultWorktreeDirectory.
+const localWorktreeDirectory = ref('')
 // Trust (edit mode): 'inherit' | 'trusted' | 'untrusted' + propagation flag.
 const localTrustChoice = ref('inherit')
 const localTrustPropagation = ref(false)
@@ -188,6 +192,7 @@ watch(
             localName.value = newProject.name || ''
             localColor.value = newProject.color || ''
             localArchived.value = newProject.archived || false
+            localWorktreeDirectory.value = newProject.worktree_directory || ''
             localTrustChoice.value = trustChoiceFromValue(newProject.trust)
             localTrustPropagation.value = newProject.trust_propagation ?? false
         } else {
@@ -196,6 +201,7 @@ watch(
             localName.value = ''
             localColor.value = ''
             localArchived.value = false
+            localWorktreeDirectory.value = ''
             localTrustChoice.value = 'inherit'
             localTrustPropagation.value = false
         }
@@ -266,6 +272,7 @@ function open() {
         localName.value = props.project.name || ''
         localColor.value = props.project.color || ''
         localArchived.value = props.project.archived || false
+        localWorktreeDirectory.value = props.project.worktree_directory || ''
         localTrustChoice.value = trustChoiceFromValue(props.project.trust)
         localTrustPropagation.value = props.project.trust_propagation ?? false
         agentDefaultsRef.value?.reset()
@@ -306,6 +313,32 @@ watch(localDirectory, () => {
  */
 function onNameInput(event) {
     localName.value = event.target.value
+}
+
+/**
+ * Handle worktree directory input change.
+ */
+function onWorktreeDirectoryInput(event) {
+    localWorktreeDirectory.value = event.target.value
+}
+
+// The global default worktree directory composed against this project's git
+// root (resolving any "../"). Empty when not in edit mode, the project is not
+// under git, or no global default is set — in which case the "use the default"
+// button is hidden.
+const composedGlobalWorktreeDir = computed(() => {
+    if (isCreateMode.value || !props.project?.git_root) return ''
+    return composeWorktreeDir(props.project.git_root, settingsStore.getDefaultWorktreeDirectory || '')
+})
+
+/**
+ * Fill the worktree directory field with the composed global default. The user
+ * stays free to edit it afterwards or type any other absolute path.
+ */
+function useGlobalWorktreeDir() {
+    if (composedGlobalWorktreeDir.value) {
+        localWorktreeDirectory.value = composedGlobalWorktreeDir.value
+    }
 }
 
 /**
@@ -457,6 +490,7 @@ async function handleSave() {
             name: trimmedName || null,
             color: localColor.value || null,
             archived: localArchived.value,
+            worktree_directory: localWorktreeDirectory.value.trim() || null,
             // Per-project agent defaults: only the keys the user actually changed
             // (the PUT handler updates a field only when it is present).
             ...(agentDefaultsRef.value?.getChangedFields?.() || {}),
@@ -580,6 +614,37 @@ defineExpose({
                         </div>
 
                         <wa-divider></wa-divider>
+
+                        <!-- Worktree directory (edit mode, git projects only) -->
+                        <div v-if="!isCreateMode && project?.git_root" class="form-group">
+                            <label class="form-label">Worktree directory</label>
+                            <div class="directory-input-row">
+                                <wa-input
+                                    :value.prop="localWorktreeDirectory"
+                                    @input="onWorktreeDirectoryInput"
+                                    placeholder="/absolute/path/to/worktrees"
+                                    class="directory-input"
+                                ></wa-input>
+                                <DirectoryPickerPopup v-model="localWorktreeDirectory" :fallback-path="project.git_root || ''" />
+                            </div>
+                            <div class="form-hint">
+                                Absolute base directory where new git worktrees of this project are created.
+                                Leave empty to use the global default.
+                            </div>
+                            <wa-button
+                                v-if="composedGlobalWorktreeDir"
+                                type="button"
+                                class="use-global-worktree-btn"
+                                variant="neutral"
+                                size="small"
+                                @click="useGlobalWorktreeDir"
+                            >
+                                <wa-icon slot="start" name="wand-magic-sparkles"></wa-icon>
+                                Use {{ composedGlobalWorktreeDir }}
+                            </wa-button>
+                        </div>
+
+                        <wa-divider v-if="!isCreateMode && project?.git_root"></wa-divider>
 
                         <!-- Trust (edit mode only) -->
                         <div v-if="!isCreateMode" class="form-group">
@@ -863,6 +928,19 @@ defineExpose({
 .directory-input {
     flex: 1;
     min-width: 0;
+}
+
+/* "Use the global default" shortcut under the worktree directory. */
+.use-global-worktree-btn {
+    margin-top: var(--wa-space-2xs);
+    align-self: flex-start;
+    max-width: 100%;
+}
+
+.use-global-worktree-btn::part(label) {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 /* -- Workspaces ------------------------------------------------------------- */

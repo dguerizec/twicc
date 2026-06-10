@@ -126,6 +126,9 @@ const activeSectionLabel = computed(() => {
 function selectSection(id) {
     activeSection.value = id
     mobileShowContent.value = true
+    if (id === 'global') {
+        worktreeDirInput.value = defaultWorktreeDirectory.value || ''
+    }
     if (id === 'notifications') {
         nextTick(() => notificationSettingsRef.value?.sync())
     }
@@ -352,6 +355,7 @@ const titleSystemPrompt = computed(() => store.getTitleSystemPrompt)
 const titleSystemPromptInput = ref('')
 const terminalUseTmux = computed(() => store.isTerminalUseTmux)
 const terminalTmuxConfigPath = computed(() => store.getTerminalTmuxConfigPath)
+const defaultWorktreeDirectory = computed(() => store.getDefaultWorktreeDirectory)
 const compactSessionList = computed(() => store.isCompactSessionList)
 const showMessageTimestamps = computed(() => store.areMessageTimestampsShown)
 const waTheme = computed(() => store.getWaTheme)
@@ -425,6 +429,11 @@ const tmuxConfigApplyIcon = computed(() => {
     if (tmuxConfigPathModified.value) return 'triangle-exclamation'
     return 'check'
 })
+
+// Default worktree directory — local input, committed to the store on Apply only.
+const worktreeDirInput = ref('')
+const worktreeDirModified = computed(() => worktreeDirInput.value.trim() !== (defaultWorktreeDirectory.value || ''))
+const worktreeDirApplyIcon = computed(() => (worktreeDirModified.value ? 'triangle-exclamation' : 'check'))
 
 // Check if the current prompt is the default
 const isDefaultPrompt = computed(() => titleSystemPrompt.value === SETTINGS_SCHEMA.titleSystemPrompt)
@@ -702,6 +711,16 @@ function onTmuxChange(event) {
     store.setTerminalUseTmux(event.target.checked)
 }
 
+function onWorktreeDirInputChange(event) {
+    worktreeDirInput.value = event.target.value
+}
+
+// Commit to the synced setting only when the user hits Apply (mirrors the tmux
+// config path control). Trimmed; empty means "no default".
+function onWorktreeDirApply() {
+    store.setDefaultWorktreeDirectory(worktreeDirInput.value.trim())
+}
+
 function onTmuxConfigPathInputChange(event) {
     tmuxConfigPathInput.value = event.target.value
     if (tmuxConfigValidation.value) tmuxConfigValidation.value = null
@@ -792,6 +811,9 @@ function resetTitleSystemPrompt() {
  */
 function onPopoverShow() {
     mobileShowContent.value = false
+    // Seed the worktree-directory input from the persisted value (Global is the
+    // default section, so selectSection('global') may not fire on open).
+    worktreeDirInput.value = defaultWorktreeDirectory.value || ''
     if (activeSection.value === 'notifications') {
         nextTick(() => notificationSettingsRef.value?.sync())
     }
@@ -947,14 +969,7 @@ function onChangelogClose() {
                             size="small"
                         ></wa-slider>
                     </div>
-                    <div class="setting-group">
-                        <label class="setting-group-label">Show costs</label>
-                        <wa-switch
-                            :checked="showCosts"
-                            @change="onShowCostsChange"
-                            size="small"
-                        >Enabled</wa-switch>
-                    </div>
+                    <wa-divider></wa-divider>
                     <div class="setting-group">
                         <label class="setting-group-label">Time display</label>
                         <wa-select
@@ -969,6 +984,41 @@ function onChangelogClose() {
                                 :value="option.value"
                             >{{ option.label }}</wa-option>
                         </wa-select>
+                    </div>
+                    <div class="setting-group">
+                        <label class="setting-group-label">Show costs</label>
+                        <wa-switch
+                            :checked="showCosts"
+                            @change="onShowCostsChange"
+                            size="small"
+                        >Enabled</wa-switch>
+                    </div>
+                    <wa-divider></wa-divider>
+                    <div class="setting-group">
+                        <label class="setting-group-label">Default worktree directory <wa-icon name="cloud" class="synced-icon"></wa-icon></label>
+                        <div class="worktree-dir-input-row">
+                            <span class="worktree-dir-prefix">&lt;git root&gt;/</span>
+                            <wa-input
+                                :value="worktreeDirInput"
+                                @input="onWorktreeDirInputChange"
+                                @keydown.enter="onWorktreeDirApply"
+                                placeholder=".worktrees"
+                                size="small"
+                            ></wa-input>
+                            <wa-button
+                                size="small"
+                                variant="neutral"
+                                @click="onWorktreeDirApply"
+                            >
+                                <wa-icon :name="worktreeDirApplyIcon" slot="start"></wa-icon>
+                                Apply
+                            </wa-button>
+                        </div>
+                        <span class="setting-group-hint">
+                            Base directory for new git worktrees, relative to each project's git root
+                            (<code>../</code> allowed). Pre-fills the path when creating a worktree.
+                            A project can override this with its own absolute directory. Leave empty for no default.
+                        </span>
                     </div>
                 </section>
 
@@ -2027,6 +2077,23 @@ wa-popover > wa-divider {
 
 .usage-file-validation {
     margin-top: var(--wa-space-2xs);
+}
+
+.worktree-dir-input-row {
+    display: flex;
+    gap: var(--wa-space-2xs);
+    align-items: center;
+
+    wa-input {
+        flex: 1;
+    }
+}
+
+.worktree-dir-prefix {
+    color: var(--wa-color-text-quiet);
+    font-family: var(--wa-font-family-code);
+    font-size: var(--wa-font-size-s);
+    white-space: nowrap;
 }
 
 .usage-mode-explanation .setting-group-hint {

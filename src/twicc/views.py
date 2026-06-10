@@ -436,6 +436,14 @@ async def project_detail(request, project_id):
             project.archived = archived
 
         update_fields = ["name", "color", "archived"]
+        if "worktree_directory" in data:
+            worktree_directory = data["worktree_directory"]
+            if worktree_directory is not None:
+                if not isinstance(worktree_directory, str):
+                    return JsonResponse({"error": "worktree_directory must be a string or null"}, status=400)
+                worktree_directory = worktree_directory.strip() or None
+            project.worktree_directory = worktree_directory
+            update_fields.append("worktree_directory")
         if "default_provider" in data:
             clean_provider, _unused, err = clean_project_agent_defaults(data["default_provider"], None)
             if err is not None:

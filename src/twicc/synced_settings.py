@@ -50,6 +50,11 @@ _GENERIC_SYNCED_SETTINGS_DEFAULTS: dict = {
         "User message:\n{text}"
     ),
     "autoUnpinOnArchive": True,
+    # Default base directory for new git worktrees, expressed RELATIVE to each
+    # project's git root (e.g. ".worktrees"). Empty = no default (the
+    # worktree-create dialog pre-fills nothing unless a project sets its own
+    # absolute worktree_directory). A project-level value always wins.
+    "defaultWorktreeDirectory": "",
     "terminalUseTmux": True,
     "terminalTmuxConfigPath": "",
     "waTheme": "default",
