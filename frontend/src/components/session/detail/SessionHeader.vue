@@ -485,6 +485,24 @@ defineExpose({
                     class="compact-provider-icon"
                 ></wa-icon>
 
+                <!-- Worktree marker: only when the session's project is a git worktree.
+                     Sits right before the title; its tooltip restates that the session
+                     runs in a worktree and embeds the same worktree badge shown elsewhere
+                     (parent repo + branch icon + worktree folder). -->
+                <wa-icon
+                    v-if="isProjectWorktree"
+                    :id="`session-header-${sessionId}-worktree`"
+                    auto-width
+                    name="code-branch"
+                    class="worktree-title-icon"
+                ></wa-icon>
+                <AppTooltip v-if="isProjectWorktree" :for="`session-header-${sessionId}-worktree`">
+                    <div class="worktree-title-tooltip">
+                        <span>This session runs in a git worktree</span>
+                        <WorktreeBadge :project-id="session.project_id" />
+                    </div>
+                </AppTooltip>
+
                 <h2 :id="`session-header-${sessionId}-title`">{{ displayName }}</h2>
                 <AppTooltip :for="`session-header-${sessionId}-title`">{{ displayName }}</AppTooltip>
 
@@ -894,6 +912,21 @@ body:not([data-display-mode="debug"]) .cost-breakdown-item {
     display: none;
     align-self: center;
     flex-shrink: 0;
+}
+
+/* Worktree marker icon before the title (only for worktree projects). */
+.worktree-title-icon {
+    align-self: center;
+    flex-shrink: 0;
+    color: var(--wa-color-text-quiet);
+    font-size: var(--wa-font-size-s);
+}
+
+/* Tooltip body: intro line stacked above the embedded worktree badge. */
+.worktree-title-tooltip {
+    display: flex;
+    flex-direction: column;
+    gap: var(--wa-space-2xs);
 }
 
 wa-divider {
