@@ -11,6 +11,7 @@ import { computed, watch, inject } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useCodeCommentsStore } from '../../../stores/codeComments'
 import { useDataStore } from '../../../stores/data'
+import { useSessionSelectionStore } from '../../../stores/sessionSelection'
 import { useSettingsStore } from '../../../stores/settings'
 import { formatDate } from '../../../utils/date'
 import { PROCESS_STATE, PROCESS_STATE_COLORS, PROCESS_STATE_NAMES, SESSION_TIME_FORMAT } from '../../../constants'
@@ -66,7 +67,7 @@ const props = defineProps({
     }
 })
 
-const emit = defineEmits(['select', 'drop-data'])
+const emit = defineEmits(['select', 'drop-data', 'selection-click'])
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Drag-hover: spring-loaded session switching (hover 1s while dragging to switch)
@@ -91,6 +92,12 @@ const router = useRouter()
 const store = useDataStore()
 const settingsStore = useSettingsStore()
 const codeCommentsStore = useCodeCommentsStore()
+const selectionStore = useSessionSelectionStore()
+
+/** Whether this item is selected in the multi-select mode. */
+const selected = computed(() =>
+    selectionStore.active && selectionStore.selectedIds.has(props.session.id)
+)
 
 const hasCodeComments = computed(() =>
     codeCommentsStore.countBySession(props.session.project_id, props.session.id) > 0
@@ -306,10 +313,44 @@ const sessionHref = computed(() => {
 })
 
 function handleClick(event) {
+    if (event.button !== 0) return // middle/right click: let the browser handle it
+    const modifier = event.ctrlKey || event.metaKey || event.shiftKey
+    if (selectionStore.active && modifier) {
+        // Multi-select mode: modifier clicks drive the selection instead of
+        // the browser's native open-in-new-tab/window behaviors.
+        event.preventDefault()
+        emit('selection-click', {
+            session: props.session,
+            shift: event.shiftKey,
+            ctrl: event.ctrlKey || event.metaKey,
+        })
+        return
+    }
+    // Auto-enter: Shift+clicking while a session is open reads as "select
+    // from the open session to here" — enter the mode with the open session
+    // as anchor and process the click as a range selection.
+    if (event.shiftKey && route.params.sessionId) {
+        event.preventDefault()
+        selectionStore.enter(route.params.sessionId)
+        emit('selection-click', {
+            session: props.session,
+            shift: true,
+            ctrl: event.ctrlKey || event.metaKey,
+        })
+        return
+    }
     // Let browser handle modifier-key clicks natively (open in new tab, etc.)
-    if (event.ctrlKey || event.metaKey || event.shiftKey || event.button !== 0) return
+    if (modifier) return
     event.preventDefault()
     emit('select', props.session)
+}
+
+function handleMousedown(event) {
+    // Shift+mousedown extends the browser text selection before our click
+    // handler runs; suppress it whenever the click will drive the selection
+    // (mode active, or about to auto-enter via Shift+click on an open session).
+    if (!event.shiftKey) return
+    if (selectionStore.active || route.params.sessionId) event.preventDefault()
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -372,7 +413,8 @@ function handleMenuSelect(event) {
             'session-item-wrapper--active': active,
             'session-item-wrapper--highlighted': highlighted,
             'session-item-wrapper--compact': compactView,
-            'session-item-wrapper--drag-pending': isDragPending
+            'session-item-wrapper--drag-pending': isDragPending,
+            'session-item-wrapper--selected': selected,
         }"
         @dragenter="onDragenter"
         @dragleave="onDragleave"
@@ -390,6 +432,7 @@ function handleMenuSelect(event) {
                 'session-item--highlighted': highlighted
             }"
             @click="handleClick"
+            @mousedown="handleMousedown"
         >
             <div class="session-name-row">
                 <!-- Compact mode: inline project color dot (instead of full ProjectBadge line) -->
@@ -631,6 +674,12 @@ function handleMenuSelect(event) {
 .session-item--highlighted::part(base) {
     outline: var(--wa-focus-ring);
     outline-offset: var(--wa-focus-ring-offset);
+}
+
+/* Multi-select mode: selected item */
+.session-item-wrapper--selected .session-item::part(base) {
+    background-color: var(--wa-color-brand-fill-quiet);
+    box-shadow: inset 0 0 0 1px var(--wa-color-brand-border-quiet);
 }
 
 .session-item::part(label) {

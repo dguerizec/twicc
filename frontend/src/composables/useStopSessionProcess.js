@@ -7,7 +7,9 @@
  * Exposes module-scoped reactive state (`pendingConfirmation`) consumed by a
  * single <StopProcessConfirmDialog> mounted globally in App.vue. Components
  * only call `stopSessionProcess(sessionId, { archive? })` and forget about
- * the crons / confirmation / flag mechanics.
+ * the crons / confirmation / flag mechanics. Batch flows (session list
+ * multi-select) provide their own aggregated confirmation and call
+ * `stopSessionProcessUnconfirmed` instead.
  */
 import { ref } from 'vue'
 import { useDataStore } from '../stores/data'
@@ -28,7 +30,7 @@ export const pendingConfirmation = ref(null)
  * because in practice the session list only renders real user sessions,
  * so the effective behavior is identical.
  */
-function isStoppable(processState) {
+export function isStoppable(processState) {
     return Boolean(
         processState
         && !processState.synthetic
@@ -52,15 +54,19 @@ function doKill(store, sessionId, { archive = false, projectId = null } = {}) {
 }
 
 /**
- * Stop the process of a session. Handles the active-crons confirmation,
- * the archive variant, and the "no process running" no-op.
+ * Stop the process of a session WITHOUT the active-crons confirmation.
+ *
+ * Used by batch flows (session list multi-select) that show ONE aggregated
+ * confirmation dialog for the whole batch and must not trigger the
+ * single-session `pendingConfirmation` dialog per session. Handles the
+ * archive variant and the "no process running" archive-only path.
  *
  * @param {string} sessionId
  * @param {Object} [options]
  * @param {boolean} [options.archive=false] - Also archive the session after stop.
  *   If `archive` is true and no process is running, archives the session outright.
  */
-export function stopSessionProcess(sessionId, { archive = false } = {}) {
+export function stopSessionProcessUnconfirmed(sessionId, { archive = false } = {}) {
     const store = useDataStore()
     const processState = store.getProcessState(sessionId)
     const session = store.getSession(sessionId)
@@ -74,19 +80,38 @@ export function stopSessionProcess(sessionId, { archive = false } = {}) {
         return
     }
 
-    // Same idiom as SessionHeader / SessionListItem so migrations are behavior-preserving.
-    const cronCount = processState.active_crons?.length || 0
+    doKill(store, sessionId, { archive, projectId })
+}
+
+/**
+ * Stop the process of a session. Handles the active-crons confirmation,
+ * the archive variant, and the "no process running" no-op.
+ *
+ * @param {string} sessionId
+ * @param {Object} [options]
+ * @param {boolean} [options.archive=false] - Also archive the session after stop.
+ *   If `archive` is true and no process is running, archives the session outright.
+ */
+export function stopSessionProcess(sessionId, { archive = false } = {}) {
+    const store = useDataStore()
+    const processState = store.getProcessState(sessionId)
+
+    // The isStoppable guard is load-bearing: the non-stoppable early-return now
+    // lives in the delegate, so without it a dead/synthetic state carrying stale
+    // active_crons would trigger a confirmation where the old code archived/no-oped.
+    const cronCount = isStoppable(processState) ? (processState.active_crons?.length || 0) : 0
     if (cronCount > 0) {
+        const session = store.getSession(sessionId)
         pendingConfirmation.value = {
             sessionId,
-            projectId,
+            projectId: session?.project_id ?? null,
             mode: archive ? 'archive' : 'stop',
             cronCount,
         }
         return
     }
 
-    doKill(store, sessionId, { archive, projectId })
+    stopSessionProcessUnconfirmed(sessionId, { archive })
 }
 
 /**
@@ -120,6 +145,8 @@ export function cancelPendingStop() {
 export function useStopSessionProcess() {
     return {
         stopSessionProcess,
+        stopSessionProcessUnconfirmed,
+        isStoppable,
         confirmPendingStop,
         cancelPendingStop,
         pendingConfirmation,

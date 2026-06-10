@@ -10,6 +10,7 @@ import { ref, computed, watch, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import { useDataStore, ALL_PROJECTS_ID } from '../../../stores/data'
 import { useWorkspacesStore } from '../../../stores/workspaces'
+import { useSessionSelectionStore } from '../../../stores/sessionSelection'
 import { isWorkspaceProjectId, extractWorkspaceId } from '../../../utils/workspaceIds'
 import { computeSidebarSessionBlocks } from '../../../utils/sidebarSessions'
 import VirtualScroller from '../../virtual-scroller/VirtualScroller.vue'
@@ -55,6 +56,7 @@ const props = defineProps({
 
 const store = useDataStore()
 const workspacesStore = useWorkspacesStore()
+const selectionStore = useSessionSelectionStore()
 const route = useRoute()
 
 // Natural scope project IDs for the current sidebar filter, passed down so
@@ -292,6 +294,13 @@ watch(() => props.sessionId, (newSessionId) => {
     }
 }, { flush: 'post', immediate: true })
 
+// Sessions that leave the visible list (filter change, archived away, …)
+// are dropped from the multi-select selection.
+watch(sessions, (list) => {
+    if (!selectionStore.active) return
+    selectionStore.prune(new Set(list.map(s => s.id)))
+})
+
 /**
  * Scroll the session list to make a session visible.
  * Retries a few times because the VirtualScroller may be recreated (via :key)
@@ -328,11 +337,56 @@ function scrollToSession(targetSessionId, attempt = 0) {
 const emit = defineEmits(['select', 'drop-data', 'focus-search'])
 
 function handleSelect(session) {
+    // In multi-select mode, opening a session also anchors it: a following
+    // Shift+click ranges from the last clicked item (file-manager semantics),
+    // even though the plain click doesn't touch the selection itself.
+    if (selectionStore.active) {
+        selectionStore.setAnchor(session.id)
+    }
     emit('select', session)
 }
 
 function handleDropData(data) {
     emit('drop-data', data)
+}
+
+/**
+ * Handle a modifier click forwarded by SessionListItem while the
+ * multi-select mode is active. Ranges follow the visual order of the
+ * filtered flat list (`sessions`), crossing block dividers.
+ *
+ * Semantics (standard Windows/macOS list selection):
+ * - Plain click (open)        → sets the anchor without touching the selection (see handleSelect)
+ * - Ctrl/Cmd+click            → toggle the item, it becomes the anchor
+ * - Shift+click               → select anchor→target range, REPLACING the selection
+ * - Ctrl/Cmd+Shift+click      → ADD the anchor→target range to the selection
+ * - Shift+click with no anchor → select the item alone and anchor it
+ */
+function handleSelectionClick({ session, shift, ctrl }) {
+    if (!shift) {
+        selectionStore.toggle(session.id)
+        return
+    }
+    const ids = sessions.value.map(s => s.id)
+    const targetIndex = ids.indexOf(session.id)
+    if (targetIndex === -1) return
+    const anchorIndex = selectionStore.anchorId ? ids.indexOf(selectionStore.anchorId) : -1
+    if (anchorIndex === -1) {
+        // No usable anchor (never set, or pruned out of the visible list):
+        // anchor the clicked item. Ctrl keeps the existing selection (adds),
+        // plain Shift replaces it.
+        selectionStore.setSelection(
+            ctrl ? [...selectionStore.selectedIds, session.id] : [session.id],
+            { anchor: session.id },
+        )
+        return
+    }
+    const [from, to] = anchorIndex <= targetIndex
+        ? [anchorIndex, targetIndex]
+        : [targetIndex, anchorIndex]
+    const range = ids.slice(from, to + 1)
+    if (ctrl) selectionStore.addSelection(range)
+    else selectionStore.setSelection(range)
 }
 
 /**
@@ -366,6 +420,14 @@ function getNavigationStartIndex() {
  * @returns {boolean} True if the event was handled (should preventDefault)
  */
 function handleKeyNavigation(event, { fromSearch = false } = {}) {
+    // Escape priority: exit multi-select mode > clear highlight > (parent:
+    // clear search). Checked before the empty-list early return so the mode
+    // can be exited even when the filter matches nothing.
+    if (event.key === 'Escape' && selectionStore.active) {
+        selectionStore.exit()
+        return true
+    }
+
     const count = sessions.value.length
     if (count === 0) return false
 
@@ -572,6 +634,7 @@ defineExpose({
                     :filter-project-id="filterProjectId"
                     @select="handleSelect"
                     @drop-data="handleDropData"
+                    @selection-click="handleSelectionClick"
                 />
                 <wa-divider
                     v-if="dividerAfterIds.has(session.id)"

@@ -12,10 +12,12 @@ import { useToast } from '../composables/useToast'
 import { useProviderActivation } from '../composables/useProviderActivation'
 import { ensureProjectTrust } from '../composables/useTrustGate'
 import { useTerminalCommandStore } from '../stores/terminalCommand'
+import { useSessionSelectionStore } from '../stores/sessionSelection'
 import { getRegisteredProviders, getProviderHelpers, getProviderStore, getProviderLabel, getProviderIcon } from '../providers'
 import { toWorkspaceProjectId } from '../utils/workspaceIds'
 import { splitProjectsByPriority } from '../utils/projectSort'
 import SessionList from '../components/session/list/SessionList.vue'
+import SessionSelectionBar from '../components/session/list/SessionSelectionBar.vue'
 import FetchErrorPanel from '../components/ui/FetchErrorPanel.vue'
 import SettingsPopover from '../components/app/SettingsPopover.vue'
 import CommandPaletteButton from '../components/app/CommandPaletteButton.vue'
@@ -64,6 +66,7 @@ const quotaButtonAppearance = computed(() =>
 // ═══════════════════════════════════════════════════════════════════════════
 
 const terminalCommandStore = useTerminalCommandStore()
+const selectionStore = useSessionSelectionStore()
 
 // Reactive set of providers currently waiting for an auth recheck round-trip
 // (so each "Check again" button can disable independently).
@@ -744,6 +747,10 @@ function handleSessionOptionsSelect(event) {
         settingsStore.setCompactSessionList(item.checked)
     } else if (value === 'show-active') {
         settingsStore.setShowActiveAcrossFilters(item.checked)
+    } else if (value === 'multi-select') {
+        // The open session (already visually marked) seeds the Shift+click anchor.
+        if (item.checked) selectionStore.enter(sessionId.value)
+        else selectionStore.exit()
     }
 }
 
@@ -1716,6 +1723,13 @@ function updateSidebarClosedClass(closed) {
                         >
                             Compact view
                         </wa-dropdown-item>
+                        <wa-dropdown-item
+                            type="checkbox"
+                            value="multi-select"
+                            :checked="selectionStore.active"
+                        >
+                            Multi-select mode
+                        </wa-dropdown-item>
                         <wa-divider></wa-divider>
                         <wa-dropdown-item
                             type="checkbox"
@@ -1757,6 +1771,13 @@ function updateSidebarClosedClass(closed) {
             <wa-divider></wa-divider>
 
             <div class="sidebar-sessions">
+                <!-- Multi-select mode: in-flow action bar above the list -->
+                <SessionSelectionBar
+                    v-if="selectionStore.active"
+                    :active-session-id="sessionId"
+                    @deselect-session="handleSessionSelect"
+                />
+
                 <!-- Error state (only for initial load failure) -->
                 <FetchErrorPanel
                     v-if="didSessionsFailToLoad && !areSessionsFetched"
