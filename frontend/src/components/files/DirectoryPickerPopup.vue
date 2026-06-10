@@ -7,12 +7,14 @@
  * /api/directory-tree/ endpoint (no project required).
  *
  * The popup starts at the directory specified by modelValue (if it exists),
- * falling back to $HOME. Clicking any directory both opens/closes it and
- * selects it (emits update:modelValue). The popup stays open until the
- * user closes it explicitly (click outside, Escape, or Browse button).
+ * falling back to fallbackPath (if provided), then $HOME. Clicking any
+ * directory both opens/closes it and selects it (emits update:modelValue).
+ * The popup stays open until the user closes it explicitly (click outside,
+ * Escape, or Browse button).
  *
  * Props:
  *   modelValue: current directory path (v-model)
+ *   fallbackPath: starting directory when modelValue is empty/unresolvable
  *
  * Events:
  *   update:modelValue: emitted when a directory is selected
@@ -24,6 +26,10 @@ import FileTreePanel from './FileTreePanel.vue'
 
 const props = defineProps({
     modelValue: {
+        type: String,
+        default: '',
+    },
+    fallbackPath: {
         type: String,
         default: '',
     },
@@ -122,8 +128,12 @@ async function openPopup() {
     error.value = null
 
     try {
-        // Try to resolve the starting path from the current modelValue
-        const resolved = await resolveStartPath(props.modelValue)
+        // Try to resolve the starting path from the current modelValue,
+        // then from the caller-provided fallback (e.g. a repo's git root)
+        let resolved = await resolveStartPath(props.modelValue)
+        if (!resolved && props.fallbackPath) {
+            resolved = await resolveStartPath(props.fallbackPath)
+        }
 
         if (resolved) {
             rootPath.value = resolved.path

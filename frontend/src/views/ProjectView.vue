@@ -24,6 +24,8 @@ import ProjectSelectorRow from '../components/project/ProjectSelectorRow.vue'
 import WorktreeSelectorRows from '../components/project/WorktreeSelectorRows.vue'
 import WorktreePickerRows from '../components/project/WorktreePickerRows.vue'
 import WorktreeBadge from '../components/project/WorktreeBadge.vue'
+import NewWorktreeButton from '../components/project/NewWorktreeButton.vue'
+import WorktreeCreateDialog from '../components/project/WorktreeCreateDialog.vue'
 import ProjectDetailPanel from '../components/project/ProjectDetailPanel.vue'
 import SessionRenameDialog from '../components/session/detail/SessionRenameDialog.vue'
 import ProjectEditDialog from '../components/project/ProjectEditDialog.vue'
@@ -977,6 +979,24 @@ function handleProjectCreated(project) {
     handleNewSession(project.id)
 }
 
+// ----- New worktree (button on git-project rows of the "New session" dropdowns) -----
+const worktreeCreateDialogRef = ref(null)
+const newSessionSplitDropdownRef = ref(null)
+const newSessionAllDropdownRef = ref(null)
+
+function openWorktreeDialog(project) {
+    // The button click is stopPropagation'd (no row selection), so the hosting
+    // dropdown stays open — close whichever one is visible before the dialog.
+    for (const dd of [newSessionSplitDropdownRef.value, newSessionAllDropdownRef.value]) {
+        if (dd) dd.open = false
+    }
+    worktreeCreateDialogRef.value?.open(project)
+}
+
+function handleWorktreeCreated(project) {
+    handleNewSession(project.id)
+}
+
 // Sidebar state persistence
 const SIDEBAR_STORAGE_KEY = 'twicc-sidebar-state'
 const DEFAULT_SIDEBAR_WIDTH = 300
@@ -1722,6 +1742,7 @@ function updateSidebarClosedClass(closed) {
 
                     <!-- Dropdown arrow: choose a different project -->
                     <wa-dropdown
+                        ref="newSessionSplitDropdownRef"
                         placement="top-end"
                         @wa-select="handleNewSessionSelect"
                     >
@@ -1745,8 +1766,9 @@ function updateSidebarClosedClass(closed) {
                             <wa-dropdown-item v-if="activeWsLabel" disabled class="section-header-item"><wa-icon name="layer-group" auto-width :style="activeWorkspace?.color ? { color: activeWorkspace.color } : null"></wa-icon> {{ activeWsLabel }}</wa-dropdown-item>
                         </template>
                         <template v-for="p in splitNamedProjects.prioritized" :key="p.id">
-                            <wa-dropdown-item :value="p.id">
+                            <wa-dropdown-item :value="p.id" class="project-picker-row">
                                 <ProjectBadge :project-id="p.id" />
+                                <NewWorktreeButton v-if="p.git_root" slot="details" @create="openWorktreeDialog(p)" />
                             </wa-dropdown-item>
                             <WorktreePickerRows
                                 :parent-id="p.id"
@@ -1766,10 +1788,11 @@ function updateSidebarClosedClass(closed) {
                                 </span>
                             </wa-dropdown-item>
                             <template v-else>
-                                <wa-dropdown-item :value="item.project.id">
+                                <wa-dropdown-item :value="item.project.id" class="project-picker-row">
                                     <span :style="{ paddingLeft: `${item.depth * 12}px` }">
                                         <ProjectBadge :project-id="item.project.id" />
                                     </span>
+                                    <NewWorktreeButton v-if="item.project.git_root" slot="details" @create="openWorktreeDialog(item.project)" />
                                 </wa-dropdown-item>
                                 <WorktreePickerRows
                                     :parent-id="item.project.id"
@@ -1787,8 +1810,9 @@ function updateSidebarClosedClass(closed) {
                         </template>
                         <wa-divider v-else-if="splitNamedProjects.others.length"></wa-divider>
                         <template v-for="p in splitNamedProjects.others" :key="p.id">
-                            <wa-dropdown-item :value="p.id">
+                            <wa-dropdown-item :value="p.id" class="project-picker-row">
                                 <ProjectBadge :project-id="p.id" />
+                                <NewWorktreeButton v-if="p.git_root" slot="details" @create="openWorktreeDialog(p)" />
                             </wa-dropdown-item>
                             <WorktreePickerRows
                                 :parent-id="p.id"
@@ -1811,10 +1835,11 @@ function updateSidebarClosedClass(closed) {
                                 </span>
                             </wa-dropdown-item>
                             <template v-else>
-                                <wa-dropdown-item :value="item.project.id">
+                                <wa-dropdown-item :value="item.project.id" class="project-picker-row">
                                     <span :style="{ paddingLeft: `${item.depth * 12}px` }">
                                         <ProjectBadge :project-id="item.project.id" />
                                     </span>
+                                    <NewWorktreeButton v-if="item.project.git_root" slot="details" @create="openWorktreeDialog(item.project)" />
                                 </wa-dropdown-item>
                                 <WorktreePickerRows
                                     :parent-id="item.project.id"
@@ -1836,6 +1861,7 @@ function updateSidebarClosedClass(closed) {
                 <wa-dropdown
                     v-if="isAllProjectsMode"
                     id="new-session-dropdown"
+                    ref="newSessionAllDropdownRef"
                     class="new-session-dropdown"
                     placement="top-end"
                     @wa-select="handleNewSessionSelect"
@@ -1862,8 +1888,9 @@ function updateSidebarClosedClass(closed) {
                         <wa-dropdown-item v-if="activeWsLabel" disabled class="section-header-item"><wa-icon name="layer-group" auto-width :style="activeWorkspace?.color ? { color: activeWorkspace.color } : null"></wa-icon> {{ activeWsLabel }}</wa-dropdown-item>
                     </template>
                     <template v-for="p in splitNamedProjects.prioritized" :key="p.id">
-                        <wa-dropdown-item :value="p.id">
+                        <wa-dropdown-item :value="p.id" class="project-picker-row">
                             <ProjectBadge :project-id="p.id" />
+                            <NewWorktreeButton v-if="p.git_root" slot="details" @create="openWorktreeDialog(p)" />
                         </wa-dropdown-item>
                         <WorktreePickerRows
                             :parent-id="p.id"
@@ -1883,10 +1910,11 @@ function updateSidebarClosedClass(closed) {
                             </span>
                         </wa-dropdown-item>
                         <template v-else>
-                            <wa-dropdown-item :value="item.project.id">
+                            <wa-dropdown-item :value="item.project.id" class="project-picker-row">
                                 <span :style="{ paddingLeft: `${item.depth * 12}px` }">
                                     <ProjectBadge :project-id="item.project.id" />
                                 </span>
+                                <NewWorktreeButton v-if="item.project.git_root" slot="details" @create="openWorktreeDialog(item.project)" />
                             </wa-dropdown-item>
                             <WorktreePickerRows
                                 :parent-id="item.project.id"
@@ -1904,8 +1932,9 @@ function updateSidebarClosedClass(closed) {
                     </template>
                     <wa-divider v-else-if="splitNamedProjects.others.length"></wa-divider>
                     <template v-for="p in splitNamedProjects.others" :key="p.id">
-                        <wa-dropdown-item :value="p.id">
+                        <wa-dropdown-item :value="p.id" class="project-picker-row">
                             <ProjectBadge :project-id="p.id" />
+                            <NewWorktreeButton v-if="p.git_root" slot="details" @create="openWorktreeDialog(p)" />
                         </wa-dropdown-item>
                         <WorktreePickerRows
                             :parent-id="p.id"
@@ -1928,10 +1957,11 @@ function updateSidebarClosedClass(closed) {
                             </span>
                         </wa-dropdown-item>
                         <template v-else>
-                            <wa-dropdown-item :value="item.project.id">
+                            <wa-dropdown-item :value="item.project.id" class="project-picker-row">
                                 <span :style="{ paddingLeft: `${item.depth * 12}px` }">
                                     <ProjectBadge :project-id="item.project.id" />
                                 </span>
+                                <NewWorktreeButton v-if="item.project.git_root" slot="details" @create="openWorktreeDialog(item.project)" />
                             </wa-dropdown-item>
                             <WorktreePickerRows
                                 :parent-id="item.project.id"
@@ -2166,6 +2196,7 @@ function updateSidebarClosedClass(closed) {
 
     <!-- Create project dialog (opened from "New session" dropdown) -->
     <ProjectEditDialog ref="createProjectDialogRef" @saved="handleProjectCreated" />
+    <WorktreeCreateDialog ref="worktreeCreateDialogRef" @created="handleWorktreeCreated" />
 
     <!-- Edit project dialog (opened from a selector row's "…" menu) -->
     <ProjectEditDialog ref="sidebarProjectEditRef" :project="sidebarEditingProject" />
@@ -2503,6 +2534,15 @@ wa-dropdown-item:hover .row-menu-trigger,
     padding: var(--wa-space-xl);
     color: var(--wa-color-text-quiet);
     font-size: var(--wa-font-size-s);
+}
+
+/* Project rows of the two "New session" dropdowns: reserve right padding for
+   the absolutely-positioned "new worktree" overlay button (NewWorktreeButton:
+   2.25rem wide, pinned 0.5em from the edge), so long project names never run
+   under it. Applied to every project row (git or not) so all rows keep the
+   same content width. */
+.project-picker-row {
+    padding-inline-end: calc(2.25rem + 0.5em + var(--wa-space-2xs));
 }
 
 /* Floating "New session" split button (single project mode) */

@@ -35,6 +35,10 @@ _DECORATION_EXCLUDE_SUFFIXES = ("/HEAD",)  # e.g. refs/remotes/origin/HEAD
 # Timeout for the git subprocess (seconds).
 _GIT_TIMEOUT = 10
 
+# Dedicated timeout for ``git worktree add`` (seconds): it materializes a full
+# checkout, which can take far longer than the read-only commands above.
+_WORKTREE_ADD_TIMEOUT = 60
+
 
 # ---------------------------------------------------------------------------
 # File list → tree builder
@@ -203,6 +207,68 @@ def get_branches(git_directory: str) -> list[str]:
         return branches
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return []
+
+
+def get_worktree_branches(git_directory: str) -> set[str]:
+    """Return the set of local branch names currently checked out in any
+    worktree of the repo (including the main checkout).
+
+    Detached-HEAD worktrees emit a ``detached`` line instead of a ``branch``
+    line in the porcelain output and are skipped.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "-C", git_directory, "worktree", "list", "--porcelain"],
+            capture_output=True,
+            text=True,
+            timeout=_GIT_TIMEOUT,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return set()
+    if result.returncode != 0:
+        return set()
+    prefix = "branch refs/heads/"
+    return {
+        line[len(prefix):]
+        for line in result.stdout.splitlines()
+        if line.startswith(prefix)
+    }
+
+
+def create_worktree(
+    repo_root: str,
+    path: str,
+    branch: str,
+    start_point: str | None = None,
+) -> tuple[bool, str]:
+    """Create a git worktree at ``path``.
+
+    If ``branch`` is an existing local branch it is checked out into the new
+    worktree (``start_point`` is ignored); otherwise the branch is created
+    with ``-b``, from ``start_point`` when given, else from the repo's HEAD.
+
+    Returns ``(True, "")`` on success, ``(False, <git error>)`` on failure.
+    Git's own stderr is relayed verbatim — git remains the authority on
+    git-level validation (branch already checked out, non-empty target, ...).
+    """
+    if branch in get_branches(repo_root):
+        args = ["git", "-C", repo_root, "worktree", "add", path, branch]
+    else:
+        args = ["git", "-C", repo_root, "worktree", "add", path, "-b", branch]
+        if start_point:
+            args.append(start_point)
+    try:
+        result = subprocess.run(
+            args,
+            capture_output=True,
+            text=True,
+            timeout=_WORKTREE_ADD_TIMEOUT,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
+        return False, str(exc)
+    if result.returncode != 0:
+        return False, result.stderr.strip() or "git worktree add failed"
+    return True, ""
 
 
 # ---------------------------------------------------------------------------

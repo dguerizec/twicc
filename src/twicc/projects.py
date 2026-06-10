@@ -207,6 +207,7 @@ def _create_or_get_project(
     name: str | None = None,
     color: str | None = None,
     stale: bool | None = None,
+    worktree_of_id: str | None = None,
 ) -> tuple[Project, bool]:
     """Pure DB operation: get-or-create a Project row.
 
@@ -223,6 +224,8 @@ def _create_or_get_project(
         defaults["color"] = color
     if stale is not None:
         defaults["stale"] = stale
+    if worktree_of_id is not None:
+        defaults["worktree_of_id"] = worktree_of_id
     project, created = Project.objects.get_or_create(id=project_id, defaults=defaults)
     if created and directory:
         # Mirror the cache update that ``ensure_project_directory`` would do
@@ -259,8 +262,13 @@ def register_project_db_only(
     name: str | None = None,
     color: str | None = None,
     stale: bool | None = None,
+    worktree_of_id: str | None = None,
 ) -> tuple[Project, bool, bool]:
     """DB-only half of project registration: get-or-create + directory adoption.
+
+    ``worktree_of_id`` sets the worktree link explicitly at creation; callers
+    that already know the parent (e.g. the worktree-creation endpoint) use it
+    instead of the filesystem detection of :func:`ensure_worktree_link`.
 
     Returns ``(project, was_just_created, adopted_directory)`` and runs **no**
     side effects — no ``project_added`` broadcast, no workspace auto-add — so
@@ -280,11 +288,16 @@ def register_project_db_only(
     """
     project, created = _create_or_get_project(
         project_id, directory=directory, name=name, color=color, stale=stale,
+        worktree_of_id=worktree_of_id,
     )
     adopted = False
     if not created and directory and not project.directory:
         _adopt_directory_sync(project, directory)
         adopted = True
+    if worktree_of_id is not None and not created and project.worktree_of_id != worktree_of_id:
+        # get_or_create defaults don't apply to a pre-existing row (lost race).
+        project.worktree_of_id = worktree_of_id
+        project.save(update_fields=["worktree_of"])
     return project, created, adopted
 
 
@@ -295,6 +308,7 @@ async def register_project(
     name: str | None = None,
     color: str | None = None,
     stale: bool | None = None,
+    worktree_of_id: str | None = None,
 ) -> tuple[Project, bool]:
     """Single entry point for Project creation. Returns ``(project, was_just_created)``.
 
@@ -321,12 +335,15 @@ async def register_project(
     project, created, adopted = await sync_to_async(register_project_db_only)(
         project_id,
         directory=directory, name=name, color=color, stale=stale,
+        worktree_of_id=worktree_of_id,
     )
     if created:
         await _broadcast_project_added(project)
     if (created or adopted) and project.directory:
         await auto_add_project_to_workspaces(project.id, project.directory)
-        await ensure_worktree_link(project.id, project.directory)
+        if worktree_of_id is None:
+            # Explicit link already set at creation — skip filesystem detection.
+            await ensure_worktree_link(project.id, project.directory)
 
     return project, created
 
