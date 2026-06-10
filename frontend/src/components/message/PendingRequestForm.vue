@@ -13,6 +13,7 @@ import { getProviderLabel, respondToPendingRequest } from '../../providers'
 import { useDataStore } from '../../stores/data'
 import { PROVIDER } from '../../constants'
 import AppTooltip from '../ui/AppTooltip.vue'
+import CollapsedBar from './CollapsedBar.vue'
 import ClaudePendingRequestBody from '../session/detail/items/claude_code/PendingRequestBody.vue'
 import CodexPendingRequestBody from '../session/detail/items/codex/PendingRequestBody.vue'
 
@@ -36,6 +37,10 @@ const props = defineProps({
         default: 1
     }
 })
+
+// `expand` fires when the request is opened (restored, or a new request takes the
+// slot), so the parent can reduce the composer (at most one footer panel expanded).
+const emit = defineEmits(['expand'])
 
 // Number of additional pending requests waiting behind this one (>= 0).
 const extraPendingCount = computed(() => Math.max(0, props.pendingCount - 1))
@@ -67,11 +72,24 @@ const minimizeToggleId = useId()
 const maximizeToggleId = useId()
 
 /**
- * Toggle between the minimized state and the normal size.
+ * Reduce the form to its single-line bar (the conversation/composer get the room).
+ * Independent of the composer: minimizing here never expands anything else.
  */
-function toggleMinimized() {
-    viewState.value = isMinimized.value ? 'normal' : 'minimized'
+function minimize() {
+    viewState.value = 'minimized'
 }
+
+/**
+ * Restore the form from its minimized bar back to the normal size.
+ * Opening the request reduces the composer (at most one expanded).
+ */
+function restore() {
+    viewState.value = 'normal'
+    emit('expand')
+}
+
+// Expose minimize so the parent can reduce this request when the composer opens.
+defineExpose({ minimize })
 
 /**
  * Toggle between the maximized state and the normal size.
@@ -82,6 +100,12 @@ function toggleMaximized() {
 
 // Request type for conditional rendering of the header icon/title
 const requestType = computed(() => props.pendingRequest.request_type)
+
+// Icon + title, shared by the normal header and the minimized bar.
+const headerIcon = computed(() => requestType.value === 'ask_user_question' ? 'circle-question' : 'shield-halved')
+const headerTitle = computed(() => requestType.value === 'ask_user_question'
+    ? `${providerLabel.value} needs your input`
+    : 'Tool approval requested')
 
 // Route to the appropriate body component based on provider
 const bodyComponent = computed(() => {
@@ -108,13 +132,19 @@ function onBodySubmit(payload) {
 
 // Reset isResponding when the pending request changes (e.g., a new one arrives
 // after the previous was resolved). The body owns its own internal state reset.
-watch(() => props.pendingRequest?.request_id, () => {
+watch(() => props.pendingRequest?.request_id, (newId, oldId) => {
     isResponding.value = false
     // A new request taking over the slot should never inherit the previous
     // request's minimized/maximized size — reset to the default so the new
     // request is always shown at normal size (and never hidden by a leftover
     // minimized state).
     viewState.value = 'normal'
+    // A new request replacing a previous one is "opened", so reduce the composer
+    // (keeps the at-most-one-expanded invariant when the composer was expanded
+    // while the prior request sat minimized). Guarded to a real id→id swap: the
+    // very first request collapses the composer via the sendingLocked transition,
+    // and a resolve to null must not collapse it (the composer expands then).
+    if (newId && oldId) emit('expand')
 })
 </script>
 
@@ -128,18 +158,40 @@ watch(() => props.pendingRequest?.request_id, () => {
     -->
     <wa-divider></wa-divider>
     <div class="pending-request-form" :class="{ maximized: isMaximized, minimized: isMinimized }">
-        <!-- Shared header. Title + icon vary on requestType. -->
-        <div class="pending-request-header">
+        <!-- Minimized: a single-line bar identical in look/behaviour to the message
+             input's collapsed bar (clickable anywhere + chevron to restore), shown
+             in place of the normal header's window controls. Independent of the
+             composer: the minimize/restore here never expands anything else. The
+             body stays mounted (hidden by CSS) so its in-progress state survives. -->
+        <CollapsedBar
+            v-if="isMinimized"
+            :icon="headerIcon"
+            :label="headerTitle"
+            expand-tooltip="Expand the request"
+            :sidebar-toggle-clearance="true"
+            @expand="restore"
+        >
+            <template #trailing>
+                <span
+                    v-if="extraPendingCount > 0"
+                    class="pending-count-badge"
+                    :id="`pending-count-${sessionId}`"
+                    role="status"
+                >+{{ extraPendingCount }} pending</span>
+                <AppTooltip
+                    v-if="extraPendingCount > 0"
+                    :for="`pending-count-${sessionId}`"
+                >{{ extraPendingCount }} more request{{ extraPendingCount > 1 ? 's' : '' }} waiting after this one</AppTooltip>
+            </template>
+        </CollapsedBar>
+        <!-- Normal header (window controls). Title + icon vary on requestType. -->
+        <div v-else class="pending-request-header">
             <wa-icon
-                :name="requestType === 'ask_user_question' ? 'circle-question' : 'shield-halved'"
+                :name="headerIcon"
                 class="pending-request-icon"
                 :class="{ 'question-icon': requestType === 'ask_user_question' }"
             ></wa-icon>
-            <span class="pending-request-title">
-                {{ requestType === 'ask_user_question'
-                    ? `${providerLabel} needs your input`
-                    : 'Tool approval requested' }}
-            </span>
+            <span class="pending-request-title">{{ headerTitle }}</span>
             <span
                 v-if="extraPendingCount > 0"
                 class="pending-count-badge"
@@ -156,11 +208,11 @@ watch(() => props.pendingRequest?.request_id, () => {
                 size="small"
                 class="size-toggle-btn"
                 :id="minimizeToggleId"
-                @click="toggleMinimized"
+                @click="minimize"
             >
-                <wa-icon :name="isMinimized ? 'window-restore' : 'window-minimize'" variant="classic"></wa-icon>
+                <wa-icon name="window-minimize" variant="classic"></wa-icon>
             </wa-button>
-            <AppTooltip :for="minimizeToggleId">{{ isMinimized ? 'Restore' : 'Minimize' }}</AppTooltip>
+            <AppTooltip :for="minimizeToggleId">Minimize</AppTooltip>
             <wa-button
                 variant="neutral"
                 appearance="plain"
@@ -174,7 +226,8 @@ watch(() => props.pendingRequest?.request_id, () => {
             <AppTooltip :for="maximizeToggleId">{{ isMaximized ? 'Restore' : 'Maximize' }}</AppTooltip>
         </div>
 
-        <!-- Provider-routed body -->
+        <!-- Provider-routed body. Always mounted (hidden by CSS while minimized) so
+             in-progress state survives a minimize/restore round-trip. -->
         <component
             :is="bodyComponent"
             v-if="bodyComponent"
@@ -204,19 +257,30 @@ wa-divider {
         max-height: unset;
         position: absolute;
         inset: 0;
+        /* On a main session the composer is always mounted in the same footer and
+           is itself positioned (position: relative), so it would otherwise paint
+           over the bottom of this overlay. Lift the maximized form above it (still
+           below the drag/drop overlay at z-index 100). */
+        z-index: 2;
     }
 }
 
-/* Minimized: collapse to the header only. The body is hidden (not unmounted), so
+/* Minimized: show only the collapsed bar. The body is hidden (not unmounted), so
    the per-provider body component keeps its in-progress state (deny reason draft,
-   question selections, edit mode) across a minimize/restore round-trip.
+   question selections, edit mode) across a minimize/restore round-trip. Strip the
+   card chrome so the bar reads exactly like the message input's collapsed bar.
    :deep() is required because the body root belongs to a child component: Vue's
    scoped CSS only forwards this component's scope id to a *single*-root child
    (Codex body), not to the Claude body's fragment root — so without :deep the
    rule would silently miss the Claude body. We drop the scope requirement on the
-   target and hide every direct child of the form that isn't the header (i.e. the
+   target and hide every direct child of the form that isn't the bar (i.e. the
    body root, whatever provider owns it). The `>` keeps it to direct children. */
-.pending-request-form.minimized > :deep(:not(.pending-request-header)) {
+.pending-request-form.minimized {
+    padding: 0;
+    gap: 0;
+    max-height: none;
+}
+.pending-request-form.minimized > :deep(:not(.collapsed-bar)) {
     display: none;
 }
 

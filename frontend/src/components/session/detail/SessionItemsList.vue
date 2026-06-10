@@ -117,6 +117,7 @@ const pendingLoadRange = ref(null)
 const dragOverType = ref(null)  // null | 'files' | 'text'
 let dragCounter = 0  // Track enter/leave events for nested elements
 const messageInputRef = ref(null)
+const pendingFormRef = ref(null)
 
 // Session data
 const session = computed(() => store.getSession(props.sessionId))
@@ -161,7 +162,9 @@ const pendingRequests = computed(() => store.getPendingRequests(props.sessionId)
 // The next request to show (oldest first — FIFO queue)
 const pendingRequest = computed(() => pendingRequests.value[0] || null)
 
-// Whether any pending request is active (hides MessageInput, shows PendingRequestForm)
+// Whether any pending request is active. On a main session the request and the
+// composer share the footer, each independently collapsible; on a subagent the
+// request stands alone (no composer).
 const hasPendingRequest = computed(() => pendingRequests.value.length > 0)
 
 /**
@@ -1504,23 +1507,36 @@ defineExpose({
                     </div>
                 </wa-callout>
             </div>
-            <!-- Pending request form (replaces MessageInput when the agent requests approval
-                 or asks a question). When multiple parallel requests are pending, the oldest
-                 is shown and a counter is displayed for the others. -->
-            <PendingRequestForm
-                v-else-if="hasPendingRequest"
-                :session-id="sessionId"
-                :pending-request="pendingRequest"
-                :pending-count="pendingRequests.length"
-            />
-            <!-- Message input (only for main sessions, not subagents, hidden during pending requests) -->
-            <MessageInput
-                ref="messageInputRef"
-                v-else-if="!parentSessionId && !hasPendingRequest"
-                :session-id="sessionId"
-                :project-id="projectId"
-                @needs-title="emit('needs-title')"
-            />
+            <template v-else>
+                <!-- Pending request form. When multiple parallel requests are pending, the
+                     oldest is shown and a counter is displayed for the others. On a main
+                     session it stacks above the composer; the two coordinate so at most one
+                     is expanded — opening the request reduces the composer (`@expand`),
+                     while reducing either leaves the other as-is. On a subagent it stands
+                     alone (no composer). -->
+                <PendingRequestForm
+                    v-if="hasPendingRequest"
+                    ref="pendingFormRef"
+                    :session-id="sessionId"
+                    :pending-request="pendingRequest"
+                    :pending-count="pendingRequests.length"
+                    @expand="messageInputRef?.collapse()"
+                />
+                <!-- Message input (main sessions only). Always rendered so nothing the user
+                     is preparing is lost when a request appears or resolves. While a request
+                     is pending it is sending-locked: usable for preparing a message, but
+                     sending is blocked until the request is answered. Opening it reduces the
+                     request (`@expand`); both can be reduced at once. -->
+                <MessageInput
+                    v-if="!parentSessionId"
+                    ref="messageInputRef"
+                    :session-id="sessionId"
+                    :project-id="projectId"
+                    :sending-locked="hasPendingRequest"
+                    @needs-title="emit('needs-title')"
+                    @expand="pendingFormRef?.minimize()"
+                />
+            </template>
         </div>
 
         <!-- Drop zone overlay -->

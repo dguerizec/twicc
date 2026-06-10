@@ -30,6 +30,7 @@ import MessageSnippetsBar from './MessageSnippetsBar.vue'
 import MessageSnippetsDialog from './MessageSnippetsDialog.vue'
 import AgentSettingsSummary from './AgentSettingsSummary.vue'
 import AgentSettingsPopover from './AgentSettingsPopover.vue'
+import CollapsedBar from './CollapsedBar.vue'
 import { useMessageSnippetsStore } from '../../stores/messageSnippets'
 import { useWorkspacesStore } from '../../stores/workspaces'
 import { getUnavailablePlaceholders, resolveSnippetText } from '../../utils/snippetPlaceholders'
@@ -42,6 +43,16 @@ const props = defineProps({
     projectId: {
         type: String,
         required: true
+    },
+    // When true, the composer shares the footer with a pending request: it stays
+    // fully usable for *preparing* a message but sending is blocked — the Send /
+    // Apply-settings button is hidden (replaced by a "Sending paused" indicator)
+    // and the keyboard send shortcut is disabled. It also gets a top separator and
+    // defaults to its collapsed bar when the request appears (independently
+    // re-expandable). The composer's collapse state stays fully its own otherwise.
+    sendingLocked: {
+        type: Boolean,
+        default: false
     }
 })
 
@@ -77,7 +88,9 @@ const {
 // Detect "All Projects" mode from route name
 const isAllProjectsMode = computed(() => route.name?.startsWith('projects-'))
 
-const emit = defineEmits(['needs-title'])
+// `expand` fires when the user expands the composer, so the parent can reduce the
+// pending request (at most one of the two footer panels is expanded at a time).
+const emit = defineEmits(['needs-title', 'expand'])
 
 // Get session data to check if it's a draft
 const session = computed(() => store.getSession(props.sessionId))
@@ -143,7 +156,7 @@ const isTall = ref(false)
 // Show the collapse affordance once the composer passes ~a third of the viewport.
 const COLLAPSE_THRESHOLD_RATIO = 0.33
 const collapseButtonId = useId()
-const restoreButtonId = useId()
+const sendingLockedId = useId()
 let collapseResizeObserver = null
 
 // Message snippets dialog
@@ -289,9 +302,11 @@ const placeholderText = computed(() => {
 
 // Restore draft message when session changes
 watch(() => props.sessionId, async (newId) => {
-    // Each session starts expanded: the collapse state is ephemeral and must not
-    // leak across sessions when this instance is reused (not remounted).
-    collapsed.value = false
+    // The collapse state is ephemeral and must not leak across sessions when this
+    // instance is reused (not remounted). Start collapsed when the new session
+    // already has a pending request (the request keeps the room), expanded
+    // otherwise.
+    collapsed.value = props.sendingLocked
     const draft = store.getDraftMessage(newId)
     messageText.value = draft?.message || ''
     // Adjust textarea height after the DOM updates with restored content
@@ -375,7 +390,8 @@ let _lastMeasuredWidth = null
 
 function adjustTextareaHeight() {
     // While collapsed the textarea is display:none — measuring it reads zeroes
-    // and pollutes the cache. expand() re-measures once it is visible again.
+    // and pollutes the cache. The `collapsed` watcher / expand() re-measure once
+    // it is visible again.
     if (collapsed.value) return
     const textarea = textareaRef.value?.shadowRoot?.querySelector('textarea')
     if (!textarea) return
@@ -448,6 +464,9 @@ const collapsedLabel = computed(() => {
     if (hasText && filesPart) return `Your message is waiting · ${filesPart}`
     if (hasText) return 'Your message is waiting'
     if (filesPart) return filesPart
+    // While sending is locked by a pending request, the bar is the entry point to
+    // prepare the next message, so name it for that intent.
+    if (props.sendingLocked) return 'Prepare a message'
     return 'Message input'
 })
 
@@ -465,11 +484,14 @@ function collapse() {
 /**
  * Restore the composer from the collapsed state, focusing the textarea with the
  * caret at the end (so the user can keep typing — handy after a comment was
- * appended while collapsed).
+ * appended while collapsed). Used for user-driven expands (bar click, restore
+ * button, command palette, focus shortcuts).
  */
 function expand() {
     if (!collapsed.value) return
     collapsed.value = false
+    // Opening the composer reduces the pending request (at most one expanded).
+    emit('expand')
     // The textarea was display:none while collapsed, so its measured height is
     // stale; re-measure once it is visible again.
     nextTick(() => {
@@ -483,6 +505,22 @@ function expand() {
         }
     })
 }
+
+// A pending request shares the footer with the composer: default the composer to
+// its collapsed bar when the request appears (so the request keeps the room) and
+// restore it when the request resolves. Each panel stays independently
+// collapsible — this only sets the default on the lock transition, without
+// stealing focus.
+watch(() => props.sendingLocked, (locked) => {
+    collapsed.value = locked
+})
+
+// Re-measure the textarea whenever it becomes visible again through a non-user
+// path (the sendingLocked default above, or a session switch); user-driven
+// expand() already re-measures in its own nextTick.
+watch(collapsed, (nowCollapsed) => {
+    if (!nowCollapsed) nextTick(adjustTextareaHeight)
+})
 
 // Recompute whether the composer is tall enough to be worth collapsing.
 // Only meaningful while expanded (see isTall comment): while collapsed the bar
@@ -1159,6 +1197,9 @@ function removeAllAttachments() {
  * the backend applies the settings via SDK methods without sending a query.
  */
 async function handleSend() {
+    // Sending is locked while a pending request shares the footer: the composer
+    // is for *preparing* only. Guards both the click and the keyboard shortcut.
+    if (props.sendingLocked) return
     const text = messageText.value.trim()
     const isSettingsOnlyUpdate = !text && hasSettingsChanged.value
 
@@ -1482,32 +1523,24 @@ function getSessionGateState() {
     }
 }
 
-defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSessionGateState })
+defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSessionGateState, collapse })
 </script>
 
 <template>
-    <div class="message-input" ref="rootRef" :class="{ collapsed }">
+    <div class="message-input" ref="rootRef" :class="{ collapsed, 'message-input--locked': sendingLocked }">
         <!-- Collapsed bar: single line shown in place of the whole composer.
-             Clickable anywhere to restore; the explicit button is the visual cue. -->
-        <div
+             Clickable anywhere to restore; the explicit button is the visual cue.
+             Keeps the .message-input-collapsed-bar class so the collapsed-state
+             "hide every other child" rule still excludes it. -->
+        <CollapsedBar
             v-if="collapsed"
             class="message-input-collapsed-bar"
-            @click="expand()"
-        >
-            <wa-icon :name="collapsedIcon" class="collapsed-icon"></wa-icon>
-            <span class="collapsed-label">{{ collapsedLabel }}</span>
-            <wa-button
-                variant="neutral"
-                appearance="outlined"
-                size="small"
-                class="collapsed-restore-btn"
-                :id="restoreButtonId"
-                @click.stop="expand()"
-            >
-                <wa-icon name="chevron-up"></wa-icon>
-            </wa-button>
-            <AppTooltip :for="restoreButtonId">Expand the message input</AppTooltip>
-        </div>
+            :icon="collapsedIcon"
+            :label="collapsedLabel"
+            expand-tooltip="Expand the message input"
+            :sidebar-toggle-clearance="true"
+            @expand="expand"
+        />
 
         <!-- Floating "collapse" button: only when the composer is tall enough to
              be worth collapsing, and not already collapsed. Absolutely positioned
@@ -1715,6 +1748,7 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
                     :is-draft="isDraft"
                     :message-text="messageText"
                     :button-label="buttonLabel"
+                    :sending-locked="sendingLocked"
                 />
 
                 <!-- Cancel button for draft sessions -->
@@ -1741,8 +1775,11 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
                     <wa-icon name="xmark" variant="classic"></wa-icon>
                     <span>Reset</span>
                 </wa-button>
-                <!-- Send / Update button: dynamically labeled based on state -->
+                <!-- Send / Update button: dynamically labeled based on state.
+                     Hidden while a pending request locks sending (replaced by the
+                     indicator below). -->
                 <wa-button
+                    v-if="!sendingLocked"
                     variant="brand"
                     :disabled="isDisabled || (!messageText.trim() && !(hasSettingsChanged && !isDraft))"
                     @click="handleSend"
@@ -1752,6 +1789,14 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
                     <wa-icon :name="buttonIcon" variant="classic"></wa-icon>
                     <span>{{ buttonLabel }}</span>
                 </wa-button>
+                <!-- Sending paused: shown in place of Send while a pending request
+                     occupies the footer. The composer stays fully usable for
+                     preparing the next message; it sends once the request is answered. -->
+                <div v-else class="sending-locked-indicator" :id="sendingLockedId">
+                    <wa-icon name="lock" variant="classic"></wa-icon>
+                    <span>Sending paused</span>
+                </div>
+                <AppTooltip v-if="sendingLocked" :for="sendingLockedId">Answer the pending request to send</AppTooltip>
             </div>
         </div>
     </div>
@@ -1785,49 +1830,17 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
     display: none;
 }
 
-.message-input-collapsed-bar {
-    display: flex;
-    align-items: center;
-    gap: var(--wa-space-xs);
-    padding: var(--wa-space-xs);
-    border-radius: var(--wa-border-radius-m);
-    color: var(--wa-color-text-quiet);
-    cursor: pointer;
-    /* On mobile the sidebar toggle button always overlaps the bottom-left of the
-       message input; mirror the toolbar's offset so the label clears it. */
-    @media (width < 640px) {
-        padding-block: var(--wa-space-s);
-        padding-left: 4rem;
-    }
+/* When sharing the footer with a pending request, a hairline separates the
+   composer from the request above it (the request itself sits under its own
+   wa-divider below the conversation). Mirrors the collapsed-state border so the
+   separator is present whether the composer is a bar or expanded. */
+.message-input.message-input--locked {
+    border-top: var(--divider-size) solid var(--wa-color-surface-border);
 }
-.message-input-collapsed-bar:hover {
-    background: var(--wa-color-neutral-fill-quiet);
-}
-/* When the sidebar is collapsed, the toggle button overlaps the bottom-left of
-   the message input — same handling as .message-input-toolbar. */
-body.sidebar-closed .message-input-collapsed-bar {
-    @media (width >= 640px) {
-        padding-block: var(--wa-space-s);
-        padding-left: 4rem;
-    }
-}
-.collapsed-icon {
-    flex-shrink: 0;
-    font-size: var(--wa-font-size-s);
-    color: var(--wa-color-warning-60);
-}
-.collapsed-label {
-    flex: 1;
-    min-width: 0;
-    font-size: var(--wa-font-size-s);
-    font-weight: var(--wa-font-weight-bold);
-    color: var(--wa-color-warning-60);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-.collapsed-restore-btn {
-    flex-shrink: 0;
+/* Breathing room below the separator when the composer is expanded under the
+   request. (Collapsed, the bar owns its own padding.) */
+.message-input.message-input--locked:not(.collapsed) {
+    padding-top: var(--wa-space-s);
 }
 
 .collapse-toggle-btn {
@@ -1914,6 +1927,25 @@ body.sidebar-closed .message-input-toolbar {
         & > span {
             display: inline-block;
         }
+    }
+}
+
+/* "Sending paused" indicator shown in place of the Send button while a pending
+   request locks sending. Non-interactive; sized to sit comfortably in the
+   actions row next to the (still-active) Reset button. */
+.sending-locked-indicator {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: var(--wa-space-2xs);
+    padding-inline: var(--wa-space-xs);
+    color: var(--wa-color-text-quiet);
+    font-size: var(--wa-font-size-s);
+    font-weight: 500;
+    white-space: nowrap;
+
+    wa-icon {
+        font-size: var(--wa-font-size-s);
     }
 }
 

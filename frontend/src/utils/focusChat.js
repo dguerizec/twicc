@@ -17,7 +17,10 @@
  */
 export function getPendingRequestPrimaryTarget() {
     const form = document.querySelector('.pending-request-form')
-    if (!form) return null
+    // No form, or it is minimized to its header (its body — and therefore every
+    // actionable control — is display:none). In the minimized case the user has
+    // expanded the composer alongside it, so it is no longer the primary target.
+    if (!form || form.classList.contains('minimized')) return null
     if (form.querySelector('.questions-container')) {
         return form.querySelector('.option-card')
     }
@@ -39,16 +42,20 @@ export function getPendingRequestPrimaryTarget() {
  * trying until focus actually sticks, or the retry budget runs out (~1.5s).
  */
 export function focusChatPrimary(retries = 30) {
-    // A collapsed message input keeps its textarea hidden (display:none), which
-    // can't take focus. Ask the composer to expand first — it re-shows and
-    // focuses the textarea, and the retry below makes the focus stick. No-op when
-    // a pending request is shown (the composer isn't mounted) or already expanded.
-    document
-        .querySelector('.message-input.collapsed')
-        ?.dispatchEvent(new CustomEvent('twicc:expand-composer'))
+    // When a pending request is the primary target, focus it as-is — do NOT touch
+    // the composer (on a main session it now sits collapsed alongside the request;
+    // auto-expanding it here would wrongly minimize the request the user must
+    // answer). Only when there is no request target is the composer primary: a
+    // collapsed textarea is display:none and can't take focus, so ask it to expand
+    // first (the retry below makes the focus stick).
+    const formTarget = getPendingRequestPrimaryTarget()
+    if (!formTarget) {
+        document
+            .querySelector('.message-input.collapsed')
+            ?.dispatchEvent(new CustomEvent('twicc:expand-composer'))
+    }
 
-    const target = getPendingRequestPrimaryTarget()
-        || document.querySelector('.message-input wa-textarea')
+    const target = formTarget || document.querySelector('.message-input wa-textarea')
     if (!target) {
         if (retries > 0) setTimeout(() => focusChatPrimary(retries - 1), 50)
         return

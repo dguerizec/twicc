@@ -990,10 +990,11 @@ function registerSessionCommands() {
             label: 'Collapse Message Input',
             icon: 'chevron-down',
             category: 'session',
-            // Only when a message input is actually shown (main session, no
-            // pending request, not stale/disabled) and currently expanded. We
-            // probe the DOM because the collapsed state is local to MessageInput;
-            // when() is re-evaluated each time the palette opens.
+            // Only when a message input is actually shown (main session, not
+            // stale/disabled) and currently expanded — including while it sits
+            // next to a pending request (the composer collapses independently,
+            // leaving the request as-is). We probe the DOM because the collapsed
+            // state is local to MessageInput; when() is re-evaluated each palette open.
             when: () => !!document.querySelector('.message-input:not(.collapsed)'),
             action: () => document
                 .querySelector('.message-input:not(.collapsed)')
@@ -1005,11 +1006,15 @@ function registerSessionCommands() {
             icon: 'chevron-up',
             category: 'session',
             when: () => !!document.querySelector('.message-input.collapsed'),
-            // focusChatPrimary expands the collapsed composer (via the same
-            // twicc:expand-composer event) AND lands the focus, retrying past the
-            // palette-close re-blur. Safe: a collapsed composer never coexists
-            // with a pending request, so there's no other focus target.
-            action: () => focusChatPrimary(),
+            // Expand the composer directly (the same twicc:expand-composer event).
+            // We can't route through focusChatPrimary anymore: a collapsed composer
+            // now coexists with a pending request, and focusChatPrimary would focus
+            // the request instead of expanding the composer. MessageInput focuses
+            // the textarea itself once expanded, and expanding it reduces the
+            // request (at most one of the two is expanded at a time).
+            action: () => document
+                .querySelector('.message-input.collapsed')
+                ?.dispatchEvent(new CustomEvent('twicc:expand-composer')),
         },
         ...buildSessionSettingsCommands(),
     ])

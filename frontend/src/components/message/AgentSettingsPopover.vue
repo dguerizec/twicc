@@ -23,6 +23,10 @@ const props = defineProps({
     isDraft: { type: Boolean, default: false },
     messageText: { type: String, default: '' },
     buttonLabel: { type: String, default: 'Send' },
+    // True while a pending request locks sending: the Send/Apply button is hidden,
+    // so the "click X to apply" hint is replaced with one explaining the changes
+    // will apply once the request is answered.
+    sendingLocked: { type: Boolean, default: false },
 })
 
 const {
@@ -480,7 +484,8 @@ onBeforeUnmount(() => {
             </div>
             <wa-callout v-if="!isDraft && hasDropdownsChanged" variant="brand" class="settings-info-callout">
                 <wa-icon name="circle-info" slot="icon"></wa-icon>
-                Click "{{ buttonLabel }}" to apply your changes.
+                <template v-if="sendingLocked">Your changes are saved and will apply once you answer the pending request.</template>
+                <template v-else>Click "{{ buttonLabel }}" to apply your changes.</template>
             </wa-callout>
             <wa-callout v-if="startupSettingsWarning" variant="warning" class="startup-warning-callout">
                 <wa-icon name="triangle-exclamation" slot="icon"></wa-icon>
