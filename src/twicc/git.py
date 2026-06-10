@@ -8,6 +8,7 @@ import base64
 import os
 import re
 import subprocess
+from typing import NamedTuple
 
 from twicc.file_content import IMAGE_EXTENSIONS, MAX_FILE_SIZE
 
@@ -209,12 +210,34 @@ def get_branches(git_directory: str) -> list[str]:
         return []
 
 
-def get_worktree_branches(git_directory: str) -> set[str]:
-    """Return the set of local branch names currently checked out in any
-    worktree of the repo (including the main checkout).
+class WorktreeInfo(NamedTuple):
+    """One entry from ``git worktree list --porcelain``.
 
-    Detached-HEAD worktrees emit a ``detached`` line instead of a ``branch``
-    line in the porcelain output and are skipped.
+    ``path`` is the absolute worktree directory as git reports it. ``branch``
+    is the short branch name checked out there, or ``None`` for a detached
+    HEAD or a bare main repo. ``head`` is the commit sha (``None`` only for a
+    bare entry). The remaining flags mirror the porcelain attributes; their
+    reason strings are ``""`` when git emits the flag without a reason.
+    """
+
+    path: str
+    head: str | None
+    branch: str | None
+    is_bare: bool
+    is_detached: bool
+    is_locked: bool
+    locked_reason: str
+    is_prunable: bool
+    prunable_reason: str
+
+
+def list_worktrees(git_directory: str) -> list[WorktreeInfo]:
+    """Return every worktree of the repository containing ``git_directory``.
+
+    Parses the full ``git worktree list --porcelain`` output — which works
+    from the main checkout or from any linked worktree, and always lists the
+    main checkout first. Returns ``[]`` if git is unavailable or the command
+    fails. Entries are blank-line separated in the porcelain format.
     """
     try:
         result = subprocess.run(
@@ -224,15 +247,62 @@ def get_worktree_branches(git_directory: str) -> set[str]:
             timeout=_GIT_TIMEOUT,
         )
     except (subprocess.TimeoutExpired, FileNotFoundError):
-        return set()
+        return []
     if result.returncode != 0:
-        return set()
-    prefix = "branch refs/heads/"
-    return {
-        line[len(prefix):]
-        for line in result.stdout.splitlines()
-        if line.startswith(prefix)
-    }
+        return []
+
+    worktrees: list[WorktreeInfo] = []
+    cur: dict | None = None
+
+    def flush() -> None:
+        if cur is None or "path" not in cur:
+            return
+        worktrees.append(WorktreeInfo(
+            path=cur["path"],
+            head=cur.get("head"),
+            branch=cur.get("branch"),
+            is_bare=cur.get("bare", False),
+            is_detached=cur.get("detached", False),
+            is_locked=cur.get("locked", False),
+            locked_reason=cur.get("locked_reason", ""),
+            is_prunable=cur.get("prunable", False),
+            prunable_reason=cur.get("prunable_reason", ""),
+        ))
+
+    for line in result.stdout.splitlines():
+        if not line:
+            flush()
+            cur = None
+            continue
+        if cur is None:
+            cur = {}
+        if line.startswith("worktree "):
+            cur["path"] = line[len("worktree "):]
+        elif line.startswith("HEAD "):
+            cur["head"] = line[len("HEAD "):]
+        elif line.startswith("branch refs/heads/"):
+            cur["branch"] = line[len("branch refs/heads/"):]
+        elif line == "bare":
+            cur["bare"] = True
+        elif line == "detached":
+            cur["detached"] = True
+        elif line == "locked" or line.startswith("locked "):
+            cur["locked"] = True
+            cur["locked_reason"] = line[len("locked "):] if line.startswith("locked ") else ""
+        elif line == "prunable" or line.startswith("prunable "):
+            cur["prunable"] = True
+            cur["prunable_reason"] = line[len("prunable "):] if line.startswith("prunable ") else ""
+    flush()
+    return worktrees
+
+
+def get_worktree_branches(git_directory: str) -> set[str]:
+    """Return the set of local branch names currently checked out in any
+    worktree of the repo (including the main checkout).
+
+    Detached-HEAD (and bare) worktrees have no branch and are skipped.
+    """
+    return {wt.branch for wt in list_worktrees(git_directory) if wt.branch}
 
 
 def create_worktree(

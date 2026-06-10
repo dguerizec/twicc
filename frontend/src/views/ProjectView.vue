@@ -26,8 +26,8 @@ import ProjectSelectorRow from '../components/project/ProjectSelectorRow.vue'
 import WorktreeSelectorRows from '../components/project/WorktreeSelectorRows.vue'
 import WorktreePickerRows from '../components/project/WorktreePickerRows.vue'
 import WorktreeBadge from '../components/project/WorktreeBadge.vue'
-import NewWorktreeButton from '../components/project/NewWorktreeButton.vue'
-import WorktreeCreateDialog from '../components/project/WorktreeCreateDialog.vue'
+import WorktreeButton from '../components/project/WorktreeButton.vue'
+import WorktreeDialog from '../components/project/WorktreeDialog.vue'
 import ProjectDetailPanel from '../components/project/ProjectDetailPanel.vue'
 import SessionRenameDialog from '../components/session/detail/SessionRenameDialog.vue'
 import ProjectEditDialog from '../components/project/ProjectEditDialog.vue'
@@ -1038,7 +1038,7 @@ function handleProjectCreated(project) {
 }
 
 // ----- New worktree (button on git-project rows of the "New session" dropdowns) -----
-const worktreeCreateDialogRef = ref(null)
+const worktreeDialogRef = ref(null)
 const newSessionSplitDropdownRef = ref(null)
 const newSessionAllDropdownRef = ref(null)
 
@@ -1048,10 +1048,10 @@ function openWorktreeDialog(project) {
     for (const dd of [newSessionSplitDropdownRef.value, newSessionAllDropdownRef.value]) {
         if (dd) dd.open = false
     }
-    worktreeCreateDialogRef.value?.open(project)
+    worktreeDialogRef.value?.open(project)
 }
 
-function handleWorktreeCreated(project) {
+function handleWorktreeResolved(project) {
     handleNewSession(project.id)
 }
 
@@ -1858,7 +1858,7 @@ function updateSidebarClosedClass(closed) {
                         <template v-for="p in splitNamedProjects.prioritized" :key="p.id">
                             <wa-dropdown-item :value="p.id" class="project-picker-row">
                                 <ProjectBadge :project-id="p.id" />
-                                <NewWorktreeButton v-if="p.git_root" slot="details" @create="openWorktreeDialog(p)" />
+                                <WorktreeButton v-if="p.git_root" slot="details" @create="openWorktreeDialog(p)" />
                             </wa-dropdown-item>
                             <WorktreePickerRows
                                 :parent-id="p.id"
@@ -1882,7 +1882,7 @@ function updateSidebarClosedClass(closed) {
                                     <span :style="{ paddingLeft: `${item.depth * 12}px` }">
                                         <ProjectBadge :project-id="item.project.id" />
                                     </span>
-                                    <NewWorktreeButton v-if="item.project.git_root" slot="details" @create="openWorktreeDialog(item.project)" />
+                                    <WorktreeButton v-if="item.project.git_root" slot="details" @create="openWorktreeDialog(item.project)" />
                                 </wa-dropdown-item>
                                 <WorktreePickerRows
                                     :parent-id="item.project.id"
@@ -1902,7 +1902,7 @@ function updateSidebarClosedClass(closed) {
                         <template v-for="p in splitNamedProjects.others" :key="p.id">
                             <wa-dropdown-item :value="p.id" class="project-picker-row">
                                 <ProjectBadge :project-id="p.id" />
-                                <NewWorktreeButton v-if="p.git_root" slot="details" @create="openWorktreeDialog(p)" />
+                                <WorktreeButton v-if="p.git_root" slot="details" @create="openWorktreeDialog(p)" />
                             </wa-dropdown-item>
                             <WorktreePickerRows
                                 :parent-id="p.id"
@@ -1929,7 +1929,7 @@ function updateSidebarClosedClass(closed) {
                                     <span :style="{ paddingLeft: `${item.depth * 12}px` }">
                                         <ProjectBadge :project-id="item.project.id" />
                                     </span>
-                                    <NewWorktreeButton v-if="item.project.git_root" slot="details" @create="openWorktreeDialog(item.project)" />
+                                    <WorktreeButton v-if="item.project.git_root" slot="details" @create="openWorktreeDialog(item.project)" />
                                 </wa-dropdown-item>
                                 <WorktreePickerRows
                                     :parent-id="item.project.id"
@@ -1980,7 +1980,7 @@ function updateSidebarClosedClass(closed) {
                     <template v-for="p in splitNamedProjects.prioritized" :key="p.id">
                         <wa-dropdown-item :value="p.id" class="project-picker-row">
                             <ProjectBadge :project-id="p.id" />
-                            <NewWorktreeButton v-if="p.git_root" slot="details" @create="openWorktreeDialog(p)" />
+                            <WorktreeButton v-if="p.git_root" slot="details" @create="openWorktreeDialog(p)" />
                         </wa-dropdown-item>
                         <WorktreePickerRows
                             :parent-id="p.id"
@@ -2004,7 +2004,7 @@ function updateSidebarClosedClass(closed) {
                                 <span :style="{ paddingLeft: `${item.depth * 12}px` }">
                                     <ProjectBadge :project-id="item.project.id" />
                                 </span>
-                                <NewWorktreeButton v-if="item.project.git_root" slot="details" @create="openWorktreeDialog(item.project)" />
+                                <WorktreeButton v-if="item.project.git_root" slot="details" @create="openWorktreeDialog(item.project)" />
                             </wa-dropdown-item>
                             <WorktreePickerRows
                                 :parent-id="item.project.id"
@@ -2024,7 +2024,7 @@ function updateSidebarClosedClass(closed) {
                     <template v-for="p in splitNamedProjects.others" :key="p.id">
                         <wa-dropdown-item :value="p.id" class="project-picker-row">
                             <ProjectBadge :project-id="p.id" />
-                            <NewWorktreeButton v-if="p.git_root" slot="details" @create="openWorktreeDialog(p)" />
+                            <WorktreeButton v-if="p.git_root" slot="details" @create="openWorktreeDialog(p)" />
                         </wa-dropdown-item>
                         <WorktreePickerRows
                             :parent-id="p.id"
@@ -2051,7 +2051,7 @@ function updateSidebarClosedClass(closed) {
                                 <span :style="{ paddingLeft: `${item.depth * 12}px` }">
                                     <ProjectBadge :project-id="item.project.id" />
                                 </span>
-                                <NewWorktreeButton v-if="item.project.git_root" slot="details" @create="openWorktreeDialog(item.project)" />
+                                <WorktreeButton v-if="item.project.git_root" slot="details" @create="openWorktreeDialog(item.project)" />
                             </wa-dropdown-item>
                             <WorktreePickerRows
                                 :parent-id="item.project.id"
@@ -2286,7 +2286,7 @@ function updateSidebarClosedClass(closed) {
 
     <!-- Create project dialog (opened from "New session" dropdown) -->
     <ProjectEditDialog ref="createProjectDialogRef" @saved="handleProjectCreated" />
-    <WorktreeCreateDialog ref="worktreeCreateDialogRef" @created="handleWorktreeCreated" />
+    <WorktreeDialog ref="worktreeDialogRef" @resolved="handleWorktreeResolved" />
 
     <!-- Edit project dialog (opened from a selector row's "…" menu) -->
     <ProjectEditDialog ref="sidebarProjectEditRef" :project="sidebarEditingProject" />
@@ -2634,7 +2634,7 @@ wa-dropdown-item:hover .row-menu-trigger,
 }
 
 /* Project rows of the two "New session" dropdowns: reserve right padding for
-   the absolutely-positioned "new worktree" overlay button (NewWorktreeButton:
+   the absolutely-positioned "new worktree" overlay button (WorktreeButton:
    2.25rem wide, pinned 0.5em from the edge), so long project names never run
    under it. Applied to every project row (git or not) so all rows keep the
    same content width. */

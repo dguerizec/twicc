@@ -47,11 +47,11 @@ $TWICC create-session [OPTIONS] '<PROMPT>'
 
 ### Worktree
 
-Create the session in a brand-new git worktree of `--project`, in one command — the CLI counterpart of the UI's "new worktree" button:
+Land the session in a git worktree of `--project`, in one command — the CLI counterpart of the UI's "new worktree" button. Either create a new worktree or adopt one that already exists on disk:
 
 - `--worktree-branch BRANCH` — create the session in a NEW git worktree of `--project` on `BRANCH` (an existing local branch is checked out; a new one is created with `-b`). `--project` then names the **source repository**; the session lands in the worktree, which is registered as its own project linked back to the source (`worktree_of`) and inherits the source's agent defaults and trust. Requires `--worktree-path`.
-- `--worktree-path PATH` — absolute path of the new worktree's directory. **Required** with `--worktree-branch`. Git rejects a non-empty target.
-- `--worktree-start-from REF` — branch/revision the new branch starts from (only when `--worktree-branch` does not yet exist). Defaults to the source repo's current HEAD. Ignored for an existing-branch checkout.
+- `--worktree-path PATH` — absolute path of the git worktree's directory. **With `--worktree-branch`**: where the NEW worktree is created (git rejects a non-empty target). **Without `--worktree-branch`**: an EXISTING worktree of `--project` to **adopt** — registered as its own project linked via `worktree_of` (no `git worktree add`), so the session opens in it. Adoption is idempotent (an already-registered worktree is reused). The path must be a real linked worktree of `--project`, not an arbitrary directory.
+- `--worktree-start-from REF` — branch/revision the new branch starts from (only when `--worktree-branch` does not yet exist). Defaults to the source repo's current HEAD. Ignored for an existing-branch checkout. Only valid with `--worktree-branch`.
 
 The settings flags below still resolve against `--project` (the source) — the worktree inherits from it, so the effective values match a UI draft opened in the worktree.
 
@@ -118,7 +118,7 @@ By default (Claude Code), questions from the agent surface as an interactive UI 
 - `annotation_path_conflict` — an annotation path conflicts with an existing scalar or object.
 - `annotation_non_scalar` — use `--annotations-file` for list or object values.
 - `invalid_annotations_file` — file missing, invalid JSON, or root value is not an object.
-- `missing_worktree_branch` — `--worktree-path` / `--worktree-start-from` given without `--worktree-branch`.
+- `missing_worktree_branch` — `--worktree-start-from` given without `--worktree-branch` (start-from only shapes new-branch creation).
 - `missing_worktree_path` — `--worktree-branch` given without `--worktree-path`.
 - `invalid_worktree_path` — `--worktree-path` must be an absolute path.
 
@@ -128,8 +128,9 @@ By default (Claude Code), questions from the agent surface as an interactive UI 
 - `project_not_found` / `project_no_directory` — `--project` didn't resolve.
 - `invalid_annotations` — annotations must be a JSON object.
 - `manager_busy` — transient; retry.
-- `not_git_repo` — `--worktree-branch` used but `--project` is not a git repository.
-- `project_already_exists` — a project is already registered for `--worktree-path`.
+- `not_git_repo` — a worktree flag was used but `--project` is not a git repository.
+- `not_a_worktree` — `--worktree-path` (adoption, no `--worktree-branch`) is not a real linked worktree of `--project`, or its directory is gone.
+- `project_already_exists` — a project is already registered for the new `--worktree-path` (creation only; adoption reuses it instead).
 - `start_from_not_found` — `--worktree-start-from` is not an existing local branch.
 - `git_error` — `git worktree add` failed (branch already checked out, non-empty target, …); the git message is relayed verbatim.
 

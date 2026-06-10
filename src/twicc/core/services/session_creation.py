@@ -134,23 +134,35 @@ async def create_session_from_payload(payload: dict) -> SessionCreationResult:
     # by the sessions watcher).
     from twicc.core.models import Project
 
-    # Worktree flow (CLI ``create-session --worktree-branch ...``): create a
-    # new git worktree of the source project first, then retarget the session
-    # at the resulting worktree project. Only the CLI sends these keys — the UI
-    # creates the worktree via ``POST /api/projects/<id>/worktrees/`` and opens
-    # a draft against it. The worktree inherits the source's agent defaults /
-    # trust through ``worktree_of``, so the settings the CLI resolved against
-    # the source still apply.
+    # Worktree flow (CLI ``create-session``): land the session in a worktree of
+    # the source project — either a NEW one (``--worktree-branch``, created
+    # first) or an EXISTING one adopted in place (``--worktree-path`` alone) —
+    # then retarget the session at the resulting worktree project. Only the CLI
+    # sends these keys; the UI uses ``POST /api/projects/<id>/worktrees/`` (or
+    # ``.../adopt``) and opens a draft against the result. The worktree inherits
+    # the source's agent defaults / trust through ``worktree_of``, so the
+    # settings the CLI resolved against the source still apply.
     worktree_branch = (payload.get("worktree_branch") or "").strip()
-    if worktree_branch:
-        from twicc.core.services.worktree_creation import create_worktree_from_source
-        wt_result = await create_worktree_from_source(
-            source_project_id=project_id,
-            source_directory=directory_hint,
-            path=payload.get("worktree_path") or "",
-            branch=worktree_branch,
-            start_from=payload.get("worktree_start_from"),
+    worktree_path = (payload.get("worktree_path") or "").strip()
+    if worktree_branch or worktree_path:
+        from twicc.core.services.worktree_creation import (
+            adopt_existing_worktree,
+            create_worktree_from_source,
         )
+        if worktree_branch:
+            wt_result = await create_worktree_from_source(
+                source_project_id=project_id,
+                source_directory=directory_hint,
+                path=worktree_path,
+                branch=worktree_branch,
+                start_from=payload.get("worktree_start_from"),
+            )
+        else:
+            wt_result = await adopt_existing_worktree(
+                source_project_id=project_id,
+                source_directory=directory_hint,
+                path=worktree_path,
+            )
         if not wt_result.success:
             return SessionCreationResult(False, None, None, None, [
                 SessionCreationError(e.field, e.code, e.message)

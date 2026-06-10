@@ -55,8 +55,11 @@ def create_session_cmd(
         None,
         "--worktree-path",
         help=(
-            "Absolute path of the new git worktree's directory. Required with "
-            "--worktree-branch; git rejects a non-empty target."
+            "Absolute path of the git worktree's directory. With "
+            "--worktree-branch the NEW worktree is created there (git rejects "
+            "a non-empty target). WITHOUT --worktree-branch it must point to "
+            "an EXISTING worktree of --project, which is adopted (registered + "
+            "session opened) without creating anything."
         ),
     ),
     worktree_start_from: str | None = typer.Option(
@@ -402,30 +405,31 @@ def create_session_cmd(
         errors.append(ValidationError(f"--attach {err.file}", err.code, err.message))
 
     # Worktree flags: --worktree-branch turns --project into the source repo
-    # and creates the session in a new worktree. The path is required and must
-    # be absolute (no caller CWD to resolve it against, like every other path
-    # the CLI hands the server). Git-level checks (branch already checked out,
-    # non-empty target, source not a repo) are the server's authority.
+    # and creates the session in a NEW worktree; --worktree-path alone (no
+    # branch) adopts an EXISTING worktree of --project instead. A path is
+    # required to create and must be absolute either way (no caller CWD to
+    # resolve it against, like every other path the CLI hands the server).
+    # --worktree-start-from only shapes new-branch creation. Git-level and
+    # worktree-membership checks are the server's authority.
     wt_branch = (worktree_branch or "").strip()
     wt_path = (worktree_path or "").strip()
     wt_start_from = (worktree_start_from or "").strip()
-    if (wt_path or wt_start_from) and not wt_branch:
+    if wt_start_from and not wt_branch:
         errors.append(ValidationError(
             "--worktree-branch", "missing_worktree_branch",
-            "--worktree-path / --worktree-start-from require --worktree-branch.",
+            "--worktree-start-from requires --worktree-branch.",
         ))
-    if wt_branch:
-        if not wt_path:
-            errors.append(ValidationError(
-                "--worktree-path", "missing_worktree_path",
-                "--worktree-branch requires --worktree-path (absolute path of "
-                "the new worktree directory).",
-            ))
-        elif not os.path.isabs(wt_path):
-            errors.append(ValidationError(
-                "--worktree-path", "invalid_worktree_path",
-                "--worktree-path must be an absolute path.",
-            ))
+    if wt_branch and not wt_path:
+        errors.append(ValidationError(
+            "--worktree-path", "missing_worktree_path",
+            "--worktree-branch requires --worktree-path (absolute path of "
+            "the new worktree directory).",
+        ))
+    if wt_path and not os.path.isabs(wt_path):
+        errors.append(ValidationError(
+            "--worktree-path", "invalid_worktree_path",
+            "--worktree-path must be an absolute path.",
+        ))
 
     if errors:
         emit_validation_errors(errors)
@@ -458,13 +462,17 @@ def create_session_cmd(
         "annotations": annotations,
         **settings._asdict(),
     }
-    # ``project_id``/``directory`` stay the SOURCE repo; the server creates the
-    # worktree from it and retargets the session at the resulting worktree.
+    # ``project_id``/``directory`` stay the SOURCE repo; the server creates (or
+    # adopts) the worktree from it and retargets the session at it. The server
+    # disambiguates on the presence of ``worktree_branch``: present => create a
+    # new worktree; absent with ``worktree_path`` => adopt an existing one.
     if wt_branch:
         payload["worktree_branch"] = wt_branch
         payload["worktree_path"] = wt_path
         if wt_start_from:
             payload["worktree_start_from"] = wt_start_from
+    elif wt_path:
+        payload["worktree_path"] = wt_path
 
     drop = write_drop_file(payload, kind="session:create")
 

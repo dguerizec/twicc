@@ -21,7 +21,7 @@ import ProviderActivationDialog from './components/app/ProviderActivationDialog.
 import GlobalMediaPreview from './components/media/GlobalMediaPreview.vue'
 import ProjectTrustDialog from './components/project/ProjectTrustDialog.vue'
 import ProjectEditDialog from './components/project/ProjectEditDialog.vue'
-import WorktreeCreateDialog from './components/project/WorktreeCreateDialog.vue'
+import WorktreeDialog from './components/project/WorktreeDialog.vue'
 import { registerTrustDialog, ensureProjectTrust } from './composables/useTrustGate'
 import { initStaticCommands } from './commands/staticCommands'
 import {
@@ -362,7 +362,7 @@ const trustDialogRef = ref(null)
 // matching the existing dialog-event pattern.
 const globalProjectEditRef = ref(null)
 const globalEditingProject = ref(null)
-const worktreeCreateDialogRef = ref(null)
+const worktreeDialogRef = ref(null)
 
 // Edit any project (current project, or one picked from a palette list).
 function openEditProjectDialog(e) {
@@ -373,15 +373,16 @@ function openEditProjectDialog(e) {
     globalProjectEditRef.value?.open()
 }
 
-// Create a git worktree from a project, then drop the user into a fresh draft
-// session in it — mirrors the "New session" dropdown's per-row worktree button.
+// Open the worktree dialog for a project (create a new worktree or pick an
+// existing one), then drop the user into a fresh draft session in the resolved
+// worktree — mirrors the "New session" dropdown's per-row worktree button.
 function openWorktreeDialog(e) {
     const projectId = e.detail?.projectId
     const project = projectId ? dataStore.getProject(projectId) : null
     if (!project) return
-    worktreeCreateDialogRef.value?.open(project)
+    worktreeDialogRef.value?.open(project)
 }
-async function handleWorktreeCreated(project) {
+async function handleWorktreeResolved(project) {
     if (!project) return
     if (!(await ensureProjectTrust(project.id))) return
     const sessionId = dataStore.createDraftSession(project.id)
@@ -453,10 +454,11 @@ const toastTheme = computed(() => {
     <GlobalMediaPreview />
     <!-- Global trust gate dialog, driven by composables/useTrustGate. -->
     <ProjectTrustDialog ref="trustDialogRef" />
-    <!-- Global command-palette dialogs: edit any project, or create a worktree
-         (+ a draft session in it). Reachable from home, a project, or a session. -->
+    <!-- Global command-palette dialogs: edit any project, or open a worktree
+         — new or existing — (+ a draft session in it). Reachable from home, a
+         project, or a session. -->
     <ProjectEditDialog ref="globalProjectEditRef" :project="globalEditingProject" />
-    <WorktreeCreateDialog ref="worktreeCreateDialogRef" @created="handleWorktreeCreated" />
+    <WorktreeDialog ref="worktreeDialogRef" @resolved="handleWorktreeResolved" />
     <!-- Prevent browser default drop behavior (e.g. navigating to a dropped image).
          Our specific drop handlers in SessionItemsList call preventDefault themselves;
          this catches any drops that miss those zones. -->

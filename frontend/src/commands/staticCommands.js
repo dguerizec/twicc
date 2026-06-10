@@ -752,10 +752,11 @@ export function initStaticCommands(router) {
                 return pickerEntries()
                     .filter(p => p.git_root && !p.worktree_of)
                     .map(p => toProjectItem(p,
-                        // Hand off to the globally-mounted WorktreeCreateDialog
-                        // (App.vue): it provisions the worktree, then drops the
-                        // user into a fresh draft session in it — same flow as the
-                        // "New session" dropdown's per-row worktree button.
+                        // Hand off to the globally-mounted WorktreeDialog
+                        // (App.vue), opening on its New-worktree tab: it
+                        // provisions the worktree, then drops the user into a
+                        // fresh draft session in it — same flow as the "New
+                        // session" dropdown's per-row worktree button.
                         () => window.dispatchEvent(new CustomEvent('twicc:open-worktree-dialog', { detail: { projectId: p.id } })),
                         aggregateProjectActivity(activityMap, data, p.id),
                     ))

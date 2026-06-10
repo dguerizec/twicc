@@ -335,28 +335,108 @@ _WORKTREE_ERROR_STATUS: dict[str, int] = {
     "branch_required": 400,
     "project_already_exists": 409,
     "start_from_not_found": 400,
+    "not_a_worktree": 400,
     "git_error": 400,
 }
 
 
-async def project_worktrees(request, project_id):
-    """POST /api/projects/<id>/worktrees/ - Create a git worktree of the project.
+def _serialize_worktrees(repo_root: str) -> list[dict]:
+    """Build the enriched worktree list for ``GET .../worktrees/``.
 
-    Body: {
+    Lists every linked worktree of ``repo_root`` (the main checkout itself
+    excluded), each annotated with: ``relative_path`` (relative to the main
+    repo when underneath it, else absolute), the checked-out ``branch`` (or
+    ``detached``), ``locked`` / ``prunable`` flags + reasons, a ``usable``
+    flag (false when the directory is gone, prunable, or bare — those rows are
+    shown disabled in the UI), and the TwiCC project link if one already
+    exists (``project_id`` / ``sessions_count`` / ``archived``). Sorted
+    usable-first, then by branch, then by path. Sync (subprocess + filesystem
+    + DB reads) — call via ``sync_to_async``.
+    """
+    from twicc.git import list_worktrees, resolve_worktree_main_repo
+
+    main_root = resolve_worktree_main_repo(repo_root) or repo_root
+    main_root_real = os.path.realpath(main_root)
+
+    out: list[dict] = []
+    for wt in list_worktrees(repo_root):
+        wt_real = os.path.realpath(wt.path)
+        if wt_real == main_root_real:
+            continue  # the main checkout is not a worktree-target
+        if wt_real.startswith(main_root_real + os.sep):
+            relative = os.path.relpath(wt_real, main_root_real)
+        else:
+            relative = wt.path
+        exists = os.path.isdir(wt_real)
+        proj = (
+            Project.objects.filter(id=path_to_project_id(wt_real))
+            .only("id", "sessions_count", "archived")
+            .first()
+        )
+        out.append({
+            "path": wt.path,
+            "relative_path": relative,
+            "branch": wt.branch,
+            "detached": wt.is_detached,
+            "locked": wt.is_locked,
+            "locked_reason": wt.locked_reason,
+            "prunable": wt.is_prunable,
+            "prunable_reason": wt.prunable_reason,
+            "usable": exists and not wt.is_prunable and not wt.is_bare,
+            "project_id": proj.id if proj else None,
+            "sessions_count": proj.sessions_count if proj else 0,
+            "archived": bool(proj.archived) if proj else False,
+        })
+
+    out.sort(key=lambda w: (not w["usable"], (w["branch"] or "￿").lower(), w["path"]))
+    return out
+
+
+async def _resolve_repo_root(project) -> str | None:
+    """Repo root of ``project``: its computed ``git_root``, or a live
+    resolution from its directory for a never-synced repo. ``None`` when the
+    directory backs no git repository."""
+    repo_root = project.git_root
+    if not repo_root and project.directory:
+        from twicc.git import resolve_git_from_path
+        git = await sync_to_async(resolve_git_from_path)(project.directory, use_cache=False)
+        repo_root = git[0] if git else None
+    return repo_root
+
+
+async def project_worktrees(request, project_id):
+    """GET  /api/projects/<id>/worktrees/ - List the git worktrees of the repo.
+    POST /api/projects/<id>/worktrees/ - Create a git worktree of the project.
+
+    GET returns ``{"worktrees": [...]}`` (see :func:`_serialize_worktrees`) so
+    the UI can offer existing worktrees that have no session yet.
+
+    POST body: {
         "path": "/absolute/path/of/the/new/worktree",
         "branch": "branch name (existing => checkout, new => created with -b)",
         "start_from": "optional existing branch the new branch starts from"
     }
-
-    Delegates to
+    delegates to
     :func:`twicc.core.services.worktree_creation.create_worktree_from_source`
     — the same orchestration the CLI ``create-session --worktree-branch``
     flow uses — and serialises the new worktree project (201).
     """
-    from twicc.core.services.worktree_creation import create_worktree_from_source
+    if request.method == "GET":
+        try:
+            project = await Project.objects.aget(id=project_id)
+        except Project.DoesNotExist:
+            return JsonResponse({"error": "Project not found"}, status=404)
+        repo_root = await _resolve_repo_root(project)
+        if not repo_root:
+            return JsonResponse({"error": "Project is not a git repository"}, status=400)
+        worktrees = await sync_to_async(_serialize_worktrees)(repo_root)
+        return JsonResponse({"worktrees": worktrees})
 
     if request.method != "POST":
         return JsonResponse({"error": "Method not allowed"}, status=405)
+
+    from twicc.core.services.worktree_creation import create_worktree_from_source
+
     try:
         data = orjson.loads(request.body)
     except orjson.JSONDecodeError:
@@ -367,6 +447,39 @@ async def project_worktrees(request, project_id):
         path=data.get("path") or "",
         branch=data.get("branch") or "",
         start_from=data.get("start_from") or None,
+    )
+    if not result.success:
+        err = result.errors[0]
+        return JsonResponse({"error": err.message},
+                            status=_WORKTREE_ERROR_STATUS.get(err.code, 400))
+
+    return JsonResponse(serialize_project(result.project), status=201)
+
+
+async def project_worktree_adopt(request, project_id):
+    """POST /api/projects/<id>/worktrees/adopt/ - Adopt an existing worktree.
+
+    Body: ``{"path": "/absolute/path/of/an/existing/worktree"}``.
+
+    Registers a worktree that already exists on disk (but has no TwiCC project
+    yet) as a Project linked to <id> via ``worktree_of`` — no ``git worktree
+    add``. Delegates to
+    :func:`twicc.core.services.worktree_creation.adopt_existing_worktree` and
+    serialises the project (201). Idempotent: an already-registered worktree
+    is returned as-is.
+    """
+    from twicc.core.services.worktree_creation import adopt_existing_worktree
+
+    if request.method != "POST":
+        return JsonResponse({"error": "Method not allowed"}, status=405)
+    try:
+        data = orjson.loads(request.body)
+    except orjson.JSONDecodeError:
+        return JsonResponse({"error": "Invalid JSON"}, status=400)
+
+    result = await adopt_existing_worktree(
+        source_project_id=project_id,
+        path=data.get("path") or "",
     )
     if not result.success:
         err = result.errors[0]
