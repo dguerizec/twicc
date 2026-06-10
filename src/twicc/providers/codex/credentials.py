@@ -53,14 +53,17 @@ CREDENTIALS_PATH = CODEX_HOME / "auth.json"
 KEYRING_SERVICE = "Codex Auth"
 
 # Cached parsed credentials. Populated on first ``get_credentials()`` call
-# and reused on subsequent calls. Invalidated by :func:`refresh_token_via_codex_sdk`
-# so a refreshed token is picked up on the next call.
+# and reused on subsequent calls. Dropped by :func:`invalidate_credentials_cache`
+# — called both at the start of a refresh attempt and on a usage-API 401 — so a
+# token refreshed underneath us (by a real session) is picked up on the re-read.
 _cached_credentials: "Credentials | None" = None
 
-# Track ``last_refresh`` values for which a refresh has already been
-# attempted (and failed), to avoid retrying the SDK throwaway call for
-# the same stale token. Mirrors the equivalent guard in the Claude Code
-# refresh path.
+# Track ``last_refresh`` values for which a refresh has already been attempted
+# (and failed), to avoid re-spawning the costly SDK throwaway call for the same
+# dead token on every cycle. The key is always the value read from *storage* at
+# refresh time (never a cached one), so a token that moves forward bypasses the
+# guard naturally; :func:`note_credentials_accepted` clears it once any token is
+# accepted by the API. Mirrors the equivalent guard in the Claude Code refresh path.
 _failed_refresh_keys: set[str] = set()
 
 # Timeout (seconds) for the throwaway SDK turn used to nudge the Codex
@@ -169,9 +172,10 @@ def _read_credentials_data() -> dict | None:
 def get_credentials() -> Credentials | None:
     """Return the cached :class:`Credentials`, reading storage on first call.
 
-    The cache is invalidated by :func:`refresh_token_via_codex_sdk` so a
-    refreshed token is picked up on the next call without paying the
-    keyring/file read cost on every usage sync.
+    The cache is dropped by :func:`invalidate_credentials_cache` (at the
+    start of a refresh attempt and on a usage-API 401) so a refreshed
+    token is picked up on the next call without paying the keyring/file
+    read cost on every usage sync.
 
     Returns ``None`` when:
     - no Codex credentials exist (CLI never logged in),
@@ -218,6 +222,18 @@ def invalidate_credentials_cache() -> None:
     """
     global _cached_credentials
     _cached_credentials = None
+
+
+def note_credentials_accepted() -> None:
+    """Forget past refresh failures after the API accepts the current token.
+
+    A successful usage fetch proves the live token works, so any
+    ``last_refresh`` recorded in :data:`_failed_refresh_keys` is moot.
+    Clearing keeps the guard from pinning a later expiry to a stale
+    "already attempted" verdict and stops the set growing unbounded over
+    the process lifetime.
+    """
+    _failed_refresh_keys.clear()
 
 
 def refresh_token_via_codex_sdk(last_refresh: str) -> bool:

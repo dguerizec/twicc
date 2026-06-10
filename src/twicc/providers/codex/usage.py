@@ -26,6 +26,8 @@ from twicc.core.models import UsageSnapshot
 
 from .credentials import (
     get_credentials,
+    invalidate_credentials_cache,
+    note_credentials_accepted,
     refresh_token_via_codex_sdk,
 )
 
@@ -49,10 +51,20 @@ USAGE_API_BASE_HEADERS = {
 def fetch_usage(*, refresh_token_if_needed: bool = True) -> dict | None:
     """Fetch raw usage data from ChatGPT's ``/backend-api/wham/usage``.
 
-    On 401/403, attempts to refresh the token by running a throwaway
-    SDK turn against the bundled binary via
-    :func:`refresh_token_via_codex_sdk`, then retries the fetch once
-    when the refresh actually moved ``last_refresh`` forward.
+    On 401/403 (with ``refresh_token_if_needed``), the rejected token is
+    handled in two steps:
+
+    1. **Stale cache** — drop the cache, re-read storage, and if a
+       *different* token now lives there (a real Codex session refreshed
+       it underneath us), retry the fetch with it. No SDK turn, and it
+       can't get pinned behind the refresh guard.
+    2. **Genuinely expired** — storage still holds the same rejected
+       token, so trigger the refresh ourselves via a throwaway SDK turn
+       (:func:`refresh_token_via_codex_sdk`, keyed on the storage value)
+       and retry once if ``last_refresh`` actually moved forward.
+
+    A successful fetch clears the refresh-failure guard via
+    :func:`note_credentials_accepted`.
 
     Returns the raw JSON payload (the unmodified ChatGPT response) on
     success, ``None`` on failure.
@@ -70,11 +82,28 @@ def fetch_usage(*, refresh_token_if_needed: bool = True) -> dict | None:
     try:
         response = httpx.get(USAGE_API_URL, headers=headers, timeout=30)
         response.raise_for_status()
+        # The token was accepted: forget any prior refresh failure so a later
+        # expiry starts from a clean slate (see note_credentials_accepted).
+        note_credentials_accepted()
         return response.json()
     except httpx.HTTPStatusError as e:
         if e.response.status_code in (401, 403) and refresh_token_if_needed:
+            # Step 1 — treat the rejection as mere cache staleness first: drop
+            # the cache, re-read storage, and if a *different* token now lives
+            # there (a real Codex session refreshed it underneath us), retry
+            # with it. No costly SDK turn, and it can't get stuck behind the
+            # refresh guard.
+            invalidate_credentials_cache()
+            fresh = get_credentials()
+            if fresh is not None and fresh.access_token != creds.access_token:
+                return fetch_usage(refresh_token_if_needed=False)
+
+            # Step 2 — storage still holds the same rejected token: it is
+            # genuinely expired and nobody else refreshed it, so trigger the
+            # refresh ourselves, keyed on the storage value (never the cache).
             logger.warning("Codex usage API returned %d, attempting token refresh", e.response.status_code)
-            if refresh_token_via_codex_sdk(creds.last_refresh):
+            last_refresh = fresh.last_refresh if fresh is not None else ""
+            if refresh_token_via_codex_sdk(last_refresh):
                 return fetch_usage(refresh_token_if_needed=False)
             return None
         logger.warning("Codex usage API HTTP error: %s", e)
