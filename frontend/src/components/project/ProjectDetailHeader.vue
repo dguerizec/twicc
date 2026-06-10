@@ -197,6 +197,15 @@ function handleEditClick() {
     }
 }
 
+// Archive the project / workspace from the header action button.
+function handleArchive() {
+    if (isSingleProjectMode.value && project.value && !project.value.archived) {
+        store.setProjectArchived(props.projectId, true)
+    } else if (isWorkspaceMode.value && workspace.value && !workspace.value.archived) {
+        workspacesStore.updateWorkspace(workspaceId.value, { archived: true })
+    }
+}
+
 // Click on the "Archived" badge → unarchive the project / workspace in place
 // (mirrors the clickable archived badge on a session header).
 function handleUnarchive() {
@@ -229,18 +238,46 @@ function handleUnarchive() {
                     </wa-dropdown-item>
                 </wa-dropdown>
 
-                <!-- Archived badge: clickable to unarchive the project / workspace,
-                     placed before the title/badge (mirrors the session header). -->
-                <template v-if="isArchived">
+                <!-- Action group before the title (mirrors the session header):
+                     the clickable "Archived" badge (or the Archive button when
+                     not archived) followed by the Edit/Manage button. -->
+                <div v-if="!isAllProjectsMode" class="detail-title-actions">
                     <wa-tag
+                        v-if="isArchived"
                         id="project-detail-archived-tag"
                         size="small"
                         variant="neutral"
                         class="archived-tag"
                         @click.stop="handleUnarchive"
                     >Archived</wa-tag>
-                    <AppTooltip for="project-detail-archived-tag">Click to unarchive</AppTooltip>
-                </template>
+                    <AppTooltip v-if="isArchived" for="project-detail-archived-tag">Click to unarchive</AppTooltip>
+
+                    <wa-button
+                        v-else
+                        id="detail-archive-button"
+                        variant="neutral"
+                        appearance="plain"
+                        size="small"
+                        class="archive-button reduced-height"
+                        @click.stop="handleArchive"
+                    >
+                        <wa-icon name="box-archive" :label="isWorkspaceMode ? 'Archive workspace' : 'Archive project'"></wa-icon>
+                    </wa-button>
+                    <AppTooltip v-if="!isArchived" for="detail-archive-button">{{ isWorkspaceMode ? 'Archive workspace' : 'Archive project' }}</AppTooltip>
+
+                    <wa-button
+                        id="detail-edit-button"
+                        variant="neutral"
+                        appearance="plain"
+                        size="small"
+                        class="edit-button reduced-height"
+                        @click.stop="handleEditClick"
+                    >
+                        <wa-icon :name="isWorkspaceMode ? 'gear' : 'pencil'"></wa-icon>
+                    </wa-button>
+                    <AppTooltip v-if="isWorkspaceMode" for="detail-edit-button">Manage workspace</AppTooltip>
+                    <AppTooltip v-else-if="isSingleProjectMode" for="detail-edit-button">Edit project (name and color)</AppTooltip>
+                </div>
 
                 <!-- Single project mode -->
                 <template v-if="isSingleProjectMode">
@@ -270,21 +307,6 @@ function handleUnarchive() {
                     label="Toggle details"
                 ></wa-icon>
             </div>
-
-            <!-- Edit/manage button (always visible) -->
-            <wa-button
-                v-if="!isAllProjectsMode"
-                id="detail-edit-button"
-                variant="neutral"
-                appearance="plain"
-                size="small"
-                class="edit-button reduced-height"
-                @click="handleEditClick"
-            >
-                <wa-icon :name="isWorkspaceMode ? 'gear' : 'pencil'"></wa-icon>
-            </wa-button>
-            <AppTooltip v-if="isWorkspaceMode" for="detail-edit-button">Manage workspace</AppTooltip>
-            <AppTooltip v-else-if="isSingleProjectMode" for="detail-edit-button">Edit project (name and color)</AppTooltip>
         </div>
 
         <!-- Collapsible rows: sparkline, directory, meta (overlay on small viewports) -->
@@ -377,9 +399,17 @@ function handleUnarchive() {
     font-size: var(--wa-font-size-l);
 }
 
-.edit-button {
+/* Action group placed before the title (mirrors the session header's
+   .session-title-actions): archived badge / archive button + edit button. */
+.detail-title-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--wa-space-2xs);
     flex-shrink: 0;
-    margin-left: auto;
+}
+.edit-button,
+.archive-button {
+    flex-shrink: 0;
 }
 
 /* Compact toggle zone: transparent on large viewports */
@@ -511,6 +541,12 @@ function handleUnarchive() {
     .detail-header.compact-collapsed .compact-tab-dropdown {
         display: inline-flex;
         align-items: center;
+    }
+
+    /* In compact collapsed mode: hide the action buttons (archive/edit), like
+       the session header — they reappear when the header is expanded. */
+    .detail-header.compact-collapsed .detail-title-actions {
+        display: none;
     }
 
     /* In compact expanded mode: hide tab dropdown */
