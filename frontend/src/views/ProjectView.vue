@@ -754,8 +754,15 @@ function handleSelectorSelect(event) {
 
     if (value.startsWith('worktrees-toggle:')) {
         // Expand/collapse a project's worktrees inline — keep the dropdown open.
+        const toggleItem = event.detail?.item
         toggleWorktrees(value.slice('worktrees-toggle:'.length))
         event.preventDefault()
+        // Adding/removing the worktree rows changes the dropdown's slotted items,
+        // which makes Web Awesome reset the active item to index 0 ("All Projects")
+        // via its slotchange handler — while DOM focus stays on this toggle row. That
+        // desyncs arrow-key navigation and Enter. Re-assert the active row on the
+        // toggle once the re-render and WA's reset have settled.
+        restoreSelectorActiveItem(toggleItem)
         return
     }
 
@@ -934,6 +941,43 @@ function closeSelector() {
         forceClosingSelector = true
         el.open = false
     }
+}
+
+// Re-assert which top-level selector row is "active" (drives WA's arrow-key /
+// Enter navigation) and refocus it. Used after an in-place toggle that mutates the
+// slotted item list (worktrees expand/collapse), since WA's slotchange handler
+// resets the active item to index 0. Runs after Vue's DOM patch (nextTick) and
+// after WA's async reset (an extra rAF, since WA awaits each item's updateComplete
+// before reassigning), so our assignment wins.
+function restoreSelectorActiveItem(item) {
+    if (!item) return
+    nextTick(() => {
+        requestAnimationFrame(() => {
+            const el = selectorEl.value
+            if (!el || !item.isConnected) return
+            el.querySelectorAll(':scope > wa-dropdown-item').forEach((row) => {
+                row.active = row === item
+            })
+            item.focus({ preventScroll: true })
+        })
+    })
+}
+
+// Tab on a selector row opens that row's "…" actions menu and moves focus into it,
+// instead of Web Awesome's default (Tab closes the whole dropdown). Capture phase so
+// we run before WA's document-level keydown handler. Shift+Tab keeps WA's default;
+// rows without a menu (All Projects, the "Worktrees (N)" header) just swallow Tab so
+// the selector stays open. We never intervene when focus is already inside a row
+// menu (the focused item is then a child of a nested dropdown, not of the selector).
+function onSelectorKeydown(event) {
+    if (event.key !== 'Tab' || event.shiftKey) return
+    const row = event.target?.closest?.('wa-dropdown-item')
+    if (!row || row.parentElement !== selectorEl.value) return
+    event.preventDefault()
+    event.stopPropagation()
+    const rowMenu = row.querySelector('.row-menu wa-dropdown')
+    // Opening the nested dropdown makes WA focus its first item for us (showMenu).
+    if (rowMenu) rowMenu.open = true
 }
 
 // Provided to ProjectSelectorRow (named / tree / worktree rows) so they can open
@@ -1377,6 +1421,7 @@ function updateSidebarClosedClass(closed) {
                         ref="selectorEl"
                         id="project-selector"
                         class="project-selector"
+                        @keydown.capture="onSelectorKeydown"
                         @wa-select="handleSelectorSelect"
                         @wa-hide="onSelectorHide"
                     >
