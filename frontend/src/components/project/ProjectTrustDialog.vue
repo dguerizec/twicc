@@ -5,12 +5,16 @@
 // (cancelled). The caller is responsible for persisting the decision (POST
 // /api/projects/<id>/trust/decide/). See ProjectEditDialog.vue for the dialog
 // pattern, and docs/plans/2026-06-09-project-trust-design.md §5.
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { defaultTrustPropagation } from '../../utils/trust'
+import ProjectBadge from './ProjectBadge.vue'
+import WorktreeBadge from './WorktreeBadge.vue'
 
 const dialogRef = ref(null)
 const project = ref(null)
 const propagation = ref(false)
+
+const isWorktree = computed(() => !!project.value?.worktree_of)
 
 // The pending promise's resolver; consumed exactly once per open.
 let resolveDecision = null
@@ -63,7 +67,8 @@ defineExpose({ requestDecision })
             </p>
 
             <div v-if="project" class="project-info">
-                <div v-if="project.name" class="project-name">{{ project.name }}</div>
+                <WorktreeBadge v-if="isWorktree" :project-id="project.id" class="project-name" />
+                <ProjectBadge v-else :project-id="project.id" class="project-name" />
                 <div class="project-dir">{{ project.directory }}</div>
             </div>
 
@@ -85,10 +90,11 @@ defineExpose({ requestDecision })
                 Cancel
             </wa-button>
             <wa-button variant="neutral" @click="decide(false)">
+                <wa-icon slot="start" name="xmark"></wa-icon>
                 Don't trust
             </wa-button>
             <wa-button variant="brand" @click="decide(true)">
-                <wa-icon slot="start" name="shield-check"></wa-icon>
+                <wa-icon slot="start" name="shield"></wa-icon>
                 Trust
             </wa-button>
         </div>
