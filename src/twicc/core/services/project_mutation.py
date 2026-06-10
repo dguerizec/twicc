@@ -5,7 +5,13 @@ whose ``kind`` matches one of the supported project actions:
 
 - ``kind="project:create"`` → :func:`create_project_from_payload`.
 - ``kind="project:update"`` → :func:`update_project_from_payload`.
+- ``kind="project:update_settings"`` → :func:`update_project_agent_settings_from_payload`.
 - ``kind="project:trust"`` → :func:`decide_project_trust_from_payload`.
+
+Also home to :func:`clean_project_agent_defaults`, the single validator /
+normalizer for the per-project agent defaults (``default_provider`` +
+``default_agent_settings``), shared by the HTTP ``PUT /api/projects/<id>/``
+endpoint and the drop-file handlers here.
 
 There is no ``project:delete`` by design: a Project row is bound to its
 sessions (cost aggregates, workspace memberships, etc.); removing it
@@ -51,6 +57,75 @@ def _invalid_payload_result(field: str, message: str) -> ProjectMutationResult:
     return ProjectMutationResult(False, None, None, [
         ProjectMutationError(field, "invalid_payload", message),
     ])
+
+
+def clean_project_agent_defaults(default_provider, default_agent_settings):
+    """Validate + normalize the per-project agent defaults.
+
+    Shared by the HTTP ``PUT /api/projects/<id>/`` endpoint and the CLI
+    drop-file handlers. Returns ``(provider_or_None, settings_or_None,
+    error_or_None)``:
+
+    - ``provider``: ``None`` or a valid :class:`Provider` value.
+    - ``settings``: ``None`` or ``{ "<provider>": { "<AgentSettings field>": value } }``
+      with hidden fields stripped, unknown providers/fields rejected, ``None``
+      values and empty bundles dropped (so storage stays sparse).
+
+    Each argument is validated independently — callers updating only one field
+    pass ``None`` for the other.
+    """
+    from twicc.core.enums import Provider
+    from twicc.providers.helpers import (
+        AGENT_SETTINGS_HIDDEN_FROM_FRONTEND,
+        AgentSettings,
+        get_provider_helpers,
+    )
+
+    valid_providers = {p.value for p in Provider}
+
+    clean_provider = None
+    if default_provider is not None:
+        if not isinstance(default_provider, str) or default_provider not in valid_providers:
+            return None, None, f"Invalid default_provider: {default_provider!r}"
+        clean_provider = default_provider or None
+
+    clean_settings = None
+    if default_agent_settings is not None:
+        if not isinstance(default_agent_settings, dict):
+            return None, None, "default_agent_settings must be an object or null"
+        allowed_fields = set(AgentSettings._fields) - set(AGENT_SETTINGS_HIDDEN_FROM_FRONTEND)
+        cleaned: dict = {}
+        for prov, bundle in default_agent_settings.items():
+            if prov not in valid_providers:
+                return None, None, f"Unknown provider in default_agent_settings: {prov!r}"
+            if not isinstance(bundle, dict):
+                return None, None, f"default_agent_settings[{prov!r}] must be an object"
+            prov_bundle: dict = {}
+            for field, value in bundle.items():
+                if field in AGENT_SETTINGS_HIDDEN_FROM_FRONTEND:
+                    continue  # strip hidden fields defensively
+                if field == "permission_mode_if_untrusted":
+                    # Default-shaping field, not part of the closed bundle: the
+                    # permission mode seeded when the project resolves untrusted
+                    # (trust design §13.1). Value must be in the provider's
+                    # untrusted-allowed set.
+                    if value is not None:
+                        helpers = get_provider_helpers(prov)
+                        if value not in helpers.UNTRUSTED_PERMISSION_MODES:
+                            return None, None, (
+                                f"Invalid permission_mode_if_untrusted for {prov!r}: {value!r}"
+                            )
+                        prov_bundle[field] = value
+                    continue
+                if field not in allowed_fields:
+                    return None, None, f"Unknown agent settings field: {field!r}"
+                if value is not None:
+                    prov_bundle[field] = value
+            if prov_bundle:
+                cleaned[prov] = prov_bundle
+        clean_settings = cleaned or None
+
+    return clean_provider, clean_settings, None
 
 
 async def create_project_from_payload(payload: dict) -> ProjectMutationResult:
@@ -198,16 +273,19 @@ async def update_project_from_payload(payload: dict) -> ProjectMutationResult:
         {
             "kind": "project:update",
             "project_id": str,
-            "name": str | None,           # optional rename
-            "unset_name": bool,           # optional, clears the custom name
-            "color": str | None,          # optional recolor
-            "unset_color": bool,          # optional, clears the color
-            "archived": bool,             # optional
+            "name": str | None,             # optional rename
+            "unset_name": bool,             # optional, clears the custom name
+            "color": str | None,            # optional recolor
+            "unset_color": bool,            # optional, clears the color
+            "archived": bool,               # optional
+            "default_provider": str | None, # optional, provider new sessions default to
+            "unset_default_provider": bool, # optional, back to inherit
         }
 
     The CLI ensures at least one patch field is present (``no_op``
     enforced locally) and that mutually-exclusive flags (``name`` vs
-    ``unset_name``, ``color`` vs ``unset_color``) are not combined.
+    ``unset_name``, ``color`` vs ``unset_color``, ``default_provider`` vs
+    ``unset_default_provider``) are not combined.
     """
     project_id = payload.get("project_id")
     if not isinstance(project_id, str) or not project_id:
@@ -241,6 +319,25 @@ async def update_project_from_payload(payload: dict) -> ProjectMutationResult:
     archived = payload.get("archived")
     if archived is not None and not isinstance(archived, bool):
         return _invalid_payload_result("archived", "archived must be a boolean.")
+
+    default_provider = payload.get("default_provider")
+    unset_default_provider = payload.get("unset_default_provider", False)
+    if not isinstance(unset_default_provider, bool):
+        return _invalid_payload_result("unset_default_provider",
+                                       "unset_default_provider must be a boolean.")
+    if unset_default_provider and default_provider is not None:
+        return ProjectMutationResult(False, project_id, None, [
+            ProjectMutationError("--default-provider", "conflicting_flags",
+                                  "--default-provider and --unset-default-provider "
+                                  "cannot be used together."),
+        ])
+    if default_provider is not None:
+        _prov, _unused, err = clean_project_agent_defaults(default_provider, None)
+        if err is not None:
+            return ProjectMutationResult(False, project_id, None, [
+                ProjectMutationError("--default-provider", "invalid_provider", err),
+            ])
+        default_provider = _prov
 
     # Format checks.
     errors: list[ProjectMutationError] = []
@@ -276,6 +373,76 @@ async def update_project_from_payload(payload: dict) -> ProjectMutationResult:
         color=color,
         unset_color=unset_color,
         archived=archived,
+        default_provider=default_provider,
+        unset_default_provider=unset_default_provider,
+    )
+
+
+async def update_project_agent_settings_from_payload(payload: dict) -> ProjectMutationResult:
+    """Drop-file glue for ``kind="project:update_settings"``.
+
+    Expected payload shape::
+
+        {
+            "kind": "project:update_settings",
+            "project_id": str,
+            "provider": str,                      # a registered Provider value
+            "updates": { "<field>": value|null }  # null = unset (back to inherit)
+        }
+
+    Patches one provider's bundle inside ``Project.default_agent_settings``:
+    a non-null value sets the field, ``null`` removes it (inherit from the
+    parent chain / global default). Untouched fields — and the other
+    providers' bundles — are left alone. A provider may be **disabled**: the
+    edit UI deliberately lets a project keep defaults for disabled providers
+    (deactivation may be temporary), so this handler only requires the
+    provider to be *registered*.
+
+    The CLI resolves aliases and validates values against the
+    provider's choices pre-flight; this handler re-runs the structural checks
+    (field names, ``permission_mode_if_untrusted`` in the untrusted-allowed
+    set) through :func:`clean_project_agent_defaults` because the drop-file
+    is a trust boundary.
+    """
+    from twicc.projects import update_project_agent_defaults_atomic
+
+    project_id = payload.get("project_id")
+    if not isinstance(project_id, str) or not project_id:
+        return _invalid_payload_result("project_id",
+                                       "project_id must be a non-empty string.")
+
+    provider = payload.get("provider")
+    if not isinstance(provider, str) or not provider:
+        return _invalid_payload_result("provider",
+                                       "provider must be a non-empty string.")
+
+    updates = payload.get("updates")
+    if not isinstance(updates, dict) or not updates:
+        return _invalid_payload_result("updates",
+                                       "updates must be a non-empty object.")
+
+    # Hidden fields are stripped (not rejected) by the cleaner below — strip
+    # them from the applied patch too, so a forged key can't slip past the
+    # validation into the stored bundle.
+    from twicc.providers.helpers import AGENT_SETTINGS_HIDDEN_FROM_FRONTEND
+    updates = {f: v for f, v in updates.items() if f not in AGENT_SETTINGS_HIDDEN_FROM_FRONTEND}
+    if not updates:
+        return _invalid_payload_result("updates",
+                                       "updates must contain at least one supported field.")
+
+    # Structural validation: run the set (non-null) part of the patch through
+    # the shared cleaner — unknown provider/field and an out-of-set
+    # ``permission_mode_if_untrusted`` are rejected here. The unset (null)
+    # keys only need their field name checked, which the cleaner does too
+    # since it skips null values after the name check.
+    _unused, _cleaned, err = clean_project_agent_defaults(None, {provider: updates})
+    if err is not None:
+        return ProjectMutationResult(False, project_id, None, [
+            ProjectMutationError("updates", "invalid_settings", err),
+        ])
+
+    return await update_project_agent_defaults_atomic(
+        project_id, provider=provider, updates=updates,
     )
 
 

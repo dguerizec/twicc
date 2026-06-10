@@ -1,6 +1,6 @@
-"""Per-provider resolution of agent-settings keyword aliases (Django-free).
+"""Per-provider resolution of agent-settings aliases (Django-free).
 
-The CLI / skills let users pass semantic keywords (``max``, ``min``,
+The CLI / skills let users pass semantic aliases (``max``, ``min``,
 ``strict``, ``open`` ...) wherever a concrete agent-settings value is expected.
 Each provider declares its own ``{field: {alias: concrete_value}}`` table in
 its ``constants.py`` (exposed on the local bootstrap as
@@ -10,14 +10,14 @@ server, DB — only ever sees normal literal values.
 
 Three things happen here, all keyed to one resolved provider:
 
-- **keyword resolution** for the ordered fields (``selected_model``,
+- **alias resolution** for the ordered fields (``selected_model``,
   ``effort``, ``permission_mode``, ``context_max``). Resolution is
   **native-first**: a value the provider already accepts verbatim (e.g. effort
-  ``max`` on Claude Code, ``strict`` on Codex) is never reinterpreted as a
-  keyword — the alias table only fires when the value is NOT native. A
+  ``max`` on Claude Code, ``strict`` on Codex) is never reinterpreted as an
+  alias — the alias table only fires when the value is NOT native. A
   genuinely unknown value on a supported field is left untouched so the
   downstream choice-validation rejects it (typo guard).
-- **``context_max`` parsing**: its keyword resolves to a token-count string
+- **``context_max`` parsing**: its alias resolves to a token-count string
   (``"1m"`` ...), then ``parse_context_max`` turns it into the int the rest of
   the pipeline expects. A malformed ``--context-max`` surfaces as a single
   ``invalid_format`` error here (it can only be checked once the provider — and
@@ -41,9 +41,9 @@ import sys
 from twicc.cli._drop_request.help_strings import parse_context_max
 from twicc.cli._drop_request.validation import ValidationError
 
-# Ordered string fields that take keyword aliases at the string level.
+# Ordered string fields that take aliases at the string level.
 # ``context_max`` is aliasable too but handled apart: its concrete form is an
-# int, parsed after the string-level keyword swap.
+# int, parsed after the string-level alias swap.
 _ALIASABLE_STRING_FIELDS = ("selected_model", "effort", "permission_mode")
 
 
@@ -59,17 +59,23 @@ def _native_values(field: str, pb) -> set:
     """Values the provider accepts verbatim for ``field`` (drives native-first)."""
     if field == "selected_model":
         return {m.get("selected_model") for m in pb.model_registry or []}
+    if field == "permission_mode_if_untrusted":
+        # Default-shaping field (project defaults / synced settings), not part
+        # of the closed bundle: its native values are the provider's
+        # untrusted-allowed permission modes, not an ``agent_settings_choices``
+        # entry.
+        return set(pb.untrusted_permission_modes or ())
     return set((pb.agent_settings_choices or {}).get(field, []))
 
 
-def resolve_keyword(field: str, value, pb, *, untrusted: bool = False):
-    """Native-first keyword resolution for one ordered string field.
+def resolve_alias(field: str, value, pb, *, untrusted: bool = False):
+    """Native-first alias resolution for one ordered string field.
 
-    Returns the concrete value when ``value`` is a known keyword for this
+    Returns the concrete value when ``value`` is a known alias for this
     provider, the value unchanged otherwise (native value, or an unknown value
     left for choice-validation / the untrusted clamp to handle).
 
-    When ``untrusted`` is set, a ``permission_mode`` keyword resolves against the
+    When ``untrusted`` is set, a ``permission_mode`` alias resolves against the
     provider's ``permission_mode_if_untrusted`` alias table instead — so ``max``
     lands on the most permissive *untrusted-allowed* mode (e.g. ``acceptEdits``),
     not ``bypassPermissions``. Native-first is unchanged: a concrete value still
@@ -92,15 +98,15 @@ def resolve_overrides(overrides: dict, pb, *, untrusted: bool = False) -> tuple[
     """Resolve a raw overrides dict against one provider.
 
     Returns ``(resolved_overrides, errors)``. ``resolved_overrides`` keeps every
-    key of ``overrides`` (so callers can rely on the shape) with keywords mapped
+    key of ``overrides`` (so callers can rely on the shape) with aliases mapped
     to concrete values, ``context_max`` parsed to an int, and unsupported fields
     forced to ``None``. ``errors`` holds at most one ``invalid_format`` for a
     malformed ``--context-max``. Does not mutate the input — important for the
     batch, where the same overrides is reused across sessions of different
     providers.
 
-    ``untrusted`` routes ``permission_mode`` keyword resolution through the
-    untrusted alias table (see :func:`resolve_keyword`); the caller still applies
+    ``untrusted`` routes ``permission_mode`` alias resolution through the
+    untrusted alias table (see :func:`resolve_alias`); the caller still applies
     :func:`clamp_untrusted_permission_mode` to the final bundle.
     """
     supported = supported_fields(pb)
@@ -115,10 +121,10 @@ def resolve_overrides(overrides: dict, pb, *, untrusted: bool = False) -> tuple[
             resolved[field] = None  # silent no-op for an unsupported field
             continue
         if field in _ALIASABLE_STRING_FIELDS:
-            resolved[field] = resolve_keyword(field, value, pb, untrusted=untrusted)
+            resolved[field] = resolve_alias(field, value, pb, untrusted=untrusted)
         elif field == "context_max":
-            # Keyword → token string (``"max"`` → ``"1m"``); a literal form
-            # (``"200k"``, ``"272k"``, a plain int) is not a keyword and passes
+            # Alias → token string (``"max"`` → ``"1m"``); a literal form
+            # (``"200k"``, ``"272k"``, a plain int) is not an alias and passes
             # through untouched, then both go through ``parse_context_max``.
             raw = ctx_aliases.get(value, value)
             try:
@@ -162,7 +168,7 @@ def clamp_untrusted_permission_mode(settings, pb, *, seed_when_absent: bool = Fa
     clamped = pb.untrusted_permission_mode_default
     print(
         f"note: this project is untrusted — permission_mode {mode!r} is not "
-        f"allowed there; using {clamped!r} instead (untrusted keywords: "
+        f"allowed there; using {clamped!r} instead (untrusted aliases: "
         f"min / safe / max).",
         file=sys.stderr,
     )

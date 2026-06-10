@@ -1,14 +1,17 @@
 // frontend/src/utils/projectAgentDefaults.js
 //
-// Front-side mirror of the backend per-project agent-settings resolver
-// (twicc/project_hierarchy.py). Given the projects already in the store, walk a
-// project's ancestor chain (worktree main repo first, else nearest path
-// ancestor, recursively) and resolve — field by field — the inherited
-// agent-settings defaults and the inherited default provider. The backend stays
-// the authority for what actually runs (it re-resolves the same chain when a
-// session is created/resumed); this mirror exists so the UI can SHOW the
-// resolved defaults (the popover baseline, diff-marking and reset target) and
-// pre-select a new draft's provider without a round-trip.
+// Per-project agent-settings defaults: frontend chain resolver. Given the
+// projects already in the store, walk a project's ancestor chain (worktree
+// main repo first, else nearest path ancestor, recursively) and resolve —
+// field by field — the inherited agent-settings defaults and the inherited
+// default provider. Resolution is a CREATION-TIME concern only: this resolver
+// pre-fills a new draft with concrete values (frozen at launch — the snapshot
+// model, see docs/plans/2026-06-09-project-agent-defaults-design.md §4), and
+// also drives the display baseline (popover diff-marking and reset targets).
+// The backend never re-resolves the chain for a running session; its mirror
+// of this resolver (src/twicc/project_agent_defaults.py) runs only when the
+// CLI creates a session (same materialize-at-creation semantics). Keep the
+// two resolvers in sync.
 //
 // Unlike trust (utils/trust.js) there is NO propagation gate: every ancestor is
 // visited and, for each field, the first non-null value wins. The chain is also

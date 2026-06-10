@@ -561,12 +561,16 @@ async def update_project_atomic(
     color: str | None = None,
     unset_color: bool = False,
     archived: bool | None = None,
+    default_provider: str | None = None,
+    unset_default_provider: bool = False,
 ) -> ProjectMutationResult:
     """Atomically apply a patch to an existing project.
 
     Mutually-exclusive flags (``new_name`` vs ``unset_name``, ``color`` vs
-    ``unset_color``) must be enforced by the caller before invocation —
-    this function trusts its inputs (the ``unset`` wins if both are set).
+    ``unset_color``, ``default_provider`` vs ``unset_default_provider``) must
+    be enforced by the caller before invocation — this function trusts its
+    inputs (the ``unset`` wins if both are set). ``default_provider`` is
+    assumed already validated as a registered provider value.
 
     Runs under :func:`run_under_db_write_lock` and broadcasts
     ``project_updated`` out of the lock on success. On
@@ -613,6 +617,15 @@ async def update_project_atomic(
                     project.archived = bool(archived)
                     update_fields.append("archived")
 
+            if unset_default_provider:
+                if project.default_provider is not None:
+                    project.default_provider = None
+                    update_fields.append("default_provider")
+            elif default_provider is not None:
+                if project.default_provider != default_provider:
+                    project.default_provider = default_provider
+                    update_fields.append("default_provider")
+
             if not update_fields:
                 # No-op write: the row already matches the patch. Treat as
                 # success with the existing project — the CLI's no_op
@@ -626,6 +639,74 @@ async def update_project_atomic(
                     ProjectMutationError("--name", "duplicate_name",
                                           "Another project already uses this name."),
                 ])
+            return ProjectMutationResult(True, project_id, project, None)
+
+    result = await run_under_db_write_lock(lambda: sync_to_async(_do_update)())
+
+    if result.success and result.project is not None:
+        channel_layer = get_channel_layer()
+        await channel_layer.group_send("updates", {
+            "type": "broadcast",
+            "data": {
+                "type": "project_updated",
+                "project": serialize_project(result.project),
+            },
+        })
+    return result
+
+
+async def update_project_agent_defaults_atomic(
+    project_id: str,
+    *,
+    provider: str,
+    updates: dict,
+) -> ProjectMutationResult:
+    """Atomically patch one provider's bundle in ``default_agent_settings``.
+
+    ``updates`` maps field names to values: a non-``None`` value sets the
+    field, ``None`` removes it (back to inherit). Other fields of the bundle
+    — and the other providers' bundles — are untouched. Empty bundles are
+    dropped so storage stays sparse (``{}`` collapses to ``NULL``).
+
+    The caller is responsible for validation (field names, value choices,
+    ``permission_mode_if_untrusted`` in the untrusted-allowed set) — see
+    ``clean_project_agent_defaults`` in
+    :mod:`twicc.core.services.project_mutation`.
+
+    Runs under :func:`run_under_db_write_lock` and broadcasts
+    ``project_updated`` out of the lock on success.
+    """
+    from twicc.providers.db_writer import run_under_db_write_lock
+
+    def _do_update() -> ProjectMutationResult:
+        with transaction.atomic():
+            try:
+                project = Project.objects.get(id=project_id)
+            except Project.DoesNotExist:
+                return ProjectMutationResult(False, None, None, [
+                    ProjectMutationError("PROJECT_ID", "project_not_found",
+                                          f"Project {project_id!r} not found."),
+                ])
+
+            current = project.default_agent_settings or {}
+            bundle = dict(current.get(provider) or {})
+            for field, value in updates.items():
+                if value is None:
+                    bundle.pop(field, None)
+                else:
+                    bundle[field] = value
+
+            new_settings = {k: v for k, v in current.items() if k != provider}
+            if bundle:
+                new_settings[provider] = bundle
+            normalized = new_settings or None
+
+            if normalized == (project.default_agent_settings or None):
+                # No-op write: the bundle already matches the patch.
+                return ProjectMutationResult(True, project_id, project, None)
+
+            project.default_agent_settings = normalized
+            project.save(update_fields=["default_agent_settings"])
             return ProjectMutationResult(True, project_id, project, None)
 
     result = await run_under_db_write_lock(lambda: sync_to_async(_do_update)())

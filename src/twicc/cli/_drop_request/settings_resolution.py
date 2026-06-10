@@ -8,11 +8,11 @@ exact same logic with a different error-handling shape:
 - :func:`parse_settings_flags` — **provider-independent** (global) validation of
   the raw CLI flags: unknown ``--unset`` token, ``--<field>`` / ``--unset``
   conflict, no-op. Same for every targeted session, so the singular and the
-  batch validate it once. ``--context-max`` is NOT parsed here anymore: a
-  keyword like ``max`` only has meaning once the provider is known, so the raw
+  batch validate it once. ``--context-max`` is NOT parsed here anymore: an
+  alias like ``max`` only has meaning once the provider is known, so the raw
   string is carried through to :func:`prepare_settings`.
 - :func:`prepare_settings` — **per-provider** resolution against one resolved
-  session: provider enabled, keyword-alias resolution + ``context_max`` parse,
+  session: provider enabled, alias resolution + ``context_max`` parse,
   silent drop of fields the provider doesn't support (set or ``--unset``),
   preset resolution (presets are provider-scoped), value validation, hidden
   invariants. The singular runs it for one session; the batch runs it per id (a
@@ -87,7 +87,7 @@ def parse_settings_flags(
     :class:`ValidationError` (``unknown_unset_field`` / ``unset_conflict`` /
     ``no_op``) when the flags are malformed on their own — independent of any
     target session's provider. ``context_max`` is left as a raw string for
-    per-provider keyword resolution + parsing in :func:`prepare_settings`.
+    per-provider alias resolution + parsing in :func:`prepare_settings`.
     """
     errors: list[ValidationError] = []
 
@@ -111,9 +111,9 @@ def parse_settings_flags(
         "thinking_enabled": thinking,
         "claude_in_chrome": claude_in_chrome,
         "fast_mode": fast_mode,
-        # Raw string: keyword aliases (``max``/``min``) and the literal token
+        # Raw string: aliases (``max``/``min``) and the literal token
         # forms (``200k``/``1m``/...) are both resolved + parsed per-provider in
-        # ``prepare_settings`` — a keyword only has meaning once we know which
+        # ``prepare_settings`` — an alias only has meaning once we know which
         # provider's table to consult.
         "context_max": context_max,
         "question_widget": question_widget,
@@ -156,7 +156,7 @@ def prepare_settings(
     """Resolve the settings update for one session against its provider.
 
     ``overrides`` / ``unset_fields`` come from :func:`parse_settings_flags`
-    (already globally validated). Keyword aliases are resolved and fields the
+    (already globally validated). Aliases are resolved and fields the
     provider doesn't support are dropped silently (no-op) before validation.
     Returns ``(updates, replace_all)`` ready for a
     ``kind="session:update_settings"`` payload, or a flat list of
@@ -181,7 +181,7 @@ def prepare_settings(
     pb = bootstrap.providers[provider]
 
     # Whether the session's project is untrusted (unknown trust counts as
-    # untrusted): routes permission_mode keyword resolution + the clamp, so an
+    # untrusted): routes permission_mode alias resolution + the clamp, so an
     # update in an untrusted project lands inside the restricted set.
     untrusted = project_is_untrusted(resolved.project_id)
 
@@ -189,7 +189,7 @@ def prepare_settings(
     # support (symmetric with the set-field drop done by ``resolve_overrides``).
     unset_fields = [f for f in unset_fields if f in supported_fields(pb)]
 
-    # Per-provider keyword-alias resolution (``max`` → flagship, ``open`` →
+    # Per-provider alias resolution (``max`` → flagship, ``open`` →
     # most permissive non-interactive mode, ...) + ``context_max`` parse +
     # silent drop of unsupported set fields. After this, ``overrides`` holds
     # only concrete, provider-valid literals.

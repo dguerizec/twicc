@@ -383,7 +383,7 @@ def _settings(
 
     Flags mirror `update-session settings` (patch by default; `--preset`
     switches to replace mode). Resolution is per-session against each session's
-    provider: keyword aliases resolve to that provider's concrete value, fields
+    provider: aliases resolve to that provider's concrete value, fields
     the provider doesn't support are dropped silently (no-op), and a session
     whose provider rejects a value yields a per-id validation_error
     (invalid_choice / invalid_format / invalid_preset) while the others proceed.

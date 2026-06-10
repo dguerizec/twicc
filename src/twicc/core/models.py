@@ -116,20 +116,20 @@ class Project(models.Model):
     # Optional defaults that seed a NEW session's agent settings, inherited UP
     # the project hierarchy (worktree_of main repo first, else nearest path
     # ancestor, recursively). These are a CREATION-TIME concern only: the
-    # frontend resolves the chain when a draft is created and pre-fills the
-    # draft with concrete values, frozen onto the session at launch. A launched
-    # session is a snapshot — changing a project (or global) default never
-    # affects it. The backend only STORES this config and serves it to the
-    # frontend; the chain resolution lives in
-    # frontend/src/utils/projectAgentDefaults.js.
-    # (resolve_agent_settings still falls a NULL column back to the global
-    # synced default, but that only fires for legacy sessions created before
-    # the snapshot model.) There is no propagation flag (unlike trust).
+    # chain is resolved when a session is being created and materialized into
+    # concrete values frozen onto the session at launch. A launched session is
+    # a snapshot — changing a project (or global) default never affects it.
+    # The chain resolution lives in frontend/src/utils/projectAgentDefaults.js
+    # (draft pre-fill) and its backend mirror twicc/project_agent_defaults.py
+    # (CLI create-session); it is NEVER wired into the per-turn resolution
+    # sites. (resolve_agent_settings still falls a NULL column back to the
+    # global synced default, but that only fires for legacy sessions created
+    # before the snapshot model.) There is no propagation flag (unlike trust).
     #
     # Which provider a NEW session in this project defaults to. NULL =
     # inherit from the chain, ultimately the global defaultProvider. Only
-    # consumed where a provider is picked (the frontend new-session flow);
-    # an explicit provider always wins.
+    # consumed where a provider is picked (the frontend new-session flow and
+    # CLI create-session without --provider); an explicit provider always wins.
     default_provider = models.CharField(max_length=50, null=True, blank=True, default=None)
     # Per-provider partial agent-settings bundles:
     #   { "<provider>": { "<AgentSettings field>": value | null, ... }, ... }

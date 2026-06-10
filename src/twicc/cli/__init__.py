@@ -1108,8 +1108,12 @@ app.command(name="delete-workspace")(delete_workspace_cmd)
 from twicc.cli.create_project import create_project_cmd  # noqa: E402
 app.command(name="create-project")(create_project_cmd)
 
-from twicc.cli.update_project import update_project_cmd  # noqa: E402
-app.command(name="update-project")(update_project_cmd)
+# ``update-project`` is a Typer group: the flat field patch lives on the
+# callback (``twicc update-project <PROJECT> --name X`` keeps working) and
+# ``settings`` is a sub-command (``twicc update-project <PROJECT> settings
+# --provider P ...``) for the per-provider agent-settings defaults.
+from twicc.cli.update_project.command import update_project_app  # noqa: E402
+app.add_typer(update_project_app)
 
 
 # ``info`` is a single read-only command taking zero or more positional

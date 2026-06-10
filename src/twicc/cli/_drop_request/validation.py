@@ -75,10 +75,10 @@ def validate_settings(provider: str, settings, bootstrap) -> list[ValidationErro
     aliases = pb.agent_settings_aliases or {}
 
     def _alias_hint(field_name: str) -> str:
-        # Surface the provider's keyword aliases on an invalid value so a user
-        # who typed an unsupported keyword discovers the accepted ones.
+        # Surface the provider's aliases on an invalid value so a user
+        # who typed an unsupported alias discovers the accepted ones.
         keys = sorted((aliases.get(field_name) or {}).keys())
-        return f" Or a keyword: {keys}." if keys else ""
+        return f" Or an alias: {keys}." if keys else ""
 
     for field, value in settings._asdict().items():
         if value is None:

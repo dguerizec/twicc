@@ -254,7 +254,7 @@ class BaseProviderHelpers:
     # ``.constants`` module so it stays Django-free.
     AGENT_SETTINGS_DESCRIPTIONS: ClassVar[dict[str, dict]] = {}
 
-    # Per-field keyword aliases the CLI/skills accept in place of a concrete
+    # Per-field aliases the CLI/skills accept in place of a concrete
     # agent-settings value (``max`` → the family flagship, ``open`` → the most
     # permissive non-interactive mode, ...). Shape ``{field: {alias: value}}``.
     # Each provider redeclares its own table from its ``.constants`` module so
@@ -433,14 +433,16 @@ class BaseProviderHelpers:
         Fields not listed in the mapping (i.e. unsupported by this provider) are
         returned as ``None``.
 
-        Per-project defaults are NOT resolved here: they are a creation-time,
-        frontend-only concern. The frontend resolves the project chain when a
-        draft is created and pre-fills the draft with concrete values, so a
-        launched session carries no ``None`` for a supported field. A ``None``
-        reaching this method therefore comes from a legacy session and falls
-        through to the global synced default. See
-        ``frontend/src/utils/projectAgentDefaults.js`` for the project-chain
-        resolution and ``docs/plans/2026-06-09-project-agent-defaults-design.md``.
+        Per-project defaults are NOT resolved here: they are a creation-time
+        concern, materialized into concrete values before the session exists.
+        The frontend resolves the project chain when a draft is created and
+        pre-fills the draft (``frontend/src/utils/projectAgentDefaults.js``);
+        the CLI does the same at ``create-session`` time (via
+        :mod:`twicc.project_agent_defaults`). Either way a launched session
+        carries no ``None`` for a supported field. A ``None`` reaching this
+        method therefore comes from a legacy session and falls through to the
+        global synced default. See
+        ``docs/plans/2026-06-09-project-agent-defaults-design.md``.
         """
         from twicc.synced_settings import read_synced_settings
 
@@ -488,10 +490,10 @@ class BaseProviderHelpers:
         raise NotImplementedError
 
     def get_agent_settings_aliases(self) -> dict[str, dict[str, str]]:
-        """Return the per-field keyword aliases for this provider.
+        """Return the per-field aliases for this provider.
 
         Shape ``{field: {alias: concrete_value}}``. Used by the CLI/skills to
-        resolve semantic keywords (``max``, ``open`` ...) into concrete,
+        resolve semantic aliases (``max``, ``open`` ...) into concrete,
         provider-specific values before a request is written. Empty for
         providers that declare no aliases.
         """

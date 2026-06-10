@@ -38,7 +38,7 @@ $TWICC create-session [OPTIONS] '<PROMPT>'
 ### Options
 
 - `--project PATH-OR-ID` — directory path or project id (**drop the leading dash** on ids). Non-existent directories are auto-created as projects. Defaults to the current working directory.
-- `--provider claude_code|codex` — falls back to the user's default. Use `$TWICC info` to check available providers, which is the default, and which are disabled (skill: `twicc-info`).
+- `--provider claude_code|codex` — falls back to the target project's `default_provider` (inherited through parent projects / git worktree main repo), then the user's global default. Use `$TWICC info` to check available providers, which is the default, and which are disabled (skill: `twicc-info`).
 - `--preset NAME` — saved agent-settings preset. Per-flag options override preset values. `__defaults__` forces the user-configured defaults explicitly. Use `$TWICC info presets` to list available presets (skill: `twicc-info`).
 - `--title TEXT` — **always pass this.** A concise 5–7 word title derived from the prompt. Don't rely on the auto-derived title.
 - `--annotation KEY=VALUE` — add a free-form session annotation; repeatable.
@@ -47,7 +47,7 @@ $TWICC create-session [OPTIONS] '<PROMPT>'
 
 ### Agent settings
 
-All optional. Omit to use preset / user defined defaults. Use `$TWICC info models agent-settings` for authoritative model lists, valid values, and per-value restrictions (skill: `twicc-info`). The lists below are indicative.
+All optional. A field you omit (and the preset doesn't set) takes the target project's `default_agent_settings` for the chosen provider (inherited through parent projects / git worktree main repo — see `twicc-project`), then the user's global default. The resolved values are frozen onto the session at creation, exactly like a session created from the UI. Use `$TWICC info models agent-settings` for authoritative model lists, valid values, and per-value restrictions (skill: `twicc-info`). The lists below are indicative.
 
 - `--model VALUE` — Claude Code: `fable`, `opus`, `sonnet`, `opus-4.7`, `opus-4.6`, `opus-4.5`, `sonnet-4.5`. Codex: `gpt`, `gpt-mini`, `gpt-5.4`.
 - `--effort VALUE` — Claude Code: `low`, `medium`, `high`, `xhigh`, `max`. Codex: `low`, `medium`, `high`, `xhigh`.
@@ -68,7 +68,7 @@ Some settings also accept provider-agnostic aliases, resolved to each provider's
 
 A flag the chosen provider doesn't support (e.g. `--thinking` on Codex) is silently ignored (no-op), so one command works across a mix of providers.
 
-**Untrusted projects.** In a project whose trust is *untrusted* — or not yet decided (unknown counts as untrusted) — `permission_mode` is restricted to a safe subset: `bypassPermissions` (Claude Code) / `yolo` (Codex) are unavailable. A session created there resolves `--permission-mode` against that subset — `min`/`safe`/`max` still work, with `max` → the most permissive *allowed* mode (Claude Code `acceptEdits`, Codex `autonomous`) — and an out-of-subset value (e.g. `bypass`) is clamped to the project's untrusted default with a note on stderr. See `twicc info agent-settings` → `permission_mode_if_untrusted` for the subset + its aliases. Project trust is a human-only decision; agents never set it.
+**Untrusted projects.** In a project whose trust is *untrusted* — or not yet decided (unknown counts as untrusted) — `permission_mode` is restricted to a safe subset: `bypassPermissions` (Claude Code) / `yolo` (Codex) are unavailable. A session created there resolves `--permission-mode` against that subset — `min`/`safe`/`max` still work, with `max` → the most permissive *allowed* mode (Claude Code `acceptEdits`, Codex `autonomous`) — and an out-of-subset value (e.g. `bypass`) is clamped to the project's untrusted default with a note on stderr. When `--permission-mode` is omitted, the session seeds from the project chain's `permission_mode_if_untrusted` default, then the global untrusted default. See `twicc info agent-settings` → `permission_mode_if_untrusted` for the subset + its aliases. Project trust is a human-only decision; agents never set it.
 
 ### `--hidden`
 

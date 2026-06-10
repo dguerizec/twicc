@@ -71,7 +71,7 @@ AGENT_SETTINGS_DESCRIPTIONS: dict[str, dict] = {
 }
 
 
-# Keyword aliases the CLI / skills accept in place of a concrete agent-settings
+# Aliases the CLI / skills accept in place of a concrete agent-settings
 # value, resolved against Codex before the request leaves the client. See the
 # matching table in ``twicc.providers.claude_code.constants`` for the full
 # rationale (native-first resolution, token-count strings for ``context_max``).
@@ -94,7 +94,7 @@ AGENT_SETTINGS_ALIASES: dict[str, dict[str, str]] = {
         "max": "yolo", "full": "yolo", "open": "yolo", "bypass": "yolo",
     },
     # Untrusted projects use a restricted set (``yolo`` removed — see
-    # ``UNTRUSTED_PERMISSION_MODES``). These keywords resolve only to values
+    # ``UNTRUSTED_PERMISSION_MODES``). These aliases resolve only to values
     # inside that set, so ``min``/``safe``/``max`` stay meaningful when a session
     # is created in an untrusted project. ``max`` is the most permissive mode
     # still allowed there: ``autonomous`` (workspace-write sandbox, uninterrupted).

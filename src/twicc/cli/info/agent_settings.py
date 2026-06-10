@@ -82,7 +82,7 @@ def build(provider: str | None, include_disabled: bool = False) -> dict[str, dic
         # sibling ``permission_mode_if_untrusted`` field so a caller scripting
         # create/update-session knows which modes survive there. A session created
         # or updated in an untrusted project has its permission_mode resolved /
-        # clamped against this set (with a note on a downgrade). Its keyword
+        # clamped against this set (with a note on a downgrade). Its alias
         # aliases (``min``/``safe``/``max``) are attached by the loop below.
         untrusted_modes = getattr(helpers, "UNTRUSTED_PERMISSION_MODES", frozenset())
         if untrusted_modes:

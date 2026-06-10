@@ -15,7 +15,7 @@ The semantics mirror the UI's settings-only update path:
 ``--model X`` combined with ``--unset model`` is rejected up-front
 (``unset_conflict``). ``--unset <field>`` for a field the session's provider
 doesn't support is silently ignored (no-op), as is a per-flag value for an
-unsupported field; keyword aliases (``max``, ``open``, ...) are resolved to the
+unsupported field; aliases (``max``, ``open``, ...) are resolved to the
 provider's concrete value before validation.
 
 The flag parsing (provider-independent) and the per-provider resolution both

@@ -122,6 +122,7 @@ Bump rule of thumb: any user-visible skill change → bump the patch (`0.10.0` �
   - `clearParsedContent(item)`
   - `hasContent(item)`
 - Agent settings are a closed cross-provider bundle: `selected_model`, `effort`, `thinking_enabled`, `permission_mode`, `context_max`, `claude_in_chrome`, `fast_mode`. New provider-specific session flags should follow the same shared-session-row pattern unless the user asks otherwise.
+- Per-project agent defaults (`Project.default_provider` + `Project.default_agent_settings`) seed NEW sessions only, inherited up the chain (worktree main repo, then path ancestors). Resolution happens at creation time only — `frontend/src/utils/projectAgentDefaults.js` (UI drafts) and its mirror `src/twicc/project_agent_defaults.py` (CLI `create-session`); never wire it into per-turn settings resolution.
 - `permission_mode_if_untrusted` is NOT in the bundle: it is a default-shaping field (global settings / presets / per-project defaults only, never on `Session`). In an untrusted (or unknown-trust) project the session's single `permission_mode` is resolved/clamped against the provider's `UNTRUSTED_PERMISSION_MODES` (no `bypassPermissions`/`yolo`) — enforced by the backend floor (`core/services/trust.py`) and mirrored by the CLI. Project trust is a human-only decision, never an agent-facing flag/skill. See `docs/plans/2026-06-09-project-trust-design.md` §13.
 
 ## Web Awesome

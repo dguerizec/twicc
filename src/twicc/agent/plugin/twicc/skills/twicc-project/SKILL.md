@@ -49,6 +49,8 @@ $TWICC project <PROJECT>
   "worktree_of": null,
   "trust": null,
   "trust_propagation": false,
+  "default_provider": null,
+  "default_agent_settings": {"claude_code": {"permission_mode": "acceptEdits", "effort": "high"}},
   "workspaces": ["backend", "home-side-projects"],
   "worktrees": ["-home-twidi-dev-myproject--worktrees-feature-x"]
 }
@@ -65,6 +67,8 @@ $TWICC project <PROJECT>
 - `worktrees` — the project ids of this project's own git worktrees (the reverse of `worktree_of`); empty when it has none. A worktree's sessions, cost and activity count toward its main repository.
 - `trust` — the project's own trust decision: `true` = trusted, `false` = untrusted, `null` = no own decision (inherits from its parent directory / git root). **Read-only here, and human-only to change** — agents never set trust. A session created in an untrusted (or `null` / undecided) project runs under a restricted permission set (`bypassPermissions` / `yolo` unavailable).
 - `trust_propagation` — whether an explicit `trust` decision also covers the project's sub-paths and its git worktrees.
+- `default_provider` — provider a NEW session in this project defaults to; `null` = inherit from the parent chain (worktree main repo / path ancestors), ultimately the global default. Editable via `$TWICC update-project <PROJECT> --default-provider X`.
+- `default_agent_settings` — per-provider agent-settings defaults that seed NEW sessions created here (`{"<provider>": {"<field>": value}}` or `null`); a missing field inherits from the parent chain, then the global default. Includes the optional `permission_mode_if_untrusted` key (the permission mode seeded instead of `permission_mode` when the project resolves untrusted). Creation-time only: changing these never affects existing sessions. Editable via `$TWICC update-project <PROJECT> settings`.
 - `workspaces` — workspace IDs this project belongs to (empty if none).
 
 ## Examples
