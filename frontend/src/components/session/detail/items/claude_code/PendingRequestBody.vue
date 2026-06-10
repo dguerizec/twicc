@@ -1031,14 +1031,16 @@ function handleSubmitQuestions() {
                     >{{ otherActive[qIndex] ? 'Cancel other' : 'Other...' }}</a>
                 </div>
                 <div v-if="otherActive[qIndex]" class="other-input-row">
-                    <wa-input
+                    <wa-textarea
                         :ref="el => { if (el) otherInputRefs[qIndex] = el }"
                         placeholder="Type your answer..."
                         size="small"
+                        rows="1"
+                        resize="auto"
                         :value.prop="otherTexts[qIndex] || ''"
                         @input="onOtherInput(qIndex, $event)"
                         class="other-input"
-                    ></wa-input>
+                    ></wa-textarea>
                 </div>
             </div>
         </div>
@@ -1341,5 +1343,15 @@ wa-textarea.auto-focused:focus-within::part(base) {
 
 .other-input {
     width: 100%;
+}
+
+/* Auto-grow with content up to 4 lines of text, then scroll. The max-height
+   mirrors the inner textarea's block padding formula (wa-textarea compensates
+   the line-height overshoot: padding-block - (1lh - 1em) / 2 per side).
+   resize="auto" sets overflow-y: hidden, which would trap content past the
+   cap — restore scrolling. */
+.other-input::part(textarea) {
+    max-height: calc(4lh + 2 * (var(--wa-form-control-padding-block) - (1lh - 1em) / 2));
+    overflow-y: auto;
 }
 </style>
