@@ -71,8 +71,8 @@ The same map is available visually in the TwiCC UI: any session that belongs to 
 
 Each session's context block gives a `scratch_base_dir`:
 
-- **Private scratch** — a session's own working files go under `<scratch_base_dir>/<session_id>/` (private to that session, no prefix needed).
-- **Shared scratch** — to exchange bulky output (a large diff, a generated file, a long report) with the rest of the tree, sessions use the directory passed down as the `scratch_dir` annotation. The leader picks one folder and propagates it through the subtree; it is created on demand (`mkdir -p`), and every file is prefixed with the writer's own session id so agents never clobber each other. Executors only — a read-only session keeps its result in its reply.
+- **Private scratch** — a session's own working files go under `<scratch_base_dir>/<session_id>/` (pre-created by TwiCC, private to that session, no prefix needed).
+- **Shared scratch** — to exchange bulky output (a large diff, a generated file, a long report) with the rest of the tree, sessions use the directory passed down as the `scratch_dir` annotation. The leader picks one folder and propagates it through the subtree; it is the leader's own scratch dir, pre-created by TwiCC (`mkdir -p` stays harmless for a custom path), and every file is prefixed with the writer's own session id so agents never clobber each other. A read-only session can **read** the shared scratch but cannot **write** it, so it returns its own result in its reply.
 
 The recurring pattern: an executor writes `<scratch_dir>/<session_id>-result.md`, then sends a short `send-message parent` ("done, see that file"); the parent reads it.
 

@@ -856,9 +856,20 @@ class ClaudeCodeAgent(BaseAgent):
             if system_prompt_append is not None:
                 system_prompt_option["append"] = system_prompt_append
 
+            # Pre-create and collect this session's work dirs (its own
+            # artifacts/<id> + scratch/<id>, plus the orchestration root's
+            # shared scratch when spawned) and grant them via ``add_dirs`` so
+            # the agent reads/writes them prompt-free in the modes that allow
+            # writes. Passed in every mode: redundant under bypass, read-only
+            # under plan — harmless either way. ``add_dirs`` needs existing
+            # dirs (Claude silently ignores a missing target), hence the
+            # pre-creation inside the helper.
+            work_dirs = await self._resolve_and_create_work_dirs()
+
             options = ClaudeAgentOptions(
                 system_prompt=system_prompt_option,
                 cwd=self.cwd,
+                add_dirs=work_dirs,
                 permission_mode=self.agent_settings.permission_mode,
                 model=self.sdk_model,
                 effort=self.agent_settings.effort,

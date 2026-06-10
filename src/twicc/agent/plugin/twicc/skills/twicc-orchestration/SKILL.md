@@ -118,15 +118,15 @@ Keep values **short and single-line** — annotations are metadata, not a messag
 
 Your context block gives a `scratch_base_dir`. Two uses:
 
-- **Your own scratch** — for your private working files, use `<scratch_base_dir>/<your_session_id>/`. It is yours alone, so no filename prefix is needed.
+- **Your own scratch** — for your private working files, use `<scratch_base_dir>/<your_session_id>/`. It already exists (TwiCC creates it for you) and is yours alone, so no filename prefix is needed.
 - **Shared scratch** — to exchange files with the other sessions of your tree, use the directory given by the **`scratch_dir` annotation**. Messages and annotations must stay short, so a shared folder is the right channel for bulky output (a large diff, a generated file, a long report).
 
 How the shared scratch works:
 
 - The leader picks a folder (typically `<scratch_base_dir>/<leader_session_id>/`) and passes its absolute path to each child as the `scratch_dir` annotation. A child that spawns children **propagates the same `scratch_dir`**, so the whole subtree converges on one folder. A `scratch_dir` annotation **takes precedence** over your own `scratch_base_dir`.
-- **Create on demand**: the first agent that needs it runs `mkdir -p <scratch_dir>` (idempotent) — nobody creates it up front.
+- **Already created**: the shared folder is the root session's own scratch dir, which TwiCC pre-creates (like every session's), so write to it directly — `mkdir -p` stays harmless/idempotent if you ever point `scratch_dir` at a custom path.
 - **Prefix every file with your own session id** (`<session_id>-report.md`) so two agents never clobber the same file.
-- **Executors only**: a read-only session can neither write nor read the scratch space; it keeps its result in its reply (read by pull).
+- **Read-only sessions**: cannot **write** the scratch, but **can read** it — TwiCC grants every tree member read access to the shared scratch, so a read-only executor still pulls peers' files from there; it returns its own result in its reply (the parent reads it by pull).
 
 Pattern: an executor (worker or manager) writes `<scratch_dir>/<session_id>-result.md`, then sends a short `send-message parent` ("done, see `<session_id>-result.md`"); the parent reads the file.
 

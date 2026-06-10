@@ -122,8 +122,9 @@ to see or open it from the TwiCC UI, save it OUTSIDE the project's
 repository so the working tree stays clean.
 
 - Directory: `{artifacts_base_dir}/{session_id}/{artifact_file_name}` — the
-  absolute `artifacts_base_dir` is listed in the "Context" block below; create
-  the per-session subdirectory if it does not yet exist.
+  absolute `artifacts_base_dir` is listed in the "Context" block below. Your
+  per-session subdirectory already exists (TwiCC creates it for you); just
+  write your file into it.
 - URL: `/artifacts/{session_id}/{artifact_file_name}`
 - Reference the URL from Markdown (e.g. `![label](URL)`) so the image
   renders inline in the conversation.
@@ -143,7 +144,8 @@ When you need somewhere to put throwaway working files, use the scratch space
 rather than the project repository, so the working tree stays clean.
 
 - Base directory: `{scratch_base_dir}`, listed in the "Context" block below.
-  It is not created for you; make what you need on demand (e.g. `mkdir -p`).
+  Your own per-session folder `{scratch_base_dir}/{session_id}/` already exists
+  (TwiCC creates it for you); write your throwaway files into it directly.
 - Delete files once you no longer need them.
 - Scratch files are not served over a URL and are not shown to the user; for
   visuals the user should open, use Artifacts above.
@@ -358,8 +360,9 @@ def build_dynamic_block(
     lines.append(f"- artifacts_base_dir: {get_artifacts_dir()}")
 
     # Absolute, resolved root for scratch files (throwaway work space, or a
-    # shared folder for an orchestration tree). Created on demand by agents;
-    # the static addendum above references this base via ``{scratch_base_dir}``.
+    # shared folder for an orchestration tree). The per-session subdir is
+    # pre-created at agent start; the static addendum above references this
+    # base via ``{scratch_base_dir}``.
     lines.append(f"- scratch_base_dir: {get_scratch_dir()}")
 
     lines.append(f"- project: {_project_descriptor(project_id)}")

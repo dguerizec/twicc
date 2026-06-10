@@ -573,6 +573,104 @@ class BaseAgent:
         """Forget the reconciliation baseline (resume) → next reconcile re-injects all."""
         reset_baseline(self.session_id)
 
+    async def _resolve_and_create_work_dirs(self) -> list[str]:
+        """Pre-create this session's work dirs and return them as absolute paths.
+
+        Always covers the session's own ``artifacts/<id>`` and ``scratch/<id>``.
+        For a session inside an orchestration tree (``Session.spawn_root`` set),
+        the root session's ``scratch/<root_id>`` is added too, so the whole
+        subtree shares one scratch folder.
+
+        These paths are granted to the agent for prompt-free access — via
+        ``ClaudeAgentOptions.add_dirs`` (Claude Code) or the workspace-write
+        sandbox ``writable_roots`` (Codex). Both need the directory to exist up
+        front: Claude silently ignores a missing ``--add-dir`` target, and the
+        Codex sandbox can write *under* a root but cannot create the root dir
+        itself. Creation is ``mkdir -p`` (idempotent): a background cleanup may
+        prune empty dirs later, and we recreate them here on the next
+        start/resume.
+
+        Runs once per agent instance (Claude: at ``start``; Codex: lazily on the
+        first turn, where the canonical thread id is final). The ``spawn_root``
+        id is read from the ``Session`` row, falling back to the pending-session
+        buffer for a brand-new session whose row the watcher has not written
+        yet. Each id must be a single safe path component (no empty value,
+        ``.``/``..``, or path separators) so a work dir can only ever be
+        ``<root>/<id>``; a malformed id is dropped. (TwiCC owns the whole data
+        dir and only ever builds ``<root>/<known id>``, so this is a cheap
+        robustness net against a malformed id, not a defense against a hostile
+        filesystem.) Best-effort: a failed ``mkdir`` (or a rejected id) is logged
+        and that dir is omitted, never raised — it must never abort agent
+        startup.
+        """
+        from twicc.core.models import Session
+        from twicc.paths import get_artifacts_dir, get_scratch_dir
+        from twicc.pending_session_attributes import get_pending_session_attributes
+
+        session_id = self.session_id
+
+        def _build() -> list[str]:
+            # (root, segment) pairs to grant. ``segment`` is a session id used as
+            # a single path component under ``root``; the guard below rejects any
+            # id that is not a single safe component (empty, ``.``/``..``, or with
+            # separators) so a malformed id can never reach another session.
+            candidates = [
+                (get_artifacts_dir(), session_id),
+                (get_scratch_dir(), session_id),
+            ]
+            # Shared scratch of the orchestration root: the spawn_root id comes
+            # from the Session row (resume) or the pending buffer (fresh start,
+            # row not written yet). A top-level session has no spawn_root; a
+            # session that IS the root already has its own scratch above.
+            spawn_root_id = (
+                Session.objects
+                .filter(id=session_id)
+                .values_list("spawn_root_id", flat=True)
+                .first()
+            )
+            if spawn_root_id is None:
+                pending = get_pending_session_attributes(session_id)
+                spawn_root_id = pending.spawn_root_id if pending else None
+            if spawn_root_id and spawn_root_id != session_id:
+                candidates.append((get_scratch_dir(), spawn_root_id))
+
+            work_dirs: list[str] = []
+            for root, segment in candidates:
+                # The id must be a single safe path component, so the dir can
+                # only be ``<root>/<id>`` (rejects empty, ``.``/``..`` and path
+                # separators). TwiCC owns the data dir and only ever builds
+                # ``<root>/<known id>`` — no agent can write the roots, only its
+                # own pre-created subdir — so this is a cheap robustness net
+                # against a malformed id, not a defense against a hostile FS
+                # (e.g. symlinks planted in the roots, which cannot happen here).
+                if (
+                    not segment
+                    or segment in (".", "..")
+                    or "/" in segment
+                    or "\\" in segment
+                    or "\x00" in segment
+                ):
+                    logger.warning(
+                        "Skipping unsafe work dir id %r under %s for session %s",
+                        segment, root, session_id,
+                    )
+                    continue
+                target = root / segment
+                # Only grant a dir we could actually create: a failed mkdir
+                # leaves no usable dir, so don't promise access to it.
+                try:
+                    target.mkdir(parents=True, exist_ok=True)
+                except OSError as exc:
+                    logger.warning(
+                        "Could not pre-create work dir %s for session %s: %s",
+                        target, session_id, exc,
+                    )
+                    continue
+                work_dirs.append(str(target))
+            return work_dirs
+
+        return await sync_to_async(_build)()
+
     async def _is_session_hidden(self) -> bool:
         """Cheap DB lookup of ``Session.hidden`` for this agent's session.
 

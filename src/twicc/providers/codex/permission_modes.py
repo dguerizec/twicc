@@ -66,20 +66,31 @@ def resolve_codex_policy(mode: str | None) -> tuple[SandboxMode, AskForApproval]
     return _PRESET_MAP.get(mode or DEFAULT_MODE, _PRESET_MAP[DEFAULT_MODE])
 
 
-def _to_sandbox_policy(sandbox_mode: SandboxMode) -> SandboxPolicy:
+def _to_sandbox_policy(
+    sandbox_mode: SandboxMode,
+    writable_roots: list[str] | None = None,
+) -> SandboxPolicy:
     """Convert a ``SandboxMode`` enum (used by ``thread_start(sandbox=...)``)
     to a ``SandboxPolicy`` ``RootModel`` (used by ``thread.turn(sandbox_policy=...)``).
 
     The SDK has two parallel types: ``SandboxMode`` for thread bootstrap,
     ``SandboxPolicy`` for per-turn override. The mapping is mechanical
-    because both encode the same 3 modes we use; the ``RootModel`` form
-    just carries extra config fields (network_access, writable_roots, …)
-    that we leave on their defaults.
+    because both encode the same 3 modes we use.
+
+    ``writable_roots`` are extra absolute directories the agent may write to on
+    top of the workspace (its own artifacts/scratch dirs, plus the orchestration
+    root's shared scratch). They only apply to ``workspace-write``: ``read-only``
+    already reads the whole filesystem and forbids writes, and
+    ``danger-full-access`` writes everywhere — neither type even carries the
+    field, so the list is silently irrelevant there.
     """
     if sandbox_mode is SandboxMode.read_only:
         return SandboxPolicy(root=ReadOnlySandboxPolicy(type="readOnly"))
     if sandbox_mode is SandboxMode.workspace_write:
-        return SandboxPolicy(root=WorkspaceWriteSandboxPolicy(type="workspaceWrite"))
+        return SandboxPolicy(root=WorkspaceWriteSandboxPolicy(
+            type="workspaceWrite",
+            writable_roots=writable_roots or [],
+        ))
     if sandbox_mode is SandboxMode.danger_full_access:
         return SandboxPolicy(root=DangerFullAccessSandboxPolicy(type="dangerFullAccess"))
     # SandboxMode is an enum with exactly the 3 values above; unreachable.
@@ -88,13 +99,16 @@ def _to_sandbox_policy(sandbox_mode: SandboxMode) -> SandboxPolicy:
 
 def resolve_codex_turn_overrides(
     mode: str | None,
+    writable_roots: list[str] | None = None,
 ) -> tuple[SandboxPolicy, AskForApproval]:
     """Return the ``(SandboxPolicy, AskForApproval)`` pair for a per-turn override.
 
     Wraps :func:`resolve_codex_policy` and converts the sandbox to the
     ``RootModel`` shape ``thread.turn`` requires. Use this in
     ``CodexAgent._run_turn`` to translate the live ``agent_settings.permission_mode``
-    into the SDK kwargs.
+    into the SDK kwargs. ``writable_roots`` (the session's pre-created work
+    dirs) are folded into the workspace-write policy; see
+    :func:`_to_sandbox_policy`.
     """
     sandbox_mode, approval_policy = resolve_codex_policy(mode)
-    return _to_sandbox_policy(sandbox_mode), approval_policy
+    return _to_sandbox_policy(sandbox_mode, writable_roots), approval_policy

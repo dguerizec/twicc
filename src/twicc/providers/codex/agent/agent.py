@@ -234,6 +234,12 @@ class CodexAgent(BaseAgent):
         # fresh session.
         self._denied_tool_ids: dict[str, str] = {}
 
+        # This session's work dirs (own artifacts/scratch + the orchestration
+        # root's shared scratch), resolved + pre-created once on the first turn
+        # (where the canonical thread id is final) and reused as the
+        # workspace-write ``writable_roots`` on every turn. ``None`` until then.
+        self._work_dirs: list[str] | None = None
+
         # Captured lazily in ``start()`` — that's the first place we're
         # guaranteed to be inside a running asyncio loop. The SDK's worker
         # threads dispatch approval callbacks back to this loop via
@@ -305,6 +311,14 @@ class CodexAgent(BaseAgent):
         # so the SDK's worker threads can resume our coroutines back here
         # via ``asyncio.run_coroutine_threadsafe`` (see ``_sync_approval_handler``).
         self._loop = asyncio.get_running_loop()
+
+        # Pre-create this session's work dirs and cache them for the
+        # workspace-write ``writable_roots`` (reused on every turn). Done here,
+        # before the hardcoded-command short-circuit below, so the pre-creation
+        # contract ("every start/resume, all modes") still holds when we wake a
+        # cold session just to run a command (e.g. /compact) and never reach
+        # ``_run_turn``.
+        self._work_dirs = await self._resolve_and_create_work_dirs()
 
         if command is not None:
             # Woken purely to run a hardcoded command (e.g. ``/compact``) on a
@@ -486,7 +500,16 @@ class CodexAgent(BaseAgent):
             turn_mode = await sync_to_async(clamp_permission_mode_for_untrusted)(
                 Provider.CODEX, turn_mode,
             )
-        sandbox_policy, approval_policy = resolve_codex_turn_overrides(turn_mode)
+        # Grant the agent prompt-free writes to its own artifacts/scratch (and
+        # the orchestration root's shared scratch) via the workspace-write
+        # sandbox's writable_roots. The list is resolved + pre-created once in
+        # ``start()`` (cached on ``self._work_dirs``) and re-sent on every turn:
+        # each turn's sandbox_policy replaces the previous one, so omitting it
+        # would wipe the roots. No-op for read-only/strict (no writes) and yolo
+        # (writes everywhere) — those sandbox types don't carry the field.
+        sandbox_policy, approval_policy = resolve_codex_turn_overrides(
+            turn_mode, writable_roots=self._work_dirs,
+        )
         sdk_model = get_provider_helpers(Provider.CODEX).resolve_sdk_model(
             self.agent_settings.selected_model,
         )
