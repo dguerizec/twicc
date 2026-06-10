@@ -66,8 +66,20 @@ class CodeCommentWidget extends WidgetType {
             updateBtnState()
         })
 
-        // Close on Escape
+        // Ctrl/Cmd+Enter adds to the message input (same as the "Add to message"
+        // button), and Escape closes the widget.
         textarea.addEventListener('keydown', (e) => {
+            if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+                // Mirror the "Add to message" button: only act when there is
+                // content (the button is disabled while the textarea is empty).
+                if (this.callbacks.onAddToMessage && textarea.value.trim().length > 0) {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    view.dispatch({ effects: removeCommentEffect.of({ lineNumber: this.lineNumber }) })
+                    this.callbacks.onAddToMessage(this.lineNumber)
+                }
+                return
+            }
             if (e.key === 'Escape') {
                 e.stopPropagation()
                 view.dispatch({ effects: removeCommentEffect.of({ lineNumber: this.lineNumber }) })
