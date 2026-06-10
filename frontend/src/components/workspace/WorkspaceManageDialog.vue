@@ -368,6 +368,16 @@ defineExpose({ open, close, openForWorkspace, openNew })
         @wa-after-show="handleDialogAfterShow"
         @wa-hide="handleDialogHide"
     >
+        <!-- Custom header: title + (edit mode) a live badge preview of the
+             workspace, reflecting the unsaved name/color being edited. -->
+        <div slot="label" class="dialog-title">
+            <span class="dialog-title-text">{{ dialogLabel }}</span>
+            <span v-if="view === 'form' && formData.id" class="dialog-title-badge">
+                <wa-icon name="layer-group" auto-width :style="formData.color ? { color: formData.color } : null"></wa-icon>
+                <span class="dialog-title-badge-name">{{ formData.name.trim() || 'Workspace' }}</span>
+            </span>
+        </div>
+
         <!-- === LIST VIEW === -->
         <div v-if="view === 'list'" class="dialog-content">
             <!-- Show archived toggle (local to dialog, does not affect global setting) -->
@@ -664,6 +674,36 @@ defineExpose({ open, close, openForWorkspace, openNew })
 <style scoped>
 .manage-workspaces-dialog {
     --width: min(36rem, calc(100vw - 2rem));
+}
+
+/* Dialog header: title on the left, the live workspace badge on the right.
+   The gap is the minimum separation kept when a long title leaves no free
+   space (otherwise margin-left:auto pushes the badge to the right edge). */
+.dialog-title {
+    display: flex;
+    align-items: center;
+    gap: var(--wa-space-m);
+    flex-wrap: wrap;
+    min-width: 0;
+}
+
+/* Live badge preview pinned to the right of the title — icon + name, a touch
+   smaller. inline-flex/gap lay it out; min/max-width keep it ellipsized. */
+.dialog-title-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--wa-space-xs);
+    margin-left: auto;
+    font-size: 0.85em;
+    min-width: 0;
+    max-width: 100%;
+}
+
+.dialog-title-badge-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
 }
 
 .dialog-content {

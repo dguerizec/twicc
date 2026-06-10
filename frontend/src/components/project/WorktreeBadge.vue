@@ -23,6 +23,13 @@ const props = defineProps({
     dot: { type: Boolean, default: true },
     // When true, the main repository name links to that project's home.
     parentLink: { type: Boolean, default: false },
+    // Explicit override for the worktree folder label. When non-null it replaces
+    // the computed label. Used for live previews reflecting an unsaved name.
+    folderOverride: { type: String, default: null },
+    // Explicit dot color override for the worktree's own color. When non-null
+    // (including an empty string, meaning "no own color → inherit the parent's")
+    // it replaces the worktree's stored color. Used for live previews.
+    colorOverride: { type: String, default: null },
     gap: { type: String, default: null },
 })
 
@@ -34,8 +41,15 @@ const parent = computed(() => {
 })
 const parentName = computed(() => parent.value ? store.getProjectDisplayName(parent.value.id) : '')
 const parentRoute = computed(() => parent.value ? { name: 'project', params: { projectId: parent.value.id } } : null)
-const folder = computed(() => worktreeLabel(project.value) || store.getProjectDisplayName(props.projectId))
-const color = computed(() => project.value?.color || parent.value?.color || null)
+const folder = computed(() =>
+    props.folderOverride !== null
+        ? props.folderOverride
+        : worktreeLabel(project.value) || store.getProjectDisplayName(props.projectId)
+)
+const color = computed(() => {
+    const own = props.colorOverride !== null ? props.colorOverride : project.value?.color
+    return own || parent.value?.color || null
+})
 </script>
 
 <template>

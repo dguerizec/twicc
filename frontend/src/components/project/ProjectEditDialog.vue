@@ -10,6 +10,8 @@ import DirectoryPickerPopup from '../files/DirectoryPickerPopup.vue'
 import { composeWorktreeDir } from '../../utils/worktreePath'
 import { resolveProjectTrust } from '../../utils/trust'
 import ProjectAgentDefaultsSection from './ProjectAgentDefaultsSection.vue'
+import ProjectBadge from './ProjectBadge.vue'
+import WorktreeBadge from './WorktreeBadge.vue'
 
 const props = defineProps({
     project: {
@@ -67,6 +69,23 @@ const isCreateMode = computed(() => !props.project)
 // Unique form ID per instance to avoid conflicts when multiple dialog instances coexist in the DOM
 const instanceId = useId()
 const formId = `project-dialog-form-${instanceId}`
+
+// -- Live header badge --------------------------------------------------------
+// Edit mode shows a live preview of the project's badge next to the title,
+// reflecting the unsaved name/color the user is typing.
+const isWorktreeProject = computed(() => !isCreateMode.value && !!props.project?.worktree_of)
+
+// Leaf folder name of the project's directory — the "unnamed" display fallback
+// (same rule as the store's display name and worktreeLabel).
+const directoryLeaf = computed(() => {
+    const dir = (props.project?.directory || '').replace(/\/+$/, '')
+    const idx = dir.lastIndexOf('/')
+    return idx >= 0 ? dir.slice(idx + 1) : dir
+})
+
+// Badge label: the typed name, falling back to the directory leaf when empty —
+// matching how an unnamed project (or worktree) renders once saved.
+const previewName = computed(() => localName.value.trim() || directoryLeaf.value)
 
 // -- Trust --------------------------------------------------------------------
 function trustChoiceFromValue(trust) {
@@ -557,9 +576,27 @@ defineExpose({
 
 <template>
     <wa-dialog ref="dialogRef" :label="isCreateMode ? 'New Project' : 'Edit Project'" class="project-edit-dialog" @wa-show="handleDialogShow" @wa-after-show="handleDialogAfterShow">
-        <!-- Custom header: title + (edit mode) the project path, small, underneath. -->
+        <!-- Custom header: title + a live badge preview (edit mode), then the
+             project path small underneath. The badge reflects the unsaved
+             name/color being edited. -->
         <div slot="label" class="dialog-title">
-            <span class="dialog-title-text">{{ isCreateMode ? 'New Project' : 'Edit Project' }}</span>
+            <div class="dialog-title-main">
+                <span class="dialog-title-text">{{ isCreateMode ? 'New Project' : 'Edit Project' }}</span>
+                <WorktreeBadge
+                    v-if="isWorktreeProject"
+                    :project-id="project.id"
+                    :folder-override="previewName"
+                    :color-override="localColor"
+                    class="dialog-title-badge"
+                />
+                <ProjectBadge
+                    v-else-if="!isCreateMode && project"
+                    :project-id="project.id"
+                    :label="previewName"
+                    :color-override="localColor"
+                    class="dialog-title-badge"
+                />
+            </div>
             <span v-if="!isCreateMode && project?.directory" class="dialog-title-path">{{ project.directory }}</span>
         </div>
         <form :id="formId" class="dialog-content" @submit.prevent="handleSave">
@@ -866,6 +903,26 @@ defineExpose({
     flex-direction: column;
     gap: var(--wa-space-3xs);
     min-width: 0;
+}
+
+/* Title row: "Edit Project" on the left, the live badge preview on the right.
+   The gap is the minimum separation kept when a long title leaves no free
+   space (otherwise margin-left:auto pushes the badge to the right edge). */
+.dialog-title-main {
+    display: flex;
+    align-items: center;
+    gap: var(--wa-space-m);
+    flex-wrap: wrap;
+    min-width: 0;
+}
+
+/* Live badge preview pinned to the right of the title — no extra styling, just
+   the badge a touch smaller. min/max-width keep names ellipsized. */
+.dialog-title-badge {
+    margin-left: auto;
+    font-size: 0.85em;
+    min-width: 0;
+    max-width: 100%;
 }
 
 .dialog-title-path {

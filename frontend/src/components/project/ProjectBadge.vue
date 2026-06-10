@@ -25,6 +25,14 @@ const props = defineProps({
         type: String,
         default: null,
     },
+    // Explicit dot color override. When non-null (including an empty string,
+    // meaning "no color"), it replaces the project's stored color. Used for live
+    // previews where the badge must reflect an unsaved color choice. `null` =
+    // not overriding (fall back to the project's stored color).
+    colorOverride: {
+        type: String,
+        default: null,
+    },
     gap: {
         type: String,
         default: null,
@@ -43,7 +51,10 @@ const displayName = computed(() => {
     }
     return store.getProjectDisplayName(props.projectId)
 })
-const color = computed(() => project.value?.color || props.fallbackColor || null)
+const color = computed(() => {
+    const own = props.colorOverride !== null ? props.colorOverride : project.value?.color
+    return own || props.fallbackColor || null
+})
 </script>
 
 <template>
