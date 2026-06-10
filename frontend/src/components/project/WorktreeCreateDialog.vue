@@ -8,6 +8,8 @@ import { useSettingsStore } from '../../stores/settings'
 import { apiFetch } from '../../utils/api'
 import { composeWorktreeDir } from '../../utils/worktreePath'
 import DirectoryPickerPopup from '../files/DirectoryPickerPopup.vue'
+import ProjectBadge from './ProjectBadge.vue'
+import WorktreeBadge from './WorktreeBadge.vue'
 
 const emit = defineEmits(['created'])
 
@@ -32,10 +34,10 @@ const errorMessage = ref('')
 const instanceId = useId()
 const formId = `worktree-create-form-${instanceId}`
 
-const parentName = computed(() => {
-    const p = parentProject.value
-    return p?.name || p?.directory || p?.id || ''
-})
+// True when the parent repo is itself a git worktree: show the worktree badge
+// (main repo + branch folder) instead of the plain project badge, matching how
+// the project renders everywhere else in the UI.
+const isWorktreeParent = computed(() => !!parentProject.value?.worktree_of)
 
 const trimmedBranch = computed(() => localBranch.value.trim())
 
@@ -236,9 +238,25 @@ defineExpose({
 
 <template>
     <wa-dialog ref="dialogRef" label="New worktree" class="worktree-create-dialog" @wa-show="handleDialogShow" @wa-after-show="handleDialogAfterShow">
+        <!-- Header: title with the parent project's badge pinned to the right,
+             then the action description as a larger subtitle underneath. The
+             badge gives the project context at a glance (same treatment as
+             ProjectEditDialog's header). -->
         <div slot="label" class="dialog-title">
-            <span class="dialog-title-text">New worktree</span>
-            <span v-if="parentName" class="dialog-title-path">Create a git worktree of {{ parentName }}</span>
+            <div class="dialog-title-main">
+                <span class="dialog-title-text">New worktree</span>
+                <WorktreeBadge
+                    v-if="isWorktreeParent"
+                    :project-id="parentProject.id"
+                    class="dialog-title-badge"
+                />
+                <ProjectBadge
+                    v-else-if="parentProject"
+                    :project-id="parentProject.id"
+                    class="dialog-title-badge"
+                />
+            </div>
+            <span class="dialog-title-subtitle">Create a git worktree</span>
         </div>
         <form :id="formId" class="dialog-content" @submit.prevent="handleCreate">
             <div class="form-group">
@@ -343,11 +361,32 @@ defineExpose({
     min-width: 0;
 }
 
-.dialog-title-path {
-    font-size: var(--wa-font-size-xs);
+/* Title row: "New worktree" on the left, the parent project's badge pinned to
+   the right edge (margin-left:auto). The gap is the minimum separation kept
+   when a long badge leaves no free space. */
+.dialog-title-main {
+    display: flex;
+    align-items: center;
+    gap: var(--wa-space-m);
+    flex-wrap: wrap;
+    min-width: 0;
+}
+
+/* Project badge pinned to the right of the title — a touch smaller; min/max
+   keep long names ellipsized rather than overflowing the header. */
+.dialog-title-badge {
+    margin-left: auto;
+    font-size: 0.85em;
+    min-width: 0;
+    max-width: 100%;
+}
+
+/* Action description under the title. Larger than a small path line, since it
+   no longer carries the project name (that moved to the badge). */
+.dialog-title-subtitle {
+    font-size: var(--wa-font-size-m);
     font-weight: var(--wa-font-weight-normal);
     color: var(--wa-color-text-quiet);
-    word-break: break-all;
 }
 
 .form-group {
