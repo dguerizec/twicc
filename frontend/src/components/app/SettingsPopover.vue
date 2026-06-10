@@ -8,7 +8,7 @@ import { useAuthStore } from '../../stores/auth'
 import { useTipsStore } from '../../stores/tips'
 import { getProviderHelpers, getProviderLabel, getProviderOptions, getRegisteredProviders, getProviderIcon } from '../../providers'
 import { getActivationCharMetadata } from '../../utils/commandActivation'
-import { DISPLAY_MODE, COLOR_SCHEME, SESSION_TIME_FORMAT, DEFAULT_MAX_CACHED_SESSIONS, WA_THEME, WA_THEME_LABELS, WA_BRAND, WA_BRAND_LABELS } from '../../constants'
+import { DISPLAY_MODE, COLOR_SCHEME, SESSION_TIME_FORMAT, DEFAULT_MAX_CACHED_SESSIONS, WA_THEME, WA_THEME_LABELS, WA_BRAND, WA_BRAND_LABELS, SPONSOR_URL } from '../../constants'
 import NotificationSettings from './NotificationSettings.vue'
 import TipsSettings from '../settings/TipsSettings.vue'
 import AppTooltip from '../ui/AppTooltip.vue'
@@ -1459,7 +1459,7 @@ function onChangelogClose() {
             ·
             <a href="#" class="settings-footer-changes" @click.prevent="openChangelog()">Changes</a>
             ·
-            <a href="https://github.com/sponsors/twidi" target="_blank" rel="noopener" class="settings-footer-sponsor">
+            <a :href="SPONSOR_URL" target="_blank" rel="noopener" class="settings-footer-sponsor">
                 <span class="settings-footer-sponsor-icon"></span>
                 Sponsor
             </a>

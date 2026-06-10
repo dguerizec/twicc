@@ -5,6 +5,12 @@
  */
 
 /**
+ * GitHub Sponsors page for the project maintainer. Single source of truth for
+ * every place that links to it (settings footer, changelog sponsor screen, …).
+ */
+export const SPONSOR_URL = 'https://github.com/sponsors/twidi'
+
+/**
  * Number of items to load at start (first N and last N) when viewing a session.
  * Also used during reconciliation to limit how many new items we fetch at once.
  */

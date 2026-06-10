@@ -4,6 +4,7 @@ import { useDataStore } from '../../stores/data.js'
 import { useSettingsStore } from '../../stores/settings.js'
 import { fetchChangelog, resolveImageLocalUrl, resolveImageGitHubUrl } from '../../utils/changelog.js'
 import { renderMarkdown } from '../../utils/markdown.js'
+import { SPONSOR_URL } from '../../constants'
 
 const emit = defineEmits(['close'])
 
@@ -35,6 +36,17 @@ const currentEntry = computed(() => {
     return entries[currentEntryIdx.value] || null
 })
 
+// A virtual "support the project" screen is appended after the last real entry,
+// so the counter reads N / (entries + 1). Only added when there is at least one
+// entry — a failed/empty changelog keeps its dedicated empty state.
+const totalScreens = computed(() =>
+    currentVersionEntries.value.length > 0 ? currentVersionEntries.value.length + 1 : 0
+)
+
+const isSponsorScreen = computed(() =>
+    currentVersionEntries.value.length > 0 && currentEntryIdx.value === currentVersionEntries.value.length
+)
+
 const badgeVariant = computed(() => {
     const cat = currentEntry.value?.category
     if (cat === 'added') return 'success'
@@ -50,6 +62,7 @@ const badgeLabel = computed(() => {
 })
 
 const dialogLabel = computed(() => {
+    if (isSponsorScreen.value) return 'Enjoying TwiCC?'
     const v = selectedVersion.value
     if (!v) return "What's New"
     if (v === COMBINED_VERSION_KEY) {
@@ -140,7 +153,7 @@ function prev() {
 }
 
 function next() {
-    if (currentEntryIdx.value < currentVersionEntries.value.length - 1) currentEntryIdx.value++
+    if (currentEntryIdx.value < totalScreens.value - 1) currentEntryIdx.value++
 }
 
 function onVersionChange(event) {
@@ -235,6 +248,26 @@ defineExpose({ open, close })
         <!-- Error -->
         <wa-callout v-else-if="error" variant="danger">{{ error }}</wa-callout>
 
+        <!-- Sponsor screen: always the last screen after the real entries -->
+        <div v-else-if="isSponsorScreen" class="changelog-sponsor">
+            <wa-icon name="heart" class="changelog-sponsor-heart"></wa-icon>
+            <p class="changelog-sponsor-text">
+                TwiCC is free and built by a solo developer. If it makes your work
+                with Claude Code and Codex smoother, please consider supporting its
+                development.
+            </p>
+            <wa-button
+                class="changelog-sponsor-button"
+                :href="SPONSOR_URL"
+                target="_blank"
+                rel="noopener"
+            >
+                <wa-icon slot="start" name="heart"></wa-icon>
+                Sponsor on GitHub
+            </wa-button>
+            <p class="changelog-sponsor-footnote">Every bit helps — thank you!</p>
+        </div>
+
         <!-- Empty -->
         <div v-else-if="!currentEntry" class="changelog-empty">
             <p>No changelog entries found.</p>
@@ -292,13 +325,13 @@ defineExpose({ open, close })
                     Prev
                 </wa-button>
                 <span class="changelog-counter">
-                    {{ currentVersionEntries.length > 0 ? currentEntryIdx + 1 : 0 }} / {{ currentVersionEntries.length }}
+                    {{ totalScreens > 0 ? currentEntryIdx + 1 : 0 }} / {{ totalScreens }}
                 </span>
                 <wa-button
                     size="small"
                     variant="neutral"
                     appearance="outlined"
-                    :disabled="currentEntryIdx >= currentVersionEntries.length - 1"
+                    :disabled="currentEntryIdx >= totalScreens - 1"
                     @click="next"
                 >
                     Next
@@ -336,6 +369,51 @@ defineExpose({ open, close })
     justify-content: center;
     height: 100%;
     color: var(--wa-color-neutral-500);
+}
+
+.changelog-sponsor {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 1rem;
+    height: 100%;
+    text-align: center;
+    padding: 0 1rem;
+}
+
+.changelog-sponsor-heart {
+    font-size: 3rem;
+    color: #db61a2; /* GitHub Sponsors pink */
+}
+
+.changelog-sponsor-text {
+    font-size: var(--wa-font-size-m);
+    line-height: 1.7;
+    color: var(--wa-color-neutral-700);
+    max-width: 32rem;
+    margin: 0;
+}
+
+.changelog-sponsor-button {
+    margin-top: 0.25rem;
+}
+
+.changelog-sponsor-button::part(base) {
+    background-color: #bf3989; /* GitHub Sponsors pink */
+    border-color: #bf3989;
+    color: #fff;
+}
+
+.changelog-sponsor-button::part(base):hover {
+    background-color: #a93578;
+    border-color: #a93578;
+}
+
+.changelog-sponsor-footnote {
+    font-size: var(--wa-font-size-s);
+    color: var(--wa-color-neutral-500);
+    margin: 0;
 }
 
 .changelog-entry {
