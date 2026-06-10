@@ -14,7 +14,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
-- Bump `claude-agent-sdk` from 0.2.91 to 0.2.95 (bundled Claude Code CLI: 2.1.165 → 2.1.170)
+- Bump `claude-agent-sdk` from 0.2.91 to 0.2.96 (bundled Claude Code CLI: 2.1.165 → 2.1.172)
 
 ## [1.7.2] - 2026-06-06
 
