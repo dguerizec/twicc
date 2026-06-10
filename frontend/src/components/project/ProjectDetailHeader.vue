@@ -95,6 +95,14 @@ const workspaceStatsProjectIds = computed(() =>
 // Single project data
 const project = computed(() => isSingleProjectMode.value ? store.getProject(props.projectId) : null)
 
+// Whether the thing shown in the header (the single project or the active
+// workspace) is currently archived — drives the clickable "Archived" badge.
+const isArchived = computed(() => {
+    if (isSingleProjectMode.value) return !!project.value?.archived
+    if (isWorkspaceMode.value) return !!workspace.value?.archived
+    return false
+})
+
 // Whether the current single project is a git worktree of another project.
 const isWorktree = computed(() => !!project.value?.worktree_of)
 
@@ -188,6 +196,16 @@ function handleEditClick() {
         editDialogRef.value?.open()
     }
 }
+
+// Click on the "Archived" badge → unarchive the project / workspace in place
+// (mirrors the clickable archived badge on a session header).
+function handleUnarchive() {
+    if (isSingleProjectMode.value && project.value?.archived) {
+        store.setProjectArchived(props.projectId, false)
+    } else if (isWorkspaceMode.value && workspace.value?.archived) {
+        workspacesStore.updateWorkspace(workspaceId.value, { archived: false })
+    }
+}
 </script>
 
 <template>
@@ -210,6 +228,19 @@ function handleEditClick() {
                         {{ tab.label }}
                     </wa-dropdown-item>
                 </wa-dropdown>
+
+                <!-- Archived badge: clickable to unarchive the project / workspace,
+                     placed before the title/badge (mirrors the session header). -->
+                <template v-if="isArchived">
+                    <wa-tag
+                        id="project-detail-archived-tag"
+                        size="small"
+                        variant="neutral"
+                        class="archived-tag"
+                        @click.stop="handleUnarchive"
+                    >Archived</wa-tag>
+                    <AppTooltip for="project-detail-archived-tag">Click to unarchive</AppTooltip>
+                </template>
 
                 <!-- Single project mode -->
                 <template v-if="isSingleProjectMode">
@@ -354,6 +385,13 @@ function handleEditClick() {
 /* Compact toggle zone: transparent on large viewports */
 .compact-toggle-zone {
     display: contents;
+}
+
+/* Clickable "Archived" badge shown before the title when the project /
+   workspace is archived (mirrors the session header's archived tag). */
+.archived-tag {
+    flex-shrink: 0;
+    cursor: pointer;
 }
 
 /* Compact chevron: hidden by default */

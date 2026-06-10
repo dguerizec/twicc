@@ -1475,6 +1475,7 @@ function updateSidebarClosedClass(closed) {
                                     v-for="ws in workspacesStore.getSelectableWorkspaces"
                                     :key="ws.id"
                                     :value="'workspace:' + ws.id"
+                                    :class="{ 'selector-row-archived': ws.archived }"
                                 >
                                     <wa-icon slot="icon" name="layer-group" :style="ws.color ? { color: ws.color } : null"></wa-icon>
                                     <span class="selector-item-content">
@@ -1567,6 +1568,7 @@ function updateSidebarClosedClass(closed) {
                                 v-for="ws in workspacesStore.getSelectableWorkspaces"
                                 :key="ws.id"
                                 :value="'workspace:' + ws.id"
+                                :class="{ 'selector-row-archived': ws.archived }"
                             >
                                 <wa-icon slot="icon" :name="ws.id === activeWorkspaceId ? 'check' : 'layer-group'" :style="ws.id !== activeWorkspaceId && ws.color ? { color: ws.color } : null"></wa-icon>
                                 <span class="selector-item-content">
@@ -2475,6 +2477,13 @@ wa-split-panel::part(divider) {
    children only — the nested "…" submenu items keep their own padding. */
 .project-selector > :deep(wa-dropdown-item) {
     padding-inline-end: var(--selector-row-padding-inline-end);
+}
+
+/* Archived workspace rows: dimmed so they read as de-emphasized vs active ones
+   when "show archived workspaces" surfaces them (matches ProjectSelectorRow's
+   archived project rows). */
+.selector-row-archived {
+    opacity: 0.55;
 }
 
 .selector-item-content {

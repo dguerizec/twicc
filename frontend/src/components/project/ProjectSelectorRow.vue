@@ -59,7 +59,7 @@ function onRowMenuSelect(event) {
 </script>
 
 <template>
-    <wa-dropdown-item :value="projectId">
+    <wa-dropdown-item :value="projectId" :class="{ 'selector-row-archived': isArchived }">
         <wa-icon slot="icon" name="check" :style="{ visibility: !isAllProjectsMode && currentProjectId === projectId ? 'visible' : 'hidden' }"></wa-icon>
         <span class="selector-item-content" :style="depth ? { paddingLeft: `${depth * 12}px` } : null">
             <ProjectBadge :project-id="projectId" :label="label" :fallback-color="fallbackColor" />
@@ -101,6 +101,12 @@ function onRowMenuSelect(event) {
 </template>
 
 <style scoped>
+/* Archived project / worktree rows: dimmed so they read as de-emphasized vs
+   active ones when "show archived projects" surfaces them in the selector. */
+.selector-row-archived {
+    opacity: 0.55;
+}
+
 .selector-item-content {
     display: flex;
     align-items: center;
