@@ -92,11 +92,22 @@ ATTACHMENT_SUPPORT: dict = {
 }
 
 
+_SYSTEM_PROMPT_STATIC_ADDENDUM = """\
+## Generated images
+
+Images you create with the `image_generation` tool are already shown to the
+user — TwiCC renders each one inline from the base64 it returns. You do NOT
+need to copy them into the artifacts directory for the user to see them; only
+save a copy there if the user separately wants a file to open or reuse.
+"""
+
+
 class CodexHelpers(BaseProviderHelpers):
     """Helpers for sessions produced by the Codex CLI."""
 
     provider: ClassVar[Provider] = Provider.CODEX
     LABEL: ClassVar[str] = "Codex"
+    SYSTEM_PROMPT_STATIC_ADDENDUM: ClassVar[str] = _SYSTEM_PROMPT_STATIC_ADDENDUM
 
     # Constants are defined in ``.constants`` (Django-free module) so the
     # CLI's ``--help`` enrichment can read them without ``django.setup()``.
