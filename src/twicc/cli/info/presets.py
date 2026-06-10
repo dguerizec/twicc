@@ -18,10 +18,12 @@ def build(provider: str | None, include_disabled: bool = False) -> dict[str, lis
     from twicc.cli._drop_request.presets import PRESET_KEY_MAP
     from twicc.cli.info._common import resolve_providers
     from twicc.providers.helpers import AGENT_SETTINGS_HIDDEN_FROM_FRONTEND, AgentSettings
+    from twicc.synced_settings import read_synced_settings
 
     # Inverse of PRESET_KEY_MAP: translate AgentSettings field names back
     # to the historical preset keys (``model`` / ``thinking``).
     wire_to_preset = {v: k for k, v in PRESET_KEY_MAP.items()}
+    synced = read_synced_settings()
 
     def _defaults_entry(helpers) -> dict:
         resolved = helpers.resolve_agent_settings(AgentSettings())._asdict()
@@ -31,6 +33,16 @@ def build(provider: str | None, include_disabled: bool = False) -> dict[str, lis
                 continue
             key = wire_to_preset.get(field, field)
             out[key] = value
+        # ``permission_mode_if_untrusted`` is a default-shaping field, not part of
+        # the resolved 7-field bundle — surface its global default here too, the
+        # same way a real preset carries the key, so __defaults__ is complete.
+        untrusted_key = helpers.UNTRUSTED_PERMISSION_MODE_SYNCED_KEY
+        if untrusted_key is not None:
+            configured = synced.get(untrusted_key)
+            out["permission_mode_if_untrusted"] = (
+                configured if configured in helpers.UNTRUSTED_PERMISSION_MODES
+                else helpers.SYNCED_SETTINGS_DEFAULTS.get(untrusted_key)
+            )
         return out
 
     output: dict[str, list[dict]] = {}

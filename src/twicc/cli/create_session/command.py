@@ -200,7 +200,7 @@ def create_session_cmd(
     import django
     django.setup()
 
-    from twicc.cli._drop_request.aliases import resolve_overrides
+    from twicc.cli._drop_request.aliases import clamp_untrusted_permission_mode, resolve_overrides
     from twicc.cli._drop_request.annotations import parse_annotations
     from twicc.cli._drop_request.attachments import (
         AttachmentResizeError,
@@ -249,6 +249,12 @@ def create_session_cmd(
     try:
         text = resolve_prompt(prompt)
         resolved_project = resolve_project(project)
+        # Whether the target project is untrusted (unknown trust counts as
+        # untrusted). Drives permission_mode keyword resolution + the clamp, so a
+        # CLI-created session in an untrusted project gets the same restricted
+        # permission set the UI offers there, with a clear note on a downgrade.
+        from twicc.core.services.trust import project_is_untrusted
+        untrusted_project = project_is_untrusted(resolved_project.project_id)
         overrides = {
             "selected_model": model,
             "effort": effort,
@@ -266,10 +272,18 @@ def create_session_cmd(
         # provider, so the rest of the pipeline sees concrete literals only.
         if provider in bootstrap.providers:
             overrides, alias_errors = resolve_overrides(
-                overrides, bootstrap.providers[provider],
+                overrides, bootstrap.providers[provider], untrusted=untrusted_project,
             )
         preset_list = bootstrap.providers[provider].presets if provider in bootstrap.providers else []
-        settings = apply_preset_and_overrides(preset, preset_list, overrides)
+        settings = apply_preset_and_overrides(
+            preset, preset_list, overrides, untrusted=untrusted_project,
+        )
+        if untrusted_project and provider in bootstrap.providers:
+            # Creation: seed the untrusted default when no permission_mode was
+            # given (frontend parity), and clamp an out-of-set value.
+            settings = clamp_untrusted_permission_mode(
+                settings, bootstrap.providers[provider], seed_when_absent=True,
+            )
     except PromptError as e:
         emit_validation_errors([ValidationError("prompt", "invalid_prompt", str(e))])
         raise typer.Exit(1)

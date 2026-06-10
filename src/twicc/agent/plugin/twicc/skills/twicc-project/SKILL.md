@@ -47,6 +47,8 @@ $TWICC project <PROJECT>
   "archived": false,
   "total_cost": 12.345678,
   "worktree_of": null,
+  "trust": null,
+  "trust_propagation": false,
   "workspaces": ["backend", "home-side-projects"],
   "worktrees": ["-home-twidi-dev-myproject--worktrees-feature-x"]
 }
@@ -61,6 +63,8 @@ $TWICC project <PROJECT>
 - `total_cost` — total cost in USD across all sessions (may be `null`).
 - `worktree_of` — when this project is a git worktree, the project id of its main repository; `null` otherwise.
 - `worktrees` — the project ids of this project's own git worktrees (the reverse of `worktree_of`); empty when it has none. A worktree's sessions, cost and activity count toward its main repository.
+- `trust` — the project's own trust decision: `true` = trusted, `false` = untrusted, `null` = no own decision (inherits from its parent directory / git root). **Read-only here, and human-only to change** — agents never set trust. A session created in an untrusted (or `null` / undecided) project runs under a restricted permission set (`bypassPermissions` / `yolo` unavailable).
+- `trust_propagation` — whether an explicit `trust` decision also covers the project's sub-paths and its git worktrees.
 - `workspaces` — workspace IDs this project belongs to (empty if none).
 
 ## Examples

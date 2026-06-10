@@ -78,6 +78,27 @@ def build(provider: str | None, include_disabled: bool = False) -> dict[str, dic
                 entries.append(entry)
             per_field[field] = {"values": entries}
 
+        # Untrusted projects use a restricted permission-mode set: surface it as a
+        # sibling ``permission_mode_if_untrusted`` field so a caller scripting
+        # create/update-session knows which modes survive there. A session created
+        # or updated in an untrusted project has its permission_mode resolved /
+        # clamped against this set (with a note on a downgrade). Its keyword
+        # aliases (``min``/``safe``/``max``) are attached by the loop below.
+        untrusted_modes = getattr(helpers, "UNTRUSTED_PERMISSION_MODES", frozenset())
+        if untrusted_modes:
+            pm_descriptions = descriptions.get("permission_mode", {})
+            per_field["permission_mode_if_untrusted"] = {
+                "values": [
+                    {
+                        "value": value,
+                        "restricted_to": None,
+                        **({"description": pm_descriptions[value]} if value in pm_descriptions else {}),
+                    }
+                    # Keep ``permission_mode``'s declared order for readability.
+                    for value in choices.get("permission_mode", []) if value in untrusted_modes
+                ]
+            }
+
         # Aliases (``max`` → flagship, ``open`` → most permissive, ...),
         # resolved to a concrete value per provider.
         for field, field_aliases in aliases.items():

@@ -90,8 +90,17 @@ AGENT_SETTINGS_ALIASES: dict[str, dict[str, str]] = {
         "min": "272k", "max": "272k",
     },
     "permission_mode": {
-        "safe": "strict",
-        "full": "yolo", "open": "yolo", "bypass": "yolo",
+        "min": "strict", "safe": "strict",
+        "max": "yolo", "full": "yolo", "open": "yolo", "bypass": "yolo",
+    },
+    # Untrusted projects use a restricted set (``yolo`` removed — see
+    # ``UNTRUSTED_PERMISSION_MODES``). These keywords resolve only to values
+    # inside that set, so ``min``/``safe``/``max`` stay meaningful when a session
+    # is created in an untrusted project. ``max`` is the most permissive mode
+    # still allowed there: ``autonomous`` (workspace-write sandbox, uninterrupted).
+    "permission_mode_if_untrusted": {
+        "min": "strict", "safe": "strict",
+        "max": "autonomous",
     },
 }
 

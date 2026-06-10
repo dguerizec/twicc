@@ -6,10 +6,15 @@ so the live TwiCC server applies the patch via
 — validation + atomic update under the DB write lock +
 ``project_updated`` broadcast.
 
-Mirrors the HTTP ``PUT /api/projects/<id>/`` endpoint: only ``name``,
-``color``, and ``archived`` are mutable; the ``directory`` is immutable
-(the project id is derived from it). There is no ``delete-project``
-counterpart by design.
+Mirrors the HTTP ``PUT /api/projects/<id>/`` endpoint: ``name``, ``color``,
+and ``archived`` are mutable; the ``directory`` is immutable (the project id
+is derived from it). There is no ``delete-project`` counterpart by design.
+
+The ``--trust`` / ``--untrust`` / ``--reset-trust`` flags are a separate,
+**human-only** decision routed through a ``kind="project:trust"`` drop-file to
+:func:`twicc.core.services.project_mutation.decide_project_trust_from_payload`
+(the same ``decide_project_trust`` service the web dialog uses). They do not
+combine with the field patch and are never exposed as an agent-facing skill.
 """
 
 from __future__ import annotations
@@ -75,6 +80,41 @@ def update_project_cmd(
             "`--archive`."
         ),
     ),
+    trust: bool = typer.Option(
+        False,
+        "--trust",
+        help=(
+            "Mark the project as trusted. A human-only decision: it does not "
+            "combine with the name/color/archive flags, nor with `--untrust` / "
+            "`--reset-trust`."
+        ),
+    ),
+    untrust: bool = typer.Option(
+        False,
+        "--untrust",
+        help=(
+            "Mark the project as untrusted — sessions created there fall under "
+            "the restricted permission set. Mutually exclusive with `--trust` / "
+            "`--reset-trust` and the field flags."
+        ),
+    ),
+    reset_trust: bool = typer.Option(
+        False,
+        "--reset-trust",
+        help=(
+            "Clear the project's own trust decision so it inherits from its "
+            "parent / git root. Mutually exclusive with `--trust` / `--untrust`."
+        ),
+    ),
+    propagate: bool | None = typer.Option(
+        None,
+        "--propagate/--no-propagate",
+        help=(
+            "Whether the trust decision also covers sub-paths (only meaningful "
+            "with `--trust`/`--untrust`; ignored on reset). Defaults to whether "
+            "the project is under git."
+        ),
+    ),
     timeout: int = typer.Option(
         30,
         "--timeout",
@@ -112,6 +152,56 @@ def update_project_cmd(
         check_heartbeat()
     except ServerDownError as e:
         emit_error(str(e), code=2)
+
+    def _submit_and_exit(payload: dict, kind: str) -> None:
+        drop = write_drop_file(payload, kind=kind)
+        status_path = drop.path.with_name(f"{drop.request_uuid}.status.json")
+        outcome = poll_status(status_path, timeout_seconds=timeout)
+        drop.path.unlink(missing_ok=True)
+        status_path.unlink(missing_ok=True)
+        emit_final(outcome, request_uuid=drop.request_uuid, timeout=timeout)
+        if outcome.status == "updated":
+            raise typer.Exit(0)
+        if outcome.status == "rejected":
+            raise typer.Exit(3)
+        if outcome.status == "failed":
+            raise typer.Exit(4)
+        raise typer.Exit(5)  # timeout
+
+    # Trust is a separate, human-only decision: it does not combine with the
+    # name/color/archive patch, mirroring the web UI where it is its own action.
+    # Handle it (and bail) before the field-patch path below.
+    chosen_trust = [n for n, on in (
+        ("--trust", trust), ("--untrust", untrust), ("--reset-trust", reset_trust),
+    ) if on]
+    if chosen_trust:
+        trust_errors: list[ValidationError] = []
+        if len(chosen_trust) > 1:
+            trust_errors.append(ValidationError(
+                chosen_trust[0], "conflicting_flags",
+                f"{' / '.join(chosen_trust)} are mutually exclusive."))
+        field_flags = [f for f, on in (
+            ("--name", new_name is not None), ("--unset-name", unset_name),
+            ("--color", color is not None), ("--unset-color", unset_color),
+            ("--archive", archive), ("--unarchive", unarchive),
+        ) if on]
+        if field_flags:
+            trust_errors.append(ValidationError(
+                chosen_trust[0], "conflicting_flags",
+                f"Trust flags cannot be combined with {', '.join(field_flags)}; "
+                "set trust in its own command."))
+        if trust_errors:
+            emit_validation_errors(trust_errors)
+            raise typer.Exit(1)
+        if not Project.objects.filter(id=project_id).exists():
+            emit_validation_errors([ValidationError(
+                "PROJECT", "project_not_found", f"Project {project_id!r} not found.")])
+            raise typer.Exit(1)
+        trusted_value = True if trust else (False if untrust else None)
+        trust_payload: dict = {"project_id": project_id, "trusted": trusted_value}
+        if trusted_value is not None and propagate is not None:
+            trust_payload["propagation"] = propagate
+        _submit_and_exit(trust_payload, "project:trust")
 
     # Mutually-exclusive flag checks (don't depend on DB state).
     errors: list[ValidationError] = []
@@ -187,20 +277,4 @@ def update_project_cmd(
         "archived": archived_value,
     }
 
-    drop = write_drop_file(payload, kind="project:update")
-
-    status_path = drop.path.with_name(f"{drop.request_uuid}.status.json")
-    outcome = poll_status(status_path, timeout_seconds=timeout)
-
-    drop.path.unlink(missing_ok=True)
-    status_path.unlink(missing_ok=True)
-
-    emit_final(outcome, request_uuid=drop.request_uuid, timeout=timeout)
-
-    if outcome.status == "updated":
-        raise typer.Exit(0)
-    if outcome.status == "rejected":
-        raise typer.Exit(3)
-    if outcome.status == "failed":
-        raise typer.Exit(4)
-    raise typer.Exit(5)  # timeout
+    _submit_and_exit(payload, "project:update")

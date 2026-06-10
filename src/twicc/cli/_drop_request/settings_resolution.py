@@ -165,8 +165,10 @@ def prepare_settings(
     invariants) when this session's provider rejects the requested change.
     """
     # Lazy (Django-heavy) imports — see the module note above.
+    from twicc.cli._drop_request.aliases import clamp_untrusted_permission_mode
     from twicc.cli._drop_request.presets import PresetError, apply_preset_and_overrides
     from twicc.cli._drop_request.validation import validate_hidden_constraints
+    from twicc.core.services.trust import project_is_untrusted
     from twicc.providers.helpers import AgentSettings, get_provider_helpers
 
     provider = resolved.provider
@@ -178,6 +180,11 @@ def prepare_settings(
         return errors
     pb = bootstrap.providers[provider]
 
+    # Whether the session's project is untrusted (unknown trust counts as
+    # untrusted): routes permission_mode keyword resolution + the clamp, so an
+    # update in an untrusted project lands inside the restricted set.
+    untrusted = project_is_untrusted(resolved.project_id)
+
     # Silent no-op: drop ``--unset`` tokens for fields this provider doesn't
     # support (symmetric with the set-field drop done by ``resolve_overrides``).
     unset_fields = [f for f in unset_fields if f in supported_fields(pb)]
@@ -186,7 +193,7 @@ def prepare_settings(
     # most permissive non-interactive mode, ...) + ``context_max`` parse +
     # silent drop of unsupported set fields. After this, ``overrides`` holds
     # only concrete, provider-valid literals.
-    overrides, alias_errors = resolve_overrides(overrides, pb)
+    overrides, alias_errors = resolve_overrides(overrides, pb, untrusted=untrusted)
     if alias_errors:
         return alias_errors
 
@@ -195,10 +202,12 @@ def prepare_settings(
     if preset is not None:
         try:
             settings = apply_preset_and_overrides(
-                preset, presets_for_provider, overrides, unset=unset_fields,
+                preset, presets_for_provider, overrides, unset=unset_fields, untrusted=untrusted,
             )
         except PresetError as e:
             return [ValidationError("--preset", "invalid_preset", str(e))]
+        if untrusted:
+            settings = clamp_untrusted_permission_mode(settings, pb)
         updates = settings._asdict()
         replace_all = True
     else:
@@ -206,7 +215,13 @@ def prepare_settings(
         # ``settings`` is built solely so ``validate_settings`` can vet the
         # non-None values; it does not drive the DB write.
         settings = AgentSettings(**{f: overrides.get(f) for f in AgentSettings._fields})
+        if untrusted:
+            settings = clamp_untrusted_permission_mode(settings, pb)
         updates = {f: v for f, v in overrides.items() if v is not None}
+        # Reflect a clamped permission_mode in the patch payload — only when the
+        # user actually set it (an untouched field never enters ``updates``).
+        if untrusted and "permission_mode" in updates:
+            updates["permission_mode"] = settings.permission_mode
         for field in unset_fields:
             updates[field] = None
         replace_all = False

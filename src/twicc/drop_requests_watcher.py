@@ -112,6 +112,11 @@ _KIND_HANDLERS: dict[str, tuple[str, str, str]] = {
         "update_project_from_payload",
         "updated",
     ),
+    "project:trust": (
+        "twicc.core.services.project_mutation",
+        "decide_project_trust_from_payload",
+        "updated",
+    ),
 }
 
 

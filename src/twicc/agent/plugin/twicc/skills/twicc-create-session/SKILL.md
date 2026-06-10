@@ -64,9 +64,11 @@ Some settings also accept provider-agnostic aliases, resolved to each provider's
 
 - `--model` — `max`/`strongest` → top family, `medium`/`balanced` → middle family, `min`/`fastest`/`cheapest` → lightest family.
 - `--effort`, `--context-max` — `max` → highest/largest, `min` → lowest/smallest.
-- `--permission-mode` — `strict`/`safe` → most-locked (non-interactive), `open`/`full`/`yolo`/`bypass` → most permissive (non-interactive), `auto` → balanced (interactive).
+- `--permission-mode` — `min`/`strict`/`safe` → most-locked (non-interactive), `max`/`open`/`full`/`yolo`/`bypass` → most permissive (non-interactive), `auto` → balanced (interactive).
 
 A flag the chosen provider doesn't support (e.g. `--thinking` on Codex) is silently ignored (no-op), so one command works across a mix of providers.
+
+**Untrusted projects.** In a project whose trust is *untrusted* — or not yet decided (unknown counts as untrusted) — `permission_mode` is restricted to a safe subset: `bypassPermissions` (Claude Code) / `yolo` (Codex) are unavailable. A session created there resolves `--permission-mode` against that subset — `min`/`safe`/`max` still work, with `max` → the most permissive *allowed* mode (Claude Code `acceptEdits`, Codex `autonomous`) — and an out-of-subset value (e.g. `bypass`) is clamped to the project's untrusted default with a note on stderr. See `twicc info agent-settings` → `permission_mode_if_untrusted` for the subset + its aliases. Project trust is a human-only decision; agents never set it.
 
 ### `--hidden`
 

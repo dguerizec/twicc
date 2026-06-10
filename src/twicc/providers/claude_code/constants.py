@@ -157,9 +157,20 @@ AGENT_SETTINGS_ALIASES: dict[str, dict[str, str]] = {
         "min": "200k", "max": "1m",
     },
     "permission_mode": {
-        "strict": "dontAsk", "safe": "dontAsk",
-        "full": "bypassPermissions", "open": "bypassPermissions",
-        "yolo": "bypassPermissions", "bypass": "bypassPermissions",
+        "min": "dontAsk", "strict": "dontAsk", "safe": "dontAsk",
+        "max": "bypassPermissions", "full": "bypassPermissions",
+        "open": "bypassPermissions", "yolo": "bypassPermissions",
+        "bypass": "bypassPermissions",
+    },
+    # Untrusted projects use a restricted permission-mode set (``bypassPermissions``
+    # removed — see ``UNTRUSTED_PERMISSION_MODES``). These keywords resolve only to
+    # values inside that set, so ``min``/``safe``/``max`` stay meaningful when a
+    # session is created in an untrusted project. ``max`` is the most permissive
+    # mode still allowed there: ``acceptEdits`` (auto-accepts edits, always
+    # available) — not ``auto``, which is model-gated and would not always resolve.
+    "permission_mode_if_untrusted": {
+        "min": "dontAsk", "safe": "dontAsk",
+        "max": "acceptEdits",
     },
 }
 

@@ -5,6 +5,7 @@ whose ``kind`` matches one of the supported project actions:
 
 - ``kind="project:create"`` → :func:`create_project_from_payload`.
 - ``kind="project:update"`` → :func:`update_project_from_payload`.
+- ``kind="project:trust"`` → :func:`decide_project_trust_from_payload`.
 
 There is no ``project:delete`` by design: a Project row is bound to its
 sessions (cost aggregates, workspace memberships, etc.); removing it
@@ -276,3 +277,56 @@ async def update_project_from_payload(payload: dict) -> ProjectMutationResult:
         unset_color=unset_color,
         archived=archived,
     )
+
+
+async def decide_project_trust_from_payload(payload: dict) -> ProjectMutationResult:
+    """Drop-file glue for ``kind="project:trust"``.
+
+    Expected payload shape::
+
+        {
+            "kind": "project:trust",
+            "project_id": str,
+            "trusted": bool | None,       # True / False = explicit, null = reset to inherit
+            "propagation": bool | None,   # optional; defaults to "is under git" for an
+                                          # explicit decision, ignored on reset
+        }
+
+    Project **trust is a human-only decision**: this path backs the
+    ``twicc update-project --trust/--untrust/--reset-trust`` flags and the
+    web dialog, never an agent-facing skill. Delegates to
+    :func:`twicc.core.services.trust.decide_project_trust` (provider-config
+    projection + DB write under lock + ``project_updated`` broadcast).
+    """
+    from twicc.core.services.trust import decide_project_trust
+
+    project_id = payload.get("project_id")
+    if not isinstance(project_id, str) or not project_id:
+        return _invalid_payload_result("project_id", "project_id must be a non-empty string.")
+
+    if "trusted" not in payload:
+        return _invalid_payload_result("trusted", "trusted is required (true, false, or null).")
+    trusted = payload.get("trusted")
+    if trusted is not None and not isinstance(trusted, bool):
+        return _invalid_payload_result("trusted", "trusted must be true, false, or null.")
+
+    propagation = payload.get("propagation")
+    if propagation is not None and not isinstance(propagation, bool):
+        return _invalid_payload_result("propagation", "propagation must be a boolean or null.")
+
+    project = await Project.objects.filter(id=project_id).afirst()
+    if project is None:
+        return ProjectMutationResult(False, project_id, None, [
+            ProjectMutationError("PROJECT", "project_not_found",
+                                  f"Project {project_id!r} not found."),
+        ])
+
+    result = await decide_project_trust(project_id, trusted, propagation)
+    if not result.get("ok"):
+        code = result.get("error", "trust_decision_failed")
+        return ProjectMutationResult(False, project_id, None, [
+            ProjectMutationError("trust", code, f"Trust decision failed: {code}."),
+        ])
+
+    project = await Project.objects.filter(id=project_id).afirst()
+    return ProjectMutationResult(True, project_id, project, None)

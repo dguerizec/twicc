@@ -67,9 +67,11 @@ Agent settings flags (all optional; use `$TWICC info models agent-settings prese
 Some settings also accept provider-agnostic aliases, resolved to the session's provider:
 - `--model` — `max`/`strongest` → top family, `medium`/`balanced` → middle family, `min`/`fastest`/`cheapest` → lightest family.
 - `--effort`, `--context-max` — `max` → highest/largest, `min` → lowest/smallest.
-- `--permission-mode` — `strict`/`safe` → most-locked (non-interactive), `open`/`full`/`yolo`/`bypass` → most permissive (non-interactive), `auto` → balanced (interactive).
+- `--permission-mode` — `min`/`strict`/`safe` → most-locked (non-interactive), `max`/`open`/`full`/`yolo`/`bypass` → most permissive (non-interactive), `auto` → balanced (interactive).
 
 A flag the session's provider doesn't support (e.g. `--thinking` on Codex) is silently ignored (no-op).
+
+**Untrusted projects.** If the session's project is *untrusted* (or unknown trust), `--permission-mode` resolves against the restricted subset — `bypassPermissions`/`yolo` are unavailable, `max` → the most permissive *allowed* mode (Claude Code `acceptEdits`, Codex `autonomous`), and an out-of-subset value is clamped to the project's untrusted default with a note on stderr. See `twicc info agent-settings` → `permission_mode_if_untrusted`.
 
 **How settings reach a live process:** if a session currently has a process attached (a running agent), changes are propagated immediately per field category:
 - *Live* (`permission_mode` on Claude Code) — applied immediately.

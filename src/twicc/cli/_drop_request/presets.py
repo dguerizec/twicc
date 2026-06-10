@@ -32,6 +32,8 @@ def apply_preset_and_overrides(
     presets: list[dict],
     overrides: dict[str, object | None],
     unset: list[str] | None = None,
+    *,
+    untrusted: bool = False,
 ) -> AgentSettings:
     """Build the final ``AgentSettings`` from preset + per-flag overrides + unset list.
 
@@ -47,6 +49,11 @@ def apply_preset_and_overrides(
 
     A field that is neither in the preset nor in the overrides stays
     ``None`` and the back will fall back to the synced default.
+
+    When ``untrusted`` is set, the preset seeds ``permission_mode`` from its
+    ``permission_mode_if_untrusted`` value (the trusted ``permission_mode`` is
+    ignored), mirroring the frontend's trust-aware selection at session
+    creation. The caller still clamps the final value.
     """
     fields = {name: None for name in AgentSettings._fields}
 
@@ -61,6 +68,13 @@ def apply_preset_and_overrides(
             if raw_key == "name":
                 continue
             field = PRESET_KEY_MAP.get(raw_key, raw_key)
+            if untrusted:
+                # Untrusted project: the session's permission_mode comes from the
+                # preset's untrusted variant; ignore the trusted permission_mode.
+                if field == "permission_mode":
+                    continue
+                if raw_key == "permission_mode_if_untrusted":
+                    field = "permission_mode"
             if field in fields:
                 fields[field] = raw_value
 

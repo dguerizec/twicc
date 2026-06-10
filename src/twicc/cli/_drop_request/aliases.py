@@ -36,6 +36,8 @@ stay importable without ``django.setup()``.
 
 from __future__ import annotations
 
+import sys
+
 from twicc.cli._drop_request.help_strings import parse_context_max
 from twicc.cli._drop_request.validation import ValidationError
 
@@ -60,21 +62,33 @@ def _native_values(field: str, pb) -> set:
     return set((pb.agent_settings_choices or {}).get(field, []))
 
 
-def resolve_keyword(field: str, value, pb):
+def resolve_keyword(field: str, value, pb, *, untrusted: bool = False):
     """Native-first keyword resolution for one ordered string field.
 
     Returns the concrete value when ``value`` is a known keyword for this
     provider, the value unchanged otherwise (native value, or an unknown value
-    left for choice-validation to reject).
+    left for choice-validation / the untrusted clamp to handle).
+
+    When ``untrusted`` is set, a ``permission_mode`` keyword resolves against the
+    provider's ``permission_mode_if_untrusted`` alias table instead — so ``max``
+    lands on the most permissive *untrusted-allowed* mode (e.g. ``acceptEdits``),
+    not ``bypassPermissions``. Native-first is unchanged: a concrete value still
+    passes through, and an out-of-set one (``bypassPermissions``, ``open`` ...) is
+    left for :func:`clamp_untrusted_permission_mode` to catch.
     """
     if value is None:
         return value
     if value in _native_values(field, pb):
         return value
-    return (pb.agent_settings_aliases or {}).get(field, {}).get(value, value)
+    alias_field = (
+        "permission_mode_if_untrusted"
+        if untrusted and field == "permission_mode"
+        else field
+    )
+    return (pb.agent_settings_aliases or {}).get(alias_field, {}).get(value, value)
 
 
-def resolve_overrides(overrides: dict, pb) -> tuple[dict, list[ValidationError]]:
+def resolve_overrides(overrides: dict, pb, *, untrusted: bool = False) -> tuple[dict, list[ValidationError]]:
     """Resolve a raw overrides dict against one provider.
 
     Returns ``(resolved_overrides, errors)``. ``resolved_overrides`` keeps every
@@ -84,6 +98,10 @@ def resolve_overrides(overrides: dict, pb) -> tuple[dict, list[ValidationError]]
     malformed ``--context-max``. Does not mutate the input — important for the
     batch, where the same overrides is reused across sessions of different
     providers.
+
+    ``untrusted`` routes ``permission_mode`` keyword resolution through the
+    untrusted alias table (see :func:`resolve_keyword`); the caller still applies
+    :func:`clamp_untrusted_permission_mode` to the final bundle.
     """
     supported = supported_fields(pb)
     ctx_aliases = (pb.agent_settings_aliases or {}).get("context_max", {})
@@ -97,7 +115,7 @@ def resolve_overrides(overrides: dict, pb) -> tuple[dict, list[ValidationError]]
             resolved[field] = None  # silent no-op for an unsupported field
             continue
         if field in _ALIASABLE_STRING_FIELDS:
-            resolved[field] = resolve_keyword(field, value, pb)
+            resolved[field] = resolve_keyword(field, value, pb, untrusted=untrusted)
         elif field == "context_max":
             # Keyword → token string (``"max"`` → ``"1m"``); a literal form
             # (``"200k"``, ``"272k"``, a plain int) is not a keyword and passes
@@ -110,3 +128,42 @@ def resolve_overrides(overrides: dict, pb) -> tuple[dict, list[ValidationError]]
         else:
             resolved[field] = value
     return resolved, errors
+
+
+def clamp_untrusted_permission_mode(settings, pb, *, seed_when_absent: bool = False):
+    """Clamp ``settings.permission_mode`` to the provider's untrusted-allowed set.
+
+    Call only when the target project resolved untrusted. An in-set value passes
+    through; an out-of-set one is replaced with
+    ``pb.untrusted_permission_mode_default`` and a one-line note is printed to
+    stderr. The replacement is exactly what the backend security floor would
+    enforce at agent build; surfacing it here is the "clamp + clear message"
+    instead of a silent server-side downgrade.
+
+    A missing (``None``) permission_mode is left for the server by default. With
+    ``seed_when_absent`` it is instead filled with the untrusted default —
+    matching the frontend, which pre-fills the untrusted default for a draft in
+    an untrusted project — so a CLI-created session stores the right value upfront
+    rather than the trusted default re-clamped on every resume. No note is printed
+    for the seed (it is the default, not a downgrade). Use it on session
+    *creation*, never on an update patch (where a missing field means "leave it
+    unchanged"). Providers without an untrusted set are a no-op.
+    """
+    modes = pb.untrusted_permission_modes
+    if not modes:
+        return settings
+    mode = settings.permission_mode
+    if mode is None:
+        if seed_when_absent:
+            return settings._replace(permission_mode=pb.untrusted_permission_mode_default)
+        return settings
+    if mode in modes:
+        return settings
+    clamped = pb.untrusted_permission_mode_default
+    print(
+        f"note: this project is untrusted — permission_mode {mode!r} is not "
+        f"allowed there; using {clamped!r} instead (untrusted keywords: "
+        f"min / safe / max).",
+        file=sys.stderr,
+    )
+    return settings._replace(permission_mode=clamped)
