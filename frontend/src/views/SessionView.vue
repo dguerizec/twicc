@@ -836,6 +836,8 @@ const SESSION_COMMAND_IDS = [
     'session.stop',
     'session.delete-draft',
     'session.focus-input',
+    'session.collapse-input',
+    'session.expand-input',
     'session.model',
     'session.effort',
     'session.permission',
@@ -981,6 +983,32 @@ function registerSessionCommands() {
             // Despite the legacy "Message Input" label, this lands on whichever
             // primary control the chat is showing: pending request form when
             // active, message input textarea otherwise.
+            action: () => focusChatPrimary(),
+        },
+        {
+            id: 'session.collapse-input',
+            label: 'Collapse Message Input',
+            icon: 'chevron-down',
+            category: 'session',
+            // Only when a message input is actually shown (main session, no
+            // pending request, not stale/disabled) and currently expanded. We
+            // probe the DOM because the collapsed state is local to MessageInput;
+            // when() is re-evaluated each time the palette opens.
+            when: () => !!document.querySelector('.message-input:not(.collapsed)'),
+            action: () => document
+                .querySelector('.message-input:not(.collapsed)')
+                ?.dispatchEvent(new CustomEvent('twicc:collapse-composer')),
+        },
+        {
+            id: 'session.expand-input',
+            label: 'Expand Message Input',
+            icon: 'chevron-up',
+            category: 'session',
+            when: () => !!document.querySelector('.message-input.collapsed'),
+            // focusChatPrimary expands the collapsed composer (via the same
+            // twicc:expand-composer event) AND lands the focus, retrying past the
+            // palette-close re-blur. Safe: a collapsed composer never coexists
+            // with a pending request, so there's no other focus target.
             action: () => focusChatPrimary(),
         },
         ...buildSessionSettingsCommands(),

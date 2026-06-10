@@ -2986,7 +2986,7 @@ wa-dropdown-item:hover .row-menu-trigger,
     /* Toggle button sticks out from the sidebar when closed */
     .sidebar-toggle {
         /* Position at right edge of sidebar, offset to stick out */
-        transform: translateX(var(--sidebar-width));
+        transform: translateX(var(--sidebar-width)) translateY(4px);
         transition: transform var(--transition-duration) ease;
         .icon-collapse {
             display: none;
@@ -3032,7 +3032,7 @@ wa-dropdown-item:hover .row-menu-trigger,
         }
 
          .sidebar-toggle {
-            transform: translateX(0);
+            transform: translateX(0) translateY(4px);
             .icon-collapse {
                 display: inline;
             }

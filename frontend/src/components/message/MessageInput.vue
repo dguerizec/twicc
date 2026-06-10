@@ -5,7 +5,7 @@
 // popover that exposes them are rendered by AgentSettingsSummary /
 // AgentSettingsPopover. This component owns the textarea, attachments,
 // pickers, and the send pipeline.
-import { ref, computed, watch, nextTick, useId, toRef } from 'vue'
+import { ref, computed, watch, nextTick, useId, toRef, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useDataStore } from '../../stores/data'
 import { useSettingsStore } from '../../stores/settings'
@@ -126,6 +126,25 @@ const fileInputRef = ref(null)
 const attachButtonId = useId()
 const settingsButtonId = useId()
 const textareaAnchorId = useId()
+
+// ── Collapse-to-a-single-line ───────────────────────────────────────────────
+// The composer can grow tall (textarea up to 40dvh + snippets/comments bars),
+// hiding the conversation. When it exceeds a fraction of the viewport we offer a
+// floating "minimize" button that collapses it to a one-line bar, freeing the
+// space for the conversation — the same flex mechanism as the pending request
+// minimize. State is ephemeral and per-session (reset on session change).
+const rootRef = ref(null)
+const collapsed = ref(false)
+// True when the composer is tall enough that offering to collapse is useful.
+// Driven by a ResizeObserver on the root; frozen while collapsed (the collapsed
+// bar always exposes its own restore button, so the threshold is irrelevant then,
+// and observing the collapsed height would just oscillate this flag).
+const isTall = ref(false)
+// Show the collapse affordance once the composer passes ~a third of the viewport.
+const COLLAPSE_THRESHOLD_RATIO = 0.33
+const collapseButtonId = useId()
+const restoreButtonId = useId()
+let collapseResizeObserver = null
 
 // Message snippets dialog
 const messageSnippetsDialogRef = ref(null)
@@ -270,6 +289,9 @@ const placeholderText = computed(() => {
 
 // Restore draft message when session changes
 watch(() => props.sessionId, async (newId) => {
+    // Each session starts expanded: the collapse state is ephemeral and must not
+    // leak across sessions when this instance is reused (not remounted).
+    collapsed.value = false
     const draft = store.getDraftMessage(newId)
     messageText.value = draft?.message || ''
     // Adjust textarea height after the DOM updates with restored content
@@ -352,6 +374,9 @@ let _lastMeasuredContent = null
 let _lastMeasuredWidth = null
 
 function adjustTextareaHeight() {
+    // While collapsed the textarea is display:none — measuring it reads zeroes
+    // and pollutes the cache. expand() re-measures once it is visible again.
+    if (collapsed.value) return
     const textarea = textareaRef.value?.shadowRoot?.querySelector('textarea')
     if (!textarea) return
 
@@ -410,6 +435,91 @@ function adjustTextareaHeight() {
         scrollerEl.scrollTop = savedScrollTop
     }
 }
+
+// ── Collapse / restore ──────────────────────────────────────────────────────
+
+// Friendly, state-aware label for the collapsed bar so the user knows what the
+// single line is — and whether anything is waiting in it. We deliberately do NOT
+// preview the text; we only signal that a message has been started.
+const collapsedLabel = computed(() => {
+    const hasText = messageText.value.trim().length > 0
+    const count = attachmentCount.value
+    const filesPart = count > 0 ? `${count} file${count > 1 ? 's' : ''} attached` : ''
+    if (hasText && filesPart) return `Your message is waiting · ${filesPart}`
+    if (hasText) return 'Your message is waiting'
+    if (filesPart) return filesPart
+    return 'Message input'
+})
+
+// Leading icon mirrors the label state.
+const collapsedIcon = computed(() => {
+    if (messageText.value.trim()) return 'pen'
+    if (attachmentCount.value > 0) return 'paperclip'
+    return 'keyboard'
+})
+
+function collapse() {
+    collapsed.value = true
+}
+
+/**
+ * Restore the composer from the collapsed state, focusing the textarea with the
+ * caret at the end (so the user can keep typing — handy after a comment was
+ * appended while collapsed).
+ */
+function expand() {
+    if (!collapsed.value) return
+    collapsed.value = false
+    // The textarea was display:none while collapsed, so its measured height is
+    // stale; re-measure once it is visible again.
+    nextTick(() => {
+        adjustTextareaHeight()
+        const textarea = textareaRef.value
+        textarea?.focus()
+        const inner = textarea?.shadowRoot?.querySelector('textarea')
+        if (inner) {
+            const end = inner.value.length
+            inner.setSelectionRange(end, end)
+        }
+    })
+}
+
+// Recompute whether the composer is tall enough to be worth collapsing.
+// Only meaningful while expanded (see isTall comment): while collapsed the bar
+// always exposes its restore button, and observing the collapsed height here
+// would just oscillate the flag.
+function recomputeIsTall() {
+    if (collapsed.value || !rootRef.value) return
+    const viewportHeight = window.visualViewport?.height ?? window.innerHeight
+    isTall.value = rootRef.value.offsetHeight > viewportHeight * COLLAPSE_THRESHOLD_RATIO
+}
+
+onMounted(() => {
+    if (!rootRef.value) return
+    if (typeof ResizeObserver !== 'undefined') {
+        collapseResizeObserver = new ResizeObserver(recomputeIsTall)
+        collapseResizeObserver.observe(rootRef.value)
+    }
+    // The threshold is viewport-relative, so a window/visual-viewport resize
+    // (incl. the mobile keyboard) can flip it without any composer size change.
+    window.addEventListener('resize', recomputeIsTall)
+    window.visualViewport?.addEventListener('resize', recomputeIsTall)
+    // Any "focus the message input" action (Alt+Shift+M, command palette, tab
+    // nav) routes through focusChat.js, which asks us to expand first when
+    // collapsed — a hidden textarea can't take focus. expand() re-shows and
+    // focuses it. The command palette also drives collapse/expand directly.
+    rootRef.value.addEventListener('twicc:expand-composer', expand)
+    rootRef.value.addEventListener('twicc:collapse-composer', collapse)
+})
+
+onBeforeUnmount(() => {
+    collapseResizeObserver?.disconnect()
+    collapseResizeObserver = null
+    window.removeEventListener('resize', recomputeIsTall)
+    window.visualViewport?.removeEventListener('resize', recomputeIsTall)
+    rootRef.value?.removeEventListener('twicc:expand-composer', expand)
+    rootRef.value?.removeEventListener('twicc:collapse-composer', collapse)
+})
 
 /**
  * Handle textarea input event.
@@ -1238,6 +1348,15 @@ async function handleReset() {
  * Focuses the textarea and positions the cursor after the inserted text.
  */
 function insertTextAtCursor(text) {
+    // Collapsed: the textarea is hidden, so there is no usable caret/focus and we
+    // must NOT pop the composer open — the user may be reading the conversation
+    // and adding comments. Append to the draft and stay collapsed; the text is
+    // there (and the collapsed label reflects it) for when they expand.
+    if (collapsed.value) {
+        updateTextareaContent(messageText.value + text)
+        return
+    }
+
     const inner = textareaRef.value?.shadowRoot?.querySelector('textarea')
     const current = messageText.value
     const pos = inner?.selectionStart ?? current.length
@@ -1367,7 +1486,46 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
 </script>
 
 <template>
-    <div class="message-input">
+    <div class="message-input" ref="rootRef" :class="{ collapsed }">
+        <!-- Collapsed bar: single line shown in place of the whole composer.
+             Clickable anywhere to restore; the explicit button is the visual cue. -->
+        <div
+            v-if="collapsed"
+            class="message-input-collapsed-bar"
+            @click="expand()"
+        >
+            <wa-icon :name="collapsedIcon" class="collapsed-icon"></wa-icon>
+            <span class="collapsed-label">{{ collapsedLabel }}</span>
+            <wa-button
+                variant="neutral"
+                appearance="outlined"
+                size="small"
+                class="collapsed-restore-btn"
+                :id="restoreButtonId"
+                @click.stop="expand()"
+            >
+                <wa-icon name="chevron-up"></wa-icon>
+            </wa-button>
+            <AppTooltip :for="restoreButtonId">Expand the message input</AppTooltip>
+        </div>
+
+        <!-- Floating "collapse" button: only when the composer is tall enough to
+             be worth collapsing, and not already collapsed. Absolutely positioned
+             so it never reflows the toolbar. Framed (outlined + opaque) so it
+             reads unambiguously as a button over the textarea. -->
+        <wa-button
+            v-if="isTall && !collapsed"
+            variant="neutral"
+            appearance="outlined"
+            size="small"
+            class="collapse-toggle-btn"
+            :id="collapseButtonId"
+            @click="collapse"
+        >
+            <wa-icon name="chevron-down" variant="classic"></wa-icon>
+        </wa-button>
+        <AppTooltip v-if="isTall && !collapsed" :for="collapseButtonId">Collapse the message input</AppTooltip>
+
         <div v-if="commentsWithContentCount > 0" class="code-comments-bar">
             <wa-button
                 variant="brand"
@@ -1608,6 +1766,80 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
     padding-top: 0;
     background: var(--main-header-footer-bg-color);
     container: message-input / inline-size;
+    /* Anchor for the floating collapse button. */
+    position: relative;
+}
+
+/* Collapsed: hide everything except the single-line bar. Children are kept in
+   the DOM (display:none, not v-if) so the draft text, attachments and changed
+   settings all survive a collapse/restore round-trip. */
+.message-input.collapsed {
+    /* The collapsed bar owns all the padding; the container adds none — except a
+       bottom inset matching the bar's relative `top` shift, so the shifted bar
+       never overflows below the footer background. */
+    padding: 0;
+    /* Hairline to read as footer chrome, distinct from the conversation above. */
+    border-top: var(--divider-size) solid var(--wa-color-surface-border);
+}
+.message-input.collapsed > :not(.message-input-collapsed-bar) {
+    display: none;
+}
+
+.message-input-collapsed-bar {
+    display: flex;
+    align-items: center;
+    gap: var(--wa-space-xs);
+    padding: var(--wa-space-xs);
+    border-radius: var(--wa-border-radius-m);
+    color: var(--wa-color-text-quiet);
+    cursor: pointer;
+    /* On mobile the sidebar toggle button always overlaps the bottom-left of the
+       message input; mirror the toolbar's offset so the label clears it. */
+    @media (width < 640px) {
+        padding-block: var(--wa-space-s);
+        padding-left: 4rem;
+    }
+}
+.message-input-collapsed-bar:hover {
+    background: var(--wa-color-neutral-fill-quiet);
+}
+/* When the sidebar is collapsed, the toggle button overlaps the bottom-left of
+   the message input — same handling as .message-input-toolbar. */
+body.sidebar-closed .message-input-collapsed-bar {
+    @media (width >= 640px) {
+        padding-block: var(--wa-space-s);
+        padding-left: 4rem;
+    }
+}
+.collapsed-icon {
+    flex-shrink: 0;
+    font-size: var(--wa-font-size-s);
+    color: var(--wa-color-warning-60);
+}
+.collapsed-label {
+    flex: 1;
+    min-width: 0;
+    font-size: var(--wa-font-size-s);
+    font-weight: var(--wa-font-weight-bold);
+    color: var(--wa-color-warning-60);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.collapsed-restore-btn {
+    flex-shrink: 0;
+}
+
+.collapse-toggle-btn {
+    position: absolute;
+    top: 10px;
+    right: 22px;
+    z-index: 1;
+}
+/* Opaque surface so the framed button reads clearly as a button and stays
+   legible over the textarea's first line of text. */
+.collapse-toggle-btn::part(base) {
+    background: var(--wa-color-surface-default);
 }
 
 .code-comments-bar {

@@ -39,6 +39,14 @@ export function getPendingRequestPrimaryTarget() {
  * trying until focus actually sticks, or the retry budget runs out (~1.5s).
  */
 export function focusChatPrimary(retries = 30) {
+    // A collapsed message input keeps its textarea hidden (display:none), which
+    // can't take focus. Ask the composer to expand first — it re-shows and
+    // focuses the textarea, and the retry below makes the focus stick. No-op when
+    // a pending request is shown (the composer isn't mounted) or already expanded.
+    document
+        .querySelector('.message-input.collapsed')
+        ?.dispatchEvent(new CustomEvent('twicc:expand-composer'))
+
     const target = getPendingRequestPrimaryTarget()
         || document.querySelector('.message-input wa-textarea')
     if (!target) {
