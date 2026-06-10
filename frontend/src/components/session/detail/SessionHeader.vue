@@ -57,6 +57,10 @@ const session = computed(() => store.getSession(props.sessionId))
 // the worktree-style title badge (parent name + branch icon + worktree folder),
 // matching the project home header.
 const isProjectWorktree = computed(() => !!store.getProject(session.value?.project_id)?.worktree_of)
+// Whether the session's project is not trusted (effective trust ≠ trusted —
+// explicitly untrusted or unknown). Drives the title-line lock marker, a
+// session-level echo of the untrusted badge shown on project/worktree badges.
+const isProjectUntrusted = computed(() => store.untrustedProjectIds.has(session.value?.project_id))
 const providerLabel = computed(() => getProviderLabel(session.value?.provider))
 const providerIcon = computed(() => getProviderIcon(session.value?.provider))
 
@@ -503,6 +507,21 @@ defineExpose({
                     </div>
                 </AppTooltip>
 
+                <!-- Untrusted marker: only when the session's project is not trusted
+                     (explicitly untrusted or unknown). Sits next to the worktree
+                     marker as a session-level status flag; the project/worktree
+                     badge on the right carries the same lock independently. -->
+                <wa-icon
+                    v-if="isProjectUntrusted"
+                    :id="`session-header-${sessionId}-untrusted`"
+                    auto-width
+                    name="lock"
+                    class="untrusted-title-icon"
+                ></wa-icon>
+                <AppTooltip v-if="isProjectUntrusted" :for="`session-header-${sessionId}-untrusted`">
+                    This session is in an untrusted project
+                </AppTooltip>
+
                 <h2 :id="`session-header-${sessionId}-title`">{{ displayName }}</h2>
                 <AppTooltip :for="`session-header-${sessionId}-title`">{{ displayName }}</AppTooltip>
 
@@ -916,6 +935,16 @@ body:not([data-display-mode="debug"]) .cost-breakdown-item {
 
 /* Worktree marker icon before the title (only for worktree projects). */
 .worktree-title-icon {
+    align-self: center;
+    flex-shrink: 0;
+    color: var(--wa-color-text-quiet);
+    font-size: var(--wa-font-size-s);
+}
+
+/* Untrusted-project marker before the title (sibling of the worktree marker).
+   Matches it visually — full visibility, not the faint badge treatment — since
+   it is a single focal session-status flag, not a list item. */
+.untrusted-title-icon {
     align-self: center;
     flex-shrink: 0;
     color: var(--wa-color-text-quiet);
