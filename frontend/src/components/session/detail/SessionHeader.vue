@@ -145,15 +145,28 @@ const contextUsageIndicatorWidth = computed(() => {
     return `calc(var(--track-width) * ${multiplier.toFixed(2)})`
 })
 
-// Display directory: git_directory if available, otherwise cwd
+// Display directory: git_directory if available, otherwise cwd. For a draft
+// session — which has neither yet — fall back to the target project's path
+// (git root if known, else its directory), i.e. where the session will run.
 const displayDirectory = computed(() => {
-    return session.value?.git_directory || session.value?.cwd || null
+    if (session.value?.git_directory) return session.value.git_directory
+    if (session.value?.cwd) return session.value.cwd
+    if (session.value?.draft) {
+        const project = store.getProject(session.value?.project_id)
+        return project?.git_root || project?.directory || null
+    }
+    return null
 })
 
-// Tooltip for directory: indicate whether it's the resolved git directory or cwd fallback
+// Tooltip for directory: indicate whether it's the resolved git directory, the
+// cwd fallback, or — for a draft — the target project's git root / directory.
 const displayDirectoryTooltip = computed(() => {
     if (session.value?.git_directory) return 'Git working directory'
     if (session.value?.cwd) return 'Working directory (cwd)'
+    if (session.value?.draft) {
+        const project = store.getProject(session.value?.project_id)
+        return project?.git_root ? 'Project git root' : 'Project directory'
+    }
     return null
 })
 
@@ -514,8 +527,10 @@ defineExpose({
         <!-- Collapsible rows: git info + meta (overlay on small viewports) -->
         <div class="session-collapsible-rows">
 
-            <!-- Git info row: directory @ branch (not shown for draft sessions) -->
-            <div v-if="!session.draft && (displayDirectory || session.git_branch)" class="session-git-info">
+            <!-- Git info row: directory @ branch. For a draft, displayDirectory
+                 falls back to the project path and there is no branch yet, so
+                 only the folder line shows. -->
+            <div v-if="displayDirectory || session.git_branch" class="session-git-info">
                 <span v-if="displayDirectory" :id="`session-header-${sessionId}-git-directory`" class="git-info-item">
                     <wa-icon auto-width name="folder-open" variant="regular"></wa-icon>
                     <span>{{ displayDirectory }}</span>
