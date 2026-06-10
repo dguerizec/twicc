@@ -2289,11 +2289,15 @@ wa-split-panel::part(divider) {
 }
 
 .project-selector {
-    /* Square size reserved for each row's "…" actions button. Inherited by the
+    /* Width reserved for each row's "…" actions overlay button. Inherited by the
        row components (ProjectSelectorRow, WorktreeSelectorRows) so the menu and
        the worktree-header spacer all reserve the exact same width and keep every
        row's indicators aligned. */
-    --selector-row-action-size: 1.5rem;
+    --selector-row-action-size: 1.75rem;
+    /* Right padding applied to every list row (overrides the wa-dropdown-item
+       default of 1em). The "…" overlay is pinned at this same distance so it
+       stays flush with each row's content edge. */
+    --selector-row-padding-inline-end: 0.5em;
     flex: 1;
     overflow: hidden;
     display: inline-flex;
@@ -2367,12 +2371,24 @@ wa-split-panel::part(divider) {
     border-color: var(--dot-color, var(--wa-color-border-quiet));
 }
 
+/* Tighter right padding for every list row (projects, workspaces, worktree
+   headers, section headers, …) than the wa-dropdown-item default of 1em, so the
+   content and the "…" overlay sit closer to the right edge. Scoped to direct
+   children only — the nested "…" submenu items keep their own padding. */
+.project-selector > :deep(wa-dropdown-item) {
+    padding-inline-end: var(--selector-row-padding-inline-end);
+}
+
 .selector-item-content {
     display: flex;
     align-items: center;
     flex: 1;
     min-width: 0;
     gap: var(--wa-space-xs);
+    /* Reserve room for the absolutely-positioned "…" overlay (button width +
+       gap) so the indicators stay put and aligned with the worktree-header
+       spacer. */
+    padding-inline-end: calc(var(--selector-row-action-size, 1.5rem) + var(--wa-space-xs));
 }
 
 .selector-item-indicators {
@@ -2383,11 +2399,20 @@ wa-split-panel::part(divider) {
     flex-shrink: 0;
 }
 
-/* Per-row "…" actions menu on workspace rows. Always visible (discreet), and
-   occupying a fixed square so every row's indicators stay aligned. */
+/* Per-row "…" actions menu on workspace rows, rendered as a near-full-height
+   overlay pinned to the right of the row. The wa-dropdown-item host is
+   position:relative and adds vertical padding; without this overlay that padding
+   band would be "dead" space where a click selects the workspace instead of
+   opening the menu — making the button easy to miss. inset-block leaves a 1px gap
+   top/bottom so the button stays visually separated from the row edges;
+   inset-inline-end matches each row's right padding so the button stays flush
+   with the content edge. */
 .row-menu {
-    display: inline-flex;
-    align-items: center;
+    position: absolute;
+    inset-block: 1px;
+    inset-inline-end: var(--selector-row-padding-inline-end, 0.5em);
+    display: flex;
+    align-items: stretch;
     justify-content: center;
     flex-shrink: 0;
     width: var(--selector-row-action-size, 1.5rem);
@@ -2403,7 +2428,8 @@ wa-split-panel::part(divider) {
     padding: 0;
     min-height: 0;
     width: var(--selector-row-action-size, 1.5rem);
-    height: var(--selector-row-action-size, 1.5rem);
+    /* Fill the full-height .row-menu overlay so the entire band opens the menu. */
+    height: 100%;
 }
 
 wa-dropdown-item:hover .row-menu-trigger,

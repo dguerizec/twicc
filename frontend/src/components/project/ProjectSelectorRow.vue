@@ -107,6 +107,10 @@ function onRowMenuSelect(event) {
     flex: 1;
     min-width: 0;
     gap: var(--wa-space-xs);
+    /* Reserve room for the absolutely-positioned "…" overlay (button width +
+       gap) so the indicators stay put and aligned with the worktree-header
+       spacer. */
+    padding-inline-end: calc(var(--selector-row-action-size, 1.5rem) + var(--wa-space-xs));
 }
 
 .selector-item-indicators {
@@ -117,12 +121,21 @@ function onRowMenuSelect(event) {
     flex-shrink: 0;
 }
 
-/* Per-row "…" actions menu. Always visible (discreet), brighter on hover, and
-   occupying a fixed square so every row's indicators stay aligned with the
-   worktree-header rows (which reserve the same width but carry no menu). */
+/* Per-row "…" actions menu, rendered as a near-full-height overlay pinned to the
+   right of the row. The wa-dropdown-item host is position:relative and adds
+   vertical padding; without this overlay that padding band would be "dead" space
+   where a click selects the project instead of opening the menu — making the
+   button easy to miss. inset-block leaves a 1px gap top/bottom so the button
+   stays visually separated from the row edges; inset-inline-end matches each
+   row's right padding so the button stays flush with the content edge, aligned
+   with the worktree-header spacer (which reserves the same width but carries no
+   menu). */
 .row-menu {
-    display: inline-flex;
-    align-items: center;
+    position: absolute;
+    inset-block: 1px;
+    inset-inline-end: var(--selector-row-padding-inline-end, 0.5em);
+    display: flex;
+    align-items: stretch;
     justify-content: center;
     flex-shrink: 0;
     width: var(--selector-row-action-size, 1.5rem);
@@ -138,7 +151,8 @@ function onRowMenuSelect(event) {
     padding: 0;
     min-height: 0;
     width: var(--selector-row-action-size, 1.5rem);
-    height: var(--selector-row-action-size, 1.5rem);
+    /* Fill the full-height .row-menu overlay so the entire band opens the menu. */
+    height: 100%;
 }
 
 wa-dropdown-item:hover .row-menu-trigger,
