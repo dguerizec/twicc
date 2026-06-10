@@ -322,6 +322,13 @@ function onWorktreeDirectoryInput(event) {
     localWorktreeDirectory.value = event.target.value
 }
 
+// Worktree directory section visibility: edit mode, git projects only, and
+// only for main repositories — never for worktree projects (worktree_of set),
+// which inherit their main repo's setting rather than carrying their own.
+const showWorktreeDirectory = computed(
+    () => !isCreateMode.value && !!props.project?.git_root && !props.project?.worktree_of
+)
+
 // The global default worktree directory composed against this project's git
 // root (resolving any "../"). Empty when not in edit mode, the project is not
 // under git, or no global default is set — in which case the "use the default"
@@ -490,10 +497,15 @@ async function handleSave() {
             name: trimmedName || null,
             color: localColor.value || null,
             archived: localArchived.value,
-            worktree_directory: localWorktreeDirectory.value.trim() || null,
             // Per-project agent defaults: only the keys the user actually changed
             // (the PUT handler updates a field only when it is present).
             ...(agentDefaultsRef.value?.getChangedFields?.() || {}),
+        }
+        // Worktree directory is editable only for git main repos; for worktree
+        // projects the section is hidden, so skip the field entirely rather than
+        // sending null and silently wiping a value the user never saw.
+        if (showWorktreeDirectory.value) {
+            body.worktree_directory = localWorktreeDirectory.value.trim() || null
         }
         let response
         try {
@@ -615,8 +627,9 @@ defineExpose({
 
                         <wa-divider></wa-divider>
 
-                        <!-- Worktree directory (edit mode, git projects only) -->
-                        <div v-if="!isCreateMode && project?.git_root" class="form-group">
+                        <!-- Worktree directory (edit mode, git main repos only —
+                             hidden for worktree projects, which inherit it) -->
+                        <div v-if="showWorktreeDirectory" class="form-group">
                             <label class="form-label">Worktree directory</label>
                             <div class="directory-input-row">
                                 <wa-input
@@ -644,7 +657,7 @@ defineExpose({
                             </wa-button>
                         </div>
 
-                        <wa-divider v-if="!isCreateMode && project?.git_root"></wa-divider>
+                        <wa-divider v-if="showWorktreeDirectory"></wa-divider>
 
                         <!-- Trust (edit mode only) -->
                         <div v-if="!isCreateMode" class="form-group">

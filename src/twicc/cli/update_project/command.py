@@ -14,8 +14,8 @@ The flat patch drops a ``kind="project:update"`` payload in
 ``project_updated`` broadcast.
 
 Mirrors the HTTP ``PUT /api/projects/<id>/`` endpoint: ``name``, ``color``,
-``archived``, and ``default_provider`` are mutable; the ``directory`` is
-immutable (the project id is derived from it). There is no
+``archived``, ``default_provider``, and ``worktree_directory`` are mutable;
+the ``directory`` is immutable (the project id is derived from it). There is no
 ``delete-project`` counterpart by design.
 
 The ``--trust`` / ``--untrust`` / ``--reset-trust`` flags are a separate,
@@ -146,6 +146,25 @@ def update_project_main(
             "Mutually exclusive with `--default-provider`."
         ),
     ),
+    worktree_directory: str | None = typer.Option(
+        None,
+        "--worktree-directory",
+        help=(
+            "Absolute base directory under which new git worktrees of this "
+            "project are created from the UI. Free-form (not required to live "
+            "under the git root). Mutually exclusive with "
+            "`--unset-worktree-directory`."
+        ),
+    ),
+    unset_worktree_directory: bool = typer.Option(
+        False,
+        "--unset-worktree-directory",
+        help=(
+            "Clear the project's worktree directory (the worktree-create "
+            "dialog falls back to the global default, composed against the "
+            "git root). Mutually exclusive with `--worktree-directory`."
+        ),
+    ),
     trust: bool = typer.Option(
         False,
         "--trust",
@@ -191,7 +210,7 @@ def update_project_main(
         ),
     ),
 ) -> None:
-    """Update an existing project's name, color, archived state, or default provider."""
+    """Update an existing project's name, color, archived state, default provider, or worktree directory."""
     from twicc.cli._drop_request.project import derive_project_id
     from twicc.cli._output import emit_error
 
@@ -211,6 +230,8 @@ def update_project_main(
             ("--archive", archive), ("--unarchive", unarchive),
             ("--default-provider", default_provider is not None),
             ("--unset-default-provider", unset_default_provider),
+            ("--worktree-directory", worktree_directory is not None),
+            ("--unset-worktree-directory", unset_worktree_directory),
             ("--trust", trust), ("--untrust", untrust),
             ("--reset-trust", reset_trust),
             ("--propagate/--no-propagate", propagate is not None),
@@ -277,6 +298,8 @@ def update_project_main(
             ("--archive", archive), ("--unarchive", unarchive),
             ("--default-provider", default_provider is not None),
             ("--unset-default-provider", unset_default_provider),
+            ("--worktree-directory", worktree_directory is not None),
+            ("--unset-worktree-directory", unset_worktree_directory),
         ) if on]
         if field_flags:
             trust_errors.append(ValidationError(
@@ -311,6 +334,10 @@ def update_project_main(
         errors.append(ValidationError("--default-provider", "conflicting_flags",
                                        "--default-provider and --unset-default-provider "
                                        "cannot be used together."))
+    if worktree_directory is not None and unset_worktree_directory:
+        errors.append(ValidationError("--worktree-directory", "conflicting_flags",
+                                       "--worktree-directory and --unset-worktree-directory "
+                                       "cannot be used together."))
 
     # No-op check.
     has_patch = (
@@ -322,12 +349,15 @@ def update_project_main(
         or unarchive
         or default_provider is not None
         or unset_default_provider
+        or worktree_directory is not None
+        or unset_worktree_directory
     )
     if not has_patch:
         errors.append(ValidationError("update-project", "no_op",
                                        "Nothing to update — pass at least one --name / --unset-name / "
                                        "--color / --unset-color / --archive / --unarchive / "
-                                       "--default-provider / --unset-default-provider."))
+                                       "--default-provider / --unset-default-provider / "
+                                       "--worktree-directory / --unset-worktree-directory."))
 
     if errors:
         emit_validation_errors(errors)
@@ -357,6 +387,13 @@ def update_project_main(
                 f"Unknown provider {default_provider!r}. Available: {valid_providers}.",
             ))
 
+    if worktree_directory is not None and not worktree_directory.strip():
+        errors.append(ValidationError(
+            "--worktree-directory", "invalid_value",
+            "--worktree-directory cannot be empty; use "
+            "--unset-worktree-directory to clear it.",
+        ))
+
     if not unset_name and new_name is not None and not errors:
         trimmed = new_name.strip()
         if trimmed:
@@ -385,6 +422,10 @@ def update_project_main(
         "archived": archived_value,
         "default_provider": default_provider,
         "unset_default_provider": unset_default_provider,
+        "worktree_directory": (
+            worktree_directory.strip() if worktree_directory is not None else None
+        ),
+        "unset_worktree_directory": unset_worktree_directory,
     }
 
     _submit_and_exit(payload, "project:update")

@@ -280,12 +280,15 @@ async def update_project_from_payload(payload: dict) -> ProjectMutationResult:
             "archived": bool,               # optional
             "default_provider": str | None, # optional, provider new sessions default to
             "unset_default_provider": bool, # optional, back to inherit
+            "worktree_directory": str | None,  # optional, base dir for new worktrees
+            "unset_worktree_directory": bool,  # optional, back to the global default
         }
 
     The CLI ensures at least one patch field is present (``no_op``
     enforced locally) and that mutually-exclusive flags (``name`` vs
     ``unset_name``, ``color`` vs ``unset_color``, ``default_provider`` vs
-    ``unset_default_provider``) are not combined.
+    ``unset_default_provider``, ``worktree_directory`` vs
+    ``unset_worktree_directory``) are not combined.
     """
     project_id = payload.get("project_id")
     if not isinstance(project_id, str) or not project_id:
@@ -339,6 +342,26 @@ async def update_project_from_payload(payload: dict) -> ProjectMutationResult:
             ])
         default_provider = _prov
 
+    worktree_directory = payload.get("worktree_directory")
+    unset_worktree_directory = payload.get("unset_worktree_directory", False)
+    if not isinstance(unset_worktree_directory, bool):
+        return _invalid_payload_result("unset_worktree_directory",
+                                       "unset_worktree_directory must be a boolean.")
+    if worktree_directory is not None:
+        if not isinstance(worktree_directory, str):
+            return _invalid_payload_result("worktree_directory",
+                                           "worktree_directory must be a string or null.")
+        if unset_worktree_directory:
+            return ProjectMutationResult(False, project_id, None, [
+                ProjectMutationError("--worktree-directory", "conflicting_flags",
+                                      "--worktree-directory and --unset-worktree-directory "
+                                      "cannot be used together."),
+            ])
+        # Same normalization as the HTTP PUT: trimmed, empty means clear.
+        worktree_directory = worktree_directory.strip() or None
+        if worktree_directory is None:
+            unset_worktree_directory = True
+
     # Format checks.
     errors: list[ProjectMutationError] = []
     if not unset_name and new_name is not None:
@@ -375,6 +398,8 @@ async def update_project_from_payload(payload: dict) -> ProjectMutationResult:
         archived=archived,
         default_provider=default_provider,
         unset_default_provider=unset_default_provider,
+        worktree_directory=worktree_directory,
+        unset_worktree_directory=unset_worktree_directory,
     )
 
 

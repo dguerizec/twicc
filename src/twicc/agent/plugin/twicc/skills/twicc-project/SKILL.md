@@ -47,6 +47,7 @@ $TWICC project <PROJECT>
   "archived": false,
   "total_cost": 12.345678,
   "worktree_of": null,
+  "worktree_directory": null,
   "trust": null,
   "trust_propagation": false,
   "default_provider": null,
@@ -64,6 +65,7 @@ $TWICC project <PROJECT>
 - `color` — may be `null`.
 - `total_cost` — total cost in USD across all sessions (may be `null`).
 - `worktree_of` — when this project is a git worktree, the project id of its main repository; `null` otherwise.
+- `worktree_directory` — absolute base directory under which new git worktrees of this project are created from the UI; `null` = use the global default (composed against the git root). Editable via `$TWICC update-project <PROJECT> --worktree-directory PATH`.
 - `worktrees` — the project ids of this project's own git worktrees (the reverse of `worktree_of`); empty when it has none. A worktree's sessions, cost and activity count toward its main repository.
 - `trust` — the project's own trust decision: `true` = trusted, `false` = untrusted, `null` = no own decision (inherits from its parent directory / git root). **Read-only here, and human-only to change** — agents never set trust. A session created in an untrusted (or `null` / undecided) project runs under a restricted permission set (`bypassPermissions` / `yolo` unavailable).
 - `trust_propagation` — whether an explicit `trust` decision also covers the project's sub-paths and its git worktrees.

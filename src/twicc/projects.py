@@ -563,14 +563,18 @@ async def update_project_atomic(
     archived: bool | None = None,
     default_provider: str | None = None,
     unset_default_provider: bool = False,
+    worktree_directory: str | None = None,
+    unset_worktree_directory: bool = False,
 ) -> ProjectMutationResult:
     """Atomically apply a patch to an existing project.
 
     Mutually-exclusive flags (``new_name`` vs ``unset_name``, ``color`` vs
-    ``unset_color``, ``default_provider`` vs ``unset_default_provider``) must
-    be enforced by the caller before invocation — this function trusts its
-    inputs (the ``unset`` wins if both are set). ``default_provider`` is
-    assumed already validated as a registered provider value.
+    ``unset_color``, ``default_provider`` vs ``unset_default_provider``,
+    ``worktree_directory`` vs ``unset_worktree_directory``) must be enforced
+    by the caller before invocation — this function trusts its inputs (the
+    ``unset`` wins if both are set). ``default_provider`` is assumed already
+    validated as a registered provider value; ``worktree_directory`` already
+    trimmed and non-empty.
 
     Runs under :func:`run_under_db_write_lock` and broadcasts
     ``project_updated`` out of the lock on success. On
@@ -625,6 +629,15 @@ async def update_project_atomic(
                 if project.default_provider != default_provider:
                     project.default_provider = default_provider
                     update_fields.append("default_provider")
+
+            if unset_worktree_directory:
+                if project.worktree_directory is not None:
+                    project.worktree_directory = None
+                    update_fields.append("worktree_directory")
+            elif worktree_directory is not None:
+                if project.worktree_directory != worktree_directory:
+                    project.worktree_directory = worktree_directory
+                    update_fields.append("worktree_directory")
 
             if not update_fields:
                 # No-op write: the row already matches the patch. Treat as
