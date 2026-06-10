@@ -127,7 +127,7 @@ Each worktree has its own:
 When asked to start (or restart) dev servers — in a worktree or not — just run the **single** `uv run ./devctl.py start` command and read the logs. devctl does **everything** for you:
 - rebuilds the editable install, which runs `npm ci` to install/refresh the frontend `node_modules`
 - applies any pending Django migrations automatically at backend startup
-- copies the database from `~/.twicc/db/` (if no local DB exists yet)
+- copies the database, search index, and user config (`settings.json`, `workspaces.json`, `terminal-config.json`, `message-snippets.json`, `seen-tips.json`, and the `*-settings-presets.json` bundles) from `~/.twicc/` (only on first setup, when no local DB exists yet; never `.env`, `logs/`, or `drop-requests/`)
 - finds available ports (incrementing from default+1: 3501 for backend, 5174 for frontend)
 - saves the port configuration to the worktree's `.env` file
 

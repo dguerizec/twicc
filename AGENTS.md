@@ -36,9 +36,9 @@ uv run ./devctl.py status
 uv run ./devctl.py logs [front|back]
 ```
 
-Default ports are frontend `5173` and backend `3500`. In an additional worktree, `devctl.py` auto-picks the next free ports (e.g. `5174`/`3501`) and copies the DB.
+Default ports are frontend `5173` and backend `3500`. In an additional worktree, `devctl.py` auto-picks the next free ports (e.g. `5174`/`3501`) and copies the DB, search index, and user config (settings, workspaces, presets, snippets, tips — never `.env`, `logs/`, or `drop-requests/`) on first setup.
 
-When asked to start/restart servers, run the **single** `devctl.py` command and read the logs — nothing else. devctl does everything: it rebuilds the editable install (running `npm ci` to install frontend `node_modules`), auto-applies pending Django migrations at backend startup, copies the DB, and picks ports. **Never run `npm install`/`npm ci`, `migrate`, or touch `node_modules` yourself to bring servers up** — a parallel `npm install` corrupts devctl's `npm ci` (`ENOTEMPTY`) and fails the build. devctl's post-start port check may time out during the backend's initial sync; that is not a failure — confirm via `logs/backend.log`.
+When asked to start/restart servers, run the **single** `devctl.py` command and read the logs — nothing else. devctl does everything: it rebuilds the editable install (running `npm ci` to install frontend `node_modules`), auto-applies pending Django migrations at backend startup, copies the DB + search index + user config, and picks ports. **Never run `npm install`/`npm ci`, `migrate`, or touch `node_modules` yourself to bring servers up** — a parallel `npm install` corrupts devctl's `npm ci` (`ENOTEMPTY`) and fails the build. devctl's post-start port check may time out during the backend's initial sync; that is not a failure — confirm via `logs/backend.log`.
 
 Do not restart development servers unless the user asks. After backend changes, tell the user to restart with `devctl.py` if needed.
 

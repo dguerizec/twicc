@@ -127,12 +127,40 @@ def save_ports_to_env(backend_port: int, frontend_port: int) -> None:
         f.write("\n".join(lines_to_add))
 
 
-def copy_data_from_main() -> bool:
-    """Copy the database and search index from the main data directory to the worktree.
+# User preference files carried into a worktree's data dir alongside the DB.
+# Infra (.env), logs/, and drop-requests/ are deliberately excluded.
+SYNCED_CONFIG_FILENAMES = (
+    "settings.json",
+    "workspaces.json",
+    "terminal-config.json",
+    "message-snippets.json",
+    "seen-tips.json",
+)
+SYNCED_CONFIG_GLOBS = ("*-settings-presets.json",)
 
-    Copies data.sqlite and any WAL/SHM files, plus the search-index/ directory.
-    Only called in worktree mode when the local database doesn't exist yet.
-    Both are copied together (all or nothing) to keep them in sync.
+
+def synced_config_files(base_dir: Path) -> list[Path]:
+    """Resolve the user preference files present at the root of base_dir.
+
+    Fixed config files plus the per-provider *-settings-presets.json bundles.
+    Returns only files that actually exist, so the result is usable both as the
+    copy source list (from the main data dir) and the clear list (from the
+    worktree data dir).
+    """
+    files = [base_dir / name for name in SYNCED_CONFIG_FILENAMES]
+    for pattern in SYNCED_CONFIG_GLOBS:
+        files.extend(sorted(base_dir.glob(pattern)))
+    return [path for path in files if path.exists()]
+
+
+def copy_data_from_main() -> bool:
+    """Copy the database, search index and user config from the main data directory to the worktree.
+
+    Copies data.sqlite and any WAL/SHM files, the search-index/ directory, and
+    the user preference files (settings, workspaces, presets, snippets, tips).
+    Only called in worktree mode when the local database doesn't exist yet, so
+    everything lands together on first setup. Existing local files are never
+    overwritten.
 
     Returns True if the copy succeeded (or source doesn't exist), False on error.
     """
@@ -173,14 +201,29 @@ def copy_data_from_main() -> bool:
         shutil.copytree(source_search, target_search)
         print("OK")
 
+    # Copy user preference files (settings, workspaces, presets, snippets, tips).
+    # Same one-shot timing as the DB — we only reach here on first worktree
+    # setup (guarded by the target_db.exists() check above). A file the worktree
+    # already has is left untouched, so local divergence is preserved.
+    copied_config = []
+    for source_file in synced_config_files(DEFAULT_DATA_DIR):
+        target_file = DATA_DIR / source_file.name
+        if not target_file.exists():
+            shutil.copy2(source_file, target_file)
+            copied_config.append(source_file.name)
+    if copied_config:
+        print(f"  Copied config files: {', '.join(copied_config)}")
+
     return True
 
 
 def clear_local_data() -> None:
-    """Delete the local database and search index in the worktree.
+    """Delete the local database, search index and user config in the worktree.
 
-    Removes data.sqlite and any WAL/SHM files, plus the search-index/ directory,
-    so the next start creates a fresh empty database and rebuilds the search index.
+    Removes data.sqlite and any WAL/SHM files, the search-index/ directory, and
+    the user preference files (settings, workspaces, presets, snippets, tips), so
+    the next start creates a fresh empty database, rebuilds the search index, and
+    carries no config over from the main data directory.
     """
     # Clear database
     target_db = DATA_DIR / "db" / "data.sqlite"
@@ -196,6 +239,14 @@ def clear_local_data() -> None:
     if target_search.exists():
         shutil.rmtree(target_search)
         print("  Cleared local search index")
+
+    # Clear user preference files (settings, workspaces, presets, snippets, tips).
+    removed_config = []
+    for config_file in synced_config_files(DATA_DIR):
+        os.remove(config_file)
+        removed_config.append(config_file.name)
+    if removed_config:
+        print(f"  Cleared config files: {', '.join(removed_config)}")
 
 
 def load_env_file() -> dict[str, str]:
@@ -606,8 +657,9 @@ TARGETS:
     all                Both frontend and backend (default for start/stop/restart)
 
 OPTIONS:
-    --empty-db         Start with an empty database instead of copying from
-                       the main data directory (worktree mode only)
+    --empty-db         Start with an empty database and no copied config
+                       instead of copying from the main data directory
+                       (worktree mode only)
     --lines=N          Number of log lines to show (default: 50)
 
 DATA DIRECTORY:
@@ -641,10 +693,13 @@ DEV HOSTNAME:
     This adds the hostname to Vite's allowedHosts so it accepts requests
     for that host. Without this, Vite rejects requests from unknown hosts.
 
-DATABASE & SEARCH INDEX (WORKTREE MODE):
+DATABASE, SEARCH INDEX & CONFIG (WORKTREE MODE):
     On start/restart in a worktree, devctl automatically copies the
-    database and search index from ~/.twicc/ if no local data exists yet.
-    Use --empty-db to skip the copy and start fresh (clears both).
+    database, search index, and user config (settings.json, workspaces.json,
+    terminal-config.json, message-snippets.json, seen-tips.json, and the
+    *-settings-presets.json bundles) from ~/.twicc/ if no local data exists
+    yet. Infra (.env), logs/, and drop-requests/ are never copied.
+    Use --empty-db to skip the copy and start fresh (clears all of them).
 
 EXAMPLES:
     uv run ./devctl.py start           # Start both servers
@@ -711,7 +766,7 @@ def main():
 
     if command == "start":
         targets = parse_target(target, processes)
-        # In worktree mode: copy DB + search index from main, or clear both if --empty-db
+        # In worktree mode: copy DB + search index + user config from main, or clear all if --empty-db
         if is_git_worktree():
             if empty_db:
                 clear_local_data()
@@ -730,7 +785,7 @@ def main():
 
     elif command == "restart":
         targets = parse_target(target, processes)
-        # In worktree mode: copy DB + search index from main, or clear both if --empty-db
+        # In worktree mode: copy DB + search index + user config from main, or clear all if --empty-db
         if is_git_worktree():
             if empty_db:
                 clear_local_data()
