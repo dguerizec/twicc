@@ -124,10 +124,14 @@ Each worktree has its own:
 - `db/data.sqlite*` database (in `<worktree>/db/`)
 - `logs/` directory (backend.log, frontend.log, sdk/) in `<worktree>/logs/`
 
-When starting dev servers in a worktree, just run `uv run ./devctl.py start`. devctl automatically:
+When asked to start (or restart) dev servers — in a worktree or not — just run the **single** `uv run ./devctl.py start` command and read the logs. devctl does **everything** for you:
+- rebuilds the editable install, which runs `npm ci` to install/refresh the frontend `node_modules`
+- applies any pending Django migrations automatically at backend startup
 - copies the database from `~/.twicc/db/` (if no local DB exists yet)
 - finds available ports (incrementing from default+1: 3501 for backend, 5174 for frontend)
 - saves the port configuration to the worktree's `.env` file
+
+**Do NOT run `npm install` / `npm ci`, `migrate`, or touch `node_modules` yourself when starting servers.** It is wasted work and actively harmful: a `npm install` running in parallel with devctl's `npm ci` corrupts the install (`ENOTEMPTY`) and fails the build. Migrations and frontend deps are not your problem here — `devctl.py start` is the whole job. (devctl's post-start port check can time out while the backend is still doing its initial sync; that is not a failure — check `logs/backend.log` to confirm it came up.)
 
 If the user explicitly asks to start with an empty/fresh database, use `uv run ./devctl.py start --empty-db`.
 
@@ -162,9 +166,9 @@ Forgetting this is destructive: a manual `migrate` from the wrong cwd applies th
 
 Claude never runs these operations on its own initiative. If the user explicitly asks you to run one of these operations, do it without asking for confirmation. Otherwise, notify the user at the end of a task or, if absolutely necessary during your work, pause the task and ask them the permission to do it or to do them manually:
 
-- **Django migrations:** After modifying models (and having created the migration yourself), remind the user to run `migrate`
+- **Django migrations:** After modifying models (and having created the migration yourself), remind the user to run `migrate`. This is about the user's own already-running instance — when you *start/restart* dev servers via `devctl.py`, migrations are auto-applied at backend startup, so never run `migrate` by hand as part of bringing servers up.
 - **Dev server restart:** After backend changes, remind the user to restart via `devctl.py`
-- **Package installation:** After adding dependencies, remind the user to run `npm install` or `uv add`
+- **Package installation:** After adding dependencies, remind the user to run `npm install` or `uv add`. (Starting servers via `devctl.py` already runs `npm ci` through the editable rebuild — never pre-run `npm install`/`npm ci` yourself when launching servers.)
 
 ## TwiCC Plugin (Agent Skills)
 

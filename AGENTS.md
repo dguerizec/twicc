@@ -36,7 +36,9 @@ uv run ./devctl.py status
 uv run ./devctl.py logs [front|back]
 ```
 
-Default ports are frontend `5173` and backend `3500`.
+Default ports are frontend `5173` and backend `3500`. In an additional worktree, `devctl.py` auto-picks the next free ports (e.g. `5174`/`3501`) and copies the DB.
+
+When asked to start/restart servers, run the **single** `devctl.py` command and read the logs — nothing else. devctl does everything: it rebuilds the editable install (running `npm ci` to install frontend `node_modules`), auto-applies pending Django migrations at backend startup, copies the DB, and picks ports. **Never run `npm install`/`npm ci`, `migrate`, or touch `node_modules` yourself to bring servers up** — a parallel `npm install` corrupts devctl's `npm ci` (`ENOTEMPTY`) and fails the build. devctl's post-start port check may time out during the backend's initial sync; that is not a failure — confirm via `logs/backend.log`.
 
 Do not restart development servers unless the user asks. After backend changes, tell the user to restart with `devctl.py` if needed.
 
@@ -84,9 +86,9 @@ If the user asks to exit, kill, delete, or otherwise leave a worktree, run `uv r
 
 Do not do these on your own initiative:
 
-- Run Django migrations after model changes. Create the migration if requested, then remind the user to run `migrate`.
+- Run Django migrations after model changes. Create the migration if requested, then remind the user to run `migrate`. (This is about the user's own running instance; starting/restarting servers via `devctl.py` auto-applies migrations, so never run `migrate` by hand to bring servers up.)
 - Restart development servers. Remind the user when a restart is needed.
-- Install packages. If dependencies were added, remind the user to run `npm install`, `npm ci`, or `uv add` as appropriate.
+- Install packages. If dependencies were added, remind the user to run `npm install`, `npm ci`, or `uv add` as appropriate. (Starting servers via `devctl.py` already runs `npm ci`; never pre-run it yourself to launch servers.)
 - Run release-test `uvx` commands. For releases, the user must test the built wheel before commit/tag/publish steps continue.
 
 If the user explicitly asks for any of these operations, perform them without asking for another confirmation.
