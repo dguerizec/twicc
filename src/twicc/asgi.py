@@ -108,63 +108,84 @@ def _get_project_display_name(project) -> str:
 
 
 @sync_to_async
-def get_session_and_project_display(session_id: str, project_id: str) -> tuple[str | None, str | None]:
-    """Get session title and project display name from the database.
+def get_session_and_project_display(
+    session_id: str, project_id: str
+) -> tuple[str | None, str | None, str | None]:
+    """Get session title and project display names from the database.
 
-    Uses select_related to fetch session + project in a single query.
-    Falls back to a separate Project query if the session doesn't exist.
+    Uses select_related to fetch session + project (and the project's main
+    repository, when the project is a git worktree) in a single query. Falls
+    back to a separate Project query if the session doesn't exist.
 
     Returns:
-        (session_title, project_display_name) — either may be None if not found.
+        (session_title, project_display_name, parent_project_display_name) —
+        any may be None if not found. The parent name is set only when the
+        project is a git worktree (``worktree_of``).
     """
     from twicc.core.models import Project, Session
 
     session_title = None
-    project_name = None
+    project = None
 
     try:
-        session = Session.objects.select_related("project").get(id=session_id)
+        session = Session.objects.select_related("project", "project__worktree_of").get(id=session_id)
         session_title = session.title
-        project_name = _get_project_display_name(session.project)
+        project = session.project
     except Session.DoesNotExist:
         # Session not in DB yet (e.g. just created) — try project alone
         try:
-            project = Project.objects.get(id=project_id)
-            project_name = _get_project_display_name(project)
+            project = Project.objects.select_related("worktree_of").get(id=project_id)
         except Project.DoesNotExist:
-            pass
+            project = None
 
-    return session_title, project_name
+    project_name = _get_project_display_name(project) if project else None
+    parent_name = (
+        _get_project_display_name(project.worktree_of)
+        if project and project.worktree_of_id
+        else None
+    )
+
+    return session_title, project_name, parent_name
 
 
 @sync_to_async
 def get_bulk_session_and_project_display(
     process_infos: list[dict],
-) -> dict[str, tuple[str | None, str | None]]:
+) -> dict[str, tuple[str | None, str | None, str | None]]:
     """Batch-fetch session titles and project display names for multiple processes.
 
     Args:
         process_infos: List of serialized process info dicts (with session_id and project_id).
 
     Returns:
-        Dict mapping session_id → (session_title, project_display_name).
+        Dict mapping session_id → (session_title, project_display_name,
+        parent_project_display_name). The parent name is set only when the
+        project is a git worktree (``worktree_of``).
     """
     from twicc.core.models import Project, Session
 
     session_ids = [p["session_id"] for p in process_infos]
     project_ids = list({p["project_id"] for p in process_infos})
 
-    # Batch fetch sessions with their projects
+    # Batch fetch sessions with their projects (and each project's main repo,
+    # when it is a worktree)
     sessions_by_id = {
         s.id: s
-        for s in Session.objects.select_related("project").filter(id__in=session_ids)
+        for s in Session.objects.select_related("project", "project__worktree_of").filter(id__in=session_ids)
     }
 
     # Batch fetch projects (for sessions not yet in DB)
     projects_by_id = {
         p.id: p
-        for p in Project.objects.filter(id__in=project_ids)
+        for p in Project.objects.select_related("worktree_of").filter(id__in=project_ids)
     }
+
+    def _project_names(project) -> tuple[str | None, str | None]:
+        """(display_name, parent_display_name) for a project, or (None, None)."""
+        if not project:
+            return None, None
+        parent = _get_project_display_name(project.worktree_of) if project.worktree_of_id else None
+        return _get_project_display_name(project), parent
 
     result = {}
     for p in process_infos:
@@ -172,10 +193,11 @@ def get_bulk_session_and_project_display(
         pid = p["project_id"]
         session = sessions_by_id.get(sid)
         if session:
-            result[sid] = (session.title, _get_project_display_name(session.project))
+            name, parent = _project_names(session.project)
+            result[sid] = (session.title, name, parent)
         else:
-            project = projects_by_id.get(pid)
-            result[sid] = (None, _get_project_display_name(project) if project else None)
+            name, parent = _project_names(projects_by_id.get(pid))
+            result[sid] = (None, name, parent)
 
     return result
 
@@ -219,13 +241,15 @@ async def broadcast_process_state(info: AgentInfo) -> None:
     # Enrich with human-readable session title and project name
     # so the frontend can display notifications without needing
     # session data in its local store.
-    session_title, project_name = await get_session_and_project_display(
+    session_title, project_name, project_parent_name = await get_session_and_project_display(
         info.session_id, info.project_id
     )
     if session_title is not None:
         message["session_title"] = session_title
     if project_name is not None:
         message["project_name"] = project_name
+    if project_parent_name is not None:
+        message["project_parent_name"] = project_parent_name
 
     await channel_layer.group_send(
         "updates",
@@ -419,11 +443,15 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
             if serialized:
                 display_info = await get_bulk_session_and_project_display(serialized)
                 for proc in serialized:
-                    session_title, project_name = display_info.get(proc["session_id"], (None, None))
+                    session_title, project_name, project_parent_name = display_info.get(
+                        proc["session_id"], (None, None, None)
+                    )
                     if session_title is not None:
                         proc["session_title"] = session_title
                     if project_name is not None:
                         proc["project_name"] = project_name
+                    if project_parent_name is not None:
+                        proc["project_parent_name"] = project_parent_name
                     # Let the provider attach any state it owns
                     await get_provider_helpers(
                         Provider(proc["provider"])

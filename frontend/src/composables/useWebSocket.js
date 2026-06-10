@@ -486,16 +486,24 @@ export function sendValidateTmuxConfigPath(filePath) {
  * Build a notification body string from the enriched WebSocket message.
  * Format: "Project: <name>\nSession: <title>" (both truncated).
  *
- * Uses session_title / project_name injected by the backend so that
- * notifications display correctly even when session data isn't loaded
- * in the frontend store (e.g. on the projects list page).
+ * When the project is a git worktree, the backend also injects
+ * project_parent_name; the project line then reads "<parent> › <worktree>"
+ * — a plain-text stand-in for the code-branch badge shown in in-app toasts
+ * (native OS notifications can't render icons). Each part is truncated
+ * shorter so the combined line stays readable.
  *
- * @param {Object} msg - The WebSocket process_state message (with session_title / project_name)
+ * Uses session_title / project_name / project_parent_name injected by the
+ * backend so that notifications display correctly even when session data
+ * isn't loaded in the frontend store (e.g. on the projects list page).
+ *
+ * @param {Object} msg - The WebSocket process_state message (with session_title / project_name / project_parent_name)
  * @returns {string}
  */
 function buildNotificationBody(msg) {
-    const projectName = truncateTitle(msg.project_name, 50)
     const sessionTitle = truncateTitle(msg.session_title, 50)
+    const projectName = msg.project_parent_name
+        ? `${truncateTitle(msg.project_parent_name, 40)} › ${truncateTitle(msg.project_name, 40)}`
+        : truncateTitle(msg.project_name, 50)
     return `Project: ${projectName}\nSession: ${sessionTitle}`
 }
 
