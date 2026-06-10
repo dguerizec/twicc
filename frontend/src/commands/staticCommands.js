@@ -32,12 +32,13 @@ import {
 // targets one agent-setting wire-name; ``selected_model`` is handled out
 // of band because it consumes the model registry's groupings.
 const PROVIDER_DEFAULTS_SIMPLE_FIELDS = [
-    { field: 'effort',           idSuffix: 'effort',     label: 'Change Default Effort…',                  icon: 'gauge' },
-    { field: 'permission_mode',  idSuffix: 'permission', label: 'Change Default Permission Mode…',         icon: 'shield-halved' },
-    { field: 'thinking_enabled', idSuffix: 'thinking',   label: 'Change Default Thinking…',                icon: 'brain' },
-    { field: 'context_max',      idSuffix: 'context',    label: 'Change Default Context Size…',            icon: 'window-maximize' },
-    { field: 'claude_in_chrome', idSuffix: 'chrome',     label: 'Change Default Claude in Chrome MCP…',    icon: 'globe' },
-    { field: 'fast_mode',        idSuffix: 'fast-mode',  label: 'Change Default Fast Mode…',               icon: 'gauge-high' },
+    { field: 'effort',                       idSuffix: 'effort',               label: 'Change Default Effort…',                       icon: 'gauge' },
+    { field: 'permission_mode',              idSuffix: 'permission',           label: 'Change Default Permission Mode…',              icon: 'shield-halved' },
+    { field: 'permission_mode_if_untrusted', idSuffix: 'permission-untrusted', label: 'Change Default Permission Mode (Untrusted)…',   icon: 'shield-halved' },
+    { field: 'thinking_enabled',             idSuffix: 'thinking',             label: 'Change Default Thinking…',                     icon: 'brain' },
+    { field: 'context_max',                  idSuffix: 'context',              label: 'Change Default Context Size…',                 icon: 'window-maximize' },
+    { field: 'claude_in_chrome',             idSuffix: 'chrome',               label: 'Change Default Claude in Chrome MCP…',         icon: 'globe' },
+    { field: 'fast_mode',                    idSuffix: 'fast-mode',            label: 'Change Default Fast Mode…',                    icon: 'gauge-high' },
 ]
 
 /**
@@ -119,54 +120,82 @@ function buildProviderDefaultsCommands(settings) {
 // the sticky groups visible.
 const SESSION_NAV_LIMIT = 100
 
-// Priority used to aggregate process states across a workspace: the highest
-// priority active state among the workspace's sessions wins.
+// Priority used to aggregate process states across a set of projects: the
+// highest-priority active state among their sessions wins.
 const PROCESS_STATE_PRIORITY = { starting: 3, assistant_turn: 2, user_turn: 1 }
 
 /**
- * Aggregate activity across all sessions in a workspace for a compact summary
- * in the command palette (and wherever else a single workspace-level
- * indicator is useful).
+ * Build a per-project activity index in a single pass over all sessions.
  *
- * Walks every session whose project belongs to the workspace (skipping
- * subagents, drafts and archived sessions) and folds two values:
- *   - `processState`: the highest-priority state currently present in any
- *     session of the workspace, or `null` when no session is running. The
- *     priority mirrors the sidebar's "what requires attention first"
- *     ordering: starting → assistant_turn → user_turn. `dead` is ignored.
- *   - `hasUnread`: true as soon as any session reads as unread per the shared
- *     `isSessionUnread` predicate (content added after last view, excluding
- *     drafts/archived/subagents/hidden, and not while the agent is working).
+ * Returns a Map keyed by `project_id` whose values fold two things, mirroring
+ * the sidebar's "what needs attention first" rules:
+ *   - the highest-priority active process state among the project's own
+ *     sessions (starting → assistant_turn → user_turn; `dead` ignored), and
+ *   - whether any of them reads as unread (shared `isSessionUnread` predicate:
+ *     content added after last view, excluding drafts/archived/subagents/
+ *     hidden, and not while the agent is working).
  *
- * Callers pass the workspace's *visible* scope — members plus their git
- * worktrees, deduped (`getVisibleProjectIds`) — so the indicator aggregates a
- * member's worktree sessions one level down, like every other badge surface.
+ * Subagents, drafts and archived sessions are skipped. The map holds only a
+ * project's OWN sessions; callers that need a project + its worktrees (or a
+ * whole workspace) fold several entries together with `aggregateActivity`.
+ * One pass keeps the pickers cheap even with many projects.
  */
-function aggregateWorkspaceActivity(data, projectIds) {
-    const projectSet = new Set(projectIds || [])
-    if (projectSet.size === 0) return { processState: null, hasUnread: false }
-
-    let bestState = null
-    let bestPriority = -1
-    let hasUnread = false
+function buildProjectActivityMap(data) {
+    const map = new Map()
     const processStates = data.processStates
     for (const s of Object.values(data.sessions)) {
-        if (!projectSet.has(s.project_id)) continue
         if (s.parent_session_id || s.draft || s.archived) continue
+        let entry = map.get(s.project_id)
+        if (!entry) {
+            entry = { state: null, priority: -1, hasUnread: false }
+            map.set(s.project_id, entry)
+        }
         const ps = processStates[s.id]
         if (ps && ps.state && ps.state !== 'dead') {
             const priority = PROCESS_STATE_PRIORITY[ps.state] ?? -1
-            if (priority > bestPriority) {
-                bestState = ps.state
-                bestPriority = priority
+            if (priority > entry.priority) {
+                entry.state = ps.state
+                entry.priority = priority
             }
         }
-        if (!hasUnread && isSessionUnread(s, ps)) hasUnread = true
+        if (!entry.hasUnread && isSessionUnread(s, ps)) entry.hasUnread = true
     }
-    return {
-        processState: bestState ? { state: bestState } : null,
-        hasUnread,
+    return map
+}
+
+/**
+ * Fold the per-project entries of `buildProjectActivityMap` over a set of
+ * project ids into a single `{ processState, hasUnread }` summary — used for a
+ * workspace (its visible members + their worktrees, via `getVisibleProjectIds`)
+ * or a project + its worktrees. The highest-priority state wins; unread is the
+ * logical OR.
+ */
+function aggregateActivity(activityMap, projectIds) {
+    let state = null
+    let priority = -1
+    let hasUnread = false
+    for (const id of projectIds || []) {
+        const entry = activityMap.get(id)
+        if (!entry) continue
+        if (entry.priority > priority) {
+            state = entry.state
+            priority = entry.priority
+        }
+        if (entry.hasUnread) hasUnread = true
     }
+    return { processState: state ? { state } : null, hasUnread }
+}
+
+/**
+ * Aggregate a single project's activity together with its git worktrees one
+ * level down — the indicator every project picker shows, matching the badges
+ * elsewhere in the UI. For a worktree row (no sub-worktrees) this folds just
+ * its own entry.
+ */
+function aggregateProjectActivity(activityMap, data, projectId) {
+    const ids = [projectId]
+    for (const wt of data.getWorktreesOf(projectId)) ids.push(wt.id)
+    return aggregateActivity(activityMap, ids)
 }
 
 /**
@@ -234,6 +263,11 @@ function buildSessionNavItems({
     // inter-group divider rendered by CommandPalette in nested mode.
     const toItem = (s, group) => {
         const project = data.projects[s.project_id]
+        // When the session lives in a git worktree, the row mirrors WorktreeBadge:
+        // a code-branch marker before the title and the dot color falling back to
+        // the parent repo's when the worktree has none of its own.
+        const isWorktree = !!project?.worktree_of
+        const parentColor = isWorktree ? (data.projects[project.worktree_of]?.color ?? null) : null
         const processState = data.processStates[s.id] || null
         const hasUnread = !!s.last_new_content_at
             && (!s.last_viewed_at || s.last_new_content_at > s.last_viewed_at)
@@ -244,7 +278,8 @@ function buildSessionNavItems({
             group,
             session: {
                 projectId: s.project_id,
-                projectColor: project?.color ?? null,
+                projectColor: project?.color ?? parentColor ?? null,
+                isWorktree,
                 pinned: s.pinned || null,
                 processState,
                 hasUnread,
@@ -309,14 +344,21 @@ export function initStaticCommands(router) {
 
     /** Map a project to a palette sub-item carrying the colored dot metadata
      *  (mirrors the session list dot) plus the absolute directory path, shown
-     *  under the name and included in the palette's fuzzy search. */
-    function toProjectItem(p, action) {
+     *  under the name and included in the palette's fuzzy search. The optional
+     *  `activity` (`{ processState, hasUnread }`, from `aggregateProjectActivity`)
+     *  rides on `project` so the palette renders the same right-aligned
+     *  indicator as session/workspace rows. */
+    function toProjectItem(p, action, activity = null) {
         return {
             id: p.id,
             label: data.getProjectDisplayName(p.id),
             path: p.directory ?? null,
             action,
-            project: { color: p.color ?? null },
+            project: {
+                color: p.color ?? null,
+                processState: activity?.processState ?? null,
+                hasUnread: activity?.hasUnread ?? false,
+            },
         }
     }
 
@@ -324,23 +366,29 @@ export function initStaticCommands(router) {
      *  uses the worktree's own color falling back to the parent's; the label is
      *  the worktree's own name or its final directory segment; `worktree.parentName`
      *  is rendered as a prefix (parent name + code-branch icon) and is searchable
-     *  alongside the label and the path. */
-    function toWorktreeItem(wt, action) {
+     *  alongside the label and the path. The optional `activity` rides on
+     *  `project` (same indicator as a plain project row). */
+    function toWorktreeItem(wt, action, activity = null) {
         const parent = wt.worktree_of ? data.getProject(wt.worktree_of) : null
         return {
             id: wt.id,
             label: worktreeLabel(wt) || data.getProjectDisplayName(wt.id),
             path: wt.directory ?? null,
             action,
-            project: { color: wt.color ?? parent?.color ?? null },
+            project: {
+                color: wt.color ?? parent?.color ?? null,
+                processState: activity?.processState ?? null,
+                hasUnread: activity?.hasUnread ?? false,
+            },
             worktree: { parentName: parent ? data.getProjectDisplayName(parent.id) : '' },
         }
     }
 
     /** Dispatch a picker entry to the right item mapper based on whether it is a
-     *  worktree. The action closure is supplied by each command. */
-    function toPickerItem(p, action) {
-        return p.worktree_of ? toWorktreeItem(p, action) : toProjectItem(p, action)
+     *  worktree. The action closure and optional aggregated `activity` are
+     *  supplied by each command. */
+    function toPickerItem(p, action, activity = null) {
+        return p.worktree_of ? toWorktreeItem(p, action, activity) : toProjectItem(p, action, activity)
     }
 
     // ── Display mode labels ───────────────────────────────────────────────
@@ -378,9 +426,13 @@ export function initStaticCommands(router) {
             label: 'Go to Project\u2026',
             icon: 'folder',
             category: 'navigation',
-            items: () => pickerEntries().map(p => toPickerItem(p,
-                () => router.push({ name: 'project', params: { projectId: p.id } })
-            )),
+            items: () => {
+                const activityMap = buildProjectActivityMap(data)
+                return pickerEntries().map(p => toPickerItem(p,
+                    () => router.push({ name: 'project', params: { projectId: p.id } }),
+                    aggregateProjectActivity(activityMap, data, p.id),
+                ))
+            },
         },
         {
             id: 'nav.session',
@@ -404,19 +456,22 @@ export function initStaticCommands(router) {
             label: 'Go to Workspace\u2026',
             icon: 'layer-group',
             category: 'navigation',
-            items: () => workspaces.getSelectableWorkspaces.map(ws => {
-                const { processState, hasUnread } = aggregateWorkspaceActivity(data, workspaces.getVisibleProjectIds(ws.id))
-                return {
-                    id: ws.id,
-                    label: ws.name,
-                    action: () => router.push({ name: 'projects-all', query: { workspace: ws.id } }),
-                    workspace: {
-                        color: ws.color || null,
-                        processState,
-                        hasUnread,
-                    },
-                }
-            }),
+            items: () => {
+                const activityMap = buildProjectActivityMap(data)
+                return workspaces.getSelectableWorkspaces.map(ws => {
+                    const { processState, hasUnread } = aggregateActivity(activityMap, workspaces.getVisibleProjectIds(ws.id))
+                    return {
+                        id: ws.id,
+                        label: ws.name,
+                        action: () => router.push({ name: 'projects-all', query: { workspace: ws.id } }),
+                        workspace: {
+                            color: ws.color || null,
+                            processState,
+                            hasUnread,
+                        },
+                    }
+                })
+            },
         },
         {
             id: 'nav.search',
@@ -513,6 +568,30 @@ export function initStaticCommands(router) {
                 })
             },
         },
+        {
+            id: 'nav.tab.orchestration',
+            label: 'Switch to Orchestration Tab',
+            icon: 'sitemap',
+            category: 'navigation',
+            // Only sessions that belong to a spawned-session orchestration tree
+            // expose the tab (mirrors SessionView's `hasSpawnRoot`).
+            when: () => {
+                const sessionId = routeSessionId()
+                if (!sessionId) return false
+                return !!data.getSession(sessionId)?.spawn_root
+            },
+            action: () => {
+                const name = isAllProjectsMode() ? 'projects-session-orchestration' : 'session-orchestration'
+                router.push({
+                    name,
+                    params: {
+                        projectId: route.params.projectId,
+                        sessionId: route.params.sessionId,
+                    },
+                    query: route.query,
+                })
+            },
+        },
 
         // Project detail panel tabs
         {
@@ -586,10 +665,36 @@ export function initStaticCommands(router) {
 
         {
             id: 'create.session',
-            label: 'New Session',
+            label: 'New Session in Current Project',
             icon: 'plus',
             category: 'creation',
             when: () => !!routeProjectId(),
+            // Render the current project as a project/worktree badge (colored dot +
+            // name, or parent + code-branch + folder) with its directory as
+            // helptext — the same display as the "New Session in…" picker rows.
+            // The palette reads `target()` in root & search modes; `label` above
+            // stays plain text so fuzzy search still finds the command.
+            target: () => {
+                const id = routeProjectId()
+                const p = id ? data.getProject(id) : null
+                if (!p) return null
+                if (p.worktree_of) {
+                    const parent = data.getProject(p.worktree_of)
+                    return {
+                        prefix: 'New Session in',
+                        label: worktreeLabel(p) || data.getProjectDisplayName(p.id),
+                        path: p.directory ?? null,
+                        project: { color: p.color ?? parent?.color ?? null },
+                        worktree: { parentName: parent ? data.getProjectDisplayName(parent.id) : '' },
+                    }
+                }
+                return {
+                    prefix: 'New Session in',
+                    label: data.getProjectDisplayName(p.id),
+                    path: p.directory ?? null,
+                    project: { color: p.color ?? null },
+                }
+            },
             action: async () => {
                 const projectId = routeProjectId()
                 if (!(await ensureProjectTrust(projectId))) return
@@ -603,7 +708,9 @@ export function initStaticCommands(router) {
             label: 'New Session in\u2026',
             icon: 'square-plus',
             category: 'creation',
-            items: () => pickerEntries().map(p => toPickerItem(p, async () => {
+            items: () => {
+                const activityMap = buildProjectActivityMap(data)
+                return pickerEntries().map(p => toPickerItem(p, async () => {
                 if (!(await ensureProjectTrust(p.id))) return
                 const sessionId = data.createDraftSession(p.id)
                 // Preserve the current sidebar filter: the draft lives in
@@ -627,7 +734,30 @@ export function initStaticCommands(router) {
                 } else {
                     router.push({ name: 'session', params: { projectId: filterProjectId, sessionId }, query: route.query })
                 }
-            })),
+            }, aggregateProjectActivity(activityMap, data, p.id)))
+            },
+        },
+        {
+            id: 'create.session-in-new-worktree',
+            label: 'New Session in New Worktree…',
+            icon: 'code-branch',
+            category: 'creation',
+            // Only worth showing when at least one non-worktree project has a git
+            // root to branch from (matches the dropdown's per-row worktree button).
+            when: () => pickerEntries().some(p => p.git_root && !p.worktree_of),
+            items: () => {
+                const activityMap = buildProjectActivityMap(data)
+                return pickerEntries()
+                    .filter(p => p.git_root && !p.worktree_of)
+                    .map(p => toProjectItem(p,
+                        // Hand off to the globally-mounted WorktreeCreateDialog
+                        // (App.vue): it provisions the worktree, then drops the
+                        // user into a fresh draft session in it — same flow as the
+                        // "New session" dropdown's per-row worktree button.
+                        () => window.dispatchEvent(new CustomEvent('twicc:open-worktree-dialog', { detail: { projectId: p.id } })),
+                        aggregateProjectActivity(activityMap, data, p.id),
+                    ))
+            },
         },
         {
             id: 'create.project',
@@ -730,6 +860,14 @@ export function initStaticCommands(router) {
             action: () => settings.setShowArchivedProjects(!settings.showArchivedProjects),
         },
         {
+            id: 'display.toggle-show-archived-workspaces',
+            label: 'Toggle Show Archived Workspaces',
+            icon: 'box-archive',
+            category: 'display',
+            toggled: () => settings.isShowArchivedWorkspaces,
+            action: () => settings.setShowArchivedWorkspaces(!settings.showArchivedWorkspaces),
+        },
+        {
             id: 'display.toggle-active-across-filters',
             label: 'Toggle Show Active Sessions Across Projects',
             icon: 'signal',
@@ -823,6 +961,40 @@ export function initStaticCommands(router) {
             },
         },
         {
+            id: 'ui.edit-project',
+            label: 'Edit Current Project',
+            icon: 'pencil',
+            category: 'ui',
+            when: () => !!routeProjectId(),
+            // Opens the globally-mounted ProjectEditDialog (App.vue) for the
+            // route's project — works for a worktree project too.
+            action: () => {
+                window.dispatchEvent(new CustomEvent('twicc:open-edit-project-dialog', { detail: { projectId: routeProjectId() } }))
+            },
+        },
+        {
+            id: 'ui.archive-project',
+            label: 'Archive Current Project',
+            icon: 'box-archive',
+            category: 'ui',
+            when: () => {
+                const p = data.getProject(routeProjectId())
+                return !!p && !p.archived
+            },
+            action: () => data.setProjectArchived(routeProjectId(), true),
+        },
+        {
+            id: 'ui.unarchive-project',
+            label: 'Unarchive Current Project',
+            icon: 'box-open',
+            category: 'ui',
+            when: () => {
+                const p = data.getProject(routeProjectId())
+                return !!p && !!p.archived
+            },
+            action: () => data.setProjectArchived(routeProjectId(), false),
+        },
+        {
             id: 'ui.edit-workspace',
             label: 'Edit Current Workspace',
             icon: 'pencil',
@@ -830,6 +1002,135 @@ export function initStaticCommands(router) {
             when: () => !!route.query.workspace,
             action: () => {
                 window.dispatchEvent(new CustomEvent('twicc:open-edit-workspace-dialog', { detail: { workspaceId: route.query.workspace } }))
+            },
+        },
+        {
+            id: 'ui.archive-workspace',
+            label: 'Archive Current Workspace',
+            icon: 'box-archive',
+            category: 'ui',
+            when: () => {
+                const ws = route.query.workspace ? workspaces.getWorkspaceById(route.query.workspace) : null
+                return !!ws && !ws.archived
+            },
+            action: () => workspaces.updateWorkspace(route.query.workspace, { archived: true }),
+        },
+        {
+            id: 'ui.unarchive-workspace',
+            label: 'Unarchive Current Workspace',
+            icon: 'box-open',
+            category: 'ui',
+            when: () => {
+                const ws = route.query.workspace ? workspaces.getWorkspaceById(route.query.workspace) : null
+                return !!ws && !!ws.archived
+            },
+            action: () => workspaces.updateWorkspace(route.query.workspace, { archived: false }),
+        },
+        {
+            id: 'ui.edit-project-pick',
+            label: 'Edit Project…',
+            icon: 'pen-to-square',
+            category: 'ui',
+            items: () => {
+                const activityMap = buildProjectActivityMap(data)
+                return pickerEntries().map(p => toPickerItem(p,
+                    () => window.dispatchEvent(new CustomEvent('twicc:open-edit-project-dialog', { detail: { projectId: p.id } })),
+                    aggregateProjectActivity(activityMap, data, p.id),
+                ))
+            },
+        },
+        {
+            id: 'ui.archive-project-pick',
+            label: 'Archive Project…',
+            icon: 'box-archive',
+            category: 'ui',
+            when: () => data.getProjects.some(p => !p.archived),
+            items: () => {
+                const activityMap = buildProjectActivityMap(data)
+                return data.getProjects.filter(p => !p.archived).map(p => toPickerItem(p,
+                    () => data.setProjectArchived(p.id, true),
+                    aggregateProjectActivity(activityMap, data, p.id),
+                ))
+            },
+        },
+        {
+            id: 'ui.unarchive-project-pick',
+            label: 'Unarchive Project…',
+            icon: 'box-open',
+            category: 'ui',
+            // Lists every archived project regardless of the "show archived
+            // projects" display toggle, so an archived project is always
+            // reachable to restore.
+            when: () => data.getProjects.some(p => p.archived),
+            items: () => {
+                const activityMap = buildProjectActivityMap(data)
+                return data.getProjects.filter(p => p.archived).map(p => toPickerItem(p,
+                    () => data.setProjectArchived(p.id, false),
+                    aggregateProjectActivity(activityMap, data, p.id),
+                ))
+            },
+        },
+        {
+            id: 'ui.edit-workspace-pick',
+            label: 'Edit Workspace…',
+            icon: 'pen-to-square',
+            category: 'ui',
+            when: () => workspaces.getSelectableWorkspaces.length > 0,
+            items: () => {
+                const activityMap = buildProjectActivityMap(data)
+                return workspaces.getSelectableWorkspaces.map(ws => {
+                    const { processState, hasUnread } = aggregateActivity(activityMap, workspaces.getVisibleProjectIds(ws.id))
+                    return {
+                        id: ws.id,
+                        label: ws.name,
+                        action: () => window.dispatchEvent(new CustomEvent('twicc:open-edit-workspace-dialog', { detail: { workspaceId: ws.id } })),
+                        workspace: {
+                            color: ws.color || null,
+                            processState,
+                            hasUnread,
+                        },
+                    }
+                })
+            },
+        },
+        {
+            id: 'ui.archive-workspace-pick',
+            label: 'Archive Workspace…',
+            icon: 'box-archive',
+            category: 'ui',
+            when: () => workspaces.workspaces.some(ws => !ws.archived),
+            items: () => {
+                const activityMap = buildProjectActivityMap(data)
+                return workspaces.workspaces.filter(ws => !ws.archived).map(ws => {
+                    const { processState, hasUnread } = aggregateActivity(activityMap, workspaces.getVisibleProjectIds(ws.id))
+                    return {
+                        id: ws.id,
+                        label: ws.name,
+                        action: () => workspaces.updateWorkspace(ws.id, { archived: true }),
+                        workspace: { color: ws.color || null, processState, hasUnread },
+                    }
+                })
+            },
+        },
+        {
+            id: 'ui.unarchive-workspace-pick',
+            label: 'Unarchive Workspace…',
+            icon: 'box-open',
+            category: 'ui',
+            // Lists every archived workspace regardless of the "show archived
+            // workspaces" display toggle.
+            when: () => workspaces.workspaces.some(ws => ws.archived),
+            items: () => {
+                const activityMap = buildProjectActivityMap(data)
+                return workspaces.workspaces.filter(ws => ws.archived).map(ws => {
+                    const { processState, hasUnread } = aggregateActivity(activityMap, workspaces.getVisibleProjectIds(ws.id))
+                    return {
+                        id: ws.id,
+                        label: ws.name,
+                        action: () => workspaces.updateWorkspace(ws.id, { archived: false }),
+                        workspace: { color: ws.color || null, processState, hasUnread },
+                    }
+                })
             },
         },
         {

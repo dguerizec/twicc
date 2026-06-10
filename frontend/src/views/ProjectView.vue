@@ -1271,6 +1271,23 @@ onMounted(() => {
                 searchInputRef.value?.focus()
             },
         },
+        {
+            id: 'ui.focus-project-selector',
+            label: 'Focus Project Selector',
+            icon: 'folder-tree',
+            category: 'ui',
+            // Open the sidebar's project/workspace switcher. On desktop, expand
+            // the sidebar first if collapsed so the trigger anchors the menu;
+            // opening the dropdown moves focus into it and enables typeahead.
+            action: () => {
+                const checkbox = document.getElementById('sidebar-toggle-state')
+                if (!isMobile() && checkbox?.checked) {
+                    checkbox.checked = false
+                    checkbox.dispatchEvent(new Event('change'))
+                }
+                nextTick(() => { if (selectorEl.value) selectorEl.value.open = true })
+            },
+        },
     ])
 
     // Listen for custom events to open dialogs (triggered by command palette)
@@ -1294,7 +1311,7 @@ function openEditWorkspaceDialog(e) {
 }
 
 onBeforeUnmount(() => {
-    unregisterCommands(['ui.toggle-sidebar', 'ui.focus-search'])
+    unregisterCommands(['ui.toggle-sidebar', 'ui.focus-search', 'ui.focus-project-selector'])
     window.removeEventListener('twicc:open-new-project-dialog', openNewProjectDialog)
     window.removeEventListener('twicc:open-new-workspace-dialog', openNewWorkspaceDialog)
     window.removeEventListener('twicc:open-manage-workspaces-dialog', openManageWorkspacesDialog)

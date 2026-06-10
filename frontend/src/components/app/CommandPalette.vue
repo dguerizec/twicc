@@ -350,6 +350,13 @@ function escapeHtml(str) {
     return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 }
 
+// The aggregated activity carrier of a nested item (session / workspace /
+// project-or-worktree row), or null. Drives the right-aligned process-state
+// indicator / unread flag shared by all three row kinds.
+function itemActivity(item) {
+    return item.session || item.workspace || item.project || null
+}
+
 defineExpose({ open, close })
 </script>
 
@@ -399,7 +406,24 @@ defineExpose({ open, close })
                             @pointerenter="activeId = cmd.id"
                         >
                             <wa-icon :name="cmd.icon" class="command-icon" />
-                            <span class="command-label">{{ cmd.label }}</span>
+                            <template v-if="cmd.target">
+                                <template v-for="t in [cmd.target()]" :key="cmd.id + '-target'">
+                                    <span v-if="t" class="command-text-col">
+                                        <span class="command-label command-target-line">
+                                            <span v-if="t.prefix" class="command-target-prefix">{{ t.prefix }}</span>
+                                            <span class="palette-project-dot" :style="t.project?.color ? { '--dot-color': t.project.color } : null"></span>
+                                            <template v-if="t.worktree?.parentName">
+                                                <span class="command-wt-parent">{{ t.worktree.parentName }}</span>
+                                                <wa-icon name="code-branch" auto-width class="command-wt-sep"></wa-icon>
+                                            </template>
+                                            <span class="command-wt-folder">{{ t.label }}</span>
+                                        </span>
+                                        <span v-if="t.path" class="command-path">{{ t.path }}</span>
+                                    </span>
+                                    <span v-else class="command-label">{{ cmd.label }}</span>
+                                </template>
+                            </template>
+                            <span v-else class="command-label">{{ cmd.label }}</span>
                             <span v-if="cmd.toggled" class="command-toggle">
                                 <wa-icon v-if="cmd.toggled()" name="check" />
                             </span>
@@ -419,7 +443,24 @@ defineExpose({ open, close })
                         @pointerenter="activeId = result.cmd.id"
                     >
                         <wa-icon :name="result.cmd.icon" class="command-icon" />
-                        <span class="command-label" v-html="result.highlighted" />
+                        <template v-if="result.cmd.target">
+                            <template v-for="t in [result.cmd.target()]" :key="result.cmd.id + '-target'">
+                                <span v-if="t" class="command-text-col">
+                                    <span class="command-label command-target-line">
+                                        <span v-if="t.prefix" class="command-target-prefix">{{ t.prefix }}</span>
+                                        <span class="palette-project-dot" :style="t.project?.color ? { '--dot-color': t.project.color } : null"></span>
+                                        <template v-if="t.worktree?.parentName">
+                                            <span class="command-wt-parent">{{ t.worktree.parentName }}</span>
+                                            <wa-icon name="code-branch" auto-width class="command-wt-sep"></wa-icon>
+                                        </template>
+                                        <span class="command-wt-folder">{{ t.label }}</span>
+                                    </span>
+                                    <span v-if="t.path" class="command-path">{{ t.path }}</span>
+                                </span>
+                                <span v-else class="command-label" v-html="result.highlighted" />
+                            </template>
+                        </template>
+                        <span v-else class="command-label" v-html="result.highlighted" />
                         <span v-if="result.categoryLabel" class="command-category">{{ result.categoryLabel }}</span>
                         <span v-if="result.cmd.toggled" class="command-toggle">
                             <wa-icon v-if="result.cmd.toggled()" name="check" />
@@ -442,7 +483,8 @@ defineExpose({ open, close })
                             @click="selectNestedItem(item)"
                             @pointerenter="activeId = item.id"
                         >
-                            <!-- Session row: project color dot + pin icon on the left (mirrors sidebar) -->
+                            <!-- Session row: project color dot + pin icon on the left (mirrors sidebar);
+                                 a code-branch marker is added when the session lives in a git worktree. -->
                             <template v-if="item.session">
                                 <span
                                     class="palette-project-dot"
@@ -452,6 +494,11 @@ defineExpose({ open, close })
                                     v-if="item.session.pinned"
                                     name="thumbtack"
                                     class="palette-pin-icon"
+                                ></wa-icon>
+                                <wa-icon
+                                    v-if="item.session.isWorktree"
+                                    name="code-branch"
+                                    class="palette-session-wt-icon"
                                 ></wa-icon>
                             </template>
                             <!-- Workspace row: layer-group icon tinted with the workspace color -->
@@ -492,17 +539,18 @@ defineExpose({ open, close })
                             </span>
                             <span v-else class="command-label" v-html="item.highlighted" />
 
-                            <!-- Session / workspace row: aggregated process state or unread flag on the right -->
-                            <template v-if="item.session || item.workspace">
+                            <!-- Session / workspace / project (or worktree) row: aggregated
+                                 process state or unread flag on the right -->
+                            <template v-if="itemActivity(item)">
                                 <ProcessIndicator
-                                    v-if="(item.session || item.workspace).processState"
-                                    :state="(item.session || item.workspace).processState.state"
-                                    :has-active-crons="(((item.session || item.workspace).processState.active_crons?.length) || 0) > 0"
+                                    v-if="itemActivity(item).processState"
+                                    :state="itemActivity(item).processState.state"
+                                    :has-active-crons="((itemActivity(item).processState.active_crons?.length) || 0) > 0"
                                     size="small"
                                     class="palette-process-indicator"
                                 />
                                 <wa-icon
-                                    v-else-if="(item.session || item.workspace).hasUnread"
+                                    v-else-if="itemActivity(item).hasUnread"
                                     name="eye"
                                     class="palette-unread-icon"
                                 ></wa-icon>
@@ -719,6 +767,21 @@ wa-divider {
     color: var(--wa-color-text-quiet);
     font-size: 0.85em;
 }
+
+/* Top-level command rendered as a project/worktree badge (e.g. "New Session in
+   ●Project"): a leading text prefix, the colored dot, then the project name or
+   the worktree's parent + code-branch + folder — mirroring the picker rows. */
+.command-target-line {
+    display: flex;
+    align-items: center;
+    gap: var(--wa-space-2xs);
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+}
+.command-target-prefix {
+    flex-shrink: 0;
+}
 .command-chevron,
 .command-toggle {
     color: var(--wa-color-text-muted);
@@ -767,6 +830,14 @@ wa-divider {
     font-size: var(--wa-font-size-2xs);
     color: var(--wa-color-yellow-80) !important;
     transform: rotate(30deg);
+}
+
+/* Session row: code-branch marker before the title when the session lives in a
+   git worktree (mirrors WorktreeBadge's separator icon). */
+.palette-session-wt-icon {
+    flex-shrink: 0;
+    font-size: var(--wa-font-size-2xs);
+    color: var(--wa-color-text-quiet);
 }
 
 /* Workspace row: layer-group icon inline with the label; the `style` binding

@@ -5,7 +5,7 @@ import { useDataStore } from '../stores/data'
 import { useSettingsStore } from '../stores/settings'
 import { getProviderHelpers } from '../providers'
 import { useCommandRegistry } from '../composables/useCommandRegistry'
-import { requestTitleSuggestion, notifySessionViewed, forceNotifySessionViewed } from '../composables/useWebSocket'
+import { requestTitleSuggestion, notifySessionViewed, forceNotifySessionViewed, markSessionReadState, cancelSessionViewedThrottle } from '../composables/useWebSocket'
 import { stopSessionProcess } from '../composables/useStopSessionProcess'
 import { useDragHover } from '../composables/useDragHover'
 import { PROCESS_STATE } from '../constants'
@@ -831,6 +831,8 @@ const SESSION_COMMAND_IDS = [
     'session.archive',
     'session.unarchive',
     'session.pin-mode',
+    'session.mark-read',
+    'session.mark-unread',
     'session.stop',
     'session.delete-draft',
     'session.focus-input',
@@ -842,6 +844,21 @@ const SESSION_COMMAND_IDS = [
     'session.chrome',
     'session.fast-mode',
 ]
+
+// Read/unread gate for the current session, mirroring SessionListItem's
+// canToggleReadState + hasUnread — minus the "is this the active row" guard,
+// since here the session IS the one on screen. Returns `{ unread }` (the raw
+// unread flag), or null when toggling read state isn't allowed (draft, or a
+// process running outside user_turn).
+function currentSessionReadState() {
+    const s = store.getSession(sessionId.value)
+    if (!s || s.draft) return null
+    const ps = store.getProcessState(sessionId.value)
+    if (ps && ps.state !== PROCESS_STATE.USER_TURN) return null
+    const unread = !!s.last_new_content_at
+        && (!s.last_viewed_at || s.last_new_content_at > s.last_viewed_at)
+    return { unread }
+}
 
 function registerSessionCommands() {
     registerCommands([
@@ -897,6 +914,34 @@ function registerSessionCommands() {
                     { id: 'workspace', label: 'Workspace',    action: () => pick('workspace'), active: current === 'workspace' },
                     { id: 'all',       label: 'Everywhere', action: () => pick('all'),       active: current === 'all' },
                 ]
+            },
+        },
+        {
+            id: 'session.mark-read',
+            label: 'Mark as Read',
+            icon: 'eye-slash',
+            category: 'session',
+            when: () => currentSessionReadState()?.unread === true,
+            action: () => markSessionReadState(sessionId.value, false),
+        },
+        {
+            id: 'session.mark-unread',
+            label: 'Mark as Unread',
+            icon: 'eye',
+            category: 'session',
+            when: () => currentSessionReadState()?.unread === false,
+            action: () => {
+                // Cancel any pending session_viewed throttle so it can't re-mark
+                // this session read, flag it unread, then leave it — staying on
+                // the session would reset it to read (mirrors SessionListItem's
+                // mark-unread on the active row).
+                cancelSessionViewedThrottle(sessionId.value)
+                markSessionReadState(sessionId.value, true)
+                if (isAllProjectsMode.value) {
+                    router.push({ name: 'projects-all', query: route.query.workspace ? { workspace: route.query.workspace } : {} })
+                } else {
+                    router.push({ name: 'project', params: { projectId: filterProjectId.value } })
+                }
             },
         },
         {

@@ -20,7 +20,9 @@ import StopProcessConfirmDialog from './components/app/StopProcessConfirmDialog.
 import ProviderActivationDialog from './components/app/ProviderActivationDialog.vue'
 import GlobalMediaPreview from './components/media/GlobalMediaPreview.vue'
 import ProjectTrustDialog from './components/project/ProjectTrustDialog.vue'
-import { registerTrustDialog } from './composables/useTrustGate'
+import ProjectEditDialog from './components/project/ProjectEditDialog.vue'
+import WorktreeCreateDialog from './components/project/WorktreeCreateDialog.vue'
+import { registerTrustDialog, ensureProjectTrust } from './composables/useTrustGate'
 import { initStaticCommands } from './commands/staticCommands'
 import {
     pendingConfirmation,
@@ -354,12 +356,53 @@ function handleGlobalKeydown(e) {
 
 const trustDialogRef = ref(null)
 
+// ─── Global, command-palette-driven dialogs ──────────────────────────────
+// Mounted here (not in ProjectView/HomeView) so the command palette can open
+// them from anywhere — home, a project, or a session. Driven by window events,
+// matching the existing dialog-event pattern.
+const globalProjectEditRef = ref(null)
+const globalEditingProject = ref(null)
+const worktreeCreateDialogRef = ref(null)
+
+// Edit any project (current project, or one picked from a palette list).
+function openEditProjectDialog(e) {
+    const projectId = e.detail?.projectId
+    const project = projectId ? dataStore.getProject(projectId) : null
+    if (!project) return
+    globalEditingProject.value = project
+    globalProjectEditRef.value?.open()
+}
+
+// Create a git worktree from a project, then drop the user into a fresh draft
+// session in it — mirrors the "New session" dropdown's per-row worktree button.
+function openWorktreeDialog(e) {
+    const projectId = e.detail?.projectId
+    const project = projectId ? dataStore.getProject(projectId) : null
+    if (!project) return
+    worktreeCreateDialogRef.value?.open(project)
+}
+async function handleWorktreeCreated(project) {
+    if (!project) return
+    if (!(await ensureProjectTrust(project.id))) return
+    const sessionId = dataStore.createDraftSession(project.id)
+    const allProjects = route.name?.startsWith('projects-')
+    router.push({
+        name: allProjects ? 'projects-session' : 'session',
+        params: { projectId: project.id, sessionId },
+        query: route.query,
+    })
+}
+
 onMounted(() => {
     document.addEventListener('keydown', handleGlobalKeydown, { capture: true })
     registerTrustDialog(trustDialogRef.value)
+    window.addEventListener('twicc:open-edit-project-dialog', openEditProjectDialog)
+    window.addEventListener('twicc:open-worktree-dialog', openWorktreeDialog)
 })
 onBeforeUnmount(() => {
     document.removeEventListener('keydown', handleGlobalKeydown, { capture: true })
+    window.removeEventListener('twicc:open-edit-project-dialog', openEditProjectDialog)
+    window.removeEventListener('twicc:open-worktree-dialog', openWorktreeDialog)
 })
 
 // Notivue theme - inverted for contrast (dark theme when app is light, and vice-versa)
@@ -410,6 +453,10 @@ const toastTheme = computed(() => {
     <GlobalMediaPreview />
     <!-- Global trust gate dialog, driven by composables/useTrustGate. -->
     <ProjectTrustDialog ref="trustDialogRef" />
+    <!-- Global command-palette dialogs: edit any project, or create a worktree
+         (+ a draft session in it). Reachable from home, a project, or a session. -->
+    <ProjectEditDialog ref="globalProjectEditRef" :project="globalEditingProject" />
+    <WorktreeCreateDialog ref="worktreeCreateDialogRef" @created="handleWorktreeCreated" />
     <!-- Prevent browser default drop behavior (e.g. navigating to a dropped image).
          Our specific drop handlers in SessionItemsList call preventDefault themselves;
          this catches any drops that miss those zones. -->
