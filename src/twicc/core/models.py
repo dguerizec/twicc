@@ -463,6 +463,13 @@ class Session(models.Model):
     # created before this column existed; the agent code passes the SDK no
     # addendum in that case (preserving their cache prefix).
     system_prompt_addendum = models.TextField(null=True, blank=True, default=None)
+    # Hybrid CLI mode: when True, this session is driven by the interactive
+    # Claude Code CLI running in a dedicated tmux session instead of the SDK.
+    # One-way: once a session has been resumed by the CLI it can never go back
+    # to the SDK (the SDK no longer sees CLI-era messages), so this flag is
+    # never reset to False. Human-only: only settable from the web UI (WS),
+    # never from the agent-facing CLI or drop-request paths.
+    hybrid = models.BooleanField(default=False)
 
     # Per-session permission mode. Values are provider-specific (e.g. "default",
     # "acceptEdits", "plan", "bypassPermissions" for Claude Code). NULL = use global default.

@@ -37,6 +37,9 @@ class PendingSessionAttributes(NamedTuple):
     # carried through to the row by the watcher. See the comment on
     # ``Session.system_prompt_addendum`` in :mod:`twicc.core.models`.
     system_prompt_addendum: str | None
+    # Hybrid CLI mode flag. Only ever True when set through the trusted
+    # human path (web UI); see ``Session.hybrid`` in :mod:`twicc.core.models`.
+    hybrid: bool
 
 
 # session_id -> PendingSessionAttributes
@@ -51,6 +54,7 @@ def set_pending_session_attributes(
     spawn_root_id: str | None = None,
     annotations: dict | None = None,
     system_prompt_addendum: str | None = None,
+    hybrid: bool = False,
 ) -> None:
     """Store pending structural attributes to be applied at row creation."""
     _pending[session_id] = PendingSessionAttributes(
@@ -59,13 +63,15 @@ def set_pending_session_attributes(
         spawn_root_id=spawn_root_id,
         annotations=annotations or {},
         system_prompt_addendum=system_prompt_addendum,
+        hybrid=hybrid,
     )
     logger.debug(
         "Set pending session attributes for %s: hidden=%s spawned_by_id=%s "
-        "spawn_root_id=%s annotations_keys=%s addendum_len=%s",
+        "spawn_root_id=%s annotations_keys=%s addendum_len=%s hybrid=%s",
         session_id, hidden, spawned_by_id, spawn_root_id,
         sorted((annotations or {}).keys()),
         len(system_prompt_addendum) if system_prompt_addendum else 0,
+        hybrid,
     )
 
 

@@ -49,8 +49,14 @@ class SessionCreationResult(NamedTuple):
     errors: list[SessionCreationError] | None
 
 
-async def create_session_from_payload(payload: dict) -> SessionCreationResult:
+async def create_session_from_payload(payload: dict, *, allow_hybrid: bool = False) -> SessionCreationResult:
     """Create a new session from a normalised payload.
+
+    ``allow_hybrid`` is a TRUSTED keyword-only switch: only the WS handler
+    (human web UI) passes ``True``. This service is also the entry point for
+    ``session:create`` drop-request files, which any agent can write — a
+    ``"hybrid": true`` key in the raw payload is therefore ignored unless the
+    caller is trusted (hybrid mode is human-only, like project trust).
 
     Expected keys in ``payload``:
     - ``session_id``: client-supplied UUID (used as Claude Code session id;
@@ -86,6 +92,7 @@ async def create_session_from_payload(payload: dict) -> SessionCreationResult:
     images = payload.get("images") or []
     documents = payload.get("documents") or []
     hidden = bool(payload.get("hidden", False))
+    hybrid = bool(payload.get("hybrid")) if allow_hybrid else False
     spawned_by_session_id = payload.get("spawned_by_session_id")  # str | None
     annotations = payload.get("annotations", {})
     if annotations is None:
@@ -318,6 +325,7 @@ async def create_session_from_payload(payload: dict) -> SessionCreationResult:
         spawn_root_id=spawn_root_session_id,
         annotations=annotations,
         system_prompt_addendum=system_prompt_addendum,
+        hybrid=hybrid,
     )
 
     # --- invoke the agent manager --------------------------------

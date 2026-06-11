@@ -108,6 +108,7 @@ def serialize_session(session):
         # User-controlled fields
         "archived": session.archived,  # Whether the session is archived
         "pinned": session.pinned,  # Whether the session is pinned
+        "hybrid": session.hybrid,  # Hybrid CLI mode (one-way, see models.Session.hybrid)
         # Closed AgentSettings bundle (cross-provider). Fields listed in
         # ``AGENT_SETTINGS_HIDDEN_FROM_FRONTEND`` are filtered out so they
         # never leak to the frontend.

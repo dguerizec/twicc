@@ -419,6 +419,8 @@ class BaseSessionsWatcher:
                 kwargs["annotations"] = pending.annotations
             if pending.system_prompt_addendum is not None:
                 kwargs["system_prompt_addendum"] = pending.system_prompt_addendum
+            if pending.hybrid:
+                kwargs["hybrid"] = True
         return Session.objects.create(**kwargs)
 
     # ------------------------------------------------------------------
