@@ -252,6 +252,13 @@ logs/
 twicc.heartbeat
 drop-requests/
 
+# Hybrid CLI mode runtime files (live in <data_dir>):
+#   - hybrid/: per-session runtime dir (addendum file, attachments)
+#   - hybrid-hooks/: drop directory for hybrid CLI hook event files
+#     (see src/twicc/providers/claude_code/agent/hybrid/).
+hybrid/
+hybrid-hooks/
+
 # Git worktrees — anchored to repo root only. An un-anchored `.worktrees/`
 # would match any segment of the path, including the worktree's own root
 # (`.../.worktrees/<name>/`), which trips up hatchling's sdist exclusion
