@@ -352,6 +352,31 @@ and its retention, so copy, don't reference).
 5. Trust dialog UX on first hybrid launch in a never-trusted directory (user
    handles it in the TUI; just confirm the flow feels right).
 
+### 5.bis Upstream CLI regression found at implementation time (2026-06-11)
+
+**Bundled CLI 2.1.172 (claude-agent-sdk 0.2.96) does not persist interactive
+transcripts at all** — the per-project JSONL gets only title/state lines
+(`ai-title`, `custom-title`, `agent-name`); no user/assistant/tool content is
+ever written, `--resume` answers "No conversation found", and a graceful
+`/exit` flushes nothing. With `-n <title>` not even the title line is written
+(no file at all). Bisected empirically (every flag combination, with and
+without `--session-id`); counter-test with the uv-cached 2.1.170 binary in
+the same directory wrote a normal 34 KB live transcript. The regression was
+introduced in 2.1.171 or 2.1.172, interactive mode only (the SDK
+`--print`/stream-json path still writes — TwiCC SDK sessions are unaffected).
+
+Consequence: hybrid mode REQUIRES a CLI that writes interactive transcripts.
+The worktree pins `claude-agent-sdk==0.2.95` (CLI 2.1.170) until an SDK
+release bundles a fixed CLI. Every future SDK bump must re-run the transcript
+probe (`docs/tmux-probe-recipe.md`: launch interactive, send one message,
+assert user/assistant lines land in the JSONL within seconds).
+
+Additional 2.1.172 findings (kept for the record): the trust dialog swallows
+a paste entirely (composer left empty after the dialog is answered) — the
+hybrid agent waits for the dialog to clear before its first paste; the
+PermissionRequest drop hook and the file-history capture both still worked
+on 2.1.172, so the regression is scoped to transcript persistence.
+
 ## 6. Decision log (chronological summary)
 
 1. Dedicated tmux session per hybrid session, terminal embedded in composer above
