@@ -597,7 +597,23 @@ class HybridClaudeAgent(BaseAgent):
         if settings.fast_mode is not None and bool(settings.fast_mode) != bool(self.agent_settings.fast_mode):
             commands.append("/fast on" if settings.fast_mode else "/fast off")
         if commands:
-            self._spawn_auto_paste("settings", commands)
+            # Fast path: apply inline while the composer is free, so settings
+            # land BEFORE a message sent in the same action (the manager
+            # awaits this method right before agent.send, and a /model pasted
+            # mid-turn has no guaranteed semantics). Fall back to the
+            # background retry task only for the commands the busy TUI
+            # refused — re-applying from there is idempotent.
+            for index, command in enumerate(commands):
+                if index:
+                    # Let the TUI finish processing the previous local
+                    # command before the next paste lands in its composer.
+                    await asyncio.sleep(0.5)
+                if not await self._checked_paste(command):
+                    self._spawn_auto_paste("settings", commands[index:])
+                    break
+                logger.info(
+                    "Applied %s to hybrid session %s", command, self.session_id,
+                )
         self.agent_settings = settings
 
     # ------------------------------------------------------------------
