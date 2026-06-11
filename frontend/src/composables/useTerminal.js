@@ -259,6 +259,8 @@ export function useTerminal(contextKey, terminalIndex = 0, { sessionId = null, p
     let resizeDebounceTimer = null
     /** Last size the backend PTY is known to have (sent or carried by the WS URL). */
     let lastSentSize = null
+    /** Container size + configured font of the last successful fit (see fitTerminal). */
+    let lastFitKey = null
     /** @type {boolean} */
     let intentionalClose = false
 
@@ -1447,22 +1449,52 @@ export function useTerminal(contextKey, terminalIndex = 0, { sessionId = null, p
         const el = containerRef.value
         if (!el || el.clientWidth === 0 || el.clientHeight === 0) return
         const userSize = settingsStore.getFontSize
-        if (terminal.options.fontSize !== userSize) {
+        // Memo: same container size and same configured font size as the
+        // last successful fit → the outcome is identical, skip entirely.
+        // This is NOT a micro-optimization: before it, every un-minimize,
+        // KeepAlive reactivation or settled window resize re-ran the fit
+        // for strictly nothing, and a single redundant pass froze the UI
+        // for over a second (see below).
+        const fitKey = `${el.clientWidth}x${el.clientHeight}:${userSize}`
+        if (fitKey === lastFitKey) return
+
+        // Changing xterm's fontSize is EXPENSIVE (~800ms measured: once the
+        // char metrics change, the DOM renderer rebuilds itself and re-probes
+        // glyph widths through forced layouts), so never touch the font
+        // speculatively. Measure at the CURRENT font (proposeDimensions()
+        // only reads), derive the single target size arithmetically (columns
+        // scale ~1/fontSize), and apply at most one font change — none at
+        // all when the target is unchanged, which is the common case for
+        // resizes that keep the panel width. The previous implementation
+        // reset to the user font then probed downward with a fit() at every
+        // step: two to three full rebuild+reflow cycles per call.
+        let dims = fitAddon.proposeDimensions()
+        if (!dims || isNaN(dims.cols) || isNaN(dims.rows)) return
+        if (enforcedMinCols) {
+            const current = terminal.options.fontSize
+            // Largest font size <= the user's that still fits the minimum
+            // column count, derived from the current measurement.
+            let target = Math.floor(current * dims.cols / enforcedMinCols)
+            target = Math.max(HYBRID_MIN_FONT_SIZE, Math.min(userSize, target))
+            if (target !== current) {
+                terminal.options.fontSize = target
+                dims = fitAddon.proposeDimensions()
+            }
+            // The 1/fontSize estimate can be one step optimistic (cell
+            // metrics round per font size); correct downward if needed.
+            while (dims && dims.cols < enforcedMinCols && terminal.options.fontSize > HYBRID_MIN_FONT_SIZE) {
+                terminal.options.fontSize -= 1
+                dims = fitAddon.proposeDimensions()
+            }
+        } else if (terminal.options.fontSize !== userSize) {
             terminal.options.fontSize = userSize
+            dims = fitAddon.proposeDimensions()
         }
+        if (!dims || isNaN(dims.cols) || isNaN(dims.rows)) return
+        // Single resize (fit() also clears the renderer to avoid artifacts);
+        // no-op when the dimensions did not change.
         fitAddon.fit()
-        if (!enforcedMinCols) return
-        let size = userSize
-        while (terminal.cols < enforcedMinCols && size > HYBRID_MIN_FONT_SIZE) {
-            // Jump close to the target (columns scale ~1/fontSize), then let
-            // the loop correct the estimate one step at a time.
-            size = Math.max(
-                HYBRID_MIN_FONT_SIZE,
-                Math.min(size - 1, Math.floor(size * terminal.cols / enforcedMinCols)),
-            )
-            terminal.options.fontSize = size
-            fitAddon.fit()
-        }
+        lastFitKey = fitKey
     }
 
     /**
@@ -1870,6 +1902,7 @@ export function useTerminal(contextKey, terminalIndex = 0, { sessionId = null, p
         clearTimeout(resizeDebounceTimer)
         resizeDebounceTimer = null
         lastSentSize = null
+        lastFitKey = null
 
         if (ws) {
             ws.close()
