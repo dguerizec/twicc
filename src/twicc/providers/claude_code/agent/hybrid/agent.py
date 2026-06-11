@@ -22,6 +22,7 @@ from typing import Any
 from asgiref.sync import sync_to_async
 
 from twicc.agent.base_agent import BaseAgent, StateChangeCallback
+from twicc.agent.exceptions import SendDeliveryError
 from twicc.agent.states import AgentState, PendingRequest
 from twicc.core.enums import Provider
 from twicc.paths import get_session_hybrid_dir
@@ -47,17 +48,14 @@ class HybridClaudeAgent(BaseAgent):
     # behavior without isinstance checks across modules.
     is_hybrid = True
 
-    # Seconds before the first paste: the TUI must be fully drawn or the
-    # paste is lost. Verified: the welcome screen (or the trust dialog) is
-    # rendered well within 8s on this machine; the trust-dialog wait below
-    # then covers the only known blocking dialog.
-    FIRST_PASTE_DELAY = 8.0
-    # Trust-dialog polling: the user answers it inside the embedded
-    # terminal, which can take a while. Poll the pane until the dialog is
-    # gone, then settle before pasting.
-    TRUST_DIALOG_POLL = 2.0
-    TRUST_DIALOG_TIMEOUT = 600.0
-    TRUST_DIALOG_SETTLE = 3.0
+    # First-paste readiness: poll until the TUI shows its empty composer
+    # (tmux.composer_ready). Covers the warm-up (nothing drawn yet) and the
+    # trust dialog (which swallows pastes — verified; it should not appear
+    # in real TwiCC flows, where project trust is settled in ~/.claude.json
+    # before launch). The bounded wait can be long: the user answers the
+    # dialog inside the embedded terminal.
+    READY_POLL_INTERVAL = 1.0
+    READY_TIMEOUT = 600.0
     LIVENESS_INTERVAL = 5.0
 
     # Single synthetic pending-request key: hybrid pending prompts are
@@ -76,6 +74,14 @@ class HybridClaudeAgent(BaseAgent):
         self._untrusted = False
         self._first_paste_task: asyncio.Task[None] | None = None
         self._liveness_task: asyncio.Task[None] | None = None
+        # Background retry tasks for auto-pasted slash commands, keyed by
+        # purpose ("rename", "settings") — a new task replaces (cancels) the
+        # previous one of the same purpose, so only the latest title/settings
+        # value is ever pasted.
+        self._auto_paste_tasks: dict[str, asyncio.Task[None]] = {}
+        # Serializes ready-check + paste pairs: two concurrent pastes would
+        # race on the shared tmux buffer and on the composer-free check.
+        self._paste_lock = asyncio.Lock()
         # Read by ClaudeCodeAgentManager._on_state_change for every Claude
         # Code agent (old-ProcessRun purge at first USER_TURN).
         self._old_runs_purged = False
@@ -212,8 +218,7 @@ class HybridClaudeAgent(BaseAgent):
         """Background task: wait for the TUI (and any trust dialog), then paste."""
         try:
             full_text = await self._materialize_attachments(text, images, documents)
-            await asyncio.sleep(self.FIRST_PASTE_DELAY)
-            await self._wait_for_trust_dialog_clearance()
+            await self._wait_until_composer_ready()
             if self.state == AgentState.DEAD:
                 return
             await asyncio.to_thread(hybrid_tmux.paste_text, self.session_id, full_text)
@@ -236,40 +241,39 @@ class HybridClaudeAgent(BaseAgent):
                 await asyncio.to_thread(hybrid_tmux.kill_session, self.session_id)
                 await self._transition_to_dead()
 
-    async def _wait_for_trust_dialog_clearance(self) -> None:
-        """Block while the TUI trust dialog is on screen.
+    async def _wait_until_composer_ready(self) -> None:
+        """Block until the TUI shows its empty composer (bounded wait).
 
-        The dialog swallows pasted text (verified), so the paste must wait
-        for the user to answer it in the embedded terminal. Bounded wait;
-        on timeout we paste anyway (worst case the paste is lost and the
-        user re-sends — better than text silently never arriving while the
-        agent looks alive forever).
+        ``composer_ready`` is the single readiness signal: it stays False
+        through the warm-up render, the trust dialog (which swallows pasted
+        text — verified) and any other blocking first screen, and flips
+        True exactly when a paste can land. On timeout we paste anyway
+        (worst case the paste is lost and the user re-sends — better than
+        text silently never arriving while the agent looks alive forever).
         """
-        deadline = time.monotonic() + self.TRUST_DIALOG_TIMEOUT
-        seen_dialog = False
+        deadline = time.monotonic() + self.READY_TIMEOUT
+        trust_logged = False
         while time.monotonic() < deadline:
             if self.state == AgentState.DEAD:
                 return
-            screen = await asyncio.to_thread(hybrid_tmux.capture_pane, self.session_id)
-            if screen is None:
-                # Session gone; the paste below will fail and be handled.
+            if await asyncio.to_thread(hybrid_tmux.composer_ready, self.session_id):
                 return
-            if not _TRUST_DIALOG_RE.search(screen):
-                if seen_dialog:
-                    # Let the post-dialog redraw settle before pasting.
-                    await asyncio.sleep(self.TRUST_DIALOG_SETTLE)
-                return
-            if not seen_dialog:
-                seen_dialog = True
-                logger.info(
-                    "Trust dialog detected for hybrid session %s — waiting for "
-                    "the user to answer it in the terminal",
-                    self.session_id,
+            if not trust_logged:
+                screen = await asyncio.to_thread(
+                    hybrid_tmux.capture_pane, self.session_id,
                 )
-            await asyncio.sleep(self.TRUST_DIALOG_POLL)
+                if screen and _TRUST_DIALOG_RE.search(screen):
+                    trust_logged = True
+                    logger.info(
+                        "Trust dialog detected for hybrid session %s — waiting "
+                        "for the user to answer it in the terminal",
+                        self.session_id,
+                    )
+            await asyncio.sleep(self.READY_POLL_INTERVAL)
         logger.warning(
-            "Trust dialog still up after %.0fs for hybrid session %s — pasting anyway",
-            self.TRUST_DIALOG_TIMEOUT, self.session_id,
+            "TUI composer still not ready after %.0fs for hybrid session %s — "
+            "pasting anyway",
+            self.READY_TIMEOUT, self.session_id,
         )
 
     async def send(
@@ -279,9 +283,36 @@ class HybridClaudeAgent(BaseAgent):
         images: list[dict] | None = None,
         documents: list[dict] | None = None,
     ) -> None:
+        # Pre-paste guard: with a TUI dialog open the paste is swallowed and
+        # its trailing Enter would VALIDATE the highlighted option (verified
+        # empirically); with text already typed in the TUI composer it would
+        # append to and submit the user's draft. Fail fast instead — the
+        # frontend restores the message into the TwiCC composer.
         full_text = await self._materialize_attachments(text, images, documents)
-        await asyncio.to_thread(hybrid_tmux.paste_text, self.session_id, full_text)
+        if not await self._checked_paste(full_text):
+            raise SendDeliveryError(
+                "The Claude CLI is showing a dialog or has text typed in its "
+                "composer — resolve it in the terminal, then send again.",
+                code="hybrid_composer_busy",
+            )
         self.last_activity = time.time()
+
+    async def _checked_paste(self, text: str) -> bool:
+        """Atomically verify the composer is free, then paste.
+
+        The lock serializes user sends and auto-pasted commands, so two
+        pastes never race on the shared tmux paste buffer and the
+        composer-free check is still valid when the paste lands.
+        """
+        async with self._paste_lock:
+            if not await asyncio.to_thread(
+                hybrid_tmux.composer_ready, self.session_id,
+            ):
+                return False
+            await asyncio.to_thread(
+                hybrid_tmux.paste_text, self.session_id, text,
+            )
+            return True
 
     async def _materialize_attachments(
         self,
@@ -469,15 +500,73 @@ class HybridClaudeAgent(BaseAgent):
     # Settings / title application
     # ------------------------------------------------------------------
 
+    AUTO_PASTE_RETRY_INTERVAL = 3.0
+    AUTO_PASTE_RETRY_TIMEOUT = 300.0
+
+    def _spawn_auto_paste(self, purpose: str, commands: list[str]) -> None:
+        """Run ``commands`` in a background retry task (latest-wins per purpose).
+
+        Auto-pasted slash commands are system-initiated and idempotent:
+        nobody is waiting on them, so instead of failing fast like user
+        sends they poll until the TUI composer is free. The task must NOT
+        be awaited by callers — rename/settings application sit on the WS
+        handler and state-transition paths, which a minutes-long retry
+        loop would stall.
+        """
+        previous = self._auto_paste_tasks.get(purpose)
+        if previous is not None and not previous.done():
+            previous.cancel()
+        self._auto_paste_tasks[purpose] = asyncio.create_task(
+            self._run_auto_paste(commands),
+            name=f"hybrid-auto-paste-{purpose}-{self.session_id}",
+        )
+
+    async def _run_auto_paste(self, commands: list[str]) -> None:
+        try:
+            for index, command in enumerate(commands):
+                if index:
+                    # Let the TUI finish processing the previous local
+                    # command before the next paste lands in its composer.
+                    await asyncio.sleep(0.5)
+                if not await self._paste_command_when_ready(command):
+                    return
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception(
+                "Auto paste failed for hybrid session %s", self.session_id,
+            )
+
+    async def _paste_command_when_ready(self, command: str) -> bool:
+        """Paste ``command`` once the empty-composer pattern shows up.
+
+        Gives up (with a warning) after AUTO_PASTE_RETRY_TIMEOUT or when
+        the agent dies — the worst case is CLI-side drift (TwiCC's stored
+        value stays authoritative and is re-passed at the next launch).
+        """
+        deadline = time.monotonic() + self.AUTO_PASTE_RETRY_TIMEOUT
+        while self.state != AgentState.DEAD:
+            if await self._checked_paste(command):
+                logger.info(
+                    "Applied %s to hybrid session %s", command, self.session_id,
+                )
+                return True
+            if time.monotonic() >= deadline:
+                break
+            await asyncio.sleep(self.AUTO_PASTE_RETRY_INTERVAL)
+        logger.warning(
+            "Gave up pasting %r to hybrid session %s (TUI composer never free)",
+            command, self.session_id,
+        )
+        return False
+
     async def rename(self, title: str) -> None:
-        """Paste ``/rename <title>`` (verified: instant, no dialog, writes
-        custom-title JSONL lines)."""
+        """Queue ``/rename <title>`` (verified: instant, no dialog, writes
+        custom-title JSONL lines). Pasted when the TUI composer is free."""
         clean = " ".join(title.split())
         if not clean:
             return
-        await asyncio.to_thread(
-            hybrid_tmux.paste_text, self.session_id, f"/rename {clean}",
-        )
+        self._spawn_auto_paste("rename", [f"/rename {clean}"])
 
     async def apply_live_settings(self, settings: Any) -> None:
         """IDLE application via pasted slash commands.
@@ -507,17 +596,8 @@ class HybridClaudeAgent(BaseAgent):
             commands.append(f"/effort {settings.effort}")
         if settings.fast_mode is not None and bool(settings.fast_mode) != bool(self.agent_settings.fast_mode):
             commands.append("/fast on" if settings.fast_mode else "/fast off")
-        for index, command in enumerate(commands):
-            if index:
-                # Let the TUI finish processing the previous local command
-                # before the next paste lands in its composer.
-                await asyncio.sleep(0.5)
-            await asyncio.to_thread(
-                hybrid_tmux.paste_text, self.session_id, command,
-            )
-            logger.info(
-                "Applied %s to hybrid session %s", command, self.session_id,
-            )
+        if commands:
+            self._spawn_auto_paste("settings", commands)
         self.agent_settings = settings
 
     # ------------------------------------------------------------------

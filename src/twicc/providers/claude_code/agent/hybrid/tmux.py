@@ -9,6 +9,7 @@ All functions are sync — callers wrap them with ``asyncio.to_thread``.
 """
 
 import os
+import re
 import shlex
 import subprocess
 
@@ -150,6 +151,42 @@ def capture_pane(session_id: str) -> str | None:
     if result.returncode != 0:
         return None
     return result.stdout.decode(errors="replace")
+
+
+# A full-width run of "─" (the TUI frames its composer with these) and a bare
+# input chevron with nothing typed after it.
+_COMPOSER_SEPARATOR_RE = re.compile(r"^\s*─{20,}\s*$")
+_EMPTY_COMPOSER_RE = re.compile(r"^❯\s*$")
+
+
+def composer_ready(session_id: str) -> bool:
+    """True when the TUI shows its EMPTY composer, ready for a paste.
+
+    The pattern is a bare ``❯`` line sandwiched between two full-width
+    separator lines. It is the pre-paste guard: while any TUI dialog is
+    open (permission prompt, AskUserQuestion, plan approval, the bare
+    ``/effort``/``/fast`` pickers, the Tab "amend" field…) a paste is
+    swallowed and its trailing Enter would VALIDATE the highlighted
+    option; and while the user has text typed in the TUI composer, a
+    paste would append to (and submit) their draft. In both states the
+    sandwich is absent — verified empirically on 2.1.170/2.1.172
+    (2026-06-11), including during a turn (spinner), where the empty
+    composer stays visible so steering pastes keep working. History
+    echoes (``❯ <sent text>``) never match: they carry text and are not
+    framed by separators. The status line is never inspected (it is
+    user-scripted, arbitrary content). Re-verify this pattern at every
+    CLI bump.
+    """
+    screen = capture_pane(session_id)
+    if screen is None:
+        return False
+    lines = screen.splitlines()
+    return any(
+        _EMPTY_COMPOSER_RE.match(lines[i])
+        and _COMPOSER_SEPARATOR_RE.match(lines[i - 1])
+        and _COMPOSER_SEPARATOR_RE.match(lines[i + 1])
+        for i in range(1, len(lines) - 1)
+    )
 
 
 def paste_text(session_id: str, text: str, *, submit: bool = True) -> None:
