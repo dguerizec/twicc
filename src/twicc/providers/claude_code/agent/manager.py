@@ -330,6 +330,35 @@ class ClaudeCodeAgentManager(BaseAgentManager):
             return False
 
     # ------------------------------------------------------------------
+    # Hybrid title application
+    # ------------------------------------------------------------------
+
+    async def rename_hybrid_if_live(self, session_id: str, title: str) -> bool:
+        """Paste ``/rename <title>`` into a live hybrid TUI. Returns whether it was issued.
+
+        ``False`` (no live hybrid agent, agent still STARTING — the booting
+        TUI would swallow the paste — or paste failure) tells the caller to
+        fall back to the direct JSONL write.
+        """
+        agent = self._agents.get(session_id)
+        if (
+            agent is None
+            or not getattr(agent, "is_hybrid", False)
+            or agent.state not in (AgentState.ASSISTANT_TURN, AgentState.USER_TURN)
+        ):
+            return False
+        try:
+            await agent.rename(title)
+            logger.info("Pasted /rename into hybrid session %s", session_id)
+            return True
+        except Exception:
+            logger.warning(
+                "Hybrid /rename failed for session %s; falling back to the "
+                "JSONL write", session_id, exc_info=True,
+            )
+            return False
+
+    # ------------------------------------------------------------------
     # Hybrid signal routing (hooks drop watcher + JSONL bridge)
     # ------------------------------------------------------------------
 

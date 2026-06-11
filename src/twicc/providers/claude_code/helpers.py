@@ -753,10 +753,21 @@ class ClaudeCodeHelpers(BaseProviderHelpers):
         title the CLI might re-append. ``rename_session_in_jsonl`` does
         FS I/O (SDK kernel-level atomic append), so it hops to a worker
         thread; ``protect_title`` is a dict mutation, safe inline.
+
+        Hybrid sessions with a LIVE claude TUI take a different route: a
+        pasted ``/rename`` (the CLI applies it instantly and writes the
+        custom-title lines itself). Writing the JSONL line directly under
+        a live claude would be clobbered by its own state re-appends on
+        exit. Dead/non-hybrid sessions keep the direct write (the CLI
+        reads the line on its next ``--resume`` tail-scan).
         """
         import asyncio
 
+        from twicc.providers.claude_code.agent.manager import get_claude_code_agent_manager
+
         try:
+            if await get_claude_code_agent_manager().rename_hybrid_if_live(session_id, title):
+                return
             await asyncio.to_thread(rename_session_in_jsonl, session_id, title)
         finally:
             protect_title(session_id, title)
