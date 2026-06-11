@@ -100,6 +100,41 @@ const isDraft = computed(() => session.value?.draft === true)
 const providerLabel = computed(() => getProviderLabel(session.value?.provider))
 const providerIcon = computed(() => getProviderIcon(session.value?.provider))
 
+// ── Hybrid CLI mode toggle ──────────────────────────────────────────────────
+// Claude Code only, never for hidden/orchestrated sessions or subagents.
+// Drafts toggle freely; existing sessions go through a confirm dialog and the
+// one-way `set_session_hybrid` WS command (a session resumed by the CLI can
+// never go back to the SDK).
+const hybridConfirmDialogRef = ref(null)
+const isHybrid = computed(() => session.value?.hybrid === true)
+const isHybridAvailable = computed(() =>
+    session.value?.provider === 'claude_code'
+    && !session.value?.hidden
+    && !session.value?.parent_session_id
+)
+const hybridTooltipLabel = computed(() => {
+    if (isDraft.value) {
+        return isHybrid.value
+            ? 'Hybrid CLI mode enabled — click to disable'
+            : 'Hybrid CLI mode: run the interactive Claude CLI in an embedded terminal'
+    }
+    return isHybrid.value
+        ? 'Hybrid CLI mode (permanent)'
+        : 'Switch to hybrid CLI mode (cannot be undone)'
+})
+function handleHybridClick() {
+    if (isDraft.value) {
+        store.setDraftHybrid(props.sessionId, !isHybrid.value)
+        return
+    }
+    if (isHybrid.value) return
+    if (hybridConfirmDialogRef.value) hybridConfirmDialogRef.value.open = true
+}
+function confirmHybridSwitch() {
+    sendWsMessage({ type: 'set_session_hybrid', session_id: props.sessionId })
+    if (hybridConfirmDialogRef.value) hybridConfirmDialogRef.value.open = false
+}
+
 // Provider's attachment capabilities (file types, max bytes, resize policy).
 // Drives the file picker's accept attribute, the paste handler's MIME
 // filter, the tooltip wording, and whether the paperclip button is even
@@ -141,6 +176,7 @@ const fileInputRef = ref(null)
 const attachButtonId = useId()
 const settingsButtonId = useId()
 const textareaAnchorId = useId()
+const hybridButtonId = useId()
 
 // ── Collapse-to-a-single-line ───────────────────────────────────────────────
 // The composer can grow tall (textarea up to 40dvh + snippets/comments bars),
@@ -1253,6 +1289,12 @@ async function handleSend() {
         payload.title = session.value.title
     }
 
+    // Hybrid CLI mode: only meaningful at creation time (drafts). Existing
+    // sessions switch through the one-way `set_session_hybrid` WS command.
+    if (isDraft.value) {
+        payload.hybrid = session.value?.hybrid === true
+    }
+
     // For draft sessions without a title, open the rename dialog (non-blocking)
     // The message is still sent, allowing the agent to start working
     if (isDraft.value && !session.value?.title) {
@@ -1775,6 +1817,22 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
                     :sending-locked="sendingLocked"
                 />
 
+                <!-- Hybrid CLI mode toggle (Claude Code, visible sessions only) -->
+                <wa-button
+                    v-if="isHybridAvailable"
+                    :id="hybridButtonId"
+                    appearance="plain"
+                    variant="neutral"
+                    size="small"
+                    class="hybrid-toggle-button"
+                    :class="{ active: isHybrid }"
+                    :disabled="!isDraft && isHybrid"
+                    @click="handleHybridClick"
+                >
+                    <wa-icon name="terminal" variant="classic"></wa-icon>
+                </wa-button>
+                <AppTooltip v-if="isHybridAvailable" :for="hybridButtonId">{{ hybridTooltipLabel }}</AppTooltip>
+
                 <!-- Cancel button for draft sessions -->
                 <wa-button
                     v-if="isDraft"
@@ -1826,6 +1884,34 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
                 <AppTooltip v-if="sendingLocked" :for="sendingLockedId">Answer the pending request to send</AppTooltip>
             </div>
         </div>
+
+        <!-- Hybrid switch confirmation (existing sessions only — one-way) -->
+        <wa-dialog
+            ref="hybridConfirmDialogRef"
+            label="Switch to hybrid CLI mode?"
+            style="--width: min(480px, calc(100vw - 2rem))"
+        >
+            <p>
+                This session will be driven by the interactive Claude Code CLI
+                running in a terminal embedded above the composer. The rich
+                session view, costs and history stay as they are.
+            </p>
+            <p>
+                <strong>This cannot be undone:</strong> once the session has been
+                resumed by the CLI, it can never go back to the regular (SDK) mode.
+            </p>
+            <wa-button
+                slot="footer"
+                variant="neutral"
+                appearance="outlined"
+                @click="hybridConfirmDialogRef.open = false"
+            >Cancel</wa-button>
+            <wa-button
+                slot="footer"
+                variant="brand"
+                @click="confirmHybridSwitch"
+            >Switch to hybrid</wa-button>
+        </wa-dialog>
     </div>
 </template>
 
@@ -1934,6 +2020,13 @@ body.sidebar-closed .message-input-toolbar {
         white-space: wrap;
         font-weight: normal;
         font-size: var(--wa-font-size-s);
+    }
+}
+
+.hybrid-toggle-button {
+    flex-shrink: 0;
+    &.active::part(base) {
+        color: var(--wa-color-brand-fill-loud);
     }
 }
 

@@ -1193,6 +1193,7 @@ export const useDataStore = defineStore('data', {
                 mtime: now,
                 last_line: 0,
                 draft: true,
+                hybrid: false,
                 ...settings,
             }
             // Persist to IndexedDB
@@ -1200,6 +1201,29 @@ export const useDataStore = defineStore('data', {
                 console.warn('Failed to save draft session to IndexedDB:', err)
             )
             return id
+        },
+
+        /**
+         * Toggle the hybrid CLI mode flag on a draft session (free both ways
+         * while still a draft — it only becomes one-way once the session is
+         * created). No-op for non-draft sessions: existing sessions switch
+         * through the one-way `set_session_hybrid` WS command instead.
+         * @param {string} sessionId
+         * @param {boolean} value
+         */
+        setDraftHybrid(sessionId, value) {
+            const session = this.sessions[sessionId]
+            if (!session?.draft) return
+            session.hybrid = !!value
+            saveDraftSession(sessionId, {
+                projectId: session.project_id,
+                title: session.title,
+                provider: session.provider,
+                hybrid: session.hybrid,
+                ...this._pickAgentSettings(session),
+            }).catch(err =>
+                console.warn('Failed to save draft session hybrid flag to IndexedDB:', err)
+            )
         },
 
         /**
@@ -3777,6 +3801,7 @@ export const useDataStore = defineStore('data', {
                         mtime: now,
                         last_line: 0,
                         draft: true,
+                        hybrid: !!draft.hybrid,
                         ...settings,
                     }
                 }
