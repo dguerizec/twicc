@@ -23,6 +23,7 @@ import {
 import { toast } from '../../composables/useToast'
 import { useCodeCommentsStore, formatAllComments } from '../../stores/codeComments'
 import { getParsedContent } from '../../utils/parsedContent'
+import { generateUUID } from '../../utils/crypto'
 import MediaThumbnailGroup from '../media/MediaThumbnailGroup.vue'
 import AppTooltip from '../ui/AppTooltip.vue'
 import FilePickerPopup from '../files/FilePickerPopup.vue'
@@ -1234,6 +1235,39 @@ function removeAllAttachments() {
  * mode has changed on an active process, sends a payload with empty text so
  * the backend applies the settings via SDK methods without sending a query.
  */
+// --- Send-failure recovery (composer callout) ---
+
+const sendFailure = computed(() => store.getSendFailure(props.sessionId))
+
+// Auto-restore: when a synchronous delivery failure lands and the composer is
+// still untouched, put the message (and attachments) straight back. Late
+// failures (the agent died after accepting the send) are ambiguous — the
+// message may have been processed — so they only offer the manual button.
+watch(sendFailure, async (failure) => {
+    if (!failure || failure.restored || failure.late) return
+    if (messageText.value.trim() || attachmentCount.value > 0) return
+    await restoreFailedSend()
+})
+
+async function restoreFailedSend() {
+    const failure = sendFailure.value
+    if (!failure || failure.restored) return
+    const current = messageText.value
+    updateTextareaContent(
+        current.trim() ? `${current.replace(/\s+$/, '')}\n\n${failure.text}` : failure.text,
+    )
+    if (failure.medias?.length) {
+        await store.restoreDraftAttachments(props.sessionId, failure.medias)
+    }
+    store.markSendFailureRestored(props.sessionId)
+    await nextTick()
+    adjustTextareaHeight()
+}
+
+function dismissSendFailure() {
+    store.consumeSendFailure(props.sessionId)
+}
+
 async function handleSend() {
     // Sending is locked while a pending request shares the footer: the composer
     // is for *preparing* only. Guards both the click and the keyboard shortcut.
@@ -1335,6 +1369,11 @@ async function handleSend() {
         }
     }
 
+    // Correlation id echoed by the backend in every reply frame, so an error
+    // can be matched back to this exact send (recovery flow).
+    const requestId = generateUUID()
+    payload.request_id = requestId
+
     const success = sendWsMessage(payload)
 
     if (success) {
@@ -1351,11 +1390,27 @@ async function handleSend() {
         // For settings-only updates, nothing else to clean up
         if (isSettingsOnlyUpdate) return
 
+        // A new send supersedes any previous failure surface
+        store.consumeSendFailure(props.sessionId)
+
+        const state = processState.value?.state
+        const optimisticShown = state !== 'assistant_turn'
+        const startingSet = optimisticShown && !state
+
+        // Snapshot the send (original draft-format medias, BEFORE the draft
+        // is cleared below) so a backend delivery failure can restore it.
+        store.registerInflightSend(requestId, {
+            sessionId: props.sessionId,
+            text,
+            medias: attachmentCount.value > 0 ? store.getAttachments(props.sessionId) : [],
+            optimisticShown,
+            startingSet,
+        })
+
         // Show optimistic user message immediately (only when not in assistant_turn,
         // because during assistant_turn the message is queued and the user_message
         // won't arrive until later)
-        const state = processState.value?.state
-        if (state !== 'assistant_turn') {
+        if (optimisticShown) {
             const attachments = (payload.images || payload.documents)
                 ? { images: payload.images, documents: payload.documents }
                 : undefined
@@ -1367,7 +1422,7 @@ async function handleSend() {
             // WebSocket message only arrives after the subprocess is ready
             // (~2-4 seconds later, alongside ASSISTANT_TURN). This optimistic
             // state gives immediate visual feedback to the user.
-            if (!state) {
+            if (startingSet) {
                 store.setProcessState(props.sessionId, props.projectId, 'starting')
             }
         }
@@ -1646,6 +1701,41 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
                 {{ commentsWithContentCount === 1 ? 'Clear comment' : 'Clear comments' }}
             </wa-button>
         </div>
+        <!-- Send-failure callout: a message the backend could not deliver to
+             the agent. Auto-restored into the composer when it was still
+             empty; otherwise (or for ambiguous late failures) the explicit
+             Restore button puts it back. -->
+        <wa-callout v-if="sendFailure" variant="danger" class="send-failure-callout">
+            <wa-icon slot="icon" name="triangle-exclamation"></wa-icon>
+            <div class="send-failure-body">
+                <div class="send-failure-text">
+                    <span>{{ sendFailure.message }}</span>
+                    <span v-if="sendFailure.restored" class="send-failure-note">
+                        Your message was restored into the composer below — it has NOT been sent.
+                    </span>
+                </div>
+                <div class="send-failure-actions">
+                    <wa-button
+                        v-if="!sendFailure.restored"
+                        size="small"
+                        variant="danger"
+                        appearance="outlined"
+                        @click="restoreFailedSend"
+                    >
+                        Restore message
+                    </wa-button>
+                    <wa-button
+                        size="small"
+                        variant="neutral"
+                        appearance="plain"
+                        @click="dismissSendFailure"
+                    >
+                        Dismiss
+                    </wa-button>
+                </div>
+            </div>
+        </wa-callout>
+
         <wa-textarea
             ref="textareaRef"
             :id="textareaAnchorId"
@@ -1973,6 +2063,32 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
     flex-wrap: wrap;
     gap: var(--wa-space-xs);
     align-items: center;
+}
+
+.send-failure-callout::part(base) {
+    padding: var(--wa-space-s) var(--wa-space-m);
+}
+.send-failure-body {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--wa-space-xs) var(--wa-space-m);
+}
+.send-failure-text {
+    display: flex;
+    flex-direction: column;
+    gap: var(--wa-space-2xs);
+    font-size: var(--wa-font-size-s);
+}
+.send-failure-note {
+    font-weight: var(--wa-font-weight-semibold);
+}
+.send-failure-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--wa-space-xs);
+    flex-shrink: 0;
 }
 
 .message-input wa-textarea::part(textarea) {

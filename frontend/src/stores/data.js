@@ -65,6 +65,16 @@ function clearBlockInactivityTimer(block) {
     }
 }
 
+// In-flight send registry: one snapshot per send_message frame, kept between
+// "the frame left the socket" and "the real user_message line arrived" (or an
+// error frame consumed it). Powers the send-failure recovery flow: restoring
+// the composer draft and dropping the optimistic chat message. Module-level
+// and non-reactive on purpose — only programmatic lookups, never rendered.
+// Snapshots hold the ORIGINAL draft-format medias (not the SDK conversion),
+// so restoring is conversion-free.
+const inflightSends = new Map()
+const INFLIGHT_SEND_TTL_MS = 5 * 60 * 1000
+
 function userMessageMatchesOptimistic(providerHelpers, optimistic, item) {
     if (!providerHelpers || !optimistic || item?.kind !== 'user_message') return false
 
@@ -448,6 +458,11 @@ export const useDataStore = defineStore('data', {
             // { sessionId: { syntheticKind, content, kind } }
             // Cleared when the real user_message arrives in addSessionItems.
             optimisticMessages: {},
+            // Per-session send-failure surface (composer callout): set when a
+            // send_message error frame matches an in-flight send, cleared on
+            // dismiss or on the next send. { code, message, text, medias,
+            // late, restored }
+            sendFailures: {},
 
             // Streaming blocks - live text/thinking deltas from the SDK stream.
             // { sessionId: { messageId, blocks: [{ blockIndex, blockType, text, stopped, uuid }] } }
@@ -928,6 +943,10 @@ export const useDataStore = defineStore('data', {
             const map = state.localState.attachments[sessionId]
             return map ? map.size : 0
         },
+
+        // Pending send-failure surface for a session (composer callout)
+        getSendFailure: (state) => (sessionId) =>
+            state.localState.sendFailures[sessionId] || null,
 
         // Whether any files are currently being processed (encoded/resized) for a session
         isProcessingAttachments: (state) => (sessionId) => {
@@ -2384,6 +2403,7 @@ export const useDataStore = defineStore('data', {
          * @param {Array<Object>} items
          */
         clearOptimisticMessageIfMatched(sessionId, items) {
+            this.resolveInflightSends(sessionId, items)
             const optimistic = this.localState.optimisticMessages[sessionId]
             if (!optimistic || !items?.length) return
 
@@ -2391,6 +2411,141 @@ export const useDataStore = defineStore('data', {
             if (items.some(item => userMessageMatchesOptimistic(providerHelpers, optimistic, item))) {
                 delete this.localState.optimisticMessages[sessionId]
             }
+        },
+
+        // Send-failure recovery actions (see registerInflightSend for the flow)
+
+        /**
+         * Snapshot an outgoing send so it can be restored if the backend
+         * cannot deliver it to the agent.
+         *
+         * Flow: MessageInput registers the snapshot (original draft-format
+         * medias) right before clearing the composer; an ``error`` frame
+         * echoing the request_id consumes it (failInflightSend → composer
+         * callout + restore); the arrival of the matching real user_message
+         * resolves it silently; a TTL sweep drops forgotten entries.
+         * @param {string} requestId
+         * @param {Object} snapshot - { sessionId, text, medias, optimisticShown, startingSet }
+         */
+        registerInflightSend(requestId, snapshot) {
+            const now = Date.now()
+            for (const [id, entry] of inflightSends) {
+                if (now - entry.sentAt > INFLIGHT_SEND_TTL_MS) inflightSends.delete(id)
+            }
+            inflightSends.set(requestId, { ...snapshot, sentAt: now })
+        },
+
+        /**
+         * Drop in-flight snapshots whose text matches a freshly arrived
+         * user_message — the send demonstrably reached the agent.
+         * @param {string} sessionId
+         * @param {Array<Object>} items
+         */
+        resolveInflightSends(sessionId, items) {
+            if (!inflightSends.size || !items?.length) return
+            const providerHelpers = getProviderHelpers(this.getSession(sessionId)?.provider)
+            if (!providerHelpers) return
+            const texts = new Set()
+            for (const item of items) {
+                if (item?.kind !== 'user_message') continue
+                const text = providerHelpers.extractUserMessageText(getParsedContent(item))
+                if (text) texts.add(text.trim())
+            }
+            if (!texts.size) return
+            for (const [id, entry] of inflightSends) {
+                if (entry.sessionId === sessionId && texts.has(entry.text.trim())) {
+                    inflightSends.delete(id)
+                }
+            }
+        },
+
+        /**
+         * Consume the in-flight snapshot matching a send_message error frame
+         * and surface the failure on the session's composer.
+         * @param {string} requestId
+         * @param {Object} info - { code, message } from the error frame
+         * @returns {boolean} true when a snapshot was found and handled
+         */
+        failInflightSend(requestId, info) {
+            const entry = inflightSends.get(requestId)
+            if (!entry) return false
+            inflightSends.delete(requestId)
+            this._applySendFailure(entry, info, { late: false })
+            return true
+        },
+
+        /**
+         * Late-failure path: the agent died after accepting the send but
+         * possibly before processing it. Ambiguous, so the surfaced failure
+         * only offers a MANUAL restore (late: true → no auto-restore).
+         * @param {string} sessionId
+         * @param {Object} info - { code, message }
+         * @returns {boolean} true when an unresolved snapshot existed
+         */
+        failPendingSendsForSession(sessionId, info) {
+            for (const [id, entry] of inflightSends) {
+                if (entry.sessionId !== sessionId) continue
+                inflightSends.delete(id)
+                this._applySendFailure(entry, info, { late: true })
+                return true
+            }
+            return false
+        },
+
+        _applySendFailure(entry, info, { late }) {
+            const { sessionId } = entry
+            // Undo what the optimistic send did to the chat: the ghost user
+            // message, and the optimistic "starting" process state (only if
+            // no real broadcast replaced it in the meantime).
+            if (entry.optimisticShown) this.clearOptimisticMessage(sessionId)
+            if (entry.startingSet && this.processStates[sessionId]?.state === PROCESS_STATE.STARTING) {
+                delete this.processStates[sessionId]
+            }
+            this.localState.sendFailures[sessionId] = {
+                code: info.code || 'send_failed',
+                message: info.message || 'The message could not be delivered.',
+                text: entry.text,
+                medias: entry.medias || [],
+                late,
+                restored: false,
+            }
+        },
+
+        markSendFailureRestored(sessionId) {
+            const failure = this.localState.sendFailures[sessionId]
+            if (failure) failure.restored = true
+        },
+
+        consumeSendFailure(sessionId) {
+            delete this.localState.sendFailures[sessionId]
+        },
+
+        /**
+         * Put snapshotted medias back into the session's draft attachments
+         * (in-memory map + IndexedDB), used by the send-failure restore.
+         * @param {string} sessionId
+         * @param {Array<Object>} medias - original draft-format media objects
+         */
+        async restoreDraftAttachments(sessionId, medias) {
+            if (!medias?.length) return
+            if (!this.localState.attachments[sessionId]) {
+                this.localState.attachments[sessionId] = new Map()
+            }
+            const map = this.localState.attachments[sessionId]
+            const draft = await getDraftMessage(sessionId) || {}
+            draft.mediaIds = draft.mediaIds || []
+            for (const media of medias) {
+                try {
+                    await saveDraftMedia(media)
+                } catch (err) {
+                    console.warn('Failed to re-save restored draft media:', err)
+                }
+                map.set(media.id, media)
+                if (!draft.mediaIds.includes(media.id)) draft.mediaIds.push(media.id)
+            }
+            await saveDraftMessage(sessionId, draft).catch(err =>
+                console.warn('Failed to save restored draft message:', err)
+            )
         },
 
         // Expanded groups actions

@@ -623,6 +623,17 @@ function notifyProcessStateChange(msg, previousState, route) {
         // the global "Claude CLI not authenticated" toast and the sidebar
         // callout (driven by useClaudeCodeStore().authenticated) already
         // surface the state, and the dead session itself shows an inline error.
+
+        // If a send was still awaiting its real user_message line when the
+        // agent died, the message may never have been processed — offer a
+        // manual restore through the composer callout. Late failures are
+        // ambiguous (delivery cannot be ruled out), so never auto-restore.
+        if (['error', 'startup-failed', 'timeout_starting'].includes(msg.kill_reason)) {
+            useDataStore().failPendingSendsForSession(sessionId, {
+                code: 'agent_died',
+                message: 'The agent stopped before confirming your message was received.',
+            })
+        }
     }
 }
 
@@ -995,6 +1006,14 @@ export function useWebSocket() {
                     title: 'Invalid title',
                     errorMessage: msg.error || 'Unknown error',
                 })
+                // The whole send was aborted with the title — restore the
+                // message into the composer too.
+                if (msg.request_id) {
+                    store.failInflightSend(msg.request_id, {
+                        code: 'invalid_title',
+                        message: `Invalid session title: ${msg.error || 'unknown error'}`,
+                    })
+                }
                 break
             case 'title_suggested':
                 // Handle title suggestion response
@@ -1201,6 +1220,12 @@ export function useWebSocket() {
                 break
             }
             case 'error': {
+                // A send_message failure matching an in-flight send: the store
+                // drops the optimistic ghosts and surfaces the composer callout
+                // (with draft restoration) — no toast needed on top.
+                if (msg.request_id && store.failInflightSend(msg.request_id, msg)) {
+                    break
+                }
                 if (msg.code === 'provider_disabled') {
                     const providerLabel = getProviderLabel(msg.provider) || msg.provider
                     toast.error(`Cannot send to ${providerLabel}: it is disabled. Enable it from Settings → Providers.`)
