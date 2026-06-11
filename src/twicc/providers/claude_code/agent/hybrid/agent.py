@@ -480,12 +480,16 @@ class HybridClaudeAgent(BaseAgent):
         )
 
     async def apply_live_settings(self, settings: Any) -> None:
-        """IDLE application: model/context via a pasted ``/model`` command.
+        """IDLE application via pasted slash commands.
 
-        Hybrid categories keep everything else STARTUP (the manager kills
-        and relaunches for those), so model is the only live-appliable
-        field. The ``/model`` side effect of saving the user's global
-        default is accepted: TwiCC re-passes the model at every launch.
+        Model/context map to ``/model <name>``, effort to
+        ``/effort <level>`` and fast mode to ``/fast on|off`` — all three
+        apply instantly in their ARGUMENT form (verified on 2.1.172); the
+        bare forms open interactive dialogs and must never be pasted.
+        ``/model`` and ``/effort`` also save the value as the user's
+        global default for new CLI sessions — accepted: TwiCC re-passes
+        both at every launch (``/fast`` has no such side effect).
+        Everything else stays STARTUP (the manager kills and relaunches).
         """
         from twicc.providers.helpers import get_provider_helpers
 
@@ -496,12 +500,23 @@ class HybridClaudeAgent(BaseAgent):
         new_model = helpers.resolve_sdk_model(
             settings.selected_model, settings.context_max,
         )
+        commands: list[str] = []
         if new_model and new_model != old_model:
+            commands.append(f"/model {new_model}")
+        if settings.effort and settings.effort != self.agent_settings.effort:
+            commands.append(f"/effort {settings.effort}")
+        if settings.fast_mode is not None and bool(settings.fast_mode) != bool(self.agent_settings.fast_mode):
+            commands.append("/fast on" if settings.fast_mode else "/fast off")
+        for index, command in enumerate(commands):
+            if index:
+                # Let the TUI finish processing the previous local command
+                # before the next paste lands in its composer.
+                await asyncio.sleep(0.5)
             await asyncio.to_thread(
-                hybrid_tmux.paste_text, self.session_id, f"/model {new_model}",
+                hybrid_tmux.paste_text, self.session_id, command,
             )
             logger.info(
-                "Applied /model %s to hybrid session %s", new_model, self.session_id,
+                "Applied %s to hybrid session %s", command, self.session_id,
             )
         self.agent_settings = settings
 

@@ -94,18 +94,19 @@ AGENT_SETTINGS_CATEGORIES: dict[AgentSettingCategory, list[str]] = {
 
 # Hybrid CLI mode classification. Differs from the SDK's: the TUI has no
 # reliable way to set permission_mode externally (Shift+Tab cycling is
-# stateful), so it becomes STARTUP. Model stays IDLE via a pasted /model
-# command. effort/thinking/fast COULD become live later via /effort, Tab,
-# /fast — kept STARTUP in V1 (design doc §2.5).
+# stateful), so it becomes STARTUP. Model, effort and fast mode are IDLE
+# via pasted commands — /model <name>, /effort <level> and /fast on|off
+# all apply instantly in their ARGUMENT form (verified on 2.1.172,
+# 2026-06-11). The bare forms open interactive dialogs and must never be
+# pasted. thinking COULD become live later via the Tab toggle — kept
+# STARTUP in V1 (design doc §2.5/§5.3).
 HYBRID_AGENT_SETTINGS_CATEGORIES: dict[AgentSettingCategory, list[str]] = {
     AgentSettingCategory.LIVE: [],
-    AgentSettingCategory.IDLE: ["selected_model", "context_max"],
+    AgentSettingCategory.IDLE: ["selected_model", "context_max", "effort", "fast_mode"],
     AgentSettingCategory.STARTUP: [
         "permission_mode",
-        "effort",
         "thinking_enabled",
         "claude_in_chrome",
-        "fast_mode",
         "question_widget",
     ],
 }

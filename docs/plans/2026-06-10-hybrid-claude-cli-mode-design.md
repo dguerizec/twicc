@@ -122,19 +122,20 @@ classification**, distinct from `AGENT_SETTINGS_CATEGORIES` in
 | `permission_mode` | live | **startup** | relaunch (Shift+Tab cycling is stateful/unstable; no slash command sets it directly — `/permissions` is unrelated) |
 | `selected_model` | idle | idle | paste `/model <name>` (verified: applies instantly, no menu) |
 | `context_max` | idle | idle | with model: `/model <name>[1m]` (to verify at implementation) |
-| `effort` | startup | live or idle (to verify) | `/effort` TUI command exists — may beat the SDK here |
+| `effort` | startup | idle | paste `/effort <level>` (verified 2026-06-11: argument form applies instantly; bare `/effort` opens a dialog) |
 | `thinking_enabled` | startup | startup (maybe live via Tab toggle — to verify) | relaunch |
 | `claude_in_chrome` | startup | startup | relaunch |
-| `fast_mode` | startup | startup (maybe live via `/fast` — to verify) | relaunch |
+| `fast_mode` | startup | idle | paste `/fast on` / `/fast off` (verified 2026-06-11: argument form applies instantly, no global side effect; bare `/fast` opens a dialog) |
 | `question_widget` | startup | startup | relaunch (`--disallowedTools AskUserQuestion`) |
 
 Startup changes = kill claude + relaunch with new flags + re-paste pending text,
 mirroring the existing SDK restart flow.
 
-Accepted side effect: `/model X` in the TUI also saves X as the user's global
-default for new CLI sessions ("saved as your default for new sessions"). Non-issue:
-TwiCC passes the model explicitly at every session launch, so TwiCC sessions always
-honor the user's per-session choice.
+Accepted side effect: `/model X` and `/effort X` in the TUI also save X as the
+user's global default for new CLI sessions ("saved as your default for new
+sessions"). Non-issue: TwiCC passes both explicitly at every session launch, so
+TwiCC sessions always honor the user's per-session choice. `/fast` has no such
+side effect (verified).
 
 **No TUI→TwiCC back-sync in V1.** If the user changes model/permission mode inside
 the TUI, TwiCC's stored settings drift. We add a small note advising users to change
@@ -351,8 +352,13 @@ and its retention, so copy, don't reference).
    JSONL while pending; `fileCheckpointingEnabled` forcing + file-history
    mapping + backup content all verified).
 2. `/model <name>[1m]` (context_max) applied interactively.
-3. `/effort <level>` / Tab thinking toggle / `/fast` as live alternatives to
-   startup-relaunch for `effort` / `thinking_enabled` / `fast_mode`.
+3. ~~`/effort <level>` / `/fast` as live alternatives to startup-relaunch for
+   `effort` / `fast_mode`~~ — **DONE 2026-06-11**: both apply instantly in
+   their argument form and are now IDLE (pasted by `apply_live_settings`);
+   the bare `/effort` / `/fast` forms open interactive dialogs and must
+   never be pasted. `/effort` shares `/model`'s save-as-global-default side
+   effect; `/fast` has none. The Tab thinking toggle remains unverified —
+   `thinking_enabled` stays STARTUP.
 4. Compute classification audit for CLI-only JSONL line types (§3.6), now
    including `file-history-snapshot` handling and the tool_use↔snapshot-version
    association for original-file capture (§3.5).
