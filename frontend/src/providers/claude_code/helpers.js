@@ -555,6 +555,13 @@ export class ClaudeCodeHelpers extends BaseProviderHelpers {
             }
             return null
         }
+        if (field === 'permission_mode' && context?.isHybrid) {
+            // Hybrid classification differs from the SDK's: permission_mode
+            // is STARTUP there (no reliable external setter in the TUI).
+            // Chain super so the trust-clamp note still wins when forced.
+            return super.getFieldHelpText(field, context)
+                ?? 'Hybrid CLI: applied on the next message by restarting the CLI.'
+        }
         return super.getFieldHelpText(field, context)
     }
 

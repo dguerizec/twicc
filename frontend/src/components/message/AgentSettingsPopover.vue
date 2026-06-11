@@ -182,6 +182,9 @@ const baseContext = computed(() => ({
     isStarting: isStarting.value,
     isContextMaxForced: isContextMaxForced.value,
     effectiveModel: effectiveModel.value,
+    // Hybrid CLI sessions get their own live/idle/startup classification
+    // (e.g. permission_mode becomes startup) — surfaced via field help text.
+    isHybrid: props.session?.hybrid === true,
     // Trust clamp (trust design §13.3/§13.4): ``untrusted`` disables
     // permission modes outside the untrusted-allowed set (base
     // ``isChoiceDisabled``); the forced pair makes the select show the value
@@ -498,6 +501,14 @@ onBeforeUnmount(() => {
             <wa-callout v-else-if="idleSettingsWarning" variant="warning" class="idle-warning-callout">
                 <wa-icon name="triangle-exclamation" slot="icon"></wa-icon>
                 {{ idleSettingsWarning }}
+            </wa-callout>
+            <!-- Hybrid CLI advisory: TwiCC never reads back TUI-side changes,
+                 so settings must be driven from here. -->
+            <wa-callout v-if="session?.hybrid" variant="neutral" class="hybrid-settings-note">
+                <wa-icon name="terminal" slot="icon"></wa-icon>
+                Hybrid CLI session: change settings here rather than inside the
+                terminal — TwiCC does not read back TUI-side changes. Changes
+                apply on the next message; some restart the CLI.
             </wa-callout>
         </div>
 
