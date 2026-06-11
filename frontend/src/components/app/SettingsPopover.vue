@@ -165,6 +165,23 @@ function goBackToNav() {
 
 // -- Keyboard shortcuts data --
 
+// The session switcher cycles on the *physical* key above Tab (e.code
+// 'Backquote'), which carries a different legend per layout (`` ` `` on QWERTY,
+// `²` on AZERTY, `^` on QWERTZ…). Default to the QWERTY legend, then — on
+// Chromium, the only engine exposing the Keyboard Map API — refine it to the
+// actual character printed on the user's keyboard. Elsewhere the static label
+// plus the "key above Tab" wording in the description keep it unambiguous.
+const backquoteKeyLabel = ref('`')
+onMounted(async () => {
+    try {
+        const layoutMap = await navigator.keyboard?.getLayoutMap?.()
+        const label = layoutMap?.get('Backquote')
+        if (label) backquoteKeyLabel.value = label
+    } catch {
+        // API unsupported or rejected — the QWERTY default stands on purpose.
+    }
+})
+
 const shortcutGroups = computed(() => {
     const mod = store.isMac ? '⌘' : 'Ctrl'
 
@@ -202,6 +219,11 @@ const shortcutGroups = computed(() => {
             shortcuts: [
                 { keys: [mod, 'K'], description: 'Open command palette' },
                 { keys: [mod, 'Shift', 'F'], description: 'Open full-text search' },
+                // Always Ctrl (even on macOS, where ⌘+` is an OS shortcut), so this
+                // one deliberately doesn't use `mod`. The cycle key is the
+                // physical key above Tab — backquoteKeyLabel resolves its legend
+                // per layout, and the description names its position too.
+                { keys: ['Ctrl', backquoteKeyLabel.value], description: 'Switch between recent sessions — hold Ctrl, tap the key above Tab (or ↑/↓) to cycle, release to switch' },
             ]
         },
         {

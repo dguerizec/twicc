@@ -50,6 +50,11 @@ const debouncedSaves = new Map()
 // still working — without this nudge the UI looks frozen with no indicator.
 const STREAM_BLOCK_INACTIVITY_MS = 500
 
+// Max number of sessions surfaced by the Ctrl+` session switcher (the MRU
+// itself keeps up to 100 entries; the switcher panel shows the most recent
+// slice of it).
+const MRU_SWITCHER_LIMIT = 20
+
 // Cancel any pending inactivity timer attached to a streaming block. Safe
 // to call when no timer is set. Called from streamBlockStop / start /
 // retire / process-state-dead paths so we never leak a setTimeout.
@@ -255,6 +260,19 @@ function computeLastToolVisible(items, lastStartedToolId, mode, expandedGroups, 
     return false
 }
 
+/**
+ * Whether a session is eligible to be reached through MRU navigation — the
+ * post-archive fallback and the Ctrl+` session switcher share this predicate so
+ * they never diverge. Excludes sessions that no longer exist in the store,
+ * hidden sessions, archived sessions, and subagents (which are reached through
+ * their parent, never standalone).
+ * @param {object|undefined} session
+ * @returns {boolean}
+ */
+function isSwitchableSession(session) {
+    return !!session && !session.hidden && !session.archived && !session.parent_session_id
+}
+
 export const useDataStore = defineStore('data', {
     state: () => ({
         // Server data
@@ -444,6 +462,27 @@ export const useDataStore = defineStore('data', {
     }),
 
     getters: {
+        /**
+         * Display-ready list for the Ctrl+` session switcher: the most-recently
+         * visited sessions, newest first, one entry per session (the MRU is
+         * already deduped by session, keeping the latest sub-route visited).
+         * Project-page entries (no sessionId) are dropped — this is a session
+         * switcher — and invalid sessions are filtered via isSwitchableSession.
+         * Capped at MRU_SWITCHER_LIMIT. Each item is { session, path }, where
+         * `path` is the exact URL to restore (so committing lands on the last
+         * tab visited within that session).
+         */
+        mruSwitcherSessions: (state) => {
+            const out = []
+            for (const entry of state.localState.mruPaths) {
+                if (!entry.sessionId) continue
+                const session = state.sessions[entry.sessionId]
+                if (!isSwitchableSession(session)) continue
+                out.push({ session, path: entry.path })
+                if (out.length >= MRU_SWITCHER_LIMIT) break
+            }
+            return out
+        },
         // Data getters (sorted by mtime descending - most recent first)
         getProjects: (state) => Object.values(state.projects).sort((a, b) => b.mtime - a.mtime),
         // Projects shown in "all projects" pickers/lists: excludes git worktrees
@@ -3382,12 +3421,9 @@ export const useDataStore = defineStore('data', {
                 if (entry.sessionId === excludeSessionId) continue
                 // Entries without a session (project pages) are always valid
                 if (!entry.sessionId) return entry.path
-                // Entries with a session: check the session is still valid
-                const session = this.sessions[entry.sessionId]
-                if (!session) continue
-                if (session.hidden) continue
-                if (session.archived) continue
-                if (session.parent_session_id) continue
+                // Entries with a session: check the session is still reachable
+                // (shared predicate with the Ctrl+` switcher, see above).
+                if (!isSwitchableSession(this.sessions[entry.sessionId])) continue
                 return entry.path
             }
             return null

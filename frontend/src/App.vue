@@ -16,6 +16,7 @@ import ConnectionIndicator from './components/app/ConnectionIndicator.vue'
 import CustomNotification from './components/app/CustomNotification.vue'
 import CommandPalette from './components/app/CommandPalette.vue'
 import SearchOverlay from './components/app/SearchOverlay.vue'
+import SessionSwitcher from './components/app/SessionSwitcher.vue'
 import StopProcessConfirmDialog from './components/app/StopProcessConfirmDialog.vue'
 import ProviderActivationDialog from './components/app/ProviderActivationDialog.vue'
 import GlobalMediaPreview from './components/media/GlobalMediaPreview.vue'
@@ -33,6 +34,7 @@ import {
 import { canStealFocus, hasBlockingOverlay } from './utils/focusGuard'
 import { focusChatPrimary } from './utils/focusChat'
 import { toggleSearchInActiveCodeMirror } from './composables/useCodeMirror'
+import { useSessionSwitcher } from './composables/useSessionSwitcher'
 
 const route = useRoute()
 const router = useRouter()
@@ -141,6 +143,9 @@ for (const provider of getRegisteredProviders()) {
 const commandPaletteRef = ref(null)
 const searchOverlayRef = ref(null)
 
+// ─── Session switcher (Ctrl+`) — Alt-Tab between recently-visited sessions ──
+const sessionSwitcher = useSessionSwitcher()
+
 // Route names where Ctrl+F opens in-session search (main chat tab only)
 const SESSION_CHAT_ROUTES = new Set(['session', 'projects-session'])
 
@@ -170,6 +175,40 @@ const TERMINAL_ROUTES = new Set([
 
 function handleGlobalKeydown(e) {
     const modKey = settingsStore.isMac ? e.metaKey : e.ctrlKey
+
+    // ─── Ctrl+` session switcher (Alt-Tab between recent sessions) ──────────
+    // Ctrl is used uniformly on every OS (never swapped to Cmd: Cmd+` is an OS
+    // window-cycle shortcut on macOS). Held Ctrl keeps the panel open; the
+    // matching keyup (handleGlobalKeyup) commits. e.code === 'Backquote' is the
+    // physical key, layout-independent.
+    if (e.ctrlKey && !e.altKey && !e.metaKey && e.code === 'Backquote') {
+        // Don't engage on top of a modal; once engaged, keep cycling regardless.
+        if (!sessionSwitcher.active.value && hasBlockingOverlay()) return
+        e.preventDefault()
+        e.stopPropagation()
+        sessionSwitcher.onCycleKey({
+            backward: e.shiftKey,
+            repeat: e.repeat,
+            currentSessionId: route.params.sessionId || null,
+        })
+        return
+    }
+    // While the switcher is open, arrows move the cursor and Escape cancels
+    // (handled here so the cancel pre-empts the triple-Escape branch below).
+    if (sessionSwitcher.active.value) {
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+            e.preventDefault()
+            e.stopPropagation()
+            sessionSwitcher.onArrow({ backward: e.key === 'ArrowUp', repeat: e.repeat })
+            return
+        }
+        if (e.key === 'Escape') {
+            e.preventDefault()
+            e.stopPropagation()
+            sessionSwitcher.cancel()
+            return
+        }
+    }
     if (modKey && e.key === 'k') {
         e.preventDefault()
         e.stopPropagation()
@@ -354,6 +393,23 @@ function handleGlobalKeydown(e) {
     }
 }
 
+// Releasing Ctrl is the keystone of the switcher gesture: commit the highlighted
+// session. (Releasing the cycle key ` alone, with Ctrl still held, is ignored —
+// only Ctrl up commits.)
+function handleGlobalKeyup(e) {
+    if (!sessionSwitcher.active.value) return
+    if (e.key === 'Control' || !e.ctrlKey) {
+        sessionSwitcher.commit()
+    }
+}
+
+// If the window loses focus while Ctrl is still held (OS Alt-Tab, click into
+// another app), we'll never receive the Ctrl keyup — cancel rather than leave
+// the panel stuck open.
+function handleWindowBlur() {
+    if (sessionSwitcher.active.value) sessionSwitcher.cancel()
+}
+
 const trustDialogRef = ref(null)
 
 // ─── Global, command-palette-driven dialogs ──────────────────────────────
@@ -396,12 +452,16 @@ async function handleWorktreeResolved(project) {
 
 onMounted(() => {
     document.addEventListener('keydown', handleGlobalKeydown, { capture: true })
+    document.addEventListener('keyup', handleGlobalKeyup, { capture: true })
+    window.addEventListener('blur', handleWindowBlur)
     registerTrustDialog(trustDialogRef.value)
     window.addEventListener('twicc:open-edit-project-dialog', openEditProjectDialog)
     window.addEventListener('twicc:open-worktree-dialog', openWorktreeDialog)
 })
 onBeforeUnmount(() => {
     document.removeEventListener('keydown', handleGlobalKeydown, { capture: true })
+    document.removeEventListener('keyup', handleGlobalKeyup, { capture: true })
+    window.removeEventListener('blur', handleWindowBlur)
     window.removeEventListener('twicc:open-edit-project-dialog', openEditProjectDialog)
     window.removeEventListener('twicc:open-worktree-dialog', openWorktreeDialog)
 })
@@ -441,6 +501,7 @@ const toastTheme = computed(() => {
     <ConnectionIndicator v-if="isAppReady && !isConnecting" :status="wsStatus" />
     <CommandPalette ref="commandPaletteRef" />
     <SearchOverlay ref="searchOverlayRef" />
+    <SessionSwitcher />
     <StopProcessConfirmDialog
         :open="pendingConfirmation !== null"
         :mode="pendingConfirmation?.mode ?? 'stop'"
