@@ -126,7 +126,8 @@ const SETTINGS_VALIDATORS = {
             && (item.name === undefined || typeof item.name === 'string')
             && (item.tested === null || item.tested === undefined || typeof item.tested === 'boolean')
             && (item.notifyUserTurn === undefined || typeof item.notifyUserTurn === 'boolean')
-            && (item.notifyPendingRequest === undefined || typeof item.notifyPendingRequest === 'boolean')),
+            && (item.notifyPendingRequest === undefined || typeof item.notifyPendingRequest === 'boolean')
+            && (item.awayOnly === undefined || typeof item.awayOnly === 'boolean')),
     publicBaseUrl: (v) => typeof v === 'string',
 }
 

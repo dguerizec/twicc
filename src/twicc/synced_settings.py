@@ -67,10 +67,13 @@ _GENERIC_SYNCED_SETTINGS_DEFAULTS: dict = {
     "orchestrationDisabledProviders": [],
     # External notifications (Apprise) — see twicc.external_notifications.
     # Targets are objects: {"url": "<apprise url>", "enabled": bool,
-    # "tested": bool|None, "notifyUserTurn": bool, "notifyPendingRequest": bool}
+    # "tested": bool|None, "notifyUserTurn": bool, "notifyPendingRequest": bool,
+    # "awayOnly": bool}
     # ("tested" reflects the last per-target test from the settings UI,
     # null/absent = never tested; the two notify* flags pick which events the
-    # target receives, absent = opted in).
+    # target receives, absent = opted in; "awayOnly" holds the notification
+    # while the user is present at a TwiCC client and sends it only once they
+    # are away, absent/false = always send — see twicc.presence).
     "externalNotificationTargets": [],
     # Public base URL where the user reaches TwiCC (e.g. tunnel hostname),
     # used to append a session deep link to external notifications.

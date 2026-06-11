@@ -11,6 +11,7 @@ import { computeUsageData } from '../utils/usage'
 import { useSettingsStore } from '../stores/settings'
 import { getProviderHelpers, getProviderLabel, getProviderWsHandler, getProviderStore } from '../providers'
 import { playNotificationSound, sendBrowserNotification, isPageActive } from '../utils/notificationSounds'
+import { installPresenceHeartbeat } from '../utils/presence'
 import { truncateTitle } from '../utils/truncate'
 import { toWorkspaceProjectId } from '../utils/workspaceIds'
 
@@ -119,6 +120,20 @@ if (!__hmrState.visibilityListenerInstalled) {
     window.addEventListener('focus', handleVisibilityChange)
     window.addEventListener('blur', handleVisibilityChange)
     __hmrState.visibilityListenerInstalled = true
+}
+
+// Install the presence heartbeat once at module load (HMR-safe via __hmrState).
+// It pings the backend while a human is active here so "away-only" external
+// notifications are held while you're at a TwiCC client. Pings are best-effort:
+// the wrapper drops them silently while the WS is down (routine on mobile
+// backgrounding/reconnect) instead of going through sendWsMessage, which would
+// log a "not initialized" warning on every attempt. Presence resumes on the
+// next ping after reconnect.
+if (!__hmrState.presenceHeartbeatInstalled) {
+    installPresenceHeartbeat((data) => {
+        if (__hmrState.wsSendFn) sendWsMessage(data)
+    })
+    __hmrState.presenceHeartbeatInstalled = true
 }
 
 /**

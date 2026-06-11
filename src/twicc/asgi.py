@@ -550,6 +550,7 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
 
         Supported message types:
         - ping: heartbeat, responds with pong
+        - presence: human-presence heartbeat (gates away-only external notifications)
         - send_message: send a message to an agent session (creates new or resumes existing)
         - kill_process: kill a running agent process
         - stop_subagent: gracefully stop a running subagent (Task)
@@ -567,6 +568,13 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
 
         if msg_type == "ping":
             await self.send_json({"type": "pong"})
+
+        elif msg_type == "presence":
+            # Lightweight human-presence heartbeat (no reply). Gates "away-only"
+            # external notifications so they aren't pushed while the user is at a
+            # TwiCC client. See twicc.presence.
+            from twicc.presence import touch
+            touch(content.get("device_class"))
 
         elif msg_type == "send_message":
             await self._handle_send_message(content)

@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
-- **External notifications** — push notifications to your devices via [Apprise](https://appriseit.com) (ntfy, Pushover, Telegram, and 130+ other services).
+- **External notifications** — push notifications to your devices via [Apprise](https://appriseit.com) (ntfy, Pushover, Telegram, and 130+ other services), with a per-target "Only when you're away" option.
 
 ## [1.8.0] - 2026-06-11
 

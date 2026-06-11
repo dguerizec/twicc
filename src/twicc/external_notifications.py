@@ -9,6 +9,11 @@ Apprise URLs (https://appriseit.com) stored in the synced settings
 (``externalNotificationTargets``); the whole pipeline is outbound-only and
 fire-and-forget — a notification failure must never affect the broadcast path.
 
+Each target can opt into presence gating via its ``awayOnly`` flag: an
+away-only target is held while a human looks present at any TwiCC client and
+sent only once they are away (see :mod:`twicc.presence` and ``_deferred_send``).
+Targets without the flag (the legacy default) always send.
+
 Design doc: docs/plans/2026-06-11-external-notifications-apprise-design.md
 """
 
@@ -16,6 +21,7 @@ import asyncio
 import logging
 import time
 
+from twicc import presence
 from twicc.agent.states import AgentInfo, AgentState
 from twicc.providers.helpers import get_provider_helpers
 from twicc.synced_settings import read_synced_settings
@@ -147,13 +153,59 @@ def _detect_and_send(
         project_parent_name,
         _build_session_url(settings, info.project_id, info.session_id),
     )
+    # Presence snapshot for this broadcast: whether a human is at any TwiCC
+    # client right now, and the activity timestamp to compare against when a
+    # deferred send later checks whether the user came back.
+    present = presence.is_user_present()
+    baseline = presence.latest_activity()
     for title, opt_in_key in events:
-        urls = [target["url"] for target in targets if target.get(opt_in_key, True)]
-        if not urls:
+        eligible = [target for target in targets if target.get(opt_in_key, True)]
+        if not eligible:
             continue
-        task = asyncio.create_task(_send(urls, title, body))
-        _send_tasks.add(task)
-        task.add_done_callback(_send_tasks.discard)
+        # ``awayOnly`` (absent / false = always send — the default for targets
+        # configured before this flag existed; true = only when the user is
+        # away) splits the eligible targets into two delivery paths.
+        always_urls = [t["url"] for t in eligible if not t.get("awayOnly")]
+        away_urls = [t["url"] for t in eligible if t.get("awayOnly")]
+        if always_urls:
+            _spawn(_send(always_urls, title, body))
+        if away_urls:
+            if present:
+                # Defer: hold while the user looks present; the deferred task
+                # cancels itself if they show fresh activity before the grace
+                # elapses (they will have seen the event in-app).
+                _spawn(_deferred_send(away_urls, title, body, baseline))
+            else:
+                _spawn(_send(away_urls, title, body))
+
+
+def _spawn(coro) -> None:
+    """Fire-and-forget a send coroutine, holding a strong task ref until it completes."""
+    task = asyncio.create_task(coro)
+    _send_tasks.add(task)
+    task.add_done_callback(_send_tasks.discard)
+
+
+async def _deferred_send(urls: list[str], title: str, body: str, baseline: float) -> None:
+    """Hold an away-only notification while the user looks present, then send.
+
+    The user was present when the event fired. We wait until their presence
+    would expire (``present_until``); if any fresh activity arrives in the
+    meantime (``latest_activity`` advances past the ``baseline`` captured at
+    event time), the user came back and will have seen the event in-app, so the
+    notification is cancelled. Otherwise the user never returned and it is sent
+    once the grace window elapses. Never raises.
+    """
+    try:
+        deadline = presence.present_until()
+        if deadline is not None:
+            await asyncio.sleep(max(0.0, deadline - time.monotonic()))
+            if presence.latest_activity() > baseline:
+                return  # user came back before the grace elapsed → cancel
+    except Exception:
+        logger.exception("Deferred external notification failed (title=%r)", title)
+        return
+    await _send(urls, title, body)
 
 
 async def _send(urls: list[str], title: str, body: str) -> None:

@@ -61,7 +61,7 @@ function effectiveTargetUrl(index) {
 
 function addExternalTarget() {
     // Local draft row only — persisted once it gets a non-empty URL.
-    externalRows.value.push({ id: generateUUID(), name: '', url: '', enabled: true, tested: null, notifyUserTurn: true, notifyPendingRequest: true })
+    externalRows.value.push({ id: generateUUID(), name: '', url: '', enabled: true, tested: null, notifyUserTurn: true, notifyPendingRequest: true, awayOnly: true })
 }
 
 function removeExternalTarget(index) {
@@ -371,6 +371,11 @@ defineExpose({ sync })
                             :checked="target.notifyPendingRequest !== false"
                             @change="onExternalTargetEventChange(index, 'notifyPendingRequest', $event)"
                         >Needs attention</wa-switch>
+                        <wa-switch
+                            size="small"
+                            :checked="target.awayOnly === true"
+                            @change="onExternalTargetEventChange(index, 'awayOnly', $event)"
+                        >Only when you're away</wa-switch>
                     </div>
                     <div v-if="targetTestErrors[index]" class="apprise-test-error">{{ targetTestErrors[index] }}</div>
                 </div>
@@ -382,6 +387,11 @@ defineExpose({ sync })
                 Notifications are only sent to targets whose last test succeeded
                 (green check). A green check means the service accepted the test
                 message — confirm it actually arrived on your device.
+            </p>
+            <p v-if="externalRows.length" class="setting-group-hint">
+                "Only when you're away" keeps a target silent while you're active
+                in TwiCC on any device (desktop or phone), so it won't notify
+                while you're at your computer — turn it off to always notify.
             </p>
         </div>
     </section>
