@@ -6,6 +6,7 @@
 
 import { computed, ref, watch } from 'vue'
 import { useSettingsStore } from '../../stores/settings'
+import { generateUUID } from '../../utils/crypto'
 import { playNotificationSound, getAvailableSoundOptions, NOTIFICATION_SOUNDS } from '../../utils/notificationSounds'
 
 const store = useSettingsStore()
@@ -20,8 +21,10 @@ const pendingRequestSound = computed(() => store.getNotifPendingRequestSound)
 const pendingRequestBrowser = computed(() => store.isNotifPendingRequestBrowser)
 
 // External notification targets (synced settings, consumed by the backend).
-// The UI edits a local working list (``externalRows``) so that rows with an
-// empty URL (just added, or cleared) exist on screen without ever being
+// Each target carries a required ``id`` (a stable handle for a future
+// per-project scoping; generated at row creation) and an optional human
+// ``name``. The UI edits a local working list (``externalRows``) so that rows
+// with an empty URL (just added, or cleared) exist on screen without ever being
 // persisted: ``persistExternalRows()`` writes only the non-empty ones to the
 // store. Remote updates (another device) reset the working list.
 const externalRows = ref((store.getExternalNotificationTargets || []).map(t => ({ ...t })))
@@ -58,7 +61,7 @@ function effectiveTargetUrl(index) {
 
 function addExternalTarget() {
     // Local draft row only — persisted once it gets a non-empty URL.
-    externalRows.value.push({ url: '', enabled: true, tested: null, notifyUserTurn: true, notifyPendingRequest: true })
+    externalRows.value.push({ id: generateUUID(), name: '', url: '', enabled: true, tested: null, notifyUserTurn: true, notifyPendingRequest: true })
 }
 
 function removeExternalTarget(index) {
@@ -83,6 +86,11 @@ function onExternalTargetUrlChange(index, event) {
     persistExternalRows()
     delete liveUrls.value[index]
     delete targetTestErrors.value[index]
+}
+
+function onExternalTargetNameChange(index, event) {
+    externalRows.value[index] = { ...externalRows.value[index], name: event.target.value.trim() }
+    persistExternalRows()
 }
 
 function onExternalTargetEnabledChange(index, event) {
@@ -303,26 +311,13 @@ defineExpose({ sync })
                 <div v-for="(target, index) in externalRows" :key="index" class="apprise-target">
                     <div class="apprise-target-row">
                         <wa-input
-                            class="apprise-url-input"
+                            class="apprise-name-input"
                             size="small"
-                            placeholder="ntfy://ntfy.sh/your-secret-topic"
-                            :value.prop="target.url"
-                            @input="onExternalTargetUrlInput(index, $event)"
-                            @change="onExternalTargetUrlChange(index, $event)"
+                            placeholder="Name (optional)"
+                            :value.prop="target.name"
+                            @change="onExternalTargetNameChange(index, $event)"
                         ></wa-input>
-                        <div class="apprise-target-controls">
-                            <wa-button
-                                size="small"
-                                appearance="outlined"
-                                :class="{ 'apprise-test-ok': target.tested === true, 'apprise-test-fail': target.tested === false }"
-                                :disabled="!effectiveTargetUrl(index) || !!testingTargets[index]"
-                                title="Send a test notification to this target"
-                                @click="testExternalTarget(index)"
-                            >
-                                <wa-spinner v-if="testingTargets[index]" slot="start"></wa-spinner>
-                                <wa-icon v-else slot="start" :name="externalTestIcon(target)"></wa-icon>
-                                Test
-                            </wa-button>
+                        <div>
                             <wa-switch
                                 class="apprise-enabled-switch"
                                 size="small"
@@ -341,6 +336,29 @@ defineExpose({ sync })
                                 <wa-icon name="trash"></wa-icon>
                             </wa-button>
                         </div>
+                    </div>
+                    <div class="apprise-target-row">
+                        <wa-input
+                            class="apprise-url-input"
+                            size="small"
+                            placeholder="ntfy://ntfy.sh/your-secret-topic"
+                            :value.prop="target.url"
+                            @input="onExternalTargetUrlInput(index, $event)"
+                            @change="onExternalTargetUrlChange(index, $event)"
+                        ></wa-input>
+                        <wa-button
+                            class="apprise-test-button"
+                            size="small"
+                            appearance="outlined"
+                            :class="{ 'apprise-test-ok': target.tested === true, 'apprise-test-fail': target.tested === false }"
+                            :disabled="!effectiveTargetUrl(index) || !!testingTargets[index]"
+                            title="Send a test notification to this target"
+                            @click="testExternalTarget(index)"
+                        >
+                            <wa-spinner v-if="testingTargets[index]" slot="start"></wa-spinner>
+                            <wa-icon v-else slot="start" :name="externalTestIcon(target)"></wa-icon>
+                            Test
+                        </wa-button>
                     </div>
                     <div class="apprise-target-events">
                         <wa-switch
@@ -420,37 +438,32 @@ defineExpose({ sync })
     gap: var(--wa-space-xs);
 }
 
-/* space-between centers the enabled switch in the space left between the
-   (input + Test) group and the remove button. */
+/* Two rows per target: (name + enable switch + remove) and (URL + Test). The
+   leading input takes the free space so the trailing controls sit at the end. */
 .apprise-target-row {
     display: flex;
     align-items: center;
-    justify-content: space-between;
     flex-wrap: wrap;
-    column-gap: var(--wa-space-m);
+    column-gap: var(--wa-space-s);
     row-gap: var(--wa-space-xs);
+    & > :last-child {
+        margin-left: auto;
+        width: 5rem;
+    }
+}
+
+.apprise-name-input,
+.apprise-url-input {
+    flex: 1;
+    min-width: 10rem;
 }
 
 .apprise-url-input {
-    flex: 1;
-    min-width: 8rem;
     font-family: var(--wa-font-family-code);
 }
 
 .apprise-remove-button::part(base) {
     xpadding-inline: var(--wa-space-2xs);
-}
-
-.apprise-target-controls {
-    display: flex;
-    align-items: center;
-    gap: var(--wa-space-2xs);
-    justify-content: space-between;
-    margin-left: auto;
-}
-
-.apprise-enabled-switch {
-    padding-left: 1em;
 }
 
 .apprise-test-ok wa-icon {

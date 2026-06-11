@@ -107,12 +107,21 @@ bootstrap + `synced_settings_updated` machinery:
 
 | Key | Type | Default | Purpose |
 |---|---|---|---|
-| `externalNotificationTargets` | list of objects | `[]` | Notification targets: `[{"url": "<apprise url>", "enabled": true, "tested": null, "notifyUserTurn": true, "notifyPendingRequest": true}, ...]`. Disabled targets are kept but skipped at send time |
+| `externalNotificationTargets` | list of objects | `[]` | Notification targets: `[{"id": "<generated>", "name": "<optional label>", "url": "<apprise url>", "enabled": true, "tested": null, "notifyUserTurn": true, "notifyPendingRequest": true}, ...]`. Disabled targets are kept but skipped at send time |
 | `publicBaseUrl` | string | `""` | Base URL where the user reaches TwiCC (e.g. tunnel hostname). Used only to build the deep link; empty = no link line in the body |
 
 A structured list (not a delimited string) so per-target state lives as real fields,
-and any future per-target field (label, …) is an additive change with no format
-migration.
+and any future per-target field is an additive change with no format migration.
+
+Each target carries a **required** stable `id` and an optional human `name`. The
+backend send path ignores both — they exist for the UI (a `name` reads better than
+a masked URL) and as the fixed handle a future per-project scoping would reference
+instead of list position (see §8). The `id` is generated at row creation via the
+`generateUUID()` helper (`frontend/src/utils/crypto.js`), which falls back to
+`crypto.getRandomValues()` in non-secure contexts (plain-HTTP LAN/tunnel access) —
+never `crypto.randomUUID()` directly. The frontend validator requires `id` to be a
+string, so an entry without one is rejected: with no back-compat shim, any
+pre-`id` settings entry is simply dropped at load and re-created.
 
 Event selection is **per target**: `notifyUserTurn` / `notifyPendingRequest` pick which
 of the two events the target receives (absent = opted in, so hand-written or older
@@ -221,7 +230,21 @@ input `change` event (blur/Enter), not on every keystroke.
 
 ## 8. Future extensions (explicitly not v1)
 
-- Per-target labels: additive fields on the target objects.
+- ~~Per-target labels~~: done — the optional `name` field (see §4.3).
 - Per-target last-delivery status display.
 - More events (session died on error, long-running session reminders).
-- Per-project / per-workspace filtering.
+- **Per-project filtering** (discussed, deferred until a real need appears). The
+  agreed direction, if built, is to keep a **single global pool** of targets (the
+  only place URLs — and their `tested` gate — are defined) and add a `scope` to each
+  target: `all` (default) / `only` these projects / `all except` these. Matching at
+  send time uses `info.project_id`, also accepting the project's `worktree_of` parent
+  so a target scoped on a main repo covers its worktrees (consistent with cost/activity
+  aggregation). This avoids a second config surface and the duplicated Test/tri-state
+  form a per-project "add target" UI would require. A read-only mirror inside the
+  project edit dialog (toggle each target on/off for *this* project, writing back to
+  the same `scope` lists) can be layered on later — two views, one source of truth.
+  The rejected alternative was project-owned targets (two classes of target with
+  divergent lifecycles, duplicated forms). Multi-project selection would reuse the
+  workspace-edit project picker (extract/share it). Workspace-level scoping is a
+  natural further step, not planned. The per-target `id` shipped now is the stable
+  handle this would reference.

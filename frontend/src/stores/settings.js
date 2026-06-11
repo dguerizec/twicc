@@ -120,8 +120,10 @@ const SETTINGS_VALIDATORS = {
     externalNotificationTargets: (v) =>
         Array.isArray(v) && v.every(item =>
             item && typeof item === 'object'
+            && typeof item.id === 'string'
             && typeof item.url === 'string'
             && typeof item.enabled === 'boolean'
+            && (item.name === undefined || typeof item.name === 'string')
             && (item.tested === null || item.tested === undefined || typeof item.tested === 'boolean')
             && (item.notifyUserTurn === undefined || typeof item.notifyUserTurn === 'boolean')
             && (item.notifyPendingRequest === undefined || typeof item.notifyPendingRequest === 'boolean')),
