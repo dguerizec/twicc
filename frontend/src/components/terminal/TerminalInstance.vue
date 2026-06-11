@@ -63,6 +63,7 @@ const terminalApi = {
     isConnected,
     isReady,
     started,
+    ptyExited,
     canScrollUp,
     canScrollDown,
     paneAlternate,

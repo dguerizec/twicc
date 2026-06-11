@@ -7,7 +7,7 @@
 // (capped height), minimized (collapsed bar), maximized (fills the session
 // area). A pulsing badge appears when the TUI is blocked on a prompt the
 // user must answer inside the terminal (the single PermissionRequest hook).
-import { ref, computed, watch, useId, provide, onBeforeUnmount } from 'vue'
+import { ref, computed, watch, watchEffect, useId, provide, onBeforeUnmount, markRaw } from 'vue'
 import { useDataStore } from '../../stores/data'
 import AppTooltip from '../ui/AppTooltip.vue'
 import CollapsedBar from './CollapsedBar.vue'
@@ -47,10 +47,11 @@ defineExpose({ minimize })
 
 // ── Process / terminal lifecycle ─────────────────────────────────────────────
 // The CLI is launched lazily at the first send: before that there is no tmux
-// session to attach to, so show a placeholder. Once a process has existed,
-// keep the terminal mounted forever — on death the attach client exits
-// (pty_exited) and the disconnect overlay shows over the last screen; the
-// next send relaunches the CLI and we auto-reconnect below.
+// session to attach to, so show a placeholder. Once a process exists, keep
+// the terminal mounted while it lives — and drop back to the placeholder
+// when the session is STOPPED (see the watchEffect below): the tmux session
+// is killed along with the CLI, so the "Terminal disconnected / Reconnect"
+// overlay would offer a reconnect to nothing.
 const processState = computed(() => store.getProcessState(props.sessionId))
 const hasProcess = computed(() => !!processState.value)
 const everHadProcess = ref(false)
@@ -59,8 +60,13 @@ watch(hasProcess, (v) => { if (v) everHadProcess.value = true }, { immediate: tr
 // Capture the embedded TerminalInstance's API (it registers itself through
 // the same provide/inject contract as the Terminal panel) so we can drive
 // reconnects when the CLI is relaunched.
+// markRaw is REQUIRED: storing the api object in a ref would wrap it in a
+// reactive proxy that auto-unwraps its nested refs — ``api.started.value``
+// would then read ``.value`` on a plain boolean and silently yield
+// undefined, breaking both watchers below. Reading the kept-intact refs
+// inside watch/watchEffect still tracks them.
 const termApi = ref(null)
-provide('registerTerminal', (_index, api) => { termApi.value = api })
+provide('registerTerminal', (_index, api) => { termApi.value = markRaw(api) })
 provide('unregisterTerminal', () => { termApi.value = null })
 
 // Auto-reconnect: when a process (re)appears while the terminal sits
@@ -84,6 +90,19 @@ watch(processState, (state, oldState) => {
     }
 })
 onBeforeUnmount(clearReconnectTimers)
+
+// Session stopped → back to the placeholder. Requires BOTH signals: the
+// process is gone AND the attach explicitly exited (pty_exited is never set
+// on network cuts, where the tmux may well be alive and the reconnect
+// overlay is the right UI). A watchEffect covers both event orders —
+// pty_exited can land before or after the process_state dead broadcast.
+watchEffect(() => {
+    if (!everHadProcess.value || hasProcess.value) return
+    const api = termApi.value
+    if (api && api.started.value && !api.isConnected.value && api.ptyExited.value) {
+        everHadProcess.value = false
+    }
+})
 
 // ── Pending-in-terminal badge ────────────────────────────────────────────────
 const hybridPending = computed(() =>
@@ -154,14 +173,13 @@ const badgeLabel = computed(() => {
             <AppTooltip :for="maximizeToggleId">{{ isMaximized ? 'Restore' : 'Maximize' }}</AppTooltip>
         </div>
 
-        <!-- Terminal area: placeholder until the first launch, then the live
-             TUI (kept mounted across deaths so the last screen stays visible
-             under the disconnect overlay). Hidden by CSS while minimized so
-             the xterm state survives. -->
+        <!-- Terminal area: placeholder until the CLI runs (and again after a
+             stop — the tmux is gone, nothing to reconnect to), then the live
+             TUI. Hidden by CSS while minimized so the xterm state survives. -->
         <div class="hybrid-terminal-body">
             <div v-if="!everHadProcess" class="hybrid-terminal-placeholder">
                 <wa-icon name="terminal"></wa-icon>
-                <span>The Claude CLI starts here when you send your first message.</span>
+                <span>The Claude CLI starts here when you send a message.</span>
             </div>
             <TerminalInstance
                 v-else
