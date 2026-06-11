@@ -438,7 +438,18 @@ PermissionRequest drop hook and the file-history capture both worked on
 
 ## 7. Noted for V2 (explicitly NOT in V1)
 
-1. **Live tool indicators ("Claude is editing…").** The SDK path shows synthetic
+1. ~~**Live tool indicators ("Claude is editing…").**~~ **CANCELLED for good
+   (user decision, 2026-06-12) — do not revisit.** The hook→drop-file channel
+   is too slow relative to fast tools, and in hybrid mode the user has the
+   terminal in front of them: if they want to watch tool activity live, the
+   TUI is the surface. A probe that day also invalidated the premise below:
+   the interactive CLI writes the assistant `tool_use` line to the transcript
+   WHILE the tool is still running (~3-4 s after the actual tool start,
+   irregular flush; the `tool_result` is flushed in ~200 ms), and the
+   frontend's generic running-spinner (a `tool_use` ingested without its
+   `tool_result`) already renders on hybrid sessions — so near-live
+   indicators exist via the JSONL alone, with no hook.
+   <br>Original note (historical): The SDK path shows synthetic
    assistant items for in-flight tools. Pure JSONL can't: tool activity appears
    only once written. The `PreToolUse`/`PostToolUse` hooks (available, verified)
    could feed live indicators. To think through later.
