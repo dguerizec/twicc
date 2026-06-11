@@ -46,6 +46,7 @@ from twicc.providers.helpers import (
     get_provider_helpers,
     get_provider_helpers_registry,
 )
+from twicc.external_notifications import notify_agent_event
 from twicc.synced_settings import _settings_lock, prepare_settings_for_client, read_synced_settings, write_synced_settings
 from twicc.workspaces import read_workspaces, write_workspaces
 from twicc.message_snippets import read_message_snippets_config, write_message_snippets_config
@@ -250,6 +251,11 @@ async def broadcast_process_state(info: AgentInfo) -> None:
         message["project_name"] = project_name
     if project_parent_name is not None:
         message["project_parent_name"] = project_parent_name
+
+    # External notifications (Apprise) mirror the browser notifications this
+    # broadcast drives in the frontend; the hook sits after the hidden-session
+    # early-return so hidden sessions never notify. Fire-and-forget inside.
+    notify_agent_event(info, session_title, project_name, project_parent_name)
 
     await channel_layer.group_send(
         "updates",

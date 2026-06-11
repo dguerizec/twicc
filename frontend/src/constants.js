@@ -206,4 +206,5 @@ export const SYNCED_SETTINGS_KEYS = new Set([
     'defaultWorktreeDirectory',
     'terminalUseTmux', 'terminalTmuxConfigPath',
     'waTheme', 'waBrand',
+    'externalNotificationTargets', 'publicBaseUrl',
 ])

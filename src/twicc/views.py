@@ -2882,6 +2882,34 @@ async def session_artifact(request, session_id, artifact_file_name):
     return FileResponse(fp, content_type=content_type, as_attachment=False)
 
 
+async def external_notifications_test(request):
+    """POST /api/external-notifications/test/ — send a test notification to Apprise URLs.
+
+    Body: ``{"urls": ["<apprise url>", ...]}`` — the URL(s) as currently present
+    in the settings form (not necessarily saved yet), so the user can verify a
+    target before saving. Each URL is tested individually; the response reports
+    per-URL results with privacy-masked URLs:
+    ``{"results": [{"url_masked": ..., "ok": bool, "error": str|null}, ...]}``.
+    """
+    if request.method != "POST":
+        return JsonResponse({"error": "Method not allowed"}, status=405)
+    try:
+        data = orjson.loads(request.body)
+    except orjson.JSONDecodeError:
+        return JsonResponse({"error": "Invalid JSON"}, status=400)
+    urls = data.get("urls")
+    if (
+        not isinstance(urls, list)
+        or not urls
+        or not all(isinstance(u, str) and u.strip() for u in urls)
+    ):
+        return JsonResponse({"error": "'urls' must be a non-empty list of non-empty strings"}, status=400)
+    from twicc.external_notifications import test_notification_urls
+
+    results = await test_notification_urls([u.strip() for u in urls])
+    return JsonResponse({"results": results})
+
+
 async def spa_index(request):
     """Catch-all for Vue Router - serves index.html."""
     index_path = settings.FRONTEND_DIST_DIR / "index.html"

@@ -59,6 +59,8 @@ export const SETTINGS_SCHEMA = {
     terminalTmuxConfigPath: null,
     waTheme: null,
     waBrand: null,
+    externalNotificationTargets: [],
+    publicBaseUrl: null,
     // --- Not persisted - runtime state ---
     _disabledProvidersPresent: false,
     _devMode: false,
@@ -115,6 +117,15 @@ const SETTINGS_VALIDATORS = {
     notifPendingRequestBrowser: (v) => typeof v === 'boolean',
     waTheme: (v) => Object.values(WA_THEME).includes(v),
     waBrand: (v) => Object.values(WA_BRAND).includes(v),
+    externalNotificationTargets: (v) =>
+        Array.isArray(v) && v.every(item =>
+            item && typeof item === 'object'
+            && typeof item.url === 'string'
+            && typeof item.enabled === 'boolean'
+            && (item.tested === null || item.tested === undefined || typeof item.tested === 'boolean')
+            && (item.notifyUserTurn === undefined || typeof item.notifyUserTurn === 'boolean')
+            && (item.notifyPendingRequest === undefined || typeof item.notifyPendingRequest === 'boolean')),
+    publicBaseUrl: (v) => typeof v === 'string',
 }
 
 /**
@@ -277,6 +288,8 @@ export const useSettingsStore = defineStore('settings', {
         isNotifPendingRequestBrowser: (state) => state.notifPendingRequestBrowser,
         getWaTheme: (state) => state.waTheme,
         getWaBrand: (state) => state.waBrand,
+        getExternalNotificationTargets: (state) => state.externalNotificationTargets,
+        getPublicBaseUrl: (state) => state.publicBaseUrl,
         /**
          * Whether the ``disabledProviders`` key is physically present in settings.json.
          * False until the backend writes it (e.g. after the initial provider-activation dialog).
@@ -673,6 +686,26 @@ export const useSettingsStore = defineStore('settings', {
         },
 
         /**
+         * Replace the external notification targets list.
+         * @param {Array<{url: string, enabled: boolean, tested: boolean|null}>} targets
+         */
+        setExternalNotificationTargets(targets) {
+            if (SETTINGS_VALIDATORS.externalNotificationTargets(targets)) {
+                this.externalNotificationTargets = targets
+            }
+        },
+
+        /**
+         * Set the public base URL used for deep links in external notifications.
+         * @param {string} url
+         */
+        setPublicBaseUrl(url) {
+            if (SETTINGS_VALIDATORS.publicBaseUrl(url)) {
+                this.publicBaseUrl = url.trim().replace(/\/+$/, '')
+            }
+        },
+
+        /**
          * Apply synced settings received from the backend.
          * Merges with schema: validates each key, ignores unknown keys,
          * keeps current value if validation fails.
@@ -875,6 +908,8 @@ export function initSettings() {
             notifPendingRequestBrowser: store.notifPendingRequestBrowser,
             waTheme: store.waTheme,
             waBrand: store.waBrand,
+            externalNotificationTargets: store.externalNotificationTargets,
+            publicBaseUrl: store.publicBaseUrl,
         }
         for (const provider of getRegisteredProviders()) {
             Object.assign(dict, getProviderHelpers(provider).getSyncedSettings())

@@ -21,6 +21,7 @@ urlpatterns = [
     path("api/sessions/<str:session_id>/", views.session_by_id),
     path("api/search/", views.search_sessions),
     path("api/usage-history/", views.usage_history),
+    path("api/external-notifications/test/", views.external_notifications_test),
     # Standalone filesystem endpoints (for directory picker, no project required)
     path("api/directory-tree/", views.standalone_directory_tree),
     path("api/file-search/", views.standalone_file_search),

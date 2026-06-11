@@ -65,6 +65,17 @@ _GENERIC_SYNCED_SETTINGS_DEFAULTS: dict = {
     # long as the provider itself is enabled. Empty = every enabled provider
     # is fair game. See `twicc.providers.state.get_orchestration_providers`.
     "orchestrationDisabledProviders": [],
+    # External notifications (Apprise) — see twicc.external_notifications.
+    # Targets are objects: {"url": "<apprise url>", "enabled": bool,
+    # "tested": bool|None, "notifyUserTurn": bool, "notifyPendingRequest": bool}
+    # ("tested" reflects the last per-target test from the settings UI,
+    # null/absent = never tested; the two notify* flags pick which events the
+    # target receives, absent = opted in).
+    "externalNotificationTargets": [],
+    # Public base URL where the user reaches TwiCC (e.g. tunnel hostname),
+    # used to append a session deep link to external notifications.
+    # Empty = no link line.
+    "publicBaseUrl": "",
 }
 
 # Note: `disabledProviders` (list[str]) is intentionally NOT listed here.
@@ -107,9 +118,14 @@ _settings_lock = threading.Lock()
 # Cross-provider legacy keys to drop unconditionally on read (no longer used).
 # Provider-specific obsolete keys are contributed via
 # ``BaseProviderHelpers.OBSOLETE_SYNCED_SETTINGS_KEYS`` and merged in at
-# migration time. Empty by default — placeholder for future cross-provider
-# drops.
-_GENERIC_OBSOLETE_SYNCED_SETTINGS_KEYS: tuple[str, ...] = ()
+# migration time.
+_GENERIC_OBSOLETE_SYNCED_SETTINGS_KEYS: tuple[str, ...] = (
+    # Short-lived global toggles for external notifications, replaced by
+    # per-target ``notifyUserTurn``/``notifyPendingRequest`` flags before any
+    # release shipped them.
+    "externalNotifyUserTurn",
+    "externalNotifyPendingRequest",
+)
 
 
 # Cross-provider legacy → current key renames. Provider-specific renames are

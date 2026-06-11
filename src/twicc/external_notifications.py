@@ -1,0 +1,209 @@
+"""
+Send notifications to external services (via Apprise) on agent events.
+
+Mirrors the browser notifications fired by the frontend
+(``notifyProcessStateChange()`` in ``frontend/src/composables/useWebSocket.js``):
+"agent finished working" (transition to USER_TURN) and "agent needs your
+attention" (a new pending request appeared). Targets are user-configured
+Apprise URLs (https://appriseit.com) stored in the synced settings
+(``externalNotificationTargets``); the whole pipeline is outbound-only and
+fire-and-forget — a notification failure must never affect the broadcast path.
+
+Design doc: docs/plans/2026-06-11-external-notifications-apprise-design.md
+"""
+
+import asyncio
+import logging
+import time
+
+from twicc.agent.states import AgentInfo, AgentState
+from twicc.providers.helpers import get_provider_helpers
+from twicc.synced_settings import read_synced_settings
+
+logger = logging.getLogger(__name__)
+
+# Last *seen broadcast* per session: (state, pending_requests count).
+# Broadcasts fire without a state transition too (e.g. a pending request is
+# added or resolved while the state stays ASSISTANT_TURN), so event detection
+# must compare against the previous broadcast — the same approach as the
+# frontend's ``previousState`` store — rather than ``AgentInfo.previous_state``,
+# which only tracks actual state-machine transitions.
+_last_seen: dict[str, tuple[AgentState, int]] = {}
+
+_TEST_TITLE = "TwiCC test notification"
+
+# Strong references to in-flight send tasks: asyncio only keeps weak refs to
+# tasks, so a fire-and-forget task could be garbage-collected mid-send.
+_send_tasks: set[asyncio.Task] = set()
+
+
+def _truncate(text: str | None, max_length: int, fallback: str = "Unknown") -> str:
+    """Mirror the frontend's ``truncateTitle()`` (frontend/src/utils/truncate.js)."""
+    if not text:
+        return fallback
+    return text[:max_length] + "…" if len(text) > max_length else text
+
+
+def _build_body(
+    session_title: str | None,
+    project_name: str | None,
+    project_parent_name: str | None,
+    session_url: str | None,
+) -> str:
+    """Mirror the frontend's ``buildNotificationBody()``, plus an optional deep link."""
+    if project_parent_name:
+        project = f"{_truncate(project_parent_name, 40)} › {_truncate(project_name, 40)}"
+    else:
+        project = _truncate(project_name, 50)
+    body = f"Project: {project}\nSession: {_truncate(session_title, 50)}"
+    if session_url:
+        body += f"\n\n{session_url}"
+    return body
+
+
+def _build_session_url(settings: dict, project_id: str, session_id: str) -> str | None:
+    base = (settings.get("publicBaseUrl") or "").strip().rstrip("/")
+    if not base:
+        return None
+    return f"{base}/project/{project_id}/session/{session_id}"
+
+
+def notify_agent_event(
+    info: AgentInfo,
+    session_title: str | None,
+    project_name: str | None,
+    project_parent_name: str | None,
+) -> None:
+    """Detect notification-worthy events on a process-state broadcast and fire sends.
+
+    Called from ``broadcast_process_state()`` (after its hidden-session
+    early-return, so hidden sessions never reach this point). Synchronous and
+    cheap on the no-event path; actual sends run in a fire-and-forget task.
+    Never raises — a notification failure (including malformed hand-edited
+    settings) must not affect the broadcast path.
+
+    The display names are passed down from the broadcast (which already
+    resolved them) instead of being re-queried here.
+    """
+    try:
+        _detect_and_send(info, session_title, project_name, project_parent_name)
+    except Exception:
+        logger.exception("External notification dispatch failed for session %s", info.session_id)
+
+
+def _detect_and_send(
+    info: AgentInfo,
+    session_title: str | None,
+    project_name: str | None,
+    project_parent_name: str | None,
+) -> None:
+    previous = _last_seen.get(info.session_id)
+    pending_count = len(info.pending_requests)
+    # Keep the baseline current even when no target is configured, so enabling
+    # targets later starts from fresh state instead of replaying old events.
+    if info.state == AgentState.DEAD:
+        _last_seen.pop(info.session_id, None)
+    else:
+        _last_seen[info.session_id] = (info.state, pending_count)
+
+    # Sync call on the async broadcast path: fine in practice — the settings
+    # cache is warmed long before any agent broadcast (bootstrap / WS connect
+    # both read it), so this never does file I/O here.
+    settings = read_synced_settings()
+    # Only enabled targets whose last test succeeded receive real
+    # notifications — an untested or failing URL is never sent to.
+    targets = [
+        target
+        for target in settings.get("externalNotificationTargets") or []
+        if isinstance(target, dict) and target.get("enabled") and target.get("url") and target.get("tested") is True
+    ]
+    if not targets:
+        return
+
+    label = get_provider_helpers(info.provider).LABEL or str(info.provider)
+    # (title, per-target opt-in key) — each target chooses its events via the
+    # ``notifyUserTurn`` / ``notifyPendingRequest`` flags (absent = opted in).
+    events: list[tuple[str, str]] = []
+
+    # --- Transition to USER_TURN: "<Provider> finished working" ---
+    if info.state == AgentState.USER_TURN and (previous is None or previous[0] != AgentState.USER_TURN):
+        events.append((f"{label} finished working", "notifyUserTurn"))
+
+    # --- Pending request count grew: "<Provider> needs your attention" ---
+    previous_pending_count = previous[1] if previous else 0
+    if pending_count > previous_pending_count:
+        latest = info.pending_requests[-1]
+        if latest.request_type == "ask_user_question":
+            events.append((f"{label} has a question for you", "notifyPendingRequest"))
+        else:
+            events.append((f"{label} needs your approval", "notifyPendingRequest"))
+
+    if not events:
+        return
+
+    body = _build_body(
+        session_title,
+        project_name,
+        project_parent_name,
+        _build_session_url(settings, info.project_id, info.session_id),
+    )
+    for title, opt_in_key in events:
+        urls = [target["url"] for target in targets if target.get(opt_in_key, True)]
+        if not urls:
+            continue
+        task = asyncio.create_task(_send(urls, title, body))
+        _send_tasks.add(task)
+        task.add_done_callback(_send_tasks.discard)
+
+
+async def _send(urls: list[str], title: str, body: str) -> None:
+    """Send one notification to every URL; failures are logged, never raised."""
+    try:
+        import apprise  # Lazy: keep the (large) plugin registry off the startup path.
+
+        apobj = apprise.Apprise()
+        for url in urls:
+            if not apobj.add(url):
+                logger.warning("External notification: invalid Apprise URL skipped")
+        if not len(apobj):
+            return
+        ok = await apobj.async_notify(title=title, body=body)
+        if not ok:
+            logger.warning("External notification failed for at least one target (title=%r)", title)
+    except Exception:
+        logger.exception("External notification send failed (title=%r)", title)
+
+
+async def test_notification_urls(urls: list[str]) -> list[dict]:
+    """Send a test notification to each URL individually and report per-URL results.
+
+    Backs the ``POST /api/external-notifications/test/`` endpoint. One Apprise
+    object per URL so each line gets its own verdict. ``url_masked`` is
+    Apprise's privacy-masked rendering, so secrets don't round-trip in clear.
+    """
+    import apprise
+
+    # Shape the test like a real TwiCC notification (same body format,
+    # including the deep link when a public base URL is configured).
+    settings = read_synced_settings()
+    base = (settings.get("publicBaseUrl") or "").strip().rstrip("/")
+    body = _build_body(
+        f"Test sent at {time.strftime('%Y-%m-%d %H:%M:%S')}",
+        "TwiCC",
+        None,
+        base or None,
+    )
+    results: list[dict] = []
+    for url in urls:
+        apobj = apprise.Apprise()
+        if not apobj.add(url):
+            results.append({"url_masked": None, "ok": False, "error": "Invalid Apprise URL"})
+            continue
+        masked = next(iter(apobj)).url(privacy=True)
+        try:
+            ok = await apobj.async_notify(title=_TEST_TITLE, body=body)
+            error = None if ok else "The service rejected the notification"
+        except Exception as e:
+            ok, error = False, str(e)
+        results.append({"url_masked": masked, "ok": bool(ok), "error": error})
+    return results
