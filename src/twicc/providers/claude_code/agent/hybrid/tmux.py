@@ -104,13 +104,24 @@ def pane_status(session_id: str) -> tuple[int | None, bool]:
     return int(parts[0]), parts[1] == "1"
 
 
+def _pane_target(session_id: str) -> str:
+    """Exact-match target-PANE for the session's active pane.
+
+    Pane-target commands (``paste-buffer``, ``send-keys``, ``capture-pane``)
+    reject a bare ``=name`` ("can't find pane") — the exact-session form for
+    a pane is ``=name:`` (trailing colon = active window/pane). Verified
+    empirically; session-target commands keep the bare ``=name`` form.
+    """
+    return "=" + hybrid_tmux_session_name(session_id) + ":"
+
+
 def capture_pane(session_id: str) -> str | None:
     """Return the visible pane content, or ``None`` if the session is gone.
 
     Used to detect TUI dialogs that must clear before a paste (the trust
     dialog swallows pasted text entirely — verified empirically).
     """
-    result = _run(["capture-pane", "-p", "-t", "=" + hybrid_tmux_session_name(session_id)])
+    result = _run(["capture-pane", "-p", "-t", _pane_target(session_id)])
     if result.returncode != 0:
         return None
     return result.stdout.decode(errors="replace")
@@ -122,16 +133,16 @@ def paste_text(session_id: str, text: str, *, submit: bool = True) -> None:
     Verified: multiline pastes don't auto-submit, ``@`` mentions don't open
     the picker, pasted slash commands are interpreted on submit.
     """
-    name = "=" + hybrid_tmux_session_name(session_id)
+    target = _pane_target(session_id)
     buf = "twicc-hybrid"
     r = _run(["load-buffer", "-b", buf, "-"], input_bytes=text.encode())
     if r.returncode != 0:
         raise RuntimeError(f"tmux load-buffer failed: {r.stderr.decode(errors='replace')}")
-    r = _run(["paste-buffer", "-p", "-d", "-b", buf, "-t", name])
+    r = _run(["paste-buffer", "-p", "-d", "-b", buf, "-t", target])
     if r.returncode != 0:
         raise RuntimeError(f"tmux paste-buffer failed: {r.stderr.decode(errors='replace')}")
     if submit:
-        _run(["send-keys", "-t", name, "Enter"])
+        _run(["send-keys", "-t", target, "Enter"])
 
 
 def kill_session(session_id: str) -> None:
