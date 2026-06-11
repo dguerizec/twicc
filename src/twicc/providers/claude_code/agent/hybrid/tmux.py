@@ -87,8 +87,16 @@ def create_session(session_id: str, cwd: str, argv: list[str]) -> None:
     )
     if result.returncode != 0:
         raise RuntimeError(f"tmux new-session failed: {result.stderr.decode(errors='replace')}")
-    _run(["set-option", "-t", "=" + name, "remain-on-exit", "on"])
-    _run(["set-option", "-t", "=" + name, "mouse", "off"])
+    # NOTE: set-option's -t is a target-PANE (options exist at every level
+    # since tmux 3.x): a bare '=name' fails with "no such session" — and
+    # _run ignores return codes here, so the failure would be silent
+    # (it was, before the '=name:' form fixed it). Same form as paste/capture.
+    target = "=" + name + ":"
+    _run(["set-option", "-t", target, "remain-on-exit", "on"])
+    _run(["set-option", "-t", target, "mouse", "off"])
+    # The embedded composer terminal shows ONLY the claude TUI — the tmux
+    # status bar would waste a line and wrap noisily at narrow widths.
+    _run(["set-option", "-t", target, "status", "off"])
 
 
 def pane_status(session_id: str) -> tuple[int | None, bool]:

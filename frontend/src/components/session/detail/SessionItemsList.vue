@@ -20,6 +20,7 @@ import GroupToggle from './GroupToggle.vue'
 import { useCodeCommentsStore } from '../../../stores/codeComments'
 import MessageInput from '../../message/MessageInput.vue'
 import PendingRequestForm from '../../message/PendingRequestForm.vue'
+import HybridTerminalBlock from '../../message/HybridTerminalBlock.vue'
 import ProcessIndicator from '../../ui/ProcessIndicator.vue'
 import TextSelectionComment from './TextSelectionComment.vue'
 import { useTextSelectionComment } from '../../../composables/useTextSelectionComment'
@@ -118,11 +119,16 @@ const dragOverType = ref(null)  // null | 'files' | 'text'
 let dragCounter = 0  // Track enter/leave events for nested elements
 const messageInputRef = ref(null)
 const pendingFormRef = ref(null)
+const hybridTerminalRef = ref(null)
 
 // Session data
 const session = computed(() => store.getSession(props.sessionId))
 const project = computed(() => store.getProject(props.projectId))
 const providerLabel = computed(() => getProviderLabel(session.value?.provider))
+
+// Hybrid CLI mode: the embedded terminal block replaces the pending-request
+// widget and the composer is never sending-locked (steering is allowed).
+const isHybridSession = computed(() => session.value?.hybrid === true)
 
 // Whether the session is stale (JSONL files deleted, history preserved as read-only)
 const isStale = computed(() => session.value?.stale === true)
@@ -1515,24 +1521,36 @@ defineExpose({
                      while reducing either leaves the other as-is. On a subagent it stands
                      alone (no composer). -->
                 <PendingRequestForm
-                    v-if="hasPendingRequest"
+                    v-if="hasPendingRequest && !isHybridSession"
                     ref="pendingFormRef"
                     :session-id="sessionId"
                     :pending-request="pendingRequest"
                     :pending-count="pendingRequests.length"
                     @expand="messageInputRef?.collapse()"
                 />
+                <!-- Hybrid CLI sessions: the embedded terminal replaces the
+                     pending-request widget entirely (prompts are answered inside
+                     the TUI; a badge in the block header signals them). -->
+                <HybridTerminalBlock
+                    v-if="isHybridSession && !parentSessionId"
+                    ref="hybridTerminalRef"
+                    :session-id="sessionId"
+                    @expand="messageInputRef?.collapse()"
+                />
                 <!-- Message input (main sessions only). Always rendered so nothing the user
                      is preparing is lost when a request appears or resolves. While a request
                      is pending it is sending-locked: usable for preparing a message, but
                      sending is blocked until the request is answered. Opening it reduces the
-                     request (`@expand`); both can be reduced at once. -->
+                     request (`@expand`); both can be reduced at once.
+                     Hybrid sessions are NEVER sending-locked: a send is possible at any
+                     moment (it steers or queues in the TUI), including while a permission
+                     prompt is open in the terminal. -->
                 <MessageInput
                     v-if="!parentSessionId"
                     ref="messageInputRef"
                     :session-id="sessionId"
                     :project-id="projectId"
-                    :sending-locked="hasPendingRequest"
+                    :sending-locked="hasPendingRequest && !isHybridSession"
                     @needs-title="emit('needs-title')"
                     @expand="pendingFormRef?.minimize()"
                 />
@@ -1639,7 +1657,8 @@ defineExpose({
         --spacing: 0;
     }
 }
-.session-footer:has(.pending-request-form.maximized) {
+.session-footer:has(.pending-request-form.maximized),
+.session-footer:has(.hybrid-terminal-block.maximized) {
     position: static;
 }
 
