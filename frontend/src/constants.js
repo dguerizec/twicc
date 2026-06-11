@@ -93,6 +93,8 @@ export const DISPLAY_LEVEL = {
  * - kind: string identifier used as syntheticKind and data-synthetic-kind attribute
  */
 export const SYNTHETIC_ITEM = {
+    // Failed sends use baseLineNum - seq as their lineNum (e.g., -3000, -3001, ...)
+    FAILED_USER_MESSAGE: { baseLineNum: -3000, kind: 'failed-user-message' },
     OPTIMISTIC_USER_MESSAGE: { lineNum: -2000, kind: 'optimistic-user-message' },
     STARTING_ASSISTANT_MESSAGE: { lineNum: -1500, kind: 'starting-assistant-message' },
     // Streaming blocks use baseLineNum - blockIndex as their lineNum (e.g., -1000, -1001, ...)

@@ -1,6 +1,6 @@
 <script setup>
 import { computed, ref } from 'vue'
-import { PROVIDER } from '../../../constants'
+import { PROVIDER, SYNTHETIC_ITEM } from '../../../constants'
 import { useDataStore } from '../../../stores/data'
 import { useSettingsStore } from '../../../stores/settings'
 import JsonViewer from '../../json/JsonViewer.vue'
@@ -12,6 +12,7 @@ import CodexToolUse from './items/codex/ToolUse.vue'
 import CodexReasoning from './items/codex/Reasoning.vue'
 import CodexImageGeneration from './items/codex/ImageGeneration.vue'
 import UnknownEntry from './items/UnknownEntry.vue'
+import FailedSendBanner from './items/FailedSendBanner.vue'
 import MessageTimestamp from './items/MessageTimestamp.vue'
 import AppTooltip from '../../ui/AppTooltip.vue'
 import CodeCommentsIndicator from '../../ui/CodeCommentsIndicator.vue'
@@ -107,6 +108,10 @@ const showJson = ref(false)
 const entryType = computed(() => props.content?.type || 'unknown')
 
 const sessionProvider = computed(() => dataStore.getSession(props.sessionId)?.provider)
+
+// Failed-send bubble (messaging pattern): shows the failure banner under the
+// regular user-message rendering.
+const isFailedSend = computed(() => props.syntheticKind === SYNTHETIC_ITEM.FAILED_USER_MESSAGE.kind)
 
 // Timestamp (date/time) shown at the very bottom of the LAST item of each
 // conversation block (the one rendered with `.is-block-end`), so a multi-item
@@ -292,6 +297,15 @@ function toggleJsonView() {
                 :data="content"
                 :session-id="sessionId"
                 :detail-key="`line:${lineNum}`"
+            />
+
+            <!-- Failed-send banner (messaging pattern): reason + Retry /
+                 Edit / Delete under the bubble, provider-agnostic -->
+            <FailedSendBanner
+                v-if="isFailedSend"
+                :content="content"
+                :project-id="projectId"
+                :session-id="sessionId"
             />
 
             <!-- Per-block timestamp: very last, after the rendered markdown -->

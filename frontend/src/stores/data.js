@@ -90,6 +90,10 @@ const INFLIGHT_AUDIT_MIN_AGE_MS = 60 * 1000
 // Max metadata-only user_message lines whose content the audit fetches
 // before concluding (recent-most kept — see auditInflightSends).
 const INFLIGHT_AUDIT_FETCH_CAP = 300
+// Monotonic counter giving each failed-send bubble a unique, stable
+// synthetic lineNum (FAILED_USER_MESSAGE.baseLineNum - seq) for the
+// visual-item cache. Display order is by sentAt, not by lineNum.
+let failedSendSeq = 0
 
 function userMessageMatchesOptimistic(providerHelpers, optimistic, item) {
     if (!providerHelpers || !optimistic || item?.kind !== 'user_message') return false
@@ -474,11 +478,15 @@ export const useDataStore = defineStore('data', {
             // { sessionId: { syntheticKind, content, kind } }
             // Cleared when the real user_message arrives in addSessionItems.
             optimisticMessages: {},
-            // Per-session send-failure surface (composer callout): set when a
-            // send_message error frame matches an in-flight send, cleared on
-            // dismiss or on the next send. { code, message, text, medias,
-            // late, restored }
-            sendFailures: {},
+            // Failed sends, rendered in the conversation flow as red
+            // user-message bubbles with Retry/Edit/Delete actions (messaging
+            // pattern). Set when a send_message error frame matches an
+            // in-flight send or when the audit declares a snapshot lost.
+            // { sessionId: { requestId: { requestId, text, medias,
+            //   mediasDropped, code, message, sentAt, item } } }
+            // ``item`` is the materialized synthetic session item (built once,
+            // injected by recomputeVisualItems like the optimistic message).
+            failedSends: {},
 
             // Streaming blocks - live text/thinking deltas from the SDK stream.
             // { sessionId: { messageId, blocks: [{ blockIndex, blockType, text, stopped, uuid }] } }
@@ -960,9 +968,9 @@ export const useDataStore = defineStore('data', {
             return map ? map.size : 0
         },
 
-        // Pending send-failure surface for a session (composer callout)
-        getSendFailure: (state) => (sessionId) =>
-            state.localState.sendFailures[sessionId] || null,
+        // A failed send entry (red bubble in the conversation flow)
+        getFailedSend: (state) => (sessionId, requestId) =>
+            state.localState.failedSends[sessionId]?.[requestId] || null,
 
         // Whether any files are currently being processed (encoded/resized) for a session
         isProcessingAttachments: (state) => (sessionId) => {
@@ -2083,7 +2091,9 @@ export const useDataStore = defineStore('data', {
          */
         recomputeVisualItems(sessionId) {
             const items = this.sessionItems[sessionId] || []
-            if (!items.length && !this.localState.optimisticMessages[sessionId]) {
+            const failedSends = this.localState.failedSends[sessionId]
+            const hasFailedSends = !!failedSends && Object.keys(failedSends).length > 0
+            if (!items.length && !this.localState.optimisticMessages[sessionId] && !hasFailedSends) {
                 this.localState.sessionVisualItems[sessionId] = []
                 this.localState.visualItemCache[sessionId] = new Map()
                 return
@@ -2100,6 +2110,19 @@ export const useDataStore = defineStore('data', {
             const isAssistantTurn = processState?.state === PROCESS_STATE.ASSISTANT_TURN
 
             let allItems = items || []
+            // Append failed-send bubbles (messaging pattern: undeliverable
+            // messages stay in the flow, marked failed), oldest first,
+            // before the current optimistic message. Items materialize
+            // lazily: at boot, hydration may register entries before the
+            // session (hence its provider-shaped content) is known.
+            if (hasFailedSends) {
+                const failedItems = Object.values(failedSends)
+                    .sort((a, b) => a.sentAt - b.sentAt)
+                    .map(failedSend => failedSend.item
+                        || (failedSend.item = this._materializeFailedSendItem(failedSend)))
+                    .filter(Boolean)
+                allItems = [...allItems, ...failedItems]
+            }
             // Append optimistic message if one exists for this session
             const optimistic = this.localState.optimisticMessages[sessionId]
             if (optimistic) {
@@ -2289,7 +2312,9 @@ export const useDataStore = defineStore('data', {
                 : null
             for (let i = visualItems.length - 1; i >= 0; i--) {
                 const vi = visualItems[i]
-                if (vi.lineNum === SYNTHETIC_ITEM.OPTIMISTIC_USER_MESSAGE.lineNum && optimistic) {
+                if (vi.lineNum <= SYNTHETIC_ITEM.FAILED_USER_MESSAGE.baseLineNum) {
+                    vi.syntheticKind = SYNTHETIC_ITEM.FAILED_USER_MESSAGE.kind
+                } else if (vi.lineNum === SYNTHETIC_ITEM.OPTIMISTIC_USER_MESSAGE.lineNum && optimistic) {
                     vi.syntheticKind = optimistic.syntheticKind
                 } else if (vi.lineNum === SYNTHETIC_ITEM.STARTING_ASSISTANT_MESSAGE.lineNum && startingMessage) {
                     vi.syntheticKind = startingMessage.syntheticKind
@@ -2476,14 +2501,54 @@ export const useDataStore = defineStore('data', {
         },
 
         /**
+         * Shared post-send bookkeeping for the composer and the failed-bubble
+         * Retry: snapshot the outgoing send, show the optimistic bubble, and
+         * set the optimistic "starting" process state when no process runs.
+         * (During an assistant turn the message is queued backend-side and
+         * its user_message line only appears later — no bubble then.)
+         * @param {string} sessionId
+         * @param {string} projectId
+         * @param {string} requestId
+         * @param {Object} send - { text, medias, images, documents }:
+         *   medias in original draft format (for restore), images/documents
+         *   in SDK format (for the optimistic bubble)
+         */
+        registerOutgoingSend(sessionId, projectId, requestId, { text, medias, images, documents }) {
+            const state = this.processStates[sessionId]?.state
+            const optimisticShown = state !== PROCESS_STATE.ASSISTANT_TURN
+            const startingSet = optimisticShown && !state
+            this.registerInflightSend(requestId, {
+                sessionId,
+                text,
+                medias: medias || [],
+                optimisticShown,
+                startingSet,
+            })
+            if (optimisticShown) {
+                const attachments = (images?.length || documents?.length)
+                    ? { images, documents }
+                    : undefined
+                this.setOptimisticMessage(sessionId, text, attachments)
+                // The backend broadcasts STARTING before spawning the
+                // subprocess, but the SDK connect() blocks the event loop so
+                // the frame only lands seconds later — this gives immediate
+                // visual feedback.
+                if (startingSet) {
+                    this.setProcessState(sessionId, projectId, PROCESS_STATE.STARTING)
+                }
+            }
+        },
+
+        /**
          * Drop in-flight snapshots whose text matches a freshly arrived
          * user_message — the send demonstrably reached the agent.
          * @param {string} sessionId
          * @param {Array<Object>} items
          */
         resolveInflightSends(sessionId, items) {
-            const pendingFailure = this.localState.sendFailures[sessionId]
-            if ((!inflightSends.size && !pendingFailure) || !items?.length) return
+            const failed = this.localState.failedSends[sessionId]
+            const hasFailed = !!failed && Object.keys(failed).length > 0
+            if ((!inflightSends.size && !hasFailed) || !items?.length) return
             const providerHelpers = getProviderHelpers(this.getSession(sessionId)?.provider)
             if (!providerHelpers) return
             const texts = new Set()
@@ -2498,18 +2563,21 @@ export const useDataStore = defineStore('data', {
                     this._dropInflightSend(id)
                 }
             }
-            // A surfaced failure whose text finally arrived was delivered
-            // after all (late/audited failures are best-effort guesses) —
-            // self-heal by dropping the stale callout, unless the user
-            // already restored the text into the composer.
-            if (pendingFailure && !pendingFailure.restored && texts.has(pendingFailure.text.trim())) {
-                this.consumeSendFailure(sessionId)
+            // A failed bubble whose text finally arrived was delivered after
+            // all (audited failures are best-effort guesses) — self-heal by
+            // removing it from the flow.
+            if (hasFailed) {
+                for (const entry of Object.values(failed)) {
+                    if (texts.has(entry.text.trim())) {
+                        this.removeFailedSend(sessionId, entry.requestId)
+                    }
+                }
             }
         },
 
         /**
          * Consume the in-flight snapshot matching a send_message error frame
-         * and surface the failure on the session's composer.
+         * and turn it into a failed bubble in the conversation flow.
          * @param {string} requestId
          * @param {Object} info - { code, message } from the error frame
          * @returns {boolean} true when a snapshot was found and handled
@@ -2518,34 +2586,37 @@ export const useDataStore = defineStore('data', {
             const entry = inflightSends.get(requestId)
             if (!entry) return false
             inflightSends.delete(requestId)
-            this._applySendFailure(requestId, entry, info, { late: false })
+            this._applySendFailure(requestId, entry, info)
             return true
         },
 
         /**
          * Late-failure path: the agent died after accepting the send but
-         * possibly before processing it. Ambiguous, so the surfaced failure
-         * only offers a MANUAL restore (late: true → no auto-restore).
+         * possibly before processing it. Every unresolved snapshot of the
+         * session becomes a failed bubble.
          * @param {string} sessionId
          * @param {Object} info - { code, message }
          * @returns {boolean} true when an unresolved snapshot existed
          */
         failPendingSendsForSession(sessionId, info) {
+            let any = false
             for (const [id, entry] of inflightSends) {
                 if (entry.sessionId !== sessionId) continue
                 inflightSends.delete(id)
-                this._applySendFailure(id, entry, info, { late: true })
-                return true
+                this._applySendFailure(id, entry, info)
+                any = true
             }
-            return false
+            return any
         },
 
-        // Surfacing a failure removes the snapshot from the in-memory
-        // registry but KEEPS its IndexedDB copy: if the page reloads before
-        // the user restores or dismisses the callout, the audit re-surfaces
-        // it at the next boot instead of silently losing the text. The
-        // persisted copy is deleted on restore/dismiss (and on resolution).
-        _applySendFailure(requestId, entry, info, { late }) {
+        // Turn a failed in-flight send into a "failed message" bubble shown
+        // in situ in the conversation flow (messaging pattern), with
+        // Retry/Edit/Delete actions. The in-memory registry entry is
+        // consumed but the IndexedDB copy is UPDATED (not deleted) with the
+        // failure reason, so an unhandled bubble — including its precise
+        // reason — survives a page reload. The persisted copy is deleted on
+        // retry/edit/delete (and on resolution).
+        _applySendFailure(requestId, entry, info) {
             const { sessionId } = entry
             // Undo what the optimistic send did to the chat: the ghost user
             // message, and the optimistic "starting" process state (only if
@@ -2554,38 +2625,86 @@ export const useDataStore = defineStore('data', {
             if (entry.startingSet && this.processStates[sessionId]?.state === PROCESS_STATE.STARTING) {
                 delete this.processStates[sessionId]
             }
-            this.localState.sendFailures[sessionId] = {
+            const code = info.code || 'send_failed'
+            const message = info.message || 'The message could not be delivered.'
+            const failedAt = info.failedAt || Date.now()
+            const failedSend = {
                 requestId,
-                code: info.code || 'send_failed',
-                message: info.message || 'The message could not be delivered.',
+                sessionId,
                 text: entry.text,
                 medias: entry.medias || [],
                 mediasDropped: !!entry.mediasDropped,
-                late,
-                restored: false,
+                code,
+                message,
+                sentAt: entry.sentAt || failedAt,
             }
+            failedSend.item = this._materializeFailedSendItem(failedSend)
+            if (!this.localState.failedSends[sessionId]) {
+                this.localState.failedSends[sessionId] = {}
+            }
+            this.localState.failedSends[sessionId][requestId] = failedSend
+            saveInflightSend(requestId, { ...entry, failed: { code, message, failedAt } }).catch(err =>
+                console.warn('Failed to persist send failure:', err)
+            )
+            this.recomputeVisualItems(sessionId)
         },
 
-        markSendFailureRestored(sessionId) {
-            const failure = this.localState.sendFailures[sessionId]
-            if (!failure) return
-            failure.restored = true
-            if (failure.requestId) {
-                deleteInflightSend(failure.requestId).catch(err =>
-                    console.warn('Failed to delete in-flight send snapshot:', err)
-                )
+        /**
+         * Build the synthetic session item for a failed send. Same rendering
+         * path as the optimistic user message (provider-shaped parsed
+         * content); the failure banner reads the extra ``failedSend`` field.
+         *
+         * Returns ``null`` when the session (hence its provider) is not
+         * known yet — at boot, hydration can run before the sessions arrive.
+         * recomputeVisualItems retries lazily on every pass.
+         */
+        _materializeFailedSendItem(failedSend) {
+            const helpers = getProviderHelpers(this.getSession(failedSend.sessionId)?.provider)
+            if (!helpers) return null
+            const { baseLineNum, kind: syntheticKind } = SYNTHETIC_ITEM.FAILED_USER_MESSAGE
+            const item = {
+                line_num: baseLineNum - failedSendSeq++,
+                content: null,
+                kind: 'user_message',
+                syntheticKind,
+                display_level: DISPLAY_LEVEL.ALWAYS,
+                group_head: null,
+                group_tail: null,
             }
+            const { images, documents } = mediasToSdkFormat(failedSend.medias || [])
+            const attachments = (images.length || documents.length)
+                ? { images, documents }
+                : undefined
+            const parsed = helpers.buildOptimisticUserMessageContent(failedSend.text, attachments)
+            parsed.syntheticKind = syntheticKind
+            parsed.failedSend = {
+                requestId: failedSend.requestId,
+                code: failedSend.code,
+                message: failedSend.message,
+                mediasDropped: failedSend.mediasDropped,
+                sentAt: failedSend.sentAt,
+            }
+            setParsedContent(item, parsed)
+            return item
         },
 
-        consumeSendFailure(sessionId) {
-            const failure = this.localState.sendFailures[sessionId]
-            if (!failure) return
-            delete this.localState.sendFailures[sessionId]
-            if (failure.requestId) {
-                deleteInflightSend(failure.requestId).catch(err =>
-                    console.warn('Failed to delete in-flight send snapshot:', err)
-                )
+        /**
+         * Remove a failed bubble (after retry, edit, delete, or when its
+         * user_message line finally arrived) and its persisted snapshot.
+         * @param {string} sessionId
+         * @param {string} requestId
+         */
+        removeFailedSend(sessionId, requestId) {
+            const failed = this.localState.failedSends[sessionId]
+            if (!failed?.[requestId]) return
+            delete failed[requestId]
+            if (!Object.keys(failed).length) {
+                delete this.localState.failedSends[sessionId]
             }
+            deleteInflightSend(requestId).catch(err =>
+                console.warn('Failed to delete in-flight send snapshot:', err)
+            )
+            this.recomputeVisualItems(sessionId)
         },
 
         /**
@@ -2608,11 +2727,20 @@ export const useDataStore = defineStore('data', {
                     deleteInflightSend(requestId).catch(() => {})
                     continue
                 }
+                if (entry.failed) {
+                    // The failure (and its precise reason) was already known
+                    // before the reload — re-materialize the bubble directly,
+                    // no audit needed.
+                    if (!this.localState.failedSends[entry.sessionId]?.[requestId]) {
+                        this._applySendFailure(requestId, entry, entry.failed)
+                    }
+                    continue
+                }
                 if (!inflightSends.has(requestId)) inflightSends.set(requestId, entry)
             }
             // Sessions opened before hydration finished never saw these
             // snapshots — audit them now (the reverse order is covered by
-            // the audit call in loadSessionItems).
+            // the audit call in loadSessionData).
             this.auditAllLoadedInflightSends()
         },
 
@@ -2622,34 +2750,29 @@ export const useDataStore = defineStore('data', {
          * never reached us (WebSocket cut, tab frozen/killed).
          *
          * A snapshot whose text matches a user_message line was delivered:
-         * resolved silently. The rest is genuinely unconfirmed; the oldest
-         * one is surfaced as a cautious, manual-restore-only failure —
-         * unless the send is recent or the agent is mid-turn (a queued
-         * message only gets its user_message line when the turn picks it
-         * up). Wrong guesses self-heal: resolveInflightSends drops the
-         * callout if the matching line eventually arrives.
+         * resolved silently. The rest is genuinely unconfirmed and becomes
+         * failed bubbles in the conversation flow — unless the send is
+         * recent or the agent is mid-turn (a queued message only gets its
+         * user_message line when the turn picks it up). Wrong guesses
+         * self-heal: resolveInflightSends removes the bubble if the matching
+         * line eventually arrives.
          * @param {string} sessionId
          */
         async auditInflightSends(sessionId) {
             const items = this.sessionItems[sessionId]
             if (items?.length) this.resolveInflightSends(sessionId, items)
-            if (this.localState.sendFailures[sessionId]) return // one surfaced failure at a time
             // Without the full item list, absence of a match proves nothing.
             if (!this.localState.sessions[sessionId]?.itemsFetched) return
             const state = this.processStates[sessionId]?.state
             if (state === PROCESS_STATE.ASSISTANT_TURN || state === PROCESS_STATE.STARTING) return
             const now = Date.now()
-            let oldestId = null
-            let oldest = null
+            const candidates = []
             for (const [id, entry] of inflightSends) {
                 if (entry.sessionId !== sessionId) continue
                 if (now - entry.sentAt < INFLIGHT_AUDIT_MIN_AGE_MS) continue
-                if (!oldest || entry.sentAt < oldest.sentAt) {
-                    oldestId = id
-                    oldest = entry
-                }
+                candidates.push(id)
             }
-            if (!oldest) return
+            if (!candidates.length) return
 
             // Session opening only loads content for the TAIL of the items
             // (virtual scroller): older user_message lines are metadata-only
@@ -2669,21 +2792,21 @@ export const useDataStore = defineStore('data', {
                 const projectId = this.getSession(sessionId)?.project_id
                 if (!projectId) return
                 await this.loadSessionItemsRanges(projectId, sessionId, linesToFetch)
-                if (!inflightSends.has(oldestId)) return // resolved by a fetched line
-                if (this.localState.sendFailures[sessionId]) return // a concurrent audit surfaced first
                 // Some requested lines still have no content (fetch failed):
-                // delivery cannot be ruled out — keep the snapshot for a
+                // delivery cannot be ruled out — keep the snapshots for a
                 // later audit instead of crying wolf.
                 const itemsNow = this.sessionItems[sessionId] || []
                 if (linesToFetch.some(n => itemsNow[n - 1] && !hasContent(itemsNow[n - 1]))) return
             }
 
-            inflightSends.delete(oldestId)
-            this._applySendFailure(oldestId, oldest, {
-                code: 'delivery_unconfirmed',
-                message: 'This message could not be confirmed as delivered — '
-                    + 'it may never have reached the agent (interrupted connection?).',
-            }, { late: true })
+            const message = 'This message could not be confirmed as delivered — '
+                + 'it may never have reached the agent (interrupted connection?).'
+            for (const id of candidates) {
+                const entry = inflightSends.get(id)
+                if (!entry) continue // resolved by a fetched line or a concurrent audit
+                inflightSends.delete(id)
+                this._applySendFailure(id, entry, { code: 'delivery_unconfirmed', message })
+            }
         },
 
         /**
