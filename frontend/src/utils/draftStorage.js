@@ -2,11 +2,12 @@
 // IndexedDB wrapper for draft messages, draft sessions, and draft medias persistence
 
 const DB_NAME = 'twicc'
-const DB_VERSION = 5
+const DB_VERSION = 6
 const DRAFT_MESSAGES_STORE = 'draftMessages'
 const DRAFT_SESSIONS_STORE = 'draftSessions'
 const DRAFT_MEDIAS_STORE = 'draftMedias'
 const CODE_COMMENTS_STORE = 'codeComments'
+const INFLIGHT_SENDS_STORE = 'inflightSends'
 
 let dbPromise = null
 
@@ -38,13 +39,23 @@ export function getDb() {
                     // Index on sessionId to retrieve all medias for a session
                     store.createIndex('sessionId', 'sessionId', { unique: false })
                 }
-                // Recreate codeComments store with compound keyPath (v5)
-                if (db.objectStoreNames.contains(CODE_COMMENTS_STORE)) {
-                    db.deleteObjectStore(CODE_COMMENTS_STORE)
+                // Recreate codeComments store with compound keyPath (v5).
+                // Guarded on oldVersion: an unconditional delete+recreate
+                // would wipe existing comments on every later upgrade.
+                if (event.oldVersion < 5) {
+                    if (db.objectStoreNames.contains(CODE_COMMENTS_STORE)) {
+                        db.deleteObjectStore(CODE_COMMENTS_STORE)
+                    }
+                    db.createObjectStore(CODE_COMMENTS_STORE, {
+                        keyPath: ['projectId', 'sessionId', 'filePath', 'source', 'sourceRef', 'lineNumber']
+                    })
                 }
-                db.createObjectStore(CODE_COMMENTS_STORE, {
-                    keyPath: ['projectId', 'sessionId', 'filePath', 'source', 'sourceRef', 'lineNumber']
-                })
+                // Create inflightSends store if not exists (v6) — in-flight
+                // send snapshots for the send-failure recovery audit
+                // (see utils/inflightStorage.js)
+                if (!db.objectStoreNames.contains(INFLIGHT_SENDS_STORE)) {
+                    db.createObjectStore(INFLIGHT_SENDS_STORE)
+                }
             }
         })
     }
@@ -329,4 +340,4 @@ export async function getAllDraftMedias() {
     })
 }
 
-export { CODE_COMMENTS_STORE }
+export { CODE_COMMENTS_STORE, INFLIGHT_SENDS_STORE }

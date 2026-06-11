@@ -25,6 +25,7 @@ import {
     deleteAllDraftMediasForSession,
     getAllDraftMedias
 } from '../utils/draftStorage'
+import { saveInflightSend, deleteInflightSend, getAllInflightSends } from '../utils/inflightStorage'
 import {
     processFile,
     mediasToSdkFormat,
@@ -72,8 +73,20 @@ function clearBlockInactivityTimer(block) {
 // and non-reactive on purpose — only programmatic lookups, never rendered.
 // Snapshots hold the ORIGINAL draft-format medias (not the SDK conversion),
 // so restoring is conversion-free.
+//
+// The registry is mirrored to IndexedDB (utils/inflightStorage.js) and
+// hydrated at boot: an error frame only reaches the socket that sent the
+// message, so a snapshot whose error was lost with the WebSocket (frozen or
+// killed tab) must survive until the audit (auditInflightSends) can check it
+// against the session's persisted items — the JSONL user_message line being
+// the ground truth for "this send was delivered".
 const inflightSends = new Map()
-const INFLIGHT_SEND_TTL_MS = 5 * 60 * 1000
+// Retention for unresolved snapshots: long on purpose — a tab killed days
+// ago should still surface its lost message when the session is reopened.
+const INFLIGHT_SEND_TTL_MS = 7 * 24 * 60 * 60 * 1000
+// Minimum snapshot age before the audit may call it undelivered: younger
+// sends may simply not have their user_message line written yet.
+const INFLIGHT_AUDIT_MIN_AGE_MS = 60 * 1000
 
 function userMessageMatchesOptimistic(providerHelpers, optimistic, item) {
     if (!providerHelpers || !optimistic || item?.kind !== 'user_message') return false
@@ -1472,6 +1485,13 @@ export const useDataStore = defineStore('data', {
                 targetArray[index] = item
             }
 
+            // Resolve in-flight send snapshots whose user_message line just
+            // arrived (live deliveries come through here, not through
+            // clearOptimisticMessageIfMatched — without this, successful
+            // sends would keep their persisted snapshot until the audit
+            // mistakes them for lost ones).
+            this.resolveInflightSends(sessionId, newItems)
+
             // Clear optimistic message when a real user_message arrives from the backend
             if (this.localState.optimisticMessages[sessionId] &&
                 newItems.some(item => item.kind === 'user_message')) {
@@ -1896,6 +1916,9 @@ export const useDataStore = defineStore('data', {
                 this.clearOptimisticMessageIfMatched(sessionId, items)
                 this.localState.sessions[sessionId].itemsFetched = true
                 this.localState.sessions[sessionId].itemsLoadingError = false
+                // Session opening = audit point for sends whose outcome was
+                // lost with a previous WebSocket/tab (send-failure recovery).
+                this.auditInflightSends(sessionId)
             } catch (error) {
                 console.error('Failed to load session items:', error)
                 if (isInitialLoading) {
@@ -2430,9 +2453,23 @@ export const useDataStore = defineStore('data', {
         registerInflightSend(requestId, snapshot) {
             const now = Date.now()
             for (const [id, entry] of inflightSends) {
-                if (now - entry.sentAt > INFLIGHT_SEND_TTL_MS) inflightSends.delete(id)
+                if (now - entry.sentAt > INFLIGHT_SEND_TTL_MS) this._dropInflightSend(id)
             }
-            inflightSends.set(requestId, { ...snapshot, sentAt: now })
+            const entry = { ...snapshot, sentAt: now }
+            inflightSends.set(requestId, entry)
+            // Write-through to IndexedDB so the snapshot survives a killed
+            // or frozen tab (the audit rediscovers it at the next boot).
+            saveInflightSend(requestId, entry).catch(err =>
+                console.warn('Failed to persist in-flight send snapshot:', err)
+            )
+        },
+
+        /** Drop a snapshot from both the registry and IndexedDB. */
+        _dropInflightSend(requestId) {
+            inflightSends.delete(requestId)
+            deleteInflightSend(requestId).catch(err =>
+                console.warn('Failed to delete in-flight send snapshot:', err)
+            )
         },
 
         /**
@@ -2442,7 +2479,8 @@ export const useDataStore = defineStore('data', {
          * @param {Array<Object>} items
          */
         resolveInflightSends(sessionId, items) {
-            if (!inflightSends.size || !items?.length) return
+            const pendingFailure = this.localState.sendFailures[sessionId]
+            if ((!inflightSends.size && !pendingFailure) || !items?.length) return
             const providerHelpers = getProviderHelpers(this.getSession(sessionId)?.provider)
             if (!providerHelpers) return
             const texts = new Set()
@@ -2454,8 +2492,15 @@ export const useDataStore = defineStore('data', {
             if (!texts.size) return
             for (const [id, entry] of inflightSends) {
                 if (entry.sessionId === sessionId && texts.has(entry.text.trim())) {
-                    inflightSends.delete(id)
+                    this._dropInflightSend(id)
                 }
+            }
+            // A surfaced failure whose text finally arrived was delivered
+            // after all (late/audited failures are best-effort guesses) —
+            // self-heal by dropping the stale callout, unless the user
+            // already restored the text into the composer.
+            if (pendingFailure && !pendingFailure.restored && texts.has(pendingFailure.text.trim())) {
+                this.consumeSendFailure(sessionId)
             }
         },
 
@@ -2470,7 +2515,7 @@ export const useDataStore = defineStore('data', {
             const entry = inflightSends.get(requestId)
             if (!entry) return false
             inflightSends.delete(requestId)
-            this._applySendFailure(entry, info, { late: false })
+            this._applySendFailure(requestId, entry, info, { late: false })
             return true
         },
 
@@ -2486,13 +2531,18 @@ export const useDataStore = defineStore('data', {
             for (const [id, entry] of inflightSends) {
                 if (entry.sessionId !== sessionId) continue
                 inflightSends.delete(id)
-                this._applySendFailure(entry, info, { late: true })
+                this._applySendFailure(id, entry, info, { late: true })
                 return true
             }
             return false
         },
 
-        _applySendFailure(entry, info, { late }) {
+        // Surfacing a failure removes the snapshot from the in-memory
+        // registry but KEEPS its IndexedDB copy: if the page reloads before
+        // the user restores or dismisses the callout, the audit re-surfaces
+        // it at the next boot instead of silently losing the text. The
+        // persisted copy is deleted on restore/dismiss (and on resolution).
+        _applySendFailure(requestId, entry, info, { late }) {
             const { sessionId } = entry
             // Undo what the optimistic send did to the chat: the ghost user
             // message, and the optimistic "starting" process state (only if
@@ -2502,10 +2552,12 @@ export const useDataStore = defineStore('data', {
                 delete this.processStates[sessionId]
             }
             this.localState.sendFailures[sessionId] = {
+                requestId,
                 code: info.code || 'send_failed',
                 message: info.message || 'The message could not be delivered.',
                 text: entry.text,
                 medias: entry.medias || [],
+                mediasDropped: !!entry.mediasDropped,
                 late,
                 restored: false,
             }
@@ -2513,11 +2565,105 @@ export const useDataStore = defineStore('data', {
 
         markSendFailureRestored(sessionId) {
             const failure = this.localState.sendFailures[sessionId]
-            if (failure) failure.restored = true
+            if (!failure) return
+            failure.restored = true
+            if (failure.requestId) {
+                deleteInflightSend(failure.requestId).catch(err =>
+                    console.warn('Failed to delete in-flight send snapshot:', err)
+                )
+            }
         },
 
         consumeSendFailure(sessionId) {
+            const failure = this.localState.sendFailures[sessionId]
+            if (!failure) return
             delete this.localState.sendFailures[sessionId]
+            if (failure.requestId) {
+                deleteInflightSend(failure.requestId).catch(err =>
+                    console.warn('Failed to delete in-flight send snapshot:', err)
+                )
+            }
+        },
+
+        /**
+         * Load persisted in-flight send snapshots into the registry.
+         * Called at app startup: snapshots left behind by a killed or frozen
+         * tab (whose error frame was lost with the WebSocket) become visible
+         * to the audit again. Expired entries are swept on the way.
+         */
+        async hydrateInflightSends() {
+            let stored
+            try {
+                stored = await getAllInflightSends()
+            } catch (err) {
+                console.warn('Failed to load in-flight sends from IndexedDB:', err)
+                return
+            }
+            const now = Date.now()
+            for (const [requestId, entry] of Object.entries(stored)) {
+                if (!entry?.sessionId || !entry.text || now - (entry.sentAt || 0) > INFLIGHT_SEND_TTL_MS) {
+                    deleteInflightSend(requestId).catch(() => {})
+                    continue
+                }
+                if (!inflightSends.has(requestId)) inflightSends.set(requestId, entry)
+            }
+            // Sessions opened before hydration finished never saw these
+            // snapshots — audit them now (the reverse order is covered by
+            // the audit call in loadSessionItems).
+            this.auditAllLoadedInflightSends()
+        },
+
+        /**
+         * Audit the session's unresolved in-flight snapshots against its
+         * loaded items — the recovery path for failures whose error frame
+         * never reached us (WebSocket cut, tab frozen/killed).
+         *
+         * A snapshot whose text matches a user_message line was delivered:
+         * resolved silently. The rest is genuinely unconfirmed; the oldest
+         * one is surfaced as a cautious, manual-restore-only failure —
+         * unless the send is recent or the agent is mid-turn (a queued
+         * message only gets its user_message line when the turn picks it
+         * up). Wrong guesses self-heal: resolveInflightSends drops the
+         * callout if the matching line eventually arrives.
+         * @param {string} sessionId
+         */
+        auditInflightSends(sessionId) {
+            const items = this.sessionItems[sessionId]
+            if (items?.length) this.resolveInflightSends(sessionId, items)
+            if (this.localState.sendFailures[sessionId]) return // one surfaced failure at a time
+            // Without the full item list, absence of a match proves nothing.
+            if (!this.localState.sessions[sessionId]?.itemsFetched) return
+            const state = this.processStates[sessionId]?.state
+            if (state === PROCESS_STATE.ASSISTANT_TURN || state === PROCESS_STATE.STARTING) return
+            const now = Date.now()
+            let oldestId = null
+            let oldest = null
+            for (const [id, entry] of inflightSends) {
+                if (entry.sessionId !== sessionId) continue
+                if (now - entry.sentAt < INFLIGHT_AUDIT_MIN_AGE_MS) continue
+                if (!oldest || entry.sentAt < oldest.sentAt) {
+                    oldestId = id
+                    oldest = entry
+                }
+            }
+            if (!oldest) return
+            inflightSends.delete(oldestId)
+            this._applySendFailure(oldestId, oldest, {
+                code: 'delivery_unconfirmed',
+                message: 'This message could not be confirmed as delivered — '
+                    + 'it may never have reached the agent (interrupted connection?).',
+            }, { late: true })
+        },
+
+        /**
+         * Run the audit for every session that has unresolved snapshots.
+         * Sessions without loaded items are skipped by the per-session audit
+         * (nothing to match against) and will be checked when opened.
+         */
+        auditAllLoadedInflightSends() {
+            const sessionIds = new Set()
+            for (const entry of inflightSends.values()) sessionIds.add(entry.sessionId)
+            for (const sessionId of sessionIds) this.auditInflightSends(sessionId)
         },
 
         /**

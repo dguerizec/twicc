@@ -1710,6 +1710,9 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
             <div class="send-failure-body">
                 <div class="send-failure-text">
                     <span>{{ sendFailure.message }}</span>
+                    <span v-if="sendFailure.mediasDropped" class="send-failure-note">
+                        Its attachments were too large to preserve — only the text can be restored.
+                    </span>
                     <span v-if="sendFailure.restored" class="send-failure-note">
                         Your message was restored into the composer below — it has NOT been sent.
                     </span>

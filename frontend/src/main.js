@@ -200,6 +200,7 @@ if (!authStore.needsLogin) {
     dataStore.hydrateDraftSessions().then(() => {
         dataStore.hydrateDraftMessages()
         dataStore.hydrateAttachments()
+        dataStore.hydrateInflightSends()
     })
 
     // Wire the global auto-apply title watcher. Module-level watchEffect that

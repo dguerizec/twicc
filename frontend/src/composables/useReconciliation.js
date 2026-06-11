@@ -40,6 +40,11 @@ export function useReconciliation() {
         } finally {
             isReconciling = false
         }
+
+        // Items are now in sync — audit in-flight sends whose error frame
+        // may have been lost while the WebSocket was down (send-failure
+        // recovery: resolve the delivered ones, surface the lost ones).
+        store.auditAllLoadedInflightSends()
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
