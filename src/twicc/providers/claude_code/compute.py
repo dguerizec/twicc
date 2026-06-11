@@ -64,6 +64,13 @@ _SYSTEM_XML_PREFIXES = (
     '<twicc-',
 )
 
+# Built-in slash commands that are settings/control noise, not real user input:
+# their <command-name> user line is classified SYSTEM (hidden in normal view,
+# like /clear). /model, /effort and /fast change agent-settings (model / effort /
+# fast_mode); their <local-command-stdout> acks are dropped via
+# _LOCAL_COMMAND_FILTERED_PREFIXES. Custom and action commands stay USER_MESSAGE.
+_SYSTEM_SLASH_COMMANDS = frozenset({'/clear', '/model', '/effort', '/fast'})
+
 # Prefix for task notification XML (background agent results)
 _TASK_NOTIFICATION_TAG = '<task-notification>'
 _TASK_NOTIFICATION_CLOSE_TAG = '</task-notification>'
@@ -185,14 +192,30 @@ def _extract_task_notification_fields(xml_str: str) -> tuple[str | None, str | N
 # Regex to strip ANSI escape codes from local command output
 _ANSI_RE = re.compile(r'\x1b\[[0-9;]*m')
 
+# Regex to drop a decorative lead-in (status glyph, punctuation, whitespace, an
+# opening paren, …) before prefix-matching a local command ack. Some CLI acks
+# carry a leading glyph — e.g. "↯ Fast mode ON · $10/$50 per Mtok" or
+# "(Compacted …)" — that would otherwise defeat the settings-ack prefixes.
+_ACK_LEAD_RE = re.compile(r'^[^0-9a-z]+')
+
 # Local command output tags (stdout and stderr)
 _LOCAL_COMMAND_TAGS = (
     ('<local-command-stdout>', '</local-command-stdout>'),
     ('<local-command-stderr>', '</local-command-stderr>'),
 )
 
-# Prefixes/suffixes that indicate a local command output should be filtered out (not displayed)
-_LOCAL_COMMAND_FILTERED_PREFIXES = ('compacted',)
+# Prefixes/suffixes that indicate a local command output should be filtered out (not displayed).
+# The "set model to" / "set effort level to" / "fast mode " prefixes are the acks the CLI emits
+# when an agent setting (model / effort / fast_mode) is changed — pure settings noise, paired with
+# the matching slash command classified via _SYSTEM_SLASH_COMMANDS below. Filtered acks are not
+# rewritten into assistant messages; they stay <local-command-stdout>… and fall under SYSTEM.
+_LOCAL_COMMAND_FILTERED_PREFIXES = (
+    'compacted',
+    'set model to',
+    'set effort level to',
+    'fast mode ',
+    'session renamed to',
+)
 _LOCAL_COMMAND_FILTERED_SUFFIXES = ('dismissed', 'cancelled', 'no content')
 
 
@@ -984,8 +1007,11 @@ class ClaudeCodeSessionCompute(BaseSessionCompute):
         if not text:
             return None
         text_lower = text.lower()
+        # Strip any decorative lead-in (glyph / "(" / whitespace) so acks like
+        # "↯ Fast mode ON …" and "(Compacted …)" match the prefixes below.
+        ack_lead_stripped = _ACK_LEAD_RE.sub('', text_lower)
         if any(
-            text_lower.startswith(prefix) or text_lower.startswith("(" + prefix)
+            ack_lead_stripped.startswith(prefix)
             for prefix in _LOCAL_COMMAND_FILTERED_PREFIXES
         ):
             return None
@@ -1044,9 +1070,10 @@ class ClaudeCodeSessionCompute(BaseSessionCompute):
             content = get_message_content(parsed_json)
             text = extract_text_from_content(content)
 
-            # Slash commands surface as user messages, except /clear which is system.
+            # Slash commands surface as user messages, except settings/control
+            # ones (/clear, /model, /effort, /fast) which are system noise.
             if text is not None and (command := extract_command(text)):
-                if command.name == '/clear':
+                if command.name in _SYSTEM_SLASH_COMMANDS:
                     return ItemKind.SYSTEM
                 return ItemKind.USER_MESSAGE
 
