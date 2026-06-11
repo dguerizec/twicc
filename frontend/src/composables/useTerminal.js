@@ -12,6 +12,12 @@ import { resolveSnippetText } from '../utils/snippetPlaceholders'
 import { getSurfaceColor, getSelectionColor } from '../utils/theme'
 import '@xterm/xterm/css/xterm.css'
 
+// Hybrid CLI terminals (contextKey "h:<session_id>") never go below this
+// column count: the font shrinks instead (see fitTerminal), down to the
+// floor below which fewer columns are accepted rather than unreadable text.
+const HYBRID_MIN_COLS = 80
+const HYBRID_MIN_FONT_SIZE = 6
+
 // ── Terminal themes ──────────────────────────────────────────────────────
 
 function buildDarkTheme() {
@@ -1378,6 +1384,45 @@ export function useTerminal(contextKey, terminalIndex = 0, { sessionId = null, p
         }
     }
 
+    // Hybrid CLI terminals guarantee a minimum column count: the Claude TUI
+    // degrades badly below ~80 columns, the embedded pane drives the tmux
+    // window size for every attached client (a narrow mobile attach would
+    // shrink the desktop view too), and the backend's composer-ready
+    // detection gets a wider safety margin. When the container is too
+    // narrow for the user's font size, shrink the font (down to a floor)
+    // instead of accepting fewer columns.
+    const enforcedMinCols = contextKey?.startsWith('h:') ? HYBRID_MIN_COLS : null
+
+    /**
+     * Fit the terminal to its container.
+     *
+     * Always restarts from the user's configured font size, so widening the
+     * container restores it; for hybrid terminals, then shrinks the font
+     * until the minimum column count fits or the font floor is reached.
+     * Intermediate fits send nothing over the WS — callers emit a single
+     * resize message with the final dimensions.
+     */
+    function fitTerminal() {
+        if (!fitAddon || !terminal) return
+        const userSize = settingsStore.getFontSize
+        if (terminal.options.fontSize !== userSize) {
+            terminal.options.fontSize = userSize
+        }
+        fitAddon.fit()
+        if (!enforcedMinCols) return
+        let size = userSize
+        while (terminal.cols < enforcedMinCols && size > HYBRID_MIN_FONT_SIZE) {
+            // Jump close to the target (columns scale ~1/fontSize), then let
+            // the loop correct the estimate one step at a time.
+            size = Math.max(
+                HYBRID_MIN_FONT_SIZE,
+                Math.min(size - 1, Math.floor(size * terminal.cols / enforcedMinCols)),
+            )
+            terminal.options.fontSize = size
+            fitAddon.fit()
+        }
+    }
+
     /**
      * Initialize the xterm.js Terminal and attach it to the container,
      * then connect the WebSocket.
@@ -1427,7 +1472,7 @@ export function useTerminal(contextKey, terminalIndex = 0, { sessionId = null, p
         }
 
         // Fit immediately
-        fitAddon.fit()
+        fitTerminal()
 
         // Custom key event handler — runs BEFORE xterm.js's own keydown processing.
         // This is where we intercept keys that xterm.js would otherwise mishandle.
@@ -1548,7 +1593,7 @@ export function useTerminal(contextKey, terminalIndex = 0, { sessionId = null, p
             // Debounce slightly to avoid rapid resize events
             requestAnimationFrame(() => {
                 if (fitAddon && terminal) {
-                    fitAddon.fit()
+                    fitTerminal()
                     // Notify the backend of new dimensions
                     wsSend({ type: 'resize', cols: terminal.cols, rows: terminal.rows })
                 }
@@ -1835,10 +1880,10 @@ export function useTerminal(contextKey, terminalIndex = 0, { sessionId = null, p
     })
 
     // Update font size live when the user changes it in settings
-    watch(() => settingsStore.getFontSize, (newSize) => {
+    // (fitTerminal restarts from the new setting, min-cols clamp included)
+    watch(() => settingsStore.getFontSize, () => {
         if (terminal) {
-            terminal.options.fontSize = newSize
-            fitAddon?.fit()
+            fitTerminal()
         }
     })
 
