@@ -18,15 +18,32 @@ HYBRID_SESSION_PREFIX = "twicc-hybrid-"
 
 # Prefix-based purge, same intent as ClaudeCodeHelpers.purge_env_vars:
 # CLAUDE_CODE* and CLAUDECODE*. ``env -u`` needs exact names, so expand the
-# prefixes against the CURRENT environment at build time (the tmux server env
-# is a superset of ours for these vars in practice; the worst case of a
-# leftover var in an old server is harmless because claude only checks the
-# entrypoint/CLAUDECODE markers we purge).
+# prefixes against the CURRENT environment at build time, and always add the
+# known marker names below: the tmux server keeps the environment of whoever
+# first started it, so a marker can reach the pane through the server even
+# when the backend's own environment is clean.
 _PURGED_ENV_PREFIXES = ("CLAUDE_CODE", "CLAUDECODE")
+
+# Markers the CLI injects into the environment of its subprocesses (Bash
+# tools). Leftovers are NOT harmless: CLAUDE_CODE_CHILD_SESSION alone makes
+# a CLI >= 2.1.171 treat itself as a child session and silently skip
+# transcript persistence entirely — nothing is written (not even at a
+# graceful exit) and --resume answers "No conversation found" (regression of
+# the upstream 2.1.170 inherited-env fix; bisected on 2.1.172, 2026-06-11).
+_PURGED_ENV_NAMES = (
+    "CLAUDECODE",
+    "CLAUDE_CODE_ENTRYPOINT",
+    "CLAUDE_CODE_SSE_PORT",
+    "CLAUDE_CODE_SESSION_ID",
+    "CLAUDE_CODE_CHILD_SESSION",
+    "CLAUDE_CODE_EXECPATH",
+)
 
 
 def _purged_env_names() -> list[str]:
-    return [name for name in os.environ if name.startswith(_PURGED_ENV_PREFIXES)]
+    names = {name for name in os.environ if name.startswith(_PURGED_ENV_PREFIXES)}
+    names.update(_PURGED_ENV_NAMES)
+    return sorted(names)
 
 
 def hybrid_tmux_session_name(session_id: str) -> str:

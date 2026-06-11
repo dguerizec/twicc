@@ -32,10 +32,13 @@ SID=$(python3 -c 'import uuid; print(uuid.uuid4())')
 F="$HOME/.claude/projects/-tmp-twicc-cwd-test/$SID.jsonl"   # cwd → dir name: '/' and '.' become '-'
 echo "SESSION_ID=$SID"
 
+# Purge ALL Claude Code env markers by prefix — a fixed -u list is NOT enough
+# (see traps below: one missed marker silently disables transcript saving).
+UNSETS=$(env | cut -d= -f1 | grep -E '^(CLAUDE_CODE|CLAUDECODE)' | sed 's/^/-u /' | tr '\n' ' ')
+
 tmux -L $SOCK kill-server 2>/dev/null
 tmux -L $SOCK new-session -d -s probe -x 200 -y 50 -c /tmp/twicc-cwd-test \
-  "exec env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT -u CLAUDE_CODE_SSE_PORT \
-   $BIN --model claude-haiku-4-5-20251001 --session-id $SID [other flags]"
+  "exec env $UNSETS $BIN --model claude-haiku-4-5-20251001 --session-id $SID [other flags]"
 sleep 12   # TUI warm-up
 
 # Trust dialog (first run in a never-trusted dir): detect and accept.
@@ -77,10 +80,16 @@ echo DONE
 
 ## Key details and traps
 
-- **`exec env -u …`** as the pane command: strips `CLAUDE_CODE*`/`CLAUDECODE*`
-  markers (a probe launched from inside a Claude session inherits them and the
-  CLI would think it is nested), and `exec` makes the pane PID = the claude
-  PID (`tmux list-panes -F '#{pane_pid} #{pane_dead}'` then gives liveness;
+- **`exec env $UNSETS …`** as the pane command: purge EVERY
+  `CLAUDE_CODE*`/`CLAUDECODE*` variable by prefix expansion, never a fixed
+  list. A probe launched from inside a Claude session inherits ~6 markers,
+  and `CLAUDE_CODE_CHILD_SESSION` ALONE makes a CLI ≥ 2.1.171 silently skip
+  transcript persistence entirely: no live writes, nothing at a graceful
+  `/exit`, `--resume` finds nothing — yet the `ai-title` line still lands, so
+  the JSONL EXISTS but holds no content (this false signal caused a full-day
+  misdiagnosis on 2026-06-11; regression of the upstream 2.1.170
+  inherited-env fix). `exec` makes the pane PID = the claude PID
+  (`tmux list-panes -F '#{pane_pid} #{pane_dead}'` then gives liveness;
   `set-option remain-on-exit on` keeps the dead pane inspectable).
 - **Pre-minted `--session-id`** makes the JSONL path deterministic — no
   guessing which file the probe produced. Works in interactive mode (verified).

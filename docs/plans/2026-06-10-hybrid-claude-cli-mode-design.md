@@ -359,30 +359,46 @@ and its retention, so copy, don't reference).
 5. Trust dialog UX on first hybrid launch in a never-trusted directory (user
    handles it in the TUI; just confirm the flow feels right).
 
-### 5.bis Upstream CLI regression found at implementation time (2026-06-11)
+### 5.bis Inherited-env regression found at implementation time (2026-06-11)
 
-**Bundled CLI 2.1.172 (claude-agent-sdk 0.2.96) does not persist interactive
-transcripts at all** — the per-project JSONL gets only title/state lines
-(`ai-title`, `custom-title`, `agent-name`); no user/assistant/tool content is
-ever written, `--resume` answers "No conversation found", and a graceful
-`/exit` flushes nothing. With `-n <title>` not even the title line is written
-(no file at all). Bisected empirically (every flag combination, with and
-without `--session-id`); counter-test with the uv-cached 2.1.170 binary in
-the same directory wrote a normal 34 KB live transcript. The regression was
-introduced in 2.1.171 or 2.1.172, interactive mode only (the SDK
-`--print`/stream-json path still writes — TwiCC SDK sessions are unaffected).
+**Initial diagnosis (night run — WRONG):** bundled CLI 2.1.172
+(claude-agent-sdk 0.2.96) was believed not to persist interactive transcripts
+at all, and the worktree temporarily pinned `claude-agent-sdk==0.2.95`
+(CLI 2.1.170).
 
-Consequence: hybrid mode REQUIRES a CLI that writes interactive transcripts.
-The worktree pins `claude-agent-sdk==0.2.95` (CLI 2.1.170) until an SDK
-release bundles a fixed CLI. Every future SDK bump must re-run the transcript
-probe (`docs/tmux-probe-recipe.md`: launch interactive, send one message,
-assert user/assistant lines land in the JSONL within seconds).
+**Actual root cause (same-day re-investigation):** 2.1.172 persists
+interactive transcripts live and correctly — when its environment is clean.
+The night probes ran from inside a Claude Code session and only unset three
+hard-coded variables; the inherited **`CLAUDE_CODE_CHILD_SESSION`** marker
+alone makes the CLI treat the new session as a child session and skip
+transcript persistence entirely: nothing is written live, nothing is flushed
+at a graceful `/exit`, `--resume` answers "No conversation found", and only
+the separately-written `ai-title` line lands — which also fooled the original
+bisect (its "OK" criterion was file existence). This is a regression of the
+upstream 2.1.170 fix: "Fixed sessions not saving transcripts (and not
+appearing in --resume) when launched from the VS Code integrated terminal or
+any shell that inherited Claude Code environment variables."
 
-Additional 2.1.172 findings (kept for the record): the trust dialog swallows
-a paste entirely (composer left empty after the dialog is answered) — the
-hybrid agent waits for the dialog to clear before its first paste; the
-PermissionRequest drop hook and the file-history capture both still worked
-on 2.1.172, so the regression is scoped to transcript persistence.
+Verified empirically on 2.1.172 (env bisect with `/proc/<pid>/environ`
+checks, a 12-case flag/model matrix, and a production-faithful counter-probe):
+keeping only `CLAUDE_CODE_CHILD_SESSION` reproduces the failure; a full purge
+— or keeping any other marker (`CLAUDE_CODE_SESSION_ID`,
+`CLAUDE_CODE_EXECPATH`, `CLAUDE_AGENT_SDK_VERSION`, `CLAUDE_EFFORT`,
+`AI_AGENT`, `ANTHROPIC_DEFAULT_HAIKU_MODEL`) — writes live. The full
+`build_argv` command line under the production prefix purge writes live and
+resumes correctly: hybrid mode is safe on 0.2.96 / 2.1.172.
+
+Consequences: the SDK pin was lifted (back to `claude-agent-sdk==0.2.96`);
+`hybrid/tmux.py` additionally unsets a static list of known marker names so a
+marker living only in the tmux server's global environment (inherited from
+whoever first started the server) never reaches claude; the probe recipe now
+mandates prefix-based purging (`docs/tmux-probe-recipe.md`).
+
+Additional findings from the night run (still valid): the trust dialog
+swallows a paste entirely (composer left empty after the dialog is answered)
+— the hybrid agent waits for the dialog to clear before its first paste; the
+PermissionRequest drop hook and the file-history capture both worked on
+2.1.172 as on 2.1.170.
 
 ## 6. Decision log (chronological summary)
 
