@@ -712,6 +712,18 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
         title = content.get("title")  # Optional, only for new sessions
         images = content.get("images")  # Optional: SDK ImageBlockParam list
         documents = content.get("documents")  # Optional: SDK DocumentBlockParam list
+        # Client-generated correlation id, echoed in every reply frame so the
+        # frontend can match an error to the exact send it made (and run its
+        # recovery flow: restore the draft, drop the optimistic message).
+        request_id = content.get("request_id")
+
+        async def send_error(message: str, *, code: str, **extra) -> None:
+            frame: dict = {"type": "error", "code": code, "message": message, **extra}
+            if request_id:
+                frame["request_id"] = request_id
+            if session_id:
+                frame["session_id"] = session_id
+            await self.send_json(frame)
 
         # Validate required fields (text is allowed to be empty for settings-only updates)
         if not session_id or not project_id:
@@ -720,11 +732,9 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
                 session_id,
                 project_id,
             )
-            await self.send_json(
-                {
-                    "type": "error",
-                    "message": "send_message requires session_id and project_id",
-                }
+            await send_error(
+                "send_message requires session_id and project_id",
+                code="invalid_request",
             )
             return
 
@@ -741,11 +751,9 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
                     "send_message: session %s has unknown provider %r",
                     session_id, existing_provider,
                 )
-                await self.send_json(
-                    {
-                        "type": "error",
-                        "message": f"Session {session_id} has an unknown provider",
-                    }
+                await send_error(
+                    f"Session {session_id} has an unknown provider",
+                    code="unknown_provider",
                 )
                 return
         else:
@@ -755,11 +763,9 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
                     "send_message: missing 'provider' for new session %s",
                     session_id,
                 )
-                await self.send_json(
-                    {
-                        "type": "error",
-                        "message": "send_message for a new session requires a 'provider' field",
-                    }
+                await send_error(
+                    "send_message for a new session requires a 'provider' field",
+                    code="invalid_request",
                 )
                 return
             try:
@@ -769,23 +775,16 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
                     "send_message: unknown provider %r for new session %s",
                     provider_value, session_id,
                 )
-                await self.send_json(
-                    {
-                        "type": "error",
-                        "message": f"Unknown provider: {provider_value!r}",
-                    }
+                await send_error(
+                    f"Unknown provider: {provider_value!r}",
+                    code="unknown_provider",
                 )
                 return
 
         try:
             ensure_provider_running(provider)
         except ProviderDisabledError as e:
-            await self.send_json({
-                "type": "error",
-                "code": "provider_disabled",
-                "provider": e.provider.value,
-                "message": str(e),
-            })
+            await send_error(str(e), code="provider_disabled", provider=e.provider.value)
             return
 
         helpers = get_provider_helpers(provider)
@@ -799,14 +798,15 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
                     session_id,
                     title_result.error,
                 )
-                await self.send_json(
-                    {
-                        "type": "invalid_title",
-                        "session_id": session_id,
-                        "title": title,
-                        "error": title_result.error,
-                    }
-                )
+                frame = {
+                    "type": "invalid_title",
+                    "session_id": session_id,
+                    "title": title,
+                    "error": title_result.error,
+                }
+                if request_id:
+                    frame["request_id"] = request_id
+                await self.send_json(frame)
                 return
             title = title_result.title
 
@@ -816,11 +816,9 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
             logger.warning(
                 "send_message: project %s not found or has no directory", project_id
             )
-            await self.send_json(
-                {
-                    "type": "error",
-                    "message": f"Project {project_id} not found or has no directory configured",
-                }
+            await send_error(
+                f"Project {project_id} not found or has no directory configured",
+                code="project_not_found",
             )
             return
 
@@ -905,31 +903,22 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
                     # The frontend already understands the error codes the service emits
                     # (provider_disabled, project_not_found, etc.).
                     first = result.errors[0]
-                    await self.send_json({
-                        "type": "error",
-                        "code": first.code,
-                        "message": first.message,
-                    })
+                    await send_error(first.message, code=first.code)
                     return
                 # Success: nothing to send back. The agent manager + watcher will emit
                 # the usual broadcasts and the front-end picks them up.
         except RuntimeError as e:
-            # Process busy or other expected errors
+            # Process busy or other expected delivery errors. SendDeliveryError
+            # carries a specific code (agent_starting, hybrid_composer_busy, …);
+            # plain RuntimeErrors fall back to the generic send_failed.
             logger.warning("send_message failed: %s", e)
-            await self.send_json(
-                {
-                    "type": "error",
-                    "message": str(e),
-                }
-            )
+            await send_error(str(e), code=getattr(e, "code", None) or "send_failed")
         except Exception as e:
             # Unexpected errors - log full traceback
             logger.exception("Unexpected error in send_message")
-            await self.send_json(
-                {
-                    "type": "error",
-                    "message": f"Failed to send message: {e}",
-                }
+            await send_error(
+                f"Failed to send message: {e}",
+                code="send_failed",
             )
 
     async def _handle_set_session_hybrid(self, content: dict) -> None:

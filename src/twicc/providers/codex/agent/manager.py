@@ -20,7 +20,7 @@ from openai_codex import CodexConfig
 
 from asgiref.sync import sync_to_async
 
-from twicc.agent import AgentState, BaseAgent, BaseAgentManager
+from twicc.agent import AgentState, BaseAgent, BaseAgentManager, SendDeliveryError
 from twicc.context_injection import inject_context
 from twicc.core.enums import Provider
 from twicc.pending_session_attributes import get_pending_session_attributes
@@ -195,8 +195,9 @@ class CodexAgentManager(BaseAgentManager):
                     return
 
                 else:
-                    raise RuntimeError(
+                    raise SendDeliveryError(
                         f"Cannot send message: agent is in state {agent.state}",
+                        code="agent_starting",
                     )
 
             # No live agent — text or at least one image is required to

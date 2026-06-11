@@ -41,7 +41,7 @@ from openai_codex.generated.v2_all import (
 
 from asgiref.sync import sync_to_async
 
-from twicc.agent import AgentState, BaseAgent, StateChangeCallback
+from twicc.agent import AgentState, BaseAgent, SendDeliveryError, StateChangeCallback
 from twicc.context_injection import apply_pending_context
 from twicc.core.enums import Provider
 from twicc.providers.helpers import AgentSettings, get_provider_helpers
@@ -364,7 +364,7 @@ class CodexAgent(BaseAgent):
         manager and pick up on the NEXT ``_run_turn``.
         """
         if self.state == AgentState.DEAD:
-            raise RuntimeError("Cannot send message: agent is dead")
+            raise SendDeliveryError("Cannot send message: agent is dead", code="agent_dead")
 
         if self.state == AgentState.ASSISTANT_TURN:
             # ``_run_turn`` publishes ``_current_turn`` only after the

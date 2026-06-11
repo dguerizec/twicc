@@ -16,6 +16,7 @@ should ``from twicc.agent.registry import get_agent_manager_registry``.
 
 from .base_agent import BaseAgent, StateChangeCallback
 from .base_manager import BaseAgentManager, BroadcastCallback
+from .exceptions import SendDeliveryError
 from .states import (
     AgentInfo,
     AgentState,
@@ -32,6 +33,7 @@ __all__ = [
     "BaseAgentManager",
     "BroadcastCallback",
     "PendingRequest",
+    "SendDeliveryError",
     "StateChangeCallback",
     "format_bytes",
     "get_process_memory",

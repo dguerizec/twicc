@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 
 from django.conf import settings
 
-from twicc.agent import AgentInfo, AgentState, BaseAgent, BaseAgentManager
+from twicc.agent import AgentInfo, AgentState, BaseAgent, BaseAgentManager, SendDeliveryError
 from twicc.core.enums import Provider
 from twicc.providers.db_writer import run_under_db_write_lock
 
@@ -212,8 +212,9 @@ class ClaudeCodeAgentManager(BaseAgentManager):
 
                 else:
                     # Agent starting - cannot send yet
-                    raise RuntimeError(
-                        f"Cannot send message: agent is in state {agent.state}"
+                    raise SendDeliveryError(
+                        f"Cannot send message: agent is in state {agent.state}",
+                        code="agent_starting",
                     )
 
             # No live agent — text is required to start a new one
