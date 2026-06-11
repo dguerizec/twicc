@@ -109,6 +109,7 @@ class HybridClaudeAgent(BaseAgent):
         *,
         images: list[dict] | None = None,
         documents: list[dict] | None = None,
+        adopt: bool = False,
     ) -> None:
         """Create the tmux session and schedule the first paste.
 
@@ -116,8 +117,27 @@ class HybridClaudeAgent(BaseAgent):
         (``_register_and_start``) — it must return fast. Only the tmux
         creation happens inline; the first paste (with its TUI warm-up
         delay and possible trust-dialog wait) runs in a background task.
+
+        ``adopt=True`` attaches to an ALREADY-RUNNING tmux session that
+        survived a TwiCC restart: nothing is created and nothing is pasted —
+        the agent simply binds to the live pane, reports USER_TURN (the
+        JSONL bridge corrects it on the next ingested lines) and starts the
+        liveness monitor. ``text`` is ignored in that case.
         """
         self._state_change_callback = on_state_change
+
+        if adopt:
+            self.agent_pid, _ = await asyncio.to_thread(
+                hybrid_tmux.pane_status, self.session_id,
+            )
+            logger.info(
+                "Adopted surviving hybrid CLI for session %s (pid=%s)",
+                self.session_id, self.agent_pid,
+            )
+            self._set_state(AgentState.USER_TURN)
+            await self._notify_state_change()
+            self._start_liveness_monitor()
+            return
 
         # The JSONL appears only when the first message is submitted; make
         # sure the watcher picks it up quickly (same as the SDK agent).
@@ -430,7 +450,12 @@ class HybridClaudeAgent(BaseAgent):
         if self._liveness_task is not None:
             self._liveness_task.cancel()
         self._clear_pending_marker()
-        await asyncio.to_thread(hybrid_tmux.kill_session, self.session_id)
+        # A TwiCC shutdown must NOT kill the claude TUI: the tmux server
+        # outlives TwiCC by design (§2.3) and boot adoption re-binds to the
+        # surviving session on the next start. Every other reason (manual
+        # stop, timeouts, settings restart) frees claude's memory.
+        if reason != "shutdown":
+            await asyncio.to_thread(hybrid_tmux.kill_session, self.session_id)
         await self._transition_to_dead()
 
     async def interrupt_or_kill(self, reason: str) -> None:

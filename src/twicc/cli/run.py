@@ -286,11 +286,21 @@ async def run_server(port: int):
     heartbeat_task = asyncio.create_task(heartbeat_loop())
     drop_watcher_task = asyncio.create_task(get_drop_requests_watcher().start())
 
-    # Hybrid CLI hook events (Claude Code hybrid sessions drop one file per
-    # injected hook fire; see twicc.providers.claude_code.agent.hybrid).
+    # Hybrid CLI sessions: adopt tmux survivors FIRST (their claude outlives
+    # TwiCC restarts), then start the hook-events watcher — its boot scan
+    # must find the adopted agents so a leftover PermissionRequest of a
+    # still-pending prompt reaches them (events for long-gone sessions are
+    # dropped harmlessly).
+    from twicc.agent.registry import get_agent_manager_registry
+    from twicc.core.enums import Provider
     from twicc.providers.claude_code.agent.hybrid.hooks_watcher import (
         get_hybrid_hooks_watcher,
     )
+
+    try:
+        await get_agent_manager_registry().get(Provider.CLAUDE_CODE).adopt_running_hybrid_sessions()
+    except Exception:
+        logger.exception("Hybrid boot adoption failed")
 
     hybrid_hooks_watcher_task = asyncio.create_task(get_hybrid_hooks_watcher().start())
 

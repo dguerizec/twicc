@@ -330,6 +330,94 @@ class ClaudeCodeAgentManager(BaseAgentManager):
             return False
 
     # ------------------------------------------------------------------
+    # Hybrid boot adoption
+    # ------------------------------------------------------------------
+
+    async def adopt_running_hybrid_sessions(self) -> None:
+        """Adopt hybrid tmux sessions that survived a TwiCC restart.
+
+        The tmux server (``-L twicc`` socket) outlives TwiCC: a hybrid
+        claude keeps running across backend restarts. Called once at boot,
+        after the stale-ProcessRun cleanup and BEFORE the hybrid-hooks
+        watcher's boot scan, so a leftover PermissionRequest event of a
+        still-pending prompt reaches its adopted agent.
+
+        For each surviving tmux session: live pane + a ``hybrid=True``
+        Session row with a project directory → adopt (register + attach,
+        no relaunch, no paste). A dead pane or a row that is missing /
+        not hybrid → the orphan tmux session is killed. A live claude
+        whose project lost its directory is left untouched (never kill a
+        live claude we merely cannot adopt).
+        """
+        from twicc.core.models import Session
+        from twicc.providers.claude_code.agent.hybrid import tmux as hybrid_tmux
+        from twicc.providers.claude_code.agent.hybrid.agent import HybridClaudeAgent
+        from twicc.providers.helpers import AgentSettings, get_provider_helpers
+
+        try:
+            names = await asyncio.to_thread(hybrid_tmux.list_hybrid_sessions)
+        except Exception:
+            logger.exception("Hybrid boot adoption: tmux scan failed")
+            return
+        if not names:
+            return
+
+        provider_helpers = get_provider_helpers(Provider.CLAUDE_CODE)
+        for name in names:
+            # Session ids are UUIDs (no '.'/':' to sanitize), so the raw
+            # suffix is the id itself.
+            session_id = name[len(hybrid_tmux.HYBRID_SESSION_PREFIX):]
+            try:
+                pid, dead = await asyncio.to_thread(hybrid_tmux.pane_status, session_id)
+
+                def _load(sid: str = session_id):
+                    session = (
+                        Session.objects.select_related("project")
+                        .filter(id=sid)
+                        .first()
+                    )
+                    if session is None or not session.hybrid:
+                        return None
+                    return (
+                        session.project_id,
+                        session.project.directory,
+                        AgentSettings.from_session(session),
+                    )
+
+                row = await asyncio.to_thread(_load)
+                if dead or pid is None or row is None:
+                    logger.info(
+                        "Killing orphan hybrid tmux session %s (pane_dead=%s, "
+                        "known_hybrid_session=%s)", name, dead, row is not None,
+                    )
+                    await asyncio.to_thread(hybrid_tmux.kill_session, session_id)
+                    continue
+                project_id, directory, raw_settings = row
+                if not directory:
+                    logger.warning(
+                        "Hybrid session %s survived but its project %s has no "
+                        "directory — leaving the tmux session unadopted",
+                        session_id, project_id,
+                    )
+                    continue
+                settings = provider_helpers.enforce_agent_settings_consistency(
+                    provider_helpers.resolve_agent_settings(raw_settings)
+                )
+                async with self._lock:
+                    if session_id in self._agents:
+                        continue
+                    agent = HybridClaudeAgent(
+                        session_id=session_id,
+                        project_id=project_id,
+                        cwd=directory,
+                        agent_settings=settings,
+                    )
+                    await self._register_and_start(agent, "", resume=True, adopt=True)
+                logger.info("Adopted surviving hybrid session %s", session_id)
+            except Exception:
+                logger.exception("Failed to adopt hybrid tmux session %s", name)
+
+    # ------------------------------------------------------------------
     # Hybrid title application
     # ------------------------------------------------------------------
 
