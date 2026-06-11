@@ -174,6 +174,31 @@ def get_session_scratch_dir(session_id: str) -> Path:
     return get_scratch_dir() / session_id
 
 
+def get_session_hybrid_dir(session_id: str) -> Path:
+    """Per-session runtime files for hybrid CLI mode (addendum file, attachments).
+
+    The whole directory is passed to the CLI via ``--add-dir`` so attachment
+    reads never trigger permission prompts.
+    """
+    path = get_data_dir() / "hybrid" / session_id
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def get_hybrid_hooks_dir() -> Path:
+    """Watched drop directory for hybrid CLI hook event files.
+
+    Hook commands injected at hybrid launch drop one
+    ``<session_id>__<event>__<nonce>.json`` file per event here; the hybrid
+    hooks watcher consumes and deletes them. File-based on purpose: hook
+    commands must reach TwiCC without HTTP, so the channel works with the
+    password enabled and exposes no URL/secret.
+    """
+    path = get_data_dir() / "hybrid-hooks"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 def get_seen_tips_path() -> Path:
     """Path to the synced seen-tips state file."""
     return get_data_dir() / "seen-tips.json"
