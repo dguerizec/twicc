@@ -8,12 +8,14 @@ updates, broadcasts, search indexing, polling) lives in the base.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
 from pathlib import Path
 from typing import ClassVar
 
+import orjson
 from asgiref.sync import sync_to_async
 from watchfiles import Change
 
@@ -162,6 +164,82 @@ class ClaudeCodeSessionsWatcher(BaseSessionsWatcher):
 
         manager = get_claude_code_agent_manager()
         await manager.discard_active_tool(update.session_id, update.tool_use_id)
+
+    async def _after_new_lines_synced(
+        self,
+        session,
+        new_line_nums: list[int],
+        tool_result_updates: list[ToolResultUpdate],
+    ) -> None:
+        """JSONL → state bridge for hybrid sessions.
+
+        Derives the batch's :class:`HybridJsonlSignals` from the freshly
+        computed items and hands them to the agent manager. Fire-and-forget:
+        the derivation (a DB read) and the agent transitions run in a task
+        so the ingest path never blocks on agent locks. Latency stays at
+        inotify level (ms), same as the live UI updates.
+        """
+        if not session.hybrid:
+            return
+        asyncio.create_task(
+            self._bridge_hybrid_signals(
+                session.id, new_line_nums, bool(tool_result_updates),
+            ),
+            name=f"hybrid-jsonl-bridge-{session.id}",
+        )
+
+    async def _bridge_hybrid_signals(
+        self,
+        session_id: str,
+        new_line_nums: list[int],
+        has_tool_results: bool,
+    ) -> None:
+        try:
+            from twicc.core.enums import ItemKind
+            from twicc.core.models import SessionItem
+
+            def _derive() -> tuple[bool, bool]:
+                user_message = False
+                turn_end = False
+                rows = (
+                    SessionItem.objects
+                    .filter(session_id=session_id, line_num__in=new_line_nums)
+                    .values_list("kind", "content")
+                )
+                for kind, content in rows:
+                    if kind == ItemKind.USER_MESSAGE:
+                        user_message = True
+                    elif kind == ItemKind.SYSTEM and content and '"turn_duration"' in content:
+                        try:
+                            parsed = orjson.loads(content)
+                        except Exception:
+                            continue
+                        if (
+                            parsed.get("type") == "system"
+                            and parsed.get("subtype") == "turn_duration"
+                        ):
+                            turn_end = True
+                return user_message, turn_end
+
+            user_message, turn_end = await asyncio.to_thread(_derive)
+            if not (user_message or turn_end or has_tool_results):
+                return
+
+            from twicc.providers.claude_code.agent.hybrid.signals import HybridJsonlSignals
+            from twicc.providers.claude_code.agent.manager import get_claude_code_agent_manager
+
+            await get_claude_code_agent_manager().handle_hybrid_jsonl_signals(
+                session_id,
+                HybridJsonlSignals(
+                    user_message=user_message,
+                    turn_end=turn_end,
+                    tool_results=has_tool_results,
+                ),
+            )
+        except Exception:
+            logger.exception(
+                "Hybrid JSONL bridge failed for session %s", session_id,
+            )
 
 
 # ---- Singleton accessor ----

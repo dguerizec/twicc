@@ -19,6 +19,7 @@ from .agent import ClaudeCodeAgent
 if TYPE_CHECKING:
     from datetime import datetime
 
+    from twicc.providers.claude_code.agent.hybrid.signals import HybridJsonlSignals
     from twicc.providers.helpers import AgentSettings
 
 logger = logging.getLogger(__name__)
@@ -320,6 +321,44 @@ class ClaudeCodeAgentManager(BaseAgentManager):
                 subagent_id, session_id, e,
             )
             return False
+
+    # ------------------------------------------------------------------
+    # Hybrid signal routing (hooks drop watcher + JSONL bridge)
+    # ------------------------------------------------------------------
+
+    async def handle_hybrid_hook(self, session_id: str, event: str, payload: dict) -> bool:
+        """Route a hybrid hook event file to its live hybrid agent.
+
+        Returns ``False`` for stale events (no live hybrid agent) and for
+        event names V1 does not inject — the hooks watcher deletes the file
+        either way (drop, never retry).
+        """
+        agent = self._agents.get(session_id)
+        if agent is None or not getattr(agent, "is_hybrid", False):
+            return False
+        if event == "PermissionRequest":
+            await agent.on_permission_request(payload)
+            return True
+        return False
+
+    async def handle_hybrid_jsonl_signals(
+        self, session_id: str, signals: "HybridJsonlSignals",
+    ) -> None:
+        """Apply JSONL-derived state signals to a live hybrid agent.
+
+        Order matters within a batch: user message first (turn started),
+        then tool results (pending cleared), then turn end — so a batch
+        carrying a whole fast turn settles on USER_TURN.
+        """
+        agent = self._agents.get(session_id)
+        if agent is None or not getattr(agent, "is_hybrid", False):
+            return
+        if signals.user_message:
+            await agent.on_jsonl_user_message()
+        if signals.tool_results:
+            await agent.on_jsonl_progress()
+        if signals.turn_end:
+            await agent.on_jsonl_turn_end()
 
     # ------------------------------------------------------------------
     # Factory hook (Claude Code agent construction)

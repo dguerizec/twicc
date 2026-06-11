@@ -303,6 +303,23 @@ class BaseSessionsWatcher:
         """
         return None
 
+    async def _after_new_lines_synced(
+        self,
+        session: Session,
+        new_line_nums: list[int],
+        tool_result_updates: list[ToolResultUpdate],
+    ) -> None:
+        """Hook fired once per live batch that ingested fresh JSONL lines.
+
+        Default implementation is a no-op. Claude Code overrides this to
+        derive hybrid-session state signals (user message → assistant turn,
+        ``turn_duration`` → user turn, tool results → pending cleared) from
+        the just-computed items. Live incremental-sync path only, like
+        :meth:`_after_compaction_synced`. Implementations must never block
+        the ingest path on agent locks (fire-and-forget a task instead).
+        """
+        return None
+
     async def maybe_handle_special_change(
         self,
         path: Path,
@@ -625,6 +642,14 @@ class BaseSessionsWatcher:
                 parsed.parent_session_id if is_subagent else parsed.session_id
             )
             get_agent_manager_registry().touch_agent_activity(activity_session_id)
+
+            # Provider hook for batch-level signals derived from the fresh
+            # lines (hybrid state bridge). Subagent lines never carry the
+            # parent's turn markers, so only top-level files feed it.
+            if not is_subagent:
+                await self._after_new_lines_synced(
+                    session, list(new_line_nums), list(tool_result_updates),
+                )
 
             # Refresh session to get computed values
             session = await refresh_session(session)

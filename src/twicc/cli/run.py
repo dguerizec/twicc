@@ -286,6 +286,14 @@ async def run_server(port: int):
     heartbeat_task = asyncio.create_task(heartbeat_loop())
     drop_watcher_task = asyncio.create_task(get_drop_requests_watcher().start())
 
+    # Hybrid CLI hook events (Claude Code hybrid sessions drop one file per
+    # injected hook fire; see twicc.providers.claude_code.agent.hybrid).
+    from twicc.providers.claude_code.agent.hybrid.hooks_watcher import (
+        get_hybrid_hooks_watcher,
+    )
+
+    hybrid_hooks_watcher_task = asyncio.create_task(get_hybrid_hooks_watcher().start())
+
     def handle_signal(signum, frame):
         logger.info("Received signal %s, initiating shutdown...", signum)
         request_shutdown()
@@ -325,6 +333,9 @@ async def run_server(port: int):
 
         logger.info("Stopping drop-requests watcher task...")
         await _cancel_task(drop_watcher_task, "Drop-requests watcher task")
+
+        logger.info("Stopping hybrid-hooks watcher task...")
+        await _cancel_task(hybrid_hooks_watcher_task, "Hybrid-hooks watcher task")
 
         # Stop the global search-indexing task(s) (if any ever started)
         # and the coordinator that gated them. Order matters: cancel the
