@@ -585,6 +585,9 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
         elif msg_type == "kill_process":
             await self._handle_kill_process(content)
 
+        elif msg_type == "set_session_hybrid":
+            await self._handle_set_session_hybrid(content)
+
         elif msg_type == "stop_subagent":
             await self._handle_stop_subagent(content)
 
@@ -888,10 +891,15 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
                     "title": content.get("title"),
                     "images": content.get("images") or [],
                     "documents": content.get("documents") or [],
+                    # Hybrid CLI mode for drafts. Honored ONLY because this is
+                    # the trusted human path (web UI): allow_hybrid below is
+                    # what lets the service read it — every other caller
+                    # (drop-request files, CLI) keeps the default False.
+                    "hybrid": bool(content.get("hybrid")),
                     **agent_settings_kwargs_from_frontend_payload(content),
                 }
 
-                result = await create_session_from_payload(payload)
+                result = await create_session_from_payload(payload, allow_hybrid=True)
                 if not result.success:
                     # Translate the first error to the WS-specific error frame shape.
                     # The frontend already understands the error codes the service emits
@@ -922,6 +930,68 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
                     "type": "error",
                     "message": f"Failed to send message: {e}",
                 }
+            )
+
+    async def _handle_set_session_hybrid(self, content: dict) -> None:
+        """Switch an existing session to hybrid CLI mode (one-way).
+
+        Human-only and UI-only: this WS handler is the single place the flag
+        can be flipped on an existing session (drafts go through the
+        ``send_message`` payload + ``allow_hybrid``). There is deliberately
+        no payload field to set it back to False — a session resumed by the
+        CLI can never go back to the SDK.
+        """
+        from twicc.core.models import Session, SessionType
+        from twicc.core.serializers import serialize_session
+
+        session_id = content.get("session_id")
+        if not session_id:
+            await self.send_json({
+                "type": "error",
+                "message": "set_session_hybrid requires session_id",
+            })
+            return
+
+        session = await sync_to_async(Session.objects.filter(id=session_id).first)()
+        if session is None:
+            await self.send_json({
+                "type": "error",
+                "message": f"Session {session_id} not found",
+            })
+            return
+        if session.hybrid:
+            return  # Already hybrid — idempotent no-op.
+        if (
+            session.provider != Provider.CLAUDE_CODE.value
+            or session.type != SessionType.SESSION
+            or session.hidden
+        ):
+            await self.send_json({
+                "type": "error",
+                "message": "Hybrid mode is only available for visible top-level Claude Code sessions",
+            })
+            return
+
+        # A live SDK agent cannot survive the switch (the CLI will own the
+        # session from now on) — kill it first.
+        manager = get_agent_manager_registry().get(Provider.CLAUDE_CODE)
+        await manager.kill_agent(session_id, reason="switch-hybrid")
+
+        await run_under_db_write_lock(
+            lambda: Session.objects.filter(id=session_id).aupdate(hybrid=True)
+        )
+        logger.info("Session %s switched to hybrid CLI mode", session_id)
+        session = await sync_to_async(Session.objects.filter(id=session_id).first)()
+        if session is not None:
+            await self.channel_layer.group_send(
+                "updates",
+                {
+                    "type": "broadcast",
+                    "data": {
+                        "type": "session_updated",
+                        "session": serialize_session(session),
+                    },
+                },
             )
 
     async def _handle_kill_process(self, content: dict) -> None:
