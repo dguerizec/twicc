@@ -165,6 +165,26 @@ class ClaudeCodeSessionsWatcher(BaseSessionsWatcher):
         manager = get_claude_code_agent_manager()
         await manager.discard_active_tool(update.session_id, update.tool_use_id)
 
+    async def _after_compaction_synced(self, session_id: str) -> None:
+        """End a hybrid agent's turn when a compaction lands.
+
+        A manually-triggered ``/compact`` writes no ``turn_duration`` line, so
+        without this the JSONL bridge would leave the agent in ASSISTANT_TURN
+        until the next real turn (same issue Codex solves with this hook).
+        ``handle_hybrid_jsonl_signals`` ignores non-hybrid sessions, so no
+        hybrid check is needed here.
+        """
+        from twicc.providers.claude_code.agent.hybrid.signals import HybridJsonlSignals
+        from twicc.providers.claude_code.agent.manager import get_claude_code_agent_manager
+
+        asyncio.create_task(
+            get_claude_code_agent_manager().handle_hybrid_jsonl_signals(
+                session_id,
+                HybridJsonlSignals(user_message=False, turn_end=True, tool_results=False),
+            ),
+            name=f"hybrid-compact-turn-end-{session_id}",
+        )
+
     async def _after_new_lines_synced(
         self,
         session,
@@ -209,15 +229,25 @@ class ClaudeCodeSessionsWatcher(BaseSessionsWatcher):
                 for kind, content in rows:
                     if kind == ItemKind.USER_MESSAGE:
                         user_message = True
-                    elif kind == ItemKind.SYSTEM and content and '"turn_duration"' in content:
-                        try:
-                            parsed = orjson.loads(content)
-                        except Exception:
-                            continue
-                        if (
-                            parsed.get("type") == "system"
-                            and parsed.get("subtype") == "turn_duration"
-                        ):
+                    elif kind == ItemKind.SYSTEM and content:
+                        if '"turn_duration"' in content:
+                            try:
+                                parsed = orjson.loads(content)
+                            except Exception:
+                                continue
+                            if (
+                                parsed.get("type") == "system"
+                                and parsed.get("subtype") == "turn_duration"
+                            ):
+                                turn_end = True
+                        elif "<local-command-stdout>" in content:
+                            # A local slash command's stdout marks its end.
+                            # Slash-command lines classify as USER_MESSAGE
+                            # (TwiCC shows them in the conversation), which
+                            # flips the agent to ASSISTANT_TURN above — but
+                            # local commands (/model, /rename, …) never write
+                            # a turn_duration, so without this the agent
+                            # would look busy forever after a pasted command.
                             turn_end = True
                 return user_message, turn_end
 
