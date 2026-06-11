@@ -232,7 +232,25 @@ def set_winsize(fd: int, cols: int, rows: int) -> None:
     fcntl.ioctl(fd, termios.TIOCSWINSZ, winsize)
 
 
-def spawn_pty(cwd: str) -> tuple[int, int]:
+def parse_initial_size(qs: dict[str, list[str]]) -> tuple[int, int]:
+    """Initial PTY size from the WS query string, or the defaults.
+
+    The frontend fits xterm.js before connecting and passes the resulting
+    dimensions, so the PTY spawns (and tmux attaches) at the right size
+    instead of 80x24-then-resize — that transient default made tmux re-wrap
+    its history twice and TUI apps repaint fully on every attach.
+    """
+    try:
+        cols = int(qs.get("cols", [""])[0])
+        rows = int(qs.get("rows", [""])[0])
+    except ValueError:
+        return DEFAULT_COLS, DEFAULT_ROWS
+    if not (2 <= cols <= 1000 and 1 <= rows <= 1000):
+        return DEFAULT_COLS, DEFAULT_ROWS
+    return cols, rows
+
+
+def spawn_pty(cwd: str, cols: int = DEFAULT_COLS, rows: int = DEFAULT_ROWS) -> tuple[int, int]:
     """Fork a PTY with a shell process in the given directory.
 
     Uses pty.fork() which handles setsid, slave PTY setup, and
@@ -265,7 +283,7 @@ def spawn_pty(cwd: str) -> tuple[int, int]:
 
     # ── Parent process ──
     # Set initial window size
-    set_winsize(master_fd, DEFAULT_COLS, DEFAULT_ROWS)
+    set_winsize(master_fd, cols, rows)
 
     # Make the fd non-blocking for event-driven reading
     flags = fcntl.fcntl(master_fd, fcntl.F_GETFL)
@@ -280,6 +298,8 @@ def spawn_tmux_pty(
     terminal_index: int = 0,
     config_path: str | None = None,
     attach_only: bool = False,
+    cols: int = DEFAULT_COLS,
+    rows: int = DEFAULT_ROWS,
 ) -> tuple[int, int]:
     """Fork a PTY running tmux, attaching to or creating a named terminal.
 
@@ -341,7 +361,7 @@ def spawn_tmux_pty(
         os._exit(1)
 
     # ── Parent process ──
-    set_winsize(master_fd, DEFAULT_COLS, DEFAULT_ROWS)
+    set_winsize(master_fd, cols, rows)
 
     flags = fcntl.fcntl(master_fd, fcntl.F_GETFL)
     fcntl.fcntl(master_fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
@@ -694,6 +714,8 @@ async def terminal_application(scope, receive, send):
     session_id = scope["url_route"]["kwargs"].get("session_id")
     project_id = scope["url_route"]["kwargs"].get("project_id")
     terminal_index = scope["url_route"]["kwargs"].get("terminal_index", 0)
+    qs = parse_qs(scope.get("query_string", b"").decode())
+    cols, rows = parse_initial_size(qs)
 
     # Build terminal context key and resolve cwd
     if session_id:
@@ -704,8 +726,6 @@ async def terminal_application(scope, receive, send):
         cwd, archived = await get_terminal_cwd(None, project_id)
     else:
         # Global or workspace: check query string for name and cwd
-        query_string = scope.get("query_string", b"").decode()
-        qs = parse_qs(query_string)
         terminal_context = qs.get("name", ["global"])[0]
 
         # Only accept cwd from query string for workspace terminals (name present)
@@ -772,10 +792,10 @@ async def terminal_application(scope, receive, send):
         if use_tmux:
             child_pid, master_fd = spawn_tmux_pty(
                 cwd, terminal_context, terminal_index, config_path=tmux_config_path,
-                attach_only=hybrid_attach,
+                attach_only=hybrid_attach, cols=cols, rows=rows,
             )
         else:
-            child_pid, master_fd = spawn_pty(cwd)
+            child_pid, master_fd = spawn_pty(cwd, cols=cols, rows=rows)
     except OSError:
         logger.exception("Failed to spawn PTY for terminal %s", terminal_context)
         await send({"type": "websocket.accept"})

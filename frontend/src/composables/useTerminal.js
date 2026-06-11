@@ -17,6 +17,11 @@ import '@xterm/xterm/css/xterm.css'
 // floor below which fewer columns are accepted rather than unreadable text.
 const HYBRID_MIN_COLS = 80
 const HYBRID_MIN_FONT_SIZE = 6
+// Trailing debounce for container-resize refits. During a live drag the
+// ResizeObserver fires every frame, and every column change reflows the whole
+// xterm scrollback AND makes tmux re-wrap its history server-side — fitting
+// per-frame froze the browser on heavy buffers.
+const RESIZE_DEBOUNCE_MS = 150
 
 // ── Terminal themes ──────────────────────────────────────────────────────
 
@@ -250,6 +255,10 @@ export function useTerminal(contextKey, terminalIndex = 0, { sessionId = null, p
     let ws = null
     /** @type {ResizeObserver | null} */
     let resizeObserver = null
+    /** @type {ReturnType<typeof setTimeout> | null} */
+    let resizeDebounceTimer = null
+    /** Last size the backend PTY is known to have (sent or carried by the WS URL). */
+    let lastSentSize = null
     /** @type {boolean} */
     let intentionalClose = false
 
@@ -350,6 +359,16 @@ export function useTerminal(contextKey, terminalIndex = 0, { sessionId = null, p
         if (shouldUseTmux()) {
             params.set('tmux', '1')
         }
+        // Initial PTY size: the terminal is fitted before the WS connects, so
+        // the backend can spawn the PTY (and tmux can attach) directly at the
+        // right dimensions instead of 80x24-then-resize — the transient
+        // default size made tmux re-wrap twice and TUI apps repaint fully on
+        // every attach.
+        if (terminal) {
+            params.set('cols', String(terminal.cols))
+            params.set('rows', String(terminal.rows))
+            lastSentSize = { cols: terminal.cols, rows: terminal.rows }
+        }
         const qs = params.toString()
         const base = `${wsProtocol}//${location.host}/ws/terminal/${path}/`
         return qs ? `${base}?${qs}` : base
@@ -379,12 +398,9 @@ export function useTerminal(contextKey, terminalIndex = 0, { sessionId = null, p
                     terminal?.writeln(`\x1b[2m(tmux disabled for ${reason} sessions)\x1b[0m`)
                 }
             }
-            // Send current terminal dimensions so the PTY matches xterm.js size.
-            // The initial fitAddon.fit() runs before the WebSocket is open,
-            // so the backend spawns with default 80x24. This fixes it.
-            if (terminal) {
-                wsSend({ type: 'resize', cols: terminal.cols, rows: terminal.rows })
-            }
+            // The PTY was spawned at the dimensions carried by the WS URL;
+            // this only sends a resize if they changed while connecting.
+            sendResize()
         }
 
         ws.onmessage = (event) => {
@@ -479,6 +495,22 @@ export function useTerminal(contextKey, terminalIndex = 0, { sessionId = null, p
         if (ws && ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify(data))
         }
+    }
+
+    /**
+     * Notify the backend of the current terminal dimensions.
+     *
+     * Skips when the WS is not open (the next connection carries the size in
+     * its URL, so nothing is lost) and when the size did not change since the
+     * last delivered value — resizing the PTY is expensive (tmux re-wraps its
+     * whole history and TUIs repaint everything), never send a no-op resize.
+     */
+    function sendResize() {
+        if (!terminal || !ws || ws.readyState !== WebSocket.OPEN) return
+        const { cols, rows } = terminal
+        if (lastSentSize && lastSentSize.cols === cols && lastSentSize.rows === rows) return
+        lastSentSize = { cols, rows }
+        wsSend({ type: 'resize', cols, rows })
     }
 
     // ── Touch selection helpers (mobile) ──────────────────────────────────
@@ -1404,6 +1436,16 @@ export function useTerminal(contextKey, terminalIndex = 0, { sessionId = null, p
      */
     function fitTerminal() {
         if (!fitAddon || !terminal) return
+        // Hidden or detached container — minimized hybrid block (display:none)
+        // or KeepAlive-cached view (subtree out of the document): bail out
+        // before touching ANYTHING, font size included. The FitAddon cannot
+        // measure it (display:none even resolves the container's percentage
+        // height to a bogus pixel value, yielding a ~10-column terminal), and
+        // any resize here reflows the whole scrollback for a terminal nobody
+        // sees, then again on reveal. Dimensions stay strictly untouched
+        // until the terminal is visible again.
+        const el = containerRef.value
+        if (!el || el.clientWidth === 0 || el.clientHeight === 0) return
         const userSize = settingsStore.getFontSize
         if (terminal.options.fontSize !== userSize) {
             terminal.options.fontSize = userSize
@@ -1588,16 +1630,18 @@ export function useTerminal(contextKey, terminalIndex = 0, { sessionId = null, p
             }
         })
 
-        // Watch for container resize
+        // Watch for container resize. Trailing debounce (see
+        // RESIZE_DEBOUNCE_MS): the terminal refits once, shortly after the
+        // last resize event, instead of once per frame during a drag.
         resizeObserver = new ResizeObserver(() => {
-            // Debounce slightly to avoid rapid resize events
-            requestAnimationFrame(() => {
+            clearTimeout(resizeDebounceTimer)
+            resizeDebounceTimer = setTimeout(() => {
+                resizeDebounceTimer = null
                 if (fitAddon && terminal) {
                     fitTerminal()
-                    // Notify the backend of new dimensions
-                    wsSend({ type: 'resize', cols: terminal.cols, rows: terminal.rows })
+                    sendResize()
                 }
-            })
+            }, RESIZE_DEBOUNCE_MS)
         })
         resizeObserver.observe(containerRef.value)
 
@@ -1823,6 +1867,9 @@ export function useTerminal(contextKey, terminalIndex = 0, { sessionId = null, p
             resizeObserver.disconnect()
             resizeObserver = null
         }
+        clearTimeout(resizeDebounceTimer)
+        resizeDebounceTimer = null
+        lastSentSize = null
 
         if (ws) {
             ws.close()
@@ -1884,6 +1931,7 @@ export function useTerminal(contextKey, terminalIndex = 0, { sessionId = null, p
     watch(() => settingsStore.getFontSize, () => {
         if (terminal) {
             fitTerminal()
+            sendResize()
         }
     })
 
