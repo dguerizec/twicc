@@ -197,11 +197,19 @@ def resolve_tmux_config_path(file_path: str) -> str | None:
 def tmux_session_name(terminal_context: str, terminal_index: int = 0) -> str:
     """Return the tmux session name for a given terminal context and index.
 
-    terminal_context is a string like 's:<id>', 'p:<id>', 'w:<id>', or 'global'.
-    For session terminals ('s:' prefix), keep the existing naming scheme
-    for backward compatibility with running tmux sessions.
+    terminal_context is a string like 's:<id>', 'p:<id>', 'w:<id>', 'h:<id>',
+    or 'global'. For session terminals ('s:' prefix), keep the existing naming
+    scheme for backward compatibility with running tmux sessions. Hybrid
+    contexts ('h:' prefix) map onto the hybrid agent's own tmux session —
+    the terminal layer only ever ATTACHES to those, it never creates them.
     All names are prefixed with 'twicc-' and sanitized (no dots/colons).
     """
+    if terminal_context.startswith("h:"):
+        # Single source of truth for the name lives with the hybrid agent.
+        # Local import: hybrid/tmux.py imports this module's constants.
+        from twicc.providers.claude_code.agent.hybrid.tmux import hybrid_tmux_session_name
+
+        return hybrid_tmux_session_name(terminal_context[2:])
     if terminal_context.startswith("s:"):
         # Backward compat: session terminals keep old naming
         session_id = terminal_context[2:]
@@ -271,6 +279,7 @@ def spawn_tmux_pty(
     terminal_context: str,
     terminal_index: int = 0,
     config_path: str | None = None,
+    attach_only: bool = False,
 ) -> tuple[int, int]:
     """Fork a PTY running tmux, attaching to or creating a named terminal.
 
@@ -279,6 +288,11 @@ def spawn_tmux_pty(
     - ``-f <cfg>``: config file — ``/dev/null`` unless a valid user path is passed
     - ``new-session -A``: attach if session exists, create if not
     - ``-s <name>``: deterministic session name
+
+    With ``attach_only=True`` the client runs ``attach-session -t =<name>``
+    instead: it never creates anything, and exits immediately when the target
+    session does not exist (hybrid terminals: the tmux session belongs to the
+    hybrid agent, the terminal layer only ever views it).
 
     The dedicated socket is non-negotiable. When a user config is loaded, the
     caller must still force ``mouse off`` at session level after the session is
@@ -308,13 +322,22 @@ def spawn_tmux_pty(
         # Strip provider-specific env vars (same reason as in spawn_pty)
         get_provider_helpers_registry().purge_env_vars(os.environ)
 
-        os.execvp(tmux_path, [
-            "tmux",
-            "-L", TMUX_SOCKET_NAME,
-            "-f", config_arg,
-            "new-session", "-A",
-            "-s", name,
-        ])
+        if attach_only:
+            os.execvp(tmux_path, [
+                "tmux",
+                "-L", TMUX_SOCKET_NAME,
+                "-f", config_arg,
+                "attach-session",
+                "-t", "=" + name,
+            ])
+        else:
+            os.execvp(tmux_path, [
+                "tmux",
+                "-L", TMUX_SOCKET_NAME,
+                "-f", config_arg,
+                "new-session", "-A",
+                "-s", name,
+            ])
         os._exit(1)
 
     # ── Parent process ──
@@ -695,8 +718,29 @@ async def terminal_application(scope, receive, send):
             cwd = home
         archived = False
 
+    # ── Hybrid terminals: attach-only ─────────────────────────────────
+    # An ``h:<session_id>`` context views the hybrid agent's own tmux
+    # session (the one running the claude TUI). The terminal layer NEVER
+    # creates it — when it does not exist (CLI not launched yet, or dead
+    # and cleaned up), tell the client the PTY is gone and close. The
+    # next send relaunches the CLI and the frontend reconnects.
+    hybrid_attach = terminal_context.startswith("h:")
+    if hybrid_attach:
+        exists = (
+            get_tmux_path() is not None
+            and await asyncio.to_thread(tmux_session_exists, terminal_context, terminal_index)
+        )
+        if not exists:
+            await send({"type": "websocket.accept"})
+            await send({
+                "type": "websocket.send",
+                "text": json.dumps({"type": "pty_exited"}),
+            })
+            await send({"type": "websocket.close", "code": 1000})
+            return
+
     # ── Spawn PTY (tmux or raw shell) ────────────────────────────────
-    use_tmux = wants_tmux(scope)
+    use_tmux = wants_tmux(scope) or hybrid_attach
     if use_tmux and get_tmux_path() is None:
         logger.warning(
             "tmux requested but not installed for terminal %s, falling back to raw shell",
@@ -728,6 +772,7 @@ async def terminal_application(scope, receive, send):
         if use_tmux:
             child_pid, master_fd = spawn_tmux_pty(
                 cwd, terminal_context, terminal_index, config_path=tmux_config_path,
+                attach_only=hybrid_attach,
             )
         else:
             child_pid, master_fd = spawn_pty(cwd)

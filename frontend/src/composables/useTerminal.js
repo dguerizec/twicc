@@ -292,8 +292,12 @@ export function useTerminal(contextKey, terminalIndex = 0, { sessionId = null, p
      * Check whether tmux should actually be used for this terminal.
      * Tmux is skipped for draft and archived sessions.
      * For project/workspace/global terminals, tmux is always available (if enabled).
+     * Hybrid terminals ('h:' context) are tmux BY DEFINITION (they attach to
+     * the hybrid agent's own tmux session), overriding both the user's tmux
+     * setting and the draft/archived guard.
      */
     function shouldUseTmux() {
+        if (contextKey?.startsWith('h:')) return true
         if (!settingsStore.isTerminalUseTmux) return false
         if (sessionId) {
             const session = dataStore.getSession(sessionId)
@@ -312,7 +316,14 @@ export function useTerminal(contextKey, terminalIndex = 0, { sessionId = null, p
         const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
         let path
         const params = new URLSearchParams()
-        if (sessionId) {
+        if (contextKey?.startsWith('h:')) {
+            // Hybrid terminal: global URL pattern + name, attach-only on the
+            // backend (never creates a tmux session). sessionId may be set
+            // for store lookups but must NOT route to the session-terminal
+            // URL (that one owns the 's:' shell-terminal namespace).
+            path = `${terminalIndex}`
+            params.set('name', contextKey)
+        } else if (sessionId) {
             // Session terminal: /ws/terminal/<projectId>/<sessionId>/<index>/
             const pid = projectId || dataStore.getSession(sessionId)?.project_id || '_'
             path = `${pid}/${sessionId}/${terminalIndex}`
