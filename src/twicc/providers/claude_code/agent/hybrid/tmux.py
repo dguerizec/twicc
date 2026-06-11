@@ -153,9 +153,14 @@ def capture_pane(session_id: str) -> str | None:
     return result.stdout.decode(errors="replace")
 
 
-# A full-width run of "─" (the TUI frames its composer with these) and a bare
-# input chevron with nothing typed after it.
-_COMPOSER_SEPARATOR_RE = re.compile(r"^\s*─{20,}\s*$")
+# The TUI frames its composer with runs of "─". The frame lines are NOT
+# always pure: the top border embeds the session title
+# ("──── My session title ──") and the bottom border can embed mode
+# indicators ("──── ● high · /effort"), so a separator is any line that
+# STARTS with a run of "─" (edit-diff rules use "╌" and box borders start
+# with "╭"/"╰" — neither matches). The bare chevron may be followed by a
+# non-breaking space (\xa0), which \s covers in unicode mode.
+_COMPOSER_SEPARATOR_RE = re.compile(r"^\s*─{10,}")
 _EMPTY_COMPOSER_RE = re.compile(r"^❯\s*$")
 
 
