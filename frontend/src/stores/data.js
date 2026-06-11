@@ -87,6 +87,9 @@ const INFLIGHT_SEND_TTL_MS = 7 * 24 * 60 * 60 * 1000
 // Minimum snapshot age before the audit may call it undelivered: younger
 // sends may simply not have their user_message line written yet.
 const INFLIGHT_AUDIT_MIN_AGE_MS = 60 * 1000
+// Max metadata-only user_message lines whose content the audit fetches
+// before concluding (recent-most kept — see auditInflightSends).
+const INFLIGHT_AUDIT_FETCH_CAP = 300
 
 function userMessageMatchesOptimistic(providerHelpers, optimistic, item) {
     if (!providerHelpers || !optimistic || item?.kind !== 'user_message') return false
@@ -2627,7 +2630,7 @@ export const useDataStore = defineStore('data', {
          * callout if the matching line eventually arrives.
          * @param {string} sessionId
          */
-        auditInflightSends(sessionId) {
+        async auditInflightSends(sessionId) {
             const items = this.sessionItems[sessionId]
             if (items?.length) this.resolveInflightSends(sessionId, items)
             if (this.localState.sendFailures[sessionId]) return // one surfaced failure at a time
@@ -2647,6 +2650,34 @@ export const useDataStore = defineStore('data', {
                 }
             }
             if (!oldest) return
+
+            // Session opening only loads content for the TAIL of the items
+            // (virtual scroller): older user_message lines are metadata-only
+            // and resolveInflightSends cannot match what it cannot read — a
+            // delivered message whose line fell outside the window would be
+            // wrongly declared lost. Fetch the content of those lines first
+            // (recent-most capped; a recent send cannot have hundreds of
+            // user messages written after its own line); addSessionItems
+            // re-runs resolution with them.
+            const missingLines = []
+            for (const item of items || []) {
+                if (item?.kind !== 'user_message' || hasContent(item)) continue
+                missingLines.push(item.line_num)
+            }
+            const linesToFetch = missingLines.slice(-INFLIGHT_AUDIT_FETCH_CAP)
+            if (linesToFetch.length) {
+                const projectId = this.getSession(sessionId)?.project_id
+                if (!projectId) return
+                await this.loadSessionItemsRanges(projectId, sessionId, linesToFetch)
+                if (!inflightSends.has(oldestId)) return // resolved by a fetched line
+                if (this.localState.sendFailures[sessionId]) return // a concurrent audit surfaced first
+                // Some requested lines still have no content (fetch failed):
+                // delivery cannot be ruled out — keep the snapshot for a
+                // later audit instead of crying wolf.
+                const itemsNow = this.sessionItems[sessionId] || []
+                if (linesToFetch.some(n => itemsNow[n - 1] && !hasContent(itemsNow[n - 1]))) return
+            }
+
             inflightSends.delete(oldestId)
             this._applySendFailure(oldestId, oldest, {
                 code: 'delivery_unconfirmed',

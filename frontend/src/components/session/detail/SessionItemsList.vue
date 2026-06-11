@@ -427,6 +427,11 @@ async function loadSessionData(lastLine) {
         // Success
         store.localState.sessions[sId].itemsLoadingError = false
 
+        // Session opening = audit point for sends whose outcome was lost
+        // with a previous WebSocket/tab (send-failure recovery). This is the
+        // REAL opening path — data.js's loadSessionItems is not called here.
+        store.auditInflightSends(sId)
+
     } catch (error) {
         console.error('Failed to load session data:', error)
         store.localState.sessions[sId].itemsLoadingError = true
