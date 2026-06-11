@@ -500,17 +500,22 @@ class BaseProviderHelpers:
         self,
         current: AgentSettings,
         requested: AgentSettings,
+        categories: dict[AgentSettingCategory, list[str]] | None = None,
     ) -> dict[AgentSettingCategory, list[str]]:
         """Return per-category lists of fields that differ between ``current`` and ``requested``.
 
         Default implementation derives the per-category diff from
         :attr:`AGENT_SETTINGS_CATEGORIES`. Categories with no changes return an
-        empty list.
+        empty list. ``categories`` overrides the classification table for
+        alternative agent flavors of the same provider (e.g. Claude Code's
+        hybrid CLI mode, where the TUI changes what can be applied live).
         """
+        if categories is None:
+            categories = self.AGENT_SETTINGS_CATEGORIES
         result: dict[AgentSettingCategory, list[str]] = {
-            category: [] for category in self.AGENT_SETTINGS_CATEGORIES
+            category: [] for category in categories
         }
-        for category, fields in self.AGENT_SETTINGS_CATEGORIES.items():
+        for category, fields in categories.items():
             for field in fields:
                 if getattr(current, field) != getattr(requested, field):
                     result[category].append(field)

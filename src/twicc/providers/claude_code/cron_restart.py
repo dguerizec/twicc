@@ -239,6 +239,18 @@ async def restart_session_crons(
     from twicc.providers.claude_code.agent.manager import get_claude_code_agent_manager
 
     manager = get_claude_code_agent_manager()
+
+    # Crons on hybrid sessions are out of scope (V1): a hybrid session can
+    # only carry crons created in its SDK era (before the one-way switch),
+    # and restarting them would launch the interactive CLI on a timer.
+    # Refuse + log instead.
+    if await manager._session_is_hybrid(session_id):
+        logger.warning(
+            "Cron restart refused for session %s: hybrid sessions do not "
+            "support crons (V1)", session_id,
+        )
+        return
+
     delays = _retry_delays(initial_delay)
     attempt = 0
 

@@ -150,6 +150,7 @@ class ClaudeCodeAgentManager(BaseAgentManager):
                 elif agent.state == AgentState.USER_TURN:
                     changes = provider_helpers.classify_agent_settings_changes(
                         agent.agent_settings, settings,
+                        categories=self._settings_categories_for(agent),
                     )
                     has_startup_changes = bool(changes[AgentSettingCategory.STARTUP])
 
@@ -197,7 +198,13 @@ class ClaudeCodeAgentManager(BaseAgentManager):
                     # During assistant_turn: apply live (permission) immediately,
                     # send text if any. Idle/startup changes are saved to DB by
                     # the caller and will be checked on next USER_TURN transition.
-                    if settings.permission_mode != agent.agent_settings.permission_mode:
+                    # Hybrid agents have no set_permission_mode (the mode is
+                    # STARTUP there) — the change is picked up by
+                    # _apply_pending_settings on the next USER_TURN.
+                    if (
+                        not getattr(agent, "is_hybrid", False)
+                        and settings.permission_mode != agent.agent_settings.permission_mode
+                    ):
                         await agent.set_permission_mode(settings.permission_mode)
                     if has_content:
                         await agent.send(text, images=images, documents=documents)
@@ -364,6 +371,38 @@ class ClaudeCodeAgentManager(BaseAgentManager):
     # Factory hook (Claude Code agent construction)
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _settings_categories_for(agent: BaseAgent) -> dict | None:
+        """Classification table override for hybrid agents (None = SDK default)."""
+        if getattr(agent, "is_hybrid", False):
+            from twicc.providers.claude_code.constants import HYBRID_AGENT_SETTINGS_CATEGORIES
+            return HYBRID_AGENT_SETTINGS_CATEGORIES
+        return None
+
+    @staticmethod
+    async def _session_is_hybrid(session_id: str) -> bool:
+        """Hybrid flag for a session: DB row, else the pending-attributes buffer.
+
+        Same dual lookup as the system-prompt addendum — a brand-new session
+        has no row until the watcher ingests its first JSONL line.
+        """
+        from twicc.core.models import Session
+        from twicc.pending_session_attributes import get_pending_session_attributes
+
+        def _read() -> bool | None:
+            return (
+                Session.objects
+                .filter(id=session_id)
+                .values_list("hybrid", flat=True)
+                .first()
+            )
+
+        hybrid = await asyncio.to_thread(_read)
+        if hybrid is not None:
+            return hybrid
+        pending = get_pending_session_attributes(session_id)
+        return bool(pending.hybrid) if pending else False
+
     async def _create_agent(
         self,
         session_id: str,
@@ -373,14 +412,29 @@ class ClaudeCodeAgentManager(BaseAgentManager):
         resume: bool,
         settings: AgentSettings,
         **kwargs: Any,
-    ) -> ClaudeCodeAgent:
-        """Build a ClaudeCodeAgent wired to this manager's cron callbacks.
+    ) -> BaseAgent:
+        """Build the right agent flavor for the session (SDK or hybrid CLI).
 
         Claude Code's SDK accepts a client-supplied session id, so ``session_id``
         is the canonical id in both ``resume=True`` and ``resume=False`` cases.
         ``resume`` is therefore unused here (the resume vs new-session decision
         is handled by ``agent.start(..., resume=resume, ...)`` downstream).
+
+        Every agent-construction path funnels through this factory
+        (``_start_agent`` for sends/creates AND the cron restart flow), so the
+        hybrid check covers them all. A hybrid session must NEVER be resumed
+        through the SDK: the CLI-era messages would be invisible to it
+        (one-way switch, see ``Session.hybrid``).
         """
+        if await self._session_is_hybrid(session_id):
+            from twicc.providers.claude_code.agent.hybrid.agent import HybridClaudeAgent
+
+            return HybridClaudeAgent(
+                session_id=session_id,
+                project_id=project_id,
+                cwd=cwd,
+                agent_settings=settings,
+            )
         return ClaudeCodeAgent(
             session_id=session_id,
             project_id=project_id,
@@ -949,6 +1003,7 @@ class ClaudeCodeAgentManager(BaseAgentManager):
 
         changes = provider_helpers.classify_agent_settings_changes(
             agent.agent_settings, requested_settings,
+            categories=self._settings_categories_for(agent),
         )
         if not any(changes.values()):
             return
