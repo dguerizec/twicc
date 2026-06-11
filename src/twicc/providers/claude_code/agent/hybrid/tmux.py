@@ -156,11 +156,18 @@ def capture_pane(session_id: str) -> str | None:
 # The TUI frames its composer with runs of "─". The frame lines are NOT
 # always pure: the top border embeds the session title
 # ("──── My session title ──") and the bottom border can embed mode
-# indicators ("──── ● high · /effort"), so a separator is any line that
-# STARTS with a run of "─" (edit-diff rules use "╌" and box borders start
-# with "╭"/"╰" — neither matches). The bare chevron may be followed by a
-# non-breaking space (\xa0), which \s covers in unicode mode.
-_COMPOSER_SEPARATOR_RE = re.compile(r"^\s*─{10,}")
+# indicators ("──── ● high · /effort"). Worse, on NARROW panes a long
+# title makes the top border WRAP, and the line adjacent to the chevron
+# becomes the title tail with ZERO leading dashes ("backend ──") —
+# verified empirically down to 28 columns. So a border line is any line
+# that STARTS with a run of "─" (right-aligned indicators keep the
+# leading run at every width) OR ENDS with one (the wrapped title tail
+# always does). Edit-diff rules use "╌" and box borders start/end with
+# "╭"/"╮"/"╰"/"╯" — none match. Checked with search(), not match(): the
+# first alternative is ^-anchored, the second matches at end of line.
+# The bare chevron may be followed by a non-breaking space (\xa0), which
+# \s covers in unicode mode.
+_COMPOSER_BORDER_RE = re.compile(r"^\s*─{4,}|─{2,}\s*$")
 _EMPTY_COMPOSER_RE = re.compile(r"^❯\s*$")
 
 
@@ -188,8 +195,8 @@ def composer_ready(session_id: str) -> bool:
     lines = screen.splitlines()
     return any(
         _EMPTY_COMPOSER_RE.match(lines[i])
-        and _COMPOSER_SEPARATOR_RE.match(lines[i - 1])
-        and _COMPOSER_SEPARATOR_RE.match(lines[i + 1])
+        and _COMPOSER_BORDER_RE.search(lines[i - 1])
+        and _COMPOSER_BORDER_RE.search(lines[i + 1])
         for i in range(1, len(lines) - 1)
     )
 
