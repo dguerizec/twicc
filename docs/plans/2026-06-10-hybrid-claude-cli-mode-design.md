@@ -283,6 +283,13 @@ original from that store and persists it in TwiCC's own storage at ingest time
 (same place the SDK-captured `originalFile` goes today — claude owns the store
 and its retention, so copy, don't reference).
 
+> Implementation note (2026-06-11): the store-side capture turned out to be
+> unnecessary — with `fileCheckpointingEnabled` forced on, the interactive CLI
+> embeds `toolUseResult.originalFile` (full pre-edit content) directly in the
+> Edit/Write tool_result JSONL lines (verified on 2.1.170 on two sessions), so
+> the existing pipeline reads it natively with zero hybrid-specific code. The
+> snapshot/store mapping above stays documented for reference.
+
 ### 3.6 Backend architecture sketch
 
 - **`Session.hybrid` flag** (one-way; new migration). Cleared never.

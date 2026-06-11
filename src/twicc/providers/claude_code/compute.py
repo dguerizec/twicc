@@ -1050,10 +1050,12 @@ class ClaudeCodeSessionCompute(BaseSessionCompute):
 
         # Top-level system-ish lines that the CLI sprinkles in (queue ops,
         # progress events, summaries, file snapshots, custom-title, etc.).
+        # agent-name / agent-color are written by interactive CLI sessions
+        # (hybrid mode brought them into TwiCC-watched files).
         if entry_type in (
             'queue-operation', 'progress', 'summary', 'file-history-snapshot',
             'last-prompt', 'attachment', 'permission-mode', 'custom-title',
-            'pr-link', 'mode', 'ai-title', 'agent-name',
+            'pr-link', 'mode', 'ai-title', 'agent-name', 'agent-color',
         ):
             return ItemKind.SYSTEM
 
