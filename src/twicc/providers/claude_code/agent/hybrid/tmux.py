@@ -104,6 +104,18 @@ def pane_status(session_id: str) -> tuple[int | None, bool]:
     return int(parts[0]), parts[1] == "1"
 
 
+def capture_pane(session_id: str) -> str | None:
+    """Return the visible pane content, or ``None`` if the session is gone.
+
+    Used to detect TUI dialogs that must clear before a paste (the trust
+    dialog swallows pasted text entirely — verified empirically).
+    """
+    result = _run(["capture-pane", "-p", "-t", "=" + hybrid_tmux_session_name(session_id)])
+    if result.returncode != 0:
+        return None
+    return result.stdout.decode(errors="replace")
+
+
 def paste_text(session_id: str, text: str, *, submit: bool = True) -> None:
     """Bracketed-paste ``text`` into the TUI composer, then press Enter.
 
