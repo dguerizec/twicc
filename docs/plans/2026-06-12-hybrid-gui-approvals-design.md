@@ -187,7 +187,12 @@ answerable pending requests**:
 - **Clearing (existing JSONL bridge, now also a janitor).** The
   unconditional clear-on-`tool_result` / clear-on-turn-end logic stays;
   on clear the agent additionally deletes the kept drop file and any
-  orphaned status file for that nonce (covers: answered in TUI before
+  orphaned status file for that nonce. With the timeout pushed very
+  high, a TUI-answered prompt would otherwise leave its hook polling
+  for as long as the CLI lives — so the janitor also **reaps the orphan
+  hook** by writing a dummy status file (the CLI provably ignores late
+  hook output): the hook consumes it and exits; a delayed unlink covers
+  the hook-already-dead case (covers: answered in TUI before
   the GUI, Esc — where the CLI kills the hook so a just-written response
   would never be consumed —, and hook death).
 - **GUI-channel expiry timer.** Each registered pending schedules a
