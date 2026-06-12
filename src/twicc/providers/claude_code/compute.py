@@ -75,6 +75,12 @@ _SYSTEM_SLASH_COMMANDS = frozenset({'/clear', '/model', '/effort', '/fast'})
 _TASK_NOTIFICATION_TAG = '<task-notification>'
 _TASK_NOTIFICATION_CLOSE_TAG = '</task-notification>'
 
+# Turn-abort breadcrumbs the CLI writes as user messages when a turn is
+# interrupted: "[Request interrupted by user]", "[Request interrupted by
+# user for tool use]". Also matched by the hybrid JSONL bridge (a turn that
+# ends this way never writes a turn_duration line).
+INTERRUPTION_MARKER_PREFIX = '[Request interrupted by user'
+
 logger = logging.getLogger(__name__)
 
 
@@ -121,6 +127,12 @@ def extract_text_from_content(content: str | list | None) -> str | None:
                     return text.strip()
 
     return None
+
+
+def is_interruption_marker(text: str) -> bool:
+    """True for the CLI's turn-abort breadcrumb user messages."""
+    stripped = text.strip()
+    return stripped.startswith(INTERRUPTION_MARKER_PREFIX) and stripped.endswith(']')
 
 
 class ParsedCommand(NamedTuple):
@@ -1093,6 +1105,11 @@ class ClaudeCodeSessionCompute(BaseSessionCompute):
                 for item in content
             ):
                 return ItemKind.CONTENT_ITEMS
+
+            # Turn-abort breadcrumbs ("[Request interrupted by user]", "... for
+            # tool use]") are CLI bookkeeping, not real user prompts.
+            if text is not None and is_interruption_marker(text):
+                return ItemKind.SYSTEM
 
             # Only user messages with visible content count as USER_MESSAGE.
             if text or _has_visible_content(content):
