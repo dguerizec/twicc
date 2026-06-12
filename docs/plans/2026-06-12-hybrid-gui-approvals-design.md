@@ -70,9 +70,10 @@ deploys. Findings:
 - **The badge stays** on the terminal block, as the indicator tying the
   pending prompt to the embedded terminal (and as the only surface after
   GUI-channel expiry).
-- **Timeout philosophy — mirror the SDK rule.** SDK sessions are never
-  auto-killed while a pending request is open; the hook channel must
-  live just as long. Set the hook `timeout` as high as the CLI accepts
+- **Timeout philosophy — mirror TwiCC's own rule.** TwiCC's agent
+  manager never auto-kills an agent while a pending request is open
+  (the user must find their morning approval still there in the
+  evening); the hook channel must live just as long. Set the hook `timeout` as high as the CLI accepts
   (target: effectively infinite; trials at implementation time will find
   the accepted ceiling). If the hook still dies (CLI clamp, crash), the
   widget degrades to the V1 badge — answering in the terminal always
@@ -82,21 +83,26 @@ deploys. Findings:
 
 ## 4. Technical design
 
-### 4.1 Response channel (filesystem, mirroring the drop channel)
+### 4.1 Response channel (filesystem, the drop-requests `.status.json` pattern)
 
-New directory `<data_dir>/hybrid-hook-responses/` (sibling of
-`hybrid-hooks/`, helper in `paths.py`). It is **not** watched — the only
-reader is the polling hook. Files are named `<session_id>__<nonce>.json`
-where `<nonce>` is the same `$$-$(date +%s%N)` value the hook generated
-for its drop file; the backend writes them atomically (`.tmp` → rename).
-Sibling dir rather than a subdirectory of `hybrid-hooks/`: `awatch` is
-recursive and the hooks watcher deletes anything it does not recognize.
+Same directory, same convention as the established CLI drop-requests
+system (`drop_requests_watcher.py` + `cli/_drop_request/polling.py`):
+the response to a drop file lives **next to it**, named
+`<drop stem>.status.json` — here
+`hybrid-hooks/<session_id>__PermissionRequest__<nonce>.status.json`.
+The backend writes it atomically (`.tmp` → rename, `chmod 600`); the
+polling reader (the hook) consumes and deletes it — exactly how the
+`twicc` CLI polls its own `.status.json`. The hooks watcher gains the
+same status/tmp suffix exclusion the drop-requests watcher has
+(critical: a bare `*.json` filter would parse the status file as a
+3-part event name and route-then-delete it), plus the matching boot
+sweep for orphaned status files.
 
 ### 4.2 Hook command (`launch.py` / `build_hooks_settings`)
 
 The injected shell command becomes: drop stdin (unchanged) → poll
-`hybrid-hook-responses/<session_id>__<nonce>.json` every ~0.2 s → on
-hit, `cat` it to stdout, `rm` it, exit 0. Still pure shell, no HTTP, no
+`<drop stem>.status.json` in the same directory every ~0.2 s → on hit,
+`cat` it to stdout, `rm` it, exit 0. Still pure shell, no HTTP, no
 token. The hook entry gains `"timeout": <very high>` (value found by
 trial; see §6). The internal poll loop is unbounded — the CLI's own
 timeout is the only reaper, so the channel lives exactly as long as the
@@ -107,11 +113,14 @@ CLI allows.
 - Passes the **nonce** through to the manager
   (`handle_hybrid_hook(session_id, event, payload, nonce)`); it already
   parses it from the filename.
-- **Deferred deletion for handled `PermissionRequest` events.** Today
-  every drop file is deleted after processing. V2: when the event is
-  handled by a live hybrid agent, the drop file is kept; the **agent**
-  deletes it when the pending clears (GUI answer, JSONL clearing, agent
-  death). Unhandled/malformed drops are deleted as today. Benefit: the
+- Ignores `.status.json` / `.tmp` files (suffix exclusion, §4.1).
+- **Deferred deletion for handled `PermissionRequest` events** —
+  scoped strictly to the `hybrid-hooks/` directory; the general CLI
+  `drop-requests/` lifecycle is untouched. Today every hybrid-hook drop
+  file is deleted after processing. V2: when the event is handled by a
+  live hybrid agent, the drop file is kept; the **agent** deletes it
+  when the pending clears (GUI answer, JSONL clearing, agent death).
+  Unhandled/malformed drops are deleted as today. Benefit: the
   existing boot scan re-feeds surviving drops after a TwiCC restart, so
   a pending approval — whose hook process is still alive inside the
   surviving tmux, still polling — regains its GUI widget across TwiCC
@@ -141,15 +150,28 @@ answerable pending requests**:
   untouched): converts the SDK-typed response built by `ws.py`
   (`PermissionResultAllow{updated_input, updated_permissions}` /
   `PermissionResultDeny{message}`) into the hook stdout JSON of §2.3,
-  writes `hybrid-hook-responses/<sid>__<nonce>.json` atomically, pops
+  writes the `.status.json` next to the kept drop file (§4.1), pops
   the pending request, deletes the kept drop file, broadcasts. Returns
   `False` when the request_id is unknown (already cleared).
   `ws.py`'s existing `setMode` persistence (`Session.permission_mode`)
   applies unchanged — the next hybrid restart's argv picks it up.
+- **ExitPlanMode plan editing — shared brick.** In SDK mode the widget
+  lets the user edit the plan; the CLI/SDK ignores the plan carried in
+  `updated_input`, so the SDK agent rewrites the plan file itself
+  (`_update_plan` in `agent/agent.py`: slug lookup → 
+  `~/.claude/plans/{slug}.md`). That logic (modified-plan detection +
+  plan-file write) is **extracted into a module shared by both modes**
+  — per the standing directive to reuse the SDK bricks, reorganizing
+  code where needed. The hybrid path is even simpler: the hook payload
+  carries `tool_input.planFilePath` directly, no slug lookup needed
+  (the shared helper takes an optional explicit path, falling back to
+  the slug lookup for the SDK caller). The file is written **before**
+  the `.status.json` so the CLI proceeds with the edited plan already
+  in place.
 - **Clearing (existing JSONL bridge, now also a janitor).** The
   unconditional clear-on-`tool_result` / clear-on-turn-end logic stays;
   on clear the agent additionally deletes the kept drop file and any
-  orphaned response file for that nonce (covers: answered in TUI before
+  orphaned status file for that nonce (covers: answered in TUI before
   the GUI, Esc — where the CLI kills the hook so a just-written response
   would never be consumed —, and hook death).
 - **GUI-channel expiry timer.** Each registered pending schedules a
@@ -159,7 +181,7 @@ answerable pending requests**:
   its ceiling this should never fire in practice; it is the safety net
   for a CLI clamp.
 - **Death cleanup**: on DEAD, clear all pendings and delete their drop
-  and response files (no futures to cancel — hybrid pendings are not
+  and status files (no futures to cancel — hybrid pendings are not
   awaited server-side).
 
 ### 4.5 Frontend
@@ -183,8 +205,8 @@ answerable pending requests**:
 
 | Scenario | Resolution | Cleanup |
 |---|---|---|
-| GUI answer | agent writes response file; hook prints it; CLI dismisses dialog | hook deletes response; agent pops pending + deletes drop |
-| TUI answer | CLI resolves; `tool_result` lands in JSONL | bridge clears pending; agent deletes drop (+ orphan response if any); orphaned hook's late output ignored |
+| GUI answer | agent writes the `.status.json`; hook prints it; CLI dismisses dialog | hook deletes the status file; agent pops pending + deletes drop |
+| TUI answer | CLI resolves; `tool_result` lands in JSONL | bridge clears pending; agent deletes drop (+ orphan status file if any); orphaned hook's late output ignored |
 | TUI Esc | rejection `tool_result` in JSONL; CLI kills hook | same as TUI answer |
 | Hook timeout (CLI clamp) | nothing resolves; TUI dialog still up | expiry timer downgrades widget→badge; TUI remains the surface |
 | TwiCC restart mid-pending | hook still polling in surviving tmux | boot scan re-feeds kept drop → widget restored; stale-drop guard skips answered ones |
@@ -237,7 +259,12 @@ answerable pending requests**:
 - Response channel = polled file, not HTTP: same rationale as the drop
   channel (no auth exemption, no token in `ps`, per-data-dir routing),
   and it survives TwiCC restarts.
-- Sibling response dir, not a subdir of the watched `hybrid-hooks/`.
+- Response = `<drop stem>.status.json` in the same watched directory,
+  reusing the drop-requests convention (suffix-excluded in the watcher),
+  rather than a separate response directory.
+- ExitPlanMode plan editing reuses the SDK brick (`_update_plan`),
+  extracted to a shared module; hybrid feeds it the payload's
+  `planFilePath` directly.
 - Drop files now deleted at **resolution** (not ingestion) to get
   restart resilience from the existing boot scan.
 - Hook timeout pushed to the CLI's ceiling instead of a re-arming
