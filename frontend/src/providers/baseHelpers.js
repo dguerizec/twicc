@@ -577,6 +577,24 @@ export class BaseProviderHelpers {
     }
 
     /**
+     * Explanation shown as the per-option help text (the option's
+     * ``description``) on a disabled choice, so the user understands *why* it
+     * reads "(not available)". Default: only the trust clamp on
+     * ``permission_mode`` (the mode is removed on untrusted projects). Returns a
+     * string or null. Providers overriding this should chain
+     * ``super.getChoiceDisabledReason(...)``.
+     */
+    getChoiceDisabledReason(field, choiceValue, context) {
+        if (field === 'permission_mode' && context?.untrusted) {
+            const allowed = this.getUntrustedPermissionModes()
+            if (allowed.length && !allowed.includes(choiceValue)) {
+                return 'Unavailable on untrusted projects.'
+            }
+        }
+        return null
+    }
+
+    /**
      * Whether the entire wa-select for ``field`` should be disabled.
      * Default: disabled while the process is starting. Providers override
      * to also disable when a runtime override is in effect (e.g. Claude's

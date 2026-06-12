@@ -109,6 +109,46 @@ async def update_session_permission_mode(session_id: str, permission_mode: str) 
     logger.info(f"Session {session_id} updated with permission_mode {permission_mode}")
 
 
+async def _clamp_setmode_permissions_for_trust(session_id: str, raw_permissions: list[dict]) -> None:
+    """Clamp a setMode approval permission to the untrusted-allowed set, in place.
+
+    Security floor for the approval path (trust design §13.4): the
+    ``pending_request_response`` handler both hands ``updated_permissions`` to the
+    SDK and persists the chosen mode to the DB. Mutating the setMode entry here —
+    once, before either consumer reads it — keeps the SDK and the stored
+    ``Session.permission_mode`` in agreement, so an untrusted project can never end
+    up displaying ``bypassPermissions`` while the agent stays clamped (the bug this
+    closes), nor have a forged/stale payload escalate past the floor.
+
+    Trust is re-resolved live, so a project trusted mid-run is honored.
+    """
+    from twicc.core.models import Session
+    from twicc.core.services.trust import clamp_permission_mode_for_untrusted, project_is_untrusted
+
+    setmode = next(
+        (p for p in raw_permissions if p.get("type") == "setMode" and p.get("mode")),
+        None,
+    )
+    if setmode is None:
+        return
+
+    project_id = await sync_to_async(
+        lambda: Session.objects.filter(id=session_id).values_list("project_id", flat=True).first()
+    )()
+    if project_id is None or not await sync_to_async(project_is_untrusted)(project_id):
+        return
+
+    clamped = await sync_to_async(clamp_permission_mode_for_untrusted)(
+        Provider.CLAUDE_CODE, setmode["mode"]
+    )
+    if clamped != setmode["mode"]:
+        logger.warning(
+            "Untrusted project: setMode %r clamped to %r for session %s (approval path)",
+            setmode["mode"], clamped, session_id,
+        )
+        setmode["mode"] = clamped
+
+
 class ClaudeCodeWSHandler:
     """Routes Claude Code-specific WebSocket messages to dedicated handlers.
 
@@ -237,6 +277,9 @@ class ClaudeCodeWSHandler:
                 updated_permissions = None
                 raw_permissions = content.get("updated_permissions")
                 if raw_permissions:
+                    # Clamp a setMode escalation to the trust floor *before* it
+                    # reaches the SDK or the DB write below — both read this list.
+                    await _clamp_setmode_permissions_for_trust(session_id, raw_permissions)
                     updated_permissions = [_permission_update_from_dict(p) for p in raw_permissions]
 
                 response = PermissionResultAllow(

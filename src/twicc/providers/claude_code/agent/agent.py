@@ -334,7 +334,7 @@ class ClaudeCodeAgent(BaseAgent):
         return True
 
     def get_permission_suggestions(
-        self, tool_name: str, input_data: dict, context: ToolPermissionContext
+        self, tool_name: str, input_data: dict, context: ToolPermissionContext, *, untrusted: bool
     ) -> list[dict] | None:
         """Extract, serialize and filter permission suggestions from the SDK context.
 
@@ -353,6 +353,10 @@ class ClaudeCodeAgent(BaseAgent):
                 MCP suggestions when the SDK provides none)
             input_data: The tool's input parameters (reserved for future filtering)
             context: SDK ``ToolPermissionContext`` containing the suggestions list
+            untrusted: Live-resolved trust state of the project. When ``True``,
+                modes outside the untrusted-allowed set (``bypassPermissions``)
+                are surfaced as ``disabled`` options rather than hidden, so the
+                user sees they exist but cannot pick them here.
 
         Returns:
             A list of serialised permission suggestion dicts, or ``None`` if there
@@ -544,12 +548,14 @@ class ClaudeCodeAgent(BaseAgent):
                 self.agent_settings.selected_model,
             )
             candidate_modes = ("default", "auto", "acceptEdits", "bypassPermissions")
-            if self._untrusted:
-                candidate_modes = tuple(
-                    m for m in candidate_modes if m in helpers.UNTRUSTED_PERMISSION_MODES
-                )
+            # Untrusted modes (``bypassPermissions``) are kept in the list but
+            # flagged ``disabled`` so the approval screen shows them as
+            # "(not available)" — matching the agent-settings popover — instead
+            # of silently hiding them. The frontend prevents picking them and the
+            # ws.py floor re-clamps regardless (forged/stale payloads).
             mode_options = [
-                m for m in candidate_modes
+                {"mode": m, "disabled": untrusted and m not in helpers.UNTRUSTED_PERMISSION_MODES}
+                for m in candidate_modes
                 if m != current_mode and (m != "auto" or supports_auto)
             ]
             if mode_options:
@@ -599,7 +605,10 @@ class ClaudeCodeAgent(BaseAgent):
         else:
             request_type = "tool_approval"
 
-        permission_suggestions = self.get_permission_suggestions(tool_name, input_data, context)
+        untrusted = await self._resolve_untrusted_now()
+        permission_suggestions = self.get_permission_suggestions(
+            tool_name, input_data, context, untrusted=untrusted
+        )
 
         request = PendingRequest(
             request_id=request_id,
@@ -800,10 +809,14 @@ class ClaudeCodeAgent(BaseAgent):
             extra_args: dict[str, str | None] = {
                 ("chrome" if self.agent_settings.claude_in_chrome else "no-chrome"): None
             }
-            if not self._untrusted:
-                # Opt-in for ``bypassPermissions``. Withheld in untrusted
-                # projects together with the mode itself (trust design §13.4).
-                extra_args["allow-dangerously-skip-permissions"] = None
+            # Always opt in to the ``bypassPermissions`` *capability* at launch.
+            # This is a capability flag, not the mode itself: the effective mode
+            # stays governed by the live trust floor (``set_permission_mode`` and
+            # the ws.py approval path both re-resolve trust). Passing it
+            # unconditionally lets a session that started untrusted escalate to
+            # ``bypassPermissions`` once the project is trusted mid-run — without
+            # it, the CLI could never honor the mode for the process lifetime.
+            extra_args["allow-dangerously-skip-permissions"] = None
 
             # Always pass ``fastMode`` explicitly (true or false) via the
             # flag-settings layer so the per-session choice overrides any
@@ -956,6 +969,19 @@ class ClaudeCodeAgent(BaseAgent):
             # The error is communicated to the frontend via WebSocket broadcast.
             await self._handle_error(f"Failed to start process: {e}", exc=e)
 
+    async def _resolve_untrusted_now(self) -> bool:
+        """Re-resolve the project's trust state live (fresh DB read).
+
+        ``self._untrusted`` is a launch-time snapshot used only for the
+        build-time decisions (initial clamp, ``setting_sources``). The runtime
+        permission floors instead re-resolve trust on every access so that
+        trusting/untrusting a project mid-run takes effect immediately, in both
+        directions (relax after trust, re-clamp after revocation).
+        """
+        from twicc.core.services.trust import project_is_untrusted
+
+        return await sync_to_async(project_is_untrusted)(self.project_id)
+
     async def set_permission_mode(self, mode: str) -> None:
         """Change permission mode on the live SDK client.
 
@@ -972,9 +998,11 @@ class ClaudeCodeAgent(BaseAgent):
         if self._client is None:
             raise RuntimeError("Process not started")
 
-        if self._untrusted:
-            # Security floor: no live escalation past the untrusted-allowed set,
-            # whatever the source of the request (trust design §13.4).
+        if await self._resolve_untrusted_now():
+            # Security floor: no escalation past the untrusted-allowed set,
+            # whatever the source of the request (trust design §13.4). Trust is
+            # re-resolved live (not the launch-time snapshot) so a project
+            # trusted mid-run can escalate, and one revoked mid-run is re-clamped.
             from twicc.core.services.trust import clamp_permission_mode_for_untrusted
 
             mode = await sync_to_async(clamp_permission_mode_for_untrusted)(

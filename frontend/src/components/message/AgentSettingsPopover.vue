@@ -249,11 +249,14 @@ const simpleFieldRows = computed(() => {
                 selectedValue,
                 choices: helpers.getFieldChoices(field).map(opt => {
                     const disabled = helpers.isChoiceDisabled(field, opt.value, ctx)
+                    const disabledReason = disabled
+                        ? helpers.getChoiceDisabledReason(field, opt.value, ctx)
+                        : null
                     return {
                         value: String(opt.value),
                         rawValue: opt.value,
                         label: opt.label,
-                        description: opt.description ?? null,
+                        description: disabledReason ?? opt.description ?? null,
                         labelWithSuffix: disabled ? `${opt.label} (not available)` : opt.label,
                         disabled,
                     }

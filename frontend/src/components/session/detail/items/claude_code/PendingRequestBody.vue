@@ -95,6 +95,10 @@ function formatModeLabel(mode) {
     return MODE_LABELS[mode] || mode
 }
 
+// Per-option help text shown on a mode the trust floor makes unavailable
+// (untrusted project). Mirrors the agent-settings popover wording.
+const DISABLED_MODE_REASON = 'Unavailable on untrusted projects.'
+
 const props = defineProps({
     pendingRequest: {
         type: Object,
@@ -401,6 +405,14 @@ const noChangeLabel = computed(() => {
     return current ? `Don't change (current: ${formatModeLabel(current)})` : "Don't change"
 })
 
+// Whether a mode value is a disabled option (untrusted floor). The backend
+// flags these in ``_modeOptions`` so the picker shows them as "(not available)"
+// instead of hiding them; selecting/submitting one must never be possible.
+function isModeDisabled(mode) {
+    const opt = setModeSuggestion.value?._modeOptions?.find(o => o.mode === mode)
+    return !!opt?.disabled
+}
+
 // Whether there are any permission suggestions to display
 const hasPermissionSuggestions = computed(() => permissionSuggestions.value.length > 0)
 
@@ -476,7 +488,7 @@ function getCheckedPermissionSuggestions() {
         }
         result.push(suggestion)
     }
-    if (selectedMode.value && setModeSuggestion.value) {
+    if (selectedMode.value && setModeSuggestion.value && !isModeDisabled(selectedMode.value)) {
         result.push({
             type: 'setMode',
             mode: selectedMode.value,
@@ -492,6 +504,12 @@ function getCheckedPermissionSuggestions() {
  */
 function onModeChange(event) {
     const value = event.target.value
+    // Defensive: disabled options can't be picked through the UI, but never
+    // accept one via a forged/edge event — the backend would re-clamp anyway.
+    if (value && isModeDisabled(value)) {
+        selectedMode.value = null
+        return
+    }
     selectedMode.value = value || null
 }
 
@@ -871,10 +889,14 @@ function handleSubmitQuestions() {
             >
                 <wa-option value="">{{ noChangeLabel }}</wa-option>
                 <wa-option
-                    v-for="mode in setModeSuggestion._modeOptions"
-                    :key="mode"
-                    :value="mode"
-                >Switch to {{ formatModeLabel(mode) }}</wa-option>
+                    v-for="opt in setModeSuggestion._modeOptions"
+                    :key="opt.mode"
+                    :value="opt.mode"
+                    :disabled="opt.disabled"
+                >
+                    <span>Switch to {{ formatModeLabel(opt.mode) }}{{ opt.disabled ? ' (not available)' : '' }}</span>
+                    <span v-if="opt.disabled" class="option-description">{{ DISABLED_MODE_REASON }}</span>
+                </wa-option>
             </wa-select>
         </div>
 
@@ -1311,6 +1333,7 @@ wa-textarea.auto-focused:focus-within::part(base) {
 }
 
 .option-description {
+    display: block;
     font-size: var(--wa-font-size-s);
     color: var(--wa-color-text-quiet);
     line-height: 1.3;
