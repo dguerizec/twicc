@@ -62,6 +62,12 @@ def build_hooks_settings(session_id: str, fast_mode: bool) -> str:
         # env purge already drops an inherited
         # CLAUDE_CODE_DISABLE_FILE_CHECKPOINTING.
         "fileCheckpointingEnabled": True,
+        # Ghost prompt suggestions render INSIDE the composer whenever it is
+        # empty, so the composer-ready detector (tmux.composer_ready) reads
+        # them as a TUI draft and fail-fasts every TwiCC send until the user
+        # manually dismisses them (observed on CLI 2.1.173, 2026-06-12).
+        # Disable the feature for hybrid sessions.
+        "promptSuggestionEnabled": False,
         "hooks": {
             "PermissionRequest": [{
                 "hooks": [{
