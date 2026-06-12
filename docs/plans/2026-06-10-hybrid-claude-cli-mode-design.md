@@ -453,7 +453,13 @@ PermissionRequest drop hook and the file-history capture both worked on
    assistant items for in-flight tools. Pure JSONL can't: tool activity appears
    only once written. The `PreToolUse`/`PostToolUse` hooks (available, verified)
    could feed live indicators. To think through later.
-2. **GUI answering of approvals/AskUserQuestion (bidirectional hooks).** Claude
+2. **GUI answering of approvals/AskUserQuestion (bidirectional hooks).**
+   **→ Verified and designed on 2026-06-12 — see
+   `2026-06-12-hybrid-gui-approvals-design.md`.** The "to verify" below held
+   up (decisions DO flow back through the hook's stdout JSON), with one
+   correction: the CLI does not block the dialog on the hook — it shows the
+   TUI prompt and runs the hook in parallel, first responder wins.
+   <br>Original note (historical): Claude
    BLOCKS while a hook runs, and the `PermissionRequest` payload carries the
    exact data the SDK's `can_use_tool` receives. V2 idea: the hook drops the
    request, then WAITS for a status file (same drop→status pattern as the CLI
