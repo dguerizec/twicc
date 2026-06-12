@@ -1383,7 +1383,7 @@ export function useTerminal(contextKey, terminalIndex = 0, { sessionId = null, p
             scrollback: 5000,
             convertEol: true,
             scrollOnUserInput: true,
-            macOptionIsMeta: true,
+            macOptionIsMeta: settingsStore.isTerminalMacOptionIsMeta,
             macOptionClickForcesSelection: true,
         })
 
@@ -1828,6 +1828,13 @@ export function useTerminal(contextKey, terminalIndex = 0, { sessionId = null, p
         if (terminal) {
             terminal.options.fontSize = newSize
             fitAddon?.fit()
+        }
+    })
+
+    // Apply the Mac "Option as Meta" toggle live to open terminals
+    watch(() => settingsStore.isTerminalMacOptionIsMeta, (enabled) => {
+        if (terminal) {
+            terminal.options.macOptionIsMeta = enabled
         }
     })
 

@@ -55,6 +55,7 @@ export const CATEGORIES = computed(() => {
         { key: 'session',    label: 'Session' },
         { key: 'creation',   label: 'Creation' },
         { key: 'display',    label: 'Display' },
+        { key: 'terminal',   label: 'Terminal' },
         ...providerCategories,
         { key: 'ui',         label: 'UI' },
     ]

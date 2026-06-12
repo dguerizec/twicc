@@ -34,6 +34,7 @@ export const SETTINGS_SCHEMA = {
     toolDiffSideBySide: false,
     diffSideBySide: true,
     editorWordWrap: true,
+    terminalMacOptionIsMeta: false,
     compactSessionList: false,
     showMessageTimestamps: false,
     showArchivedSessions: false,
@@ -102,6 +103,7 @@ const SETTINGS_VALIDATORS = {
     defaultWorktreeDirectory: (v) => typeof v === 'string',
     terminalUseTmux: (v) => typeof v === 'boolean',
     terminalTmuxConfigPath: (v) => typeof v === 'string',
+    terminalMacOptionIsMeta: (v) => typeof v === 'boolean',
     showDiffs: (v) => typeof v === 'boolean',
     toolDiffWordWrap: (v) => typeof v === 'boolean',
     toolDiffSideBySide: (v) => typeof v === 'boolean',
@@ -279,6 +281,7 @@ export const useSettingsStore = defineStore('settings', {
         getDefaultWorktreeDirectory: (state) => state.defaultWorktreeDirectory,
         isTerminalUseTmux: (state) => state.terminalUseTmux,
         getTerminalTmuxConfigPath: (state) => state.terminalTmuxConfigPath,
+        isTerminalMacOptionIsMeta: (state) => state.terminalMacOptionIsMeta,
         isShowDiffs: (state) => state.showDiffs,
         isToolDiffWordWrap: (state) => state.toolDiffWordWrap,
         isToolDiffSideBySide: (state) => state.toolDiffSideBySide,
@@ -509,6 +512,19 @@ export const useSettingsStore = defineStore('settings', {
         setTerminalTmuxConfigPath(path) {
             if (SETTINGS_VALIDATORS.terminalTmuxConfigPath(path)) {
                 this.terminalTmuxConfigPath = path
+            }
+        },
+
+        /**
+         * Set whether the Mac Option (⌥) key acts as Meta in terminals.
+         * When enabled, Option sends Esc-prefixed sequences (shell word
+         * shortcuts) instead of composing characters (|, {, }… on
+         * international layouts). Local-only: a per-device keyboard concern.
+         * @param {boolean} enabled
+         */
+        setTerminalMacOptionIsMeta(enabled) {
+            if (SETTINGS_VALIDATORS.terminalMacOptionIsMeta(enabled)) {
+                this.terminalMacOptionIsMeta = enabled
             }
         },
 

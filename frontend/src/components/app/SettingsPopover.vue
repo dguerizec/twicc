@@ -387,6 +387,8 @@ const titleSystemPrompt = computed(() => store.getTitleSystemPrompt)
 const titleSystemPromptInput = ref('')
 const terminalUseTmux = computed(() => store.isTerminalUseTmux)
 const terminalTmuxConfigPath = computed(() => store.getTerminalTmuxConfigPath)
+const terminalMacOptionIsMeta = computed(() => store.isTerminalMacOptionIsMeta)
+const isMac = computed(() => store.isMac)
 const defaultWorktreeDirectory = computed(() => store.getDefaultWorktreeDirectory)
 const compactSessionList = computed(() => store.isCompactSessionList)
 const showMessageTimestamps = computed(() => store.areMessageTimestampsShown)
@@ -749,6 +751,13 @@ function onTitleSystemPromptApply() {
  */
 function onTmuxChange(event) {
     store.setTerminalUseTmux(event.target.checked)
+}
+
+/**
+ * Toggle Mac "Option as Meta" in terminals.
+ */
+function onMacOptionIsMetaChange(event) {
+    store.setTerminalMacOptionIsMeta(event.target.checked)
 }
 
 function onWorktreeDirInputChange(event) {
@@ -1332,6 +1341,21 @@ function onChangelogClose() {
                             size="small"
                             class="usage-file-validation"
                         >{{ tmuxConfigValidation.message }}</wa-callout>
+                    </div>
+                    <div class="setting-group" v-if="isMac">
+                        <label class="setting-group-label">Option key (⌥)</label>
+                        <wa-switch
+                            :checked="terminalMacOptionIsMeta"
+                            @change="onMacOptionIsMetaChange"
+                            size="small"
+                        >Use as Meta key</wa-switch>
+                        <span class="setting-group-hint">
+                            When enabled, Option acts as the Meta key for shell shortcuts
+                            (<kbd>⌥B</kbd>/<kbd>⌥F</kbd> to move word by word, <kbd>⌥.</kbd> for the last
+                            argument), but characters typed with Option — such as <code>|</code>,
+                            <code>{</code> or <code>\</code> on international keyboard layouts — can no
+                            longer be entered. Stored per device; applies to open terminals immediately.
+                        </span>
                     </div>
                 </section>
 

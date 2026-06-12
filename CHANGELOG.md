@@ -14,6 +14,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   - ![External notifications](frontend/public/whats-new/v1.8.1/external-notifications.webp)
 - **Session switcher** — hold Ctrl and tap the key above Tab (the backtick on QWERTY) to flip between your recently-visited sessions; add Shift to pick from the sessions shown in the sidebar instead.
   - ![Extra usage alerts](frontend/public/whats-new/v1.8.1/sessions-switcher.webp)
+- **Terminal (Mac)** — new settings to choose whether the Option (⌥) key types special characters like `|` or acts as the Meta key for shell shortcuts.
 - **File editor** — Alt+E to toggle edit mode for the current file.
 
 ### Fixed

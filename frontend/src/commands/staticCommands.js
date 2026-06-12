@@ -935,6 +935,18 @@ export function initStaticCommands(router) {
             action: () => settings.setToolDiffSideBySide(!settings.toolDiffSideBySide),
         },
 
+        // ── Terminal ──────────────────────────────────────────────────
+
+        {
+            id: 'terminal.toggle-mac-option-is-meta',
+            label: 'Toggle Terminal Option Key (⌥) as Meta',
+            icon: 'keyboard',
+            category: 'terminal',
+            when: () => settings.isMac,
+            toggled: () => settings.isTerminalMacOptionIsMeta,
+            action: () => settings.setTerminalMacOptionIsMeta(!settings.terminalMacOptionIsMeta),
+        },
+
         // ── Provider defaults (one section per registered provider) ───
 
         ...buildProviderDefaultsCommands(settings),
