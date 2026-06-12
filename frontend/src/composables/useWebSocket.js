@@ -1026,12 +1026,14 @@ export function useWebSocket() {
                     ? `<wa-icon family="brands" name="${iconName}" style="margin-inline-end: 0.4em;"></wa-icon>`
                     : ''
                 const detail = formatExtraUsageStartedDetail(msg.extra_usage)
+                const sentence = `${label} is currently drawing from your extra usage credit, billed on top of your plan.`
                 toast.custom({
                     type: 'warning',
                     duration: 60000,
                     html: `
                         <div style="display: flex; flex-direction: column; gap: 0.2rem;">
                             <span style="font-weight: 600; display: inline-flex; align-items: center;">${iconHtml}${label} — Extra usage started</span>
+                            <span>${sentence}</span>
                             ${detail ? `<span>${detail}</span>` : ''}
                         </div>
                     `,
@@ -1040,7 +1042,7 @@ export function useWebSocket() {
                 if (settings.notifExtraUsageStartBrowser) {
                     sendBrowserNotification(
                         `${label} — Extra usage started`,
-                        detail || 'Extra usage credits are now being consumed.',
+                        detail ? `${sentence}\n${detail}` : sentence,
                     )
                 }
                 break

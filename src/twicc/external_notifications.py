@@ -196,28 +196,28 @@ def notify_extra_usage_started(provider, snapshot, settings: dict) -> None:
         logger.exception("Extra-usage external notification dispatch failed for provider %s", provider)
 
 
-def _build_extra_usage_body(snapshot, base_url: str | None) -> str:
-    """Body for the extra-usage push: the credit detail, plus the bare app URL.
+def _build_extra_usage_body(snapshot, label: str, base_url: str | None) -> str:
+    """Body for the extra-usage push: a sentence, the credit figure, the app URL.
 
-    Two display modes, like the sidebar ring: Anthropic-style providers report
-    used/limit credits (``utilization`` set), Codex-style providers report only
-    a remaining balance. Unlike the process-state push there is no session to
-    deep-link to, so when a public base URL is configured we append it raw
-    (nothing after it).
+    Same lead sentence used by the in-app toast and the browser notification.
+    The credit figure has two display modes, like the sidebar ring:
+    Anthropic-style providers report used/limit credits (``utilization`` set),
+    Codex-style providers report only a remaining balance. Unlike the
+    process-state push there is no session to deep-link to, so when a public
+    base URL is configured we append it raw (nothing after it).
     """
+    body = f"{label} is currently drawing from your extra usage credit, billed on top of your plan."
     if snapshot.extra_usage_utilization is not None:
         used = snapshot.extra_usage_used_credits or 0
         if snapshot.extra_usage_monthly_limit is not None:
-            detail = f"{used} of {snapshot.extra_usage_monthly_limit} credits used."
+            body += f"\n{used} of {snapshot.extra_usage_monthly_limit} credits used."
         else:
-            detail = f"{used} credits used."
+            body += f"\n{used} credits used."
     elif snapshot.extra_usage_remaining_credits is not None:
-        detail = f"{round(snapshot.extra_usage_remaining_credits)} credits remaining."
-    else:
-        detail = "Extra usage credits are now being consumed."
+        body += f"\n{round(snapshot.extra_usage_remaining_credits)} credits remaining."
     if base_url:
-        detail += f"\n\n{base_url}"
-    return detail
+        body += f"\n\n{base_url}"
+    return body
 
 
 def _send_extra_usage_started(provider, snapshot, settings: dict) -> None:
@@ -237,7 +237,7 @@ def _send_extra_usage_started(provider, snapshot, settings: dict) -> None:
     # No session to deep-link to: append the bare public base URL when set,
     # matching the same publicBaseUrl handling as the process-state push.
     base_url = (settings.get("publicBaseUrl") or "").strip().rstrip("/") or None
-    body = _build_extra_usage_body(snapshot, base_url)
+    body = _build_extra_usage_body(snapshot, label, base_url)
 
     present = presence.is_user_present()
     baseline = presence.latest_activity()
