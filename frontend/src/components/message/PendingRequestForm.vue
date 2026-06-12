@@ -168,7 +168,6 @@ watch(() => props.pendingRequest?.request_id, (newId, oldId) => {
             :icon="headerIcon"
             :label="headerTitle"
             expand-tooltip="Expand the request"
-            :sidebar-toggle-clearance="true"
             @expand="restore"
         >
             <template #trailing>

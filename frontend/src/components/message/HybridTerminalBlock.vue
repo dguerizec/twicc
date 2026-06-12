@@ -135,14 +135,13 @@ const badgeLabel = computed(() => {
             icon="terminal"
             label="Claude CLI terminal"
             expand-tooltip="Expand the terminal"
-            :sidebar-toggle-clearance="true"
             @expand="restore"
         >
             <template #trailing>
                 <span
                     v-if="hybridPending"
                     class="hybrid-pending-badge"
-                :class="{ 'terminal-only': !pendingIsAnswerable }"
+                    :class="{ 'terminal-only': !pendingIsAnswerable }"
                     :id="badgeId"
                     role="status"
                 >{{ badgeLabel }}</span>
