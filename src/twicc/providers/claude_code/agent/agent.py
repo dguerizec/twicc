@@ -20,7 +20,7 @@ from claude_agent_sdk import (
     HookMatcher,
     PermissionResultAllow,
     PermissionResultDeny,
-    PermissionUpdate, ResultMessage, StreamEvent, SystemMessage, ThinkingConfigAdaptive, ThinkingConfigDisabled,
+    ResultMessage, StreamEvent, SystemMessage, ThinkingConfigAdaptive, ThinkingConfigDisabled,
     ToolPermissionContext, UserMessage,
 )
 
@@ -37,6 +37,11 @@ from twicc.core.models import Session
 from twicc.pending_session_attributes import get_pending_session_attributes
 from twicc.providers.helpers import AgentSettings
 
+from .permissions import (
+    maybe_update_plan_file,
+    order_suggestion_fields,
+    serialize_and_filter_suggestions,
+)
 from .sdk_logger import patch_client as patch_client_for_logging
 from .tool_label_filter import filter_tool_input
 
@@ -362,36 +367,15 @@ class ClaudeCodeAgent(BaseAgent):
             A list of serialised permission suggestion dicts, or ``None`` if there
             are none (or all were filtered out).
         """
-        serialized = [s.to_dict() if isinstance(s, PermissionUpdate) else s for s in context.suggestions or ()]
-
-        result = []
-        for suggestion in serialized:
-            suggestion_type = suggestion.get("type")
-
-            # Drop any setMode suggestion from the SDK — we inject our own at the end
-            # so the user always sees the full set of mode options regardless of context.
-            if suggestion_type == "setMode":
-                continue
-
-            # Strip the project directory from directory suggestions (always implicitly allowed).
-            if suggestion_type in ("addDirectories", "removeDirectories"):
-                directories = suggestion.get("directories")
-                if directories is not None:
-                    # Filter out the project directory — it is always implicitly allowed
-                    directories = [d for d in directories if d != self.cwd]
-                    if not directories:
-                        # Nothing left to suggest after filtering
-                        continue
-                    suggestion = {**suggestion, "directories": directories}
-
-            # Ungroup suggestions that bundle multiple rules: split into one
-            # suggestion per rule so the frontend can present them individually.
-            rules = suggestion.get("rules")
-            if rules and len(rules) > 1:
-                for rule in rules:
-                    result.append({**suggestion, "rules": [rule]})
-            else:
-                result.append(suggestion)
+        # Shared brick: serialize, cwd-filter, ungroup (kept identical for the
+        # hybrid path). Then drop any setMode suggestion from the SDK — we
+        # inject our own mode-picker at the end so the user always sees the
+        # full set of mode options regardless of context (SDK-only policy:
+        # the hybrid path keeps hook-native setMode suggestions verbatim).
+        result = [
+            s for s in serialize_and_filter_suggestions(context.suggestions, self.cwd)
+            if s.get("type") != "setMode"
+        ]
 
         # Inject wildcard MCP suggestions: for each rule targeting a specific MCP tool
         # (mcp__{name}__{tool}), add a wildcard suggestion (mcp__{name}__*) so the user
@@ -567,16 +551,7 @@ class ClaudeCodeAgent(BaseAgent):
                     '_currentMode': current_mode,
                 })
 
-        # Normalize field order to match PermissionUpdate dataclass definition.
-        # Private fields (prefixed with _) are preserved at the end for frontend use.
-        field_order = ("type", "rules", "behavior", "mode", "directories", "destination")
-        result = [
-            {k: s[k] for k in field_order if k in s}
-            | {k: v for k, v in s.items() if k.startswith("_")}
-            for s in result
-        ]
-
-        return result or None
+        return order_suggestion_fields(result)
 
     async def _handle_pending_request(
         self,
@@ -628,17 +603,15 @@ class ClaudeCodeAgent(BaseAgent):
             )
             raise
 
-        # For ExitPlanMode: detect if the user modified the plan content.
-        # Because of a "bug" in claude-agent-sdk / claude-code, the plan passed
-        # via the response is not taken into account, so we update it ourselves
-        # in the plan file (via ``_update_plan``).
-        if (
-            tool_name == "ExitPlanMode"
-            and isinstance(response, PermissionResultAllow)
-            and response.updated_input is not None
-            and response.updated_input.get("plan") != input_data.get("plan")
-        ):
-            await self._update_plan(response.updated_input["plan"])
+        # For ExitPlanMode: persist a user-modified plan to the plan file
+        # (shared brick — the CLI ignores the plan carried in updated_input).
+        if tool_name == "ExitPlanMode" and isinstance(response, PermissionResultAllow):
+            await maybe_update_plan_file(
+                input_data,
+                response.updated_input,
+                slug_getter=self._get_session_slug,
+                session_id=self.session_id,
+            )
 
         return response
 
@@ -1693,50 +1666,6 @@ class ClaudeCodeAgent(BaseAgent):
         # Run in thread executor for complete isolation from async context
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, _do_kill)
-
-    async def _update_plan(self, new_plan: str) -> None:
-        """Handle a user-modified plan for ExitPlanMode.
-
-        Called when the user approves ExitPlanMode with changes and the plan
-        content differs from the original. Retrieves the session slug from the
-        database, then overwrites the plan file at ~/.claude/plans/{slug}.md.
-
-        Args:
-            new_plan: The modified plan content from the user
-        """
-        from pathlib import Path
-
-        slug = await self._get_session_slug(self.session_id)
-        if slug is None:
-            logger.warning(
-                "Cannot update plan for session %s: no slug found in session items",
-                self.session_id,
-            )
-            return
-
-        plan_file = Path.home() / ".claude" / "plans" / f"{slug}.md"
-        if not plan_file.exists():
-            logger.warning(
-                "Plan file does not exist for session %s: %s",
-                self.session_id,
-                plan_file,
-            )
-            return
-
-        try:
-            plan_file.write_text(new_plan, encoding="utf-8")
-            logger.info(
-                "Plan file updated for session %s: %s (%d chars)",
-                self.session_id,
-                plan_file,
-                len(new_plan),
-            )
-        except OSError as e:
-            logger.error(
-                "Failed to write plan file for session %s: %s",
-                self.session_id,
-                e,
-            )
 
     async def _broadcast_process_tools(self) -> None:
         """Broadcast the current list of in-progress tools for the status display."""
