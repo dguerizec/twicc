@@ -9,7 +9,7 @@ import { useReconciliation } from './useReconciliation'
 import { toast } from './useToast'
 import { computeUsageData } from '../utils/usage'
 import { useSettingsStore } from '../stores/settings'
-import { getProviderHelpers, getProviderLabel, getProviderWsHandler, getProviderStore } from '../providers'
+import { getProviderHelpers, getProviderLabel, getProviderIcon, getProviderWsHandler, getProviderStore } from '../providers'
 import { playNotificationSound, sendBrowserNotification, isPageActive } from '../utils/notificationSounds'
 import { installPresenceHeartbeat } from '../utils/presence'
 import { truncateTitle } from '../utils/truncate'
@@ -51,6 +51,13 @@ if (!('cancelledViewedThrottles' in __hmrState)) __hmrState.cancelledViewedThrot
 
 // Active user_turn toast tracking — prevents duplicates, allows cleanup from SessionToastContent
 if (!('activeUserTurnToasts' in __hmrState)) __hmrState.activeUserTurnToasts = new Set() // sessionId
+
+// Per-provider previous "extra usage recently active" flag. Used to fire a
+// one-shot warning toast on the rising edge (quiet → active): when a provider
+// starts consuming its extra usage credits again after ~1h+ with no
+// consumption. Seeded silently on the first observation per provider so
+// opening the app mid-burn never triggers a spurious toast.
+if (!('extraUsagePrevRecentlyActive' in __hmrState)) __hmrState.extraUsagePrevRecentlyActive = new Map() // provider -> boolean
 
 // Route's current session id, kept in sync by useWebSocket()'s watcher.
 // Used by the visibility listener to know which session to flush/mark on
@@ -660,6 +667,87 @@ function handleUpdateAvailable(msg) {
     })
 }
 
+/**
+ * Build the credit-detail line of the "extra usage started" toast for a provider.
+ *
+ * Mirrors the two display modes of the extra-usage block (see usage.js):
+ * Anthropic-style providers report used/limit credits (``utilization`` set),
+ * Codex-style providers report only a remaining balance. Wording and rounding
+ * follow the sidebar tooltip in ProjectView.vue. The "started" framing lives in
+ * the toast title, so this returns only the figure.
+ *
+ * @param {object} extra - The computed ``extraUsage`` object.
+ * @returns {string} A short credit-detail line, or '' when no figure is available.
+ */
+function buildExtraUsageStartedMessage(extra) {
+    if (extra.utilization != null) {
+        const used = extra.usedCredits ?? 0
+        return extra.monthlyLimit != null
+            ? `${used} of ${extra.monthlyLimit} credits used.`
+            : `${used} credits used.`
+    }
+    if (extra.remainingCredits != null) {
+        return `${Math.round(extra.remainingCredits)} credits remaining.`
+    }
+    return ''
+}
+
+/**
+ * Fire a one-shot warning toast when a provider starts consuming its extra
+ * usage credits again after a quiet period.
+ *
+ * Detection reuses the existing ``extraUsage.recentlyActive`` flag (consumption
+ * within the last ~1h, computed in usage.js). We watch its rising edge per
+ * provider: a known previous ``false`` flipping to ``true`` means consumption
+ * resumed after ~1h+ of calm — that's the "started" event. The first
+ * observation per provider only seeds the baseline (never fires), so opening
+ * the app while extra usage is already being burned stays silent. A tick with
+ * no usable data (failed/empty fetch) is ignored entirely so a transient gap
+ * between two active ticks can't fake a restart.
+ *
+ * The toast is persistent (``duration: Infinity``) and must be dismissed by the
+ * user, like the "update available" toast — extra-credit billing warrants an
+ * explicit acknowledgement. It is built via ``toast.custom`` html so the title
+ * line can carry the provider's brand icon (the plain ``title`` field renders
+ * as text and can't hold a ``<wa-icon>``).
+ *
+ * @param {string} provider
+ * @param {object|null} computed - Result of ``computeUsageData`` for this tick.
+ */
+function maybeWarnExtraUsageStarted(provider, computed) {
+    // No data this tick: leave the baseline untouched.
+    if (!computed) return
+
+    const extra = computed.extraUsage
+    const active = !!(extra && extra.isEnabled && extra.recentlyActive)
+
+    const prevMap = __hmrState.extraUsagePrevRecentlyActive
+    const prev = prevMap.get(provider)
+    prevMap.set(provider, active)
+
+    // Rising edge only: require a known previous ``false`` (``prev === false``).
+    // ``undefined`` (first observation) or ``true`` (already active) never fire.
+    if (prev !== false || !active) return
+    if (!useSettingsStore().shouldWarnOnExtraUsageStart) return
+
+    const label = getProviderLabel(provider)
+    const iconName = getProviderIcon(provider)
+    const iconHtml = iconName
+        ? `<wa-icon family="brands" name="${iconName}" style="margin-inline-end: 0.4em;"></wa-icon>`
+        : ''
+    const detail = buildExtraUsageStartedMessage(extra)
+    toast.custom({
+        type: 'warning',
+        duration: Infinity,
+        html: `
+            <div style="display: flex; flex-direction: column; gap: 0.2rem;">
+                <span style="font-weight: 600; display: inline-flex; align-items: center;">${iconHtml}${label} — Extra usage started</span>
+                ${detail ? `<span>${detail}</span>` : ''}
+            </div>
+        `,
+    })
+}
+
 export function useWebSocket() {
     const store = useDataStore()
     const route = useRoute()
@@ -982,6 +1070,7 @@ export function useWebSocket() {
                 if (!provider) break
                 const computed = msg.usage ? computeUsageData(msg.usage) : null
                 getProviderStore(provider)?.setUsage(msg.success, msg.reason, msg.usage, computed)
+                maybeWarnExtraUsageStarted(provider, computed)
                 break
             }
             case 'usage_dump_path_validated':

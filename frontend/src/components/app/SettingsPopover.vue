@@ -370,6 +370,7 @@ const colorScheme = computed(() => store.getColorScheme)
 const sessionTimeFormat = computed(() => store.getSessionTimeFormat)
 const showCosts = computed(() => store.areCostsShown)
 const extraUsageOnlyWhenNeeded = computed(() => store.isExtraUsageOnlyWhenNeeded)
+const warnOnExtraUsageStart = computed(() => store.shouldWarnOnExtraUsageStart)
 const maxCachedSessions = computed(() => store.getMaxCachedSessions)
 const autoUnpinOnArchive = computed(() => store.isAutoUnpinOnArchive)
 const titleGenerationEnabled = computed(() => store.isTitleGenerationEnabled)
@@ -616,6 +617,13 @@ function onShowCostsChange(event) {
  */
 function onExtraUsageOnlyWhenNeededChange(event) {
     store.setExtraUsageOnlyWhenNeeded(event.target.checked)
+}
+
+/**
+ * Toggle the warning toast shown when extra usage credits start being consumed.
+ */
+function onWarnOnExtraUsageStartChange(event) {
+    store.setWarnOnExtraUsageStart(event.target.checked)
 }
 
 function onUsageFileEnabledChange(provider, event) {
@@ -1331,6 +1339,14 @@ function onChangelogClose() {
                             @change="onExtraUsageOnlyWhenNeededChange"
                             size="small"
                         >Only when needed</wa-switch>
+                    </div>
+                    <div class="setting-group">
+                        <label class="setting-group-label">Warn when extra usage starts</label>
+                        <wa-switch
+                            :checked="warnOnExtraUsageStart"
+                            @change="onWarnOnExtraUsageStartChange"
+                            size="small"
+                        >Show a warning toast</wa-switch>
                     </div>
                     <template v-for="(provider, idx) in usageProviders" :key="provider">
                         <wa-divider v-if="idx === 0"></wa-divider>

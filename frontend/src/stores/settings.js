@@ -28,6 +28,7 @@ export const SETTINGS_SCHEMA = {
     sessionTimeFormat: DEFAULT_SESSION_TIME_FORMAT,
     showCosts: false,
     extraUsageOnlyWhenNeeded: true,
+    warnOnExtraUsageStart: true,
     maxCachedSessions: DEFAULT_MAX_CACHED_SESSIONS,
     showDiffs: true,
     toolDiffWordWrap: true,
@@ -93,6 +94,7 @@ const SETTINGS_VALIDATORS = {
     titleSystemPrompt: (v) => typeof v === 'string' && v.includes('{text}'),
     showCosts: (v) => typeof v === 'boolean',
     extraUsageOnlyWhenNeeded: (v) => typeof v === 'boolean',
+    warnOnExtraUsageStart: (v) => typeof v === 'boolean',
     maxCachedSessions: (v) => typeof v === 'number' && Number.isInteger(v) && v >= 1 && v <= 50,
     autoUnpinOnArchive: (v) => typeof v === 'boolean',
     defaultWorktreeDirectory: (v) => typeof v === 'string',
@@ -267,6 +269,7 @@ export const useSettingsStore = defineStore('settings', {
         getTitleSystemPrompt: (state) => state.titleSystemPrompt,
         areCostsShown: (state) => state.showCosts,
         isExtraUsageOnlyWhenNeeded: (state) => state.extraUsageOnlyWhenNeeded,
+        shouldWarnOnExtraUsageStart: (state) => state.warnOnExtraUsageStart,
         getMaxCachedSessions: (state) => state.maxCachedSessions,
         isAutoUnpinOnArchive: (state) => state.autoUnpinOnArchive,
         getDefaultWorktreeDirectory: (state) => state.defaultWorktreeDirectory,
@@ -445,6 +448,17 @@ export const useSettingsStore = defineStore('settings', {
         setExtraUsageOnlyWhenNeeded(enabled) {
             if (SETTINGS_VALIDATORS.extraUsageOnlyWhenNeeded(enabled)) {
                 this.extraUsageOnlyWhenNeeded = enabled
+            }
+        },
+
+        /**
+         * Set whether to show a warning toast when a provider starts consuming
+         * its extra usage credits again after a quiet period.
+         * @param {boolean} enabled
+         */
+        setWarnOnExtraUsageStart(enabled) {
+            if (SETTINGS_VALIDATORS.warnOnExtraUsageStart(enabled)) {
+                this.warnOnExtraUsageStart = enabled
             }
         },
 
