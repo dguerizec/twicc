@@ -180,7 +180,7 @@ class ClaudeCodeSessionsWatcher(BaseSessionsWatcher):
         asyncio.create_task(
             get_claude_code_agent_manager().handle_hybrid_jsonl_signals(
                 session_id,
-                HybridJsonlSignals(user_message=False, turn_end=True, tool_results=False),
+                HybridJsonlSignals(turn_end=True),
             ),
             name=f"hybrid-compact-turn-end-{session_id}",
         )
@@ -218,9 +218,19 @@ class ClaudeCodeSessionsWatcher(BaseSessionsWatcher):
             from twicc.core.enums import ItemKind
             from twicc.core.models import SessionItem
 
-            def _derive() -> tuple[bool, bool]:
+            from twicc.providers.claude_code.compute import (
+                INTERRUPTION_MARKER_PREFIX,
+                extract_command,
+                extract_text_from_content,
+                get_message_content,
+                is_interruption_marker,
+            )
+
+            def _derive() -> tuple[bool, bool, bool, bool]:
                 user_message = False
                 turn_end = False
+                command_message = False
+                local_command_ack = False
                 rows = (
                     SessionItem.objects
                     .filter(session_id=session_id, line_num__in=new_line_nums)
@@ -228,6 +238,22 @@ class ClaudeCodeSessionsWatcher(BaseSessionsWatcher):
                 )
                 for kind, content in rows:
                     if kind == ItemKind.USER_MESSAGE:
+                        # Slash-command echoes (<command-name> lines) start a
+                        # local command, not an assistant turn — keep them
+                        # apart so their ack can close exactly what they
+                        # opened. Sniff then parse: a real prompt could quote
+                        # the tag.
+                        if "<command-name>" in content:
+                            try:
+                                parsed = orjson.loads(content)
+                                text = extract_text_from_content(
+                                    get_message_content(parsed),
+                                )
+                            except Exception:
+                                text = None
+                            if text and extract_command(text):
+                                command_message = True
+                                continue
                         user_message = True
                     elif kind == ItemKind.SYSTEM and content:
                         if '"turn_duration"' in content:
@@ -242,17 +268,36 @@ class ClaudeCodeSessionsWatcher(BaseSessionsWatcher):
                                 turn_end = True
                         elif "<local-command-stdout>" in content:
                             # A local slash command's stdout marks its end.
-                            # Slash-command lines classify as USER_MESSAGE
-                            # (TwiCC shows them in the conversation), which
-                            # flips the agent to ASSISTANT_TURN above — but
-                            # local commands (/model, /rename, …) never write
-                            # a turn_duration, so without this the agent
-                            # would look busy forever after a pasted command.
-                            turn_end = True
-                return user_message, turn_end
+                            # NOT folded into turn_end: mid-turn it must not
+                            # end anything (the agent handler decides).
+                            local_command_ack = True
+                        elif INTERRUPTION_MARKER_PREFIX in content:
+                            # Interruption breadcrumb (classified SYSTEM by
+                            # compute): the turn was aborted — it will never
+                            # write a turn_duration. Sniff then parse: the
+                            # prefix could appear inside arbitrary content.
+                            try:
+                                parsed = orjson.loads(content)
+                                text = extract_text_from_content(
+                                    get_message_content(parsed),
+                                )
+                            except Exception:
+                                continue
+                            if (
+                                parsed.get("type") == "user"
+                                and text
+                                and is_interruption_marker(text)
+                            ):
+                                turn_end = True
+                return user_message, turn_end, command_message, local_command_ack
 
-            user_message, turn_end = await asyncio.to_thread(_derive)
-            if not (user_message or turn_end or has_tool_results):
+            user_message, turn_end, command_message, local_command_ack = (
+                await asyncio.to_thread(_derive)
+            )
+            if not (
+                user_message or turn_end or command_message
+                or local_command_ack or has_tool_results
+            ):
                 return
 
             from twicc.providers.claude_code.agent.hybrid.signals import HybridJsonlSignals
@@ -264,6 +309,8 @@ class ClaudeCodeSessionsWatcher(BaseSessionsWatcher):
                     user_message=user_message,
                     turn_end=turn_end,
                     tool_results=has_tool_results,
+                    command_message=command_message,
+                    local_command_ack=local_command_ack,
                 ),
             )
         except Exception:

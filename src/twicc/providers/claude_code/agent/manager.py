@@ -479,17 +479,22 @@ class ClaudeCodeAgentManager(BaseAgentManager):
     ) -> None:
         """Apply JSONL-derived state signals to a live hybrid agent.
 
-        Order matters within a batch: user message first (turn started),
-        then tool results (pending cleared), then turn end — so a batch
-        carrying a whole fast turn settles on USER_TURN.
+        Order matters within a batch: turn starters first (user message,
+        slash-command echo), then tool results (pending cleared), then turn
+        enders (command ack, turn end) — so a batch carrying a whole fast
+        turn settles on USER_TURN.
         """
         agent = self._agents.get(session_id)
         if agent is None or not getattr(agent, "is_hybrid", False):
             return
         if signals.user_message:
             await agent.on_jsonl_user_message()
+        if signals.command_message:
+            await agent.on_jsonl_command_message()
         if signals.tool_results:
             await agent.on_jsonl_progress()
+        if signals.local_command_ack:
+            await agent.on_jsonl_local_command_ack()
         if signals.turn_end:
             await agent.on_jsonl_turn_end()
 

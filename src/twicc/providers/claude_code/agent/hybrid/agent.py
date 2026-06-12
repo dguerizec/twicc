@@ -100,6 +100,12 @@ class HybridClaudeAgent(BaseAgent):
         # Read by ClaudeCodeAgentManager._on_state_change for every Claude
         # Code agent (old-ProcessRun purge at first USER_TURN).
         self._old_runs_purged = False
+        # True while the current ASSISTANT_TURN was started by a local
+        # slash-command echo (not a real prompt): only then does the
+        # command's <local-command-stdout> ack end the turn. Mid-real-turn
+        # acks (e.g. the auto /rename's) are ignored — one once reaped a
+        # live permission prompt, denying it behind the user's back.
+        self._local_cmd_turn = False
 
     # ------------------------------------------------------------------
     # Manager-contract shims (SDK-agent methods reached on every Claude
@@ -440,10 +446,43 @@ class HybridClaudeAgent(BaseAgent):
 
     async def on_jsonl_user_message(self) -> None:
         """A real user prompt landed in the JSONL → a turn is running."""
+        self._local_cmd_turn = False
         self._clear_all_pendings("reap")
         if self.state != AgentState.ASSISTANT_TURN:
             self._set_state(AgentState.ASSISTANT_TURN)
         self.last_activity = time.time()
+        await self._notify_state_change()
+
+    async def on_jsonl_command_message(self) -> None:
+        """A local slash-command echo landed (its stdout ack will follow).
+
+        Outside a turn, show the command as activity (spinner) and remember
+        that the ack — not a turn_duration — will end it. During a real
+        assistant turn the command executed inline: state, pendings and the
+        ack-tracking flag are all left untouched.
+        """
+        self.last_activity = time.time()
+        if self.state == AgentState.ASSISTANT_TURN:
+            return
+        self._local_cmd_turn = True
+        self._set_state(AgentState.ASSISTANT_TURN)
+        await self._notify_state_change()
+
+    async def on_jsonl_local_command_ack(self) -> None:
+        """A ``<local-command-stdout>`` ack landed.
+
+        Ends the command-started "turn" it belongs to. Any other ack —
+        typically one landing mid real turn (auto-pasted /rename, a command
+        typed in the TUI while Claude works) — is plain noise: ending the
+        turn there once reaped a live permission prompt (the dummy reap
+        status denied the approval behind the user's back).
+        """
+        self.last_activity = time.time()
+        if not self._local_cmd_turn:
+            return
+        self._local_cmd_turn = False
+        if self.state != AgentState.USER_TURN:
+            self._set_state(AgentState.USER_TURN)
         await self._notify_state_change()
 
     async def on_jsonl_progress(self) -> None:
@@ -460,7 +499,9 @@ class HybridClaudeAgent(BaseAgent):
             await self._notify_state_change()
 
     async def on_jsonl_turn_end(self) -> None:
-        """A ``turn_duration`` system line landed → the turn is over."""
+        """A turn ended: ``turn_duration`` line, interruption marker, or
+        compaction."""
+        self._local_cmd_turn = False
         self._clear_all_pendings("reap")
         if self.state != AgentState.USER_TURN:
             self._set_state(AgentState.USER_TURN)

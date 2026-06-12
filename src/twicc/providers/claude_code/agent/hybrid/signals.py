@@ -31,9 +31,20 @@ class HybridHookOutcome(StrEnum):
 
 class HybridJsonlSignals(NamedTuple):
     # A real user prompt landed (computed ItemKind.USER_MESSAGE — excludes
-    # meta lines, tool results and system XML) → the agent entered a turn.
-    user_message: bool
-    # A ``system``/``turn_duration`` line landed → the turn is over.
-    turn_end: bool
+    # meta lines, tool results, system XML and slash-command echoes) → the
+    # agent entered a turn.
+    user_message: bool = False
+    # A ``system``/``turn_duration`` line landed, or an interruption marker
+    # ("[Request interrupted by user…]") — either way the turn is over.
+    turn_end: bool = False
     # New tool_result content landed → any pending TUI prompt was answered.
-    tool_results: bool
+    tool_results: bool = False
+    # A slash-command echo landed (USER_MESSAGE carrying <command-name>):
+    # a local command was submitted; its <local-command-stdout> ack follows.
+    # Only relevant when no real turn is running — see the agent handler.
+    command_message: bool = False
+    # A <local-command-stdout> ack landed. It ends a command-started "turn"
+    # ONLY; during a real assistant turn it is plain noise (a local command
+    # executes inline mid-turn) and MUST NOT end the turn nor reap pendings
+    # (a /rename ack once denied a live permission prompt that way).
+    local_command_ack: bool = False
