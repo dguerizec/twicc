@@ -23,9 +23,12 @@ const props = defineProps({
 const emit = defineEmits(['expand', 'show-pending-form'])
 
 // Clicking the badge while the form is available brings it back if the user
-// minimized it (no-op otherwise — handled by the parent wiring).
+// minimized it (no-op otherwise — handled by the parent wiring), and
+// minimizes the terminal block: the user chose the form as their surface.
 function onBadgeClick() {
-    if (pendingIsAnswerable.value) emit('show-pending-form')
+    if (!pendingIsAnswerable.value) return
+    emit('show-pending-form')
+    minimize()
 }
 
 const store = useDataStore()
