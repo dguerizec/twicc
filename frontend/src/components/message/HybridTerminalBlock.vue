@@ -159,7 +159,7 @@ const badgeLabel = computed(() => {
             >{{ badgeLabel }}</span>
             <AppTooltip v-if="hybridPending" :for="badgeId">
                 {{ pendingIsAnswerable
-                    ? 'Claude is waiting for an answer — use the form above, or answer inside the terminal'
+                    ? 'Claude is waiting for an answer — use the form above'
                     : 'Claude is waiting for an answer inside the terminal' }}
             </AppTooltip>
             <wa-button
