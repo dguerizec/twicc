@@ -28,7 +28,6 @@ export const SETTINGS_SCHEMA = {
     sessionTimeFormat: DEFAULT_SESSION_TIME_FORMAT,
     showCosts: false,
     extraUsageOnlyWhenNeeded: true,
-    warnOnExtraUsageStart: true,
     maxCachedSessions: DEFAULT_MAX_CACHED_SESSIONS,
     showDiffs: true,
     toolDiffWordWrap: true,
@@ -62,6 +61,7 @@ export const SETTINGS_SCHEMA = {
     waBrand: null,
     externalNotificationTargets: [],
     publicBaseUrl: null,
+    warnOnExtraUsageStart: null,
     // --- Not persisted - runtime state ---
     _disabledProvidersPresent: false,
     _devMode: false,

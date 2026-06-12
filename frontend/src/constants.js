@@ -207,4 +207,5 @@ export const SYNCED_SETTINGS_KEYS = new Set([
     'terminalUseTmux', 'terminalTmuxConfigPath',
     'waTheme', 'waBrand',
     'externalNotificationTargets', 'publicBaseUrl',
+    'warnOnExtraUsageStart',
 ])

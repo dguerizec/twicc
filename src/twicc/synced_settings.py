@@ -79,6 +79,12 @@ _GENERIC_SYNCED_SETTINGS_DEFAULTS: dict = {
     # used to append a session deep link to external notifications.
     # Empty = no link line.
     "publicBaseUrl": "",
+    # Show a warning toast when a provider starts consuming its extra usage
+    # credits again after a quiet period (see useWebSocket's
+    # maybeWarnExtraUsageStarted). A global alerting preference with no
+    # device-specific mechanic, so it syncs across devices rather than staying
+    # local like the display-only extraUsageOnlyWhenNeeded toggle.
+    "warnOnExtraUsageStart": True,
 }
 
 # Note: `disabledProviders` (list[str]) is intentionally NOT listed here.
