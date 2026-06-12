@@ -113,15 +113,16 @@ watchEffect(() => {
 const hybridPending = computed(() =>
     (store.getPendingRequests(props.sessionId) || [])[0] || null
 )
+// Same discriminant as SessionItemsList's PendingRequestForm gating: an
+// answerable head request means the widget IS rendered above the composer.
+const pendingIsAnswerable = computed(() =>
+    !!hybridPending.value && hybridPending.value.request_type !== 'hybrid_terminal'
+)
+// Steer the user to the widget whenever it is available; only degraded
+// badge-only requests (GUI channel expired) point at the terminal.
 const badgeLabel = computed(() => {
-    const pending = hybridPending.value
-    if (!pending) return ''
-    // Steer the user to the widget whenever it is available; only degraded
-    // badge-only requests (GUI channel expired) point at the terminal.
-    if (pending.request_type !== 'hybrid_terminal') {
-        return 'Prefer answering in the UI above'
-    }
-    return 'Answer in the terminal'
+    if (!hybridPending.value) return ''
+    return pendingIsAnswerable.value ? 'Prefer answering in the UI above' : 'Answer in the terminal'
 })
 </script>
 
@@ -157,7 +158,9 @@ const badgeLabel = computed(() => {
                 role="status"
             >{{ badgeLabel }}</span>
             <AppTooltip v-if="hybridPending" :for="badgeId">
-                Claude is waiting for an answer inside the terminal (tool: {{ hybridPending.tool_name || 'unknown' }})
+                {{ pendingIsAnswerable
+                    ? 'Claude is waiting for an answer — use the form above, or answer inside the terminal'
+                    : 'Claude is waiting for an answer inside the terminal' }}
             </AppTooltip>
             <wa-button
                 variant="neutral"
