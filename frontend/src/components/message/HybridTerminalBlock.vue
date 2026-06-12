@@ -116,13 +116,12 @@ const hybridPending = computed(() =>
 const badgeLabel = computed(() => {
     const pending = hybridPending.value
     if (!pending) return ''
-    // User-facing wording: AskUserQuestion is an internal tool name.
-    const what = pending.tool_name === 'AskUserQuestion' ? 'question' : pending.tool_name
-    const suffix = what ? ` (${what})` : ''
+    // Steer the user to the widget whenever it is available; only degraded
+    // badge-only requests (GUI channel expired) point at the terminal.
     if (pending.request_type !== 'hybrid_terminal') {
-        return `Answer above — or in the terminal${suffix}`
+        return 'Prefer answering in the UI above'
     }
-    return `Answer in the terminal${suffix}`
+    return 'Answer in the terminal'
 })
 </script>
 
@@ -258,7 +257,7 @@ wa-divider {
 
 .hybrid-pending-badge {
     flex-shrink: 0;
-    font-size: var(--wa-font-size-xs);
+    font-size: var(--wa-font-size-s);
     font-weight: var(--wa-font-weight-semibold);
     color: var(--wa-color-warning-on-quiet);
     background: var(--wa-color-warning-fill-quiet);
