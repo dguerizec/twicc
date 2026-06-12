@@ -9,7 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Added
 
 - **External notifications** — push notifications to your devices via [Apprise](https://appriseit.com) (ntfy, Pushover, Telegram, and 130+ other services), with a per-target "Only when you're away" option.
-- **Session switcher** — hold Ctrl and tap the key above Tab (the backtick on QWERTY) to flip between your recently-visited sessions.
+- **Session switcher** — hold Ctrl and tap the key above Tab (the backtick on QWERTY) to flip between your recently-visited sessions; add Shift to pick from the sessions shown in the sidebar instead.
 
 ## [1.8.0] - 2026-06-11
 

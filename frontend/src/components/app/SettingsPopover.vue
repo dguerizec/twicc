@@ -219,11 +219,12 @@ const shortcutGroups = computed(() => {
             shortcuts: [
                 { keys: [mod, 'K'], description: 'Open command palette' },
                 { keys: [mod, 'Shift', 'F'], description: 'Open full-text search' },
-                // Always Ctrl (even on macOS, where ⌘+` is an OS shortcut), so this
-                // one deliberately doesn't use `mod`. The cycle key is the
-                // physical key above Tab — backquoteKeyLabel resolves its legend
-                // per layout, and the description names its position too.
+                // Always Ctrl (even on macOS, where ⌘+` is an OS shortcut), so these
+                // deliberately don't use `mod`. The cycle key is the physical key
+                // above Tab — backquoteKeyLabel resolves its legend per layout, and
+                // the description names its position too.
                 { keys: ['Ctrl', backquoteKeyLabel.value], description: 'Switch between recent sessions — hold Ctrl, tap the key above Tab (or ↑/↓) to cycle, release to switch' },
+                { keys: ['Ctrl', 'Shift', backquoteKeyLabel.value], description: 'Same, through the sessions currently shown in the sidebar (tap Shift while open to toggle either source)' },
             ]
         },
         {

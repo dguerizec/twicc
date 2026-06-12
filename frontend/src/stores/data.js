@@ -436,6 +436,13 @@ export const useDataStore = defineStore('data', {
             // Used to navigate back when archiving the current session
             mruPaths: [],
 
+            // Ordered ids of the sessions currently shown in the sidebar list,
+            // published by SessionList.vue (its already-filtered `sessions`
+            // computed). The Ctrl+Shift+` switcher reads this to offer the
+            // on-screen list — pushing the rendered result guarantees parity
+            // (filters, scope, search) far more simply than recomputing it.
+            displayedSessionIds: [],
+
             // Optimistic messages - user messages displayed immediately after send,
             // before the backend confirms with a real user_message item.
             // { sessionId: { syntheticKind, content, kind } }
@@ -480,6 +487,23 @@ export const useDataStore = defineStore('data', {
                 if (!isSwitchableSession(session)) continue
                 out.push({ session, path: entry.path })
                 if (out.length >= MRU_SWITCHER_LIMIT) break
+            }
+            return out
+        },
+        /**
+         * Display-ready list for the "displayed sessions" mode of the switcher:
+         * the sidebar's currently-rendered sessions, in order. Sourced from the
+         * ids SessionList publishes (already filtered/scoped/searched), so no
+         * re-filtering here — we trust the published list and just resolve each
+         * id to its session, dropping any that vanished. Each item is
+         * { session }; the navigation target is built at commit time.
+         */
+        displayedSwitcherSessions: (state) => {
+            const out = []
+            for (const id of state.localState.displayedSessionIds) {
+                const session = state.sessions[id]
+                if (!session) continue
+                out.push({ session })
             }
             return out
         },
@@ -3373,6 +3397,16 @@ export const useDataStore = defineStore('data', {
         },
 
         // --- MRU (Most Recently Used) navigation tracking ---
+
+        /**
+         * Publish the ordered ids of the sessions currently shown in the sidebar.
+         * Called by SessionList.vue whenever its rendered list changes, so the
+         * "displayed sessions" switcher mode mirrors the screen exactly.
+         * @param {string[]} ids - Session ids, in display order.
+         */
+        setDisplayedSessionIds(ids) {
+            this.localState.displayedSessionIds = ids
+        },
 
         /**
          * Record the current route in the MRU stack.

@@ -176,26 +176,34 @@ const TERMINAL_ROUTES = new Set([
 function handleGlobalKeydown(e) {
     const modKey = settingsStore.isMac ? e.metaKey : e.ctrlKey
 
-    // ─── Ctrl+` session switcher (Alt-Tab between recent sessions) ──────────
+    // ─── Ctrl+` session switcher (Alt-Tab between sessions) ─────────────────
     // Ctrl is used uniformly on every OS (never swapped to Cmd: Cmd+` is an OS
     // window-cycle shortcut on macOS). Held Ctrl keeps the panel open; the
     // matching keyup (handleGlobalKeyup) commits. e.code === 'Backquote' is the
-    // physical key, layout-independent.
+    // physical key, layout-independent. Shift on the engaging press opens the
+    // "currently displayed" source instead of the recent (MRU) one.
     if (e.ctrlKey && !e.altKey && !e.metaKey && e.code === 'Backquote') {
         // Don't engage on top of a modal; once engaged, keep cycling regardless.
         if (!sessionSwitcher.active.value && hasBlockingOverlay()) return
         e.preventDefault()
         e.stopPropagation()
         sessionSwitcher.onCycleKey({
-            backward: e.shiftKey,
+            engageMode: e.shiftKey ? 'list' : 'mru',
             repeat: e.repeat,
             currentSessionId: route.params.sessionId || null,
         })
         return
     }
-    // While the switcher is open, arrows move the cursor and Escape cancels
-    // (handled here so the cancel pre-empts the triple-Escape branch below).
+    // While the switcher is open: Shift flips the source, arrows move the cursor,
+    // Escape cancels (handled here so it pre-empts the triple-Escape branch).
     if (sessionSwitcher.active.value) {
+        // A fresh Shift press (not its autorepeat) toggles MRU ↔ displayed.
+        if (e.key === 'Shift' && !e.repeat) {
+            e.preventDefault()
+            e.stopPropagation()
+            sessionSwitcher.toggleMode(route.params.sessionId || null)
+            return
+        }
         if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
             e.preventDefault()
             e.stopPropagation()

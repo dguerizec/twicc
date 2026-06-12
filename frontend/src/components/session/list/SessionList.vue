@@ -6,7 +6,7 @@
  * search filtering, keyboard navigation. Each session item is rendered
  * by SessionListItem, which owns its own store lookups (computed).
  */
-import { ref, computed, watch, nextTick } from 'vue'
+import { ref, computed, watch, nextTick, onBeforeUnmount } from 'vue'
 import { useRoute } from 'vue-router'
 import { useDataStore, ALL_PROJECTS_ID } from '../../../stores/data'
 import { useWorkspacesStore } from '../../../stores/workspaces'
@@ -300,6 +300,14 @@ watch(sessions, (list) => {
     if (!selectionStore.active) return
     selectionStore.prune(new Set(list.map(s => s.id)))
 })
+
+// Publish the rendered list (in order, search filter included) so the
+// Ctrl+Shift+` switcher can offer exactly what's on screen. Cleared on unmount
+// so a stale list never lingers when the sidebar is gone.
+watch(sessions, (list) => {
+    store.setDisplayedSessionIds(list.map(s => s.id))
+}, { immediate: true })
+onBeforeUnmount(() => store.setDisplayedSessionIds([]))
 
 /**
  * Scroll the session list to make a session visible.

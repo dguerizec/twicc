@@ -22,7 +22,9 @@ import { useSessionSwitcher } from '../../composables/useSessionSwitcher'
 
 const route = useRoute()
 const store = useDataStore()
-const { visible, items, cursor, pointTo, commitTo, cancel } = useSessionSwitcher()
+const { visible, mode, items, cursor, pointTo, commitTo, cancel } = useSessionSwitcher()
+
+const modeLabel = computed(() => (mode.value === 'list' ? 'Displayed sessions' : 'Recent sessions'))
 
 /**
  * Color for the project dot: the project's own color, or — for a worktree with
@@ -78,7 +80,11 @@ watch([cursor, visible], async () => {
 <template>
     <Teleport to="body">
         <div v-if="visible" class="switcher-overlay" @mousedown.self="cancel">
-            <div class="switcher-panel" role="listbox" aria-label="Recent sessions">
+            <div class="switcher-panel" role="listbox" :aria-label="modeLabel">
+                <div class="switcher-header">
+                    <span class="switcher-mode">{{ modeLabel }}</span>
+                    <span class="switcher-hint"><kbd>⇧</kbd> to switch</span>
+                </div>
                 <div ref="listRef" class="switcher-list">
                     <button
                         v-for="row in rows"
@@ -142,6 +148,37 @@ watch([cursor, visible], async () => {
     border-radius: var(--wa-border-radius-l);
     box-shadow: var(--wa-shadow-l);
     overflow: hidden;
+}
+
+.switcher-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--wa-space-s);
+    padding: var(--wa-space-xs) var(--wa-space-s);
+    border-bottom: var(--wa-border-width-s) solid var(--wa-color-surface-border);
+    font-size: var(--wa-font-size-xs);
+    color: var(--wa-color-text-muted);
+}
+
+.switcher-mode {
+    font-weight: var(--wa-font-weight-semibold);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.switcher-hint {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--wa-space-2xs);
+}
+
+.switcher-hint kbd {
+    font: inherit;
+    padding: 0 var(--wa-space-2xs);
+    border: var(--wa-border-width-s) solid var(--wa-color-surface-border);
+    border-radius: var(--wa-border-radius-s);
+    background: var(--wa-color-surface-lowered);
 }
 
 .switcher-list {

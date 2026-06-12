@@ -14,6 +14,7 @@ import { useDataStore } from '../../../stores/data'
 import { useSessionSelectionStore } from '../../../stores/sessionSelection'
 import { useSettingsStore } from '../../../stores/settings'
 import { formatDate } from '../../../utils/date'
+import { sessionRouteLocation } from '../../../utils/sessionRoute'
 import { PROCESS_STATE, PROCESS_STATE_COLORS, PROCESS_STATE_NAMES, SESSION_TIME_FORMAT } from '../../../constants'
 import { markSessionReadState, cancelSessionViewedThrottle } from '../../../composables/useWebSocket'
 import { stopSessionProcess } from '../../../composables/useStopSessionProcess'
@@ -301,16 +302,7 @@ const stoppingProcess = computed(() => store.isSessionStopping(props.session.id)
 // Link href for native "open in new tab" support
 // ═══════════════════════════════════════════════════════════════════════════
 
-const sessionHref = computed(() => {
-    const isAllProjects = route.name?.startsWith('projects-')
-    const location = isAllProjects
-        ? { name: 'projects-session', params: { projectId: props.session.project_id, sessionId: props.session.id } }
-        : { name: 'session', params: { projectId: route.params.projectId, sessionId: props.session.id } }
-    if (route.query.workspace) {
-        location.query = { workspace: route.query.workspace }
-    }
-    return router.resolve(location).href
-})
+const sessionHref = computed(() => router.resolve(sessionRouteLocation(props.session, route)).href)
 
 function handleClick(event) {
     if (event.button !== 0) return // middle/right click: let the browser handle it
