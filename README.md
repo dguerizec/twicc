@@ -55,43 +55,48 @@ uv tool upgrade twicc
 ### Claude Code and Codex, side by side
 
 - **Both providers in one UI**, using your existing credentials — nothing extra to set up
-- Live conversation with full tool-use details, real-time streaming of assistant text and thinking
-- Per-session agent control: model (Opus 4.8, Sonnet 4.6, …), context window (200K / 1M), effort, thinking, fast mode, permissions (including Claude Code's classifier-gated "auto" mode), with reusable presets
-- Interactive tool approvals and provider questions, answered directly from the browser
+- **Live conversation** with full tool-use details, real-time streaming of assistant text and thinking
+- **Per-session agent control**: model (Fable 5, Opus 4.8, Sonnet 4.6, …), context window (200K / 1M), effort, thinking, fast mode, permissions (including Claude Code's classifier-gated "auto" mode), with reusable presets
+- **Interactive tool approvals** and provider questions, answered directly from the browser
 - **Persistent Claude Code cron jobs**: scheduled tasks survive TwiCC restarts and are auto-renewed before their 7-day expiry — they would otherwise be lost on a Claude Code CLI restart
-- Provider status monitoring (Anthropic and OpenAI status pages) with in-app outage notifications
+- **Provider status monitoring** (Anthropic and OpenAI status pages) with in-app outage notifications
 
 ### Mobile-first, work from anywhere
 
-- Fully responsive UI, designed for touch from the start
-- Mobile-friendly terminal: touch selection, paste, proper scrollbar, scroll/select toggle, support for tmux and alternate-screen apps
+- **Fully responsive UI**, designed for touch from the start
+- **Mobile-friendly terminal**: touch selection, paste, proper scrollbar, scroll/select toggle, support for tmux and alternate-screen apps
 - **Extra keys bar** (Essentials / More / F-keys) with modifiers (tap for one-shot, double-tap to lock), arrow keys, special characters, function keys
-- User-defined key combos and reusable text snippets for the terminal
-- Combined with a tunnel ([Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/), [ngrok](https://ngrok.com/), [Tailscale Funnel](https://tailscale.com/docs/features/tailscale-funnel), …), TwiCC turns a phone into a usable Claude or Codex frontend — see [Remote access](#remote-access) below
+- **User-defined key combos** and reusable text snippets for the terminal
+- **Tunnel-ready**: combined with a tunnel ([Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/), [ngrok](https://ngrok.com/), [Tailscale Funnel](https://tailscale.com/docs/features/tailscale-funnel), …), TwiCC turns a phone into a usable Claude or Codex frontend — see [Remote access](#remote-access) below
 
-### Productivity tools
+### Productivity
 
 - **Command palette** (Ctrl+K / Cmd+K): jump to any project, session, or workspace, change session settings, and trigger common actions from a single keyboard-driven menu
+- **Session switcher**: hold Ctrl and tap the key above Tab (the backtick on QWERTY) to flip between your recently-visited sessions; add Shift to pick from the sessions shown in the sidebar instead
+- **Session list multi-select**: select several sessions at once and apply batch actions — pin, mark read/unread, archive, and more
+- **External notifications**: push to your devices via [Apprise](https://appriseit.com) (ntfy, Pushover, Telegram, and 130+ other services), with a per-target "only when you're away" option
 - **Slash commands and file references**: `/` for Claude Code skills and commands, `$` for Codex skills, `@` for the file picker — all from the message input
 - **Message snippets**: reusable text snippets with placeholders, scoped globally or per-project, for the prompts you keep retyping
 - **Inline code comments**: click a line number in a code block to annotate, then send a formatted review comment back to the agent — human review of AI-generated code, right from the browser
 - **Selection comments**: select text in Chat, Files, Git, or Terminal to copy it or attach a comment, then send the selection and your note back to the agent, preformatted and ready to go
-- Full-text search across all sessions (Ctrl+Shift+F) and in-session search (Ctrl+F)
-- Multiple simultaneous terminals, with optional custom `tmux.conf`
-- Git integration: log, diffs (including side-by-side image diff), file browser, commit details
-- Project and session archiving (including bulk archive of old sessions)
+- **Full-text search** across all sessions (Ctrl+Shift+F), plus in-session search (Ctrl+F)
+- **Multiple simultaneous terminals**, with optional custom `tmux.conf`
+- **Git integration**: log, diffs (including side-by-side image diff), file browser, commit details
+- **Project and session archiving** (including bulk archive of old sessions)
 
 ### Costs, usage and activity
 
-- Per-session and per-project cost tracking
-- Quota graphs and burn rate for the Claude Code and Codex 5h / 7-day windows
-- Daily and weekly activity heatmaps and stats, per project, per workspace, and across all projects
+- **Cost tracking** per session and per project
+- **Quota graphs and burn rate** for the Claude Code and Codex 5h / 7-day windows
+- **Extra usage alerts**: get notified when a provider starts drawing on your paid extra-usage credits
+- **Activity heatmaps and stats** — daily and weekly, per project, per workspace, and across all projects
 
 ### Workspaces and projects
 
-- Group projects into named, color-coded **workspaces**, with optional auto-add by directory pattern
-- Scoped session list, search, snippets, and aggregated stats per workspace
-- Workspace-level Files, Git, and Terminal tabs in addition to per-project ones
+- **Workspaces**: group projects into named, color-coded buckets, with optional auto-add by directory pattern
+- **Workspace scoping**: session list, search, snippets, and aggregated stats, all per workspace
+- **Workspace-level tabs**: Files, Git, and Terminal, in addition to the per-project ones
+- **Git worktree support** across the app: create a worktree in a couple of clicks, and existing ones are detected and surfaced, with their sessions, cost, and activity rolling up into the main repository
 
 ### Self-aware: agent skills and CLI
 
