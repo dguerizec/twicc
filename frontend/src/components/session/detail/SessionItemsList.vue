@@ -1552,6 +1552,7 @@ defineExpose({
                     ref="hybridTerminalRef"
                     :session-id="sessionId"
                     @expand="messageInputRef?.collapse()"
+                    @show-pending-form="pendingFormRef?.restoreIfMinimized()"
                 />
                 <!-- Message input (main sessions only). Always rendered so nothing the user
                      is preparing is lost when a request appears or resolves. While a request

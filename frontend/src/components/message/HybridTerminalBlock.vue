@@ -20,7 +20,13 @@ const props = defineProps({
     }
 })
 
-const emit = defineEmits(['expand'])
+const emit = defineEmits(['expand', 'show-pending-form'])
+
+// Clicking the badge while the form is available brings it back if the user
+// minimized it (no-op otherwise — handled by the parent wiring).
+function onBadgeClick() {
+    if (pendingIsAnswerable.value) emit('show-pending-form')
+}
 
 const store = useDataStore()
 
@@ -122,7 +128,7 @@ const pendingIsAnswerable = computed(() =>
 // badge-only requests (GUI channel expired) point at the terminal.
 const badgeLabel = computed(() => {
     if (!hybridPending.value) return ''
-    return pendingIsAnswerable.value ? 'Prefer answering in the UI above' : 'Answer in the terminal'
+    return pendingIsAnswerable.value ? 'Prefer answering in the UI' : 'Answer in the terminal'
 })
 </script>
 
@@ -141,9 +147,10 @@ const badgeLabel = computed(() => {
                 <span
                     v-if="hybridPending"
                     class="hybrid-pending-badge"
-                    :class="{ 'terminal-only': !pendingIsAnswerable }"
+                    :class="{ 'terminal-only': !pendingIsAnswerable, clickable: pendingIsAnswerable }"
                     :id="badgeId"
                     role="status"
+                    @click.stop="onBadgeClick"
                 >{{ badgeLabel }}</span>
             </template>
         </CollapsedBar>
@@ -154,15 +161,11 @@ const badgeLabel = computed(() => {
             <span
                 v-if="hybridPending"
                 class="hybrid-pending-badge"
-                :class="{ 'terminal-only': !pendingIsAnswerable }"
+                :class="{ 'terminal-only': !pendingIsAnswerable, clickable: pendingIsAnswerable }"
                 :id="badgeId"
                 role="status"
+                @click.stop="onBadgeClick"
             >{{ badgeLabel }}</span>
-            <AppTooltip v-if="hybridPending" :for="badgeId">
-                {{ pendingIsAnswerable
-                    ? 'Claude is waiting for an answer — use the form above'
-                    : 'Claude is waiting for an answer inside the terminal' }}
-            </AppTooltip>
             <wa-button
                 variant="neutral"
                 appearance="plain"
@@ -276,6 +279,11 @@ wa-divider {
    hint, not a call to action. */
 .hybrid-pending-badge.terminal-only {
     animation: hybrid-badge-pulse 1.6s ease-in-out infinite;
+}
+
+/* When the form is available, the badge brings it back if minimized. */
+.hybrid-pending-badge.clickable {
+    cursor: pointer;
 }
 
 @keyframes hybrid-badge-pulse {

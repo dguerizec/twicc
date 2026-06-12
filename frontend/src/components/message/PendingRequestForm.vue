@@ -88,8 +88,17 @@ function restore() {
     emit('expand')
 }
 
-// Expose minimize so the parent can reduce this request when the composer opens.
-defineExpose({ minimize })
+/**
+ * Restore from the minimized bar only — no-op in normal/maximized states.
+ * Used by the hybrid terminal block's pending badge to bring the form back.
+ */
+function restoreIfMinimized() {
+    if (isMinimized.value) restore()
+}
+
+// Expose minimize so the parent can reduce this request when the composer
+// opens, and restoreIfMinimized for the hybrid pending badge.
+defineExpose({ minimize, restoreIfMinimized })
 
 /**
  * Toggle between the maximized state and the normal size.
