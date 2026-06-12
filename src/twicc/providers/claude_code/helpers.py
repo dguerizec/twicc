@@ -13,7 +13,7 @@ from datetime import date
 from decimal import Decimal
 from functools import lru_cache
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import orjson
 from django.conf import settings
