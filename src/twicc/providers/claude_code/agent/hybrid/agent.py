@@ -17,18 +17,33 @@ import asyncio
 import logging
 import re
 import time
+from dataclasses import replace
+from datetime import datetime, timezone
 from typing import Any
 
 from asgiref.sync import sync_to_async
+from claude_agent_sdk import PermissionResultAllow
 
 from twicc.agent.base_agent import BaseAgent, StateChangeCallback
 from twicc.agent.exceptions import SendDeliveryError
 from twicc.agent.states import AgentState, PendingRequest
 from twicc.core.enums import Provider
 from twicc.paths import get_session_hybrid_dir
+from twicc.providers.claude_code.agent.permissions import (
+    maybe_update_plan_file,
+    order_suggestion_fields,
+    serialize_and_filter_suggestions,
+)
 
 from . import tmux as hybrid_tmux
-from .launch import build_argv, write_addendum_file
+from .launch import HYBRID_HOOK_TIMEOUT_SECONDS, build_argv, write_addendum_file
+from .responses import (
+    DUMMY_REAP_STATUS,
+    drop_path_for,
+    status_path_for,
+    to_hook_output,
+    write_status,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -58,10 +73,6 @@ class HybridClaudeAgent(BaseAgent):
     READY_TIMEOUT = 600.0
     LIVENESS_INTERVAL = 5.0
 
-    # Single synthetic pending-request key: hybrid pending prompts are
-    # answered inside the TUI; TwiCC only badges their existence.
-    PENDING_MARKER_KEY = "hybrid-terminal"
-
     def __init__(
         self,
         session_id: str,
@@ -82,6 +93,10 @@ class HybridClaudeAgent(BaseAgent):
         # Serializes ready-check + paste pairs: two concurrent pastes would
         # race on the shared tmux buffer and on the composer-free check.
         self._paste_lock = asyncio.Lock()
+        # GUI-answer expiry timers, one per registered pending request
+        # (keyed by hook nonce): when the CLI-side hook timeout reaps the
+        # polling hook, the widget degrades to the badge-only marker.
+        self._gui_expiry_tasks: dict[str, asyncio.Task[None]] = {}
         # Read by ClaudeCodeAgentManager._on_state_change for every Claude
         # Code agent (old-ProcessRun purge at first USER_TURN).
         self._old_runs_purged = False
@@ -359,15 +374,73 @@ class HybridClaudeAgent(BaseAgent):
     # Signal-driven transitions (hooks watcher + JSONL bridge, via manager)
     # ------------------------------------------------------------------
 
-    async def on_permission_request(self, payload: dict) -> None:
-        """The single injected hook fired: a TUI prompt is up."""
-        self._mark_pending_in_terminal(payload)
+    async def on_permission_request(self, payload: dict, nonce: str) -> bool:
+        """The injected hook fired: a TUI prompt is up — register a real,
+        GUI-answerable pending request keyed on the hook's nonce.
+
+        Returns ``True`` when registered (the hooks watcher leaves the drop
+        file to this agent — deleted at resolution/clear/death), ``False``
+        when declined (a stale drop re-fed after a TwiCC restart whose prompt
+        was already answered — the watcher deletes it).
+        """
+        if nonce in self._pending_requests:
+            # Idempotent boot re-feed: already registered, drop stays owned.
+            return True
+        if await self._is_stale_drop(nonce):
+            logger.info(
+                "Stale PermissionRequest drop for hybrid session %s "
+                "(transcript moved after the hook fired) — not registered",
+                self.session_id,
+            )
+            return False
+        tool_name = payload.get("tool_name") or ""
+        self._pending_requests[nonce] = PendingRequest(
+            request_id=nonce,
+            request_type="ask_user_question" if tool_name == "AskUserQuestion" else "tool_approval",
+            tool_name=tool_name,
+            tool_input=payload.get("tool_input") or {},
+            created_at=time.time(),
+            # Hook-native suggestions only, through the shared filter (NO
+            # SDK-style setMode mode-picker injection, NO synthesized
+            # suggestions — design doc 2026-06-12 §3).
+            permission_suggestions=order_suggestion_fields(
+                serialize_and_filter_suggestions(payload.get("permission_suggestions"), self.cwd)
+            ),
+        )
+        self._schedule_gui_expiry(nonce)
         self.last_activity = time.time()
         await self._notify_state_change()
+        return True
+
+    async def _is_stale_drop(self, nonce: str) -> bool:
+        """A re-fed drop is stale when the transcript moved after the fire.
+
+        While a permission prompt is pending the CLI writes nothing to the
+        JSONL (verified — that is why the hook exists), so ANY item whose
+        embedded message timestamp postdates the hook fire proves the prompt
+        was resolved. The nonce embeds the fire wall-clock
+        (``<pid>-<nanoseconds>``, same machine as the CLI's timestamps).
+        """
+        try:
+            fired_ns = int(nonce.rsplit("-", 1)[-1])
+            fired_at = datetime.fromtimestamp(fired_ns / 1e9, tz=timezone.utc)
+        except (ValueError, OverflowError, OSError):
+            # Unparseable nonce: register rather than silently drop.
+            return False
+
+        @sync_to_async
+        def _transcript_moved() -> bool:
+            from twicc.core.models import SessionItem
+
+            return SessionItem.objects.filter(
+                session_id=self.session_id, timestamp__gt=fired_at,
+            ).exists()
+
+        return await _transcript_moved()
 
     async def on_jsonl_user_message(self) -> None:
         """A real user prompt landed in the JSONL → a turn is running."""
-        self._clear_pending_marker()
+        self._clear_all_pendings("reap")
         if self.state != AgentState.ASSISTANT_TURN:
             self._set_state(AgentState.ASSISTANT_TURN)
         self.last_activity = time.time()
@@ -377,46 +450,148 @@ class HybridClaudeAgent(BaseAgent):
         """New tool_result lines landed.
 
         The PermissionRequest payload carries no tool_use_id (verified), so
-        clearing is unconditional: any tool_result written AFTER the marker
-        was set proves the prompt was answered (approve → result, deny →
-        error result).
+        clearing is unconditional: any tool_result written AFTER a pending
+        was registered proves the prompt was answered (approve → result,
+        deny → error result).
         """
         self.last_activity = time.time()
-        if self._has_pending_marker():
-            self._clear_pending_marker()
+        if self._pending_requests:
+            self._clear_all_pendings("reap")
             await self._notify_state_change()
 
     async def on_jsonl_turn_end(self) -> None:
         """A ``turn_duration`` system line landed → the turn is over."""
-        self._clear_pending_marker()
+        self._clear_all_pendings("reap")
         if self.state != AgentState.USER_TURN:
             self._set_state(AgentState.USER_TURN)
         self.last_activity = time.time()
         await self._notify_state_change()
 
     # ------------------------------------------------------------------
-    # Pending-in-terminal marker
+    # GUI answer delivery (manager → resolve_pending_request → status file)
     # ------------------------------------------------------------------
 
-    def _mark_pending_in_terminal(self, payload: dict) -> None:
-        self._pending_requests[self.PENDING_MARKER_KEY] = PendingRequest(
-            request_id=self.PENDING_MARKER_KEY,
-            request_type="hybrid_terminal",
-            tool_name=payload.get("tool_name") or "",
-            tool_input=payload.get("tool_input") or {},
-            created_at=time.time(),
-            permission_suggestions=payload.get("permission_suggestions") or None,
+    def resolve_pending_request(self, request_id: str, response: Any) -> bool:
+        """Deliver a GUI answer by writing the hook's ``.status.json``.
+
+        Overrides the Future-based SDK contract: hybrid pendings have no
+        awaiter — the polling hook is the consumer. The base contract is
+        sync, so the file I/O finishes in a task; the pending is popped
+        immediately (the next ``process_state`` broadcast clears the widget,
+        same as the SDK path).
+        """
+        pending = self._pending_requests.pop(request_id, None)
+        if pending is None:
+            logger.warning(
+                "[session %s] resolve_pending_request: no hybrid pending for "
+                "request_id=%s (already cleared?)",
+                self.session_id, request_id,
+            )
+            return False
+        self._cancel_gui_expiry(request_id)
+        if not self._pending_requests:
+            # Same stamp as the SDK path: the time spent waiting on the user
+            # must not count against the turn timeouts.
+            self.last_pending_resolved_at = time.time()
+        asyncio.create_task(
+            self._finalize_gui_answer(pending, response),
+            name=f"hybrid-gui-answer-{self.session_id}",
+        )
+        return True
+
+    async def _finalize_gui_answer(self, pending: PendingRequest, response: Any) -> None:
+        try:
+            if pending.tool_name == "ExitPlanMode" and isinstance(response, PermissionResultAllow):
+                # Shared brick: persist a user-edited plan BEFORE the CLI
+                # proceeds (``planFilePath`` rides in the hook payload's
+                # tool_input; no slug fallback needed in hybrid).
+                await maybe_update_plan_file(pending.tool_input, response.updated_input)
+            status = status_path_for(self.session_id, pending.request_id)
+            await asyncio.to_thread(write_status, status, to_hook_output(response))
+            await asyncio.to_thread(
+                drop_path_for(self.session_id, pending.request_id).unlink, missing_ok=True,
+            )
+        except Exception:
+            # The pending is already popped: the widget is gone but the TUI
+            # dialog is still up and answerable — log loudly and move on.
+            logger.exception(
+                "[session %s] failed to deliver the GUI answer for request %s",
+                self.session_id, pending.request_id,
+            )
+        self.last_activity = time.time()
+        await self._notify_state_change()
+
+    # ------------------------------------------------------------------
+    # Pending clearing janitor + GUI-channel expiry
+    # ------------------------------------------------------------------
+
+    def _clear_all_pendings(self, mode: str) -> None:
+        """Clear every registered pending and clean its files.
+
+        ``mode`` picks the file janitor:
+        - ``"reap"`` — the prompt was resolved inside the TUI: write a dummy
+          status so the still-polling hook consumes it and exits (the CLI
+          provably ignores late hook output), delete the drop, then
+          delayed-delete the dummy for the hook-already-dead case (TUI Esc
+          kills the hook before it can consume anything).
+        - ``"delete"`` — the CLI (and its hooks) are dead: delete both files.
+        - ``"detach"`` — TwiCC shutdown: the CLI survives and the prompt may
+          still be pending; keep the drop on disk (boot re-feeds it) and the
+          hook polling (GUI answering resumes after restart).
+        """
+        if not self._pending_requests:
+            return
+        cleared = list(self._pending_requests.values())
+        self._pending_requests.clear()
+        for task in self._gui_expiry_tasks.values():
+            task.cancel()
+        self._gui_expiry_tasks.clear()
+        # Same stamp as _await_pending_request's finally: the time spent
+        # waiting on the user must not count against the turn timeouts.
+        self.last_pending_resolved_at = time.time()
+        if mode != "detach":
+            asyncio.ensure_future(self._janitor_files(cleared, reap=(mode == "reap")))
+
+    async def _janitor_files(self, cleared: list[PendingRequest], *, reap: bool) -> None:
+        for pending in cleared:
+            drop = drop_path_for(self.session_id, pending.request_id)
+            status = status_path_for(self.session_id, pending.request_id)
+            try:
+                if reap:
+                    await asyncio.to_thread(write_status, status, DUMMY_REAP_STATUS)
+                    await asyncio.to_thread(drop.unlink, missing_ok=True)
+                    await asyncio.sleep(5)
+                    await asyncio.to_thread(status.unlink, missing_ok=True)
+                else:
+                    await asyncio.to_thread(drop.unlink, missing_ok=True)
+                    await asyncio.to_thread(status.unlink, missing_ok=True)
+            except Exception:
+                logger.exception(
+                    "[session %s] pending-files janitor failed for %s",
+                    self.session_id, pending.request_id,
+                )
+
+    def _schedule_gui_expiry(self, nonce: str) -> None:
+        async def _expire() -> None:
+            await asyncio.sleep(HYBRID_HOOK_TIMEOUT_SECONDS)
+            self._gui_expiry_tasks.pop(nonce, None)
+            pending = self._pending_requests.get(nonce)
+            if pending is None:
+                return
+            # The CLI reaped the polling hook at its timeout: the GUI channel
+            # for this prompt is gone. Keep the pending but degrade it to the
+            # V1 badge-only marker — the TUI dialog is still answerable.
+            self._pending_requests[nonce] = replace(pending, request_type="hybrid_terminal")
+            await self._notify_state_change()
+
+        self._gui_expiry_tasks[nonce] = asyncio.create_task(
+            _expire(), name=f"hybrid-gui-expiry-{self.session_id}",
         )
 
-    def _has_pending_marker(self) -> bool:
-        return self.PENDING_MARKER_KEY in self._pending_requests
-
-    def _clear_pending_marker(self) -> None:
-        removed = self._pending_requests.pop(self.PENDING_MARKER_KEY, None)
-        if removed is not None and not self._pending_requests:
-            # Same stamp as _await_pending_request's finally: the time spent
-            # waiting on the user must not count against the turn timeouts.
-            self.last_pending_resolved_at = time.time()
+    def _cancel_gui_expiry(self, nonce: str) -> None:
+        task = self._gui_expiry_tasks.pop(nonce, None)
+        if task is not None:
+            task.cancel()
 
     # ------------------------------------------------------------------
     # Liveness
@@ -459,7 +634,7 @@ class HybridClaudeAgent(BaseAgent):
                     self.session_id, dead,
                 )
                 self.kill_reason = self.kill_reason or "cli-exit"
-                self._clear_pending_marker()
+                self._clear_all_pendings("delete")
                 if self._first_paste_task is not None:
                     self._first_paste_task.cancel()
                 # Remove the dead-pane tmux session so the next send can
@@ -480,7 +655,11 @@ class HybridClaudeAgent(BaseAgent):
             self._first_paste_task.cancel()
         if self._liveness_task is not None:
             self._liveness_task.cancel()
-        self._clear_pending_marker()
+        # On TwiCC shutdown the CLI (and its polling hooks) survive: keep the
+        # drop files so boot adoption + the hooks-watcher scan restore the
+        # GUI-answerable pendings. Every other reason kills the tmux below,
+        # taking the hooks with it — delete the files.
+        self._clear_all_pendings("detach" if reason == "shutdown" else "delete")
         # A TwiCC shutdown must NOT kill the claude TUI: the tmux server
         # outlives TwiCC by design (§2.3) and boot adoption re-binds to the
         # surviving session on the next start. Every other reason (manual
