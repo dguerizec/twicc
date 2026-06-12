@@ -141,10 +141,25 @@ answerable pending requests**:
   with `request_id=nonce`, `request_type` = `ask_user_question` when
   `tool_name == "AskUserQuestion"` else `tool_approval`, real
   `tool_name` / `tool_input` / `permission_suggestions`, then
-  broadcasts. For `ExitPlanMode` (payload has no suggestions) the agent
-  synthesizes `[{"type":"setMode","mode":"acceptEdits","destination":
-  "session"}]` so the widget can offer the TUI's "auto-accept edits"
-  option (CLI honoring to be confirmed at impl, §6).
+  broadcasts. **Hook-native suggestions only** (decided at review): the
+  hybrid path does NOT add TwiCC-invented suggestions — neither the
+  SDK path's injected `setMode` mode-picker suggestion
+  (`_modeOptions`/`_currentMode`) nor an "auto-accept edits" synthesis
+  for `ExitPlanMode` (whose payload carries no suggestions: its widget
+  offers plain approve/deny + plan editing). The mode picker disappears
+  by construction — the frontend only renders it when a suggestion
+  carries `_modeOptions`. Both may come later.
+- **Shared inbound conversion.** The SDK agent's suggestion processing
+  (`get_permission_suggestions` in `agent/agent.py`: `PermissionUpdate`
+  → plain dicts, `addDirectories`/`removeDirectories` cwd filtering,
+  field-order normalization) is extracted into a module shared by both
+  modes; the SDK-only enrichment (the injected `setMode` mode-picker
+  suggestion) stays in the SDK agent, layered on top of the shared
+  passthrough. The hybrid path feeds the hook's already-plain dicts
+  through the same shared filter so both modes present identical
+  shapes to the frontend. The outbound conversion (front answer →
+  `PermissionResultAllow/Deny`) is already shared: it lives in `ws.py`,
+  which is mode-agnostic.
 - **`resolve_pending_request(request_id, response)` override** (the SDK
   path resolves an asyncio Future; ws.py and the manager stay
   untouched): converts the SDK-typed response built by `ws.py`
@@ -162,12 +177,13 @@ answerable pending requests**:
   `~/.claude/plans/{slug}.md`). That logic (modified-plan detection +
   plan-file write) is **extracted into a module shared by both modes**
   — per the standing directive to reuse the SDK bricks, reorganizing
-  code where needed. The hybrid path is even simpler: the hook payload
-  carries `tool_input.planFilePath` directly, no slug lookup needed
-  (the shared helper takes an optional explicit path, falling back to
-  the slug lookup for the SDK caller). The file is written **before**
-  the `.status.json` so the CLI proceeds with the edited plan already
-  in place.
+  code where needed. Both modes now have the target path directly:
+  `tool_input.planFilePath` is CLI-injected into the ExitPlanMode tool
+  input itself (verified in SDK-session transcripts since CLI ~2.1.91),
+  so the hook payload AND the SDK's `can_use_tool` input both carry it;
+  the shared helper uses it and keeps the slug lookup only as a legacy
+  fallback. The file is written **before** the `.status.json` so the
+  CLI proceeds with the edited plan already in place.
 - **Clearing (existing JSONL bridge, now also a janitor).** The
   unconditional clear-on-`tool_result` / clear-on-turn-end logic stays;
   on clear the agent additionally deletes the kept drop file and any
@@ -228,8 +244,11 @@ answerable pending requests**:
 - A GUI answer needs the hook process alive: prompts that predate the
   hybrid launch design change (old sessions without the polling hook)
   or that outlive the CLI-accepted timeout fall back to terminal-only.
-- The `permission_suggestions` offered are exactly what the CLI sends
-  (plus the synthesized ExitPlanMode one); no TwiCC-invented rules.
+- The `permission_suggestions` offered are exactly what the CLI sends;
+  no TwiCC-invented suggestions in hybrid for now — in particular no
+  mode-picker (`_modeOptions`) injection and no ExitPlanMode
+  "auto-accept edits" synthesis (its widget is approve/deny + plan
+  editing only).
 - If the user answers in the TUI, the orphaned hook keeps polling until
   the CLI timeout (one `sleep 0.2` shell loop — negligible).
 
@@ -239,15 +258,12 @@ answerable pending requests**:
    (target ≥ weeks). Probe: huge value → does the hook survive past
    600 s? If clamped, pick the max accepted and rely on the expiry
    timer for the degradation.
-2. **ExitPlanMode + `updatedPermissions`**: does an allow carrying the
-   synthesized `setMode acceptEdits` reproduce the TUI's "auto-accept
-   edits" option? (Plain allow = manual approve, verified.)
-3. **Stale-drop guard**: confirm nonce-timestamp vs JSONL-timestamp
+2. **Stale-drop guard**: confirm nonce-timestamp vs JSONL-timestamp
    comparison is reliable on a real restart-mid-pending scenario.
-4. **Hook survival across TwiCC restart**: end-to-end check of §4.6
+3. **Hook survival across TwiCC restart**: end-to-end check of §4.6
    row 5 (probe strongly suggests it; the hook is a child of the CLI in
    the tmux, not of TwiCC).
-5. `permission_suggestions` round-trip for non-setMode types (e.g.
+4. `permission_suggestions` round-trip for non-setMode types (e.g.
    `addRules`) through the hook's `updatedPermissions` — the SDK path
    supports them; verify the CLI applies them when returned by the hook.
 
@@ -263,8 +279,13 @@ answerable pending requests**:
   reusing the drop-requests convention (suffix-excluded in the watcher),
   rather than a separate response directory.
 - ExitPlanMode plan editing reuses the SDK brick (`_update_plan`),
-  extracted to a shared module; hybrid feeds it the payload's
-  `planFilePath` directly.
+  extracted to a shared module; both modes use `tool_input.planFilePath`
+  (CLI-injected, verified in transcripts since ~2.1.91), slug lookup
+  demoted to legacy fallback.
+- Inbound suggestion processing (normalize + filter) extracted from the
+  SDK agent into a shared module; TwiCC's enrichments (the injected
+  `setMode` mode-picker suggestion, any synthesized suggestion) stay
+  SDK-only for now — hybrid presents hook-native suggestions verbatim.
 - Drop files now deleted at **resolution** (not ingestion) to get
   restart resilience from the existing boot scan.
 - Hook timeout pushed to the CLI's ceiling instead of a re-arming
