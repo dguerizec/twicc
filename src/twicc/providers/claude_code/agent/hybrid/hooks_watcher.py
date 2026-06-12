@@ -2,10 +2,14 @@
 
 Hook commands injected at hybrid launch (see ``hybrid/launch.py``) drop
 ``<session_id>__<event>__<nonce>.json`` files into ``get_hybrid_hooks_dir()``;
-this watcher feeds them to the Claude Code agent manager and deletes them.
-File-based on purpose: no HTTP endpoint to exempt from the password
-middleware, no token to leak through ``ps`` — write access to the data dir
-IS the authentication.
+this watcher feeds them to the Claude Code agent manager and deletes them —
+EXCEPT ``PermissionRequest`` drops the agent takes ownership of
+(``HybridHookOutcome.OWNED``): those stay on disk until the pending request
+resolves, so the boot scan can re-feed them after a TwiCC restart while the
+hook process (a child of the CLI, not of TwiCC) is still polling for its
+``.status.json`` answer. File-based on purpose: no HTTP endpoint to exempt
+from the password middleware, no token to leak through ``ps`` — write access
+to the data dir IS the authentication.
 
 Only ``PermissionRequest`` is injected in V1, but any event name is parsed
 and routed (forward-compat with the V2 ideas in the design doc §7); events
@@ -22,11 +26,17 @@ import orjson
 from watchfiles import Change, awatch
 
 from twicc.paths import get_hybrid_hooks_dir
+from twicc.providers.claude_code.agent.hybrid.signals import HybridHookOutcome
 
 logger = logging.getLogger(__name__)
 
 EVENT_SUFFIX = ".json"
 TMP_SUFFIX = ".tmp"
+# Answers written by the hybrid agent next to the drop files (drop-requests
+# convention); consumed by the polling hook, NEVER by this watcher. Without
+# this exclusion a status file would parse as a valid 3-part event name and
+# get routed then deleted.
+STATUS_SUFFIX = ".status.json"
 
 
 class HybridHooksWatcher:
@@ -73,6 +83,16 @@ class HybridHooksWatcher:
                 asyncio.ensure_future(self._process_file(path))
 
     async def _scan_existing(self) -> None:
+        # Orphan status sweep first: an answer file whose drop is gone can
+        # never be consumed (its hook died — TUI Esc kills it, or the CLI
+        # reaped it at timeout). Mirrors the drop-requests watcher's boot
+        # cleanup.
+        for path in sorted(self.directory.glob(f"*{STATUS_SUFFIX}")):
+            drop = path.with_name(path.name.removesuffix(STATUS_SUFFIX) + EVENT_SUFFIX)
+            if not drop.exists():
+                logger.info("[HybridHooksWatcher] boot cleanup orphan status %s", path.name)
+                await asyncio.to_thread(path.unlink, missing_ok=True)
+
         for path in sorted(self.directory.glob(f"*{EVENT_SUFFIX}")):
             if not self._is_event_file(path):
                 continue
@@ -83,7 +103,11 @@ class HybridHooksWatcher:
 
     @staticmethod
     def _is_event_file(path: Path) -> bool:
-        return path.name.endswith(EVENT_SUFFIX) and not path.name.endswith(TMP_SUFFIX)
+        return (
+            path.name.endswith(EVENT_SUFFIX)
+            and not path.name.endswith(TMP_SUFFIX)
+            and not path.name.endswith(STATUS_SUFFIX)
+        )
 
     # ------------------------------------------------------------------
     # Per-file processing
@@ -100,7 +124,7 @@ class HybridHooksWatcher:
                 )
                 await asyncio.to_thread(path.unlink, missing_ok=True)
                 return
-            session_id, event, _nonce = parts
+            session_id, event, nonce = parts
 
             payload: dict = {}
             try:
@@ -119,17 +143,18 @@ class HybridHooksWatcher:
                 get_claude_code_agent_manager,
             )
 
-            handled = await get_claude_code_agent_manager().handle_hybrid_hook(
-                session_id, event, payload,
+            outcome = await get_claude_code_agent_manager().handle_hybrid_hook(
+                session_id, event, payload, nonce,
             )
-            if not handled:
+            if outcome is HybridHookOutcome.UNHANDLED:
                 # Stale event (no live hybrid agent) or an event name the
                 # manager does not route — dropped, never retried.
                 logger.info(
                     "[HybridHooksWatcher] unhandled %s event for session %s "
                     "(dropped)", event, session_id,
                 )
-            await asyncio.to_thread(path.unlink, missing_ok=True)
+            if outcome is not HybridHookOutcome.OWNED:
+                await asyncio.to_thread(path.unlink, missing_ok=True)
         except Exception:
             logger.exception("[HybridHooksWatcher] processing failed for %s", path.name)
             await asyncio.to_thread(path.unlink, missing_ok=True)

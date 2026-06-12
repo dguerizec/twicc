@@ -19,7 +19,7 @@ from .agent import ClaudeCodeAgent
 if TYPE_CHECKING:
     from datetime import datetime
 
-    from twicc.providers.claude_code.agent.hybrid.signals import HybridJsonlSignals
+    from twicc.providers.claude_code.agent.hybrid.signals import HybridHookOutcome, HybridJsonlSignals
     from twicc.providers.helpers import AgentSettings
 
 logger = logging.getLogger(__name__)
@@ -451,20 +451,28 @@ class ClaudeCodeAgentManager(BaseAgentManager):
     # Hybrid signal routing (hooks drop watcher + JSONL bridge)
     # ------------------------------------------------------------------
 
-    async def handle_hybrid_hook(self, session_id: str, event: str, payload: dict) -> bool:
+    async def handle_hybrid_hook(
+        self, session_id: str, event: str, payload: dict, nonce: str,
+    ) -> "HybridHookOutcome":
         """Route a hybrid hook event file to its live hybrid agent.
 
-        Returns ``False`` for stale events (no live hybrid agent) and for
-        event names V1 does not inject — the hooks watcher deletes the file
-        either way (drop, never retry).
+        Returns the file-ownership verdict for the hooks watcher:
+        ``UNHANDLED`` for stale events (no live hybrid agent) and event
+        names V1 does not inject (deleted, never retried); ``OWNED`` when
+        the agent registered a pending request keyed on ``nonce`` (the drop
+        file stays on disk until the pending resolves); ``HANDLED`` when
+        the agent declined the registration (e.g. a stale drop re-fed after
+        a restart, already answered in the TUI — deleted).
         """
+        from twicc.providers.claude_code.agent.hybrid.signals import HybridHookOutcome
+
         agent = self._agents.get(session_id)
         if agent is None or not getattr(agent, "is_hybrid", False):
-            return False
+            return HybridHookOutcome.UNHANDLED
         if event == "PermissionRequest":
-            await agent.on_permission_request(payload)
-            return True
-        return False
+            registered = await agent.on_permission_request(payload, nonce)
+            return HybridHookOutcome.OWNED if registered else HybridHookOutcome.HANDLED
+        return HybridHookOutcome.UNHANDLED
 
     async def handle_hybrid_jsonl_signals(
         self, session_id: str, signals: "HybridJsonlSignals",

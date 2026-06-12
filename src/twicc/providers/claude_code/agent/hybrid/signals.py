@@ -3,9 +3,30 @@
 Produced by the Claude Code sessions watcher (one per ingest batch with
 fresh lines, hybrid sessions only) and consumed by
 ``ClaudeCodeAgentManager.handle_hybrid_jsonl_signals``.
+
+Also home to ``HybridHookOutcome``, the routing verdict the manager returns
+to the hooks watcher for each event file.
 """
 
+from enum import StrEnum
 from typing import NamedTuple
+
+
+class HybridHookOutcome(StrEnum):
+    """What the hooks watcher should do with an event file after routing.
+
+    UNHANDLED: stale event (no live hybrid agent) or unrouted event name —
+        delete the file, never retry.
+    HANDLED: routed, but the file is no longer needed — delete it.
+    OWNED: routed and the agent registered a pending request keyed on the
+        event's nonce — the drop file must STAY on disk (the agent deletes
+        it at resolution/clear/death; the boot scan re-feeds survivors after
+        a TwiCC restart, restoring the GUI-answer widget).
+    """
+
+    UNHANDLED = "unhandled"
+    HANDLED = "handled"
+    OWNED = "owned"
 
 
 class HybridJsonlSignals(NamedTuple):
