@@ -1,7 +1,7 @@
 ---
 name: twicc-info
 description: Read-only inspection of TwiCC providers — TwiCC version, list of providers (with their enabled / disabled state), agent settings presets, available slash / dollar commands, supported models, agent-settings choices and per-value constraints. One single command composes any subset of sections in a single JSON payload. Use when you or the user need a machine-readable picture of what is available before scripting a session, picking a preset / model, or filtering for a command.
-argument-hint: [presets|commands|models|agent-settings|all...]
+argument-hint: '[presets|commands|models|agent-settings|all...]'
 ---
 
 # TwiCC Info

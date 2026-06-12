@@ -1,7 +1,7 @@
 ---
 name: twicc-update-sessions
 description: Apply the same update to several TwiCC sessions at once — batch archive/unarchive, pin/unpin, hide/unhide, annotations, or settings. Use when you or the user want to change many sessions in one call (e.g. hide a whole batch, tag every worker in an orchestration, or bump the model/effort of all your children).
-argument-hint: {archive|unarchive|pin|unpin|hide|unhide|annotations|settings} [SESSION_ID...] [--spawned-by X|--descendants X] [--annotation ...]
+argument-hint: '{archive|unarchive|pin|unpin|hide|unhide|annotations|settings} [SESSION_ID...] [--spawned-by X|--descendants X] [--annotation ...]'
 ---
 
 # TwiCC Update Sessions
