@@ -82,7 +82,7 @@ This plan is meant to be executed END-TO-END WITHOUT STOPPING for user input.
 
 Pure refactor — zero behavior change on the SDK path.
 
-- [ ] **Step 1: `normalize_permission_suggestions(suggestions, cwd) -> list[dict] | None`**
+- [x] **Step 1: `normalize_permission_suggestions(suggestions, cwd) -> list[dict] | None`**
 
 Move from `get_permission_suggestions`: the `PermissionUpdate.to_dict()` /
 plain-dict normalization, the `addDirectories`/`removeDirectories` cwd
@@ -97,7 +97,7 @@ SDK-only by design decision; `get_permission_suggestions` becomes a thin
 wrapper: shared normalize → SDK-only injection → shared field-order pass (or
 inject before the field-order pass, whichever keeps the output byte-identical).
 
-- [ ] **Step 2: `maybe_update_plan_file(tool_input, updated_input, *, slug_getter=None, session_id=None) -> None` (async)**
+- [x] **Step 2: `maybe_update_plan_file(tool_input, updated_input, *, slug_getter=None, session_id=None) -> None` (async)**
 
 Move `_update_plan` + the modified-plan detection. Behavior:
 - No-op unless `updated_input` is set and `updated_input.get("plan") !=
@@ -108,14 +108,14 @@ Move `_update_plan` + the modified-plan detection. Behavior:
   `~/.claude/plans/{slug}.md`) — only the SDK caller passes it.
 - Keep the existing warnings/logging semantics (missing file → warn + skip).
 
-- [ ] **Step 3: Rewire the SDK agent**
+- [x] **Step 3: Rewire the SDK agent**
 
 `agent.py` imports both helpers; `_handle_pending_request`'s post-resolve
 ExitPlanMode block calls `maybe_update_plan_file(input_data,
 response.updated_input, slug_getter=self._get_session_slug,
 session_id=self.session_id)`. Delete the now-dead private code.
 
-- [ ] **Step 4: Verify (SDK smoke)**
+- [x] **Step 4: Verify (SDK smoke)**
 
 ```bash
 cd /home/twidi/dev/twicc-poc/.worktrees/claude-hybrid
@@ -132,7 +132,7 @@ Expected: one suggestion with `/cwd` filtered out, ordered fields. Then a live
 SDK approval check happens in Task 6's sweep (suggestions + mode picker still
 render identically).
 
-- [ ] **Step 5: Commit** — `refactor(claude): extract shared permission/plan bricks from the SDK agent`
+- [x] **Step 5: Commit** — `refactor(claude): extract shared permission/plan bricks from the SDK agent`
 
 ---
 
@@ -142,7 +142,7 @@ render identically).
 - Modify: `src/twicc/providers/claude_code/agent/hybrid/launch.py`
   (`build_hooks_settings`, ~line 24)
 
-- [ ] **Step 1: Probe the timeout ceiling (impl-time verification §6.1)**
+- [x] **Step 1: Probe the timeout ceiling (impl-time verification §6.1)**
 
 Throwaway CLI (env-purged, `/tmp/twicc-probe-timeout/`) with a
 `PermissionRequest` hook set to a huge `"timeout"` (e.g. `31536000` = 1 year;
@@ -153,7 +153,7 @@ to the highest honored value. **Record the result in the commit message** and
 set `HYBRID_HOOK_TIMEOUT_SECONDS` accordingly. (One real-time wait of ~11
 minutes; run it in background while doing Task 3.)
 
-- [ ] **Step 2: Extend the hook command**
+- [x] **Step 2: Extend the hook command**
 
 In `build_hooks_settings`, build the nonce once and derive both paths:
 
@@ -173,14 +173,14 @@ entry becomes `{"type": "command", "command": command, "timeout":
 HYBRID_HOOK_TIMEOUT_SECONDS}` with the constant defined in `launch.py`
 (imported by the agent for the expiry timer).
 
-- [ ] **Step 3: Probe the new command end-to-end**
+- [x] **Step 3: Probe the new command end-to-end**
 
 Throwaway CLI launched with the EXACT settings JSON `build_hooks_settings`
 produces (print it from a Python one-liner, feed it via `--settings`):
 approval fires → drop appears → write a valid allow status file → hook prints
 it → CLI dismisses the dialog and runs the tool → status file gone.
 
-- [ ] **Step 4: Commit** — `feat(hybrid): hook now polls a .status.json answer next to its drop`
+- [x] **Step 4: Commit** — `feat(hybrid): hook now polls a .status.json answer next to its drop`
 
 ---
 
@@ -191,19 +191,19 @@ it → CLI dismisses the dialog and runs the tool → status file gone.
 - Modify: `src/twicc/providers/claude_code/agent/manager.py`
   (`handle_hybrid_hook`, ~line 454)
 
-- [ ] **Step 1: Suffix exclusion**
+- [x] **Step 1: Suffix exclusion**
 
 `STATUS_SUFFIX = ".status.json"`; `_is_event_file` returns `False` for it (and
 keeps the `.tmp` exclusion). **Load-bearing:** without this, a status file
 parses as a 3-part event name and gets routed then deleted.
 
-- [ ] **Step 2: Nonce passthrough**
+- [x] **Step 2: Nonce passthrough**
 
 `_process_file` already splits `session_id, event, nonce` — pass `nonce` to
 `handle_hybrid_hook(session_id, event, payload, nonce)`; update the manager
 signature and forward to `agent.on_permission_request(payload, nonce)`.
 
-- [ ] **Step 3: Deferred drop deletion (hybrid-hooks only)**
+- [x] **Step 3: Deferred drop deletion (hybrid-hooks only)**
 
 When `handle_hybrid_hook` returns `True` for a `PermissionRequest`, do **not**
 unlink the drop — the agent owns it now (deleted at resolution/clear/death).
@@ -216,13 +216,13 @@ Re-feed idempotence: the boot scan may re-process a kept drop after a restart
 — the agent's registration must be idempotent per nonce (Task 4) and the
 in-flight name guard already prevents double-processing within a run.
 
-- [ ] **Step 4: Boot sweep of orphan status files**
+- [x] **Step 4: Boot sweep of orphan status files**
 
 In `_scan_existing`, before processing drops: delete any `*.status.json`
 without a matching drop file (mirrors
 `DropRequestsWatcher._cleanup_orphan_status_files`).
 
-- [ ] **Step 5: Probe**
+- [x] **Step 5: Probe**
 
 With the worktree backend running and a live hybrid test session: trigger an
 approval → drop file PERSISTS in `hybrid-hooks/` while the pending is up (vs
@@ -230,7 +230,7 @@ V1 immediate deletion); craft an orphan `foo__PermissionRequest__1.status.json`
 → restart backend → swept at boot; confirm a status file written next to a
 live drop is NOT consumed by the watcher.
 
-- [ ] **Step 6: Commit** — `feat(hybrid): hooks watcher passes the nonce and defers drop deletion`
+- [x] **Step 6: Commit** — `feat(hybrid): hooks watcher passes the nonce and defers drop deletion`
 
 ---
 
@@ -241,7 +241,7 @@ live drop is NOT consumed by the watcher.
   (pending block ~lines 359–420, death paths ~lines 436–483)
 - Create: `src/twicc/providers/claude_code/agent/hybrid/responses.py`
 
-- [ ] **Step 1: Registration (replaces `_mark_pending_in_terminal`)**
+- [x] **Step 1: Registration (replaces `_mark_pending_in_terminal`)**
 
 `on_permission_request(payload, nonce)`:
 - Idempotent per nonce (re-feed after restart): if `nonce` already registered,
@@ -262,7 +262,7 @@ live drop is NOT consumed by the watcher.
   today. Multiple nonces can coexist in `_pending_requests` (sequential in
   practice).
 
-- [ ] **Step 2: `responses.py` — wire conversion + file helpers**
+- [x] **Step 2: `responses.py` — wire conversion + file helpers**
 
 - `to_hook_output(response) -> dict`:
   `PermissionResultAllow` → `{"hookSpecificOutput": {"hookEventName":
@@ -277,7 +277,7 @@ live drop is NOT consumed by the watcher.
 - `write_status(path, data)`: orjson dump, `.tmp` → `os.replace`, chmod 600
   (same recipe as `DropRequestsWatcher._write_status`).
 
-- [ ] **Step 3: `resolve_pending_request` override**
+- [x] **Step 3: `resolve_pending_request` override**
 
 Async-safe override on the hybrid agent (base signature
 `resolve_pending_request(request_id, response) -> bool`, called by the base
@@ -294,7 +294,7 @@ synchronously first):
 - The frontend's `isResponding` spinner resolves when the pending disappears
   from the next `process_state` broadcast — same as SDK.
 
-- [ ] **Step 4: Clearing janitor + expiry timer**
+- [x] **Step 4: Clearing janitor + expiry timer**
 
 - `on_jsonl_progress` / `on_jsonl_turn_end` (and the death paths that call
   `_clear_pending_marker` today): for EVERY registered pending — pop it, then
@@ -311,7 +311,7 @@ synchronously first):
 - DEAD path: clear all pendings + delete their drop/status files (no dummy
   needed — the tmux kill takes the hooks down with the CLI).
 
-- [ ] **Step 5: Probe (backend-only, no UI)**
+- [x] **Step 5: Probe (backend-only, no UI)**
 
 Live hybrid test session on the worktree backend; drive answers by calling the
 WS-equivalent path or directly `manager.resolve_pending_request(...)` from a
@@ -321,7 +321,7 @@ in `process_state` with `request_type="tool_approval"` and real suggestions;
 answer in the TUI → pending clears, drop file gone, orphan hook exits (dummy
 status consumed) within ~1 s.
 
-- [ ] **Step 6: Commit** — `feat(hybrid): answerable pending requests resolved through the hook status file`
+- [x] **Step 6: Commit** — `feat(hybrid): answerable pending requests resolved through the hook status file`
 
 ---
 
@@ -331,7 +331,7 @@ status consumed) within ~1 s.
 - Modify: `frontend/src/components/session/detail/SessionItemsList.vue` (~line 1528)
 - Modify: `frontend/src/components/message/HybridTerminalBlock.vue` (~line 110)
 
-- [ ] **Step 1: Gating**
+- [x] **Step 1: Gating**
 
 `PendingRequestForm` renders when `hasPendingRequest` AND the head request is
 answerable: on hybrid sessions that means
@@ -340,18 +340,18 @@ unchanged. Keep the comment explaining the hybrid dual-surface. The form
 already routes to `ClaudePendingRequestBody` by provider — no change there,
 and without `_modeOptions` suggestions the mode picker simply doesn't render.
 
-- [ ] **Step 2: Badge**
+- [x] **Step 2: Badge**
 
 `hybridPending` matches the head pending request regardless of
 `request_type` (any pending means "a prompt is up in the terminal"); label
 logic unchanged.
 
-- [ ] **Step 3: Build check**
+- [x] **Step 3: Build check**
 
 `cd frontend && npx vite build` — then **delete `src/twicc/static/frontend/`**
 (stale-release trap). Visual checks land in Task 6.
 
-- [ ] **Step 4: Commit** — `feat(hybrid): show the pending-request widget on hybrid sessions`
+- [x] **Step 4: Commit** — `feat(hybrid): show the pending-request widget on hybrid sessions`
 
 ---
 
@@ -364,7 +364,7 @@ End-to-end on the worktree instance (servers via `uv run ./devctl.py start`
 from the worktree; hybrid test session in `/tmp/twicc-hybrid-test`, sonnet,
 low effort), via Chrome MCP:
 
-- [ ] **Sweep — all through the real UI:**
+- [x] **Sweep — all through the real UI:**
   1. Tool approval (Write in default mode): widget appears with suggestions →
      **Allow** in GUI → TUI dialog dismisses, tool runs, widget clears.
   2. Same → **Deny with message** → message visible in the TUI error and the
@@ -387,10 +387,10 @@ low effort), via Chrome MCP:
      → widget reappears (re-fed drop), GUI answer still works (hook survived).
   9. SDK session regression: a normal (non-hybrid) approval still renders with
      the mode picker and resolves (Task 1 refactor sanity).
-- [ ] **CHANGELOG** under `### Added`: hybrid sessions now show the real
+- [x] **CHANGELOG** under `### Added`: hybrid sessions now show the real
   pending-request widget — approvals, questions and plan reviews can be
   answered from the UI or the terminal, whichever comes first.
-- [ ] **Commit** — `feat(hybrid): GUI answering E2E + changelog`
+- [x] **Commit** — `feat(hybrid): GUI answering E2E + changelog`
 
 ---
 
