@@ -8,10 +8,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
-- **External notifications** — push notifications to your devices via [Apprise](https://appriseit.com) (ntfy, Pushover, Telegram, and 130+ other services), with a per-target "Only when you're away" option.
 - **Extra usage alerts** — get notified when a provider starts using your paid extra usage credits (configurable notification).
+  - ![Extra usage alerts](frontend/public/whats-new/v1.8.1/extra-credits-toast.webp)
+- **External notifications** — push notifications to your devices via [Apprise](https://appriseit.com) (ntfy, Pushover, Telegram, and 130+ other services), with a per-target "Only when you're away" option.
+  - ![External notifications](frontend/public/whats-new/v1.8.1/external-notifications.webp)
 - **Session switcher** — hold Ctrl and tap the key above Tab (the backtick on QWERTY) to flip between your recently-visited sessions; add Shift to pick from the sessions shown in the sidebar instead.
+  - ![Extra usage alerts](frontend/public/whats-new/v1.8.1/sessions-switcher.webp)
 - **File editor** — Alt+E to toggle edit mode for the current file.
+
+### Fixed
+
+- **Workspaces auto-add** — now correctly add new projects to workspaces with auto-add patterns.
+- **Trust flags** — some fixes to make the trust system more reliable. 
 
 ## [1.8.0] - 2026-06-11
 
