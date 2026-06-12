@@ -8,12 +8,16 @@ Claude CLI directly (via ``exec``) so the pane PID *is* the claude PID and
 All functions are sync — callers wrap them with ``asyncio.to_thread``.
 """
 
+import logging
 import os
 import re
 import shlex
 import subprocess
+import time
 
 from twicc.terminal import TMUX_SOCKET_NAME, get_tmux_path, resolve_tmux_config_path
+
+logger = logging.getLogger(__name__)
 
 HYBRID_SESSION_PREFIX = "twicc-hybrid-"
 
@@ -201,6 +205,63 @@ def composer_ready(session_id: str) -> bool:
     )
 
 
+# A composer line carrying text: ``❯`` followed by anything (the empty
+# variant is _EMPTY_COMPOSER_RE).
+_COMPOSER_LINE_RE = re.compile(r"^❯(.*)$")
+
+# Post-submit verification polls (seconds between checks).
+_SUBMIT_VERIFY_DELAYS = (0.15, 0.3, 0.5)
+
+
+def _composer_text(screen: str) -> str | None:
+    """Text sitting in the TUI composer: ``''`` if empty, None if no composer.
+
+    The composer's first line is a ``❯`` line directly under a separator
+    (the block's top border). Scanned bottom-up — the composer is the lowest
+    such line, and history echoes (``❯ <sent text>``) are not framed by
+    separators. Only the first composer line is returned: enough to
+    recognize a pasted text, wrapped continuation lines don't matter.
+    """
+    lines = screen.splitlines()
+    for i in range(len(lines) - 1, 0, -1):
+        match = _COMPOSER_LINE_RE.match(lines[i])
+        if match and _COMPOSER_BORDER_RE.search(lines[i - 1]):
+            return match.group(1).strip()
+    return None
+
+
+def _ensure_submitted(session_id: str, target: str, text: str) -> None:
+    """Re-press Enter when the paste's trailing Enter was swallowed.
+
+    The CLI's composer occasionally drops an Enter arriving right behind the
+    bracketed paste (the text hadn't been committed yet), leaving the pasted
+    text sitting unsubmitted — observed twice in real use. Poll the composer:
+    empty → submitted, done; still showing OUR text → press Enter again;
+    anything else (a dialog popped up, no composer on screen) → hands off,
+    a blind Enter there would validate the dialog's highlighted option.
+    """
+    first_line = next((ln for ln in text.splitlines() if ln.strip()), "").strip()
+    prefix = first_line[:40]
+    if not prefix:
+        return
+    for delay in _SUBMIT_VERIFY_DELAYS:
+        time.sleep(delay)
+        screen = capture_pane(session_id)
+        if screen is None:
+            return
+        line = _composer_text(screen)
+        if not line:  # '' = submitted, None = no composer (dialog?) — done
+            return
+        compare_len = min(len(line), len(prefix))
+        if line[:compare_len] != prefix[:compare_len]:
+            return  # not our text — never touch someone else's draft
+        logger.warning(
+            "Pasted text still sitting in the composer of hybrid session %s "
+            "— pressing Enter again", session_id,
+        )
+        _run(["send-keys", "-t", target, "Enter"])
+
+
 def paste_text(session_id: str, text: str, *, submit: bool = True) -> None:
     """Bracketed-paste ``text`` into the TUI composer, then press Enter.
 
@@ -217,6 +278,7 @@ def paste_text(session_id: str, text: str, *, submit: bool = True) -> None:
         raise RuntimeError(f"tmux paste-buffer failed: {r.stderr.decode(errors='replace')}")
     if submit:
         _run(["send-keys", "-t", target, "Enter"])
+        _ensure_submitted(session_id, target, text)
 
 
 def kill_session(session_id: str) -> None:
