@@ -605,7 +605,14 @@ async def project_trust_resolve(request, project_id):
         raise Http404("Project not found")
     from twicc.core.services.trust import resolve_project_trust
 
-    return JsonResponse(await resolve_project_trust(project_id))
+    try:
+        return JsonResponse(await resolve_project_trust(project_id))
+    except Exception:
+        # Never 500 the trust gate: an unexpected failure (filesystem, git
+        # subprocess, …) degrades to "unresolved" so the frontend keeps a
+        # coherent state instead of guessing what the backend did.
+        logger.exception("Trust resolve failed for project %s", project_id)
+        return JsonResponse({"state": None, "via": "error", "source_id": None})
 
 
 async def project_trust_decide(request, project_id):
@@ -634,7 +641,11 @@ async def project_trust_decide(request, project_id):
         return JsonResponse({"error": "'propagation' must be a boolean"}, status=400)
     from twicc.core.services.trust import decide_project_trust
 
-    result = await decide_project_trust(project_id, trusted, propagation)
+    try:
+        result = await decide_project_trust(project_id, trusted, propagation)
+    except Exception:
+        logger.exception("Trust decide failed for project %s", project_id)
+        return JsonResponse({"error": "decision_failed"}, status=500)
     if not result.get("ok"):
         return JsonResponse({"error": result.get("error", "decision_failed")}, status=400)
     return JsonResponse(result)

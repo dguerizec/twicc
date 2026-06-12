@@ -699,8 +699,9 @@ export function initStaticCommands(router) {
             },
             action: async () => {
                 const projectId = routeProjectId()
-                if (!(await ensureProjectTrust(projectId))) return
-                const sessionId = data.createDraftSession(projectId)
+                const gate = await ensureProjectTrust(projectId)
+                if (!gate) return
+                const sessionId = data.createDraftSession(projectId, gate.state)
                 const name = isAllProjectsMode() ? 'projects-session' : 'session'
                 router.push({ name, params: { projectId, sessionId } })
             },
@@ -713,8 +714,9 @@ export function initStaticCommands(router) {
             items: () => {
                 const activityMap = buildProjectActivityMap(data)
                 return pickerEntries().map(p => toPickerItem(p, async () => {
-                if (!(await ensureProjectTrust(p.id))) return
-                const sessionId = data.createDraftSession(p.id)
+                const gate = await ensureProjectTrust(p.id)
+                if (!gate) return
+                const sessionId = data.createDraftSession(p.id, gate.state)
                 // Preserve the current sidebar filter: the draft lives in
                 // project p.id (data), but we keep the URL's projectId on
                 // the current filter so the sidebar does not switch. The

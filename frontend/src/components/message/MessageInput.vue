@@ -12,6 +12,8 @@ import { useSettingsStore } from '../../stores/settings'
 import { getProviderHelpers, getProviderLabel, getProviderIcon } from '../../providers'
 import { sendWsMessage, notifyUserDraftUpdated } from '../../composables/useWebSocket'
 import { useSessionAgentSettings } from '../../composables/useSessionAgentSettings'
+import { ensureProjectTrust } from '../../composables/useTrustGate'
+import { resolveProjectTrust } from '../../utils/trust'
 import { vPopoverFocusFix } from '../../directives/vPopoverFocusFix'
 import {
     draftMediaToMediaItem,
@@ -1205,6 +1207,24 @@ async function handleSend() {
 
     // Need either text or settings change to proceed
     if ((!text && !isSettingsOnlyUpdate) || isDisabled.value) return
+
+    // Trust gate for drafts whose project is still unresolved — e.g. a draft
+    // hydrated from before the trust system existed, or one created while the
+    // gate could not settle the state. Settle it before the first start so the
+    // dialog shows when needed and the backend clamp sees a settled state.
+    // When the gate settles on trusted and the draft still carries the
+    // automatic untrusted permission seed, re-seed it to the now-resolved
+    // default (an explicit identical user pick is indistinguishable — rare and
+    // visible in the popover, so acceptable).
+    if (isDraft.value && props.projectId
+        && resolveProjectTrust(props.projectId, store.projects).state == null) {
+        const gate = await ensureProjectTrust(props.projectId)
+        if (!gate) return // user cancelled the trust dialog → don't send
+        if (gate.state === true
+            && selectedPermissionMode.value === settings.providerStore.value?.defaultUntrustedPermissionMode) {
+            selectedPermissionMode.value = settings.resolvedDefaults.value.permission_mode
+        }
+    }
 
     // Build the message payload
     // For context_max: when the auto-force-to-1M rule is active we send 1M

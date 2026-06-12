@@ -1124,14 +1124,20 @@ export const useDataStore = defineStore('data', {
          * @param {string} provider - Wire key of the session's provider
          * @returns {Object} the 7 agent-settings fields, all concrete or null
          */
-        _resolveDraftAgentSettings(projectId, provider) {
+        _resolveDraftAgentSettings(projectId, provider, trustState = undefined) {
             const chain = resolveProjectAgentDefaults(projectId, provider, this.projects)
             const pStore = getProviderStore(provider)
             // Trust-dependent permission seed (trust design §13.3): a project
             // whose effective trust is NOT trusted (untrusted or unknown) seeds
             // from the `permission_mode_if_untrusted` chain — same inheritance,
             // different field — falling back to the global untrusted default.
-            const untrusted = resolveProjectTrust(projectId, this.projects).state !== true
+            // `trustState` (from the trust gate) is AUTHORITATIVE when provided:
+            // the store may not have caught up with a backend seed yet (the
+            // project_updated broadcast races this call).
+            const state = trustState !== undefined
+                ? trustState
+                : resolveProjectTrust(projectId, this.projects).state
+            const untrusted = state !== true
             const permissionMode = untrusted
                 ? (chain.permission_mode_if_untrusted ?? pStore?.defaultUntrustedPermissionMode ?? null)
                 : (chain.permission_mode ?? pStore?.defaultPermissionMode ?? null)
@@ -1163,9 +1169,12 @@ export const useDataStore = defineStore('data', {
          * Create a draft session for a project.
          * Draft sessions exist only in the frontend until the first message is sent.
          * @param {string} projectId - The project ID
+         * @param {boolean|null} [trustState] - The project's effective trust as
+         *   settled by the trust gate (`ensureProjectTrust(...).state`).
+         *   Authoritative over the store's local resolution when provided.
          * @returns {string} The generated session ID (UUID)
          */
-        createDraftSession(projectId) {
+        createDraftSession(projectId, trustState = undefined) {
             const id = generateUUID()
             const now = Date.now() / 1000  // Unix timestamp in seconds
             // Provider preselect: the project's inherited default provider
@@ -1175,7 +1184,7 @@ export const useDataStore = defineStore('data', {
             // Snapshot the resolved agent settings onto the draft (concrete), so
             // launching the session freezes today's project → global defaults
             // regardless of later default changes (option A).
-            const settings = this._resolveDraftAgentSettings(projectId, provider)
+            const settings = this._resolveDraftAgentSettings(projectId, provider, trustState)
             this.sessions[id] = {
                 id,
                 project_id: projectId,

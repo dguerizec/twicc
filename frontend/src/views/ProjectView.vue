@@ -873,9 +873,12 @@ async function handleNewSession(targetProjectId = null) {
     if (!projectIdToUse) return
 
     // Trust gate: settle the project's trust before starting a session in it.
-    if (!(await ensureProjectTrust(projectIdToUse))) return
+    // Its result is authoritative for the draft seed (the store may not have
+    // caught up with a backend seed broadcast yet).
+    const gate = await ensureProjectTrust(projectIdToUse)
+    if (!gate) return
 
-    const newSessionId = store.createDraftSession(projectIdToUse)
+    const newSessionId = store.createDraftSession(projectIdToUse, gate.state)
 
     // `query: route.query` preserves ?workspace=… (and any other query params)
     // across the navigation. The router guard would normally drop workspace

@@ -265,6 +265,13 @@ async def run_server(port: int):
     # Cross-provider periodic tasks
     price_sync_task = asyncio.create_task(start_price_sync_task(shutdown_event))
     version_check_task = asyncio.create_task(start_version_check_task())
+
+    # One-shot trust backfill: settle every not-yet-imported project's trust
+    # from the provider configs (seed + projection + broadcast). Runs in the
+    # server loop (NOT blocking boot) because each settled project may spawn
+    # a short-lived Codex app-server for the config projection.
+    from twicc.core.services.trust import backfill_unimported_trust
+    trust_backfill_task = asyncio.create_task(backfill_unimported_trust())
     # Dev-only: re-scan the tips dir every 10 s and broadcast on change.
     # The task short-circuits to a no-op outside TWICC_DEBUG so this is a
     # zero-cost coroutine in production.
@@ -298,6 +305,9 @@ async def run_server(port: int):
         logger.info("Stopping version check task...")
         stop_version_check_task()
         await _cancel_task(version_check_task, "Version check task")
+
+        # One-shot; usually already finished — cancel covers an early shutdown.
+        await _cancel_task(trust_backfill_task, "Trust backfill task")
 
         # Tips watcher exits cleanly when shutdown_event fires (set above),
         # but we still cancel it explicitly to cover the no-op TWICC_DEBUG=

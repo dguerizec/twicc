@@ -416,11 +416,33 @@ Frontend:
 Validation/choices are enforced **both** front (choices) and back
 (`_clean_project_agent_defaults` + the clamp).
 
-### 13.7 Open sequencing detail
+### 13.7 Sequencing (revised after the v1.8.0 incident)
 
-Gate (Part 1) and draft pre-fill both fire at session creation. The pre-fill must
-read trust **as resolved by the gate** (unknown → untrusted); if call order makes
-pre-fill run first, re-seed after the gate resolves. Pure wiring, no design impact.
+Gate (Part 1) and draft pre-fill both fire at session creation. The original
+"pre-fill reads the store after the gate" wiring proved racy: a backend seed
+settles the DB but the `project_updated` broadcast can land *after* the draft
+seed, so the draft froze the untrusted default for a project that had just been
+seeded trusted (observed in the field: session stuck on `default`, lock badge
+shown, then everything "fixed itself" once the store caught up). Hardened as:
+
+- **The gate's result is authoritative**: `ensureProjectTrust` returns the
+  settled `{state}` and every creation path passes it straight to
+  `createDraftSession(projectId, trustState)` — no re-resolution of the store
+  between gate and seed. HTTP/exception failures return `{state: null}` with a
+  console warning (and no dialog: the backend may have partially settled).
+- **Startup backfill** (`backfill_unimported_trust`, run as a boot task): seeds
+  every `trust_imported=False` project from the provider configs, so the
+  post-upgrade stock is settled immediately instead of lazily at each project's
+  first gate. New projects keep the lazy gate (correct: nothing to import yet,
+  re-checked at next boot anyway).
+- **Gate at draft send**: sending a draft whose project is still unresolved
+  (pre-upgrade hydrated drafts, failed-gate leftovers) runs the gate first; if
+  it settles trusted and the draft still carries the automatic untrusted seed,
+  the permission mode is re-seeded to the resolved default.
+- **Provider projections off the request path**: the resolve/decide endpoints
+  settle the DB, respond, and run the Claude/Codex config writes as background
+  tasks (the Codex write spawns an app-server subprocess — serialized by a
+  module lock); the resolve endpoint never 500s (degrades to `state: null`).
 
 ### 13.8 Deferred / out of scope
 

@@ -12,6 +12,7 @@ write failure — the DB decision stands regardless.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 
@@ -21,6 +22,32 @@ from twicc.providers.db_writer import run_under_db_write_lock
 from twicc.trust import TrustResolution, effective_trust, load_trust_rows
 
 logger = logging.getLogger(__name__)
+
+# Keeps strong references to in-flight background projection tasks so they
+# are not garbage-collected mid-run (asyncio only holds weak refs).
+_projection_tasks: set[asyncio.Task] = set()
+
+
+def _schedule_projection(coro, label: str) -> None:
+    """Run a provider-config projection in the background, never raising.
+
+    Provider writes are best-effort (the DB is the source of truth) and can be
+    slow — the Codex write spawns an app-server subprocess. Keeping them out of
+    the request path makes ``resolve``/``decide`` respond as soon as the DB is
+    settled, so a slow or failing projection can no longer stall or break the
+    frontend trust gate (the root of the "session silently seeded untrusted"
+    incident).
+    """
+
+    async def _run() -> None:
+        try:
+            await coro
+        except Exception:
+            logger.exception("Trust projection failed (%s)", label)
+
+    task = asyncio.create_task(_run())
+    _projection_tasks.add(task)
+    task.add_done_callback(_projection_tasks.discard)
 
 
 # --- key / git helpers (sync, filesystem) ---------------------------------
@@ -293,7 +320,10 @@ async def resolve_project_trust(project_id: str) -> dict:
         # Materialize + mark imported ONLY at the first gate of this project.
         project = await Project.objects.filter(id=project_id).afirst()
         if project is not None and not project.trust_imported:
-            await _materialize(target, source_directory, resolution.state)
+            _schedule_projection(
+                _materialize(target, source_directory, resolution.state),
+                f"materialize {project_id}",
+            )
             await run_under_db_write_lock(
                 lambda: Project.objects.filter(id=project_id).aupdate(
                     trust_imported=True
@@ -321,7 +351,10 @@ async def resolve_project_trust(project_id: str) -> dict:
             )
         )
         # Reconcile the project's own provider entries to the adopted value.
-        await _project_decision(target.directory, seeded)
+        _schedule_projection(
+            _project_decision(target.directory, seeded),
+            f"seed projection {project_id}",
+        )
         await _broadcast_project_updated(project_id)
         return {"state": seeded, "via": "seed", "source_id": project_id}
 
@@ -354,12 +387,18 @@ async def decide_project_trust(
                 trust=None, trust_imported=True
             )
         )
-        await _clear_project_entries(project.directory)
-        target, resolution, source_directory = await sync_to_async(_load_resolution)(
-            project_id
-        )
-        if target is not None and resolution.state is not None:
-            await _materialize(target, source_directory, resolution.state)
+
+        async def _reset_projection() -> None:
+            # Ordered sequence: clear the own entries first, THEN materialize
+            # the newly-effective inherited value where providers need it.
+            await _clear_project_entries(project.directory)
+            target, resolution, source_directory = await sync_to_async(
+                _load_resolution
+            )(project_id)
+            if target is not None and resolution.state is not None:
+                await _materialize(target, source_directory, resolution.state)
+
+        _schedule_projection(_reset_projection(), f"reset projection {project_id}")
         await _broadcast_project_updated(project_id)
         return {"ok": True, "state": None}
 
@@ -375,14 +414,55 @@ async def decide_project_trust(
             trust=trusted, trust_propagation=bool(propagation), trust_imported=True
         )
     )
-    await _project_decision(project.directory, trusted)
+    _schedule_projection(
+        _project_decision(project.directory, trusted),
+        f"decide projection {project_id}",
+    )
     await _broadcast_project_updated(project_id)
     return {"ok": True, "state": trusted, "propagation": bool(propagation)}
+
+
+async def backfill_unimported_trust() -> None:
+    """Startup backfill: settle the trust of every not-yet-imported project.
+
+    Until v1.8.0 the provider-config seed only ran lazily, at the first
+    session-creation gate of each project — so after the upgrade every
+    pre-existing project sat in the "unknown" state (treated as untrusted:
+    clamped session seeds, lock indicator) even when the user had long trusted
+    it in the Claude/Codex CLIs. This one-shot pass runs the exact same
+    resolve+seed path per project at boot, so the existing provider state is
+    imported immediately. Idempotent: only ``trust_imported=False`` projects
+    are considered; projects with nothing to import stay unresolved (the gate
+    will ask) and are re-checked at next boot — the per-project cost is two
+    local file reads.
+    """
+    from twicc.core.models import Project
+
+    ids = await sync_to_async(list)(
+        Project.objects.filter(
+            trust_imported=False, stale=False, directory__isnull=False,
+        ).values_list("id", flat=True)
+    )
+    if not ids:
+        return
+    settled = 0
+    for project_id in ids:
+        try:
+            result = await resolve_project_trust(project_id)
+            if result.get("state") is not None:
+                settled += 1
+        except Exception:
+            logger.exception("Trust backfill failed for project %s", project_id)
+    logger.info(
+        "Trust backfill: %d unimported project(s) checked, %d settled",
+        len(ids), settled,
+    )
 
 
 __all__ = [
     "resolve_project_trust",
     "decide_project_trust",
+    "backfill_unimported_trust",
     "project_is_untrusted",
     "untrusted_permission_mode_default",
     "clamp_permission_mode_for_untrusted",

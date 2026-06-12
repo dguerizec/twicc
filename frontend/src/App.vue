@@ -468,8 +468,9 @@ function openWorktreeDialog(e) {
 }
 async function handleWorktreeResolved(project) {
     if (!project) return
-    if (!(await ensureProjectTrust(project.id))) return
-    const sessionId = dataStore.createDraftSession(project.id)
+    const gate = await ensureProjectTrust(project.id)
+    if (!gate) return
+    const sessionId = dataStore.createDraftSession(project.id, gate.state)
     const allProjects = route.name?.startsWith('projects-')
     router.push({
         name: allProjects ? 'projects-session' : 'session',

@@ -10,12 +10,18 @@ Rust source: ``set_project_trust_level`` / ``config_manager_service``).
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import tomllib
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+# Serializes the short-lived app-server clients spawned by ``_write_value``:
+# concurrent trust projections (e.g. the startup backfill settling several
+# projects at once) would otherwise each spawn their own Codex subprocess.
+_write_lock = asyncio.Lock()
 
 
 def _config_path() -> Path:
@@ -92,21 +98,22 @@ async def _write_value(root: str, value: str | None) -> None:
     bundled = resolve_bundled_binary()
     config = CodexConfig(codex_bin=str(bundled), cwd=str(Path.home()))
     try:
-        async with AsyncCodexClient(config=config) as client:
-            await client.initialize()
-            await client.request(
-                "config/batchWrite",
-                {
-                    "edits": [
-                        {
-                            "keyPath": _key_path(root),
-                            "mergeStrategy": "upsert",
-                            "value": value,
-                        }
-                    ]
-                },
-                response_model=ConfigWriteResponse,
-            )
+        async with _write_lock:
+            async with AsyncCodexClient(config=config) as client:
+                await client.initialize()
+                await client.request(
+                    "config/batchWrite",
+                    {
+                        "edits": [
+                            {
+                                "keyPath": _key_path(root),
+                                "mergeStrategy": "upsert",
+                                "value": value,
+                            }
+                        ]
+                    },
+                    response_model=ConfigWriteResponse,
+                )
         logger.info("Codex trust for %s -> %s", root, value)
     except Exception:
         logger.exception("Failed to write Codex trust for %s", root)
