@@ -1555,19 +1555,19 @@ defineExpose({
                     @show-pending-form="pendingFormRef?.restoreIfMinimized()"
                 />
                 <!-- Message input (main sessions only). Always rendered so nothing the user
-                     is preparing is lost when a request appears or resolves. While a request
-                     is pending it is sending-locked: usable for preparing a message, but
-                     sending is blocked until the request is answered. Opening it reduces the
-                     request (`@expand`); both can be reduced at once.
-                     Hybrid sessions are NEVER sending-locked: a send is possible at any
-                     moment (it steers or queues in the TUI), including while a permission
-                     prompt is open in the terminal. -->
+                     is preparing is lost when a request appears or resolves. While the
+                     request form is displayed it is sending-locked: usable for preparing a
+                     message, but sending is blocked until the request is answered — hybrid
+                     or not. Opening it reduces the request (`@expand`); both can be reduced
+                     at once. On hybrid sessions only the degraded badge-only state (no form,
+                     answer happens inside the TUI) keeps sending possible: it would steer
+                     or queue in the TUI. -->
                 <MessageInput
                     v-if="!parentSessionId"
                     ref="messageInputRef"
                     :session-id="sessionId"
                     :project-id="projectId"
-                    :sending-locked="hasPendingRequest && !isHybridSession"
+                    :sending-locked="hasAnswerablePendingRequest"
                     @needs-title="emit('needs-title')"
                     @expand="pendingFormRef?.minimize()"
                 />
@@ -1669,6 +1669,7 @@ defineExpose({
 
 .session-footer {
     position: relative;
+    overflow-y: auto;
     > wa-divider {
         --width: var(--divider-size);
         --spacing: 0;
