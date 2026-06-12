@@ -21,6 +21,16 @@ from twicc.providers.claude_code.bin import resolve_bundled_binary
 from twicc.providers.helpers import AgentSettings, get_provider_helpers
 
 
+# How long the CLI lets the PermissionRequest hook live — i.e. how long the
+# GUI-answer channel stays open for one prompt (the hook IS the channel: it
+# polls for the answer file until the CLI reaps it). Mirror of TwiCC's own
+# rule that an agent is never auto-killed while a pending request is open.
+# 14 days: comfortably "as long as the CLI session" in practice while staying
+# under Node's setTimeout ceiling of 2^31-1 ms (~24.8 days) — values above it
+# overflow. Ceiling probed empirically (2026-06-12, plan Task 2).
+HYBRID_HOOK_TIMEOUT_SECONDS = 14 * 24 * 3600
+
+
 def build_hooks_settings(session_id: str, fast_mode: bool) -> str:
     """Inline ``--settings`` JSON: fastMode + forced file checkpointing + the
     single ``PermissionRequest`` hook.
@@ -28,13 +38,23 @@ def build_hooks_settings(session_id: str, fast_mode: bool) -> str:
     Schema validated empirically on CLI 2.1.170 (2026-06-11 design probe).
     The hook is pure shell — it drops its stdin JSON into the watched
     hybrid-hooks directory (no HTTP endpoint, no token; filesystem write
-    access is the authentication). ``$$`` + nanoseconds make the name
-    unique; the ``.tmp`` → ``mv`` rename makes the drop atomic (the watcher
-    ignores ``.tmp`` files).
+    access is the authentication), then polls for a ``.status.json`` answer
+    next to its drop (the drop-requests convention) and prints it on stdout —
+    the CLI applies the decision and dismisses the displayed TUI dialog
+    (design doc 2026-06-12 §4.2). ``$$`` + nanoseconds make the name unique;
+    the ``.tmp`` → ``mv`` rename makes the drop atomic (the watcher ignores
+    ``.tmp`` and ``.status.json`` files). The poll loop is unbounded: the
+    CLI's own ``timeout`` is the reaper, and the agent's clearing janitor
+    reaps orphans sooner via a dummy status file. On drop failure exit
+    early — TwiCC will never see the request, so nobody would ever answer.
     """
     hooks_dir = shlex.quote(str(get_hybrid_hooks_dir()))
     name = f"{session_id}__PermissionRequest__$$-$(date +%s%N)"
-    command = f'f={hooks_dir}/{name}.json; cat > "$f.tmp" && mv "$f.tmp" "$f" || true'
+    command = (
+        f'n={hooks_dir}/{name}; cat > "$n.json.tmp" && mv "$n.json.tmp" "$n.json" || exit 0; '
+        f'while :; do if [ -f "$n.status.json" ]; then cat "$n.status.json"; rm -f "$n.status.json"; exit 0; fi; '
+        f'sleep 0.2; done'
+    )
     settings = {
         "fastMode": fast_mode,
         # Forced ON: off by default in SDK mode and user-disablable in user
@@ -43,7 +63,13 @@ def build_hooks_settings(session_id: str, fast_mode: bool) -> str:
         # CLAUDE_CODE_DISABLE_FILE_CHECKPOINTING.
         "fileCheckpointingEnabled": True,
         "hooks": {
-            "PermissionRequest": [{"hooks": [{"type": "command", "command": command}]}],
+            "PermissionRequest": [{
+                "hooks": [{
+                    "type": "command",
+                    "command": command,
+                    "timeout": HYBRID_HOOK_TIMEOUT_SECONDS,
+                }],
+            }],
         },
     }
     return orjson.dumps(settings).decode()
