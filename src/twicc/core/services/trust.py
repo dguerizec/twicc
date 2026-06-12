@@ -76,27 +76,39 @@ def _codex_root_key(directory: str) -> str:
 
 
 def _claude_write(directory: str, trusted: bool) -> None:
+    from twicc.core.enums import Provider
+    from twicc.logging_context import provider_log_context
     from twicc.providers.claude_code import trust as claude_trust
 
-    claude_trust.write_trust(directory, trusted)
+    with provider_log_context(Provider.CLAUDE_CODE):
+        claude_trust.write_trust(directory, trusted)
 
 
 async def _codex_write(root_key: str, trusted: bool) -> None:
+    from twicc.core.enums import Provider
+    from twicc.logging_context import provider_log_context
     from twicc.providers.codex import trust as codex_trust
 
-    await codex_trust.write_trust(root_key, trusted)
+    with provider_log_context(Provider.CODEX):
+        await codex_trust.write_trust(root_key, trusted)
 
 
 def _claude_clear(directory: str) -> None:
+    from twicc.core.enums import Provider
+    from twicc.logging_context import provider_log_context
     from twicc.providers.claude_code import trust as claude_trust
 
-    claude_trust.clear_trust(directory)
+    with provider_log_context(Provider.CLAUDE_CODE):
+        claude_trust.clear_trust(directory)
 
 
 async def _codex_clear(root_key: str) -> None:
+    from twicc.core.enums import Provider
+    from twicc.logging_context import provider_log_context
     from twicc.providers.codex import trust as codex_trust
 
-    await codex_trust.clear_trust(root_key)
+    with provider_log_context(Provider.CODEX):
+        await codex_trust.clear_trust(root_key)
 
 
 def _seed_read(directory: str) -> bool | None:
@@ -111,14 +123,18 @@ def _seed_read(directory: str) -> bool | None:
     treated as noise (the CLI auto-creates ``false`` entries before any decision)
     and ignored, so we don't import bogus declines for projects the user trusts.
     """
+    from twicc.core.enums import Provider
+    from twicc.logging_context import provider_log_context
     from twicc.providers.claude_code import trust as claude_trust
     from twicc.providers.codex import trust as codex_trust
 
-    claude = claude_trust.read_trust(directory)
+    with provider_log_context(Provider.CLAUDE_CODE):
+        claude = claude_trust.read_trust(directory)
     codex: bool | None = None
     root_key = _codex_root_key(directory)
     if root_key == os.path.realpath(directory):  # P is its own root
-        codex = codex_trust.read_trust(root_key)
+        with provider_log_context(Provider.CODEX):
+            codex = codex_trust.read_trust(root_key)
 
     if claude is True or codex is True:
         return True
