@@ -142,6 +142,7 @@ const badgeLabel = computed(() => {
                 <span
                     v-if="hybridPending"
                     class="hybrid-pending-badge"
+                :class="{ 'terminal-only': !pendingIsAnswerable }"
                     :id="badgeId"
                     role="status"
                 >{{ badgeLabel }}</span>
@@ -154,6 +155,7 @@ const badgeLabel = computed(() => {
             <span
                 v-if="hybridPending"
                 class="hybrid-pending-badge"
+                :class="{ 'terminal-only': !pendingIsAnswerable }"
                 :id="badgeId"
                 role="status"
             >{{ badgeLabel }}</span>
@@ -268,6 +270,12 @@ wa-divider {
     border-radius: var(--wa-border-radius-pill);
     padding: 0 var(--wa-space-s);
     line-height: 1.6;
+}
+
+/* Pulse only when the terminal is the ONLY answer surface (degraded
+   badge-only request) — when the form is shown above, the badge is a quiet
+   hint, not a call to action. */
+.hybrid-pending-badge.terminal-only {
     animation: hybrid-badge-pulse 1.6s ease-in-out infinite;
 }
 
