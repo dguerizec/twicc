@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from asgiref.sync import sync_to_async
-from claude_agent_sdk import PermissionResultAllow
+from claude_agent_sdk import PermissionResultAllow, PermissionUpdate
 
 from twicc.agent.base_agent import BaseAgent, StateChangeCallback
 from twicc.agent.exceptions import SendDeliveryError
@@ -493,6 +493,18 @@ class HybridClaudeAgent(BaseAgent):
             # Same stamp as the SDK path: the time spent waiting on the user
             # must not count against the turn timeouts.
             self.last_pending_resolved_at = time.time()
+        # A session-destination setMode rides back to the CLI, which applies
+        # it itself ("Allowed by PermissionRequest hook" + mode switch) while
+        # ws.py persists it on the Session row. Mirror it into the in-memory
+        # snapshot too: permission_mode is a STARTUP setting for hybrid, so a
+        # stale snapshot would make the settings monitor read the DB change
+        # as pending and kill the CLI right after the answer (observed in the
+        # E2E sweep).
+        if isinstance(response, PermissionResultAllow):
+            for perm in response.updated_permissions or ():
+                p = perm.to_dict() if isinstance(perm, PermissionUpdate) else perm
+                if p.get("type") == "setMode" and p.get("mode") and p.get("destination") in (None, "session"):
+                    self.agent_settings = self.agent_settings._replace(permission_mode=p["mode"])
         asyncio.create_task(
             self._finalize_gui_answer(pending, response),
             name=f"hybrid-gui-answer-{self.session_id}",
