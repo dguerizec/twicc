@@ -105,9 +105,12 @@ watchEffect(() => {
 })
 
 // ── Pending-in-terminal badge ────────────────────────────────────────────────
+// Any pending request means a prompt is up inside the TUI: answerable ones
+// also render the PendingRequestForm widget (dual surface — first responder
+// wins), while requests degraded to `hybrid_terminal` (GUI channel expired)
+// only have the terminal. The badge points at the TUI surface in both cases.
 const hybridPending = computed(() =>
-    (store.getPendingRequests(props.sessionId) || [])
-        .find(r => r.request_type === 'hybrid_terminal') || null
+    (store.getPendingRequests(props.sessionId) || [])[0] || null
 )
 const badgeLabel = computed(() => {
     const toolName = hybridPending.value?.tool_name

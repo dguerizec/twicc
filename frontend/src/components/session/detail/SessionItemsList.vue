@@ -173,6 +173,15 @@ const pendingRequest = computed(() => pendingRequests.value[0] || null)
 // request stands alone (no composer).
 const hasPendingRequest = computed(() => pendingRequests.value.length > 0)
 
+// Whether the head pending request can be answered from the GUI. Hybrid
+// sessions register real answerable requests (the hook polls a status file
+// for the answer); a request degraded to `hybrid_terminal` lost its GUI
+// channel (CLI-side hook timeout) and is only answerable inside the TUI —
+// the terminal block's badge is its surface.
+const hasAnswerablePendingRequest = computed(() =>
+    hasPendingRequest.value && pendingRequest.value.request_type !== 'hybrid_terminal'
+)
+
 /**
  * Whether the VirtualScroller should be visible.
  * Uses v-show (not v-if) to keep the component alive across KeepAlive cycles,
@@ -1524,18 +1533,20 @@ defineExpose({
                      session it stacks above the composer; the two coordinate so at most one
                      is expanded — opening the request reduces the composer (`@expand`),
                      while reducing either leaves the other as-is. On a subagent it stands
-                     alone (no composer). -->
+                     alone (no composer). On hybrid sessions the same widget renders for
+                     answerable requests (dual surface: the TUI dialog stays answerable
+                     too, first responder wins); only a request degraded to badge-only
+                     (`hybrid_terminal`, GUI channel expired) hides it. -->
                 <PendingRequestForm
-                    v-if="hasPendingRequest && !isHybridSession"
+                    v-if="hasAnswerablePendingRequest"
                     ref="pendingFormRef"
                     :session-id="sessionId"
                     :pending-request="pendingRequest"
                     :pending-count="pendingRequests.length"
                     @expand="messageInputRef?.collapse()"
                 />
-                <!-- Hybrid CLI sessions: the embedded terminal replaces the
-                     pending-request widget entirely (prompts are answered inside
-                     the TUI; a badge in the block header signals them). -->
+                <!-- Hybrid CLI sessions: the embedded terminal, with a badge in the
+                     block header pointing at pending prompts (the TUI surface). -->
                 <HybridTerminalBlock
                     v-if="isHybridSession && !parentSessionId"
                     ref="hybridTerminalRef"

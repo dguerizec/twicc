@@ -399,6 +399,20 @@ const setModeSuggestion = computed(() =>
     allPermissionSuggestions.value.find(s => s.type === 'setMode') || null
 )
 
+// Options for the mode picker, normalized to ``{mode, disabled}`` objects.
+// The SDK path injects a synthetic suggestion carrying the full
+// `_modeOptions` list (backend-built, with disabled entries for the
+// untrusted floor); hybrid sessions pass the hook's native setMode
+// suggestion verbatim, which carries a single concrete `mode` (e.g.
+// acceptEdits, the TUI's "allow all edits during this session") — render it
+// as the lone, always-enabled switch option (the untrusted floor is
+// enforced CLI-side in hybrid).
+const modeOptions = computed(() => {
+    const suggestion = setModeSuggestion.value
+    if (!suggestion) return []
+    return suggestion._modeOptions || (suggestion.mode ? [{ mode: suggestion.mode, disabled: false }] : [])
+})
+
 // Label for the "don't change mode" option in the picker.
 const noChangeLabel = computed(() => {
     const current = setModeSuggestion.value?._currentMode
@@ -889,7 +903,7 @@ function handleSubmitQuestions() {
             >
                 <wa-option value="">{{ noChangeLabel }}</wa-option>
                 <wa-option
-                    v-for="opt in setModeSuggestion._modeOptions"
+                    v-for="opt in modeOptions"
                     :key="opt.mode"
                     :value="opt.mode"
                     :disabled="opt.disabled"
