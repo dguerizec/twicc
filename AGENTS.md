@@ -1,164 +1,180 @@
 # AGENTS.md
 
-## Project
+**TwiCC** (The Web Interface for Claude and Codex) — self-contained web UI for browsing and interacting with Claude Code and Codex sessions. Single process, zero external services, one command to launch.
 
-TwiCC is a single-process web application for browsing and interacting with Claude Code and Codex sessions.
+## Working Rules
 
-Main stack:
-- Backend: Django 6 ASGI, Uvicorn, Channels, SQLite, Python 3.13+
-- Frontend: Vue 3 SFCs with Composition API, Vite, Pinia, VueUse
-- UI: Web Awesome `wa-*` components
-- Package managers: `uv` for Python, `npm` for frontend
-
-## Working Agreement
-
-- At the start of work, if `AGENTS.local.md` exists at the repository root, read it after this file. It contains local, uncommitted instructions specific to the developer. Its instructions extend and may override this `AGENTS.md`; when the two files conflict, `AGENTS.local.md` takes precedence. Direct system, developer, and current user instructions still take precedence over both files.
-- Do not implement code unless the user explicitly asks you to do so. If the user is explaining requirements or thinking aloud, wait, ask clarifying questions if needed, and do not treat it as permission to edit.
-- Preserve existing work. The worktree may already be dirty; never revert or overwrite changes you did not make unless the user explicitly asks.
-- Never rebase on remote branches such as `origin/main` unless explicitly requested. If rebasing is requested and a local branch exists, rebase on the local branch.
-- Code, comments, variable names, UI strings, and documentation — design/plan/spec files included — must be in English. French is only for live chat with the user (and the developer's personal `AGENTS.local.md`).
-- The project prefers high-quality implementation. The only accepted shortcuts called out by the project are no mandatory tests and no mandatory linting.
+- **Local instructions:** at the start of work, if `AGENTS.local.md` exists at the repository root, read it after this file. It contains local, uncommitted instructions specific to the developer. Its instructions extend and may override this `AGENTS.md`; when the two files conflict, `AGENTS.local.md` takes precedence. Direct system, developer, and current user instructions still take precedence over both files.
+- **Quality:** best standards everywhere. Only allowed shortcuts: no mandatory tests or linting.
+- **Never implement without explicit invitation.** When the user explains requirements or shares thoughts, wait for confirmation before writing code. Ask clarifying questions, but an explanation is not an invitation.
+- **Preserve existing user changes.** The current checkout may already contain uncommitted changes. Treat any change you did not make as user-owned: do not revert, overwrite, move, or clean it up unless the user explicitly asks.
+- **Git rebase:** never on remote branches (`origin/main`, …) unless explicitly asked. Always rebase on the local branch; if it exists, use it.
+- **Language:** all written artifacts — code, UI strings, comments, names, docs (incl. `docs/plans/`) — in English. French is reserved for live chat (and the dev's `AGENTS.local.md`). Even when the user speaks French, write UI/code/docs in English.
 
 ## Commit Conventions
 
 - When creating commits, include a descriptive commit body that explains the change, not only a subject line.
 - Add a `Co-Authored-By: Codex <codex@openai.com>` trailer for the agent that performed the work, matching the style used in recent commits.
 
-## Development Commands
+## Operations Reserved to User
 
-Use `devctl.py` for development servers:
+Never run these on your own initiative. If the user explicitly asks, do it without confirmation. Otherwise notify at task end (or pause and ask if truly necessary mid-task):
+
+- **Django migrations:** after you modify models and create the migration, remind the user to `migrate` their own running instance. (Starting/restarting via `devctl.py` auto-applies migrations at backend startup — never `migrate` by hand to bring servers up.)
+- **Dev server restart:** after backend changes, remind the user to restart via `devctl.py` (no need to do it on every message)
+- **Package installation:** after adding deps, remind the user to run `npm install` or `uv add`. (`devctl.py start` already runs `npm ci` via the editable rebuild — never pre-run it yourself.)
+
+## Stack
+
+uv + npm · Django 6 ASGI (Uvicorn, Python ≥ 3.13) · Channels + InMemoryChannelLayer · SQLite (WAL) · watchfiles · claude-agent-sdk + openai_codex · Vue 3 (Composition API, `<script setup>`) + Vite 7 · Pinia + VueUse · Web Awesome 3+ (`wa-*`) · CodeMirror 6 · xterm.js (PTY) · markdown-it + shiki + mermaid.
+
+Python: ruff (line-length=120). Tests: pytest + pytest-django.
+
+## Architecture
+
+Entry: `run.py → cli.main()`.
+
+- **Startup:** *Initial sync* scans each provider data root (`~/.claude/projects/`, `~/.codex/sessions/`, …) and bulk-inserts raw `SessionItem`s (fast, no metadata). Then a separate *background compute* process fills metadata (display_level, kind, groups, costs, git) for sessions whose `compute_version` is below the provider's `CURRENT_COMPUTE_VERSION`, then exits.
+- **Django ASGI:** HTTP (REST + SPA catch-all) and WebSocket — `/ws/` `UpdatesConsumer` (data sync, process control, title suggestions) and `/ws/terminal/<session_id>/` (raw ASGI PTY, optional tmux).
+- **watchfiles task:** JSONL change → incremental read from `last_offset` → save to DB (full metadata, inline for real-time accuracy) → WS broadcast → Pinia → Vue.
+- **Periodic:** price sync from OpenRouter (24h); usage quota fetch from provider APIs (5min where supported).
+- **Agent managers:** provider SDKs drive interactive sessions → providers write JSONL → watcher picks up.
+
+**Sync strategy:** JSONL files are append-only — on change, compare `mtime`, `seek(last_offset)`, read new lines, insert, update offset.
+
+## Data Directory
+
+All persistent data (db, logs, config) lives in one data dir, resolved (centralized in `src/twicc/paths.py`; `devctl.py` has equivalent standalone logic):
+
+1. git worktree → worktree root (forced); 2. `$TWICC_DATA_DIR` if set; 3. default `~/.twicc/`.
+
+Contents: `.env` (infra config: ports, password hash), synced user config (`settings.json`, `workspaces.json`, `terminal-config.json`, `message-snippets.json`, `seen-tips.json`, `{provider}-settings-presets.json`), `db/data.sqlite(+shm/+wal)`, `search-index/` (Tantivy), `drop-requests/` (CLI drop-files picked up by a watcher), `logs/` (`backend.log`, `frontend.log`, and in dev mode, `sdk/{provider}/{session_id}.jsonl`).
+
+## devctl.py — Dev Servers
+
+Use when the user asks to start/stop/restart dev servers.
 
 ```bash
-uv run ./devctl.py start [front|back|all]
-uv run ./devctl.py stop [front|back|all]
-uv run ./devctl.py restart [front|back|all]
+uv run ./devctl.py start|stop|restart [front|back|all]
 uv run ./devctl.py status
-uv run ./devctl.py logs [front|back]
+uv run ./devctl.py logs [front|back] [--lines=N]
 ```
 
-Default ports are frontend `5173` and backend `3500`. In an additional worktree, `devctl.py` auto-picks the next free ports (e.g. `5174`/`3501`) and copies the DB, search index, and user config (settings, workspaces, presets, snippets, tips — never `.env`, `logs/`, or `drop-requests/`) on first setup.
+Default ports: frontend 5173, backend 3500 (verified after start). `start --empty-db` for a fresh DB in worktrees on user request. Debug via `<data_dir>/logs/{backend,frontend}.log`. PIDs in `.devctl/pids/` (always local to project/worktree root).
 
-When asked to start/restart servers, run the **single** `devctl.py` command and read the logs — nothing else. devctl does everything: it rebuilds the editable install (running `npm ci` to install frontend `node_modules`), auto-applies pending Django migrations at backend startup, copies the DB + search index + user config, and picks ports. **Never run `npm install`/`npm ci`, `migrate`, or touch `node_modules` yourself to bring servers up** — a parallel `npm install` corrupts devctl's `npm ci` (`ENOTEMPTY`) and fails the build. devctl's post-start port check may time out during the backend's initial sync; that is not a failure — confirm via `logs/backend.log`.
+**To start/restart, run the single `start` command and read the logs — devctl does everything:** it rebuilds the editable install (runs `npm ci`), auto-applies pending migrations at startup, on first setup copies db + search index + user config from `~/.twicc/` (never `.env`, `logs/`, `drop-requests/`), finds free ports (default+1: 3501/5174), writes them to `.env`.
 
-Do not restart development servers unless the user asks. After backend changes, tell the user to restart with `devctl.py` if needed.
+**Never run `npm install`/`npm ci`, `migrate`, or touch `node_modules` yourself when starting servers** — wasted and harmful: a parallel `npm install` corrupts devctl's `npm ci` (`ENOTEMPTY`). The post-start port check can time out during initial sync — not a failure; confirm via `backend.log`.
 
-## Data Directory And Worktrees
+When starting in a worktree, give the user the localhost URLs from devctl's output. When asked to exit/kill/delete a worktree, you MUST run `stop all` even if you didn't start the processes.
 
-In this section, `worktree` means an additional Git checkout created with
-`git worktree` (typically under `.worktrees/`). Do not use this term for the
-main repository checkout.
+### Worktrees
 
-Persistent data lives in the TwiCC data directory:
+devctl auto-detects worktrees and sets `TWICC_DATA_DIR=<worktree root>`, so each worktree has its own backend/frontend, `.env` (ports), `.devctl/`, `db/`, `logs/`, and json data files. Always check your cwd before starting so you know whether you're in a worktree.
 
-```text
-<data_dir>/
-├── .env
-├── db/data.sqlite
-└── logs/
-```
+**Prefix every Bash command with `cd <worktree> && `** — never trust the persistent cwd. A wrong cwd on a destructive command (`devctl restart/stop`, manual `migrate`) hits the main project's servers/data dir and kills real work.
 
-Data directory priority:
-1. Git worktree root, when launched through `devctl.py`
-2. `$TWICC_DATA_DIR`
-3. `~/.twicc/`
-
-When running Python or Django code manually inside an additional Git worktree,
-always set `TWICC_DATA_DIR` to that worktree root. `paths.py` does not detect
-additional worktrees by itself; `devctl.py` injects the correct environment
-only for processes it starts.
-
-When running commands manually from the main repository checkout, do not set
-`TWICC_DATA_DIR=$PWD` by default. Leave it unset to use the normal TwiCC data
-directory unless the user explicitly wants checkout-local data.
-
-Example:
+**Running Python/Django without devctl:** `paths.py` does NOT detect worktrees (only devctl injects `TWICC_DATA_DIR`). Any other invocation (one-liners, `manage.py`, shell, ad-hoc migrations) silently falls back to `~/.twicc/` — the **prod** data dir — even after `cd`. So always do both: (1) `cd` into the worktree (editable install resolves to its source + migrations); (2) set `TWICC_DATA_DIR=$PWD` in the command's env.
 
 ```bash
 cd <worktree>
 TWICC_DATA_DIR=$PWD uv run python -m django <command> --settings=twicc.settings
 ```
 
-Before running migrations or database-affecting commands, verify the resolved database path points inside the intended worktree.
+Before any data-dir-dependent read/write (esp. migrations), sanity-check the resolved path:
+```python
+from django.conf import settings; print(settings.DATABASES['default']['NAME'])  # must be inside the worktree
+```
+Forgetting this is destructive: a `migrate` from the wrong cwd applies branch-only migrations to the prod DB, leaving it unwritable by `main`.
 
-If the user asks to exit, kill, delete, or otherwise leave a worktree, run `uv run ./devctl.py stop all` from that worktree first.
+## Database Models
 
-## Operations Reserved To The User
+Key models in `src/twicc/core/models.py` (read the source for full field lists; non-obvious points only here):
 
-Do not do these on your own initiative:
+- **`Project`** — cross-provider working dir, ID from path via `path_to_project_id`. `worktree_of` is an auto-detected self-FK to the main repo (never set manually; a worktree's sessions/cost/activity aggregate into it). Per-project agent defaults `default_provider` + `default_agent_settings` seed NEW sessions, inherited up the chain (worktree main repo, then path ancestors), resolved **at creation only** by `projectAgentDefaults.js` (UI) and its mirror `project_agent_defaults.py` (CLI) — never re-resolved for a running session.
+- **`Session`** — one JSONL file; `last_offset`/`last_line` drive incremental sync. Carries costs, `type` (session/subagent), `parent_session` (self-FK), lifecycle timestamps, and the closed `AgentSettings` bundle (see below).
+- **`SessionItem`** — one JSONL line; `display_level` (ALWAYS/COLLAPSIBLE/DEBUG_ONLY), `kind`, `group_head`/`group_tail` for collapsible groups.
+- **`ToolResultLink`** / **`AgentLink`** — link tool_use ↔ tool_result / spawn-agent tool_use ↔ subagent session (both provider-agnostic).
+- **`ModelPrice`** (OpenRouter pricing) · **`UsageSnapshot`** (per-provider quotas) · **`WeeklyActivity`/`DailyActivity`** (stats by `(project, date, provider)`, `project=NULL` = global) · **`ProcessRun`** (live process, cron lifecycle + crash recovery) · **`SessionCron`** (CLI-created crons) · **`Command`** (synced slash-commands) — all per provider where relevant.
 
-- Run Django migrations after model changes. Create the migration if requested, then remind the user to run `migrate`. (This is about the user's own running instance; starting/restarting servers via `devctl.py` auto-applies migrations, so never run `migrate` by hand to bring servers up.)
-- Restart development servers. Remind the user when a restart is needed.
-- Install packages. If dependencies were added, remind the user to run `npm install`, `npm ci`, or `uv add` as appropriate. (Starting servers via `devctl.py` already runs `npm ci`; never pre-run it yourself to launch servers.)
-- Run release-test `uvx` commands. For releases, the user must test the built wheel before commit/tag/publish steps continue.
+### Agent Settings — Closed Bundle
 
-If the user explicitly asks for any of these operations, perform them without asking for another confirmation.
+The seven per-session fields (`selected_model`, `effort`, `thinking_enabled`, `permission_mode`, `context_max`, `claude_in_chrome`, `fast_mode`) are a **closed bundle** with one shape across all providers (on `Session`, the WS payload, synced localStorage). Each provider declares which fields it uses via `getAgentSettingsCategories()` (`frontend/src/providers/baseHelpers.js` + overrides); unlisted ones are ignored. New provider-specific flags follow the same pattern — add a `Session` column, classify it in the provider's categories, never a side table (rationale in the `Session.claude_in_chrome` comment).
 
-## TwiCC Plugin (Agent Skills)
+**`permission_mode_if_untrusted` is NOT in the bundle** — a per-provider *default-shaping* field in global settings / presets / `default_agent_settings`, never on `Session`. At creation, project trust picks which one materializes into the stored `permission_mode` (trusted → `permission_mode`, else → `permission_mode_if_untrusted`, restricted to `UNTRUSTED_PERMISSION_MODES`, no `bypassPermissions`/`yolo`). A backend floor re-clamps at agent build regardless (`core/services/trust.py`), mirrored by the CLI (`cli/_drop_request/aliases.py`). **Trust is human-only** — never an agent-facing flag/skill. See `docs/plans/2026-06-09-project-trust-design.md` §13.
 
-The agent-facing skills live under `src/twicc/agent/plugin/twicc/skills/`, packaged as a versioned plugin declared in `src/twicc/agent/plugin/twicc/.claude-plugin/plugin.json`.
+## Python Patterns
 
-Any change to the skill bundle — adding a new `SKILL.md`, editing the body of an existing one, renaming, or removing — REQUIRES bumping the `version` field in `plugin.json`. Without a bump, providers (Claude Code, Codex, ...) may keep an older copy cached and serve stale instructions to agents. The version is the signal "the bundle changed, refresh your local copy."
-
-**Before creating or updating any skill, read `src/twicc/agent/plugin/README.md`.** It documents the established structure, wording rules, and anti-patterns for TwiCC skills. Also read a few existing skills to calibrate tone and level of detail.
-
-Bump rule of thumb: any user-visible skill change → bump the patch (`0.10.0` → `0.10.1`); a new skill or an existing one with new flags/options → bump the minor (`0.10.0` → `0.11.0`); skill rename / removal → bump the minor at least.
-
-## Backend Patterns
-
-- Use `orjson` for backend JSON work instead of the standard `json` module.
-- Use `NamedTuple` for simple immutable data containers instead of dataclasses when mutability is not needed.
-- Use aliased imports (`from X import Y as Z`) sparingly, only when strictly necessary: either to avoid a name collision in scope, or to disambiguate intent at the call site for a noticeably less generic verb (e.g. `patch_client as patch_client_for_logging`). Avoid the cosmetic prefix/suffix style (`as _foo`, `as django_settings`, `as ProcessRunModel`) when the bare name doesn't actually conflict — it adds noise and makes it harder to grep for the canonical symbol.
-- Key models live in `src/twicc/core/models.py`: `Project`, `Session`, `SessionItem`, `ToolResultLink`, `AgentLink`, `ModelPrice`, `UsageSnapshot`, `WeeklyActivity`, and `DailyActivity`.
-- JSONL files are append-only. Sync logic uses offsets and line numbers to incrementally ingest new lines.
+- **`NamedTuple`** for simple immutable data (return values, decisions, configs) — works with all field types incl. lists; prefer over `@dataclass` when mutability isn't needed.
+- **`orjson`**, not stdlib `json`, for all backend JSON (~6× faster, handles high-volume JSONL).
+- **Aliased imports (`as`)** only when strictly necessary: (1) name collision (e.g. multiple `main` → `as foo_main`); (2) disambiguating intent for a less generic verb (e.g. `patch_client as patch_client_for_logging`). Avoid cosmetic `as _foo`/`as django_settings` when there's no real conflict — it's noise and harms grep.
 
 ## Frontend Patterns
 
-- Use Vue Composition API with `<script setup>`.
-- Avoid circular imports that break Vite HMR:
-  - Do not import `router.js` statically from utilities, composables, or stores. Use lazy `await import(...)` if needed.
-  - Avoid mutual static imports between stores or between stores and composables. Use lazy imports in the less frequent direction.
-  - Do not statically import Vue components from composables when that creates cycles; use `defineAsyncComponent`.
-- Never parse `item.content` directly. Use helpers from `frontend/src/utils/parsedContent.js`:
-  - `getParsedContent(item)`
-  - `setParsedContent(item, parsed)`
-  - `clearParsedContent(item)`
-  - `hasContent(item)`
-- Agent settings are a closed cross-provider bundle: `selected_model`, `effort`, `thinking_enabled`, `permission_mode`, `context_max`, `claude_in_chrome`, `fast_mode`. New provider-specific session flags should follow the same shared-session-row pattern unless the user asks otherwise.
-- Per-project agent defaults (`Project.default_provider` + `Project.default_agent_settings`) seed NEW sessions only, inherited up the chain (worktree main repo, then path ancestors). Resolution happens at creation time only — `frontend/src/utils/projectAgentDefaults.js` (UI drafts) and its mirror `src/twicc/project_agent_defaults.py` (CLI `create-session`); never wire it into per-turn settings resolution.
-- `permission_mode_if_untrusted` is NOT in the bundle: it is a default-shaping field (global settings / presets / per-project defaults only, never on `Session`). In an untrusted (or unknown-trust) project the session's single `permission_mode` is resolved/clamped against the provider's `UNTRUSTED_PERMISSION_MODES` (no `bypassPermissions`/`yolo`) — enforced by the backend floor (`core/services/trust.py`) and mirrored by the CLI. Project trust is a human-only decision, never an agent-facing flag/skill. See `docs/plans/2026-06-09-project-trust-design.md` §13.
+### Circular imports (HMR) — CRITICAL
 
-## Web Awesome
+Cycles make Vite HMR fall back to full reloads (recurring issue).
+- Never import `router.js` from utils/composables/stores → use lazy `await import('../router')`.
+- Never mutual static imports store↔store or store↔composable → lazy `await import()` in the less-frequent direction.
+- Never statically import components from composables when those components close a cycle → `defineAsyncComponent(() => import(...))`.
+- Common shapes: `main.js → … → main.js` (extract shared code), `router → views → components → util → router` (lazy router), `store ↔ store`, `store ↔ composable`, `composable → component → store → composable`.
 
-- Every used Web Awesome component must be imported explicitly in `frontend/src/main.js`.
-- Web Awesome 3 native browser events are unprefixed, such as `@click`, `@focus`, and `@input`.
-- Web Awesome custom events keep the `wa-` prefix, such as `@wa-show`, `@wa-hide`, and `@wa-after-show`.
-- Use `slot="start"` and `slot="end"` for icons inside buttons. For `wa-dropdown-item`, use `slot="icon"`.
-- Local docs are available at `frontend/node_modules/@awesome.me/webawesome/dist/llms.txt` and under `frontend/node_modules/@awesome.me/webawesome/dist/skills/webawesome/`.
+### Drafts
 
-## Dialog Forms
+Draft sessions/messages/media persisted to IndexedDB (`frontend/src/utils/draftStorage.js`), hydrated on startup before app mount.
 
-For forms inside `wa-dialog`, use `frontend/src/components/ProjectEditDialog.vue` as the reference pattern:
+### Virtual scrolling
 
-- Wrap fields in a `<form>` with `@submit.prevent`.
-- Put submit buttons outside the form when needed and set the `form` attribute via `setAttribute()`.
-- Use `@wa-after-show` for focus management.
-- Trim text inputs before validation and submission.
-- Use client-side uniqueness validation where possible, with backend constraints as enforcement.
-- Use `wa-callout variant="danger"` for validation and API errors.
-- Set responsive dialog width with `--width: min(Xpx, calc(100vw - 2rem))`.
+Large item lists use a custom scroller (`useVirtualScroll.js`, `VirtualScroller.vue`): raw items → `computeVisualItems()` (display mode, group expansion) → rendered. Visual items are stabilized across recomputes — each new item is compared by `lineNum` to the cached one; identical → old reference reused, so Vue skips re-render even though `computeVisualItems` makes new objects.
+
+### Session item content access — IMPORTANT
+
+Never access `item.content` (raw JSON string) directly. Use `frontend/src/utils/parsedContent.js`:
+- `getParsedContent(item)` — parsed object, lazy + `markRaw()` cached; works on session and visual items.
+- `setParsedContent(item, parsed)` — set explicitly (synthetic items, or forwarding a cached result).
+- `clearParsedContent(item)` — invalidate (e.g. when `item.content` changes).
+- `hasContent(item)` — true if content available (raw or set); use instead of `!!item.content` for placeholders (synthetic items have parsed content but no string).
+
+`JSON.parse(item.content)` and touching `_parsedContent` directly are forbidden.
+
+### Dialog forms
+
+When creating a form inside a `wa-dialog`, use `frontend/src/components/project/ProjectEditDialog.vue` as the reference implementation. Key patterns:
+
+- **Form element:** wrap content in a `<form>` with `@submit.prevent="handleSave"` and a unique `id`.
+- **Submit button outside form:** use `type="submit"` and set the `form` attribute via `setAttribute()` in a sync function (wa-button doesn't expose `form` as a property).
+- **Focus management:** use the `@wa-after-show` event (not the `autofocus` attribute) to focus the first input after the dialog animation completes, and `setSelectionRange(len, len)` to put the cursor at the end.
+- **Input validation:** apply `trim()` on text inputs before validation and submission.
+- **Uniqueness checks:** validate client-side first (from store data); the backend enforces with a unique constraint.
+- **Error display:** use `wa-callout variant="danger"` for validation and API errors.
+- **Dialog width:** use `--width: min(Xpx, calc(100vw - 2rem))` to stay responsive.
+- **Event propagation:** dialog `@wa-show`/`@wa-hide`/`@wa-after-*` handlers must guard against bubbling from nested `wa-*` children — see *Bubbling custom events* below. Failing to guard makes a nested `wa-select` opening/closing steal focus or close the whole dialog.
+
+## Web Awesome (3.3+)
+
+- Native events are **un**prefixed since v3 (`@click`, `@input`); custom WA events keep `wa-` (`@wa-show`, `@wa-after-show`).
+- **Every component must be explicitly imported in `frontend/src/main.js`** (loads JS + shadow-DOM styles). Unstyled in prod but fine in dev → missing import.
+- Icon slots: `start`/`end` inside buttons (not `prefix`/`suffix`), `icon` for `wa-dropdown-item`:
+  ```html
+  <wa-button><wa-icon slot="start" name="check"></wa-icon> Save</wa-button>
+  <wa-dropdown-item><wa-icon slot="icon" name="plus"></wa-icon> New</wa-dropdown-item>
+  ```
+- Docs: one-file `frontend/node_modules/@awesome.me/webawesome/dist/llms.txt`; full set in same `dist` dir under `skills/webawesome/`.
+
+### Bubbling custom events — recurring trap
+
+WA custom events **bubble through the composed DOM**: a nested `wa-*` child fires the *same* event name the outer component listens for. Classic case — a `wa-select`/`wa-dropdown` inside a `wa-dialog` emits `wa-show`/`wa-hide`/`wa-after-show`/`wa-after-hide` on panel open/close; unguarded, the dialog handler re-runs focus logic (stealing focus from the dropdown) or treats it as the dialog closing (dismissing everything). Same family with `wa-switch`, nested `wa-details`, nested `wa-tab-group` (`wa-tab-show`/`wa-tab-hide`), per-row `wa-dropdown` `wa-select` reaching a parent selector, nested `wa-split-panel` `wa-reposition`.
+
+**Always scope the handler to its own element** — equivalent idioms: a top guard `if (event.target !== ownRef/event.currentTarget) return`; the Vue `.self` modifier; or `.stop` when a nested control's event must never reach a same-named outer handler. When a parent must *veto* its own close while a child panel is open, combine the target guard with `event.preventDefault()` for the parent's own event only (see `ProjectView.vue` `onSelectorHide`).
+
+## TwiCC Plugin (Agent Skills)
+
+Skills live under `src/twicc/agent/plugin/twicc/skills/`, packaged as a versioned plugin (`.../twicc/.claude-plugin/plugin.json`).
+
+**Any bundle change — add/edit/rename/remove a `SKILL.md` — REQUIRES bumping `version` in `plugin.json`**, or providers serve a stale cached copy. Bump: user-visible change → patch; new skill or new flags/options → minor; rename/removal → minor at least.
+
+**Before creating/updating a skill, read `src/twicc/agent/plugin/README.md`** (structure, wording, anti-patterns) and a few existing skills to calibrate tone.
 
 ## Release Process
 
-When the user asks for a release:
-
-1. Verify the branch is `main`; stop if it is not.
-2. Update the version in `pyproject.toml` and the `twicc` package entry in `uv.lock`.
-3. Update `CHANGELOG.md`: convert `[Unreleased]` to the release version and date.
-4. Run `./scripts/build-release.sh`. It deletes `src/twicc/static/frontend/` before `uv build` so the frontend is always rebuilt from source — the `hatch_build.py` hook otherwise reuses a stale build sitting there and silently ships an outdated UI (how 1.7.1 went out broken). Never package a release without that clean rebuild.
-5. Ask the user to test the built wheel with the appropriate `uvx --from dist/... twicc` command. Do not run this yourself.
-6. Continue only after the user confirms testing passed.
-7. Commit with `release: v{version}`.
-8. Create an annotated tag with the changelog content. Convert relative changelog image URLs to `https://raw.githubusercontent.com/twidi/twicc/main/...` in the tag message only.
-9. Push commit and tag.
-10. Create the GitHub Release with the same changelog content.
-11. Give the user the `uvx uv-publish /home/twidi/dev/twicc-poc/dist/twicc-{version}*` command (the glob covers both the wheel and the sdist). Do not publish unless explicitly asked. The sdist is now publishable — it embeds the pre-built frontend assets and the Codex CLI binary comes from the `openai-codex-cli-bin` PyPI dependency, so `pip install` from source needs neither npm nor an extra fetch.
+When the user asks to make a release, follow `docs/release-process.md`.

@@ -1,0 +1,53 @@
+# Release Process
+
+When the user asks to make a new release, follow these steps in order:
+
+1. **Check branch:** Verify you're on `main`. If not, stop and inform the user.
+
+2. **Update version numbers:**
+   - `pyproject.toml` → `[project]` → `version`
+   - `uv.lock` → `[[package]]` → `version` (for the `twicc` package entry)
+
+3. **Update CHANGELOG.md:** Set the version number on the `[Unreleased]` section (if not already done) and add the release date (`YYYY-MM-DD`).
+
+4. **Build:** Run `./scripts/build-release.sh` (~1-2 min). This produces:
+   - `dist/twicc-{version}.tar.gz` (sdist, platform-agnostic — both this and the wheel get published to PyPI in step 11)
+   - `dist/twicc-{version}-py3-none-any.whl` (single platform-agnostic wheel)
+
+   The Codex CLI binary comes from `openai-codex-cli-bin` on PyPI (manylinux/macOS/Windows wheels since 0.133.0), so TwiCC itself does not need per-platform wheels anymore. The sdist embeds the pre-built frontend assets so `pip install` from source does not need npm. See `hatch_build.py` and `docs/codex-vendoring.md`.
+
+   **Fresh frontend, always:** `build-release.sh` deletes `src/twicc/static/frontend/` before `uv build`. The `hatch_build.py` hook skips the npm build whenever that directory already holds an `index.html` (needed for the sdist→wheel and pip-install-from-sdist paths). Without the wipe, a stale dev build sitting there would be packaged as-is, silently shipping an outdated UI — exactly how 1.7.1 went out with a frontend missing its latest changes. Never package a release without that clean rebuild.
+
+5. **User testing (mandatory):** Ask the user to test the build before continuing:
+   ```
+   uvx --from dist/twicc-{version}-py3-none-any.whl twicc
+   ```
+   Remind them to stop any running TwiCC instance first, then visit `http://localhost:3500` to test. **Do not run `uvx` yourself** — this requires user interaction.
+
+6. **Wait for user confirmation.** Only proceed if they say it's OK.
+
+7. **Commit:** Create a commit with message `release: v{version}`.
+
+8. **Create annotated tag** with changelog content extracted from `CHANGELOG.md`:
+   ```bash
+   git tag -a v{version} -m "Release v{version}
+
+   {changelog content for this version}"
+   ```
+   **Image URLs:** If the changelog contains relative image paths (e.g., `frontend/public/whats-new/...`), replace them with absolute URLs in the tag message by prefixing with `https://raw.githubusercontent.com/twidi/twicc/main/`. Do **not** modify `CHANGELOG.md` itself.
+
+9. **Push** commit and tag:
+   ```bash
+   git push && git push --tags
+   ```
+
+10. **Create GitHub Release** using the same changelog content (with the same absolute image URLs as the tag):
+    ```bash
+    gh release create v{version} --title "v{version}" --notes "{changelog content}"
+    ```
+
+11. **Publish to PyPI (user action):** Give the user the command to publish both the wheel and the sdist:
+    ```
+    uvx uv-publish /home/twidi/dev/twicc-poc/dist/twicc-{version}*
+    ```
+    The glob picks up both `twicc-{version}-py3-none-any.whl` and `twicc-{version}.tar.gz`. The sdist is now safe to publish — it embeds the pre-built frontend assets, and the Codex CLI binary comes from the `openai-codex-cli-bin` PyPI dependency, so `pip install` from source needs no npm and no extra fetch. **Do not run `uv-publish` yourself** unless the user explicitly asks you to.
