@@ -17,6 +17,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Terminal (Mac)** — new settings to choose whether the Option (⌥) key types special characters like `|` or acts as the Meta key for shell shortcuts.
 - **File editor** — Alt+E to toggle edit mode for the current file.
 
+### Changed
+
+- **Claude Agent SDK** — Upgrade from 0.2.96 to 0.2.99 (bundled Claude Code CLI: 2.1.172 → 2.1.175)
+
 ### Fixed
 
 - **Workspaces auto-add** — now correctly add new projects to workspaces with auto-add patterns.
