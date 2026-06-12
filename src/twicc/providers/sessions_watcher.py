@@ -545,10 +545,8 @@ class BaseSessionsWatcher:
         session = await get_session_by_id(parsed.session_id)
 
         # For new sessions, check that the file has content BEFORE creating
-        # the Project row. Otherwise we'd create the project on the empty-file
-        # event, return early, and the next event (file now populated) would
-        # see ``project_created=False`` — silently skipping the workspace
-        # auto-add at the end of this method forever.
+        # the Project row, so an empty-file event doesn't leave a project
+        # (and later a session) row with nothing behind it.
         if session is None:
             has_content = await check_file_has_content_async(path)
             if not has_content:
@@ -559,6 +557,14 @@ class BaseSessionsWatcher:
         # ``sync_session_items_from_file`` has resolved the directory from
         # the JSONL body — see the explicit call at the end of this method.
         project, project_created = await register_project(parsed.project_id)
+
+        # The directory may not be resolvable on THIS event: recent Claude
+        # CLI session files open with header lines (``last-prompt``, ``mode``,
+        # ``permission-mode``) that carry no ``cwd`` — the first cwd-bearing
+        # line lands on a later event. Track the directory-less state so the
+        # workspace auto-add at the end of this method retries on every event
+        # until the directory is known, not just on the creation event.
+        project_had_no_directory = not project.directory
 
         # Track whether this session was just created via TwiCC (had pending settings).
         # Used below to broadcast an early session_updated even before the user message
@@ -759,12 +765,19 @@ class BaseSessionsWatcher:
                     "session": serialize_session(session),
                 })
 
-        # Auto-add newly created project to workspaces whose patterns match
-        # its directory. Deferred to here (rather than into
-        # ``register_project`` above) because the directory is only resolved
-        # by ``sync_session_items_from_file`` — at creation time the watcher
-        # only knows ``project_id``, not the cwd.
-        if project_created:
+        # Auto-add the project to workspaces whose patterns match its
+        # directory. Deferred to here (rather than into ``register_project``
+        # above) because the directory is only resolved by
+        # ``sync_session_items_from_file`` — at creation time the watcher
+        # only knows ``project_id``, not the cwd. Gated on the directory
+        # having been unknown BEFORE this sync (not on ``project_created``):
+        # the event that creates the project often syncs only cwd-less header
+        # lines, so the directory is resolved by a LATER event — that event
+        # must run the auto-add, or the project never joins its workspaces.
+        # Idempotent, and a no-op refresh+check for the (rare) directory-less
+        # project until the cwd shows up; projects with a known directory
+        # skip it entirely.
+        if project_created or project_had_no_directory:
             project = await refresh_project(project)
             if project.directory:
                 await auto_add_project_to_workspaces(project.id, project.directory)
