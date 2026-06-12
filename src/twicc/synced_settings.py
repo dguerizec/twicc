@@ -79,12 +79,17 @@ _GENERIC_SYNCED_SETTINGS_DEFAULTS: dict = {
     # used to append a session deep link to external notifications.
     # Empty = no link line.
     "publicBaseUrl": "",
-    # Show a warning toast when a provider starts consuming its extra usage
-    # credits again after a quiet period (see useWebSocket's
-    # maybeWarnExtraUsageStarted). A global alerting preference with no
-    # device-specific mechanic, so it syncs across devices rather than staying
-    # local like the display-only extraUsageOnlyWhenNeeded toggle.
-    "warnOnExtraUsageStart": True,
+    # Master switch for the "extra usage started" alert: when a provider starts
+    # consuming its extra usage credits again after a quiet period, notify the
+    # user. This is the single kill switch for the whole feature — when off, no
+    # in-app toast, no sound, no browser notification and no external push fire,
+    # whatever the per-device or per-target sub-settings say. A global alerting
+    # preference with no device-specific mechanic, so it syncs across devices
+    # (and the backend reads it here to gate the external push). The detection
+    # itself is backend-driven (see twicc.usage_task) and fans out to a
+    # ``extra_usage_started`` WS event (in-app toast/sound/browser) and Apprise
+    # push (twicc.external_notifications.notify_extra_usage_started).
+    "notifyOnExtraUsageStart": True,
 }
 
 # Note: `disabledProviders` (list[str]) is intentionally NOT listed here.

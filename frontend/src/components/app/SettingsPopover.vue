@@ -370,7 +370,9 @@ const colorScheme = computed(() => store.getColorScheme)
 const sessionTimeFormat = computed(() => store.getSessionTimeFormat)
 const showCosts = computed(() => store.areCostsShown)
 const extraUsageOnlyWhenNeeded = computed(() => store.isExtraUsageOnlyWhenNeeded)
-const warnOnExtraUsageStart = computed(() => store.shouldWarnOnExtraUsageStart)
+// Same synced setting as the one in the Notifications section — mirrored here
+// so a user browsing the Usage section doesn't miss the feature.
+const notifyOnExtraUsageStart = computed(() => store.shouldNotifyOnExtraUsageStart)
 const maxCachedSessions = computed(() => store.getMaxCachedSessions)
 const autoUnpinOnArchive = computed(() => store.isAutoUnpinOnArchive)
 const titleGenerationEnabled = computed(() => store.isTitleGenerationEnabled)
@@ -620,10 +622,11 @@ function onExtraUsageOnlyWhenNeededChange(event) {
 }
 
 /**
- * Toggle the warning toast shown when extra usage credits start being consumed.
+ * Master switch for the "extra usage started" alert (same synced setting as the
+ * one in the Notifications section).
  */
-function onWarnOnExtraUsageStartChange(event) {
-    store.setWarnOnExtraUsageStart(event.target.checked)
+function onNotifyOnExtraUsageStartChange(event) {
+    store.setNotifyOnExtraUsageStart(event.target.checked)
 }
 
 function onUsageFileEnabledChange(provider, event) {
@@ -1341,12 +1344,18 @@ function onChangelogClose() {
                         >Only when needed</wa-switch>
                     </div>
                     <div class="setting-group">
-                        <label class="setting-group-label">Warn when extra usage starts</label>
+                        <label class="setting-group-label">When extra usage starts</label>
                         <wa-switch
-                            :checked="warnOnExtraUsageStart"
-                            @change="onWarnOnExtraUsageStartChange"
+                            :checked="notifyOnExtraUsageStart"
+                            @change="onNotifyOnExtraUsageStartChange"
                             size="small"
-                        >Show a warning toast</wa-switch>
+                        >Notify me</wa-switch>
+                        <span class="setting-group-hint">
+                            Alerts you when a provider starts consuming its extra usage credits again
+                            after a quiet period. See the
+                            <a href="#" @click.prevent="selectSection('notifications')">Notifications</a>
+                            tab for sound, browser and pushed-device options.
+                        </span>
                     </div>
                     <template v-for="(provider, idx) in usageProviders" :key="provider">
                         <wa-divider v-if="idx === 0"></wa-divider>

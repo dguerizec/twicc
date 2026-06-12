@@ -19,6 +19,10 @@ const userTurnSound = computed(() => store.getNotifUserTurnSound)
 const userTurnBrowser = computed(() => store.isNotifUserTurnBrowser)
 const pendingRequestSound = computed(() => store.getNotifPendingRequestSound)
 const pendingRequestBrowser = computed(() => store.isNotifPendingRequestBrowser)
+// Extra-usage alert: a master switch (synced) plus per-device sound/browser.
+const notifyOnExtraUsageStart = computed(() => store.shouldNotifyOnExtraUsageStart)
+const extraUsageStartSound = computed(() => store.getNotifExtraUsageStartSound)
+const extraUsageStartBrowser = computed(() => store.isNotifExtraUsageStartBrowser)
 
 // External notification targets (synced settings, consumed by the backend).
 // Each target carries a required ``id`` (a stable handle for a future
@@ -61,7 +65,7 @@ function effectiveTargetUrl(index) {
 
 function addExternalTarget() {
     // Local draft row only — persisted once it gets a non-empty URL.
-    externalRows.value.push({ id: generateUUID(), name: '', url: '', enabled: true, tested: null, notifyUserTurn: true, notifyPendingRequest: true, awayOnly: true })
+    externalRows.value.push({ id: generateUUID(), name: '', url: '', enabled: true, tested: null, notifyUserTurn: true, notifyPendingRequest: true, notifyExtraUsageStart: true, awayOnly: true })
 }
 
 function removeExternalTarget(index) {
@@ -101,6 +105,11 @@ function onExternalTargetEnabledChange(index, event) {
 function onExternalTargetEventChange(index, key, event) {
     externalRows.value[index] = { ...externalRows.value[index], [key]: event.target.checked }
     persistExternalRows()
+    // Opting a target into the extra-usage push implies wanting the alert, so
+    // turn the master switch on (the single kill switch governs every channel).
+    if (key === 'notifyExtraUsageStart' && event.target.checked) {
+        store.setNotifyOnExtraUsageStart(true)
+    }
 }
 
 async function testExternalTarget(index) {
@@ -180,12 +189,29 @@ function onPendingRequestBrowserChange(event) {
     store.setNotifPendingRequestBrowser(event.target.checked)
 }
 
+function onNotifyOnExtraUsageStartChange(event) {
+    store.setNotifyOnExtraUsageStart(event.target.checked)
+}
+
+function onExtraUsageStartSoundChange(event) {
+    // Picking a sound forces the master switch on (handled in the store action).
+    store.setNotifExtraUsageStartSound(event.target.value)
+}
+
+function onExtraUsageStartBrowserChange(event) {
+    store.setNotifExtraUsageStartBrowser(event.target.checked)
+}
+
 function testUserTurnSound() {
     playNotificationSound(userTurnSound.value)
 }
 
 function testPendingRequestSound() {
     playNotificationSound(pendingRequestSound.value)
+}
+
+function testExtraUsageStartSound() {
+    playNotificationSound(extraUsageStartSound.value)
 }
 
 /**
@@ -284,6 +310,43 @@ defineExpose({ sync })
             </div>
         </div>
 
+        <!-- When extra usage starts -->
+        <div class="setting-group">
+            <label class="setting-group-label">When extra usage starts</label>
+            <wa-switch
+                :checked="notifyOnExtraUsageStart"
+                @change="onNotifyOnExtraUsageStartChange"
+                size="small"
+            >Notify me</wa-switch>
+            <wa-select
+                :value.prop="extraUsageStartSound"
+                @change="onExtraUsageStartSoundChange"
+                size="small"
+            >
+                <wa-option
+                    v-for="opt in soundOptions"
+                    :key="opt.value"
+                    :value="opt.value"
+                >{{ opt.label }}</wa-option>
+            </wa-select>
+            <a v-if="extraUsageStartSound !== 'none'" href="#" class="notif-test-link" @click.prevent="testExtraUsageStartSound">
+                <wa-icon name="volume-up"></wa-icon> Test sound
+            </a>
+            <div v-if="browserNotifPermission === 'granted'" class="notif-browser-row">
+                <wa-switch
+                    :checked="extraUsageStartBrowser"
+                    @change="onExtraUsageStartBrowserChange"
+                    size="small"
+                >Browser notification</wa-switch>
+            </div>
+            <p class="setting-group-hint">
+                Turn "Notify me" off to silence extra-usage alerts everywhere —
+                in-app toast, sound, browser and pushed devices — without
+                touching your per-device or per-target settings. Enabling a
+                sound, browser notification or a pushed device turns it back on.
+            </p>
+        </div>
+
         <!-- External notifications (Apprise) -->
         <wa-divider></wa-divider>
         <div class="setting-group">
@@ -371,6 +434,11 @@ defineExpose({ sync })
                             :checked="target.notifyPendingRequest !== false"
                             @change="onExternalTargetEventChange(index, 'notifyPendingRequest', $event)"
                         >Needs attention</wa-switch>
+                        <wa-switch
+                            size="small"
+                            :checked="target.notifyExtraUsageStart !== false"
+                            @change="onExternalTargetEventChange(index, 'notifyExtraUsageStart', $event)"
+                        >Extra usage</wa-switch>
                         <wa-switch
                             size="small"
                             :checked="target.awayOnly === true"

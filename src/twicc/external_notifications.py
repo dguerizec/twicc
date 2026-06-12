@@ -179,6 +179,79 @@ def _detect_and_send(
                 _spawn(_send(away_urls, title, body))
 
 
+def notify_extra_usage_started(provider, snapshot, settings: dict) -> None:
+    """Push an "extra usage started" notification to opted-in external targets.
+
+    Called from ``twicc.usage_task`` on the rising edge of extra-usage
+    consumption, and only when the master ``notifyOnExtraUsageStart`` switch is
+    on (the caller already gated on it and passes the resolved ``settings``).
+    Mirrors the process-state push: enabled + tested targets that opted into
+    ``notifyExtraUsageStart``, split by ``awayOnly`` with the same
+    presence-aware deferral. Never raises — a notification failure must not
+    affect the usage broadcast path.
+    """
+    try:
+        _send_extra_usage_started(provider, snapshot, settings)
+    except Exception:
+        logger.exception("Extra-usage external notification dispatch failed for provider %s", provider)
+
+
+def _build_extra_usage_body(snapshot, base_url: str | None) -> str:
+    """Body for the extra-usage push: the credit detail, plus the bare app URL.
+
+    Two display modes, like the sidebar ring: Anthropic-style providers report
+    used/limit credits (``utilization`` set), Codex-style providers report only
+    a remaining balance. Unlike the process-state push there is no session to
+    deep-link to, so when a public base URL is configured we append it raw
+    (nothing after it).
+    """
+    if snapshot.extra_usage_utilization is not None:
+        used = snapshot.extra_usage_used_credits or 0
+        if snapshot.extra_usage_monthly_limit is not None:
+            detail = f"{used} of {snapshot.extra_usage_monthly_limit} credits used."
+        else:
+            detail = f"{used} credits used."
+    elif snapshot.extra_usage_remaining_credits is not None:
+        detail = f"{round(snapshot.extra_usage_remaining_credits)} credits remaining."
+    else:
+        detail = "Extra usage credits are now being consumed."
+    if base_url:
+        detail += f"\n\n{base_url}"
+    return detail
+
+
+def _send_extra_usage_started(provider, snapshot, settings: dict) -> None:
+    targets = [
+        target
+        for target in settings.get("externalNotificationTargets") or []
+        if isinstance(target, dict) and target.get("enabled") and target.get("url") and target.get("tested") is True
+    ]
+    # ``notifyExtraUsageStart`` absent = opted in (consistent with the other
+    # per-target event flags; the master switch is the real off-ramp).
+    eligible = [target for target in targets if target.get("notifyExtraUsageStart", True)]
+    if not eligible:
+        return
+
+    label = get_provider_helpers(provider).LABEL or str(provider)
+    title = f"{label} — Extra usage started"
+    # No session to deep-link to: append the bare public base URL when set,
+    # matching the same publicBaseUrl handling as the process-state push.
+    base_url = (settings.get("publicBaseUrl") or "").strip().rstrip("/") or None
+    body = _build_extra_usage_body(snapshot, base_url)
+
+    present = presence.is_user_present()
+    baseline = presence.latest_activity()
+    always_urls = [t["url"] for t in eligible if not t.get("awayOnly")]
+    away_urls = [t["url"] for t in eligible if t.get("awayOnly")]
+    if always_urls:
+        _spawn(_send(always_urls, title, body))
+    if away_urls:
+        if present:
+            _spawn(_deferred_send(away_urls, title, body, baseline))
+        else:
+            _spawn(_send(away_urls, title, body))
+
+
 def _spawn(coro) -> None:
     """Fire-and-forget a send coroutine, holding a strong task ref until it completes."""
     task = asyncio.create_task(coro)

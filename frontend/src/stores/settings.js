@@ -46,6 +46,8 @@ export const SETTINGS_SCHEMA = {
     notifUserTurnBrowser: false,
     notifPendingRequestSound: NOTIFICATION_SOUNDS.NONE,
     notifPendingRequestBrowser: false,
+    notifExtraUsageStartSound: NOTIFICATION_SOUNDS.NONE,
+    notifExtraUsageStartBrowser: false,
     // --- Synced settings (defaults from backend, null as placeholder) ---
     defaultProvider: null,
     disabledProviders: [],
@@ -61,7 +63,7 @@ export const SETTINGS_SCHEMA = {
     waBrand: null,
     externalNotificationTargets: [],
     publicBaseUrl: null,
-    warnOnExtraUsageStart: null,
+    notifyOnExtraUsageStart: null,
     // --- Not persisted - runtime state ---
     _disabledProvidersPresent: false,
     _devMode: false,
@@ -94,7 +96,7 @@ const SETTINGS_VALIDATORS = {
     titleSystemPrompt: (v) => typeof v === 'string' && v.includes('{text}'),
     showCosts: (v) => typeof v === 'boolean',
     extraUsageOnlyWhenNeeded: (v) => typeof v === 'boolean',
-    warnOnExtraUsageStart: (v) => typeof v === 'boolean',
+    notifyOnExtraUsageStart: (v) => typeof v === 'boolean',
     maxCachedSessions: (v) => typeof v === 'number' && Number.isInteger(v) && v >= 1 && v <= 50,
     autoUnpinOnArchive: (v) => typeof v === 'boolean',
     defaultWorktreeDirectory: (v) => typeof v === 'string',
@@ -117,6 +119,8 @@ const SETTINGS_VALIDATORS = {
     notifUserTurnBrowser: (v) => typeof v === 'boolean',
     notifPendingRequestSound: (v) => Object.values(NOTIFICATION_SOUNDS).includes(v),
     notifPendingRequestBrowser: (v) => typeof v === 'boolean',
+    notifExtraUsageStartSound: (v) => Object.values(NOTIFICATION_SOUNDS).includes(v),
+    notifExtraUsageStartBrowser: (v) => typeof v === 'boolean',
     waTheme: (v) => Object.values(WA_THEME).includes(v),
     waBrand: (v) => Object.values(WA_BRAND).includes(v),
     externalNotificationTargets: (v) =>
@@ -269,7 +273,7 @@ export const useSettingsStore = defineStore('settings', {
         getTitleSystemPrompt: (state) => state.titleSystemPrompt,
         areCostsShown: (state) => state.showCosts,
         isExtraUsageOnlyWhenNeeded: (state) => state.extraUsageOnlyWhenNeeded,
-        shouldWarnOnExtraUsageStart: (state) => state.warnOnExtraUsageStart,
+        shouldNotifyOnExtraUsageStart: (state) => state.notifyOnExtraUsageStart,
         getMaxCachedSessions: (state) => state.maxCachedSessions,
         isAutoUnpinOnArchive: (state) => state.autoUnpinOnArchive,
         getDefaultWorktreeDirectory: (state) => state.defaultWorktreeDirectory,
@@ -292,6 +296,8 @@ export const useSettingsStore = defineStore('settings', {
         isNotifUserTurnBrowser: (state) => state.notifUserTurnBrowser,
         getNotifPendingRequestSound: (state) => state.notifPendingRequestSound,
         isNotifPendingRequestBrowser: (state) => state.notifPendingRequestBrowser,
+        getNotifExtraUsageStartSound: (state) => state.notifExtraUsageStartSound,
+        isNotifExtraUsageStartBrowser: (state) => state.notifExtraUsageStartBrowser,
         getWaTheme: (state) => state.waTheme,
         getWaBrand: (state) => state.waBrand,
         getExternalNotificationTargets: (state) => state.externalNotificationTargets,
@@ -452,13 +458,15 @@ export const useSettingsStore = defineStore('settings', {
         },
 
         /**
-         * Set whether to show a warning toast when a provider starts consuming
-         * its extra usage credits again after a quiet period.
+         * Set the master switch for the "extra usage started" alert. When off,
+         * the whole feature is silenced (in-app toast, sound, browser
+         * notification, and external push) regardless of the per-device or
+         * per-target sub-settings — the single kill switch.
          * @param {boolean} enabled
          */
-        setWarnOnExtraUsageStart(enabled) {
-            if (SETTINGS_VALIDATORS.warnOnExtraUsageStart(enabled)) {
-                this.warnOnExtraUsageStart = enabled
+        setNotifyOnExtraUsageStart(enabled) {
+            if (SETTINGS_VALIDATORS.notifyOnExtraUsageStart(enabled)) {
+                this.notifyOnExtraUsageStart = enabled
             }
         },
 
@@ -687,6 +695,31 @@ export const useSettingsStore = defineStore('settings', {
         setNotifPendingRequestBrowser(enabled) {
             if (SETTINGS_VALIDATORS.notifPendingRequestBrowser(enabled)) {
                 this.notifPendingRequestBrowser = enabled
+            }
+        },
+
+        /**
+         * Set the sound played when extra usage starts (this device only).
+         * Choosing a sound implies wanting to be notified, so it turns the
+         * master ``notifyOnExtraUsageStart`` switch on (see its action).
+         * @param {string} sound
+         */
+        setNotifExtraUsageStartSound(sound) {
+            if (SETTINGS_VALIDATORS.notifExtraUsageStartSound(sound)) {
+                this.notifExtraUsageStartSound = sound
+                if (sound !== NOTIFICATION_SOUNDS.NONE) this.notifyOnExtraUsageStart = true
+            }
+        },
+
+        /**
+         * Set the browser notification for the extra-usage-start event (this
+         * device only). Enabling it turns the master switch on.
+         * @param {boolean} enabled
+         */
+        setNotifExtraUsageStartBrowser(enabled) {
+            if (SETTINGS_VALIDATORS.notifExtraUsageStartBrowser(enabled)) {
+                this.notifExtraUsageStartBrowser = enabled
+                if (enabled) this.notifyOnExtraUsageStart = true
             }
         },
 
@@ -923,6 +956,8 @@ export function initSettings() {
             notifUserTurnBrowser: store.notifUserTurnBrowser,
             notifPendingRequestSound: store.notifPendingRequestSound,
             notifPendingRequestBrowser: store.notifPendingRequestBrowser,
+            notifExtraUsageStartSound: store.notifExtraUsageStartSound,
+            notifExtraUsageStartBrowser: store.notifExtraUsageStartBrowser,
             waTheme: store.waTheme,
             waBrand: store.waBrand,
             externalNotificationTargets: store.externalNotificationTargets,

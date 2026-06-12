@@ -18,7 +18,15 @@ from channels.layers import get_channel_layer
 from twicc.core.enums import Provider
 from twicc.core.models import UsageSnapshot
 from twicc.core.serializers import serialize_usage_snapshot
+from twicc.synced_settings import read_synced_settings
 from twicc.usage import compute_period_costs
+
+# Per-provider previous "extra usage recently active" flag, used to fire the
+# "extra usage started" alert on the rising edge (quiet → active). In-memory and
+# reset on restart, exactly like external_notifications._last_seen: a restart
+# re-seeds the baseline (the next observation never fires), so a process bounce
+# can at worst miss one start event, never invent one. Keyed by provider value.
+_extra_usage_prev_active: dict[str, bool] = {}
 
 
 @sync_to_async
@@ -239,6 +247,121 @@ def _build_usage_message_sync(
     return _build_usage_message(provider, success, reason, snapshot)
 
 
+def _find_extra_usage_ref(snapshot: UsageSnapshot) -> UsageSnapshot | None:
+    """Return the ~1h-ago snapshot used to detect recent extra-usage activity.
+
+    Unconstrained by the 5h/7d quota windows: extra usage resets on a different
+    (monthly) cadence, so the lookback is a plain 1-hour floor. Mirrors the
+    ``extra_usage_one_hour`` reference the broadcast already serializes for the
+    frontend (see ``_build_reference_snapshots``).
+    """
+    floor = snapshot.fetched_at - timedelta(hours=1)
+    return (
+        UsageSnapshot.objects
+        .filter(provider=snapshot.provider)
+        .exclude(pk=snapshot.pk)
+        .filter(fetched_at__gte=floor)
+        .order_by("fetched_at")
+        .first()
+    )
+
+
+def _extra_usage_recently_active(snapshot: UsageSnapshot, ref: UsageSnapshot | None) -> bool:
+    """Whether extra usage was consumed since ``ref`` (~1h ago).
+
+    Python mirror of the frontend ``computeExtraUsageRecentlyActive`` (usage.js):
+    Anthropic-style providers report a rising ``utilization`` as credits are
+    spent; Codex-style providers report a falling remaining balance. Conservative
+    when the reference is missing (returns ``False`` rather than risk a false
+    positive). Keep this in sync with the JS definition.
+    """
+    if not ref:
+        return False
+    cur_util = snapshot.extra_usage_utilization
+    if cur_util is not None and cur_util > (ref.extra_usage_utilization or 0):
+        return True
+    cur_rem = snapshot.extra_usage_remaining_credits
+    ref_rem = ref.extra_usage_remaining_credits
+    if cur_rem is not None and ref_rem is not None and cur_rem < ref_rem:
+        return True
+    return False
+
+
+@sync_to_async
+def _evaluate_extra_usage_start(provider: Provider, snapshot: UsageSnapshot) -> dict | None:
+    """Decide whether to fire the "extra usage started" alert for this tick.
+
+    Runs all the blocking work (the 1h-ref DB query, the synced-settings read)
+    in one ``sync_to_async`` block and returns the synced-settings dict when the
+    alert should fire, or ``None`` otherwise. Updates the per-provider baseline
+    on every call so the rising edge is detected exactly once.
+
+    Returns ``None`` (no alert) when: the provider has no extra usage enabled,
+    there is no rising edge (first observation seeds the baseline silently, or
+    consumption was already active), or the master ``notifyOnExtraUsageStart``
+    switch is off (the global kill switch — suppresses every channel).
+    """
+    active = bool(
+        snapshot.extra_usage_is_enabled
+        and _extra_usage_recently_active(snapshot, _find_extra_usage_ref(snapshot))
+    )
+    prev = _extra_usage_prev_active.get(provider.value)
+    _extra_usage_prev_active[provider.value] = active
+    # Rising edge only: a known previous ``False`` flipping to ``True``.
+    # ``None`` (first observation) or ``True`` (already active) never fire.
+    if prev is not False or not active:
+        return None
+    settings = read_synced_settings()
+    if not settings.get("notifyOnExtraUsageStart", True):
+        return None
+    return settings
+
+
+def _extra_usage_event_payload(snapshot: UsageSnapshot) -> dict:
+    """The ``extra_usage`` block carried by the ``extra_usage_started`` WS event.
+
+    Snake-case to match the rest of the usage wire shape; the frontend formats
+    the credit detail (used/limit vs remaining) from these fields.
+    """
+    return {
+        "utilization": snapshot.extra_usage_utilization,
+        "used_credits": snapshot.extra_usage_used_credits,
+        "monthly_limit": snapshot.extra_usage_monthly_limit,
+        "remaining_credits": snapshot.extra_usage_remaining_credits,
+    }
+
+
+async def _maybe_notify_extra_usage_started(provider: Provider, snapshot: UsageSnapshot | None) -> None:
+    """Fire the "extra usage started" alert on the rising edge, if the master switch is on.
+
+    Fans out to two channels: a ``extra_usage_started`` WS event (drives the
+    in-app toast plus the per-device sound/browser notifications) and the Apprise
+    external push (per-target opt-in). Both are gated by the single master switch
+    evaluated in :func:`_evaluate_extra_usage_start`.
+    """
+    if not snapshot:
+        return
+    settings = await _evaluate_extra_usage_start(provider, snapshot)
+    if settings is None:
+        return
+    channel_layer = get_channel_layer()
+    await channel_layer.group_send(
+        "updates",
+        {
+            "type": "broadcast",
+            "data": {
+                "type": "extra_usage_started",
+                "provider": provider.value,
+                "extra_usage": _extra_usage_event_payload(snapshot),
+            },
+        },
+    )
+    # External push (per-target opt-in, away-only/presence handled inside). Sync
+    # fire-and-forget like the process-state path; never raises.
+    from twicc import external_notifications
+    external_notifications.notify_extra_usage_started(provider, snapshot, settings)
+
+
 async def broadcast_usage_updated(provider: Provider, success: bool, reason: str = "sync") -> None:
     """Broadcast a ``usage_updated`` message for ``provider`` to all connected clients.
 
@@ -261,6 +384,9 @@ async def broadcast_usage_updated(provider: Provider, success: bool, reason: str
             "data": data,
         },
     )
+    # Detect the "extra usage started" rising edge and, if the master switch is
+    # on, fan out to the in-app alert (WS event) and the external push.
+    await _maybe_notify_extra_usage_started(provider, snapshot)
 
 
 async def get_usage_message_for_connection(provider: Provider) -> dict:
