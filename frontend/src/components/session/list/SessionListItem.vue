@@ -15,6 +15,7 @@ import { useSessionSelectionStore } from '../../../stores/sessionSelection'
 import { useSettingsStore } from '../../../stores/settings'
 import { formatDate } from '../../../utils/date'
 import { sessionRouteLocation } from '../../../utils/sessionRoute'
+import { projectPathTitle } from '../../../utils/projectName'
 import { PROCESS_STATE, PROCESS_STATE_COLORS, PROCESS_STATE_NAMES, SESSION_TIME_FORMAT } from '../../../constants'
 import { markSessionReadState, cancelSessionViewedThrottle } from '../../../composables/useWebSocket'
 import { stopSessionProcess } from '../../../composables/useStopSessionProcess'
@@ -436,7 +437,7 @@ function handleMenuSelect(event) {
                 ></span>
                 <AppTooltip v-if="compactView && effectiveShowProjectName" :for="`compact-project-dot-${session.id}`">
                     <WorktreeBadge v-if="isProjectWorktree" :project-id="session.project_id" :dot="false" />
-                    <template v-else>{{ store.getProjectDisplayName(session.project_id) }}</template>
+                    <template v-else>{{ projectPathTitle(store.getProject(session.project_id)) || store.getProjectDisplayName(session.project_id) }}</template>
                 </AppTooltip>
                 <wa-icon v-if="session.pinned" name="thumbtack" class="pinned-icon"></wa-icon>
                 <wa-tag v-if="session.archived" size="small" variant="neutral" class="archived-tag">Arch.</wa-tag>

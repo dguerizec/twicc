@@ -2,6 +2,7 @@
 // ProjectBadge.vue - Displays a project color dot and display name
 import { computed } from 'vue'
 import { useDataStore } from '../../stores/data'
+import { projectPathTitle } from '../../utils/projectName'
 
 const props = defineProps({
     projectId: {
@@ -51,6 +52,13 @@ const displayName = computed(() => {
     }
     return store.getProjectDisplayName(props.projectId)
 })
+// For unnamed projects (shown with just their final folder name), reveal the
+// full directory path on hover. Suppressed when the displayed name already is
+// the full path (e.g. `useDirectoryForUnnamed`).
+const nameTitle = computed(() => {
+    const path = projectPathTitle(project.value)
+    return path && path !== displayName.value ? path : null
+})
 const color = computed(() => {
     const own = props.colorOverride !== null ? props.colorOverride : project.value?.color
     return own || props.fallbackColor || null
@@ -66,7 +74,7 @@ const untrusted = computed(() => store.untrustedProjectIds.has(props.projectId))
             class="project-badge-dot"
             :style="color ? { '--dot-color': color } : null"
         ></span>
-        <span class="project-badge-name">{{ displayName }}</span>
+        <span class="project-badge-name" :title="nameTitle">{{ displayName }}</span>
         <wa-icon
             v-if="untrusted"
             name="lock"

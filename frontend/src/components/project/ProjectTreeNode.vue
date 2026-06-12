@@ -59,7 +59,7 @@ function onChildMenuSelect(event, proj) {
                 :name="isOpen ? 'chevron-down' : 'chevron-right'"
                 class="chevron-icon"
             ></wa-icon>
-            <span class="folder-label">{{ node.segment }}</span>
+            <span class="folder-label" :title="node.path">{{ node.segment }}</span>
         </div>
 
         <!-- Project node (has project) -->

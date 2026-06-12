@@ -9,6 +9,7 @@
 /**
  * @typedef {Object} ProjectTreeNode
  * @property {string} segment - Display label (e.g. "dev" or "OBS/web/characters" after compression)
+ * @property {string} path - Full accumulated directory path of this node (e.g. "/home/twidi/dev")
  * @property {Array<ProjectTreeNode>} children - Child nodes, sorted alphabetically by segment
  * @property {Object|null} project - The project object, or null for intermediate folder nodes
  */
@@ -17,6 +18,7 @@
  * @typedef {Object} FlatProjectTreeItem
  * @property {boolean} isFolder - True for folder nodes without a project
  * @property {string} segment - Display label
+ * @property {string} path - Full accumulated directory path of this node
  * @property {Object|null} project - The project object, or null for folder nodes
  * @property {number} depth - Nesting level (0 for top-level), for computing indent
  * @property {string} key - Unique key for v-for (project.id for projects, "__folder_N" for folders)
@@ -118,6 +120,25 @@ function trieNodeToTreeNode(trieNode) {
     }
 }
 
+/**
+ * Assign a full accumulated `path` to every node, in place.
+ *
+ * Root nodes already carry a leading "/" on their segment (see buildProjectTree),
+ * so a root's path is its own segment; a child's path is the parent path joined
+ * with the child segment. For project leaf nodes this reproduces the project's
+ * `directory`; for intermediate folder nodes it is the directory that folder
+ * stands for — surfaced as a hover tooltip in tree views.
+ *
+ * @param {ProjectTreeNode} node
+ * @param {string} parentPath - Accumulated path of the parent ("" for roots)
+ */
+function assignPaths(node, parentPath) {
+    node.path = parentPath ? `${parentPath}/${node.segment}` : node.segment
+    for (const child of node.children) {
+        assignPaths(child, node.path)
+    }
+}
+
 // =============================================================================
 // Public API
 // =============================================================================
@@ -161,15 +182,20 @@ export function buildProjectTree(projects) {
         // Return it as the sole root node, with a leading "/" since directories are absolute paths.
         const node = trieNodeToTreeNode(compressed)
         node.segment = '/' + node.segment
+        assignPaths(node, '')
         return [node]
     }
 
     // Root was not compressed — return its children as top-level roots.
     // Prefix each root segment with "/" since directories are absolute paths.
-    return Array.from(compressed.children.values())
+    const roots = Array.from(compressed.children.values())
         .map(trieNodeToTreeNode)
         .map(node => ({ ...node, segment: '/' + node.segment }))
         .sort((a, b) => a.segment.localeCompare(b.segment))
+    for (const root of roots) {
+        assignPaths(root, '')
+    }
+    return roots
 }
 
 /**
@@ -178,6 +204,7 @@ export function buildProjectTree(projects) {
  * Performs a depth-first traversal, producing one item per node. Each item has:
  * - `isFolder`: true for intermediate folder nodes (no project)
  * - `segment`: display label
+ * - `path`: full accumulated directory path of the node
  * - `project`: the project object, or null
  * - `depth`: nesting level (0 for top-level roots)
  * - `key`: unique key for v-for (project.id for project nodes, "__folder_N" for folders)
@@ -199,6 +226,7 @@ export function flattenProjectTree(roots) {
         items.push({
             isFolder,
             segment: node.segment,
+            path: node.path,
             project: node.project,
             depth,
             key: isFolder ? `__folder_${folderCounter++}` : node.project.id,

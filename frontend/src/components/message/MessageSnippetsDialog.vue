@@ -556,7 +556,7 @@ defineExpose({ open, close })
                             disabled
                             class="tree-folder-option"
                         >
-                            <span class="tree-folder-label" :style="{ paddingLeft: `${item.depth * 12}px` }">
+                            <span class="tree-folder-label" :title="item.path" :style="{ paddingLeft: `${item.depth * 12}px` }">
                                 {{ item.segment }}
                             </span>
                         </wa-option>
@@ -593,7 +593,7 @@ defineExpose({ open, close })
                             disabled
                             class="tree-folder-option"
                         >
-                            <span class="tree-folder-label" :style="{ paddingLeft: `${item.depth * 12}px` }">
+                            <span class="tree-folder-label" :title="item.path" :style="{ paddingLeft: `${item.depth * 12}px` }">
                                 {{ item.segment }}
                             </span>
                         </wa-option>

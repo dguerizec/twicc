@@ -16,6 +16,7 @@ import { computed } from 'vue'
 import { RouterLink } from 'vue-router'
 import { useDataStore } from '../../stores/data'
 import { worktreeLabel } from '../../utils/worktree'
+import { projectPathTitle } from '../../utils/projectName'
 
 const props = defineProps({
     projectId: { type: String, required: true },
@@ -46,6 +47,17 @@ const folder = computed(() =>
         ? props.folderOverride
         : worktreeLabel(project.value) || store.getProjectDisplayName(props.projectId)
 )
+// Full directory paths shown on hover for unnamed projects (the main repo name
+// and/or the worktree folder are otherwise just final folder names). Suppressed
+// for the folder during a live preview (`folderOverride`).
+const parentTitle = computed(() => projectPathTitle(parent.value))
+const folderTitle = computed(() => {
+    if (props.folderOverride !== null) {
+        return null
+    }
+    const path = projectPathTitle(project.value)
+    return path && path !== folder.value ? path : null
+})
 const color = computed(() => {
     const own = props.colorOverride !== null ? props.colorOverride : project.value?.color
     return own || parent.value?.color || null
@@ -67,12 +79,13 @@ const untrusted = computed(() => store.untrustedProjectIds.has(props.projectId))
                 v-if="parentLink && parentRoute"
                 :to="parentRoute"
                 class="worktree-badge-name worktree-badge-parent-link"
+                :title="parentTitle"
                 @click.stop
             >{{ parentName }}</RouterLink>
-            <span v-else class="worktree-badge-name">{{ parentName }}</span>
+            <span v-else class="worktree-badge-name" :title="parentTitle">{{ parentName }}</span>
             <wa-icon name="code-branch" auto-width class="worktree-badge-sep"></wa-icon>
         </template>
-        <span class="worktree-badge-name">{{ folder }}</span>
+        <span class="worktree-badge-name" :title="folderTitle">{{ folder }}</span>
         <wa-icon
             v-if="untrusted"
             name="lock"

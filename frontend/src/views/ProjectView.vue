@@ -35,6 +35,7 @@ import WorkspaceManageDialog from '../components/workspace/WorkspaceManageDialog
 import BulkArchiveConfirmDialog from '../components/sidebar/BulkArchiveConfirmDialog.vue'
 import { getUsageRingColor, formatRecentDelta } from '../utils/usage'
 import { buildProjectTree, flattenProjectTree } from '../utils/projectTree'
+import { projectPathTitle } from '../utils/projectName'
 import CostDisplay from '../components/ui/CostDisplay.vue'
 import AppTooltip from '../components/ui/AppTooltip.vue'
 import UsageGraphDialog from '../components/app/UsageGraphDialog.vue'
@@ -580,6 +581,8 @@ const isCurrentProjectWorktree = computed(() => !!store.getProject(projectId.val
 
 // Label shown in the selector trigger for a regular (non-worktree) single project.
 const selectedProjectLabel = computed(() => store.getProjectDisplayName(projectId.value))
+// Full directory path on hover when that project is unnamed (shown by folder name only).
+const selectedProjectTitle = computed(() => projectPathTitle(store.getProject(projectId.value)))
 
 // Loading and error states for sessions
 // Only show initial loading spinner when we haven't fetched any sessions yet
@@ -1460,7 +1463,7 @@ function updateSidebarClosedClass(closed) {
                             <span v-if="isWorkspaceMode" class="project-selector-label"><wa-icon name="layer-group" auto-width :style="activeWorkspace?.color ? { color: activeWorkspace.color } : null"></wa-icon> {{ activeWorkspace?.name }}</span>
                             <span v-else-if="isAllProjectsMode" class="project-selector-label">All Projects</span>
                             <span v-else-if="isCurrentProjectWorktree" class="project-selector-label"><WorktreeBadge :project-id="projectId" :dot="false" gap="var(--wa-space-2xs)" /></span>
-                            <span v-else class="project-selector-label">{{ selectedProjectLabel }}</span>
+                            <span v-else class="project-selector-label" :title="selectedProjectTitle">{{ selectedProjectLabel }}</span>
 
                             <wa-icon slot="end" name="chevron-down" class="project-selector-caret"></wa-icon>
                         </wa-button>
@@ -1541,7 +1544,7 @@ function updateSidebarClosedClass(closed) {
                                     class="tree-folder-dropdown-item"
                                 >
                                     <wa-icon slot="icon" name="check" style="visibility: hidden;"></wa-icon>
-                                    <span class="tree-folder-label" :style="{ paddingLeft: `${item.depth * 12}px` }">
+                                    <span class="tree-folder-label" :title="item.path" :style="{ paddingLeft: `${item.depth * 12}px` }">
                                         {{ item.segment }}
                                     </span>
                                 </wa-dropdown-item>
@@ -1661,7 +1664,7 @@ function updateSidebarClosedClass(closed) {
                                     class="tree-folder-dropdown-item"
                                 >
                                     <wa-icon slot="icon" name="check" style="visibility: hidden;"></wa-icon>
-                                    <span class="tree-folder-label" :style="{ paddingLeft: `${item.depth * 12}px` }">
+                                    <span class="tree-folder-label" :title="item.path" :style="{ paddingLeft: `${item.depth * 12}px` }">
                                         {{ item.segment }}
                                     </span>
                                 </wa-dropdown-item>
@@ -1873,7 +1876,7 @@ function updateSidebarClosedClass(closed) {
                                 disabled
                                 class="tree-folder-dropdown-item"
                             >
-                                <span class="tree-folder-label" :style="{ paddingLeft: `${item.depth * 12}px` }">
+                                <span class="tree-folder-label" :title="item.path" :style="{ paddingLeft: `${item.depth * 12}px` }">
                                     {{ item.segment }}
                                 </span>
                             </wa-dropdown-item>
@@ -1920,7 +1923,7 @@ function updateSidebarClosedClass(closed) {
                                 disabled
                                 class="tree-folder-dropdown-item"
                             >
-                                <span class="tree-folder-label" :style="{ paddingLeft: `${item.depth * 12}px` }">
+                                <span class="tree-folder-label" :title="item.path" :style="{ paddingLeft: `${item.depth * 12}px` }">
                                     {{ item.segment }}
                                 </span>
                             </wa-dropdown-item>
@@ -1995,7 +1998,7 @@ function updateSidebarClosedClass(closed) {
                             disabled
                             class="tree-folder-dropdown-item"
                         >
-                            <span class="tree-folder-label" :style="{ paddingLeft: `${item.depth * 12}px` }">
+                            <span class="tree-folder-label" :title="item.path" :style="{ paddingLeft: `${item.depth * 12}px` }">
                                 {{ item.segment }}
                             </span>
                         </wa-dropdown-item>
@@ -2042,7 +2045,7 @@ function updateSidebarClosedClass(closed) {
                             disabled
                             class="tree-folder-dropdown-item"
                         >
-                            <span class="tree-folder-label" :style="{ paddingLeft: `${item.depth * 12}px` }">
+                            <span class="tree-folder-label" :title="item.path" :style="{ paddingLeft: `${item.depth * 12}px` }">
                                 {{ item.segment }}
                             </span>
                         </wa-dropdown-item>
@@ -2588,6 +2591,14 @@ wa-dropdown-item:hover .row-menu-trigger,
 .tree-folder-label {
     font-family: var(--wa-font-family-code);
     font-size: var(--wa-font-size-s);
+    /* Intermediate directory nodes are not projects — italicize them so they
+       read as grouping folders, distinct from the unnamed-project leaves below. */
+    font-style: italic;
+    /* Folder rows live inside a disabled <wa-dropdown-item>, whose host sets
+       `pointer-events: none` — which would suppress the native `title` tooltip
+       showing the full path. Re-enable pointer events on the label itself so the
+       tooltip works on hover (the row stays non-selectable: it carries no value). */
+    pointer-events: auto;
 }
 
 .sidebar wa-divider {
