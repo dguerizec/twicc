@@ -609,7 +609,8 @@ onBeforeUnmount(() => {
 .startup-warning-callout,
 .idle-warning-callout,
 .model-fallback-callout,
-.provider-blocked-callout {
+.provider-blocked-callout,
+.hybrid-settings-note {
     font-size: var(--wa-font-size-s);
     width: 100%;
 }
