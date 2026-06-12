@@ -1,7 +1,8 @@
 <script setup>
-import { ref, watch, computed, nextTick, useId, inject, onBeforeUnmount } from 'vue'
+import { ref, watch, computed, nextTick, useId, inject, onMounted, onBeforeUnmount } from 'vue'
 import { apiFetch } from '../../utils/api'
 import { useSettingsStore } from '../../stores/settings'
+import { useCommandRegistry } from '../../composables/useCommandRegistry'
 import { usePanZoom } from '../../composables/usePanZoom'
 import MarkdownContent from '../ui/MarkdownContent.vue'
 import AppTooltip from '../ui/AppTooltip.vue'
@@ -64,6 +65,7 @@ const markdownPreviewButtonId = useId()
 const svgPreviewButtonId = useId()
 const viewInFilesButtonId = useId()
 const searchButtonId = useId()
+const editSwitchId = useId()
 
 // Injected from SessionView: function to switch to Files tab and reveal a file.
 // null when FilePane is not inside a SessionView (or no Files tab available).
@@ -365,6 +367,14 @@ const showHeader = computed(() => {
     return !!props.filePath && hasLoadedOnce.value
 })
 
+// Whether the Edit switch is currently available — mirrors the switch's own
+// v-if exactly: the header is visible, the file is writable, and we're not in
+// a read-only diff (commit diffs). Gates both the Alt+E shortcut and the
+// command-palette entry.
+const canEdit = computed(() =>
+    showHeader.value && (!props.diffMode || !props.diffReadOnly) && isWritable.value
+)
+
 // Whether a full-area placeholder should be shown (loading spinner, error, non-image binary).
 // These overlay on top of the editor area.
 const showOverlay = computed(() => {
@@ -506,9 +516,8 @@ watch(() => props.diffReadOnly, (readOnly) => {
 
 // --- Edit mode handlers ---
 
-function onEditToggle(event) {
-    const checked = event.target.checked
-    if (checked) {
+function setEditing(enabled) {
+    if (enabled) {
         isEditing.value = true
         showMarkdownPreview.value = false  // exit preview when entering edit mode
         showSvgPreview.value = false       // exit SVG preview when entering edit mode
@@ -519,6 +528,69 @@ function onEditToggle(event) {
         isEditing.value = false
     }
 }
+
+function onEditToggle(event) {
+    setEditing(event.target.checked)
+}
+
+// Toggle edit mode programmatically (Alt+E shortcut and command palette).
+// No-op when editing isn't available for the current file/pane.
+function toggleEdit() {
+    if (!canEdit.value) return
+    setEditing(!isEditing.value)
+}
+
+// --- Alt+E shortcut + command palette entry ---
+//
+// Both the global Alt+E handler (App.vue) and the palette command target the
+// *active* editable pane. Only one FilePane is ever `active` at a time (the
+// visible tab of the active session/project view), so guarding on
+// `props.active && canEdit` selects exactly the editor the user is looking at.
+
+const { registerCommand, unregisterCommand } = useCommandRegistry()
+
+// Unique per instance: every FilePane would otherwise share one id and an
+// unmounting/deactivating pane could unregister the active pane's command.
+const toggleEditCommandId = `display.toggle-file-edit.${useId()}`
+
+// Alt+E is dispatched as a window event by App.vue's global key handler. It
+// carries `detail.handled`, which we flip so App.vue knows to swallow the key
+// (and the browser's native Edit menu / macOS dead-key accent) only when we act.
+function onToggleEditShortcut(event) {
+    if (!props.active || !canEdit.value) return
+    if (event.detail) event.detail.handled = true
+    toggleEdit()
+}
+
+onMounted(() => {
+    window.addEventListener('twicc:toggle-file-edit', onToggleEditShortcut)
+})
+
+onBeforeUnmount(() => {
+    window.removeEventListener('twicc:toggle-file-edit', onToggleEditShortcut)
+    unregisterCommand(toggleEditCommandId)
+})
+
+// Expose the toggle in the command palette only while this is the active,
+// editable pane.
+watch(
+    () => props.active && canEdit.value,
+    (available) => {
+        if (available) {
+            registerCommand({
+                id: toggleEditCommandId,
+                label: 'Toggle File Edit Mode',
+                icon: 'pen-to-square',
+                category: 'display',
+                toggled: () => isEditing.value,
+                action: () => toggleEdit(),
+            })
+        } else {
+            unregisterCommand(toggleEditCommandId)
+        }
+    },
+    { immediate: true },
+)
 
 function toggleMarkdownPreview() {
     showMarkdownPreview.value = !showMarkdownPreview.value
@@ -703,10 +775,12 @@ function goToNextDiff() {
                 <!-- Edit controls: hidden in read-only diff mode (commit diffs) -->
                 <template v-if="(!diffMode || !diffReadOnly) && isWritable">
                     <wa-switch
+                        :id="editSwitchId"
                         :checked="isEditing"
                         size="small"
                         @change="onEditToggle"
                     >Edit</wa-switch>
+                    <AppTooltip :for="editSwitchId">Toggle edit mode (Alt+E)</AppTooltip>
                     <template v-if="isEditing">
                         <wa-button
                             size="small"

@@ -173,6 +173,13 @@ const TERMINAL_ROUTES = new Set([
     'project-terminal', 'projects-terminal',
 ])
 
+// Routes whose Files / Git panel hosts a CodeMirror editor with an Edit switch
+// (for the Alt+E toggle-edit shortcut).
+const FILE_EDITOR_ROUTES = new Set([
+    'session-files', 'projects-session-files', 'session-git', 'projects-session-git',
+    'project-files', 'projects-files', 'project-git', 'projects-git',
+])
+
 function handleGlobalKeydown(e) {
     const modKey = settingsStore.isMac ? e.metaKey : e.ctrlKey
 
@@ -345,6 +352,19 @@ function handleGlobalKeydown(e) {
                 const chatRouteName = route.name.startsWith('projects-session') ? 'projects-session' : 'session'
                 router.push({ name: chatRouteName, params: route.params }).then(() => focusChatPrimary())
             }
+        }
+    }
+    // Alt+E: toggle the Edit switch of the active Files/Git CodeMirror editor.
+    // Dispatched as a window event; the active FilePane flips detail.handled
+    // when it actually toggles (writable file open), so we only swallow the key
+    // — and the browser's native Edit menu — when something happened. e.code
+    // (physical key) because Alt+E is a dead key on macOS (´ accent).
+    if (e.altKey && !e.shiftKey && !e.ctrlKey && !e.metaKey && e.code === 'KeyE' && FILE_EDITOR_ROUTES.has(route.name)) {
+        const detail = { handled: false }
+        window.dispatchEvent(new CustomEvent('twicc:toggle-file-edit', { detail }))
+        if (detail.handled) {
+            e.preventDefault()
+            e.stopPropagation()
         }
     }
     // Triple-Escape: emergency stop of the current chat session's process.

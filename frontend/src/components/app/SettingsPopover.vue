@@ -284,6 +284,12 @@ const shortcutGroups = computed(() => {
             ]
         },
         {
+            label: 'Files / Git editor',
+            shortcuts: [
+                { keys: ['Alt', 'E'], description: 'Toggle edit mode for the current file' },
+            ]
+        },
+        {
             label: 'Terminal',
             shortcuts: [
                 { keys: ['Ctrl', 'C'], description: 'Copy selected text (instead of SIGINT)' },
