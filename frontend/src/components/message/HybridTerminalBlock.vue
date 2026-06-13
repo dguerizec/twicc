@@ -174,15 +174,16 @@ const terminalBlocked = computed(() => !!processState.value?.extra?.terminal_blo
             @expand="restore"
         >
             <template #trailing>
+                <!-- Only badges that require opening the terminal surface on the
+                     minimized bar. "Prefer answering in the UI" (answerable
+                     pending) is skipped here: its answer surface is the widget
+                     above the composer, so the bar badge would be noise. No
+                     @click — the whole collapsed bar expands the terminal. -->
                 <span
-                    v-if="hybridPending"
-                    class="hybrid-pending-badge"
-                    :class="{ 'terminal-only': !pendingIsAnswerable, clickable: pendingIsAnswerable }"
-                    :id="badgeId"
+                    v-if="hybridPending && !pendingIsAnswerable"
+                    class="hybrid-pending-badge terminal-only"
                     role="status"
-                    @click.stop="onBadgeClick"
                 >{{ badgeLabel }}</span>
-                <!-- No @click: the whole collapsed bar expands the terminal. -->
                 <span
                     v-else-if="terminalBlocked"
                     class="hybrid-pending-badge blocked"
