@@ -1381,8 +1381,8 @@ function handleCancel() {
 }
 
 /**
- * Reset the form to its initial state: clear textarea text and
- * restore dropdowns to their active (server-side) values.
+ * Reset the form to its initial state: clear textarea text and attachments,
+ * and restore dropdowns to their active (server-side) values.
  */
 async function handleReset() {
     // Clear text if any
@@ -1396,6 +1396,10 @@ async function handleReset() {
             await nextTick()
             adjustTextareaHeight()
         }
+    }
+    // Clear attachments if any
+    if (attachmentCount.value > 0) {
+        store.clearAttachmentsForSession(props.sessionId)
     }
     // Reset dropdowns to their reference values (active process or DB, including null)
     if (hasDropdownsChanged.value) {
@@ -1783,9 +1787,12 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
                     <wa-icon name="xmark" variant="classic"></wa-icon>
                     <span>Cancel</span>
                 </wa-button>
-                <!-- Reset button for existing sessions: resets text and/or dropdowns -->
+                <!-- Reset/Clear button for existing sessions: "Reset" when agent
+                     settings changed (with or without message/attachments), "Clear"
+                     when only the message (text and/or attachments) is set. Both clear
+                     text + attachments and/or restore dropdowns. -->
                 <wa-button
-                    v-else-if="messageText.trim() || hasDropdownsChanged"
+                    v-else-if="messageText.trim() || attachmentCount > 0 || hasDropdownsChanged"
                     variant="neutral"
                     appearance="outlined"
                     @click="handleReset"
@@ -1793,7 +1800,7 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
                     class="reset-button"
                 >
                     <wa-icon name="xmark" variant="classic"></wa-icon>
-                    <span>Reset</span>
+                    <span>{{ hasDropdownsChanged ? 'Reset' : 'Clear' }}</span>
                 </wa-button>
                 <!-- Send / Update button: dynamically labeled based on state.
                      Hidden while a pending request locks sending (replaced by the

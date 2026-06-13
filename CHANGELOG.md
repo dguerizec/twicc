@@ -10,6 +10,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Notification sounds** — more short, distinctive sounds to choose from.
 
+### Fixed
+
+- **Message input** — the clear/reset button now also removes attachments.
+
 ## [1.8.1] - 2026-06-13
 
 ### Added
