@@ -50,10 +50,19 @@ const props = defineProps({
     // When true, the composer shares the footer with a pending request: it stays
     // fully usable for *preparing* a message but sending is blocked — the Send /
     // Apply-settings button is hidden (replaced by a "Sending paused" indicator)
-    // and the keyboard send shortcut is disabled. It also gets a top separator and
-    // defaults to its collapsed bar when the request appears (independently
-    // re-expandable). The composer's collapse state stays fully its own otherwise.
+    // and the keyboard send shortcut is disabled. It also defaults to its collapsed
+    // bar when the request appears (independently re-expandable). The composer's
+    // collapse state stays fully its own otherwise.
     sendingLocked: {
+        type: Boolean,
+        default: false
+    },
+    // When true, another panel (a pending request and/or the hybrid terminal block)
+    // is rendered directly above the composer in the footer — regardless of that
+    // panel's own expanded/collapsed state. Drives the top separator hairline so the
+    // composer always reads as distinct from whatever sits above it. A superset of
+    // ``sendingLocked`` (which only tracks the pending request).
+    hasPanelAbove: {
         type: Boolean,
         default: false
     }
@@ -1587,7 +1596,7 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
 </script>
 
 <template>
-    <div class="message-input" ref="rootRef" :class="{ collapsed, 'message-input--locked': sendingLocked }">
+    <div class="message-input" ref="rootRef" :class="{ collapsed, 'message-input--has-panel-above': hasPanelAbove }">
         <!-- Collapsed bar: single line shown in place of the whole composer.
              Clickable anywhere to restore; the explicit button is the visual cue.
              Keeps the .message-input-collapsed-bar class so the collapsed-state
@@ -1937,16 +1946,17 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
     display: none;
 }
 
-/* When sharing the footer with a pending request, a hairline separates the
-   composer from the request above it (the request itself sits under its own
-   wa-divider below the conversation). Mirrors the collapsed-state border so the
-   separator is present whether the composer is a bar or expanded. */
-.message-input.message-input--locked {
+/* When another panel sits above the composer in the footer — a pending request
+   and/or the hybrid terminal block — a hairline separates the composer from it
+   (each of those panels itself sits under its own wa-divider). Mirrors the
+   collapsed-state border so the separator is present whether the composer is a
+   bar or expanded. */
+.message-input.message-input--has-panel-above {
     border-top: var(--divider-size) solid var(--wa-color-surface-border);
 }
 /* Breathing room below the separator when the composer is expanded under the
-   request. (Collapsed, the bar owns its own padding.) */
-.message-input.message-input--locked:not(.collapsed) {
+   panel. (Collapsed, the bar owns its own padding.) */
+.message-input.message-input--has-panel-above:not(.collapsed) {
     padding-top: var(--wa-space-s);
 }
 

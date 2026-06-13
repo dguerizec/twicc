@@ -1568,6 +1568,7 @@ defineExpose({
                     :session-id="sessionId"
                     :project-id="projectId"
                     :sending-locked="hasAnswerablePendingRequest"
+                    :has-panel-above="hasAnswerablePendingRequest || (isHybridSession && !parentSessionId)"
                     @needs-title="emit('needs-title')"
                     @expand="pendingFormRef?.minimize()"
                 />
