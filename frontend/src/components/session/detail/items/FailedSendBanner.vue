@@ -96,58 +96,58 @@ function discard() {
 </script>
 
 <template>
-    <div v-if="failedSend" class="failed-send-banner">
-        <div class="failed-send-reason">
-            <wa-icon name="triangle-exclamation"></wa-icon>
-            <span>{{ failedSend.message }}</span>
+    <!-- Reuse the familiar danger callout (same idiom as ApiError) for the
+         undeliverable-message notice + its Retry / Edit / Delete actions. -->
+    <wa-callout
+        v-if="failedSend"
+        variant="danger"
+        appearance="outlined"
+        size="small"
+        class="failed-send-callout"
+    >
+        <wa-icon slot="icon" name="triangle-exclamation"></wa-icon>
+        <div class="failed-send-content">
+            <div class="failed-send-message">{{ failedSend.message }}</div>
+            <div v-if="failedSend.mediasDropped" class="failed-send-note">
+                Its attachments were too large to preserve — only the text can be retried or edited.
+            </div>
+            <div class="failed-send-actions">
+                <wa-button size="small" variant="danger" appearance="outlined" @click="retry">
+                    <wa-icon slot="start" name="rotate-right"></wa-icon>
+                    Retry
+                </wa-button>
+                <wa-button v-if="insertTextAtCursor" size="small" variant="neutral" appearance="outlined" @click="edit">
+                    <wa-icon slot="start" name="pen"></wa-icon>
+                    Edit
+                </wa-button>
+                <wa-button size="small" variant="neutral" appearance="plain" @click="discard">
+                    Delete
+                </wa-button>
+            </div>
         </div>
-        <span v-if="failedSend.mediasDropped" class="failed-send-note">
-            Its attachments were too large to preserve — only the text can be retried or edited.
-        </span>
-        <div class="failed-send-actions">
-            <wa-button size="small" variant="danger" appearance="outlined" @click="retry">
-                <wa-icon slot="start" name="rotate-right"></wa-icon>
-                Retry
-            </wa-button>
-            <wa-button v-if="insertTextAtCursor" size="small" variant="neutral" appearance="outlined" @click="edit">
-                <wa-icon slot="start" name="pen"></wa-icon>
-                Edit
-            </wa-button>
-            <wa-button size="small" variant="neutral" appearance="plain" @click="discard">
-                Delete
-            </wa-button>
-        </div>
-    </div>
+    </wa-callout>
 </template>
 
 <style scoped>
-.failed-send-banner {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-    gap: var(--wa-space-xs);
+.failed-send-callout {
     margin-top: var(--wa-space-2xs);
 }
 
-.failed-send-reason {
+.failed-send-content {
     display: flex;
-    align-items: baseline;
-    gap: var(--wa-space-2xs);
-    color: var(--wa-color-danger-60);
-    font-size: var(--wa-font-size-s);
-    text-align: right;
+    flex-direction: column;
+    gap: var(--wa-space-xs);
 }
 
 .failed-send-note {
-    color: var(--wa-color-danger-60);
     font-size: var(--wa-font-size-s);
     font-weight: var(--wa-font-weight-semibold);
-    text-align: right;
 }
 
 .failed-send-actions {
     display: flex;
     align-items: center;
+    flex-wrap: wrap;
     gap: var(--wa-space-xs);
 }
 </style>
