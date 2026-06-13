@@ -42,22 +42,41 @@ const currentVersionEntries = computed(() =>
     selectedVersionData.value?.entries || []
 )
 
-const currentEntry = computed(() => {
+// The actual sequence of screens the user pages through. Each entry becomes an
+// 'entry' slide, interleaved with one or two virtual "support the project"
+// 'sponsor' slides:
+//   - an intermediate sponsor screen right after the summary block (the leading
+//     run of `summary` entries), shown only when at least one non-summary entry
+//     follows — so it never duplicates the final one (e.g. a summary-only
+//     release like 1.0.0, or a multi-version span with summaries only);
+//   - a final sponsor screen, always appended after the last entry.
+// With no summary, only the final sponsor screen is shown. The footer counter
+// and prev/next navigation are driven by this list's length. An empty changelog
+// produces no slides and keeps its dedicated empty state.
+const slides = computed(() => {
     const entries = currentVersionEntries.value
-    if (!entries.length) return null
-    return entries[currentEntryIdx.value] || null
+    if (!entries.length) return []
+    let summaryCount = 0
+    while (summaryCount < entries.length && entries[summaryCount].category === 'summary') summaryCount++
+    const hasMidSponsor = summaryCount > 0 && summaryCount < entries.length
+    const out = []
+    entries.forEach((entry, i) => {
+        out.push({ type: 'entry', entry })
+        if (hasMidSponsor && i === summaryCount - 1) out.push({ type: 'sponsor' })
+    })
+    out.push({ type: 'sponsor' })
+    return out
 })
 
-// A virtual "support the project" screen is appended after the last real entry,
-// so the counter reads N / (entries + 1). Only added when there is at least one
-// entry — a failed/empty changelog keeps its dedicated empty state.
-const totalScreens = computed(() =>
-    currentVersionEntries.value.length > 0 ? currentVersionEntries.value.length + 1 : 0
+const currentSlide = computed(() => slides.value[currentEntryIdx.value] || null)
+
+const currentEntry = computed(() =>
+    currentSlide.value?.type === 'entry' ? currentSlide.value.entry : null
 )
 
-const isSponsorScreen = computed(() =>
-    currentVersionEntries.value.length > 0 && currentEntryIdx.value === currentVersionEntries.value.length
-)
+const totalScreens = computed(() => slides.value.length)
+
+const isSponsorScreen = computed(() => currentSlide.value?.type === 'sponsor')
 
 const badgeVariant = computed(() => {
     const cat = currentEntry.value?.category
