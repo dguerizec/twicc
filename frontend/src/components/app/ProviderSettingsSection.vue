@@ -63,7 +63,7 @@ const supportedFields = computed(() => FIELD_ORDER.filter(field => helpers.value
 // quand le modèle ne les supporte pas).
 const fieldContext = computed(() => ({
     isStarting: false,
-    effectiveModel: helpers.value.getDefaultValue('selected_model'),
+    effectiveModel: helpers.value.resolveToAvailableModel(helpers.value.getDefaultValue('selected_model')),
 }))
 
 function valueOf(field) {
@@ -90,8 +90,16 @@ function parseValue(field, raw) {
     return raw
 }
 
+const modelFallbackNotice = computed(() =>
+    helpers.value?.getModelFallbackNotice(valueOf('selected_model')) ?? null,
+)
+
 function selectValueOf(field) {
-    const v = valueOf(field)
+    let v = valueOf(field)
+    // A stored default model may have become unavailable (disabled/retired);
+    // show its effective substitute so the select isn't left blank (a wa-select
+    // can't display a disabled option as selected). Mirrors the session popover.
+    if (field === 'selected_model') v = helpers.value.resolveToAvailableModel(v)
     return v === null || v === undefined ? '' : String(v)
 }
 
@@ -161,6 +169,13 @@ function onOrchestrationToggle(event) {
             <label class="setting-group-label">{{ FIELD_DEFAULT_LABELS[field] ?? field }}</label>
 
             <!-- Model field: groups (latest / older) separated by a divider. -->
+            <wa-callout
+                v-if="field === 'selected_model' && modelFallbackNotice"
+                variant="warning"
+                class="model-fallback-callout"
+            >
+                {{ modelFallbackNotice }}
+            </wa-callout>
             <wa-select
                 v-if="field === 'selected_model'"
                 :value.prop="selectValueOf(field)"
@@ -173,7 +188,12 @@ function onOrchestrationToggle(event) {
                         v-for="entry in group.entries"
                         :key="entry.value"
                         :value="entry.value"
-                    >{{ entry.label }}</wa-option>
+                        :label="entry.labelWithSuffix"
+                        :disabled="entry.disabled"
+                    >
+                        <span>{{ entry.labelWithSuffix }}</span>
+                        <span v-if="entry.description" class="option-description">{{ entry.description }}</span>
+                    </wa-option>
                 </template>
             </wa-select>
 
@@ -247,5 +267,11 @@ function onOrchestrationToggle(event) {
 
 .synced-icon {
     color: var(--wa-color-brand);
+}
+
+.model-fallback-callout {
+    display: block;
+    font-size: var(--wa-font-size-s);
+    margin-bottom: var(--wa-space-xs);
 }
 </style>

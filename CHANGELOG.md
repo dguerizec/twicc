@@ -8,11 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Summary
 
-- **Unreleased: Small polish** — more notification sounds, and a clear button that wipes attachments too.
+- **Unreleased: Exit Fable 5** — the Claude Fable 5 model is [no longer available](https://x.com/i/status/2065597531644743999).
 
 ### Added
 
 - **Notification sounds** — more short, distinctive sounds to choose from.
+
+### Changed
+
+- **Claude Fable 5** — no longer available ([Anthropic cut access at the US government's request](https://x.com/i/status/2065597531644743999)); anything using it falls back to Opus 4.8.
 
 ### Fixed
 
@@ -52,7 +56,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
-- **Claude Fable 5** — support for the new model family.
+- **Claude Fable 5** — support for the new frontier model from Anthropic (removed in 1.8.2, [reason](https://x.com/i/status/2065597531644743999)).
 - **Git worktrees** — full worktree support across the app.
   - ![Worktrees selector](frontend/public/whats-new/v1.8/worktrees-selector.webp)
   - ![Worktree creation](frontend/public/whats-new/v1.8/worktrees-creation.webp)

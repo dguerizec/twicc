@@ -276,6 +276,7 @@ const modelRow = computed(() => {
         fieldDisabled: helpers.isFieldDisabled('selected_model', ctx),
         helpText: helpers.getFieldHelpText('selected_model', ctx),
         groups: helpers.getModelSelectGroups(helpers.getModelRegistry()),
+        fallbackNotice: helpers.getModelFallbackNotice(props.session?.selected_model ?? defaults.value.selected_model),
     }
 })
 
@@ -505,6 +506,9 @@ onBeforeUnmount(() => {
             <!-- Model row (special: registry-driven groups instead of a flat choices list) -->
             <div v-if="modelRow" class="setting-row">
                 <label class="setting-label">{{ modelRow.label }}</label>
+                <wa-callout v-if="modelRow.fallbackNotice" variant="warning" class="model-fallback-callout">
+                    {{ modelRow.fallbackNotice }}
+                </wa-callout>
                 <wa-select
                     :value.prop="modelRow.value"
                     @change="onModelChange"
@@ -519,8 +523,11 @@ onBeforeUnmount(() => {
                             v-for="entry in group.entries"
                             :key="entry.value"
                             :value="entry.value"
+                            :label="entry.labelWithSuffix"
+                            :disabled="entry.disabled"
                         >
-                            {{ entry.label }}
+                            <span>{{ entry.labelWithSuffix }}</span>
+                            <span v-if="entry.description" class="option-description">{{ entry.description }}</span>
                         </wa-option>
                     </template>
                 </wa-select>
@@ -590,9 +597,14 @@ onBeforeUnmount(() => {
 .settings-info-callout,
 .startup-warning-callout,
 .idle-warning-callout,
+.model-fallback-callout,
 .provider-blocked-callout {
     font-size: var(--wa-font-size-s);
     width: 100%;
+}
+
+.model-fallback-callout {
+    margin-bottom: 0.4rem;
 }
 
 .provider-blocked-callout {

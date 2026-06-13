@@ -76,8 +76,8 @@ async def _check_and_retire() -> None:
             continue
         selected = f"{mv.model}-{mv.version}"
         if helpers.is_model_retired(selected):
-            target = helpers.get_upgrade_target(selected)
-            if target:
+            target = helpers.resolve_to_available_model(selected)
+            if target != selected:
                 retired_models[selected] = target
 
     if not retired_models:

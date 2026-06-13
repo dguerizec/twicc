@@ -17,6 +17,7 @@ Concrete providers live in ``providers/<name>/helpers.py`` and subclass
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterable
 from datetime import date, datetime
 from decimal import Decimal
@@ -25,6 +26,8 @@ from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple
 
 from twicc.core.enums import Provider
 from twicc.pricing import FamilyPrices, TokenUsage
+
+logger = logging.getLogger(__name__)
 
 
 # Shared long-edge cap (in pixels) for outgoing images. Matches
@@ -183,6 +186,17 @@ class ModelVersion(NamedTuple):
     carrying capability flags or other metadata that doesn't generalise
     cross-provider — for Claude Code this is
     :class:`ClaudeCodeModelExtra`.
+
+    ``weight`` is a cross-family strength ranking *within a provider*
+    (higher = stronger), unique per provider. It drives two things: the
+    order models appear in every model picker (sorted descending), and
+    the fallback chosen when a model becomes unavailable — see
+    :meth:`BaseProviderHelpers.resolve_to_available_model`. ``enabled``
+    is ``False`` to take a model out of service without removing its
+    entry; ``disable_reason`` is the human-readable explanation shown
+    (greyed out) in the model pickers. A disabled model — like a retired
+    one — is *unavailable* and resolves to the nearest-by-weight
+    available model.
     """
     provider: Provider
     model: str
@@ -191,6 +205,31 @@ class ModelVersion(NamedTuple):
     retirement_date: date | None
     latest: bool
     provider_extra: Any
+    weight: int
+    enabled: bool = True
+    disable_reason: str | None = None
+
+
+def assert_unique_weights(model_versions: list[ModelVersion]) -> None:
+    """Fail loudly at import time if two models share a ``weight``.
+
+    Weights drive both the model-picker ordering and the fallback
+    resolution (:meth:`BaseProviderHelpers.resolve_to_available_model`),
+    where an exact distance tie is broken by the higher weight — so two
+    equal weights would make ordering and tie-breaking ambiguous. Each
+    provider calls this once, right after declaring its
+    ``MODEL_VERSIONS``, so a duplicate is caught the moment the module
+    is imported (at startup) rather than silently mis-ordering pickers.
+    """
+    seen: dict[tuple[Provider, int], str] = {}
+    for mv in model_versions:
+        key = (mv.provider, mv.weight)
+        if key in seen:
+            raise ValueError(
+                f"Duplicate model weight {mv.weight} for provider "
+                f"{mv.provider.value}: {seen[key]} and {mv.full_name}"
+            )
+        seen[key] = mv.full_name
 
 
 class BaseProviderHelpers:
@@ -895,34 +934,57 @@ class BaseProviderHelpers:
             return False
         return date.today() > mv.retirement_date
 
-    def get_upgrade_target(self, identifier: str) -> str | None:
-        """Return the identifier of the next-up version in the same model family.
+    def _model_available(self, mv: ModelVersion) -> bool:
+        """Return ``True`` when ``mv`` is usable: enabled and not retired."""
+        if not mv.enabled:
+            return False
+        if mv.retirement_date is not None and date.today() > mv.retirement_date:
+            return False
+        return True
 
-        Looks within :attr:`MODEL_VERSIONS` for entries with the same
-        ``(provider, model)`` and a strictly higher ``version``, picking
-        the closest higher one. Returns the bare alias (``mv.model``)
-        when the upgrade target is the latest in its family, otherwise
-        the versioned alias (``"{model}-{version}"``). Returns ``None``
-        when no upgrade is possible. Provider helpers may override this
-        if their identifier scheme is not the alias-based one assumed
-        here.
+    def resolve_to_available_model(self, identifier: str) -> str:
+        """Resolve ``identifier`` to the closest available model by weight.
+
+        A model is *available* when it is enabled and not past its
+        retirement date. If ``identifier`` is already available — or is
+        unknown to this provider — it is returned unchanged. Otherwise
+        we pick the available model whose ``weight`` is closest to the
+        unavailable model's weight: the nearest one above and the
+        nearest one below are compared by absolute weight distance, the
+        closer wins, and an exact tie is broken in favour of the
+        higher-weight (stronger) model.
+
+        This single rule subsumes both retirement (a model retires on a
+        date) and explicit disabling (``enabled=False``): both make a
+        model unavailable, and both fall through to the same
+        nearest-by-weight substitution, which may cross model families.
         """
+        if not identifier:
+            return identifier
         mv = self.find_model(identifier)
-        if mv is None:
-            return None
-
-        def parse(version: str) -> list[int]:
-            return [int(p) for p in version.split(".")]
-
-        family = sorted(
-            (v for v in self.MODEL_VERSIONS if v.provider == mv.provider and v.model == mv.model),
-            key=lambda v: parse(v.version),
-        )
-        current = parse(mv.version)
-        for candidate in family:
-            if parse(candidate.version) > current:
-                return candidate.model if candidate.latest else f"{candidate.model}-{candidate.version}"
-        return None
+        if mv is None or self._model_available(mv):
+            return identifier
+        above: ModelVersion | None = None
+        below: ModelVersion | None = None
+        for cand in self.MODEL_VERSIONS:
+            if cand.provider != mv.provider or not self._model_available(cand):
+                continue
+            if cand.weight > mv.weight:
+                if above is None or cand.weight < above.weight:
+                    above = cand
+            elif cand.weight < mv.weight:
+                if below is None or cand.weight > below.weight:
+                    below = cand
+        if above is None and below is None:
+            logger.warning("No available fallback for unavailable model '%s'", identifier)
+            return identifier
+        if above is None:
+            pick = below
+        elif below is None:
+            pick = above
+        else:
+            pick = above if (above.weight - mv.weight) <= (mv.weight - below.weight) else below
+        return self.selected_model_value(pick)
 
     def enforce_synced_settings_consistency(self, synced: dict, changes: dict) -> None:
         """Apply this provider's rules to the merged synced settings dict.
@@ -955,18 +1017,19 @@ class BaseProviderHelpers:
         invoke this once on a settings bundle to make every field
         mutually valid given the chosen model. The base implementation
         only enforces the cross-provider rule that's always meaningful:
-        if ``selected_model`` is retired, substitute it with its
-        :meth:`get_upgrade_target` successor. Providers whose models
-        carry capability flags override this to add their own rules
-        (typically: call ``super()`` for the auto-upgrade, then demote
+        if ``selected_model`` is unavailable (disabled or retired),
+        substitute it with the nearest-by-weight available model via
+        :meth:`resolve_to_available_model`. Providers whose models carry
+        capability flags override this to add their own rules
+        (typically: call ``super()`` for the substitution, then demote
         ``context_max`` / ``effort`` against the resolved model's
         capabilities).
         """
         selected = settings.selected_model
-        if selected and self.is_model_retired(selected):
-            target = self.get_upgrade_target(selected)
-            if target:
-                settings = settings._replace(selected_model=target)
+        if selected:
+            resolved = self.resolve_to_available_model(selected)
+            if resolved != selected:
+                settings = settings._replace(selected_model=resolved)
         return settings
 
     def selected_model_value(self, mv: ModelVersion) -> str:
@@ -999,8 +1062,9 @@ class BaseProviderHelpers:
         """Serialize :attr:`MODEL_VERSIONS` for the bootstrap payload.
 
         Each entry is the ``_asdict()`` of the :class:`ModelVersion``
-        with ``retirement_date`` rendered as an ISO date string.
-        ``provider_extra`` is replaced by the dict produced by
+        (so ``weight`` / ``enabled`` / ``disable_reason`` ride along
+        automatically) with ``retirement_date`` rendered as an ISO date
+        string. ``provider_extra`` is replaced by the dict produced by
         :meth:`serialize_model_extra` so each provider controls the
         wire shape of its own extras. A ``selected_model`` field — the
         round-trip identifier produced by :meth:`selected_model_value`
@@ -1009,12 +1073,12 @@ class BaseProviderHelpers:
         each entry so consumers can treat the entry as self-describing
         even when it travels outside the per-provider nesting.
 
-        Entries are sorted with latest versions first (by family name),
-        then non-latest by version descending then family name — the
-        natural order for a model-picker dropdown.
+        Entries are sorted by ``weight`` descending — strongest first —
+        the natural order for a model-picker dropdown. The front may
+        re-group (e.g. latest vs. older) but always preserves this
+        within-group order.
         """
-        latest: list[dict] = []
-        non_latest: list[dict] = []
+        entries: list[dict] = []
         for mv in self.MODEL_VERSIONS:
             entry = mv._asdict()
             entry["provider"] = mv.provider.value
@@ -1023,10 +1087,9 @@ class BaseProviderHelpers:
             )
             entry["provider_extra"] = self.serialize_model_extra(mv)
             entry["selected_model"] = self.selected_model_value(mv)
-            (latest if mv.latest else non_latest).append(entry)
-        latest.sort(key=lambda e: e["model"])
-        non_latest.sort(key=lambda e: ([-int(p) for p in e["version"].split(".")], e["model"]))
-        return latest + non_latest
+            entries.append(entry)
+        entries.sort(key=lambda e: -e["weight"])
+        return entries
 
 
 class ProviderHelpersRegistry:

@@ -107,7 +107,18 @@ function fieldChoices(provider, field) {
     return helpersFor(provider)?.getFieldChoices(field) ?? []
 }
 function fieldValue(provider, field) {
-    return localSettings.value[provider]?.[field] ?? null
+    const v = localSettings.value[provider]?.[field] ?? null
+    // A stored default model may have become unavailable (disabled/retired);
+    // show its effective substitute so the select isn't left blank (a wa-select
+    // can't display a disabled option as selected). Mirrors the session popover.
+    if (field === 'selected_model' && v) return helpersFor(provider)?.resolveToAvailableModel(v) ?? v
+    return v
+}
+// Warning shown above the model select when this project's explicitly-set
+// default model has become unavailable and resolves to a different model.
+function modelFallbackNotice(provider) {
+    const raw = localSettings.value[provider]?.selected_model ?? null
+    return helpersFor(provider)?.getModelFallbackNotice(raw) ?? null
 }
 function isEnabled(provider) {
     return enabledProviders.value.has(provider)
@@ -340,6 +351,9 @@ defineExpose({ getChangedFields, reset: initLocal })
                     <!-- Model row: registry-driven groups -->
                     <div v-if="field === 'selected_model'" class="ad-field">
                         <label class="ad-field-label">{{ fieldLabel(p.value, 'selected_model') }}</label>
+                        <wa-callout v-if="modelFallbackNotice(p.value)" variant="warning" class="model-fallback-callout">
+                            {{ modelFallbackNotice(p.value) }}
+                        </wa-callout>
                         <wa-select
                             size="small"
                             :value.prop="toSentinel(fieldValue(p.value, 'selected_model'))"
@@ -353,8 +367,11 @@ defineExpose({ getChangedFields, reset: initLocal })
                                     v-for="entry in group.entries"
                                     :key="entry.value"
                                     :value="entry.value"
+                                    :label="entry.labelWithSuffix"
+                                    :disabled="entry.disabled"
                                 >
-                                    {{ entry.label }}
+                                    <span>{{ entry.labelWithSuffix }}</span>
+                                    <span v-if="entry.description" class="ad-option-description">{{ entry.description }}</span>
                                 </wa-option>
                             </template>
                         </wa-select>
@@ -465,5 +482,11 @@ defineExpose({ getChangedFields, reset: initLocal })
     display: block;
     font-size: var(--wa-font-size-s);
     color: var(--wa-color-text-quiet);
+}
+
+.model-fallback-callout {
+    display: block;
+    font-size: var(--wa-font-size-s);
+    margin-bottom: var(--wa-space-xs);
 }
 </style>

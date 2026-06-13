@@ -519,12 +519,13 @@ class ClaudeCodeHelpers(BaseProviderHelpers):
             synced["claudeCodeDefaultPermissionMode"] = adjusted.permission_mode
 
     def enforce_agent_settings_consistency(self, settings: AgentSettings) -> AgentSettings:
-        """Auto-upgrade retired model, then normalise capability rules.
+        """Substitute an unavailable model, then normalise capability rules.
 
         Pipeline:
         1. Delegates to :meth:`BaseProviderHelpers.enforce_agent_settings_consistency`
-           to substitute a retired ``selected_model`` with its successor.
-        2. Caps ``context_max`` to 200K when the (post-upgrade) model
+           to substitute an unavailable (disabled or retired)
+           ``selected_model`` with the nearest-by-weight available model.
+        2. Caps ``context_max`` to 200K when the (post-substitution) model
            doesn't support 1M context.
         3. Demotes ``effort == "max"`` to ``"xhigh"`` (or ``"high"`` if
            xhigh is also unsupported), then ``effort == "xhigh"`` to

@@ -74,6 +74,7 @@ function buildProviderDefaultsCommands(settings) {
                     groups.forEach((group, idx) => {
                         const groupKey = `model_group_${idx}`
                         for (const entry of group.entries ?? []) {
+                            if (entry.disabled) continue
                             items.push({
                                 id: entry.value,
                                 group: groupKey,

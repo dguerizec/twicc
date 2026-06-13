@@ -8,7 +8,7 @@ the motivation (Django-free re-use by lightweight callers like
 from __future__ import annotations
 
 from twicc.core.enums import Provider
-from twicc.providers.helpers import AgentSettingCategory, ModelVersion
+from twicc.providers.helpers import AgentSettingCategory, ModelVersion, assert_unique_weights
 
 
 SYNCED_SETTINGS_DEFAULTS: dict = {
@@ -118,6 +118,7 @@ MODEL_VERSIONS: list[ModelVersion] = [
         full_name="gpt-5.5",
         retirement_date=None,
         latest=True,
+        weight=100,
         provider_extra=None,
     ),
     ModelVersion(
@@ -127,6 +128,7 @@ MODEL_VERSIONS: list[ModelVersion] = [
         full_name="gpt-5.4",
         retirement_date=None,
         latest=False,
+        weight=90,
         provider_extra=None,
     ),
     ModelVersion(
@@ -136,6 +138,9 @@ MODEL_VERSIONS: list[ModelVersion] = [
         full_name="gpt-5.4-mini",
         retirement_date=None,
         latest=True,
+        weight=50,
         provider_extra=None,
     ),
 ]
+
+assert_unique_weights(MODEL_VERSIONS)

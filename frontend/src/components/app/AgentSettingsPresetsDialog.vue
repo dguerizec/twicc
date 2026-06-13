@@ -75,6 +75,10 @@ const modelGroups = computed(() => {
     return helpers.getModelSelectGroups(helpers.getModelRegistry())
 })
 
+const modelFallbackNotice = computed(() =>
+    providerHelpers.value?.getModelFallbackNotice(formData.value.selected_model) ?? null,
+)
+
 function emptyFormData() {
     return {
         name: '',
@@ -282,9 +286,12 @@ function handleSave() {
                 <!-- Model row uses registry-driven groups instead of a flat choices list -->
                 <div v-if="field === 'selected_model'" class="form-group">
                     <label class="form-label">{{ providerHelpers.getFieldLabel('selected_model') }}</label>
+                    <wa-callout v-if="modelFallbackNotice" variant="warning" class="model-fallback-callout">
+                        {{ modelFallbackNotice }}
+                    </wa-callout>
                     <wa-select
                         size="small"
-                        :value.prop="toSentinel(formData.selected_model)"
+                        :value.prop="toSentinel(providerHelpers.resolveToAvailableModel(formData.selected_model))"
                         @change="formData.selected_model = fromSentinel('selected_model', $event.target.value)"
                     >
                         <wa-option :value="DEFAULT_SENTINEL">Default</wa-option>
@@ -295,8 +302,11 @@ function handleSave() {
                                 v-for="entry in group.entries"
                                 :key="entry.value"
                                 :value="entry.value"
+                                :label="entry.labelWithSuffix"
+                                :disabled="entry.disabled"
                             >
-                                {{ entry.label }}
+                                <span>{{ entry.labelWithSuffix }}</span>
+                                <span v-if="entry.description" class="option-description">{{ entry.description }}</span>
                             </wa-option>
                         </template>
                     </wa-select>
@@ -488,5 +498,10 @@ function handleSave() {
     display: block;
     font-size: var(--wa-font-size-s);
     color: var(--wa-color-text-quiet);
+}
+
+.model-fallback-callout {
+    font-size: var(--wa-font-size-s);
+    margin-bottom: var(--wa-space-xs);
 }
 </style>

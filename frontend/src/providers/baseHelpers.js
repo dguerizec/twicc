@@ -387,11 +387,59 @@ export class BaseProviderHelpers {
      * ``claudeInChrome``, ``permissionMode`` (any subset). Returns a new
      * object with the same shape — call sites compare to detect what changed.
      *
-     * Default: no-op (returns the same object). Providers override to add
-     * model-driven rules.
+     * Default: substitute an unavailable (disabled or retired)
+     * ``selectedModel`` with the nearest-by-weight available model (see
+     * ``resolveToAvailableModel``). Providers with capability flags override
+     * to chain ``super`` then demote other fields against the resolved model.
      */
     enforceAgentSettingsConsistency(settings) {
-        return settings
+        const result = { ...settings }
+        if ('selectedModel' in result) {
+            result.selectedModel = this.resolveToAvailableModel(result.selectedModel)
+        }
+        return result
+    }
+
+    /**
+     * Whether a model registry entry is usable: enabled and not past its
+     * retirement date. Mirrors the backend ``_model_available``.
+     */
+    isModelAvailable(entry) {
+        if (!entry) return false
+        if (entry.enabled === false) return false
+        if (entry.retirement_date && new Date(entry.retirement_date + 'T00:00:00') < new Date()) return false
+        return true
+    }
+
+    /**
+     * Resolve ``selectedModel`` to the closest available model by weight,
+     * mirroring the backend ``resolve_to_available_model``. An available (or
+     * unknown) model is returned unchanged. Otherwise the nearest available
+     * model above and below by ``weight`` are compared by absolute distance,
+     * the closer wins, and an exact tie favours the higher-weight model. This
+     * single rule covers both disabled and retired models.
+     */
+    resolveToAvailableModel(selectedModel) {
+        if (!selectedModel) return selectedModel
+        const registry = this.getModelRegistry?.() ?? []
+        const mv = registry.find(e => e.selected_model === selectedModel)
+        if (!mv || this.isModelAvailable(mv)) return selectedModel
+        let above = null
+        let below = null
+        for (const cand of registry) {
+            if (cand.provider !== mv.provider || !this.isModelAvailable(cand)) continue
+            if (cand.weight > mv.weight) {
+                if (!above || cand.weight < above.weight) above = cand
+            } else if (cand.weight < mv.weight) {
+                if (!below || cand.weight > below.weight) below = cand
+            }
+        }
+        if (!above && !below) return selectedModel
+        let pick
+        if (!above) pick = below
+        else if (!below) pick = above
+        else pick = (above.weight - mv.weight) <= (mv.weight - below.weight) ? above : below
+        return pick.selected_model
     }
 
     // ─── Per-field choice catalogue ──────────────────────────────────────
@@ -488,6 +536,35 @@ export class BaseProviderHelpers {
 
     getModelLabel(selectedModel) {
         return selectedModel ?? ''
+    }
+
+    /**
+     * Version-qualified model label — always includes the version, even for a
+     * latest bare alias whose ``getModelLabel`` omits it (e.g. "opus" → "Opus
+     * 4.8"). Used where the user needs the exact resolved model, notably the
+     * unavailable-model fallback callout.
+     */
+    getModelLabelWithVersion(selectedModel) {
+        if (!selectedModel) return ''
+        const entry = (this.getModelRegistry?.() ?? []).find(e => e.selected_model === selectedModel)
+        const base = this.getModelLabel(selectedModel)
+        return entry?.latest ? `${base} ${entry.version}` : base
+    }
+
+    /**
+     * Warning text shown above a model select when ``storedModel`` is no longer
+     * available (disabled or retired) and resolves to a different model. Names
+     * both the unavailable model and the effective fallback, each with its
+     * version, so the user knows exactly which model went away and what will
+     * run instead. Returns null when the model is available, empty, or unknown
+     * (nothing to warn about).
+     */
+    getModelFallbackNotice(storedModel) {
+        if (!storedModel) return null
+        const resolved = this.resolveToAvailableModel(storedModel)
+        if (resolved === storedModel) return null
+        return `${this.getModelLabelWithVersion(storedModel)} is no longer available `
+            + `— falling back to ${this.getModelLabelWithVersion(resolved)}.`
     }
 
     // ─── Runtime context-max resolution ──────────────────────────────────
@@ -730,11 +807,28 @@ export class BaseProviderHelpers {
      */
     getModelSelectGroups(registry) {
         return [{
-            entries: (registry ?? []).map(e => ({
-                value: e.selected_model,
-                label: this.getModelLabel(e.selected_model),
-            })),
+            entries: (registry ?? []).map(e => this.buildModelOption(e, this.getModelLabel(e.selected_model))),
         }]
+    }
+
+    /**
+     * Shape one model registry entry into a wa-option descriptor for the
+     * model picker. ``baseLabel`` is the provider-formatted label (the
+     * caller adds any "(latest: vX)" / "(until DATE)" decoration). A disabled
+     * model stays in the list, greyed out: ``disabled`` flags the option,
+     * ``labelWithSuffix`` appends "(not available)", and ``description``
+     * carries the reason shown under the option (mirrors the per-option
+     * description used by the other agent-setting selects).
+     */
+    buildModelOption(entry, baseLabel) {
+        const disabled = entry.enabled === false
+        return {
+            value: entry.selected_model,
+            label: baseLabel,
+            labelWithSuffix: disabled ? `${baseLabel} (not available)` : baseLabel,
+            disabled,
+            description: disabled ? (entry.disable_reason || null) : null,
+        }
     }
 
     // ─── Attachment capabilities ─────────────────────────────────────────

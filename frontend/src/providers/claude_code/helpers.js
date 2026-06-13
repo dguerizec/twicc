@@ -437,8 +437,7 @@ export class ClaudeCodeHelpers extends BaseProviderHelpers {
         const result = { ...settings }
 
         if ('selectedModel' in result) {
-            const upgrade = this.getRetiredModelUpgrade(result.selectedModel)
-            if (upgrade) result.selectedModel = upgrade
+            result.selectedModel = this.resolveToAvailableModel(result.selectedModel)
         }
         const model = result.selectedModel
 
@@ -496,18 +495,14 @@ export class ClaudeCodeHelpers extends BaseProviderHelpers {
         return this.isContextMaxAutoPromoted(session, baseValue, model) ? CONTEXT_MAX.EXTENDED : baseValue
     }
 
-    /**
-     * If ``selectedModel`` is retired (past retirement date and not the
-     * latest), return the next-higher version in the same family. Otherwise
-     * ``null``. Used at render/send time to correct stale session settings.
-     */
     // ─── Popover/summary rendering hooks ────────────────────────────────
 
     getDefaultValueLabel(field, value) {
         if (field === 'selected_model') {
-            const entry = this.getModelRegistry().find(e => e.selected_model === value)
-            if (entry?.latest) return `${this.getModelLabel(value)} (latest: ${entry.version})`
-            return this.getModelLabel(value)
+            const resolved = this.resolveToAvailableModel(value)
+            const entry = this.getModelRegistry().find(e => e.selected_model === resolved)
+            if (entry?.latest) return `${this.getModelLabel(resolved)} (latest: ${entry.version})`
+            return this.getModelLabel(resolved)
         }
         return super.getDefaultValueLabel(field, value)
     }
@@ -605,16 +600,14 @@ export class ClaudeCodeHelpers extends BaseProviderHelpers {
         const list = registry ?? []
         return [
             {
-                entries: list.filter(e => e.latest).map(e => ({
-                    value: e.selected_model,
-                    label: `${this.getModelLabel(e.selected_model)} (latest: ${e.version})`,
-                })),
+                entries: list.filter(e => e.latest).map(e => this.buildModelOption(
+                    e, `${this.getModelLabel(e.selected_model)} (latest: ${e.version})`,
+                )),
             },
             {
-                entries: list.filter(e => !e.latest).map(e => ({
-                    value: e.selected_model,
-                    label: `${this.getModelLabel(e.selected_model)} (until ${formatRetirementDate(e.retirement_date)})`,
-                })),
+                entries: list.filter(e => !e.latest).map(e => this.buildModelOption(
+                    e, `${this.getModelLabel(e.selected_model)} (until ${formatRetirementDate(e.retirement_date)})`,
+                )),
             },
         ]
     }
@@ -660,36 +653,13 @@ export class ClaudeCodeHelpers extends BaseProviderHelpers {
      *     tighter of {model cap, 2000} in that case.
      */
     getEffectiveImageDimension({ model, numImages } = {}) {
-        const upgraded = this.getRetiredModelUpgrade(model) ?? model
-        const highres = this.modelSupportsHighresImages(upgraded)
+        const resolved = this.resolveToAvailableModel(model)
+        const highres = this.modelSupportsHighresImages(resolved)
         let cap = highres ? null : 1568
         if ((numImages ?? 0) > 20) {
             cap = cap === null ? 2000 : Math.min(cap, 2000)
         }
         return cap
-    }
-
-    getRetiredModelUpgrade(selectedModel) {
-        if (!selectedModel) return null
-        const registry = useClaudeCodeStore().modelRegistry
-        const entry = registry.find(e => e.selected_model === selectedModel)
-        if (!entry || entry.latest || !entry.retirement_date) return null
-        if (new Date(entry.retirement_date + 'T00:00:00') >= new Date()) return null
-        const family = registry
-            .filter(e => e.model === entry.model)
-            .sort((a, b) => {
-                const av = a.version.split('.').map(Number)
-                const bv = b.version.split('.').map(Number)
-                return av[0] - bv[0] || (av[1] ?? 0) - (bv[1] ?? 0)
-            })
-        const currentParts = entry.version.split('.').map(Number)
-        for (const candidate of family) {
-            const cp = candidate.version.split('.').map(Number)
-            if (cp[0] > currentParts[0] || (cp[0] === currentParts[0] && (cp[1] ?? 0) > (currentParts[1] ?? 0))) {
-                return candidate.selected_model
-            }
-        }
-        return null
     }
 }
 

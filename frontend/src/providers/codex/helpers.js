@@ -343,9 +343,10 @@ export class CodexHelpers extends BaseProviderHelpers {
 
     getDefaultValueLabel(field, value) {
         if (field === 'selected_model') {
-            const entry = this.getModelRegistry().find(e => e.selected_model === value)
-            if (entry?.latest) return `${this.getModelLabel(value)} (latest: ${entry.version})`
-            return this.getModelLabel(value)
+            const resolved = this.resolveToAvailableModel(value)
+            const entry = this.getModelRegistry().find(e => e.selected_model === resolved)
+            if (entry?.latest) return `${this.getModelLabel(resolved)} (latest: ${entry.version})`
+            return this.getModelLabel(resolved)
         }
         return super.getDefaultValueLabel(field, value)
     }
@@ -354,16 +355,14 @@ export class CodexHelpers extends BaseProviderHelpers {
         const list = registry ?? []
         return [
             {
-                entries: list.filter(e => e.latest).map(e => ({
-                    value: e.selected_model,
-                    label: `${this.getModelLabel(e.selected_model)} (latest: ${e.version})`,
-                })),
+                entries: list.filter(e => e.latest).map(e => this.buildModelOption(
+                    e, `${this.getModelLabel(e.selected_model)} (latest: ${e.version})`,
+                )),
             },
             {
-                entries: list.filter(e => !e.latest).map(e => ({
-                    value: e.selected_model,
-                    label: this.getModelLabel(e.selected_model),
-                })),
+                entries: list.filter(e => !e.latest).map(e => this.buildModelOption(
+                    e, this.getModelLabel(e.selected_model),
+                )),
             },
         ]
     }

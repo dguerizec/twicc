@@ -18,7 +18,7 @@ from datetime import date
 from typing import NamedTuple
 
 from twicc.core.enums import Provider
-from twicc.providers.helpers import AgentSettingCategory, ModelVersion
+from twicc.providers.helpers import AgentSettingCategory, ModelVersion, assert_unique_weights
 
 
 class ClaudeCodeModelExtra(NamedTuple):
@@ -196,6 +196,9 @@ MODEL_VERSIONS: list[ModelVersion] = [
         model="fable", version="5", full_name="claude-fable-5",
         retirement_date=None,
         latest=True,
+        weight=200,
+        enabled=False,
+        disable_reason="Anthropic has cut off access to this model following a request from the US government.",
         provider_extra=ClaudeCodeModelExtra(
             supports_1m=True, supports_effort_xhigh=True, supports_effort_max=True,
             supports_fast=False, supports_permission_auto=True,
@@ -207,6 +210,7 @@ MODEL_VERSIONS: list[ModelVersion] = [
         model="opus", version="4.8", full_name="claude-opus-4-8",
         retirement_date=None,
         latest=True,
+        weight=90,
         provider_extra=ClaudeCodeModelExtra(
             supports_1m=True, supports_effort_xhigh=True, supports_effort_max=True,
             supports_fast=True, supports_permission_auto=True,
@@ -218,6 +222,7 @@ MODEL_VERSIONS: list[ModelVersion] = [
         model="opus", version="4.7", full_name="claude-opus-4-7",
         retirement_date=date(2027, 4, 16),
         latest=False,
+        weight=80,
         provider_extra=ClaudeCodeModelExtra(
             supports_1m=True, supports_effort_xhigh=True, supports_effort_max=True,
             supports_fast=True, supports_permission_auto=True,
@@ -229,6 +234,7 @@ MODEL_VERSIONS: list[ModelVersion] = [
         model="opus", version="4.6", full_name="claude-opus-4-6",
         retirement_date=date(2027, 2, 5),
         latest=False,
+        weight=70,
         provider_extra=ClaudeCodeModelExtra(
             supports_1m=True, supports_effort_xhigh=False, supports_effort_max=True,
             supports_fast=True, supports_permission_auto=True,
@@ -240,6 +246,7 @@ MODEL_VERSIONS: list[ModelVersion] = [
         model="opus", version="4.5", full_name="claude-opus-4-5-20251101",
         retirement_date=date(2026, 11, 24),
         latest=False,
+        weight=60,
         provider_extra=ClaudeCodeModelExtra(
             supports_1m=False, supports_effort_xhigh=False, supports_effort_max=False,
             supports_fast=False, supports_permission_auto=False,
@@ -251,6 +258,7 @@ MODEL_VERSIONS: list[ModelVersion] = [
         model="sonnet", version="4.6", full_name="claude-sonnet-4-6",
         retirement_date=None,  # to set when sonnet 4.7 is released (retire 2027-02-17)
         latest=True,
+        weight=20,
         provider_extra=ClaudeCodeModelExtra(
             supports_1m=True, supports_effort_xhigh=False, supports_effort_max=True,
             supports_fast=False, supports_permission_auto=True,
@@ -262,6 +270,7 @@ MODEL_VERSIONS: list[ModelVersion] = [
         model="sonnet", version="4.5", full_name="claude-sonnet-4-5-20250929",
         retirement_date=date(2026, 9, 29),
         latest=False,
+        weight=10,
         provider_extra=ClaudeCodeModelExtra(
             supports_1m=False, supports_effort_xhigh=False, supports_effort_max=False,
             supports_fast=False, supports_permission_auto=False,
@@ -269,3 +278,5 @@ MODEL_VERSIONS: list[ModelVersion] = [
         ),
     ),
 ]
+
+assert_unique_weights(MODEL_VERSIONS)
