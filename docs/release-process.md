@@ -8,7 +8,11 @@ When the user asks to make a new release, follow these steps in order:
    - `pyproject.toml` → `[project]` → `version`
    - `uv.lock` → `[[package]]` → `version` (for the `twicc` package entry)
 
-3. **Update CHANGELOG.md:** Set the version number on the `[Unreleased]` section (if not already done) and add the release date (`YYYY-MM-DD`).
+3. **Update CHANGELOG.md:**
+   - Set the version number on the `[Unreleased]` section (if not already done) and add the release date (`YYYY-MM-DD`).
+   - **Ensure the release has a `### Summary` section** as its first category (before `### Added` / `### Changed` / `### Fixed`) — a deliberate deviation from Keep a Changelog. It holds a single bold-led bullet in the form `- **vX.Y.Z: Catchy title** — one-line recap of the highlights.`
+   - **Check the version inside the summary's bold lead matches the release** and fix it otherwise — in particular, a summary drafted under `[Unreleased]` reads `**Unreleased: …**` and must become `**vX.Y.Z: …**`.
+   - **If no summary has been written, STOP and ask the user before continuing.** Do not invent and commit one silently: propose a draft — a short, punchy bold title plus a one-line description — modelled on the existing summaries (read a few first to match their title style and the terseness of their descriptions), then wait for the user to confirm or amend it.
 
 4. **Build:** Run `./scripts/build-release.sh` (~1-2 min). This produces:
    - `dist/twicc-{version}.tar.gz` (sdist, platform-agnostic — both this and the wheel get published to PyPI in step 11)

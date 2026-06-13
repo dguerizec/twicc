@@ -14,15 +14,17 @@ const settingsStore = useSettingsStore()
 // Sentinel key for the combined "previous → current" entry in the version selector
 const COMBINED_VERSION_KEY = '__combined__'
 
-// Category display order for the combined multi-version screen. The CHANGELOG
-// only ever uses these three (### Added / ### Changed / ### Fixed). Entries are
-// grouped by category in this fixed order, then by version (oldest first)
-// within each category — so a multi-version upgrade reads as "all the new
-// features, then all the changes, then all the fixes". A fixed list is required
-// because a category may appear in only some of the spanned versions, leaving
-// document order ambiguous. Any unexpected category (none today) is appended
+// Category display order for the combined multi-version screen. Each release
+// opens with a ### Summary (a single bold-led, one-line recap of the version) —
+// a deliberate deviation from Keep a Changelog — followed by the standard
+// ### Added / ### Changed / ### Fixed. Entries are grouped by category in this
+// fixed order, then by version (oldest first) within each category — so a
+// multi-version upgrade reads as "every release's summary first, then all the
+// new features, then all the changes, then all the fixes". A fixed list is
+// required because a category may appear in only some of the spanned versions,
+// leaving document order ambiguous. Any unexpected category is appended
 // afterwards in first-appearance order, so no entry is ever dropped.
-const COMBINED_CATEGORY_ORDER = ['added', 'changed', 'fixed']
+const COMBINED_CATEGORY_ORDER = ['summary', 'added', 'changed', 'fixed']
 
 const dialogRef = ref(null)
 const loading = ref(false)
@@ -59,6 +61,7 @@ const isSponsorScreen = computed(() =>
 
 const badgeVariant = computed(() => {
     const cat = currentEntry.value?.category
+    if (cat === 'summary') return 'brand'
     if (cat === 'added') return 'success'
     if (cat === 'changed') return 'warning'
     if (cat === 'fixed') return 'danger'

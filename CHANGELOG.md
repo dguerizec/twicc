@@ -2,9 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Some entries include illustrative screenshots in nested sub-lists.
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). As a small deviation, each release opens with a one-line **Summary** recapping its highlights, and some entries include illustrative screenshots in nested sub-lists.
 
 ## [Unreleased]
+
+### Summary
+
+- **Unreleased: Small polish** — more notification sounds, and a clear button that wipes attachments too.
 
 ### Added
 
@@ -15,6 +19,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Message input** — the clear/reset button now also removes attachments.
 
 ## [1.8.1] - 2026-06-13
+
+### Summary
+
+- **v1.8.1: Never miss a beat** — extra-usage alerts, push notifications to your devices, and a quick session switcher.
 
 ### Added
 
@@ -37,6 +45,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Trust flags** — some fixes to make the trust system more reliable. 
 
 ## [1.8.0] - 2026-06-11
+
+### Summary
+
+- **v1.8.0: Worktrees, trust & Fable 5** — full git worktree support, a project trust model, and per-project defaults.
 
 ### Added
 
@@ -72,11 +84,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [1.7.2] - 2026-06-06
 
+### Summary
+
+- **v1.7.2: Build hotfix** — republishes 1.7.1 with the correct frontend bundle.
+
 ### Fixed
 
 - The 1.7.1 wheel and sdist published to PyPI shipped a stale frontend build that was missing the latest UI changes; 1.7.2 republishes the same release with a correctly rebuilt frontend.
 
 ## [1.7.1] - 2026-06-06
+
+### Summary
+
+- **v1.7.1: Batch & timestamps** — act on many sessions at once from the CLI, and see when each message was sent.
 
 ### Added
 
@@ -96,6 +116,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Codex sessions no longer silently lose TwiCC's skills after a restart or a version change.
 
 ## [1.7.0] - 2026-06-05
+
+### Summary
+
+- **v1.7.0: CLI, API & orchestration** — a scriptable twicc CLI and HTTP API, an orchestrator skills family, and Opus 4.8.
 
 ### Added
 
@@ -136,11 +160,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [1.6.1] - 2026-05-20
 
+### Summary
+
+- **v1.6.1: Quiet fix** — no more "CLI not authenticated" warnings for providers you've disabled.
+
 ### Fixed
 
 - TwiCC no longer surfaces "CLI not authenticated" warnings for providers that you have disabled.
 
 ## [1.6.0] - 2026-05-19
+
+### Summary
+
+- **v1.6.0: Codex arrives** — drive Codex alongside Claude Code, with bulk archiving and product tips.
 
 ### Added
 
@@ -188,6 +220,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [1.5.5] - 2026-04-28
 
+### Summary
+
+- **v1.5.5: Smoother sign-in** — graceful handling when you're not logged in to Claude, plus assorted fixes.
+
 ### Added
 
 - Better handling when you are not authenticated on Claude: TwiCC now starts anyway and tells you the command to run to log in, with the option to run it directly in an integrated terminal
@@ -206,17 +242,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [1.5.4] - 2026-04-26
 
+### Summary
+
+- **v1.5.4: Tiny fix (for real)** — really handles failing tools in the "Claude is…" status.
+
 ### Fixed
 
 - Really correctly handle failing tools in "Claude is..."
 
 ## [1.5.3] - 2026-04-26
 
+### Summary
+
+- **v1.5.3: Tiny fix** — handles failing tools in the "Claude is…" status.
+
 ### Fixed
 
 - Correctly handle failing tools in "Claude is..."
 
 ## [1.5.2] - 2026-04-26
+
+### Summary
+
+- **v1.5.2: Scroll & pickers** — fewer scroll jumps and pickers that fit small screens.
 
 ### Fixed
 
@@ -225,6 +273,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Deduplicate messages in the message history picker
 
 ## [1.5.1] - 2026-04-25
+
+### Summary
+
+- **v1.5.1: Presets & pinning** — reusable Claude presets, session pinning, a live working status, and a markdown toolbar.
 
 ### Added
 
@@ -265,6 +317,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Git commit selector no longer renders raw error JSON and stays interactive (opens the commit list) when the requested commit cannot be found
 
 ## [1.5.0] - 2026-04-20
+
+### Summary
+
+- **v1.5.0: Themes & streaming** — new visual themes, real-time assistant streaming, Opus 4.7, and per-view tabs.
 
 ### Added
 
@@ -331,6 +387,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [1.4.0] - 2026-04-11
 
+### Summary
+
+- **v1.4.0: Workspaces** — group projects into workspaces, and comment on any selected text in chat.
+
 ### Added
 
 - Workspaces: organize projects into named groups with optional color, scoped session list, search, snippets, aggregated stats, and auto-add projects via directory patterns
@@ -358,6 +418,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - CLI subcommands (`twicc usage`, `twicc projects`, etc.) failing when `DJANGO_SETTINGS_MODULE` was not set or pointed to another project
 
 ## [1.3.0] - 2026-04-05
+
+### Summary
+
+- **v1.3.0: Big terminal & unread update** — unread tracking, snippets, inline code comments, and usage graphs.
 
 ### Added
 
@@ -445,11 +509,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [1.2.1] - 2026-03-20
 
+### Summary
+
+- **v1.2.1: Startup fix** — fixes a macOS crash in the background compute process.
+
 ### Fixed
 
 - Crash on macOS at startup (`AppRegistryNotReady` in background compute process)
 
 ## [1.2.0] - 2026-03-20
+
+### Summary
+
+- **v1.2.0: Search & 1M context** — full-text search across all sessions, a 1M context window, and a JSON CLI.
 
 ### Added
 
@@ -483,6 +555,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [1.1.2] - 2026-03-09
 
+### Summary
+
+- **v1.1.2: Pickers & palette** — slash-command and file pickers, plus the Ctrl+K command palette.
+
 ### Added
 
 - Slash command picker: type `/` at the start of the message input to browse and insert slash commands (built-in, custom, and plugin commands)
@@ -504,6 +580,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [1.1.1] - 2026-03-08
 
+### Summary
+
+- **v1.1.1: Stay current** — auto-reload on update, new-version alerts, and Claude status monitoring.
+
 ### Added
 
 - Auto-reload frontend when backend version changes
@@ -511,6 +591,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Monitor Claude Code status via status.claude.com and show toast notifications on outages
 
 ## [1.1.0] - 2026-03-08
+
+### Summary
+
+- **v1.1.0: Effort & thinking** — per-session effort and thinking controls, with live tracking of long-running tools.
 
 ### Added
 
@@ -536,6 +620,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Improve backend resilience (watcher crash prevention, empty session handling, WebSocket error isolation)
 
 ## [1.0.3] - 2026-03-04
+
+### Summary
+
+- **v1.0.3: Project archiving** — archive projects, browse unnamed ones as a tree, and persist sidebar toggles.
 
 ### Added
 
@@ -564,6 +652,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [1.0.2] - 2026-02-28
 
+### Summary
+
+- **v1.0.2: Smarter permissions** — auto-generated, granular permission suggestions for every tool type.
+
 ### Added
 
 - Smart permission suggestions: auto-generate actionable suggestions for all tool types (file Read/Edit/Write, WebFetch, WebSearch, MCP tools) when the SDK doesn't provide them
@@ -581,6 +673,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [1.0.1] - 2026-02-28
 
+### Summary
+
+- **v1.0.1: Create projects in-app** — make new projects from the home page, with stale-project handling.
+
 ### Added
 
 - Create new projects from the home page and from session dropdown menus, with directory path validation
@@ -596,5 +692,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Clean up existing empty projects via migration
 
 ## [1.0.0] - 2026-02-27
+
+### Summary
+
+- **v1.0.0: Hello, TwiCC** — the first public release: a web UI for your Claude Code sessions.
 
 Initial release.
