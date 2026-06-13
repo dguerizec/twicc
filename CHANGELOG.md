@@ -6,17 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.8.2] - 2026-06-13
+
 ### Summary
 
-- **Unreleased: Exit Fable 5** — the Claude Fable 5 model is [no longer available](https://x.com/i/status/2065597531644743999).
-
-### Added
-
-- **Notification sounds** — more short, distinctive sounds to choose from.
+- **v1.8.2: Exit Fable 5** — the Claude Fable 5 model is [no longer available](https://x.com/i/status/2065597531644743999).
 
 ### Changed
 
 - **Claude Fable 5** — no longer available ([Anthropic cut access at the US government's request](https://x.com/i/status/2065597531644743999)); anything using it falls back to Opus 4.8.
+- **Notification sounds** — more short, distinctive sounds to choose from.
 
 ### Fixed
 
