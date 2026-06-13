@@ -14,6 +14,16 @@ const settingsStore = useSettingsStore()
 // Sentinel key for the combined "previous → current" entry in the version selector
 const COMBINED_VERSION_KEY = '__combined__'
 
+// Category display order for the combined multi-version screen. The CHANGELOG
+// only ever uses these three (### Added / ### Changed / ### Fixed). Entries are
+// grouped by category in this fixed order, then by version (oldest first)
+// within each category — so a multi-version upgrade reads as "all the new
+// features, then all the changes, then all the fixes". A fixed list is required
+// because a category may appear in only some of the spanned versions, leaving
+// document order ambiguous. Any unexpected category (none today) is appended
+// afterwards in first-appearance order, so no entry is ever dropped.
+const COMBINED_CATEGORY_ORDER = ['added', 'changed', 'fixed']
+
 const dialogRef = ref(null)
 const loading = ref(false)
 const error = ref(null)
@@ -114,10 +124,29 @@ function buildCombinedVersion(allVersions, previousVersion, currentVersion) {
     // Reverse to display oldest first (changelog file is newest-first)
     const reversed = [...versionsInRange].reverse()
 
-    const entries = []
+    // Effective category order: the fixed list above for known categories, then
+    // any unexpected ones in first-appearance order so nothing is dropped.
+    const presentCategories = []
     for (const v of reversed) {
         for (const entry of v.entries) {
-            entries.push({ ...entry, _sourceVersion: v.version })
+            if (!presentCategories.includes(entry.category)) presentCategories.push(entry.category)
+        }
+    }
+    const orderedCategories = [
+        ...COMBINED_CATEGORY_ORDER.filter(c => presentCategories.includes(c)),
+        ...presentCategories.filter(c => !COMBINED_CATEGORY_ORDER.includes(c)),
+    ]
+
+    // Group by category first, then by version (oldest first) within each
+    // category. Entry order inside a same category/version pair is preserved.
+    const entries = []
+    for (const category of orderedCategories) {
+        for (const v of reversed) {
+            for (const entry of v.entries) {
+                if (entry.category === category) {
+                    entries.push({ ...entry, _sourceVersion: v.version })
+                }
+            }
         }
     }
 
