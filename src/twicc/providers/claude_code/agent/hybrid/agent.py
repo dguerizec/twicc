@@ -332,7 +332,8 @@ class HybridClaudeAgent(BaseAgent):
         if not await self._checked_paste(full_text):
             raise SendDeliveryError(
                 "The Claude CLI is showing a dialog or has text typed in its "
-                "composer — resolve it in the terminal, then send again.",
+                "composer — resolve it in the Claude CLI terminal below, then "
+                "send again.",
                 code="hybrid_composer_busy",
             )
         self.last_activity = time.time()

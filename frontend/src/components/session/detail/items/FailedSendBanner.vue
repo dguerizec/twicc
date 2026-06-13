@@ -105,7 +105,7 @@ function discard() {
         size="small"
         class="failed-send-callout"
     >
-        <wa-icon slot="icon" name="triangle-exclamation"></wa-icon>
+        <wa-icon slot="icon" name="circle-exclamation"></wa-icon>
         <div class="failed-send-content">
             <div class="failed-send-message">{{ failedSend.message }}</div>
             <div v-if="failedSend.mediasDropped" class="failed-send-note">
@@ -147,6 +147,7 @@ function discard() {
 .failed-send-actions {
     display: flex;
     align-items: center;
+    justify-content: flex-end;
     flex-wrap: wrap;
     gap: var(--wa-space-xs);
 }
