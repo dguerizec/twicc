@@ -34,11 +34,17 @@ function onBadgeClick() {
 const store = useDataStore()
 
 // ── Size state (window-controls style, single enum) ─────────────────────────
-const viewState = ref('normal')
+// Minimized by default: the composer keeps the room, and the CLI is steered
+// from it without needing the terminal on screen. Safe for sizing — the CLI's
+// 80-column width comes from the backend tmux session's default size (created
+// detached at 80x24), not from the embedded xterm; opening the terminal later
+// only ever widens it (the font-shrink floor keeps the attached view >= 80).
+const viewState = ref('minimized')
 const isMinimized = computed(() => viewState.value === 'minimized')
 const isMaximized = computed(() => viewState.value === 'maximized')
 const minimizeToggleId = useId()
 const maximizeToggleId = useId()
+const refreshBtnId = useId()
 const badgeId = useId()
 
 function minimize() {
@@ -53,6 +59,18 @@ function toggleMaximized() {
     if (isMaximized.value) emit('expand')
 }
 defineExpose({ minimize })
+
+// ── Manual terminal refresh ──────────────────────────────────────────────────
+// A purely front-side xterm.js freeze (renderer stuck, or a zombie WebSocket
+// that still reads as connected so reconnect() would no-op) leaves the CLI
+// running fine in the backend tmux but frozen/blank in the UI. Remounting the
+// TerminalInstance through this key is the reliable cure: Vue disposes the old
+// xterm and closes its socket, then a fresh instance mounts, refits and
+// re-attaches to the same tmux session — which repaints the whole TUI.
+const terminalRefreshKey = ref(0)
+function refresh() {
+    terminalRefreshKey.value++
+}
 
 // ── Process / terminal lifecycle ─────────────────────────────────────────────
 // The CLI is launched lazily at the first send: before that there is no tmux
@@ -170,6 +188,18 @@ const badgeLabel = computed(() => {
                 @click.stop="onBadgeClick"
             >{{ badgeLabel }}</span>
             <wa-button
+                v-if="everHadProcess"
+                variant="neutral"
+                appearance="plain"
+                size="small"
+                class="size-toggle-btn"
+                :id="refreshBtnId"
+                @click="refresh"
+            >
+                <wa-icon name="arrows-rotate" variant="classic"></wa-icon>
+            </wa-button>
+            <AppTooltip v-if="everHadProcess" :for="refreshBtnId">Refresh the terminal</AppTooltip>
+            <wa-button
                 variant="neutral"
                 appearance="plain"
                 size="small"
@@ -203,6 +233,7 @@ const badgeLabel = computed(() => {
             </div>
             <TerminalInstance
                 v-else
+                :key="terminalRefreshKey"
                 :context-key="'h:' + sessionId"
                 :session-id="sessionId"
                 :active="!isMinimized"
