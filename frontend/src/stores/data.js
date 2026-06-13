@@ -3428,6 +3428,10 @@ export const useDataStore = defineStore('data', {
                     active_crons: extra.active_crons || null,
                     session_title: extra.session_title || null,
                     project_name: extra.project_name || null,
+                    // Provider/mode-specific live bag (e.g. hybrid's
+                    // {mode, terminal_blocked}). The options arg is itself
+                    // named ``extra``; ``extra.extra`` is the serialized field.
+                    extra: extra.extra || null,
                     tools: [],
                     lastStartedToolId: null,
                 }
@@ -3474,6 +3478,10 @@ export const useDataStore = defineStore('data', {
                         active_crons: p.active_crons || null,
                         session_title: p.session_title || null,
                         project_name: p.project_name || null,
+                        // Provider/mode-specific live bag (hybrid's
+                        // {mode, terminal_blocked}) — kept in the initial
+                        // snapshot so a late-opened client sees it too.
+                        extra: p.extra || null,
                         tools: Array.isArray(p.active_tools) ? p.active_tools : [],
                         lastStartedToolId: p.last_started_tool_id || null,
                     }

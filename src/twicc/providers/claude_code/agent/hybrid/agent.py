@@ -345,16 +345,17 @@ class HybridClaudeAgent(BaseAgent):
         composer-free check is still valid when the paste lands.
         """
         async with self._paste_lock:
-            if not await asyncio.to_thread(
+            ready = await asyncio.to_thread(
                 hybrid_tmux.composer_ready, self.session_id,
-            ):
-                await self._set_terminal_blocked(True)
-                return False
-            await asyncio.to_thread(
-                hybrid_tmux.paste_text, self.session_id, text,
             )
-            await self._set_terminal_blocked(False)
-            return True
+            if ready:
+                await asyncio.to_thread(
+                    hybrid_tmux.paste_text, self.session_id, text,
+                )
+        # Update + broadcast the blocked flag OUTSIDE the lock (broadcasts are
+        # never held under a lock): not-ready means the composer was busy.
+        await self._set_terminal_blocked(not ready)
+        return ready
 
     # ── Terminal-blocked live state ──────────────────────────────────────────
     async def _set_terminal_blocked(self, blocked: bool) -> None:
