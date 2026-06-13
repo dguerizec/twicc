@@ -37,7 +37,7 @@ Entry: `run.py → cli.main()`.
 - **Startup:** *Initial sync* scans each provider data root (`~/.claude/projects/`, `~/.codex/sessions/`, …) and bulk-inserts raw `SessionItem`s (fast, no metadata). Then a separate *background compute* process fills metadata (display_level, kind, groups, costs, git) for sessions whose `compute_version` is below the provider's `CURRENT_COMPUTE_VERSION`, then exits.
 - **Django ASGI:** HTTP (REST + SPA catch-all) and WebSocket — `/ws/` `UpdatesConsumer` (data sync, process control, title suggestions) and `/ws/terminal/<session_id>/` (raw ASGI PTY, optional tmux).
 - **watchfiles task:** JSONL change → incremental read from `last_offset` → save to DB (full metadata, inline for real-time accuracy) → WS broadcast → Pinia → Vue.
-- **Periodic:** price sync from OpenRouter (24h); usage quota fetch from provider APIs (5min where supported).
+- **Periodic:** price sync from OpenRouter (24h); usage quota fetch from provider APIs (5min where supported) — idle-gated: the fetch loops pause after 30min with no human presence (monotonic) and no active agent, resuming eagerly on a presence ping or an agent entering ASSISTANT_TURN (`twicc/usage_task.py` `should_run_usage_cycle`/`note_activity`).
 - **Agent managers:** provider SDKs drive interactive sessions → providers write JSONL → watcher picks up.
 
 **Sync strategy:** JSONL files are append-only — on change, compare `mtime`, `seek(last_offset)`, read new lines, insert, update offset.

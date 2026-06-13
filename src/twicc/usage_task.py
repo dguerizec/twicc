@@ -10,16 +10,125 @@ are parameterised by ``provider`` (or take a ``UsageSnapshot`` whose
 
 from __future__ import annotations
 
+import asyncio
+import logging
+import time
 from datetime import datetime, timedelta
 
 from asgiref.sync import sync_to_async
 from channels.layers import get_channel_layer
 
+from twicc import presence
 from twicc.core.enums import Provider
 from twicc.core.models import UsageSnapshot
 from twicc.core.serializers import serialize_usage_snapshot
 from twicc.synced_settings import read_synced_settings
 from twicc.usage import compute_period_costs
+
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Idle gating for the periodic usage sync loops
+# ---------------------------------------------------------------------------
+# The per-provider usage sync loops poll provider quota APIs every few minutes.
+# Those calls are wasted when nobody is around to read the result and no agent
+# is running that might want fresh quota data: a human idle for a while with no
+# active agent means the numbers won't change and won't be looked at. Each loop
+# therefore consults ``should_run_usage_cycle()`` every tick and skips the fetch
+# while idle, resuming the moment activity returns — eagerly via
+# ``note_activity()`` (a presence ping or an agent starting work), or lazily at
+# the next poll. This mirrors what already happens whenever the backend itself
+# isn't running (laptop asleep, restart): a gap in the snapshot series the rest
+# of the usage code already tolerates.
+
+# Wall-clock idle past which usage fetching pauses, absent any active agent.
+USAGE_IDLE_THRESHOLD_SECONDS = 30 * 60
+
+# Set whenever fresh activity appears so a paused loop can resume immediately
+# instead of waiting out its poll interval. ``asyncio.Event`` binds to the
+# running loop lazily on first await (Python >= 3.10), so a module-level
+# instance is safe even though no loop is running at import time. Shared by every
+# provider loop — one ``set()`` wakes them all.
+_usage_wake_event = asyncio.Event()
+
+
+def get_usage_wake_event() -> asyncio.Event:
+    """Return the shared wake event the paused usage loops wait on."""
+    return _usage_wake_event
+
+
+def note_activity() -> None:
+    """Signal fresh user/agent activity so any paused usage loop resumes promptly.
+
+    Cheap and safe to call from any coroutine on the event loop (the WS presence
+    handler, agent state transitions): setting an already-set event is a no-op,
+    and a ``set()`` that lands while every loop is active is simply consumed and
+    cleared at the next active tick.
+    """
+    _usage_wake_event.set()
+
+
+def should_run_usage_cycle() -> bool:
+    """Whether the periodic usage fetch should run this tick.
+
+    Runs when a human or an agent has been active within
+    :data:`USAGE_IDLE_THRESHOLD_SECONDS`, and always while an agent is genuinely
+    working (``ASSISTANT_TURN`` and not merely parked on a user approval) — an
+    orchestrator mid-run may want fresh quota data regardless of human presence.
+    Otherwise the loop pauses to avoid pointless provider calls.
+
+    Reads in-memory state only (presence + the agent registry), so it is cheap
+    enough to evaluate every tick. Presence timestamps are monotonic while agent
+    timestamps are wall-clock (``time.time()``); the two idle deltas are computed
+    each in its own clock and never mixed.
+    """
+    # Lazy import: the agent registry pulls in provider managers, which import
+    # this module — importing it at call time keeps the module graph acyclic.
+    from twicc.agent.registry import get_agent_manager_registry
+    from twicc.agent.states import AgentState
+
+    agents = get_agent_manager_registry().get_active_agents()
+
+    # A genuinely-working agent (not just blocked on an approval prompt) keeps
+    # the fetch alive however long the human has been gone.
+    if any(a.state == AgentState.ASSISTANT_TURN and not a.pending_requests for a in agents):
+        return True
+
+    # Human idle (monotonic clock). ``latest_activity() == 0.0`` means "never
+    # pinged" → treat as infinitely idle rather than subtracting from the
+    # arbitrary monotonic origin.
+    last_human = presence.latest_activity()
+    human_idle = float("inf") if last_human == 0.0 else time.monotonic() - last_human
+
+    # Agent idle (wall clock). Covers agents parked in USER_TURN or blocked on an
+    # approval: their ``last_activity`` dates their last real work.
+    now = time.time()
+    agent_idle = min((now - a.last_activity for a in agents), default=float("inf"))
+
+    return min(human_idle, agent_idle) < USAGE_IDLE_THRESHOLD_SECONDS
+
+
+async def wait_for_usage_resume(stop_event: asyncio.Event, interval: float) -> None:
+    """Sleep a paused usage loop until activity wakes it, the interval elapses, or stop.
+
+    Returns as soon as :func:`note_activity` fires (eager resume) or after
+    ``interval`` seconds (lazy re-check of the gate), whichever comes first — and
+    immediately if ``stop_event`` is set. The wake event is intentionally left
+    un-cleared here; the loop clears it on its next active tick, which avoids any
+    lost-wakeup window between clearing and awaiting.
+    """
+    wake_event = get_usage_wake_event()
+    stop_task = asyncio.ensure_future(stop_event.wait())
+    wake_task = asyncio.ensure_future(wake_event.wait())
+    try:
+        await asyncio.wait(
+            {stop_task, wake_task}, timeout=interval, return_when=asyncio.FIRST_COMPLETED
+        )
+    finally:
+        stop_task.cancel()
+        wake_task.cancel()
+
 
 # Per-provider previous "extra usage recently active" flag, used to fire the
 # "extra usage started" alert on the rising edge (quiet → active). In-memory and

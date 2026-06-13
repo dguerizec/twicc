@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- **Providers Usage** — TwiCC stops refreshing your provider usage when there's no activity for a long time.
+
 ## [1.8.2] - 2026-06-13
 
 ### Summary

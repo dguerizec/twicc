@@ -572,9 +572,12 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
         elif msg_type == "presence":
             # Lightweight human-presence heartbeat (no reply). Gates "away-only"
             # external notifications so they aren't pushed while the user is at a
-            # TwiCC client. See twicc.presence.
+            # TwiCC client (see twicc.presence), and wakes the paused usage sync
+            # loops so quota data refreshes promptly when the user comes back.
             from twicc.presence import touch
+            from twicc.usage_task import note_activity
             touch(content.get("device_class"))
+            note_activity()
 
         elif msg_type == "send_message":
             await self._handle_send_message(content)

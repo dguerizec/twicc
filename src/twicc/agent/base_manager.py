@@ -500,6 +500,11 @@ class BaseAgentManager:
             await self._update_session_stopped_at(agent)
             self._cleanup_dead(agent)
         elif info.state == AgentState.ASSISTANT_TURN:
+            # Wake the paused usage sync loops: an agent starting real work may
+            # want fresh quota data (e.g. an orchestrator checking usage) even
+            # with no human present. No-op when the loops aren't paused.
+            from twicc.usage_task import note_activity
+            note_activity()
             await self._flush_pending_title(agent)
 
     async def _flush_pending_title(self, agent: BaseAgent) -> None:

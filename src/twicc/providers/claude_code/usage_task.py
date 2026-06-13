@@ -12,7 +12,12 @@ import logging
 import sys
 
 from twicc.core.enums import Provider
-from twicc.usage_task import broadcast_usage_updated
+from twicc.usage_task import (
+    broadcast_usage_updated,
+    get_usage_wake_event,
+    should_run_usage_cycle,
+    wait_for_usage_resume,
+)
 from .helpers import ClaudeCodeHelpers
 from .usage import fetch_and_save_usage
 
@@ -41,8 +46,11 @@ async def start_usage_sync_task() -> None:
     """Periodically fetch and store Claude Code usage quotas.
 
     Runs until :func:`stop_usage_sync_task` is called:
-    - Executes :func:`fetch_and_save_usage` immediately on startup
-    - Then waits :attr:`ClaudeCodeHelpers.USAGE_SYNC_INTERVAL` before the next fetch
+    - Executes :func:`fetch_and_save_usage` immediately on startup (baseline)
+    - Then, each cycle, fetches only when :func:`should_run_usage_cycle` says
+      someone may read or need the data; otherwise pauses to spare the API call
+    - Waits :attr:`ClaudeCodeHelpers.USAGE_SYNC_INTERVAL` between cycles, or
+      resumes early from a paused state when activity wakes the loop
     - Handles graceful shutdown via the stop event
 
     The fetch operation runs in a thread to avoid blocking the event
@@ -50,6 +58,7 @@ async def start_usage_sync_task() -> None:
     """
     interval = ClaudeCodeHelpers.USAGE_SYNC_INTERVAL
     stop_event = get_usage_sync_stop_event()
+    wake_event = get_usage_wake_event()
     # Reset for hot-restart support — see auth_task.start_auth_task().
     stop_event.clear()
 
@@ -65,35 +74,55 @@ async def start_usage_sync_task() -> None:
 
     logger.info("Usage sync task started")
 
+    first_cycle = True  # always fetch once at startup for a baseline snapshot
+    paused = False      # tracked only to log active<->pause transitions once
+
     while not stop_event.is_set():
-        success = False
-        try:
-            snapshot = await fetch_and_save_usage(allow_refresh=allow_refresh)
-            if snapshot:
-                success = True
-                logger.info(
-                    "Usage sync completed: 5h=%.1f%% (time: %.1f%%), 7d=%.1f%% (time: %.1f%%)",
-                    snapshot.five_hour_utilization or 0,
-                    snapshot.five_hour_temporal_pct or 0,
-                    snapshot.seven_day_utilization or 0,
-                    snapshot.seven_day_temporal_pct or 0,
-                )
-            else:
-                logger.warning("Usage sync: no data (credentials missing or API error)")
-        except Exception as e:
-            logger.error("Usage sync failed: %s", e, exc_info=True)
+        if first_cycle or should_run_usage_cycle():
+            first_cycle = False
+            if paused:
+                logger.info("Usage sync resumed (activity detected)")
+                paused = False
+            # Consume any wake signal now that we are acting on it.
+            wake_event.clear()
 
-        # Broadcast to frontend (always sends latest snapshot from DB + success flag)
-        try:
-            await broadcast_usage_updated(Provider.CLAUDE_CODE, success)
-        except Exception as e:
-            logger.error("Usage broadcast failed: %s", e, exc_info=True)
+            success = False
+            try:
+                snapshot = await fetch_and_save_usage(allow_refresh=allow_refresh)
+                if snapshot:
+                    success = True
+                    logger.info(
+                        "Usage sync completed: 5h=%.1f%% (time: %.1f%%), 7d=%.1f%% (time: %.1f%%)",
+                        snapshot.five_hour_utilization or 0,
+                        snapshot.five_hour_temporal_pct or 0,
+                        snapshot.seven_day_utilization or 0,
+                        snapshot.seven_day_temporal_pct or 0,
+                    )
+                else:
+                    logger.warning("Usage sync: no data (credentials missing or API error)")
+            except Exception as e:
+                logger.error("Usage sync failed: %s", e, exc_info=True)
 
-        # Wait for the next sync interval (or until stop event is set)
-        try:
-            await asyncio.wait_for(stop_event.wait(), timeout=interval)
-        except asyncio.TimeoutError:
-            # Timeout means it's time to sync again
-            pass
+            # Broadcast to frontend (always sends latest snapshot from DB + success flag)
+            try:
+                await broadcast_usage_updated(Provider.CLAUDE_CODE, success)
+            except Exception as e:
+                logger.error("Usage broadcast failed: %s", e, exc_info=True)
+
+            # Active cadence: sleep the interval on the stop event only — wake
+            # pings are ignored here so steady activity can't trigger a fetch
+            # storm (we already fetch every interval while active).
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=interval)
+            except asyncio.TimeoutError:
+                # Timeout means it's time to sync again
+                pass
+        else:
+            if not paused:
+                logger.info("Usage sync paused (idle, no active agent)")
+                paused = True
+            # Paused: resume early when activity wakes us, else re-check the gate
+            # at the next interval.
+            await wait_for_usage_resume(stop_event, interval)
 
     logger.info("Usage sync task stopped")
