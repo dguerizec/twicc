@@ -151,6 +151,15 @@ const badgeLabel = computed(() => {
     if (!hybridPending.value) return ''
     return pendingIsAnswerable.value ? 'Prefer answering in the UI' : 'Answer in the terminal'
 })
+
+// ── Terminal-blocked badge ───────────────────────────────────────────────────
+// Backend-sourced live flag (process ``extra.terminal_blocked``): TwiCC tried
+// to paste and the composer wasn't free — a TUI dialog is open or the user has
+// text typed in the terminal. Because it rides on the process state, it is in
+// the initial snapshot too, so any client (reloaded, or opened after the
+// block happened) sees it. Surfaced only when there's no pending request —
+// that case already has its own badge steering to the terminal/widget.
+const terminalBlocked = computed(() => !!processState.value?.extra?.terminal_blocked)
 </script>
 
 <template>
@@ -173,6 +182,12 @@ const badgeLabel = computed(() => {
                     role="status"
                     @click.stop="onBadgeClick"
                 >{{ badgeLabel }}</span>
+                <!-- No @click: the whole collapsed bar expands the terminal. -->
+                <span
+                    v-else-if="terminalBlocked"
+                    class="hybrid-pending-badge blocked"
+                    role="status"
+                >Terminal blocked — open it</span>
             </template>
         </CollapsedBar>
         <!-- Normal header (window controls) -->
@@ -187,6 +202,12 @@ const badgeLabel = computed(() => {
                 role="status"
                 @click.stop="onBadgeClick"
             >{{ badgeLabel }}</span>
+            <!-- Terminal already open: the block to resolve is visible below. -->
+            <span
+                v-else-if="terminalBlocked"
+                class="hybrid-pending-badge blocked"
+                role="status"
+            >Terminal blocked</span>
             <wa-button
                 v-if="everHadProcess"
                 variant="neutral"
@@ -318,6 +339,16 @@ wa-divider {
 /* When the form is available, the badge brings it back if minimized. */
 .hybrid-pending-badge.clickable {
     cursor: pointer;
+}
+
+/* Terminal blocked: a problem that needs attention — danger colors + pulse.
+   Distinct from the warning-toned pending badges (which are actionable, not
+   broken). On the collapsed bar the whole bar expands the terminal on click. */
+.hybrid-pending-badge.blocked {
+    color: var(--wa-color-danger-on-quiet);
+    background: var(--wa-color-danger-fill-quiet);
+    border-color: var(--wa-color-danger-border-quiet);
+    animation: hybrid-badge-pulse 1.6s ease-in-out infinite;
 }
 
 @keyframes hybrid-badge-pulse {

@@ -96,6 +96,11 @@ class AgentInfo(NamedTuple):
     pending_requests: tuple[PendingRequest, ...] = ()
     active_tools: tuple[dict, ...] = ()
     last_started_tool_id: str | None = None
+    # Provider/mode-specific live process state, broadcast verbatim to the
+    # front (both live and in the initial active_processes snapshot). Absent
+    # for normal sessions; hybrid Claude sessions carry
+    # ``{"mode": "hybrid", "terminal_blocked": bool}``.
+    extra: dict | None = None
 
     @property
     def memory_rss_human(self) -> str | None:
@@ -139,4 +144,6 @@ def serialize_agent_info(info: AgentInfo) -> dict:
         data["active_tools"] = list(info.active_tools)
     if info.last_started_tool_id is not None:
         data["last_started_tool_id"] = info.last_started_tool_id
+    if info.extra:
+        data["extra"] = info.extra
     return data

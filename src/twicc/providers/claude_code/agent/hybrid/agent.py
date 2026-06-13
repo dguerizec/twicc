@@ -26,7 +26,7 @@ from claude_agent_sdk import PermissionResultAllow, PermissionUpdate
 
 from twicc.agent.base_agent import BaseAgent, StateChangeCallback
 from twicc.agent.exceptions import SendDeliveryError
-from twicc.agent.states import AgentState, PendingRequest
+from twicc.agent.states import AgentInfo, AgentState, PendingRequest
 from twicc.core.enums import Provider
 from twicc.paths import get_session_hybrid_dir
 from twicc.providers.claude_code.agent.permissions import (
@@ -72,6 +72,10 @@ class HybridClaudeAgent(BaseAgent):
     READY_POLL_INTERVAL = 1.0
     READY_TIMEOUT = 600.0
     LIVENESS_INTERVAL = 5.0
+    # While the terminal is flagged blocked, poll the composer at this cadence
+    # to clear the flag as soon as it frees up (the user resolved the dialog /
+    # cleared their TUI draft) without waiting for the next paste attempt.
+    BLOCK_POLL_INTERVAL = 2.5
 
     def __init__(
         self,
@@ -106,6 +110,13 @@ class HybridClaudeAgent(BaseAgent):
         # acks (e.g. the auto /rename's) are ignored — one once reaped a
         # live permission prompt, denying it behind the user's back.
         self._local_cmd_turn = False
+        # True when TwiCC tried to paste (a user send or an auto command) and
+        # the composer wasn't free — a TUI dialog is open or the user has text
+        # typed in the terminal. Surfaced verbatim in get_info().extra so any
+        # client (live, late-opened, reloaded) can steer the user to the
+        # terminal. A poll clears it as soon as the composer frees up.
+        self._terminal_blocked = False
+        self._block_poll_task: asyncio.Task[None] | None = None
 
     # ------------------------------------------------------------------
     # Manager-contract shims (SDK-agent methods reached on every Claude
@@ -114,6 +125,14 @@ class HybridClaudeAgent(BaseAgent):
 
     def get_pid(self) -> int | None:
         return self.agent_pid
+
+    def get_info(self) -> AgentInfo:
+        # Attach the hybrid-specific live state bag (broadcast verbatim to the
+        # front, live and in the initial snapshot). The flag is raw — the
+        # front decides whether/when to surface it.
+        return super().get_info()._replace(
+            extra={"mode": "hybrid", "terminal_blocked": self._terminal_blocked},
+        )
 
     def get_expired_recurring_crons(self) -> list:
         # Crons on hybrid sessions are out of scope (V1): the manager's cron
@@ -329,11 +348,63 @@ class HybridClaudeAgent(BaseAgent):
             if not await asyncio.to_thread(
                 hybrid_tmux.composer_ready, self.session_id,
             ):
+                await self._set_terminal_blocked(True)
                 return False
             await asyncio.to_thread(
                 hybrid_tmux.paste_text, self.session_id, text,
             )
+            await self._set_terminal_blocked(False)
             return True
+
+    # ── Terminal-blocked live state ──────────────────────────────────────────
+    async def _set_terminal_blocked(self, blocked: bool) -> None:
+        """Update the blocked flag, manage the unblock poll, and broadcast.
+
+        No-op when unchanged. Going blocked starts a poll that clears the flag
+        as soon as the composer frees up; going free cancels it. Broadcasts the
+        fresh ``get_info().extra`` so every client (live or late) sees it.
+        """
+        if self._terminal_blocked == blocked:
+            return
+        self._terminal_blocked = blocked
+        if blocked:
+            self._start_block_poll()
+        else:
+            self._cancel_block_poll()
+        await self._notify_state_change()
+
+    def _start_block_poll(self) -> None:
+        if self._block_poll_task and not self._block_poll_task.done():
+            return
+        self._block_poll_task = asyncio.create_task(
+            self._poll_until_unblocked(), name=f"hybrid-block-poll-{self.session_id}",
+        )
+
+    def _cancel_block_poll(self) -> None:
+        task = self._block_poll_task
+        self._block_poll_task = None
+        # Never cancel from inside the poll task itself (it returns on its own).
+        if task and task is not asyncio.current_task():
+            task.cancel()
+
+    async def _poll_until_unblocked(self) -> None:
+        """While blocked, watch the composer and clear the flag when it frees."""
+        try:
+            while self._terminal_blocked and self.state != AgentState.DEAD:
+                await asyncio.sleep(self.BLOCK_POLL_INTERVAL)
+                if self.state == AgentState.DEAD:
+                    return
+                if await asyncio.to_thread(hybrid_tmux.composer_ready, self.session_id):
+                    self._terminal_blocked = False
+                    self._block_poll_task = None
+                    await self._notify_state_change()
+                    return
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception(
+                "Terminal-blocked poll failed for hybrid session %s", self.session_id,
+            )
 
     async def _materialize_attachments(
         self,
@@ -708,6 +779,7 @@ class HybridClaudeAgent(BaseAgent):
             self._first_paste_task.cancel()
         if self._liveness_task is not None:
             self._liveness_task.cancel()
+        self._cancel_block_poll()
         # On TwiCC shutdown the CLI (and its polling hooks) survive: keep the
         # drop files so boot adoption + the hooks-watcher scan restore the
         # GUI-answerable pendings. Every other reason kills the tmux below,
