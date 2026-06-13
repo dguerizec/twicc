@@ -51,7 +51,7 @@ $TWICC update-session '<SESSION_ID>' settings [OPTIONS]
 
 Agent settings flags (all optional; use `$TWICC info models agent-settings presets` to discover the supported models, valid agent settings values per provider and the presets, — skill: `twicc-info`):
 
-- `--model VALUE` — Claude Code: `fable`, `opus`, `sonnet`, `opus-4.7`, `opus-4.6`, `opus-4.5`, `sonnet-4.5`. Codex: `gpt`, `gpt-mini`, `gpt-5.4`.
+- `--model VALUE` — Claude Code: `opus`, `sonnet`, `opus-4.7`, `opus-4.6`, `opus-4.5`, `sonnet-4.5`. Codex: `gpt`, `gpt-mini`, `gpt-5.4`.
 - `--effort VALUE` — Claude Code: `low`, `medium`, `high`, `xhigh`, `max`. Codex: `low`, `medium`, `high`, `xhigh`.
 - `--permission-mode VALUE` — Claude Code: `default`, `acceptEdits`, `plan`, `dontAsk`, `bypassPermissions`. Codex: `read_only`, `strict`, `auto`, `autonomous`, `yolo`.
 - `--thinking / --no-thinking` — Claude Code only.

@@ -148,7 +148,10 @@ AGENT_SETTINGS_ALIASES: dict[str, dict[str, str]] = {
     "selected_model": {
         "min": "sonnet", "fastest": "sonnet", "cheapest": "sonnet",
         "medium": "opus", "balanced": "opus",
-        "max": "fable", "strongest": "fable",
+        # ``fable`` is the strongest family but currently disabled, so the
+        # "top" aliases point at the strongest *available* model (opus).
+        # Repoint to ``fable`` if it is ever re-enabled.
+        "max": "opus", "strongest": "opus",
     },
     "effort": {
         "min": "low", "max": "max",

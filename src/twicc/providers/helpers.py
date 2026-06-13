@@ -986,6 +986,29 @@ class BaseProviderHelpers:
             pick = above if (above.weight - mv.weight) <= (mv.weight - below.weight) else below
         return self.selected_model_value(pick)
 
+    def sdk_model_safety_net(self, selected_model: str) -> str:
+        """Last-resort substitution right before a model reaches the SDK.
+
+        Every caller is expected to have run
+        :meth:`enforce_agent_settings_consistency` first, so an unavailable
+        (disabled or retired) model is normally already substituted. This is
+        defense in depth for the one boundary that must never leak — the
+        actual ``model=`` argument handed to the provider SDK/CLI: a
+        provider's ``resolve_sdk_model`` calls this so a disabled/retired
+        model can never be sent verbatim, even from a future call site that
+        forgot to normalise. When the net fires it logs a warning, because a
+        substitution here means an upstream call site built the SDK model
+        without normalising — a contract gap worth surfacing.
+        """
+        resolved = self.resolve_to_available_model(selected_model)
+        if resolved != selected_model:
+            logger.warning(
+                "SDK model resolution received unavailable model '%s' (not "
+                "normalised upstream); substituting '%s'",
+                selected_model, resolved,
+            )
+        return resolved
+
     def enforce_synced_settings_consistency(self, synced: dict, changes: dict) -> None:
         """Apply this provider's rules to the merged synced settings dict.
 

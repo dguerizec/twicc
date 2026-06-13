@@ -56,10 +56,15 @@ def build(provider: str | None, include_disabled: bool = False) -> dict[str, dic
         # model registry, with richer metadata in ``info models``); surface the
         # accepted ``selected_model`` values here too so the section is
         # self-contained. ``latest`` flags the current flagship of each family.
+        # Disabled models are dropped here — this is the config surface (what
+        # you may pass to ``--model``), and a disabled model isn't a valid
+        # choice (it resolves away to its fallback). ``info models`` still
+        # lists it, flagged ``enabled: false`` with the reason.
         per_field["selected_model"] = {
             "values": [
                 {"value": m["selected_model"], "latest": m["latest"]}
                 for m in helpers.serialize_model_registry()
+                if m["enabled"]
             ]
         }
 

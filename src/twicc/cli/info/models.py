@@ -22,15 +22,21 @@ def build(provider: str | None, include_disabled: bool = False) -> dict[str, lis
     for prov, helpers in resolve_providers(provider, include_disabled=include_disabled):
         entries: list[dict] = []
         for mv in helpers.MODEL_VERSIONS:
-            entries.append({
+            entry = {
                 "identifier": f"{mv.model}-{mv.version}",
                 "alias": mv.model if mv.latest else None,
                 "family": mv.model,
                 "version": mv.version,
                 "latest": mv.latest,
+                "enabled": mv.enabled,
                 "retirement_date": mv.retirement_date.isoformat() if mv.retirement_date else None,
                 "extra": helpers.serialize_model_extra(mv),
-            })
+            }
+            # Only carry the reason for a disabled model — like ``description``,
+            # absent otherwise to keep the common case quiet.
+            if not mv.enabled and mv.disable_reason:
+                entry["disable_reason"] = mv.disable_reason
+            entries.append(entry)
         output[prov.value] = entries
 
     return output

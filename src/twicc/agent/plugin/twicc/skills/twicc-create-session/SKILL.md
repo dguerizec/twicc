@@ -59,7 +59,7 @@ The settings flags below still resolve against `--project` (the source) — the 
 
 All optional. A field you omit (and the preset doesn't set) takes the target project's `default_agent_settings` for the chosen provider (inherited through parent projects / git worktree main repo — see `twicc-project`), then the user's global default. The resolved values are frozen onto the session at creation, exactly like a session created from the UI. Use `$TWICC info models agent-settings` for authoritative model lists, valid values, and per-value restrictions (skill: `twicc-info`). The lists below are indicative.
 
-- `--model VALUE` — Claude Code: `fable`, `opus`, `sonnet`, `opus-4.7`, `opus-4.6`, `opus-4.5`, `sonnet-4.5`. Codex: `gpt`, `gpt-mini`, `gpt-5.4`.
+- `--model VALUE` — Claude Code: `opus`, `sonnet`, `opus-4.7`, `opus-4.6`, `opus-4.5`, `sonnet-4.5`. Codex: `gpt`, `gpt-mini`, `gpt-5.4`.
 - `--effort VALUE` — Claude Code: `low`, `medium`, `high`, `xhigh`, `max`. Codex: `low`, `medium`, `high`, `xhigh`.
 - `--permission-mode VALUE` — Claude Code: `default`, `auto`, `acceptEdits`, `plan`, `dontAsk`, `bypassPermissions`. Codex: `read_only`, `strict`, `auto`, `autonomous`, `yolo`.
 - `--thinking / --no-thinking` — Claude Code only.

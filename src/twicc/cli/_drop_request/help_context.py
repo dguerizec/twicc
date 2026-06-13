@@ -124,6 +124,7 @@ def load_help_context() -> HelpContext:
         model_aliases[provider_name] = [
             ModelAlias(alias=_alias_for(mv), is_latest=mv.latest, version=mv.version)
             for mv in model_versions
+            if mv.enabled
         ]
 
     return HelpContext(

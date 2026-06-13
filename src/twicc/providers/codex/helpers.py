@@ -348,6 +348,9 @@ class CodexHelpers(BaseProviderHelpers):
         """
         if not selected_model:
             return None
+        # Defense in depth: a disabled/retired model must never reach the SDK,
+        # even if a call site skipped enforce_agent_settings_consistency.
+        selected_model = self.sdk_model_safety_net(selected_model)
         mv = self.find_model(selected_model)
         return mv.full_name if mv else selected_model
 
