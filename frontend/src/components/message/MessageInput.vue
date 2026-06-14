@@ -112,37 +112,146 @@ const providerIcon = computed(() => getProviderIcon(session.value?.provider))
 
 // ── Hybrid CLI mode toggle ──────────────────────────────────────────────────
 // Claude Code only, never for hidden/orchestrated sessions or subagents.
-// Drafts toggle freely; existing sessions go through a confirm dialog and the
-// one-way `set_session_hybrid` WS command (a session resumed by the CLI can
-// never go back to the SDK).
-const hybridConfirmDialogRef = ref(null)
-const isHybrid = computed(() => session.value?.hybrid === true)
+//
+// Three lifecycle states the button distinguishes (see the decision tree in the
+// hybrid design doc):
+//   - committed  (real session, ``session.hybrid`` true)  → green, locked-in
+//   - pending    (draft choice OR a staged switch on an SDK session) → orange,
+//                 still reversible; applied/committed on the next Send/Apply
+//   - off        (neutral)
+// Switching an existing SDK session is a STARTUP-type change: the dialog only
+// *stages* it locally; ``set_session_hybrid`` is fired on the next Send/Apply
+// (handleSend), exactly like the staged agent settings. Re-clicking a staged
+// (not-yet-committed) toggle un-stages it silently.
 const isHybridAvailable = computed(() =>
     session.value?.provider === 'claude_code'
     && !session.value?.hidden
     && !session.value?.parent_session_id
 )
+const isHybrid = computed(() => session.value?.hybrid === true)
+const isHybridCommitted = computed(() => !isDraft.value && isHybrid.value)
+// Staged is meaningless once committed (a committed session is never stagable),
+// so hide any leftover local flag behind the committed state.
+const isHybridStaged = computed(() => !isHybridCommitted.value && store.isHybridStaged(props.sessionId))
+// Orange "pending" state: a draft chose hybrid (applied when sent), or an SDK
+// session has a staged switch (applied on the next Send/Apply).
+const hybridPending = computed(() => (isDraft.value && isHybrid.value) || isHybridStaged.value)
+
 const hybridTooltipLabel = computed(() => {
-    if (isDraft.value) {
-        return isHybrid.value
-            ? 'Hybrid CLI mode enabled — click to disable'
-            : 'Hybrid CLI mode: run the interactive Claude CLI in an embedded terminal'
-    }
-    return isHybrid.value
-        ? 'Hybrid CLI mode (permanent)'
-        : 'Switch to hybrid CLI mode (cannot be undone)'
+    if (isHybridCommitted.value) return 'Hybrid CLI mode (permanent) — click for details'
+    if (isDraft.value && isHybrid.value) return 'Hybrid CLI mode on for this draft — click to turn off'
+    if (isHybridStaged.value) return 'Hybrid switch staged — applies on send; click to cancel'
+    return 'Switch to hybrid CLI mode'
 })
+
+// ── Hybrid dialog (single dialog, four variants) ────────────────────────────
+// Variants: 'draft-enable' | 'sdk-explainer' | 'sdk-confirm' | 'committed-info'.
+// The explanation lives in a <details>, always present; only the intro text,
+// its open state, the switch and the footer buttons differ between variants.
+const hybridDialogRef = ref(null)
+const hybridDialogVariant = ref(null)
+const hybridDontShowAgain = ref(true)
+// Forced-choice guard: switch variants must not be dismissable by Esc / the X /
+// the backdrop, so we never persist the "seen" flag without a real button press.
+// wa-hide can't tell Esc from a programmatic close, so we gate on this flag.
+const hybridDialogAllowClose = ref(false)
+
+const hybridDialogHasSwitch = computed(() =>
+    hybridDialogVariant.value === 'draft-enable' || hybridDialogVariant.value === 'sdk-explainer'
+)
+const hybridDialogDetailsOpen = computed(() => hybridDialogHasSwitch.value)
+const hybridDialogForcedChoice = computed(() => hybridDialogHasSwitch.value)
+const hybridDialogIsInfo = computed(() => hybridDialogVariant.value === 'committed-info')
+const hybridDialogTitle = computed(() => {
+    if (hybridDialogVariant.value === 'committed-info') return 'Hybrid CLI mode'
+    if (hybridDialogVariant.value === 'draft-enable') return 'Start this session in hybrid mode?'
+    return 'Switch to hybrid CLI mode?'
+})
+const hybridDialogIntro = computed(() => {
+    switch (hybridDialogVariant.value) {
+        case 'draft-enable':
+            // Draft = reversible until sent, so no "cannot be undone" now — only
+            // a heads-up that the choice locks in once the session starts.
+            return 'This session will start with the interactive Claude CLI running in a terminal embedded in the composer, instead of the SDK. You can turn it back off until you send the first message — after that, the choice is permanent.'
+        case 'committed-info':
+            return 'This session is running in hybrid CLI mode. There is no way back to the regular SDK mode — a session resumed by the CLI stays on the CLI. This dialog is just a reminder.'
+        default: // sdk-explainer / sdk-confirm
+            return 'This session will be driven by the interactive Claude CLI in a terminal embedded in the composer. The switch is applied on your next message and cannot be undone afterwards.'
+    }
+})
+
+function openHybridDialog(variant) {
+    hybridDialogVariant.value = variant
+    hybridDontShowAgain.value = true
+    hybridDialogAllowClose.value = false
+    if (hybridDialogRef.value) hybridDialogRef.value.open = true
+}
+
 function handleHybridClick() {
+    const seen = settingsStore.isClaudeHybridExplainerSeen
     if (isDraft.value) {
-        store.setDraftHybrid(props.sessionId, !isHybrid.value)
+        if (isHybrid.value) {
+            store.setDraftHybrid(props.sessionId, false)          // A.2 — toggle off
+        } else if (seen) {
+            store.setDraftHybrid(props.sessionId, true)           // A.1.b — enable directly
+        } else {
+            openHybridDialog('draft-enable')                       // A.1.a — explainer
+        }
         return
     }
-    if (isHybrid.value) return
-    if (hybridConfirmDialogRef.value) hybridConfirmDialogRef.value.open = true
+    if (isHybridCommitted.value) {
+        openHybridDialog('committed-info')                         // B.2 — reminder
+        return
+    }
+    if (isHybridStaged.value) {
+        store.setStagedHybrid(props.sessionId, false)              // staged → un-stage
+        return
+    }
+    openHybridDialog(seen ? 'sdk-confirm' : 'sdk-explainer')       // B.1.b / B.1.a
 }
-function confirmHybridSwitch() {
-    sendWsMessage({ type: 'set_session_hybrid', session_id: props.sessionId })
-    if (hybridConfirmDialogRef.value) hybridConfirmDialogRef.value.open = false
+
+// Persist the synced "seen" flag only when the dialog actually carries the
+// switch and the user left it on. Never on the info / short-confirm variants.
+function persistExplainerSeenIfNeeded() {
+    if (hybridDialogHasSwitch.value && hybridDontShowAgain.value) {
+        settingsStore.setClaudeHybridExplainerSeen(true)
+    }
+}
+
+function closeHybridDialog() {
+    hybridDialogAllowClose.value = true
+    if (hybridDialogRef.value) hybridDialogRef.value.open = false
+}
+
+// Footer "Switch to hybrid": stage the choice (draft flag or SDK staged switch);
+// the actual commit happens on Send/Apply for SDK sessions.
+function confirmHybridDialog() {
+    persistExplainerSeenIfNeeded()
+    if (hybridDialogVariant.value === 'draft-enable') {
+        store.setDraftHybrid(props.sessionId, true)
+    } else if (hybridDialogVariant.value === 'sdk-explainer' || hybridDialogVariant.value === 'sdk-confirm') {
+        store.setStagedHybrid(props.sessionId, true)
+    }
+    closeHybridDialog()
+}
+
+function cancelHybridDialog() {
+    persistExplainerSeenIfNeeded()
+    closeHybridDialog()
+}
+
+// Block Esc / X / backdrop on switch variants (the wa-hide event bubbles from
+// the nested wa-switch/wa-details too — scope to the dialog's own event).
+function onHybridDialogHide(event) {
+    if (event.target !== hybridDialogRef.value) return
+    if (hybridDialogForcedChoice.value && !hybridDialogAllowClose.value) {
+        event.preventDefault()
+    }
+}
+function onHybridDialogAfterHide(event) {
+    if (event.target !== hybridDialogRef.value) return
+    hybridDialogVariant.value = null
+    hybridDialogAllowClose.value = false
 }
 
 // Provider's attachment capabilities (file types, max bytes, resize policy).
@@ -285,16 +394,21 @@ const isDisabled = computed(() => {
 
 // Button label based on process state and settings changes
 // On drafts, the button is always "Send" since there's no process to apply settings to.
+// Whether the (non-draft) session has unapplied changes that "Apply settings"
+// would commit: a staged agent-settings change and/or a staged hybrid switch.
+const hasUnappliedChanges = computed(() =>
+    !isDraft.value && (hasSettingsChanged.value || isHybridStaged.value)
+)
 const buttonLabel = computed(() => {
     const state = processState.value?.state
     if (state === 'starting') return 'Starting...'
-    if (!isDraft.value && hasSettingsChanged.value && !messageText.value.trim()) return 'Apply settings'
+    if (hasUnappliedChanges.value && !messageText.value.trim()) return 'Apply settings'
     return 'Send'
 })
 
 // Button icon changes based on mode
 const buttonIcon = computed(() => {
-    if (!isDraft.value && hasSettingsChanged.value && !messageText.value.trim()) return 'arrows-rotate'
+    if (hasUnappliedChanges.value && !messageText.value.trim()) return 'arrows-rotate'
     return 'paper-plane'
 })
 
@@ -1249,9 +1363,11 @@ async function handleSend() {
     // is for *preparing* only. Guards both the click and the keyboard shortcut.
     if (props.sendingLocked) return
     const text = messageText.value.trim()
-    const isSettingsOnlyUpdate = !text && hasSettingsChanged.value
+    // A staged hybrid switch is an unapplied change too — committed below.
+    const hasStagedHybrid = isHybridStaged.value
+    const isSettingsOnlyUpdate = !text && (hasSettingsChanged.value || hasStagedHybrid)
 
-    // Need either text or settings change to proceed
+    // Need text, a settings change, or a staged hybrid switch to proceed
     if ((!text && !isSettingsOnlyUpdate) || isDisabled.value) return
 
     // Trust gate for drafts whose project is still unresolved — e.g. a draft
@@ -1270,6 +1386,19 @@ async function handleSend() {
             && selectedPermissionMode.value === settings.providerStore.value?.defaultUntrustedPermissionMode) {
             selectedPermissionMode.value = settings.resolvedDefaults.value.permission_mode
         }
+    }
+
+    // Commit a staged hybrid switch FIRST. The WS consumer processes frames in
+    // order, so the backend flips ``session.hybrid`` (killing the SDK agent)
+    // before it handles the send_message, and ``_create_agent`` then launches
+    // the CLI to receive it. With no message, the switch alone is applied and
+    // the CLI starts on the next message — we don't send an empty settings
+    // update that would launch it now; any other staged setting rides the next
+    // real message.
+    if (hasStagedHybrid) {
+        sendWsMessage({ type: 'set_session_hybrid', session_id: props.sessionId })
+        store.setStagedHybrid(props.sessionId, false)
+        if (!text) return
     }
 
     // Build the message payload
@@ -1820,7 +1949,10 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
                     :sending-locked="sendingLocked"
                 />
 
-                <!-- Hybrid CLI mode toggle (Claude Code, visible sessions only) -->
+                <!-- Hybrid CLI mode toggle (Claude Code, visible sessions only).
+                     Always clickable: committed sessions open the info dialog so a
+                     click is never a no-op the user reads as a bug. Green =
+                     committed, orange = pending (draft choice or staged switch). -->
                 <wa-button
                     v-if="isHybridAvailable"
                     :id="hybridButtonId"
@@ -1828,8 +1960,7 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
                     variant="neutral"
                     size="small"
                     class="hybrid-toggle-button"
-                    :class="{ active: isHybrid }"
-                    :disabled="!isDraft && isHybrid"
+                    :class="{ 'is-committed': isHybridCommitted, 'is-pending': hybridPending }"
                     @click="handleHybridClick"
                 >
                     <wa-icon name="terminal" variant="classic"></wa-icon>
@@ -1869,7 +2000,7 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
                 <wa-button
                     v-if="!sendingLocked"
                     variant="brand"
-                    :disabled="isDisabled || (!messageText.trim() && !(hasSettingsChanged && !isDraft))"
+                    :disabled="isDisabled || (!messageText.trim() && !hasUnappliedChanges)"
                     @click="handleSend"
                     size="small"
                     class="send-button"
@@ -1888,32 +2019,64 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
             </div>
         </div>
 
-        <!-- Hybrid switch confirmation (existing sessions only — one-way) -->
+        <!-- Hybrid CLI mode dialog — one dialog, four variants (see script).
+             The explanation lives in a <wa-details>, always present; only the
+             intro, the details' open state, the "don't show again" switch and the
+             footer buttons vary. Switch variants are forced-choice (no Esc / X /
+             backdrop) so the synced "seen" flag is only written on a real press. -->
         <wa-dialog
-            ref="hybridConfirmDialogRef"
-            label="Switch to hybrid CLI mode?"
-            style="--width: min(480px, calc(100vw - 2rem))"
+            ref="hybridDialogRef"
+            class="hybrid-dialog"
+            :class="{ 'forced-choice': hybridDialogForcedChoice }"
+            :label="hybridDialogTitle"
+            style="--width: min(520px, calc(100vw - 2rem))"
+            @wa-hide="onHybridDialogHide"
+            @wa-after-hide="onHybridDialogAfterHide"
         >
-            <p>
-                This session will be driven by the interactive Claude Code CLI
-                running in a terminal embedded above the composer. The rich
-                session view, costs and history stay as they are.
-            </p>
-            <p>
-                <strong>This cannot be undone:</strong> once the session has been
-                resumed by the CLI, it can never go back to the regular (SDK) mode.
-            </p>
+            <p class="hybrid-dialog-intro">{{ hybridDialogIntro }}</p>
+            <wa-details
+                class="hybrid-dialog-details"
+                :open="hybridDialogDetailsOpen"
+            >
+                <span slot="summary">What does hybrid mode do?</span>
+                <p>
+                    Hybrid mode runs the real interactive Claude Code CLI in a
+                    terminal embedded in the composer — slash commands, dialogs and
+                    all — while TwiCC keeps the rich session view, costs, history
+                    and notifications.
+                </p>
+                <p>
+                    It is a one-way switch: a session resumed by the CLI can never
+                    go back to the regular SDK mode.
+                </p>
+            </wa-details>
+
+            <wa-switch
+                v-if="hybridDialogHasSwitch"
+                slot="footer"
+                class="hybrid-dialog-switch"
+                :checked="hybridDontShowAgain"
+                @change="hybridDontShowAgain = $event.target.checked"
+            >Don't show this again</wa-switch>
             <wa-button
+                v-if="hybridDialogIsInfo"
                 slot="footer"
                 variant="neutral"
-                appearance="outlined"
-                @click="hybridConfirmDialogRef.open = false"
-            >Cancel</wa-button>
-            <wa-button
-                slot="footer"
-                variant="brand"
-                @click="confirmHybridSwitch"
-            >Switch to hybrid</wa-button>
+                @click="closeHybridDialog"
+            >Close</wa-button>
+            <template v-else>
+                <wa-button
+                    slot="footer"
+                    variant="neutral"
+                    appearance="outlined"
+                    @click="cancelHybridDialog"
+                >Cancel</wa-button>
+                <wa-button
+                    slot="footer"
+                    variant="brand"
+                    @click="confirmHybridDialog"
+                >Switch to hybrid</wa-button>
+            </template>
         </wa-dialog>
     </div>
 </template>
@@ -2029,9 +2192,29 @@ body.sidebar-closed .message-input-toolbar {
 
 .hybrid-toggle-button {
     flex-shrink: 0;
-    &.active::part(base) {
-        color: var(--wa-color-brand-fill-loud);
+    /* Green = committed hybrid session (locked in); orange = pending (a draft's
+       choice, or a staged switch on an SDK session — still reversible until the
+       next Send/Apply). The button is never disabled now, so no opacity fix. */
+    &.is-committed::part(base) {
+        color: var(--wa-color-success-fill-loud);
     }
+    &.is-pending::part(base) {
+        color: var(--wa-color-warning-fill-loud);
+    }
+}
+
+/* Hybrid dialog footer: the "don't show again" switch sits left of the buttons;
+   the close (X) is hidden on forced-choice variants so a footer button must be
+   pressed (we never persist the "seen" flag on an Esc/backdrop dismissal). */
+.hybrid-dialog-intro {
+    margin-block-start: 0;
+}
+.hybrid-dialog-switch {
+    margin-inline-end: auto;
+    align-self: center;
+}
+.hybrid-dialog.forced-choice::part(close-button) {
+    display: none;
 }
 
 .message-input-actions {

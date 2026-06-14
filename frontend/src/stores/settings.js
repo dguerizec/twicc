@@ -65,6 +65,9 @@ export const SETTINGS_SCHEMA = {
     externalNotificationTargets: [],
     publicBaseUrl: null,
     notifyOnExtraUsageStart: null,
+    // Whether the user has seen the hybrid-mode explainer dialog (never shown
+    // in the settings panel; gates the hybrid toggle's explainer).
+    claudeHybridExplainerSeen: null,
     // --- Not persisted - runtime state ---
     _disabledProvidersPresent: false,
     _devMode: false,
@@ -100,6 +103,7 @@ const SETTINGS_VALIDATORS = {
     notifyOnExtraUsageStart: (v) => typeof v === 'boolean',
     maxCachedSessions: (v) => typeof v === 'number' && Number.isInteger(v) && v >= 1 && v <= 50,
     autoUnpinOnArchive: (v) => typeof v === 'boolean',
+    claudeHybridExplainerSeen: (v) => typeof v === 'boolean',
     defaultWorktreeDirectory: (v) => typeof v === 'string',
     terminalUseTmux: (v) => typeof v === 'boolean',
     terminalTmuxConfigPath: (v) => typeof v === 'string',
@@ -278,6 +282,8 @@ export const useSettingsStore = defineStore('settings', {
         shouldNotifyOnExtraUsageStart: (state) => state.notifyOnExtraUsageStart,
         getMaxCachedSessions: (state) => state.maxCachedSessions,
         isAutoUnpinOnArchive: (state) => state.autoUnpinOnArchive,
+        // null (not yet loaded / never set) reads as "not seen".
+        isClaudeHybridExplainerSeen: (state) => state.claudeHybridExplainerSeen === true,
         getDefaultWorktreeDirectory: (state) => state.defaultWorktreeDirectory,
         isTerminalUseTmux: (state) => state.terminalUseTmux,
         getTerminalTmuxConfigPath: (state) => state.terminalTmuxConfigPath,
@@ -491,6 +497,19 @@ export const useSettingsStore = defineStore('settings', {
         setAutoUnpinOnArchive(enabled) {
             if (SETTINGS_VALIDATORS.autoUnpinOnArchive(enabled)) {
                 this.autoUnpinOnArchive = enabled
+            }
+        },
+
+        /**
+         * Record whether the user has seen the hybrid-mode explainer dialog.
+         * Synced (so it follows the user across devices) but never surfaced in
+         * the settings panel; written only via the dialog's "don't show again"
+         * switch.
+         * @param {boolean} seen
+         */
+        setClaudeHybridExplainerSeen(seen) {
+            if (SETTINGS_VALIDATORS.claudeHybridExplainerSeen(seen)) {
+                this.claudeHybridExplainerSeen = seen
             }
         },
 
@@ -952,6 +971,7 @@ export function initSettings() {
             extraUsageOnlyWhenNeeded: store.extraUsageOnlyWhenNeeded,
             maxCachedSessions: store.maxCachedSessions,
             autoUnpinOnArchive: store.autoUnpinOnArchive,
+            claudeHybridExplainerSeen: store.claudeHybridExplainerSeen,
             defaultWorktreeDirectory: store.defaultWorktreeDirectory,
             terminalUseTmux: store.terminalUseTmux,
             terminalTmuxConfigPath: store.terminalTmuxConfigPath,

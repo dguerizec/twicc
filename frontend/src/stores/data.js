@@ -488,6 +488,15 @@ export const useDataStore = defineStore('data', {
             // injected by recomputeVisualItems like the optimistic message).
             failedSends: {},
 
+            // Staged (pending, not-yet-committed) hybrid switch for an existing
+            // SDK session, keyed by sessionId. A startup-type change: chosen via
+            // the toggle dialog but only committed (`set_session_hybrid`) on the
+            // next Send / Apply. Deliberately volatile — NOT persisted to
+            // IndexedDB — so a page reload before applying drops the staged
+            // choice (the switch is irreversible only once committed).
+            // { sessionId: true }
+            stagedHybrid: {},
+
             // Streaming blocks - live text/thinking deltas from the SDK stream.
             // { sessionId: { messageId, blocks: [{ blockIndex, blockType, text, stopped, uuid }] } }
             // Each block is rendered as a synthetic visual item until the real
@@ -971,6 +980,11 @@ export const useDataStore = defineStore('data', {
         // A failed send entry (red bubble in the conversation flow)
         getFailedSend: (state) => (sessionId, requestId) =>
             state.localState.failedSends[sessionId]?.[requestId] || null,
+
+        // Whether an existing SDK session has a staged (pending, not-yet-applied)
+        // hybrid switch — committed on the next Send/Apply, droppable until then.
+        isHybridStaged: (state) => (sessionId) =>
+            state.localState.stagedHybrid[sessionId] === true,
 
         // Whether any files are currently being processed (encoded/resized) for a session
         isProcessingAttachments: (state) => (sessionId) => {
@@ -2705,6 +2719,22 @@ export const useDataStore = defineStore('data', {
                 console.warn('Failed to delete in-flight send snapshot:', err)
             )
             this.recomputeVisualItems(sessionId)
+        },
+
+        /**
+         * Stage or un-stage a pending hybrid switch for an existing SDK session.
+         * Local + volatile (never persisted): the switch is only committed via
+         * ``set_session_hybrid`` on the next Send/Apply. Re-clicking the toggle
+         * un-stages it silently.
+         * @param {string} sessionId
+         * @param {boolean} staged
+         */
+        setStagedHybrid(sessionId, staged) {
+            if (staged) {
+                this.localState.stagedHybrid[sessionId] = true
+            } else {
+                delete this.localState.stagedHybrid[sessionId]
+            }
         },
 
         /**
