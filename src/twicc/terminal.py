@@ -65,6 +65,14 @@ READ_BUFFER_SIZE = 20480
 # tmux socket name — isolates twicc sessions from user's own tmux
 TMUX_SOCKET_NAME = "twicc"
 
+# Hybrid CLI sessions live on a SEPARATE tmux socket. The user's custom tmux
+# config (``terminalTmuxConfigPath``) is loaded server-wide on the main socket,
+# so a dedicated socket is the only way to guarantee it never reaches the
+# embedded Claude TUI (and vice-versa). Every tmux call bound to a terminal
+# context routes through ``tmux_socket_for``; the hybrid agent's own primitives
+# (hybrid/tmux.py) import this name directly.
+HYBRID_TMUX_SOCKET_NAME = "twicc-hybrid"
+
 # Maximum length for terminal tab labels (stored in tmux user options)
 TERMINAL_LABEL_MAX_LENGTH = 30
 
@@ -223,6 +231,17 @@ def tmux_session_name(terminal_context: str, terminal_index: int = 0) -> str:
     return f"{base}__{terminal_index}"
 
 
+def tmux_socket_for(terminal_context: str) -> str:
+    """Return the tmux socket name to use for a given terminal context.
+
+    Hybrid contexts (``h:`` prefix) get their own dedicated socket
+    (``HYBRID_TMUX_SOCKET_NAME``) so the user's custom tmux config — loaded
+    server-wide on the main socket — can never reach the embedded Claude TUI.
+    Every context-bound tmux invocation MUST route its ``-L`` through here.
+    """
+    return HYBRID_TMUX_SOCKET_NAME if terminal_context.startswith("h:") else TMUX_SOCKET_NAME
+
+
 # ── PTY helpers (pure functions, no class needed) ─────────────────────────
 
 def set_winsize(fd: int, cols: int, rows: int) -> None:
@@ -303,8 +322,10 @@ def spawn_tmux_pty(
 ) -> tuple[int, int]:
     """Fork a PTY running tmux, attaching to or creating a named terminal.
 
-    Uses ``tmux -L twicc -f <cfg> new-session -A -s <name>`` which:
-    - ``-L twicc``: always use a dedicated socket (isolation from user's tmux)
+    Uses ``tmux -L <socket> -f <cfg> new-session -A -s <name>`` which:
+    - ``-L <socket>``: a dedicated socket (isolation from user's tmux),
+      ``tmux_socket_for(terminal_context)`` — hybrid contexts get their own
+      socket so the user's tmux config can't leak into the embedded Claude TUI
     - ``-f <cfg>``: config file — ``/dev/null`` unless a valid user path is passed
     - ``new-session -A``: attach if session exists, create if not
     - ``-s <name>``: deterministic session name
@@ -345,7 +366,7 @@ def spawn_tmux_pty(
         if attach_only:
             os.execvp(tmux_path, [
                 "tmux",
-                "-L", TMUX_SOCKET_NAME,
+                "-L", tmux_socket_for(terminal_context),
                 "-f", config_arg,
                 "attach-session",
                 "-t", "=" + name,
@@ -353,7 +374,7 @@ def spawn_tmux_pty(
         else:
             os.execvp(tmux_path, [
                 "tmux",
-                "-L", TMUX_SOCKET_NAME,
+                "-L", tmux_socket_for(terminal_context),
                 "-f", config_arg,
                 "new-session", "-A",
                 "-s", name,
@@ -404,7 +425,7 @@ def tmux_session_exists(terminal_context: str, terminal_index: int = 0) -> bool:
     name = tmux_session_name(terminal_context, terminal_index)
     try:
         result = subprocess.run(
-            [tmux_path, "-L", TMUX_SOCKET_NAME, "has-session", "-t", name],
+            [tmux_path, "-L", tmux_socket_for(terminal_context), "has-session", "-t", name],
             capture_output=True,
             timeout=5,
         )
@@ -429,7 +450,7 @@ def list_tmux_terminals(terminal_context: str) -> list[TerminalInfo]:
 
     try:
         result = subprocess.run(
-            [tmux_path, "-L", TMUX_SOCKET_NAME, "list-sessions",
+            [tmux_path, "-L", tmux_socket_for(terminal_context), "list-sessions",
              "-F", "#{session_name}\t#{@twicc_label}"],
             capture_output=True,
             text=True,
@@ -471,7 +492,7 @@ def kill_tmux_terminal(terminal_context: str, terminal_index: int = 0) -> bool:
     name = tmux_session_name(terminal_context, terminal_index)
     try:
         result = subprocess.run(
-            [tmux_path, "-L", TMUX_SOCKET_NAME, "kill-session", "-t", name],
+            [tmux_path, "-L", tmux_socket_for(terminal_context), "kill-session", "-t", name],
             capture_output=True,
             timeout=5,
         )
@@ -506,7 +527,7 @@ def tmux_set_option(terminal_context: str, option: str, value: str, terminal_ind
     name = tmux_session_name(terminal_context, terminal_index)
     try:
         result = subprocess.run(
-            [tmux_path, "-L", TMUX_SOCKET_NAME, "set-option", "-t", name, option, value],
+            [tmux_path, "-L", tmux_socket_for(terminal_context), "set-option", "-t", name, option, value],
             capture_output=True, timeout=5,
         )
         return result.returncode == 0
@@ -543,7 +564,7 @@ def _unset_tmux_terminal_label(terminal_context: str, terminal_index: int) -> bo
     name = tmux_session_name(terminal_context, terminal_index)
     try:
         result = subprocess.run(
-            [tmux_path, "-L", TMUX_SOCKET_NAME, "set-option", "-u", "-t", name, _TMUX_LABEL_OPTION],
+            [tmux_path, "-L", tmux_socket_for(terminal_context), "set-option", "-u", "-t", name, _TMUX_LABEL_OPTION],
             capture_output=True, timeout=5,
         )
         return result.returncode == 0
@@ -551,14 +572,18 @@ def _unset_tmux_terminal_label(terminal_context: str, terminal_index: int) -> bo
         return False
 
 
-def _tmux_set_global_option(option: str, value: str) -> bool:
-    """Set a tmux global (server-wide) option on the twicc socket."""
+def _tmux_set_global_option(option: str, value: str, socket: str = TMUX_SOCKET_NAME) -> bool:
+    """Set a tmux global (server-wide) option on the given twicc socket.
+
+    ``socket`` defaults to the main socket; pass ``tmux_socket_for(context)``
+    so a hybrid attach configures its own dedicated server, not the main one.
+    """
     tmux_path = get_tmux_path()
     if tmux_path is None:
         return False
     try:
         result = subprocess.run(
-            [tmux_path, "-L", TMUX_SOCKET_NAME, "set-option", "-g", option, value],
+            [tmux_path, "-L", socket, "set-option", "-g", option, value],
             capture_output=True, timeout=5,
         )
         return result.returncode == 0
@@ -584,7 +609,7 @@ def _tmux_scroll(terminal_context: str, lines: int, terminal_index: int = 0) -> 
     count = abs(lines)
     # Single tmux invocation: enter copy-mode (no-op if already in) + scroll N lines
     subprocess.run(
-        [tmux_path, "-L", TMUX_SOCKET_NAME,
+        [tmux_path, "-L", tmux_socket_for(terminal_context),
          "copy-mode", "-eH", "-t", name, ";",
          "send-keys", "-t", name, "-X", "-N", str(count), cmd],
         capture_output=True, timeout=5,
@@ -594,7 +619,7 @@ def _tmux_scroll(terminal_context: str, lines: int, terminal_index: int = 0) -> 
     # will be empty — that means we're at the bottom (position 0).
     try:
         result = subprocess.run(
-            [tmux_path, "-L", TMUX_SOCKET_NAME, "display-message",
+            [tmux_path, "-L", tmux_socket_for(terminal_context), "display-message",
              "-t", name, "-p", "#{scroll_position},#{history_size}"],
             capture_output=True, text=True, timeout=5,
         )
@@ -628,7 +653,7 @@ def _tmux_pane_state(terminal_context: str, terminal_index: int = 0) -> dict | N
     name = tmux_session_name(terminal_context, terminal_index)
     try:
         result = subprocess.run(
-            [tmux_path, "-L", TMUX_SOCKET_NAME, "display-message",
+            [tmux_path, "-L", tmux_socket_for(terminal_context), "display-message",
              "-t", name, "-p",
              "#{alternate_on},#{pane_in_mode},#{scroll_position},#{history_size}"],
             capture_output=True, text=True, timeout=5,
@@ -827,7 +852,7 @@ async def terminal_application(scope, receive, send):
         # Force mouse off at both session and global level — ensures clean
         # state regardless of prior tmux server configuration or user config.
         await asyncio.to_thread(tmux_set_option, terminal_context, "mouse", "off", terminal_index=terminal_index)
-        await asyncio.to_thread(_tmux_set_global_option, "mouse", "off")
+        await asyncio.to_thread(_tmux_set_global_option, "mouse", "off", tmux_socket_for(terminal_context))
 
     # ── PTY output reader task ────────────────────────────────────────
     # Uses add_reader for event-driven reading, and an asyncio.Queue

@@ -1,9 +1,11 @@
 """Tmux primitives for hybrid CLI sessions.
 
 A hybrid session owns exactly one tmux session named ``twicc-hybrid-<id>``
-(sanitized), on the shared ``-L twicc`` socket, whose single pane runs the
-Claude CLI directly (via ``exec``) so the pane PID *is* the claude PID and
-``pane_dead`` flips when claude exits (``remain-on-exit on``).
+(sanitized), on the dedicated ``-L twicc-hybrid`` socket (separate from the
+Terminal panel's ``-L twicc`` so the user's custom tmux config never reaches
+the Claude TUI), whose single pane runs the Claude CLI directly (via ``exec``)
+so the pane PID *is* the claude PID and ``pane_dead`` flips when claude exits
+(``remain-on-exit on``).
 
 All functions are sync — callers wrap them with ``asyncio.to_thread``.
 """
@@ -15,7 +17,7 @@ import shlex
 import subprocess
 import time
 
-from twicc.terminal import TMUX_SOCKET_NAME, get_tmux_path, resolve_tmux_config_path
+from twicc.terminal import HYBRID_TMUX_SOCKET_NAME, get_tmux_path
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +73,7 @@ def _tmux_base() -> list[str]:
     tmux = get_tmux_path()
     if tmux is None:
         raise RuntimeError("tmux is not installed — hybrid mode requires tmux")
-    return [tmux, "-L", TMUX_SOCKET_NAME]
+    return [tmux, "-L", HYBRID_TMUX_SOCKET_NAME]
 
 
 def _run(args: list[str], *, input_bytes: bytes | None = None) -> subprocess.CompletedProcess:
@@ -82,14 +84,6 @@ def _run(args: list[str], *, input_bytes: bytes | None = None) -> subprocess.Com
         timeout=5,
         check=False,
     )
-
-
-def _read_tmux_config_path() -> str | None:
-    """User-configured tmux config, resolved like the Terminal panel does."""
-    from twicc.synced_settings import read_synced_settings
-
-    configured = read_synced_settings().get("terminalTmuxConfigPath") or ""
-    return resolve_tmux_config_path(configured)
 
 
 def session_exists(session_id: str) -> bool:
@@ -116,8 +110,13 @@ def create_session(session_id: str, cwd: str, argv: list[str]) -> None:
     env_args = unsets + assignments
     command = "exec env " + shlex.join(env_args + argv) if env_args else "exec " + shlex.join(argv)
     base = _tmux_base()
-    config = _read_tmux_config_path()
-    base += ["-f", config if config else "/dev/null"]
+    # NEVER load the user's custom tmux config (``terminalTmuxConfigPath``) for
+    # the hybrid CLI pane. That setting is meant for the user's own Terminal
+    # panel; here it would only risk interfering with the embedded Claude TUI
+    # (status scripting, key bindings, escape-time, colours…). Always start from
+    # a clean ``/dev/null`` config — the session-level options set just below
+    # force the few settings the hybrid pane actually needs.
+    base += ["-f", "/dev/null"]
     result = subprocess.run(
         [*base, "new-session", "-d", "-s", name, "-c", cwd, command],
         capture_output=True,
