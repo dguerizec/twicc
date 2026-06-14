@@ -32,6 +32,25 @@ const insertTextAtCursor = inject('insertTextAtCursor', null)
 
 const failedSend = computed(() => props.content?.failedSend || null)
 
+// A hybrid send rejected because the CLI composer was busy (a TUI dialog was
+// open, or the user had text typed) carries a now-or-never reason. The backend
+// polls every 2.5s and clears ``terminal_blocked`` once the composer is ready
+// again — at which point the original "resolve the dialog" wording is stale and
+// confusing. Detect that positive unblock (strict ``=== false``: a hybrid agent
+// always reports the flag, so this is real knowledge, not "no state") and swap
+// the message for a ready-to-retry one. Purely presentational; the user still
+// drives the actual resend with Retry.
+const composerReadyAgain = computed(() =>
+    failedSend.value?.code === 'hybrid_composer_busy'
+    && store.getProcessState(props.sessionId)?.extra?.terminal_blocked === false
+)
+
+const displayMessage = computed(() =>
+    composerReadyAgain.value
+        ? 'The Claude CLI terminal was blocked and is ready again — retry to send your message.'
+        : (failedSend.value?.message || '')
+)
+
 function getEntry() {
     const requestId = failedSend.value?.requestId
     return requestId ? store.getFailedSend(props.sessionId, requestId) : null
@@ -107,7 +126,7 @@ function discard() {
     >
         <wa-icon slot="icon" name="circle-exclamation"></wa-icon>
         <div class="failed-send-content">
-            <div class="failed-send-message">{{ failedSend.message }}</div>
+            <div class="failed-send-message">{{ displayMessage }}</div>
             <div v-if="failedSend.mediasDropped" class="failed-send-note">
                 Its attachments were too large to preserve — only the text can be retried or edited.
             </div>
