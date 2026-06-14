@@ -16,6 +16,7 @@ import { computed, ref } from 'vue'
 import { getProviderHelpers, getProviderIcon } from '../../providers'
 import { useSettingsStore } from '../../stores/settings'
 import AgentSettingsPresetsDialog from './AgentSettingsPresetsDialog.vue'
+import HybridModeExplainer from '../message/HybridModeExplainer.vue'
 
 const props = defineProps({
     provider: {
@@ -161,6 +162,19 @@ function onOrchestrationToggle(event) {
             {{ helpers.constructor.label }} settings
             <wa-icon name="cloud" class="synced-icon"></wa-icon>
         </h3>
+
+        <!-- Hybrid mode default (Claude Code only): new sessions start in hybrid
+             mode. Drafts only — existing sessions are never enforced. -->
+        <div v-if="provider === 'claude_code'" class="setting-group">
+            <label class="setting-group-label">Hybrid Mode</label>
+            <wa-switch
+                :checked="settingsStore.isClaudeHybridDefault"
+                @change="settingsStore.setClaudeHybridDefault($event.target.checked)"
+            >Activate on new sessions</wa-switch>
+            <HybridModeExplainer />
+        </div>
+        <wa-divider v-if="provider === 'claude_code'"></wa-divider>
+
         <div
             v-for="field in supportedFields"
             :key="field"

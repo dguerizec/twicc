@@ -68,6 +68,8 @@ export const SETTINGS_SCHEMA = {
     // Whether the user has seen the hybrid-mode explainer dialog (never shown
     // in the settings panel; gates the hybrid toggle's explainer).
     claudeHybridExplainerSeen: null,
+    // Start new Claude Code sessions in hybrid mode by default (drafts only).
+    claudeHybridDefault: null,
     // --- Not persisted - runtime state ---
     _disabledProvidersPresent: false,
     _devMode: false,
@@ -104,6 +106,7 @@ const SETTINGS_VALIDATORS = {
     maxCachedSessions: (v) => typeof v === 'number' && Number.isInteger(v) && v >= 1 && v <= 50,
     autoUnpinOnArchive: (v) => typeof v === 'boolean',
     claudeHybridExplainerSeen: (v) => typeof v === 'boolean',
+    claudeHybridDefault: (v) => typeof v === 'boolean',
     defaultWorktreeDirectory: (v) => typeof v === 'string',
     terminalUseTmux: (v) => typeof v === 'boolean',
     terminalTmuxConfigPath: (v) => typeof v === 'string',
@@ -284,6 +287,8 @@ export const useSettingsStore = defineStore('settings', {
         isAutoUnpinOnArchive: (state) => state.autoUnpinOnArchive,
         // null (not yet loaded / never set) reads as "not seen".
         isClaudeHybridExplainerSeen: (state) => state.claudeHybridExplainerSeen === true,
+        // Whether new Claude Code sessions should start in hybrid mode.
+        isClaudeHybridDefault: (state) => state.claudeHybridDefault === true,
         getDefaultWorktreeDirectory: (state) => state.defaultWorktreeDirectory,
         isTerminalUseTmux: (state) => state.terminalUseTmux,
         getTerminalTmuxConfigPath: (state) => state.terminalTmuxConfigPath,
@@ -510,6 +515,17 @@ export const useSettingsStore = defineStore('settings', {
         setClaudeHybridExplainerSeen(seen) {
             if (SETTINGS_VALIDATORS.claudeHybridExplainerSeen(seen)) {
                 this.claudeHybridExplainerSeen = seen
+            }
+        },
+
+        /**
+         * Whether new Claude Code sessions start in hybrid mode by default.
+         * Synced; applies to new drafts only (never to existing sessions).
+         * @param {boolean} enabled
+         */
+        setClaudeHybridDefault(enabled) {
+            if (SETTINGS_VALIDATORS.claudeHybridDefault(enabled)) {
+                this.claudeHybridDefault = enabled
             }
         },
 
@@ -972,6 +988,7 @@ export function initSettings() {
             maxCachedSessions: store.maxCachedSessions,
             autoUnpinOnArchive: store.autoUnpinOnArchive,
             claudeHybridExplainerSeen: store.claudeHybridExplainerSeen,
+            claudeHybridDefault: store.claudeHybridDefault,
             defaultWorktreeDirectory: store.defaultWorktreeDirectory,
             terminalUseTmux: store.terminalUseTmux,
             terminalTmuxConfigPath: store.terminalTmuxConfigPath,

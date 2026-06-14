@@ -34,6 +34,7 @@ import MessageSnippetsDialog from './MessageSnippetsDialog.vue'
 import AgentSettingsSummary from './AgentSettingsSummary.vue'
 import AgentSettingsPopover from './AgentSettingsPopover.vue'
 import CollapsedBar from './CollapsedBar.vue'
+import HybridModeExplainer from './HybridModeExplainer.vue'
 import { useMessageSnippetsStore } from '../../stores/messageSnippets'
 import { useWorkspacesStore } from '../../stores/workspaces'
 import { getUnavailablePlaceholders, resolveSnippetText } from '../../utils/snippetPlaceholders'
@@ -2034,22 +2035,7 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
             @wa-after-hide="onHybridDialogAfterHide"
         >
             <p class="hybrid-dialog-intro">{{ hybridDialogIntro }}</p>
-            <wa-details
-                class="hybrid-dialog-details"
-                :open="hybridDialogDetailsOpen"
-            >
-                <span slot="summary">What does hybrid mode do?</span>
-                <p>
-                    Hybrid mode runs the real interactive Claude Code CLI in a
-                    terminal embedded in the composer — slash commands, dialogs and
-                    all — while TwiCC keeps the rich session view, costs, history
-                    and notifications.
-                </p>
-                <p>
-                    It is a one-way switch: a session resumed by the CLI can never
-                    go back to the regular SDK mode.
-                </p>
-            </wa-details>
+            <HybridModeExplainer :open="hybridDialogDetailsOpen" />
 
             <wa-switch
                 v-if="hybridDialogHasSwitch"

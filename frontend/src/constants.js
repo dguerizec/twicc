@@ -214,4 +214,7 @@ export const SYNCED_SETTINGS_KEYS = new Set([
     // the user has seen the hybrid-mode explainer dialog (so it stops gating
     // the toggle). Written only via the dialog's "don't show again" switch.
     'claudeHybridExplainerSeen',
+    // Start new Claude Code sessions in hybrid mode by default (drafts only;
+    // never enforced on existing sessions). Shown in the Claude settings section.
+    'claudeHybridDefault',
 ])

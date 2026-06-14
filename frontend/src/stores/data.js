@@ -1242,6 +1242,10 @@ export const useDataStore = defineStore('data', {
             // launching the session freezes today's project → global defaults
             // regardless of later default changes (option A).
             const settings = this._resolveDraftAgentSettings(projectId, provider, trustState)
+            // Hybrid-by-default (synced setting): new Claude Code sessions start in
+            // hybrid mode when enabled. Claude Code only — the flag is meaningless
+            // for other providers. Existing sessions are never touched.
+            const hybrid = provider === 'claude_code' && useSettingsStore().isClaudeHybridDefault
             this.sessions[id] = {
                 id,
                 project_id: projectId,
@@ -1250,11 +1254,11 @@ export const useDataStore = defineStore('data', {
                 mtime: now,
                 last_line: 0,
                 draft: true,
-                hybrid: false,
+                hybrid,
                 ...settings,
             }
-            // Persist to IndexedDB
-            saveDraftSession(id, { projectId, provider, ...settings }).catch(err =>
+            // Persist to IndexedDB (hybrid included so the default survives a reload)
+            saveDraftSession(id, { projectId, provider, hybrid, ...settings }).catch(err =>
                 console.warn('Failed to save draft session to IndexedDB:', err)
             )
             return id
@@ -1301,10 +1305,15 @@ export const useDataStore = defineStore('data', {
             // bundle held the old provider's resolved defaults).
             const settings = this._resolveDraftAgentSettings(session.project_id, provider)
             Object.assign(session, settings)
+            // Re-resolve the hybrid flag for the new provider: it is Claude Code
+            // only, so switching to another provider clears it; switching to
+            // Claude Code applies the hybrid-by-default setting.
+            session.hybrid = provider === 'claude_code' && useSettingsStore().isClaudeHybridDefault
             saveDraftSession(sessionId, {
                 projectId: session.project_id,
                 title: session.title,
                 provider,
+                hybrid: session.hybrid,
                 ...settings,
             }).catch(err =>
                 console.warn('Failed to save draft session provider to IndexedDB:', err)
