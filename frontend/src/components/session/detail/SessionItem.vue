@@ -679,7 +679,12 @@ wa-details {
 
 /* Common style for wa-detail and wa-detail.items-details */
 wa-details {
-    --spacing: min(var(--card-spacing), var(--wa-space-m));
+    /* Fall back to --wa-space-m when --card-spacing is undefined (e.g. a
+       wa-details outside a session card, like the hybrid dialog): without the
+       fallback, var(--card-spacing) resolves to nothing, the whole min() is
+       invalid, and --spacing collapses to 0 — leaving the details with no
+       padding. */
+    --spacing: min(var(--card-spacing, var(--wa-space-m)), var(--wa-space-m));
 }
 
 wa-details.item-details {
