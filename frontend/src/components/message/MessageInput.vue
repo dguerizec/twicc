@@ -139,10 +139,10 @@ const isHybridStaged = computed(() => !isHybridCommitted.value && store.isHybrid
 const hybridPending = computed(() => (isDraft.value && isHybrid.value) || isHybridStaged.value)
 
 const hybridTooltipLabel = computed(() => {
-    if (isHybridCommitted.value) return 'Hybrid CLI mode (permanent) — click for details'
-    if (isDraft.value && isHybrid.value) return 'Hybrid CLI mode on for this draft — click to turn off'
+    if (isHybridCommitted.value) return 'Hybrid mode (permanent) — click for details'
+    if (isDraft.value && isHybrid.value) return 'Hybrid mode on for this draft — click to turn off'
     if (isHybridStaged.value) return 'Hybrid switch staged — applies on send; click to cancel'
-    return 'Switch to hybrid CLI mode'
+    return 'Turn on hybrid mode'
 })
 
 // ── Hybrid dialog (single dialog, four variants) ────────────────────────────
@@ -164,22 +164,26 @@ const hybridDialogDetailsOpen = computed(() => hybridDialogHasSwitch.value)
 const hybridDialogForcedChoice = computed(() => hybridDialogHasSwitch.value)
 const hybridDialogIsInfo = computed(() => hybridDialogVariant.value === 'committed-info')
 const hybridDialogTitle = computed(() => {
-    if (hybridDialogVariant.value === 'committed-info') return 'Hybrid CLI mode'
+    if (hybridDialogVariant.value === 'committed-info') return 'Hybrid mode'
     if (hybridDialogVariant.value === 'draft-enable') return 'Start this session in hybrid mode?'
-    return 'Switch to hybrid CLI mode?'
+    return 'Switch this session to hybrid mode?'
 })
 const hybridDialogIntro = computed(() => {
     switch (hybridDialogVariant.value) {
         case 'draft-enable':
             // Draft = reversible until sent, so no "cannot be undone" now — only
             // a heads-up that the choice locks in once the session starts.
-            return 'This session will start with the interactive Claude CLI running in a terminal embedded in the composer, instead of the SDK. You can turn it back off until you send the first message — after that, the choice is permanent.'
+            return 'This draft will start in hybrid mode. You can turn it back off until you send the first message — after that it\'s permanent.'
         case 'committed-info':
-            return 'This session is running in hybrid CLI mode. There is no way back to the regular SDK mode — a session resumed by the CLI stays on the CLI. This dialog is just a reminder.'
+            return 'This session is in hybrid mode. There\'s no way back to normal mode — it\'s permanent. (Just a reminder.)'
         default: // sdk-explainer / sdk-confirm
-            return 'This session will be driven by the interactive Claude CLI in a terminal embedded in the composer. The switch is applied on your next message and cannot be undone afterwards.'
+            return 'This session switches to hybrid mode on your next message — and can\'t be undone afterwards.'
     }
 })
+// A draft "starts" hybrid; an existing SDK session "switches" — match the title.
+const hybridConfirmLabel = computed(() =>
+    hybridDialogVariant.value === 'draft-enable' ? 'Start in hybrid mode' : 'Switch to hybrid mode'
+)
 
 function openHybridDialog(variant) {
     hybridDialogVariant.value = variant
@@ -2030,7 +2034,7 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
             class="hybrid-dialog"
             :class="{ 'forced-choice': hybridDialogForcedChoice }"
             :label="hybridDialogTitle"
-            style="--width: min(520px, calc(100vw - 2rem))"
+            style="--width: min(40rem, calc(100vw - 2rem))"
             @wa-hide="onHybridDialogHide"
             @wa-after-hide="onHybridDialogAfterHide"
         >
@@ -2061,7 +2065,7 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
                     slot="footer"
                     variant="brand"
                     @click="confirmHybridDialog"
-                >Switch to hybrid</wa-button>
+                >{{ hybridConfirmLabel }}</wa-button>
             </template>
         </wa-dialog>
     </div>
