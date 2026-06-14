@@ -15,8 +15,11 @@ import '@xterm/xterm/css/xterm.css'
 // Hybrid CLI terminals (contextKey "h:<session_id>") never go below this
 // column count: the font shrinks instead (see fitTerminal), down to the
 // floor below which fewer columns are accepted rather than unreadable text.
-const HYBRID_MIN_COLS = 80
-const HYBRID_MIN_FONT_SIZE = 6
+// Kept fairly low so the embedded terminal stays usable when the client
+// window is narrow (the tmux session is still born at 80x24 — only an opened,
+// narrow on-screen pane drives it below that).
+const HYBRID_MIN_COLS = 40
+const HYBRID_MIN_FONT_SIZE = 10
 // Trailing debounce for container-resize refits. During a live drag the
 // ResizeObserver fires every frame, and every column change reflows the whole
 // xterm scrollback AND makes tmux re-wrap its history server-side — fitting
@@ -1088,16 +1091,25 @@ export function useTerminal(contextKey, terminalIndex = 0, { sessionId = null, p
         if (!terminal || lines === 0) return
 
         if (paneAlternate.value) {
-            // Alternate screen app inside tmux (vim, less, htop…):
-            // send arrow keys — the app handles scrolling.
-            // Use SS3 sequences when application cursor mode is active (DECCKM).
-
+            // Alternate screen inside tmux — two sub-cases.
             detectAlternateScrollResult(lines, 'tmux+alternate')
-            const appCursor = terminal?.modes?.applicationCursorKeysMode ?? false
-            const key = lines > 0
-                ? (appCursor ? '\x1bOB' : '\x1b[B')
-                : (appCursor ? '\x1bOA' : '\x1b[A')
-            wsSend({ type: 'input', data: key.repeat(Math.abs(lines)) })
+            if (contextKey?.startsWith('h:')) {
+                // Hybrid Claude CLI in its fullscreen renderer (alternate screen):
+                // the conversation scrolls on PgUp/PgDn — the arrow keys drive the
+                // composer, not the scrollback, so they'd be swallowed. Send one
+                // half-page key per call (direction from the sign); this renderer
+                // has no finer keyboard scroll in normal mode. The physical
+                // PgUp/PgDn the user types still passes straight through to the CLI.
+                wsSend({ type: 'input', data: lines > 0 ? '\x1b[6~' : '\x1b[5~' })
+            } else {
+                // Any other alt-screen app (vim, less, htop…): arrow keys, one per
+                // line. SS3 sequences when application cursor mode is active (DECCKM).
+                const appCursor = terminal?.modes?.applicationCursorKeysMode ?? false
+                const key = lines > 0
+                    ? (appCursor ? '\x1bOB' : '\x1b[B')
+                    : (appCursor ? '\x1bOA' : '\x1b[A')
+                wsSend({ type: 'input', data: key.repeat(Math.abs(lines)) })
+            }
         } else if (shouldUseTmux()) {
             // Shell prompt inside tmux: use backend tmux command to scroll
             // exactly N lines in copy-mode, bypassing tmux's mouse handling
@@ -1418,13 +1430,14 @@ export function useTerminal(contextKey, terminalIndex = 0, { sessionId = null, p
         }
     }
 
-    // Hybrid CLI terminals guarantee a minimum column count: the Claude TUI
-    // degrades badly below ~80 columns, the embedded pane drives the tmux
-    // window size for every attached client (a narrow mobile attach would
-    // shrink the desktop view too), and the backend's composer-ready
-    // detection gets a wider safety margin. When the container is too
-    // narrow for the user's font size, shrink the font (down to a floor)
-    // instead of accepting fewer columns.
+    // Hybrid CLI terminals enforce a minimum column count (HYBRID_MIN_COLS):
+    // the Claude TUI degrades below it, the embedded pane drives the tmux
+    // window size for every attached client (a narrow attach would shrink
+    // other clients too), and the backend's composer-ready detection gets a
+    // wider safety margin. The floor is set low enough to keep a narrow client
+    // window usable — when the container is too narrow for the user's font
+    // size, shrink the font (down to HYBRID_MIN_FONT_SIZE) instead of dropping
+    // below it.
     const enforcedMinCols = contextKey?.startsWith('h:') ? HYBRID_MIN_COLS : null
 
     /**

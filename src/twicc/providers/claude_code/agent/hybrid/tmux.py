@@ -44,6 +44,16 @@ _PURGED_ENV_NAMES = (
     "CLAUDE_CODE_EXECPATH",
 )
 
+# Environment variables FORCED on the hybrid claude process, passed as
+# ``NAME=VALUE`` assignments to the same ``env`` wrapper that purges the markers
+# above. Names listed here are excluded from the prefix purge so our value stays
+# authoritative even when the same name is inherited (these start with the
+# purged ``CLAUDE_CODE`` prefix, so the assignment must win over the ``-u``).
+_HYBRID_LAUNCH_ENV: dict[str, str] = {
+    # Suppress the CLI's full-screen repaint flicker in the embedded xterm.
+    "CLAUDE_CODE_NO_FLICKER": "1",
+}
+
 
 def _purged_env_names() -> list[str]:
     names = {name for name in os.environ if name.startswith(_PURGED_ENV_PREFIXES)}
@@ -90,14 +100,21 @@ def session_exists(session_id: str) -> bool:
 def create_session(session_id: str, cwd: str, argv: list[str]) -> None:
     """Create the tmux session running ``argv`` directly as the pane command.
 
-    ``exec env -u VAR…`` ensures the ``sh -c`` wrapper is replaced and the
-    purged variables never reach claude, regardless of the tmux server env.
+    ``exec env -u VAR… NAME=VALUE…`` ensures the ``sh -c`` wrapper is replaced,
+    the purged variables never reach claude (regardless of the tmux server env),
+    and the forced launch vars are set authoritatively.
     """
     name = hybrid_tmux_session_name(session_id)
     unsets: list[str] = []
     for var in _purged_env_names():
+        # A forced var is set below; never also unset it (it would be ambiguous
+        # whether the ``-u`` or the assignment wins across env implementations).
+        if var in _HYBRID_LAUNCH_ENV:
+            continue
         unsets += ["-u", var]
-    command = "exec env " + shlex.join(unsets + argv) if unsets else "exec " + shlex.join(argv)
+    assignments = [f"{key}={value}" for key, value in _HYBRID_LAUNCH_ENV.items()]
+    env_args = unsets + assignments
+    command = "exec env " + shlex.join(env_args + argv) if env_args else "exec " + shlex.join(argv)
     base = _tmux_base()
     config = _read_tmux_config_path()
     base += ["-f", config if config else "/dev/null"]

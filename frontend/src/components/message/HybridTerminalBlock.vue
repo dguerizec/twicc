@@ -35,10 +35,12 @@ const store = useDataStore()
 
 // ── Size state (window-controls style, single enum) ─────────────────────────
 // Minimized by default: the composer keeps the room, and the CLI is steered
-// from it without needing the terminal on screen. Safe for sizing — the CLI's
-// 80-column width comes from the backend tmux session's default size (created
-// detached at 80x24), not from the embedded xterm; opening the terminal later
-// only ever widens it (the font-shrink floor keeps the attached view >= 80).
+// from it without needing the terminal on screen. Safe for sizing — while
+// minimized the CLI's 80-column width comes from the backend tmux session's
+// default size (created detached at 80x24), not from the embedded xterm.
+// Opening the terminal fits it to the panel: a wide panel widens the view, a
+// narrow one shrinks the font first and only then narrows the columns, down to
+// the HYBRID_MIN_COLS floor (so an opened, narrow pane can drive tmux below 80).
 const viewState = ref('minimized')
 const isMinimized = computed(() => viewState.value === 'minimized')
 const isMaximized = computed(() => viewState.value === 'maximized')
