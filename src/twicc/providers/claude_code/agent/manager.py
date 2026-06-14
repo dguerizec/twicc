@@ -337,11 +337,14 @@ class ClaudeCodeAgentManager(BaseAgentManager):
     async def adopt_running_hybrid_sessions(self) -> None:
         """Adopt hybrid tmux sessions that survived a TwiCC restart.
 
-        The tmux server (``-L twicc`` socket) outlives TwiCC: a hybrid
-        claude keeps running across backend restarts. Called once at boot,
-        after the stale-ProcessRun cleanup and BEFORE the hybrid-hooks
-        watcher's boot scan, so a leftover PermissionRequest event of a
-        still-pending prompt reaches its adopted agent.
+        A clean shutdown now kills each hybrid tmux (best-effort, see
+        ``HybridClaudeAgent.kill``), so a survivor here means the kill didn't
+        land or TwiCC was hard-killed (SIGKILL/OOM) before reaching it. The
+        dedicated ``-L twicc-hybrid`` socket keeps such a claude running across
+        the restart; we re-bind to it instead of losing the session. Called
+        once at boot, after the stale-ProcessRun cleanup and BEFORE the
+        hybrid-hooks watcher's boot scan, so a leftover PermissionRequest event
+        of a still-pending prompt reaches its adopted agent.
 
         For each surviving tmux session: live pane + a ``hybrid=True``
         Session row with a project directory → adopt (register + attach,

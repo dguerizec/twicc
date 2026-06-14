@@ -661,9 +661,11 @@ class HybridClaudeAgent(BaseAgent):
           delayed-delete the dummy for the hook-already-dead case (TUI Esc
           kills the hook before it can consume anything).
         - ``"delete"`` — the CLI (and its hooks) are dead: delete both files.
-        - ``"detach"`` — TwiCC shutdown: the CLI survives and the prompt may
-          still be pending; keep the drop on disk (boot re-feeds it) and the
-          hook polling (GUI answering resumes after restart).
+        - ``"detach"`` — TwiCC shutdown: the tmux kill is best-effort, so the
+          CLI MAY survive with a still-pending prompt; keep the drop on disk
+          (boot re-feeds a survivor) and the hook polling (GUI answering
+          resumes after restart). A killed session's leftover files are swept
+          as orphans at the next boot.
         """
         if not self._pending_requests:
             return
@@ -782,24 +784,26 @@ class HybridClaudeAgent(BaseAgent):
         if self._liveness_task is not None:
             self._liveness_task.cancel()
         self._cancel_block_poll()
-        # On TwiCC shutdown the CLI (and its polling hooks) survive: keep the
-        # drop files so boot adoption + the hooks-watcher scan restore the
-        # GUI-answerable pendings. Every other reason kills the tmux below,
-        # taking the hooks with it — delete the files.
+        # Pending files on shutdown: KEEP them ("detach"). The tmux kill below
+        # is best-effort, so if it doesn't land (or TwiCC was hard-killed before
+        # reaching here) the CLI survives — boot adoption + the hooks-watcher
+        # scan then restore its GUI-answerable pendings. If the kill DID land,
+        # the leftover files are swept as orphans at the next boot. Every other
+        # reason kills the tmux synchronously, taking the hooks with it — delete.
         self._clear_all_pendings("detach" if reason == "shutdown" else "delete")
-        # A TwiCC shutdown must NOT kill the claude TUI: the tmux server
-        # outlives TwiCC by design (§2.3) and boot adoption re-binds to the
-        # surviving session on the next start. Every other reason (manual
-        # stop, timeouts, settings restart) frees claude's memory.
-        if reason != "shutdown":
-            await asyncio.to_thread(hybrid_tmux.kill_session, self.session_id)
+        # Stop the embedded CLI like an SDK agent: a TwiCC shutdown now kills the
+        # hybrid tmux too (best-effort — kill_session swallows errors and the
+        # manager's shutdown is time-bounded). A session that nonetheless
+        # survives (kill failed, or a hard crash) is re-adopted at the next boot.
+        await asyncio.to_thread(hybrid_tmux.kill_session, self.session_id)
         await self._transition_to_dead()
 
     async def interrupt_or_kill(self, reason: str) -> None:
-        # Timeouts and manual stops both kill: the tmux session must go away
-        # to free claude's memory. Mid-turn interruption without killing
-        # stays possible by pressing Escape inside the embedded terminal
-        # (V1 decision — no dedicated TwiCC affordance).
+        # Timeouts, manual stops and TwiCC shutdown all kill: the tmux session
+        # must go away to free claude's memory (shutdown best-effort, see
+        # ``kill``). Mid-turn interruption without killing stays possible by
+        # pressing Escape inside the embedded terminal (V1 decision — no
+        # dedicated TwiCC affordance).
         await self.kill(reason)
 
     # ------------------------------------------------------------------
