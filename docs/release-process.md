@@ -24,7 +24,7 @@ When the user asks to make a new release, follow these steps in order:
 
 5. **User testing (mandatory):** Ask the user to test the build before continuing:
    ```
-   uvx --from dist/twicc-{version}-py3-none-any.whl twicc
+   uvx --from /absolute/path/to/dist/twicc-{version}-py3-none-any.whl twicc
    ```
    Remind them to stop any running TwiCC instance first, then visit `http://localhost:3500` to test. **Do not run `uvx` yourself** — this requires user interaction.
 

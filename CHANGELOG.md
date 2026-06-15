@@ -4,19 +4,25 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). As a small deviation, each release opens with a one-line **Summary** recapping its highlights, and some entries include illustrative screenshots in nested sub-lists.
 
-## [Unreleased]
+## [1.8.3] - 2026-06-15
 
 ### Summary
 
-- **vX.Y.Z: Hybrid mode** — run real interactive Claude CLI sessions inside TwiCC and keep your usage on your Pro/Max plan instead of API rates.
+- **v1.8.3: Smoother & steadier** — fewer approval prompts (a session can use its own working folders without asking), no more intermittent 500s under load, and a worktree-session-creation fix.
 
 ### Added
 
-- **Hybrid mode** — turn a Claude session into a real `claude` CLI running inside TwiCC, so its usage stays on your subscription quota instead of being billed at API rates ([Anthropic's 15 June 2026 change](https://x.com/ClaudeDevs/status/2054610152817619388)). You keep the full TwiCC experience — message input, approvals, the question widget, notifications — with the live CLI terminal one click away. It's one-way per session; turn it on from the message input, or default new sessions under Settings → Claude.
+- **Future Hybrid mode** — groundwork for running a Claude session through the real `claude` CLI inside TwiCC instead of the SDK, keeping your usage on your subscription quota instead of API rates. Built for Anthropic's billing change (announced for 15 June 2026, now postponed), it ships dormant until that lands.
 
 ### Changed
 
 - **Providers Usage** — TwiCC stops refreshing your provider usage when there's no activity for a long time.
+
+### Fixed
+
+- **Git worktrees** — "new session in a worktree" now shows up for projects whose git repo wasn't detected at creation.
+- **RPC concurrency** — overlapping requests and config-file writes no longer collide, fixing intermittent 500s under load.
+- **Approvals** — a session no longer asks for approval to read or write its own working folders (its artifacts and scratch space).
 
 ## [1.8.2] - 2026-06-13
 
