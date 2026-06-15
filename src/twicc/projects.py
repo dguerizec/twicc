@@ -191,6 +191,41 @@ def ensure_project_git_root(project_id: str, directory: str | None = None) -> st
     return git_root
 
 
+async def reresolve_project_git_root(project_id: str) -> tuple[bool, str | None]:
+    """Action-time git_root verifier behind the worktree-creation affordances.
+
+    Re-resolves *project_id*'s git_root live from its directory (a fresh
+    filesystem walk, cache bypassed), persists it, and broadcasts
+    ``project_updated`` when it changed — in BOTH directions: a repo that was
+    ``git init``-ed after the project was created, or one whose ``.git`` was
+    removed. The UI renders the "new session in a worktree" affordances from
+    the cached ``git_root`` (never blocking on it, never re-checking per
+    render); this is what those affordances call when the user actually acts,
+    so the stale flag heals without a backend restart.
+
+    Returns ``(found, git_root)``. ``found=False`` means the project row does
+    not exist (caller maps to 404). ``git_root`` is the freshly resolved value
+    (``None`` when the directory backs no git repository, or the project has no
+    directory to resolve from).
+    """
+    from twicc.providers.db_writer import run_under_db_write_lock
+
+    project = await Project.objects.filter(id=project_id).afirst()
+    if project is None:
+        return (False, None)
+    directory = project.directory
+    if not directory:
+        return (True, project.git_root)
+
+    old = project.git_root
+    new = await run_under_db_write_lock(
+        lambda: sync_to_async(ensure_project_git_root)(project_id, directory)
+    )
+    if new != old:
+        await _broadcast_project_updated(project_id)
+    return (True, new)
+
+
 # =============================================================================
 # Project creation — single entry point
 # =============================================================================

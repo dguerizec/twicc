@@ -1864,7 +1864,7 @@ function updateSidebarClosedClass(closed) {
                         <template v-for="p in splitNamedProjects.prioritized" :key="p.id">
                             <wa-dropdown-item :value="p.id" class="project-picker-row">
                                 <ProjectBadge :project-id="p.id" />
-                                <WorktreeButton v-if="p.git_root" slot="details" @create="openWorktreeDialog(p)" />
+                                <WorktreeButton v-if="!p.worktree_of" :project-id="p.id" slot="details" @create="openWorktreeDialog(p)" />
                             </wa-dropdown-item>
                             <WorktreePickerRows
                                 :parent-id="p.id"
@@ -1888,7 +1888,7 @@ function updateSidebarClosedClass(closed) {
                                     <span :style="{ paddingLeft: `${item.depth * 12}px` }">
                                         <ProjectBadge :project-id="item.project.id" />
                                     </span>
-                                    <WorktreeButton v-if="item.project.git_root" slot="details" @create="openWorktreeDialog(item.project)" />
+                                    <WorktreeButton v-if="!item.project.worktree_of" :project-id="item.project.id" slot="details" @create="openWorktreeDialog(item.project)" />
                                 </wa-dropdown-item>
                                 <WorktreePickerRows
                                     :parent-id="item.project.id"
@@ -1908,7 +1908,7 @@ function updateSidebarClosedClass(closed) {
                         <template v-for="p in splitNamedProjects.others" :key="p.id">
                             <wa-dropdown-item :value="p.id" class="project-picker-row">
                                 <ProjectBadge :project-id="p.id" />
-                                <WorktreeButton v-if="p.git_root" slot="details" @create="openWorktreeDialog(p)" />
+                                <WorktreeButton v-if="!p.worktree_of" :project-id="p.id" slot="details" @create="openWorktreeDialog(p)" />
                             </wa-dropdown-item>
                             <WorktreePickerRows
                                 :parent-id="p.id"
@@ -1935,7 +1935,7 @@ function updateSidebarClosedClass(closed) {
                                     <span :style="{ paddingLeft: `${item.depth * 12}px` }">
                                         <ProjectBadge :project-id="item.project.id" />
                                     </span>
-                                    <WorktreeButton v-if="item.project.git_root" slot="details" @create="openWorktreeDialog(item.project)" />
+                                    <WorktreeButton v-if="!item.project.worktree_of" :project-id="item.project.id" slot="details" @create="openWorktreeDialog(item.project)" />
                                 </wa-dropdown-item>
                                 <WorktreePickerRows
                                     :parent-id="item.project.id"
@@ -1986,7 +1986,7 @@ function updateSidebarClosedClass(closed) {
                     <template v-for="p in splitNamedProjects.prioritized" :key="p.id">
                         <wa-dropdown-item :value="p.id" class="project-picker-row">
                             <ProjectBadge :project-id="p.id" />
-                            <WorktreeButton v-if="p.git_root" slot="details" @create="openWorktreeDialog(p)" />
+                            <WorktreeButton v-if="!p.worktree_of" :project-id="p.id" slot="details" @create="openWorktreeDialog(p)" />
                         </wa-dropdown-item>
                         <WorktreePickerRows
                             :parent-id="p.id"
@@ -2010,7 +2010,7 @@ function updateSidebarClosedClass(closed) {
                                 <span :style="{ paddingLeft: `${item.depth * 12}px` }">
                                     <ProjectBadge :project-id="item.project.id" />
                                 </span>
-                                <WorktreeButton v-if="item.project.git_root" slot="details" @create="openWorktreeDialog(item.project)" />
+                                <WorktreeButton v-if="!item.project.worktree_of" :project-id="item.project.id" slot="details" @create="openWorktreeDialog(item.project)" />
                             </wa-dropdown-item>
                             <WorktreePickerRows
                                 :parent-id="item.project.id"
@@ -2030,7 +2030,7 @@ function updateSidebarClosedClass(closed) {
                     <template v-for="p in splitNamedProjects.others" :key="p.id">
                         <wa-dropdown-item :value="p.id" class="project-picker-row">
                             <ProjectBadge :project-id="p.id" />
-                            <WorktreeButton v-if="p.git_root" slot="details" @create="openWorktreeDialog(p)" />
+                            <WorktreeButton v-if="!p.worktree_of" :project-id="p.id" slot="details" @create="openWorktreeDialog(p)" />
                         </wa-dropdown-item>
                         <WorktreePickerRows
                             :parent-id="p.id"
@@ -2057,7 +2057,7 @@ function updateSidebarClosedClass(closed) {
                                 <span :style="{ paddingLeft: `${item.depth * 12}px` }">
                                     <ProjectBadge :project-id="item.project.id" />
                                 </span>
-                                <WorktreeButton v-if="item.project.git_root" slot="details" @create="openWorktreeDialog(item.project)" />
+                                <WorktreeButton v-if="!item.project.worktree_of" :project-id="item.project.id" slot="details" @create="openWorktreeDialog(item.project)" />
                             </wa-dropdown-item>
                             <WorktreePickerRows
                                 :parent-id="item.project.id"

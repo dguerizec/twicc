@@ -315,14 +315,43 @@ async def project_branches(request, project_id):
         project = await Project.objects.aget(id=project_id)
     except Project.DoesNotExist:
         return JsonResponse({"error": "Project not found"}, status=404)
-    if not project.git_root:
+    # Resolve the repo root live (git_root, or a fallback from the directory for
+    # a never-synced / freshly git-init'd repo) — same fallback as the worktrees
+    # GET/POST endpoints, so a stale ``git_root=None`` never wrongly 400s here.
+    repo_root = await _resolve_repo_root(project)
+    if not repo_root:
         return JsonResponse({"error": "Project is not a git repository"}, status=400)
 
-    branches = await sync_to_async(get_branches)(project.git_root)
-    checked_out = await sync_to_async(get_worktree_branches)(project.git_root)
+    branches = await sync_to_async(get_branches)(repo_root)
+    checked_out = await sync_to_async(get_worktree_branches)(repo_root)
     return JsonResponse(
         {"branches": [{"name": b, "checked_out": b in checked_out} for b in branches]}
     )
+
+
+async def project_resolve_git(request, project_id):
+    """POST /api/projects/<id>/resolve-git/ - Re-resolve the project's git_root live.
+
+    The action-time verifier behind the worktree-creation affordances. The UI
+    renders the "new session in a worktree" entry points (per-row button in the
+    "New session" dropdown, the Command Palette command) from the cached
+    ``git_root`` — it never blocks on it and never re-checks per render. When
+    the user actually acts on a project whose ``git_root`` is ``None`` (a repo
+    ``git init``-ed after the project was created), this re-resolves from the
+    directory, persists, and broadcasts ``project_updated`` on change, so the
+    affordance heals without a backend restart. Also heals the reverse (a
+    project whose ``.git`` was removed → ``git_root`` back to ``None``).
+
+    Returns ``{"git_root": str | null}`` (the freshly resolved value).
+    """
+    from twicc.projects import reresolve_project_git_root
+
+    if request.method != "POST":
+        return JsonResponse({"error": "Method not allowed"}, status=405)
+    found, git_root = await reresolve_project_git_root(project_id)
+    if not found:
+        return JsonResponse({"error": "Project not found"}, status=404)
+    return JsonResponse({"git_root": git_root})
 
 
 # Worktree-creation error code -> HTTP status. The service is

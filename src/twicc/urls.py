@@ -36,6 +36,7 @@ urlpatterns = [
     path("api/projects/<str:project_id>/trust/resolve/", views.project_trust_resolve),
     path("api/projects/<str:project_id>/trust/decide/", views.project_trust_decide),
     path("api/projects/<str:project_id>/branches/", views.project_branches),
+    path("api/projects/<str:project_id>/resolve-git/", views.project_resolve_git),
     path("api/projects/<str:project_id>/worktrees/", views.project_worktrees),
     path("api/projects/<str:project_id>/worktrees/adopt/", views.project_worktree_adopt),
     path("api/projects/<str:project_id>/commands/", views.commands),

@@ -3,10 +3,9 @@
 A project registered in a freshly ``git init``-ed directory — e.g. created via
 the RPC/API ``project:create`` drop-request in a never-synced repo — must expose
 its ``git_root`` immediately, instead of staying ``None`` until the next startup
-sync re-resolves it. The frontend gates the worktree-creation affordance
-(``WorktreeButton v-if="p.git_root"``) and the project Git tab
-(``hasGitRepo = !!git_root``) on ``git_root``, so a stale ``None`` there made
-worktrees uncreatable until a restart — the bug this test guards against.
+sync re-resolves it. The frontend renders the worktree-creation affordances and
+the project Git tab from ``git_root``, so a stale ``None`` made worktrees
+uncreatable until a restart — the bug this test guards against.
 
 The resolution lives in :func:`twicc.projects.register_project_db_only` (the
 single DB-only half every creation path funnels through), so exercising it
@@ -15,13 +14,18 @@ directly covers the RPC, HTTP, session and worktree creation flows at once.
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 
 import pytest
 
 from twicc.core.models import Project
 from twicc.paths import path_to_project_id
-from twicc.projects import _project_git_roots, register_project_db_only
+from twicc.projects import (
+    _project_git_roots,
+    ensure_project_git_root,
+    register_project_db_only,
+)
 
 
 def _git_init(path) -> None:
@@ -88,3 +92,33 @@ def test_register_resolves_git_root_on_directory_adoption(db, tmp_path):
     assert adopted is True
     assert project.git_root == directory
     assert Project.objects.get(id=project_id).git_root == directory
+
+
+def test_ensure_git_root_reverse_heal_when_git_removed(db, tmp_path):
+    """The action-time re-resolution heals BOTH directions: a project whose
+    ``.git`` was removed must have ``git_root`` reset to ``None``. This is the
+    core write-on-change of ``ensure_project_git_root`` that
+    ``reresolve_project_git_root`` drives behind the worktree affordances."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git_init(repo)
+    directory = str(repo)
+    project_id = path_to_project_id(directory)
+
+    register_project_db_only(project_id, directory=directory)
+    assert Project.objects.get(id=project_id).git_root == directory
+
+    # Reflect the committed cache state: in production the registration's
+    # on_commit populated the cache with the resolved root, but the test's outer
+    # transaction never commits, so seed it by hand. Without this, the
+    # ``cache == resolved`` short-circuit (None == None) would skip the corrective
+    # write and the reverse heal would not be exercised.
+    _project_git_roots[project_id] = directory
+
+    # The directory is no longer a git repository.
+    shutil.rmtree(repo / ".git")
+
+    result = ensure_project_git_root(project_id, directory)
+
+    assert result is None
+    assert Project.objects.get(id=project_id).git_root is None

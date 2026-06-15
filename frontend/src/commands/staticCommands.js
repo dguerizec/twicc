@@ -19,6 +19,8 @@ import { computeSidebarSessionBlocks } from '../utils/sidebarSessions'
 import { isSessionUnread } from '../utils/sessions'
 import { worktreeLabel } from '../utils/worktree'
 import { toWorkspaceProjectId } from '../utils/workspaceIds'
+import { apiFetch } from '../utils/api'
+import { toast } from '../composables/useToast'
 import {
     DISPLAY_MODE,
     COLOR_SCHEME,
@@ -341,6 +343,32 @@ export function initStaticCommands(router) {
      *  dropped unless the "show archived projects" setting is enabled. */
     function pickerEntries() {
         return data.getProjects.filter(p => settings.isShowArchivedProjects || !p.archived)
+    }
+
+    /** Action-time verifier for the "New Session in New Worktree" command. The
+     *  command is offered for every non-worktree project regardless of the
+     *  cached git_root (which may be a stale null for a repo git-init'd after
+     *  the project was created). On activation we re-resolve git_root live: if
+     *  the directory is a git repo, mirror the value into the store (so the
+     *  WorktreeDialog composes its default path from a fresh git_root, not a
+     *  stale null) and open the dialog; otherwise tell the user there is none. */
+    async function openWorktreeForProject(projectId) {
+        try {
+            const res = await apiFetch(`/api/projects/${projectId}/resolve-git/`, { method: 'POST' })
+            if (!res.ok) {
+                toast.error('Could not check this folder for a git repository.')
+                return
+            }
+            const { git_root } = await res.json()
+            if (!git_root) {
+                toast.info('No git repository found in this folder.')
+                return
+            }
+            data.updateProject({ id: projectId, git_root })
+            window.dispatchEvent(new CustomEvent('twicc:open-worktree-dialog', { detail: { projectId } }))
+        } catch {
+            toast.error('Could not check this folder for a git repository.')
+        }
     }
 
     /** Map a project to a palette sub-item carrying the colored dot metadata
@@ -747,20 +775,19 @@ export function initStaticCommands(router) {
             label: 'New Session in New Worktree…',
             icon: 'code-branch',
             category: 'creation',
-            // Only worth showing when at least one non-worktree project has a git
-            // root to branch from (matches the dropdown's per-row worktree button).
-            when: () => pickerEntries().some(p => p.git_root && !p.worktree_of),
+            // Shown for every non-worktree project (a worktree can't have
+            // worktrees). git is verified at activation, NOT here: the cached
+            // git_root may be a stale null for a repo git-init'd after the
+            // project was created, so gating the entry point on it would hide it
+            // exactly when it's needed. openWorktreeForProject re-checks live and
+            // either opens the WorktreeDialog (App.vue) or says there's no repo.
+            when: () => pickerEntries().some(p => !p.worktree_of),
             items: () => {
                 const activityMap = buildProjectActivityMap(data)
                 return pickerEntries()
-                    .filter(p => p.git_root && !p.worktree_of)
+                    .filter(p => !p.worktree_of)
                     .map(p => toProjectItem(p,
-                        // Hand off to the globally-mounted WorktreeDialog
-                        // (App.vue), opening on its New-worktree tab: it
-                        // provisions the worktree, then drops the user into a
-                        // fresh draft session in it — same flow as the "New
-                        // session" dropdown's per-row worktree button.
-                        () => window.dispatchEvent(new CustomEvent('twicc:open-worktree-dialog', { detail: { projectId: p.id } })),
+                        () => openWorktreeForProject(p.id),
                         aggregateProjectActivity(activityMap, data, p.id),
                     ))
             },
