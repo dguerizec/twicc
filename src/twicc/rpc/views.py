@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 
 import orjson
 from django.db import close_old_connections
@@ -10,6 +11,10 @@ from django.http import HttpRequest, HttpResponse
 
 from twicc.rpc.generator import build_registry, render_argv
 from twicc.rpc.invoker import invoke
+
+# Child of the ``twicc`` logger, so it inherits the file handler
+# (backend.log) — unlike ``django.request``, which is not wired to it.
+logger = logging.getLogger(__name__)
 
 
 def _json(payload, *, status: int = 200) -> HttpResponse:
@@ -84,7 +89,18 @@ async def dispatch(request: HttpRequest, command_path: str) -> HttpResponse:
             return _json(err, status=400)
         argv = render_argv(spec, body)
 
-    result = await asyncio.to_thread(_run_invoke, argv)
+    try:
+        result = await asyncio.to_thread(_run_invoke, argv)
+    except Exception:
+        # An exception reaching here is unexpected: invoke() already converts
+        # Click/Typer failures into an InvocationResult. Anything else (ORM
+        # errors, a bug in a command body, ...) would otherwise surface as a
+        # bare Django 500 whose traceback never reaches backend.log — the
+        # django.request logger is not wired to the file handler and DEBUG is
+        # off in production. Log the full traceback ourselves and return a
+        # structured 500 so the root cause is recoverable from the logs.
+        logger.exception("RPC command %r failed (argv=%r)", command_path, argv)
+        return _json({"error": "Internal error while executing the command."}, status=500)
     return _json({"exit_code": result.exit_code, "result": result.result, "error": result.error})
 
 
