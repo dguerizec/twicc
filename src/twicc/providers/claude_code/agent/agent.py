@@ -38,6 +38,7 @@ from twicc.pending_session_attributes import get_pending_session_attributes
 from twicc.providers.helpers import AgentSettings
 
 from .permissions import (
+    extract_claude_tool_paths,
     maybe_update_plan_file,
     order_suggestion_fields,
     serialize_and_filter_suggestions,
@@ -581,6 +582,23 @@ class ClaudeCodeAgent(BaseAgent):
             request_type = "tool_approval"
 
         untrusted = await self._resolve_untrusted_now()
+
+        # System work-dir auto-approval: if this approval targets ONLY the
+        # session's own artifacts/scratch dirs (and the orchestration root's
+        # shared scratch), answer it silently instead of prompting the human.
+        # Disabled in untrusted projects (trust stays human-only); never for
+        # AskUserQuestion (not a tool approval).
+        if not untrusted and request_type == "tool_approval":
+            paths, fully_known = extract_claude_tool_paths(
+                tool_name, input_data, getattr(context, "blocked_path", None),
+            )
+            if self._targets_only_work_dirs(paths, fully_known):
+                logger.info(
+                    "Auto-approving %s for session %s — targets only system "
+                    "work dirs", tool_name, self.session_id,
+                )
+                return PermissionResultAllow()
+
         permission_suggestions = self.get_permission_suggestions(
             tool_name, input_data, context, untrusted=untrusted
         )

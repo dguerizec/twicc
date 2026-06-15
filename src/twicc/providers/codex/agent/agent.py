@@ -50,7 +50,9 @@ from ..permission_modes import resolve_codex_turn_overrides
 from ..sdk_wrappers import TwiccAsyncCodex, TwiccAsyncThread
 from ..streaming_registry import get_streamed_item_registry
 from .approvals import (
+    auto_approve_response_for,
     default_response_for,
+    extract_codex_approval_paths,
     is_approval_method,
     make_pending_request,
 )
@@ -1301,6 +1303,12 @@ class CodexAgent(BaseAgent):
             self.session_id, method, item_id_for_log,
         )
         enriched_params = self._enrich_params_with_item_payload(method, params)
+        if await self._should_auto_approve_work_dir(method, enriched_params):
+            logger.info(
+                "Auto-approving Codex %s for session %s — targets only system "
+                "work dirs", method, self.session_id,
+            )
+            return auto_approve_response_for(method)
         request = make_pending_request(method, enriched_params)
         response = await self._await_pending_request(request)
         # Record refusals in _denied_tool_ids so the Codex compute can
@@ -1332,6 +1340,24 @@ class CodexAgent(BaseAgent):
         if payload is None:
             return params
         return {**params, "_item_payload": payload}
+
+    async def _should_auto_approve_work_dir(
+        self, method: str, enriched_params: dict | None,
+    ) -> bool:
+        """True if this approval targets ONLY the session's system work dirs.
+
+        Mirrors the Claude path: extract the request's full footprint, require
+        it fully enumerable and entirely inside ``self._work_dirs``, then gate
+        on a live untrusted read (auto-approval is off in untrusted projects).
+        Containment is checked first so the trust DB read only happens for a
+        request already proven in-scope.
+        """
+        paths, fully_known = extract_codex_approval_paths(method, enriched_params)
+        if not self._targets_only_work_dirs(paths, fully_known):
+            return False
+        from twicc.core.services.trust import project_is_untrusted
+
+        return not await sync_to_async(project_is_untrusted)(self.project_id)
 
     # Item types from ``_items_by_id`` that produce a ``function_call_output``
     # in the JSONL (and therefore can be matched by ``_denied_tool_ids``).

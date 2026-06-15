@@ -28,6 +28,44 @@ logger = logging.getLogger(__name__)
 # fields (prefixed with ``_``) are preserved at the end for frontend use.
 _SUGGESTION_FIELD_ORDER = ("type", "rules", "behavior", "mode", "directories", "destination")
 
+# Tools whose input names an exact, complete target path — so an approval for
+# one of them touches exactly that path and nothing else. Maps the tool name to
+# the input key holding the path. (``MultiEdit`` edits a single file too.)
+_EXACT_PATH_INPUT_KEYS = {
+    "Read": "file_path",
+    "Write": "file_path",
+    "Edit": "file_path",
+    "MultiEdit": "file_path",
+    "NotebookEdit": "notebook_path",
+}
+
+
+def extract_claude_tool_paths(
+    tool_name: str, tool_input: dict, blocked_path: str | None = None,
+) -> tuple[list[str], bool]:
+    """Return ``(candidate_abs_paths, fully_known)`` for a Claude tool approval.
+
+    Shared by the SDK ``can_use_tool`` callback and the hybrid ``PermissionRequest``
+    hook. ``fully_known=False`` means the request's full footprint cannot be
+    enumerated, so the caller must NOT auto-approve.
+
+    - File tools (``Read``/``Write``/``Edit``/``MultiEdit``/``NotebookEdit``)
+      expose the exact, complete target via ``file_path`` / ``notebook_path``.
+    - For ``Bash`` (and any other multi-effect tool), the only signal is
+      ``blocked_path`` — the single path that tripped the permission prompt. When
+      present we treat that lone path as the footprint (best-effort heuristic, by
+      design); otherwise the footprint is unknowable → not auto-approvable.
+    """
+    key = _EXACT_PATH_INPUT_KEYS.get(tool_name)
+    if key is not None:
+        path = tool_input.get(key) if isinstance(tool_input, dict) else None
+        if isinstance(path, str) and path:
+            return [path], True
+        return [], False
+    if isinstance(blocked_path, str) and blocked_path:
+        return [blocked_path], True
+    return [], False
+
 
 def serialize_and_filter_suggestions(suggestions, cwd: str) -> list[dict]:
     """Serialize, filter and ungroup raw permission suggestions.

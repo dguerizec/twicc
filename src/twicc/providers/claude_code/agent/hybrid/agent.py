@@ -30,6 +30,7 @@ from twicc.agent.states import AgentInfo, AgentState, PendingRequest
 from twicc.core.enums import Provider
 from twicc.paths import get_session_hybrid_dir
 from twicc.providers.claude_code.agent.permissions import (
+    extract_claude_tool_paths,
     maybe_update_plan_file,
     order_suggestion_fields,
     serialize_and_filter_suggestions,
@@ -473,6 +474,29 @@ class HybridClaudeAgent(BaseAgent):
             )
             return False
         tool_name = payload.get("tool_name") or ""
+
+        # System work-dir auto-approval: answer silently (no GUI card) when the
+        # request targets ONLY this session's own artifacts/scratch dirs (and the
+        # orchestration root's shared scratch). Disabled in untrusted projects
+        # (trust stays human-only); never for AskUserQuestion. Containment is
+        # checked first so the trust DB read only happens for an in-scope request.
+        if tool_name != "AskUserQuestion":
+            paths, fully_known = extract_claude_tool_paths(
+                tool_name, payload.get("tool_input") or {}, payload.get("blocked_path"),
+            )
+            if self._targets_only_work_dirs(paths, fully_known):
+                from twicc.core.services.trust import project_is_untrusted
+
+                if not await sync_to_async(project_is_untrusted)(self.project_id):
+                    logger.info(
+                        "Auto-approving hybrid %s for session %s — targets only "
+                        "system work dirs", tool_name, self.session_id,
+                    )
+                    await self._auto_approve_work_dir(nonce)
+                    # HANDLED: the status file drives the CLI hook and the watcher
+                    # deletes the drop; no pending is registered (no GUI card).
+                    return False
+
         self._pending_requests[nonce] = PendingRequest(
             request_id=nonce,
             request_type="ask_user_question" if tool_name == "AskUserQuestion" else "tool_approval",
@@ -490,6 +514,21 @@ class HybridClaudeAgent(BaseAgent):
         self.last_activity = time.time()
         await self._notify_state_change()
         return True
+
+    async def _auto_approve_work_dir(self, nonce: str) -> None:
+        """Write an ``allow`` status for a system-dir auto-approval.
+
+        No pending is registered and no GUI card is shown: the CLI's still-polling
+        hook reads this ``.status.json`` and proceeds, exactly as it would for a
+        human GUI answer (mirrors ``_finalize_gui_answer`` minus the pending
+        bookkeeping). The caller returns ``False`` (HANDLED) so the hooks watcher
+        deletes the drop file.
+        """
+        status = status_path_for(self.session_id, nonce)
+        await asyncio.to_thread(
+            write_status, status, to_hook_output(PermissionResultAllow()),
+        )
+        self.last_activity = time.time()
 
     async def _is_stale_drop(self, nonce: str) -> bool:
         """A re-fed drop is stale when the transcript moved after the fire.

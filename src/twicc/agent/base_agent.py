@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 from asgiref.sync import sync_to_async
 from channels.layers import get_channel_layer
 
+from twicc.agent.work_dir_autoapprove import all_targets_within_work_dirs
 from twicc.context_injection import clear_context, reconcile, reset_baseline
 from twicc.core.enums import Provider
 from twicc.logging_context import provider_log_context
@@ -114,6 +115,14 @@ class BaseAgent:
 
         # ProcessRun model row, populated by the manager once the agent is registered.
         self.process_run: Any = None
+
+        # This session's system work dirs (its own artifacts/<id> + scratch/<id>,
+        # plus the orchestration root's shared scratch when spawned), cached by
+        # ``_resolve_and_create_work_dirs``. Used both to grant prompt-free
+        # access at agent build and to auto-approve tool approvals that target
+        # only these dirs (``_targets_only_work_dirs``). Empty until resolved
+        # (Codex narrows it to ``None`` until the first turn — see its __init__).
+        self._work_dirs: list[str] = []
 
     # ------------------------------------------------------------------
     # State machine
@@ -669,7 +678,30 @@ class BaseAgent:
                 work_dirs.append(str(target))
             return work_dirs
 
-        return await sync_to_async(_build)()
+        work_dirs = await sync_to_async(_build)()
+        # Cache for the auto-approval path (``_targets_only_work_dirs``); the
+        # caller also passes these to the provider's directory-scope grant.
+        self._work_dirs = work_dirs
+        return work_dirs
+
+    def _targets_only_work_dirs(
+        self, candidate_paths: list[str], fully_known: bool,
+    ) -> bool:
+        """True if an approval touching ``candidate_paths`` may be silently
+        auto-approved because it targets only this session's system work dirs.
+
+        ``fully_known`` is set by the provider's path extractor — ``False`` means
+        the request's full footprint could not be enumerated, so we never
+        auto-approve. Containment is checked against ``self._work_dirs`` (this
+        session's own dirs), so another session's dirs are never in scope.
+
+        Trust is NOT checked here: callers gate on a live untrusted read first
+        (auto-approval is disabled in untrusted projects). See
+        ``twicc.agent.work_dir_autoapprove`` for the containment rule.
+        """
+        if not fully_known:
+            return False
+        return all_targets_within_work_dirs(candidate_paths, self._work_dirs)
 
     async def _is_session_hidden(self) -> bool:
         """Cheap DB lookup of ``Session.hidden`` for this agent's session.
