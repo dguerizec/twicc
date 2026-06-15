@@ -323,7 +323,7 @@ class HybridClaudeAgent(BaseAgent):
         *,
         images: list[dict] | None = None,
         documents: list[dict] | None = None,
-    ) -> None:
+    ) -> bool:
         # Pre-paste guard: with a TUI dialog open the paste is swallowed and
         # its trailing Enter would VALIDATE the highlighted option (verified
         # empirically); with text already typed in the TUI composer it would
@@ -338,6 +338,7 @@ class HybridClaudeAgent(BaseAgent):
                 code="hybrid_composer_busy",
             )
         self.last_activity = time.time()
+        return True
 
     async def _checked_paste(self, text: str) -> bool:
         """Atomically verify the composer is free, then paste.

@@ -94,7 +94,7 @@ class CodexAgentManager(BaseAgentManager):
         *,
         images: list[dict] | None = None,
         documents: list[dict] | None = None,
-    ) -> None:
+    ) -> bool:
         """Send a message to an existing session.
 
         Routes based on the live agent's state:
@@ -110,6 +110,10 @@ class CodexAgentManager(BaseAgentManager):
         ``images`` are forwarded to the SDK as ``ImageInput`` data URLs;
         ``documents`` are dropped with a warning (Codex protocol has no
         equivalent input block).
+
+        Returns ``True`` when a message (or hardcoded command) was accepted
+        for delivery, so the WS layer can emit a delivery ack; ``False`` for
+        a settings-only update with nothing to send.
         """
         self._warn_about_documents(session_id, documents)
 
@@ -126,7 +130,10 @@ class CodexAgentManager(BaseAgentManager):
                 await self._dispatch_hardcoded_command(
                     session_id, project_id, cwd, command, settings,
                 )
-                return
+                # Command was dispatched (it may produce no user_message line);
+                # ack it so its in-flight snapshot is dropped rather than later
+                # mis-audited as undelivered.
+                return True
 
             if session_id in self._agents:
                 agent = self._agents[session_id]
@@ -147,7 +154,7 @@ class CodexAgentManager(BaseAgentManager):
                         # settings onto the agent here, but a stale bundle is harmless
                         # as long as the next ``send_to_session`` refreshes it
                         # (which it does).
-                        return
+                        return False
                     # Refresh the bundle on the live agent so the upcoming turn picks
                     # up any field changed since creation. ``CodexAgent._run_turn``
                     # reads ``effort``, ``permission_mode`` and ``selected_model`` off
@@ -164,8 +171,7 @@ class CodexAgentManager(BaseAgentManager):
                         old_settings.selected_model, settings.selected_model,
                     )
                     agent.agent_settings = settings
-                    await agent.send(text, images=images)
-                    return
+                    return await agent.send(text, images=images)
 
                 elif agent.state == AgentState.ASSISTANT_TURN:
                     if not text and not images:
@@ -173,7 +179,7 @@ class CodexAgentManager(BaseAgentManager):
                         # the bundle so the NEXT turn picks up the new picker
                         # values; nothing to steer.
                         agent.agent_settings = settings
-                        return
+                        return False
                     # Steer: refresh the bundle (the active turn keeps the
                     # policy it was started with — ``turn/steer`` has no
                     # override knobs, the new values land on the next
@@ -191,8 +197,7 @@ class CodexAgentManager(BaseAgentManager):
                         old_settings.selected_model, settings.selected_model,
                     )
                     agent.agent_settings = settings
-                    await agent.send(text, images=images)
-                    return
+                    return await agent.send(text, images=images)
 
                 else:
                     raise SendDeliveryError(
@@ -209,6 +214,7 @@ class CodexAgentManager(BaseAgentManager):
                 session_id, project_id, cwd, text, resume=True,
                 settings=settings, images=images,
             )
+            return True
 
     async def _dispatch_hardcoded_command(
         self,

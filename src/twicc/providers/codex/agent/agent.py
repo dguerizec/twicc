@@ -340,6 +340,7 @@ class CodexAgent(BaseAgent):
         await self._notify_state_change()
 
         self._schedule_turn(text, images)
+        return True
 
     async def send(
         self,
@@ -347,8 +348,12 @@ class CodexAgent(BaseAgent):
         *,
         images: list[dict] | None = None,
         **kwargs: Any,
-    ) -> None:
+    ) -> bool:
         """Schedule a new turn, or steer the active one.
+
+        Returns ``True`` once the input is accepted (turn scheduled, or steer
+        landed on the active turn); raises on failure. Codex never silently
+        drops a send, so there is no ``False`` return.
 
         - ``USER_TURN``: schedule a fresh turn (the normal flow).
         - ``ASSISTANT_TURN``: steer — push the input into the active
@@ -404,7 +409,7 @@ class CodexAgent(BaseAgent):
                 raise RuntimeError(f"Steer failed: {e}") from e
 
             self.last_activity = time.time()
-            return
+            return True
 
         self._set_state(AgentState.ASSISTANT_TURN)
         self.last_activity = time.time()

@@ -105,7 +105,7 @@ class ClaudeCodeAgentManager(BaseAgentManager):
         images: list[dict] | None = None,
         documents: list[dict] | None = None,
         cancel_cron_restart: bool = True,
-    ) -> None:
+    ) -> bool:
         """Send a message to an existing session, applying settings changes as needed.
 
         If no active agent exists for this session, a new one is created with
@@ -122,6 +122,12 @@ class ClaudeCodeAgentManager(BaseAgentManager):
         When startup settings change during USER_TURN, the agent is killed
         (reason="apply-settings") and restarted. During ASSISTANT_TURN, the
         changes are saved to DB and applied on the next USER_TURN transition.
+
+        Returns:
+            ``True`` when a message was synchronously accepted for delivery
+            (so the WS layer can emit a delivery ack); ``False`` when no
+            message was delivered now — settings-only update, or a
+            restart-deferred send whose user_message line will confirm it.
 
         Raises:
             RuntimeError: If the agent cannot be started or message cannot be sent
@@ -185,14 +191,18 @@ class ClaudeCodeAgentManager(BaseAgentManager):
                                 images=pending.get("images"),
                                 documents=pending.get("documents"),
                             )
-                        # If has_crons → cron restart task handles it
-                        return
+                        # If has_crons → cron restart task handles it.
+                        # Delivery is deferred to after the restart, so this is
+                        # not a synchronous ack — the message's user_message
+                        # line (a fresh USER_TURN send) confirms it instead.
+                        return False
                     else:
                         # Only live/idle changes → apply on the live agent
                         await agent.apply_live_settings(settings)
+                        delivered = False
                         if has_content:
-                            await agent.send(text, images=images, documents=documents)
-                        return
+                            delivered = await agent.send(text, images=images, documents=documents)
+                        return delivered
 
                 elif agent.state == AgentState.ASSISTANT_TURN:
                     # During assistant_turn: apply live (permission) immediately,
@@ -206,9 +216,10 @@ class ClaudeCodeAgentManager(BaseAgentManager):
                         and settings.permission_mode != agent.agent_settings.permission_mode
                     ):
                         await agent.set_permission_mode(settings.permission_mode)
+                    delivered = False
                     if has_content:
-                        await agent.send(text, images=images, documents=documents)
-                    return
+                        delivered = await agent.send(text, images=images, documents=documents)
+                    return delivered
 
                 else:
                     # Agent starting - cannot send yet
@@ -229,6 +240,7 @@ class ClaudeCodeAgentManager(BaseAgentManager):
                 settings=settings,
                 images=images, documents=documents,
             )
+            return True
 
     async def create_session(
         self,

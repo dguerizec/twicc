@@ -2501,12 +2501,14 @@ export const useDataStore = defineStore('data', {
          * cannot deliver it to the agent.
          *
          * Flow: MessageInput registers the snapshot (original draft-format
-         * medias) right before clearing the composer; an ``error`` frame
-         * echoing the request_id consumes it (failInflightSend → composer
-         * callout + restore); the arrival of the matching real user_message
-         * resolves it silently; a TTL sweep drops forgotten entries.
+         * medias) right before clearing the composer; a backend ``send_ack``
+         * frame echoing the request_id confirms delivery and drops it
+         * (confirmInflightSend); an ``error`` frame consumes it instead
+         * (failInflightSend → failed bubble + restore); failing those, the
+         * arrival of the matching real user_message resolves it silently; a
+         * TTL sweep drops forgotten entries.
          * @param {string} requestId
-         * @param {Object} snapshot - { sessionId, text, medias, optimisticShown, startingSet }
+         * @param {Object} snapshot - { sessionId, text, medias, optimisticShown, startingSet, noLineExpected }
          */
         registerInflightSend(requestId, snapshot) {
             const now = Date.now()
@@ -2547,12 +2549,22 @@ export const useDataStore = defineStore('data', {
             const state = this.processStates[sessionId]?.state
             const optimisticShown = state !== PROCESS_STATE.ASSISTANT_TURN
             const startingSet = optimisticShown && !state
+            // Claude Code folds a message accepted mid-turn into the running
+            // turn and never writes a user_message line for it (hybrid CLI
+            // sessions DO — they are excluded). Absence of a line is then no
+            // evidence of non-delivery: only the backend send_ack confirms
+            // these, so the audit must never flag them as undelivered.
+            const session = this.getSession(sessionId)
+            const noLineExpected = session?.provider === 'claude_code'
+                && !session?.hybrid
+                && state === PROCESS_STATE.ASSISTANT_TURN
             this.registerInflightSend(requestId, {
                 sessionId,
                 text,
                 medias: medias || [],
                 optimisticShown,
                 startingSet,
+                noLineExpected,
             })
             if (optimisticShown) {
                 const attachments = (images?.length || documents?.length)
@@ -2618,6 +2630,21 @@ export const useDataStore = defineStore('data', {
             inflightSends.delete(requestId)
             this._applySendFailure(requestId, entry, info)
             return true
+        },
+
+        /**
+         * Positive delivery acknowledgement from the backend (``send_ack``
+         * frame): the message reached the agent. Drop the snapshot, and heal
+         * any failed bubble a lost or premature failure signal produced for
+         * it (the ack is authoritative — it proves delivery). This is the
+         * only confirmation for messages Claude Code accepts mid-turn, which
+         * never get their own user_message line.
+         * @param {string} sessionId
+         * @param {string} requestId
+         */
+        confirmInflightSend(sessionId, requestId) {
+            this._dropInflightSend(requestId)
+            if (sessionId) this.removeFailedSend(sessionId, requestId)
         },
 
         /**
@@ -2815,6 +2842,10 @@ export const useDataStore = defineStore('data', {
             const candidates = []
             for (const [id, entry] of inflightSends) {
                 if (entry.sessionId !== sessionId) continue
+                // No user_message line will ever confirm these (Claude Code
+                // mid-turn); only the backend send_ack does. Absence here is
+                // not evidence of failure — never declare them undelivered.
+                if (entry.noLineExpected) continue
                 if (now - entry.sentAt < INFLIGHT_AUDIT_MIN_AGE_MS) continue
                 candidates.push(id)
             }

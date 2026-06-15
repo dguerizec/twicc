@@ -1220,6 +1220,17 @@ export function useWebSocket() {
                 )
                 break
             }
+            case 'send_ack': {
+                // Positive delivery acknowledgement for a send: the message
+                // reached the agent. Drop its in-flight snapshot (and heal any
+                // failed bubble produced by a lost/premature failure signal).
+                // This is the only delivery confirmation for messages Claude
+                // Code accepts mid-turn — they never get a user_message line.
+                if (msg.request_id) {
+                    store.confirmInflightSend(msg.session_id, msg.request_id)
+                }
+                break
+            }
             case 'error': {
                 // A send_message failure matching an in-flight send: the store
                 // drops the optimistic ghosts and surfaces the composer callout

@@ -829,6 +829,10 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
         # Fields listed in ``AGENT_SETTINGS_HIDDEN_FROM_FRONTEND`` are dropped
         # here (defense in depth — the frontend does not know they exist).
         agent_settings = AgentSettings(**agent_settings_kwargs_from_frontend_payload(content))
+        # Whether the backend accepted the message for delivery to the agent.
+        # A positive ack is emitted after the try/except when True; failures
+        # leave it False (and have already surfaced via an error frame).
+        delivered = False
         try:
             if exists:
                 # Save all session settings to DB in one query.
@@ -870,7 +874,7 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
                 effective_agent_settings = helpers.enforce_agent_settings_consistency(effective_agent_settings)
 
                 # Session exists: send message to it
-                await manager.send_to_session(
+                delivered = await manager.send_to_session(
                     session_id, project_id, cwd, text,
                     settings=effective_agent_settings,
                     images=images, documents=documents,
@@ -905,8 +909,11 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
                     first = result.errors[0]
                     await send_error(first.message, code=first.code)
                     return
-                # Success: nothing to send back. The agent manager + watcher will emit
-                # the usual broadcasts and the front-end picks them up.
+                # Success: the new agent started with the first message as its
+                # opening prompt. Mark it delivered so the ack below confirms
+                # it; the usual broadcasts from the agent manager + watcher
+                # still flow.
+                delivered = True
         except RuntimeError as e:
             # Process busy or other expected delivery errors. SendDeliveryError
             # carries a specific code (agent_starting, hybrid_composer_busy, …);
@@ -920,6 +927,18 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
                 f"Failed to send message: {e}",
                 code="send_failed",
             )
+
+        # Positive delivery acknowledgement: the message reached the agent, so
+        # the frontend can drop its in-flight send snapshot. This is the only
+        # delivery confirmation for messages Claude Code accepts mid-turn —
+        # those are folded into the running turn and never get their own
+        # user_message line in the JSONL.
+        if delivered and request_id:
+            await self.send_json({
+                "type": "send_ack",
+                "request_id": request_id,
+                "session_id": session_id,
+            })
 
     async def _handle_set_session_hybrid(self, content: dict) -> None:
         """Switch an existing session to hybrid CLI mode (one-way).

@@ -780,8 +780,14 @@ class BaseAgent:
         """
         raise NotImplementedError
 
-    async def send(self, text: str, **kwargs: Any) -> None:
-        """Send a follow-up message to the running agent."""
+    async def send(self, text: str, **kwargs: Any) -> bool:
+        """Send a follow-up message to the running agent.
+
+        Returns ``True`` when the message was accepted for delivery to the
+        agent, ``False`` when a synchronous delivery error was swallowed and
+        surfaced via the DEAD-state broadcast instead. Callers use the result
+        to emit a positive delivery acknowledgement to the frontend.
+        """
         raise NotImplementedError
 
     async def interrupt_or_kill(self, reason: str) -> None:

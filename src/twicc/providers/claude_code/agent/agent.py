@@ -1188,13 +1188,18 @@ class ClaudeCodeAgent(BaseAgent):
         *,
         images: list[dict] | None = None,
         documents: list[dict] | None = None,
-    ) -> None:
+    ) -> bool:
         """Send a follow-up message to the process.
 
         Args:
             text: The message text to send
             images: Optional list of SDK ImageBlockParam objects
             documents: Optional list of SDK DocumentBlockParam objects
+
+        Returns:
+            ``True`` once the message was handed to the SDK (accepted for
+            delivery); ``False`` when ``query()`` failed and the error was
+            swallowed into the DEAD-state broadcast.
 
         Raises:
             RuntimeError: If the process is not running or not ready for input
@@ -1218,12 +1223,15 @@ class ClaudeCodeAgent(BaseAgent):
             # Build query prompt as async generator (streaming mode)
             query_prompt = await self._build_query_prompt(text, images, documents)
             await self._client.query(query_prompt)
+            return True
 
         except Exception as e:
             # Handle error and transition to DEAD state. Do not re-raise as the
             # spec requires process errors to be logged and reported, never propagated.
             # The error is communicated to the frontend via WebSocket broadcast.
+            # The caller learns delivery failed from the False return (no ack).
             await self._handle_error(f"Failed to send message: {e}", exc=e)
+            return False
 
     async def kill(self, reason: str = "manual") -> None:
         """Terminate the process gracefully.
