@@ -232,6 +232,16 @@ function goToComposer(focus = false) {
     setOpenBlock('message-input', { focus })
 }
 
+// The pending form's own minimize button. Collapse it explicitly (not only via
+// the openBlock transition) so it still works when ``openBlock`` is already
+// 'message-input' — in that case setOpenBlock is a no-op, the watcher never
+// fires, and applyOpenBlock would never call minimize(). Defense in depth on top
+// of the mount-time accordion init (the immediate sessionId watch below).
+function collapsePendingRequest() {
+    pendingFormRef.value?.minimize()
+    goToComposer(true)
+}
+
 // A new pending request takes the slot (focus it); resolving the last one
 // returns home (no focus — the agent is now working).
 watch(() => pendingRequest.value?.request_id, (id, oldId) => {
@@ -241,10 +251,15 @@ watch(() => pendingRequest.value?.request_id, (id, oldId) => {
 
 // Reset on session switch (this component is reused across sessions). Force a
 // re-apply even when the value is unchanged, so the panels reset too.
+// ``immediate`` so this also runs on the very first mount: a cold load directly
+// onto a session that already has a pending request would otherwise leave
+// ``openBlock`` stuck at its 'message-input' default — the accordion invariant
+// is never established, applyOpenBlock never runs, and the pending form's
+// minimize button (which relies on the openBlock transition) silently no-ops.
 watch(() => props.sessionId, () => {
     openBlock.value = pendingRequest.value ? 'pending' : 'message-input'
     nextTick(applyOpenBlock)
-})
+}, { immediate: true })
 
 // External footer-panel navigation (global Alt+Shift+{PageDown/PageUp/T}
 // shortcuts and the matching command-palette actions, routed through
@@ -1676,7 +1691,7 @@ defineExpose({
                     :pending-request="pendingRequest"
                     :pending-count="pendingRequests.length"
                     @request-open="setOpenBlock('pending', { focus: true })"
-                    @request-collapse="goToComposer(true)"
+                    @request-collapse="collapsePendingRequest"
                 />
                 <!-- Hybrid CLI sessions: the embedded terminal, with a badge in the
                      block header pointing at pending prompts (the TUI surface). -->
