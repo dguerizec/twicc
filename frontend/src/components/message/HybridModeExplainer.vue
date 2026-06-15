@@ -1,22 +1,32 @@
 <script setup>
-// Shared "Why you need hybrid mode" explainer, rendered as a wa-details. Single source
-// of truth so the toggle dialog (MessageInput) and the Claude settings section
-// stay in sync. Pass ``open`` to expand it by default.
+// Shared hybrid-mode explainer, rendered as a wa-details. Single source of truth
+// so the toggle dialog (MessageInput) and the Claude settings section stay in
+// sync. Pass ``open`` to expand it by default.
 //
 // Each sentence leads with a bold inline mini-title so the reader can scan the
 // bold lead-ins to find the line they need; UI references (the Claude CLI
 // terminal, the Settings path) stay plain to keep one bold anchor per line.
+import { computed } from 'vue'
+import { useSettingsStore } from '../../stores/settings'
+
 defineProps({
     open: {
         type: Boolean,
         default: false,
     },
 })
+
+// First-time readers get the persuasive "why you need it" summary; once they've
+// seen it (the synced flag flips after the dialog is acknowledged), it reads as
+// plain reference — "what is hybrid mode".
+const settingsStore = useSettingsStore()
+const explainerSeen = computed(() => settingsStore.isClaudeHybridExplainerSeen)
 </script>
 
 <template>
     <wa-details :open="open" class="hybrid-mode-explainer">
-        <span slot="summary">Why you <strong><em>need</em></strong> hybrid mode</span>
+        <span v-if="!explainerSeen" slot="summary">Why you <strong><em>need</em></strong> hybrid mode</span>
+        <span v-else slot="summary">What is hybrid mode</span>
 
         <wa-callout variant="warning" size="small">
             <wa-icon slot="icon" name="triangle-exclamation" variant="classic"></wa-icon>
@@ -69,7 +79,8 @@ defineProps({
 
         <p>
             <strong>No orchestration —</strong> that's also why hybrid sessions
-            can't be orchestrated: no human to step in.
+            can't be orchestrated: no human to step in. To opt Claude out
+            entirely, turn off Enabled in orchestration under Settings → Claude.
         </p>
 
         <p class="explainer-section-title">Turning it on</p>
