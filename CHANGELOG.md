@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Summary
+
+- **vX.Y.Z: Hybrid mode** — run real interactive Claude CLI sessions inside TwiCC and keep your usage on your Pro/Max plan instead of API rates.
+
+### Added
+
+- **Hybrid mode** — turn a Claude session into a real `claude` CLI running inside TwiCC, so its usage stays on your subscription quota instead of being billed at API rates ([Anthropic's 15 June 2026 change](https://x.com/ClaudeDevs/status/2054610152817619388)). You keep the full TwiCC experience — message input, approvals, the question widget, notifications — with the live CLI terminal one click away. It's one-way per session; turn it on from the message input, or default new sessions under Settings → Claude.
+
 ### Changed
 
 - **Providers Usage** — TwiCC stops refreshing your provider usage when there's no activity for a long time.
