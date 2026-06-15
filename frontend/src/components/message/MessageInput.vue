@@ -169,7 +169,9 @@ const hybridTooltipLabel = computed(() => {
 const hybridDialogRef = ref(null)
 const hybridConfirmBtnRef = ref(null)
 const hybridDialogVariant = ref(null)
-const hybridDontShowAgain = ref(true)
+// "Don't show this again" defaults OFF (opt-in): the explainer keeps showing
+// until the user actively asks to silence it.
+const hybridDontShowAgain = ref(false)
 // Forced-choice guard: switch variants must not be dismissable by Esc / the X /
 // the backdrop, so we never persist the "seen" flag without a real button press.
 // wa-hide can't tell Esc from a programmatic close, so we gate on this flag.
@@ -201,7 +203,7 @@ const hybridConfirmLabel = computed(() =>
 
 function openHybridDialog(variant) {
     hybridDialogVariant.value = variant
-    hybridDontShowAgain.value = true
+    hybridDontShowAgain.value = false
     hybridDialogAllowClose.value = false
     if (hybridDialogRef.value) hybridDialogRef.value.open = true
 }

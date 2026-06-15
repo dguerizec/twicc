@@ -882,12 +882,19 @@ function onOpenChangelogEvent() {
 window.addEventListener('open-changelog', onOpenChangelogEvent)
 onBeforeUnmount(() => window.removeEventListener('open-changelog', onOpenChangelogEvent))
 
-watch(() => dataStore.pendingChangelogVersion, (version) => {
-    if (version) {
-        forcedChangelogOpen.value = true
-        changelogDialogRef.value?.open()
-    }
-})
+// Auto-open the changelog on a new version — but hold it back while the startup
+// hybrid-mode announcement is pending or open (it takes priority). Watching both
+// sources means this re-fires when the announcement closes
+// (hybridAnnouncementActive → false) and opens the deferred changelog then.
+watch(
+    [() => dataStore.pendingChangelogVersion, () => dataStore.hybridAnnouncementActive],
+    ([version, announcementActive]) => {
+        if (version && !announcementActive && !forcedChangelogOpen.value) {
+            forcedChangelogOpen.value = true
+            changelogDialogRef.value?.open()
+        }
+    },
+)
 
 function onChangelogClose() {
     if (forcedChangelogOpen.value) {

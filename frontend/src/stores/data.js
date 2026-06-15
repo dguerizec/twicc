@@ -348,6 +348,10 @@ export const useDataStore = defineStore('data', {
         currentVersion: null,           // string, from server_version message
         pendingChangelogVersion: null,  // string, version to show in changelog dialog after app is ready
         previousChangelogVersion: null, // string, previousLastChangelogVersionSeen from backend
+        // True while the startup hybrid-mode announcement (App.vue) is pending or
+        // open. The changelog auto-open waits for this to clear so the two dialogs
+        // never stack on launch — the announcement takes priority.
+        hybridAnnouncementActive: false,
         latestVersion: null,            // { version, releaseUrl } or null, from update_available message
 
         // Local UI state (separate from server data to avoid being overwritten)
@@ -1047,6 +1051,9 @@ export const useDataStore = defineStore('data', {
         },
         clearPendingChangelogVersion() {
             this.pendingChangelogVersion = null
+        },
+        setHybridAnnouncementActive(active) {
+            this.hybridAnnouncementActive = active
         },
         setLatestVersion(version, releaseUrl) {
             this.latestVersion = { version, releaseUrl }

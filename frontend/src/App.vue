@@ -19,6 +19,7 @@ import SearchOverlay from './components/app/SearchOverlay.vue'
 import SessionSwitcher from './components/app/SessionSwitcher.vue'
 import StopProcessConfirmDialog from './components/app/StopProcessConfirmDialog.vue'
 import ProviderActivationDialog from './components/app/ProviderActivationDialog.vue'
+import HybridAnnouncementDialog from './components/app/HybridAnnouncementDialog.vue'
 import GlobalMediaPreview from './components/media/GlobalMediaPreview.vue'
 import ProjectTrustDialog from './components/project/ProjectTrustDialog.vue'
 import ProjectEditDialog from './components/project/ProjectEditDialog.vue'
@@ -571,6 +572,10 @@ const toastTheme = computed(() => {
 <template>
     <!-- Provider activation: non-dismissible first-run / recovery dialog -->
     <ProviderActivationDialog v-if="isAppReady" />
+
+    <!-- Hybrid mode / billing-change announcement: auto-opens once for users who
+         haven't seen the explainer yet (self-gates on the synced flag). -->
+    <HybridAnnouncementDialog v-if="isAppReady" />
 
     <!-- Version mismatch: non-dismissible reload dialog -->
     <wa-dialog :open="versionMismatchDetected || undefined" without-header @wa-hide.prevent>
