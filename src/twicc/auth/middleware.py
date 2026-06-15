@@ -139,7 +139,15 @@ class RpcTokenAuthMiddleware:
             )
             return JsonResponse({"error": msg}, status=401)
 
-        await sync_to_async(api_tokens.touch_last_used)(record.id)
+        # Updating last_used_at is best-effort telemetry: it must never fail the
+        # authenticated request. The write touches a small JSON file, and a
+        # transient I/O error (notably a concurrent write racing on the store's
+        # temp file) otherwise surfaced as a 500 on every overlapping /rpc/
+        # call. Swallow it and log; auth has already succeeded.
+        try:
+            await sync_to_async(api_tokens.touch_last_used)(record.id)
+        except Exception:
+            logger.warning("token last_used_at update failed (ignored)", exc_info=True)
         return await self.get_response(request)
 
     @staticmethod
