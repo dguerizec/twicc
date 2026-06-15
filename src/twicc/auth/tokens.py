@@ -13,8 +13,10 @@ takes effect in the running backend without a restart.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
+import logging
 import secrets
 from datetime import datetime, timezone
 from typing import NamedTuple
@@ -24,11 +26,23 @@ import orjson
 from twicc.atomic_json import locked_json_file
 from twicc.paths import get_api_tokens_path
 
+logger = logging.getLogger(__name__)
+
 _TOKEN_PREFIX = "twicc_pat_"
 
 # Empty on-disk store shape. ``locked_json_file`` deep-copies the default when
 # the file is absent, so this module-level literal is never mutated.
 _EMPTY_STORE = {"version": 1, "tokens": []}
+
+# Coalesced last_used telemetry. A burst of authenticated /rpc/ requests would
+# otherwise rewrite api-tokens.json on every call; instead the middleware only
+# records the touch in memory (``note_used``) and ``start_last_used_flush_task``
+# persists everything pending at most once every LAST_USED_FLUSH_INTERVAL
+# seconds. ``{token_id: latest ISO-8601}``. Backend-process-local (touching is
+# backend-only); touches still pending at shutdown are dropped, which is fine
+# for an approximate ``last_used_at`` (at most one interval of staleness).
+LAST_USED_FLUSH_INTERVAL = 10  # seconds
+_pending_last_used: dict[str, str] = {}
 
 
 class TokenRecord(NamedTuple):
@@ -142,12 +156,73 @@ def verify_token(token: str) -> TokenRecord | None:
     return match
 
 
-def touch_last_used(token_id: str) -> None:
+def note_used(token_id: str) -> None:
+    """Record that *token_id* was just used — in memory only, no I/O.
+
+    Called from the auth middleware on the event loop, so it never blocks the
+    request on a file write. The actual api-tokens.json write is coalesced by
+    :func:`start_last_used_flush_task`.
+    """
+    _pending_last_used[token_id] = _now_iso()
+
+
+def _drain_pending_last_used() -> dict[str, str]:
+    """Atomically take and clear the pending touches.
+
+    Event-loop only: ``note_used`` and this run on the same (event-loop) thread,
+    so the copy-then-clear never races a concurrent mutation.
+    """
+    snapshot = dict(_pending_last_used)
+    _pending_last_used.clear()
+    return snapshot
+
+
+def _write_last_used(snapshot: dict[str, str]) -> int:
+    """Apply *snapshot* (``token_id -> ISO``) to api-tokens.json in one locked
+    write. Returns the number of records updated; a token absent from the file
+    (e.g. revoked since the touch) is skipped. Blocking — run via
+    :func:`asyncio.to_thread`.
+    """
     with locked_json_file(get_api_tokens_path(), default=_EMPTY_STORE) as txn:
-        changed = False
-        for t in txn.data.get("tokens", []):
-            if isinstance(t, dict) and t.get("id") == token_id:
-                t["last_used_at"] = _now_iso()
-                changed = True
-        if changed:
+        by_id = {t["id"]: t for t in txn.data.get("tokens", [])
+                 if isinstance(t, dict) and "id" in t}
+        updated = 0
+        for token_id, iso in snapshot.items():
+            rec = by_id.get(token_id)
+            if rec is not None:
+                rec["last_used_at"] = iso
+                updated += 1
+        if updated:
             txn.write()
+        return updated
+
+
+async def start_last_used_flush_task(stop_event: asyncio.Event) -> None:
+    """Flush pending token last_used touches every LAST_USED_FLUSH_INTERVAL s.
+
+    Coalesces a burst of authenticated /rpc/ requests into at most one
+    api-tokens.json write per interval (so at most ~one interval of staleness).
+    Exits when *stop_event* is set; touches still pending at that point are
+    dropped (acceptable for an approximate timestamp).
+    """
+    logger.info("Token last-used flush task started (every %ss)", LAST_USED_FLUSH_INTERVAL)
+    while not stop_event.is_set():
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=LAST_USED_FLUSH_INTERVAL)
+        except asyncio.TimeoutError:
+            pass
+        else:
+            break  # stop_event fired — exit without another flush
+
+        snapshot = _drain_pending_last_used()
+        if not snapshot:
+            continue
+        try:
+            updated = await asyncio.to_thread(_write_last_used, snapshot)
+            if updated:
+                logger.debug("Flushed last_used for %d token(s)", updated)
+        except Exception:  # noqa: BLE001 — keep the loop alive across transient errors
+            # Re-queue without clobbering any newer touch that arrived meanwhile.
+            for token_id, iso in snapshot.items():
+                _pending_last_used.setdefault(token_id, iso)
+            logger.warning("Token last_used flush failed (re-queued)", exc_info=True)

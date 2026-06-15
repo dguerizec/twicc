@@ -139,15 +139,11 @@ class RpcTokenAuthMiddleware:
             )
             return JsonResponse({"error": msg}, status=401)
 
-        # Updating last_used_at is best-effort telemetry: it must never fail the
-        # authenticated request. The write touches a small JSON file, and a
-        # transient I/O error (notably a concurrent write racing on the store's
-        # temp file) otherwise surfaced as a 500 on every overlapping /rpc/
-        # call. Swallow it and log; auth has already succeeded.
-        try:
-            await sync_to_async(api_tokens.touch_last_used)(record.id)
-        except Exception:
-            logger.warning("token last_used_at update failed (ignored)", exc_info=True)
+        # Record last_used in memory only — no I/O on the request path. A burst
+        # of authenticated /rpc/ calls is coalesced into at most one
+        # api-tokens.json write per interval by
+        # ``twicc.auth.tokens.start_last_used_flush_task``.
+        api_tokens.note_used(record.id)
         return await self.get_response(request)
 
     @staticmethod

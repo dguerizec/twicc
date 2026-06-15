@@ -84,6 +84,7 @@ from twicc.instance_lock import InstanceAlreadyRunning, InstanceLock  # noqa: E4
 from twicc.orchestrator import get_orchestrator_registry  # noqa: E402
 from twicc.paths import get_data_dir  # noqa: E402
 from twicc.pricing_task import start_price_sync_task, sync_all_providers  # noqa: E402
+from twicc.auth.tokens import start_last_used_flush_task  # noqa: E402
 from twicc.search import SearchIndexLockedError, init_search_index, shutdown_search_index  # noqa: E402
 from twicc.search_indexing_task import (  # noqa: E402
     get_active_indexing_tasks,
@@ -264,6 +265,7 @@ async def run_server(port: int):
 
     # Cross-provider periodic tasks
     price_sync_task = asyncio.create_task(start_price_sync_task(shutdown_event))
+    last_used_flush_task = asyncio.create_task(start_last_used_flush_task(shutdown_event))
     version_check_task = asyncio.create_task(start_version_check_task())
 
     # One-shot trust backfill: settle every not-yet-imported project's trust
@@ -301,6 +303,9 @@ async def run_server(port: int):
         # so we just wait for it to finish.
         logger.info("Stopping price sync task...")
         await _cancel_task(price_sync_task, "Price sync task")
+
+        logger.info("Stopping token last-used flush task...")
+        await _cancel_task(last_used_flush_task, "Token last-used flush task")
 
         logger.info("Stopping version check task...")
         stop_version_check_task()
