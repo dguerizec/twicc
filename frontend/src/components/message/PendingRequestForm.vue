@@ -8,7 +8,7 @@
 // - The isResponding guard + the provider-agnostic respondToPendingRequest dispatch
 //   (triggered by the body's @submit event)
 
-import { ref, computed, watch, useId } from 'vue'
+import { ref, computed, watch, useId, nextTick } from 'vue'
 import { getProviderLabel, respondToPendingRequest } from '../../providers'
 import { useDataStore } from '../../stores/data'
 import { PROVIDER } from '../../constants'
@@ -40,7 +40,7 @@ const props = defineProps({
 
 // `expand` fires when the request is opened (restored, or a new request takes the
 // slot), so the parent can reduce the composer (at most one footer panel expanded).
-const emit = defineEmits(['expand'])
+const emit = defineEmits(['request-open', 'request-collapse'])
 
 // Number of additional pending requests waiting behind this one (>= 0).
 const extraPendingCount = computed(() => Math.max(0, props.pendingCount - 1))
@@ -85,7 +85,6 @@ function minimize() {
  */
 function restore() {
     viewState.value = 'normal'
-    emit('expand')
 }
 
 /**
@@ -96,9 +95,40 @@ function restoreIfMinimized() {
     if (isMinimized.value) restore()
 }
 
+// ── Focus on (accordion-driven) open ─────────────────────────────────────────
+// Order-independent, like the composer's requestFocus: if the form is still
+// minimized when asked, defer until the restore watch shows the body; otherwise
+// focus now. Targets the body's designated primary control — both provider
+// bodies mark it with `.auto-focused` (Approve button / first option card /
+// deny input) — and falls back to the first focusable control.
+const rootRef = ref(null)
+const FOCUSABLE_SELECTOR = 'a[href], button, input:not([type="hidden"]), textarea, select, '
+    + 'wa-button, wa-input, wa-textarea, wa-select, wa-radio, wa-checkbox, '
+    + '[tabindex]:not([tabindex="-1"])'
+let wantsFocus = false
+function focusBodyNow() {
+    nextTick(() => {
+        const root = rootRef.value
+        if (!root) return
+        const target = root.querySelector('.auto-focused') || root.querySelector(FOCUSABLE_SELECTOR)
+        target?.focus?.()
+    })
+}
+function requestFocus() {
+    if (isMinimized.value) wantsFocus = true
+    else focusBodyNow()
+}
+watch(isMinimized, (min) => {
+    if (!min && wantsFocus) {
+        wantsFocus = false
+        focusBodyNow()
+    }
+})
+
 // Expose minimize so the parent can reduce this request when the composer
-// opens, and restoreIfMinimized for the hybrid pending badge.
-defineExpose({ minimize, restoreIfMinimized })
+// opens, restoreIfMinimized for the hybrid pending badge, and requestFocus so
+// the accordion can move focus into the form when it opens it.
+defineExpose({ minimize, restoreIfMinimized, requestFocus })
 
 /**
  * Toggle between the maximized state and the normal size.
@@ -148,12 +178,8 @@ watch(() => props.pendingRequest?.request_id, (newId, oldId) => {
     // request is always shown at normal size (and never hidden by a leftover
     // minimized state).
     viewState.value = 'normal'
-    // A new request replacing a previous one is "opened", so reduce the composer
-    // (keeps the at-most-one-expanded invariant when the composer was expanded
-    // while the prior request sat minimized). Guarded to a real id→id swap: the
-    // very first request collapses the composer via the sendingLocked transition,
-    // and a resolve to null must not collapse it (the composer expands then).
-    if (newId && oldId) emit('expand')
+    // Taking over the slot (open this form + reduce the others) is handled by the
+    // footer accordion in SessionItemsList, which watches the pending request id.
 })
 </script>
 
@@ -166,7 +192,7 @@ watch(() => props.pendingRequest?.request_id, (newId, oldId) => {
         ``<template v-else-if>`` branches.
     -->
     <wa-divider></wa-divider>
-    <div class="pending-request-form" :class="{ maximized: isMaximized, minimized: isMinimized }">
+    <div ref="rootRef" class="pending-request-form" :class="{ maximized: isMaximized, minimized: isMinimized }">
         <!-- Minimized: a single-line bar identical in look/behaviour to the message
              input's collapsed bar (clickable anywhere + chevron to restore), shown
              in place of the normal header's window controls. Independent of the
@@ -177,7 +203,7 @@ watch(() => props.pendingRequest?.request_id, (newId, oldId) => {
             :icon="headerIcon"
             :label="headerTitle"
             expand-tooltip="Expand the request"
-            @expand="restore"
+            @expand="$emit('request-open')"
         >
             <template #trailing>
                 <span
@@ -216,7 +242,7 @@ watch(() => props.pendingRequest?.request_id, (newId, oldId) => {
                 size="small"
                 class="size-toggle-btn"
                 :id="minimizeToggleId"
-                @click="minimize"
+                @click="$emit('request-collapse')"
             >
                 <wa-icon name="window-minimize" variant="classic"></wa-icon>
             </wa-button>

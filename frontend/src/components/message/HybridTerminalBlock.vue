@@ -1,16 +1,21 @@
 <script setup>
 // HybridTerminalBlock.vue - Embedded terminal for hybrid CLI sessions.
 //
-// Sits in the session footer, above the composer textarea. Shows the live
-// claude TUI of the session's dedicated tmux session (attach-only 'h:'
-// terminal context). Three sizes like the pending-request form: normal
-// (capped height), minimized (collapsed bar), maximized (fills the session
-// area). A pulsing badge appears when the TUI is blocked on a prompt the
-// user must answer inside the terminal (the single PermissionRequest hook).
-import { ref, computed, watch, watchEffect, useId, provide, onBeforeUnmount, markRaw } from 'vue'
+// Sits in the session footer, above the message input. Shows the live claude
+// TUI of the session's dedicated tmux session (attach-only 'h:' terminal
+// context). CLOSED by default — nothing visible, but the xterm stays mounted
+// so its buffer survives. Opened on demand: the composer's hybrid icon
+// (committed sessions) or the attention callout below. Two open sizes: normal
+// (capped height) and maximized (fills the session area).
+//
+// When closed AND the TUI needs the user directly — a prompt only it can show
+// ('hybrid_terminal', GUI channel expired) or a blocked composer — a warning
+// callout takes the block's place, carrying the reason and opening the terminal
+// on click. Answerable requests never trigger it: they render the
+// PendingRequestForm above the composer (first responder wins).
+import { ref, computed, watch, watchEffect, useId, provide, onBeforeUnmount, markRaw, nextTick } from 'vue'
 import { useDataStore } from '../../stores/data'
 import AppTooltip from '../ui/AppTooltip.vue'
-import CollapsedBar from './CollapsedBar.vue'
 import TerminalInstance from '../terminal/TerminalInstance.vue'
 
 const props = defineProps({
@@ -20,47 +25,39 @@ const props = defineProps({
     }
 })
 
-const emit = defineEmits(['expand', 'show-pending-form'])
-
-// Clicking the badge while the form is available brings it back if the user
-// minimized it (no-op otherwise — handled by the parent wiring), and
-// minimizes the terminal block: the user chose the form as their surface.
-function onBadgeClick() {
-    if (!pendingIsAnswerable.value) return
-    emit('show-pending-form')
-    minimize()
-}
+const emit = defineEmits(['request-open', 'request-collapse', 'show-pending-form', 'state-change'])
 
 const store = useDataStore()
 
-// ── Size state (window-controls style, single enum) ─────────────────────────
-// Minimized by default: the composer keeps the room, and the CLI is steered
-// from it without needing the terminal on screen. Safe for sizing — while
-// minimized the CLI's 80-column width comes from the backend tmux session's
-// default size (created detached at 80x24), not from the embedded xterm.
-// Opening the terminal fits it to the panel: a wide panel widens the view, a
-// narrow one shrinks the font first and only then narrows the columns, down to
-// the HYBRID_MIN_COLS floor (so an opened, narrow pane can drive tmux below 80).
-const viewState = ref('minimized')
-const isMinimized = computed(() => viewState.value === 'minimized')
+// ── Open/closed state (single enum) ─────────────────────────────────────────
+// Closed by default: the composer keeps the room and the CLI is steered from
+// it without the terminal on screen. Safe for sizing — while closed the CLI's
+// 80-column width comes from the backend tmux session's default size (created
+// detached at 80x24), not the embedded xterm. Opening fits it to the panel: a
+// wide panel widens the view, a narrow one shrinks the font first and only then
+// narrows the columns, down to the HYBRID_MIN_COLS floor.
+const viewState = ref('closed') // 'closed' | 'normal' | 'maximized'
+const isClosed = computed(() => viewState.value === 'closed')
 const isMaximized = computed(() => viewState.value === 'maximized')
-const minimizeToggleId = useId()
+const closeBtnId = useId()
 const maximizeToggleId = useId()
 const refreshBtnId = useId()
-const badgeId = useId()
 
-function minimize() {
-    viewState.value = 'minimized'
+// Imperative open/close, driven by the footer accordion (SessionItemsList). No
+// emit, so the accordion's sync never loops back into a request.
+function close() {
+    viewState.value = 'closed'
 }
-function restore() {
+function open() {
+    if (viewState.value !== 'closed') return
     viewState.value = 'normal'
-    emit('expand')
 }
 function toggleMaximized() {
     viewState.value = isMaximized.value ? 'normal' : 'maximized'
-    if (isMaximized.value) emit('expand')
 }
-defineExpose({ minimize })
+// Driven from the composer's hybrid icon (open) and internally (close);
+// requestFocus moves keyboard focus into the xterm once the block is open.
+defineExpose({ open, close, requestFocus })
 
 // ── Manual terminal refresh ──────────────────────────────────────────────────
 // A purely front-side xterm.js freeze (renderer stuck, or a zombie WebSocket
@@ -133,84 +130,107 @@ watchEffect(() => {
     }
 })
 
-// ── Pending-in-terminal badge ────────────────────────────────────────────────
-// Any pending request means a prompt is up inside the TUI: answerable ones
-// also render the PendingRequestForm widget (dual surface — first responder
-// wins), so the badge steers the user to the widget first, terminal as the
-// alternative. Requests degraded to `hybrid_terminal` (GUI channel expired)
-// only have the terminal, and the badge says so.
-const hybridPending = computed(() =>
-    (store.getPendingRequests(props.sessionId) || [])[0] || null
-)
-// Same discriminant as SessionItemsList's PendingRequestForm gating: an
-// answerable head request means the widget IS rendered above the composer.
+// ── Focus the embedded terminal on (accordion-driven) open ───────────────────
+// Order-independent, like the composer's requestFocus: if the block is still
+// closed when asked, defer until the open watch flips it; otherwise focus now.
+// The first open lazily starts the xterm (active:false → true), so termApi may
+// not be ready for a tick — poll briefly. No-op while in the placeholder state
+// (no process yet, nothing to focus).
+let wantsFocus = false
+function focusTerminalNow() {
+    if (!everHadProcess.value) return
+    let tries = 8
+    const attempt = () => {
+        const api = termApi.value
+        if (api?.started?.value) { api.focus?.(); return }
+        if (tries-- > 0) setTimeout(attempt, 40)
+    }
+    nextTick(attempt)
+}
+function requestFocus() {
+    if (isClosed.value) wantsFocus = true
+    else focusTerminalNow()
+}
+watch(isClosed, (closed) => {
+    if (!closed && wantsFocus) {
+        wantsFocus = false
+        focusTerminalNow()
+    }
+})
+
+// ── Attention: the terminal is the ONLY answer surface ───────────────────────
+// A pending request degraded to badge-only ('hybrid_terminal', GUI channel
+// expired) or a blocked composer (process ``extra.terminal_blocked``: TwiCC
+// tried to paste and a TUI dialog was open or text was typed in). Answerable
+// pendings are excluded — they render the PendingRequestForm above the composer.
+const hybridPending = computed(() => (store.getPendingRequests(props.sessionId) || [])[0] || null)
 const pendingIsAnswerable = computed(() =>
     !!hybridPending.value && hybridPending.value.request_type !== 'hybrid_terminal'
 )
-// Steer the user to the widget whenever it is available; only degraded
-// badge-only requests (GUI channel expired) point at the terminal.
-const badgeLabel = computed(() => {
-    if (!hybridPending.value) return ''
-    return pendingIsAnswerable.value ? 'Prefer answering in the UI' : 'Answer in the terminal'
-})
-
-// ── Terminal-blocked badge ───────────────────────────────────────────────────
-// Backend-sourced live flag (process ``extra.terminal_blocked``): TwiCC tried
-// to paste and the composer wasn't free — a TUI dialog is open or the user has
-// text typed in the terminal. Because it rides on the process state, it is in
-// the initial snapshot too, so any client (reloaded, or opened after the
-// block happened) sees it. Surfaced only when there's no pending request —
-// that case already has its own badge steering to the terminal/widget.
+const pendingTerminalOnly = computed(() => !!hybridPending.value && !pendingIsAnswerable.value)
 const terminalBlocked = computed(() => !!processState.value?.extra?.terminal_blocked)
+const attentionTerminalOnly = computed(() => pendingTerminalOnly.value || terminalBlocked.value)
+// Same wording the minimized bar used to carry, promoted to the callout.
+const attentionLabel = computed(() =>
+    pendingTerminalOnly.value ? 'Answer in the terminal' : 'Terminal blocked — click here to open'
+)
+
+// Open-header badge: while the terminal IS open, keep the same context — steer
+// an answerable request to the UI form, or note a block. Quiet (no pulse): the
+// terminal is already on screen.
+const headerBadgeLabel = computed(() => {
+    if (hybridPending.value) return pendingIsAnswerable.value ? 'Prefer answering in the UI' : 'Answer in the terminal'
+    if (terminalBlocked.value) return 'Terminal blocked'
+    return ''
+})
+// Clicking the answerable badge brings the form back if the user minimized it,
+// and closes the terminal: the user chose the form as their surface.
+function onHeaderBadgeClick() {
+    if (!pendingIsAnswerable.value) return
+    emit('show-pending-form')
+    close()
+}
+
+// ── Report visibility + attention to the parent ──────────────────────────────
+// calloutShown: the closed-state warning callout is up → drives the composer's
+// hybrid-icon tint. isVisible: the block occupies space (open, or the callout)
+// → drives the composer's top separator.
+const calloutShown = computed(() => isClosed.value && attentionTerminalOnly.value)
+const isVisible = computed(() => !isClosed.value || attentionTerminalOnly.value)
+watch([isVisible, calloutShown], () => {
+    emit('state-change', { visible: isVisible.value, attention: calloutShown.value })
+}, { immediate: true })
 </script>
 
 <template>
-    <wa-divider></wa-divider>
-    <div class="hybrid-terminal-block" :class="{ maximized: isMaximized, minimized: isMinimized }">
-        <!-- Minimized: single-line bar, same look as the composer's collapsed bar -->
-        <CollapsedBar
-            v-if="isMinimized"
-            icon="terminal"
-            label="Claude CLI terminal"
-            expand-tooltip="Expand the terminal"
-            @expand="restore"
+    <wa-divider v-if="isVisible"></wa-divider>
+    <div class="hybrid-terminal-block" :class="{ maximized: isMaximized, closed: isClosed, attention: calloutShown }">
+        <!-- Closed + attention: a warning callout takes the block's place, opens
+             the terminal on click. -->
+        <wa-callout
+            v-if="calloutShown"
+            variant="warning"
+            size="small"
+            class="hybrid-attention-callout"
+            role="button"
+            tabindex="0"
+            @click="$emit('request-open')"
+            @keydown.enter="$emit('request-open')"
         >
-            <template #trailing>
-                <!-- Only badges that require opening the terminal surface on the
-                     minimized bar. "Prefer answering in the UI" (answerable
-                     pending) is skipped here: its answer surface is the widget
-                     above the composer, so the bar badge would be noise. No
-                     @click — the whole collapsed bar expands the terminal. -->
-                <span
-                    v-if="hybridPending && !pendingIsAnswerable"
-                    class="hybrid-pending-badge terminal-only"
-                    role="status"
-                >{{ badgeLabel }}</span>
-                <span
-                    v-else-if="terminalBlocked"
-                    class="hybrid-pending-badge blocked"
-                    role="status"
-                >Terminal blocked — open it</span>
-            </template>
-        </CollapsedBar>
-        <!-- Normal header (window controls) -->
-        <div v-else class="hybrid-terminal-header">
+            <wa-icon slot="icon" name="triangle-exclamation" variant="classic"></wa-icon>
+            {{ attentionLabel }}
+        </wa-callout>
+        <!-- Open: header with window controls -->
+        <div v-else-if="!isClosed" class="hybrid-terminal-header">
             <wa-icon name="terminal" class="hybrid-terminal-icon"></wa-icon>
             <span class="hybrid-terminal-title">Claude CLI terminal</span>
             <span
-                v-if="hybridPending"
+                v-if="headerBadgeLabel"
                 class="hybrid-pending-badge"
-                :class="{ 'terminal-only': !pendingIsAnswerable, clickable: pendingIsAnswerable }"
-                :id="badgeId"
+                :class="{ clickable: pendingIsAnswerable }"
                 role="status"
-                @click.stop="onBadgeClick"
-            >{{ badgeLabel }}</span>
-            <!-- Terminal already open: the block to resolve is visible below. -->
-            <span
-                v-else-if="terminalBlocked"
-                class="hybrid-pending-badge blocked"
-                role="status"
-            >Terminal blocked</span>
+                @click.stop="onHeaderBadgeClick"
+            >{{ headerBadgeLabel }}</span>
             <wa-button
                 v-if="everHadProcess"
                 variant="neutral"
@@ -228,12 +248,12 @@ const terminalBlocked = computed(() => !!processState.value?.extra?.terminal_blo
                 appearance="plain"
                 size="small"
                 class="size-toggle-btn"
-                :id="minimizeToggleId"
-                @click="minimize"
+                :id="closeBtnId"
+                @click="$emit('request-collapse')"
             >
                 <wa-icon name="window-minimize" variant="classic"></wa-icon>
             </wa-button>
-            <AppTooltip :for="minimizeToggleId">Minimize</AppTooltip>
+            <AppTooltip :for="closeBtnId">Hide the terminal (the CLI keeps running)</AppTooltip>
             <wa-button
                 variant="neutral"
                 appearance="plain"
@@ -249,7 +269,7 @@ const terminalBlocked = computed(() => !!processState.value?.extra?.terminal_blo
 
         <!-- Terminal area: placeholder until the CLI runs (and again after a
              stop — the tmux is gone, nothing to reconnect to), then the live
-             TUI. Hidden by CSS while minimized so the xterm state survives. -->
+             TUI. Hidden by CSS while closed so the xterm state survives. -->
         <div class="hybrid-terminal-body">
             <div v-if="!everHadProcess" class="hybrid-terminal-placeholder">
                 <wa-icon name="terminal"></wa-icon>
@@ -260,7 +280,7 @@ const terminalBlocked = computed(() => !!processState.value?.extra?.terminal_blo
                 :key="terminalRefreshKey"
                 :context-key="'h:' + sessionId"
                 :session-id="sessionId"
-                :active="!isMinimized"
+                :active="!isClosed"
             />
         </div>
     </div>
@@ -289,14 +309,23 @@ wa-divider {
     }
 }
 
-.hybrid-terminal-block.minimized {
+/* Closed: zero visible footprint. The body stays mounted (xterm buffer
+   survives) but hidden. When a warning callout shows (closed + attention) the
+   block reclaims a little padding to frame it. */
+.hybrid-terminal-block.closed {
     padding: 0;
     gap: 0;
     height: auto;
 }
-/* Keep the terminal mounted (xterm buffer survives) but hidden. */
-.hybrid-terminal-block.minimized > .hybrid-terminal-body {
+.hybrid-terminal-block.closed.attention {
+    padding: var(--wa-space-2xs) var(--wa-space-s);
+}
+.hybrid-terminal-block.closed > .hybrid-terminal-body {
     display: none;
+}
+
+.hybrid-attention-callout {
+    cursor: pointer;
 }
 
 .hybrid-terminal-header {
@@ -332,30 +361,9 @@ wa-divider {
     line-height: 1.6;
 }
 
-/* Pulse only when the terminal is the ONLY answer surface (degraded
-   badge-only request) — when the form is shown above, the badge is a quiet
-   hint, not a call to action. */
-.hybrid-pending-badge.terminal-only {
-    animation: hybrid-badge-pulse 1.6s ease-in-out infinite;
-}
-
 /* When the form is available, the badge brings it back if minimized. */
 .hybrid-pending-badge.clickable {
     cursor: pointer;
-}
-
-/* Terminal blocked: a problem that needs attention — danger colors + pulse.
-   Distinct from the warning-toned pending badges (which are actionable, not
-   broken). On the collapsed bar the whole bar expands the terminal on click. */
-.hybrid-pending-badge.blocked {
-    color: var(--wa-color-danger-on-quiet);
-    background: var(--wa-color-danger-fill-quiet);
-    border-color: var(--wa-color-danger-border-quiet);
-    animation: hybrid-badge-pulse 1.6s ease-in-out infinite;
-}
-
-@keyframes hybrid-badge-pulse {
-    50% { opacity: 0.55; }
 }
 
 .size-toggle-btn {

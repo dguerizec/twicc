@@ -66,6 +66,22 @@ const props = defineProps({
     hasPanelAbove: {
         type: Boolean,
         default: false
+    },
+    // Hybrid sessions only: the embedded terminal is closed AND needs the user
+    // directly (a prompt only the CLI can show, or a blocked composer). Tints
+    // the hybrid icon so the warning callout above the composer has an obvious
+    // target. The callout itself carries the reason; the icon opens the terminal.
+    terminalAttention: {
+        type: Boolean,
+        default: false
+    },
+    // Hybrid sessions only: whether the embedded terminal block is currently
+    // visible (open, or its warning callout). When it is NOT, and the composer
+    // is collapsed, the hybrid icon is reproduced on the collapsed bar so the
+    // terminal stays one click away.
+    terminalVisible: {
+        type: Boolean,
+        default: false
     }
 })
 
@@ -103,7 +119,7 @@ const isAllProjectsMode = computed(() => route.name?.startsWith('projects-'))
 
 // `expand` fires when the user expands the composer, so the parent can reduce the
 // pending request (at most one of the two footer panels is expanded at a time).
-const emit = defineEmits(['needs-title', 'expand'])
+const emit = defineEmits(['needs-title', 'request-expand', 'request-collapse', 'open-terminal'])
 
 // Get session data to check if it's a draft
 const session = computed(() => store.getSession(props.sessionId))
@@ -139,16 +155,17 @@ const isHybridStaged = computed(() => !isHybridCommitted.value && store.isHybrid
 const hybridPending = computed(() => (isDraft.value && isHybrid.value) || isHybridStaged.value)
 
 const hybridTooltipLabel = computed(() => {
-    if (isHybridCommitted.value) return 'Hybrid mode (permanent) — click for details'
+    if (isHybridCommitted.value) return 'Hybrid mode (permanent) — open the terminal'
     if (isDraft.value && isHybrid.value) return 'Hybrid mode on for this draft — click to turn off'
     if (isHybridStaged.value) return 'Hybrid switch staged — applies on send; click to cancel'
     return 'Turn on hybrid mode'
 })
 
-// ── Hybrid dialog (single dialog, four variants) ────────────────────────────
-// Variants: 'draft-enable' | 'sdk-explainer' | 'sdk-confirm' | 'committed-info'.
-// The explanation lives in a <details>, always present; only the intro text,
-// its open state, the switch and the footer buttons differ between variants.
+// ── Hybrid dialog (single dialog, three variants) ───────────────────────────
+// Variants: 'draft-enable' | 'sdk-explainer' | 'sdk-confirm'. The explanation
+// lives in a <details>, always present; only the intro text, its open state and
+// the switch differ between variants. (A committed session no longer opens a
+// dialog — the icon opens the embedded terminal instead.)
 const hybridDialogRef = ref(null)
 const hybridDialogVariant = ref(null)
 const hybridDontShowAgain = ref(true)
@@ -162,9 +179,7 @@ const hybridDialogHasSwitch = computed(() =>
 )
 const hybridDialogDetailsOpen = computed(() => hybridDialogHasSwitch.value)
 const hybridDialogForcedChoice = computed(() => hybridDialogHasSwitch.value)
-const hybridDialogIsInfo = computed(() => hybridDialogVariant.value === 'committed-info')
 const hybridDialogTitle = computed(() => {
-    if (hybridDialogVariant.value === 'committed-info') return 'Hybrid mode'
     if (hybridDialogVariant.value === 'draft-enable') return 'Start this session in hybrid mode?'
     return 'Switch this session to hybrid mode?'
 })
@@ -174,8 +189,6 @@ const hybridDialogIntro = computed(() => {
             // Draft = reversible until sent, so no "cannot be undone" now — only
             // a heads-up that the choice locks in once the session starts.
             return 'This draft will start in hybrid mode. You can turn it back off until you send the first message — after that it\'s permanent.'
-        case 'committed-info':
-            return 'This session is in hybrid mode. There\'s no way back to normal mode — it\'s permanent. (Just a reminder.)'
         default: // sdk-explainer / sdk-confirm
             return 'This session switches to hybrid mode on your next message — and can\'t be undone afterwards.'
     }
@@ -205,7 +218,7 @@ function handleHybridClick() {
         return
     }
     if (isHybridCommitted.value) {
-        openHybridDialog('committed-info')                         // B.2 — reminder
+        emit('open-terminal')                                      // B.2 — open the CLI terminal
         return
     }
     if (isHybridStaged.value) {
@@ -301,6 +314,7 @@ const attachButtonId = useId()
 const settingsButtonId = useId()
 const textareaAnchorId = useId()
 const hybridButtonId = useId()
+const hybridButtonCollapsedId = useId()
 
 // ── Collapse-to-a-single-line ───────────────────────────────────────────────
 // The composer can grow tall (textarea up to 40dvh + snippets/comments bars),
@@ -469,11 +483,8 @@ const placeholderText = computed(() => {
 
 // Restore draft message when session changes
 watch(() => props.sessionId, async (newId) => {
-    // The collapse state is ephemeral and must not leak across sessions when this
-    // instance is reused (not remounted). Start collapsed when the new session
-    // already has a pending request (the request keeps the room), expanded
-    // otherwise.
-    collapsed.value = props.sendingLocked
+    // Collapse state is owned by the footer accordion (SessionItemsList), which
+    // resets it on session switch — nothing to do here.
     const draft = store.getDraftMessage(newId)
     messageText.value = draft?.message || ''
     // Adjust textarea height after the DOM updates with restored content
@@ -644,49 +655,59 @@ const collapsedIcon = computed(() => {
     return 'keyboard'
 })
 
+// Imperative show/hide, driven by the footer accordion (SessionItemsList). No
+// emit, so the accordion's sync never loops back into a request.
 function collapse() {
     collapsed.value = true
 }
-
-/**
- * Restore the composer from the collapsed state, focusing the textarea with the
- * caret at the end (so the user can keep typing — handy after a comment was
- * appended while collapsed). Used for user-driven expands (bar click, restore
- * button, command palette, focus shortcuts).
- */
 function expand() {
     if (!collapsed.value) return
     collapsed.value = false
-    // Opening the composer reduces the pending request (at most one expanded).
-    emit('expand')
     // The textarea was display:none while collapsed, so its measured height is
     // stale; re-measure once it is visible again.
-    nextTick(() => {
-        adjustTextareaHeight()
-        const textarea = textareaRef.value
-        textarea?.focus()
-        const inner = textarea?.shadowRoot?.querySelector('textarea')
-        if (inner) {
-            const end = inner.value.length
-            inner.setSelectionRange(end, end)
-        }
-    })
+    nextTick(adjustTextareaHeight)
 }
 
-// A pending request shares the footer with the composer: default the composer to
-// its collapsed bar when the request appears (so the request keeps the room) and
-// restore it when the request resolves. Each panel stays independently
-// collapsible — this only sets the default on the lock transition, without
-// stealing focus.
-watch(() => props.sendingLocked, (locked) => {
-    collapsed.value = locked
-})
+// Put the caret at the end and focus the textarea.
+function focusTextarea() {
+    const textarea = textareaRef.value
+    textarea?.focus()
+    const inner = textarea?.shadowRoot?.querySelector('textarea')
+    if (inner) {
+        const end = inner.value.length
+        inner.setSelectionRange(end, end)
+    }
+}
+
+// Focus the composer now if already shown, else as soon as the accordion
+// expands it (honored by the ``collapsed`` watcher below). Robust to the order
+// in which the open request and the accordion's apply land.
+let wantsFocusOnExpand = false
+function requestFocus() {
+    if (collapsed.value) wantsFocusOnExpand = true
+    else nextTick(focusTextarea)
+}
+
+// User-driven open of the composer (bar click, focus-the-composer shortcut):
+// ask the accordion to open it, then focus once shown.
+function requestExpandAndFocus() {
+    emit('request-expand')
+    requestFocus()
+}
+function onCollapseRequest() {
+    emit('request-collapse')
+}
 
 // Re-measure the textarea whenever it becomes visible again through a non-user
 // path (the sendingLocked default above, or a session switch); user-driven
 // expand() already re-measures in its own nextTick.
 watch(collapsed, (nowCollapsed) => {
-    if (!nowCollapsed) nextTick(adjustTextareaHeight)
+    if (nowCollapsed) return
+    nextTick(adjustTextareaHeight)
+    if (wantsFocusOnExpand) {
+        wantsFocusOnExpand = false
+        nextTick(focusTextarea)
+    }
 })
 
 // Recompute whether the composer is tall enough to be worth collapsing.
@@ -713,8 +734,8 @@ onMounted(() => {
     // nav) routes through focusChat.js, which asks us to expand first when
     // collapsed — a hidden textarea can't take focus. expand() re-shows and
     // focuses it. The command palette also drives collapse/expand directly.
-    rootRef.value.addEventListener('twicc:expand-composer', expand)
-    rootRef.value.addEventListener('twicc:collapse-composer', collapse)
+    rootRef.value.addEventListener('twicc:expand-composer', requestExpandAndFocus)
+    rootRef.value.addEventListener('twicc:collapse-composer', onCollapseRequest)
 })
 
 onBeforeUnmount(() => {
@@ -722,8 +743,8 @@ onBeforeUnmount(() => {
     collapseResizeObserver = null
     window.removeEventListener('resize', recomputeIsTall)
     window.visualViewport?.removeEventListener('resize', recomputeIsTall)
-    rootRef.value?.removeEventListener('twicc:expand-composer', expand)
-    rootRef.value?.removeEventListener('twicc:collapse-composer', collapse)
+    rootRef.value?.removeEventListener('twicc:expand-composer', requestExpandAndFocus)
+    rootRef.value?.removeEventListener('twicc:collapse-composer', onCollapseRequest)
 })
 
 /**
@@ -1726,7 +1747,7 @@ function getSessionGateState() {
     }
 }
 
-defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSessionGateState, collapse })
+defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSessionGateState, collapse, expand, requestFocus })
 </script>
 
 <template>
@@ -1742,8 +1763,26 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
             :label="collapsedLabel"
             expand-tooltip="Expand the message input"
             :sidebar-toggle-clearance="true"
-            @expand="expand"
-        />
+            @expand="requestExpandAndFocus"
+        >
+            <!-- Hybrid icon kept reachable while the composer is collapsed —
+                 only when the embedded terminal block isn't already visible
+                 above (open or its callout). Mirrors the expanded toolbar icon. -->
+            <template v-if="isHybridAvailable && !terminalVisible" #trailing>
+                <wa-button
+                    :id="hybridButtonCollapsedId"
+                    appearance="plain"
+                    variant="neutral"
+                    size="small"
+                    class="hybrid-toggle-button"
+                    :class="{ 'is-committed': isHybridCommitted, 'is-pending': hybridPending, 'needs-attention': isHybridCommitted && terminalAttention }"
+                    @click.stop="handleHybridClick"
+                >
+                    <wa-icon name="terminal" variant="classic"></wa-icon>
+                </wa-button>
+                <AppTooltip :for="hybridButtonCollapsedId">{{ hybridTooltipLabel }}</AppTooltip>
+            </template>
+        </CollapsedBar>
 
         <!-- Floating "collapse" button: only when the composer is tall enough to
              be worth collapsing, and not already collapsed. Absolutely positioned
@@ -1756,7 +1795,7 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
             size="small"
             class="collapse-toggle-btn"
             :id="collapseButtonId"
-            @click="collapse"
+            @click="onCollapseRequest"
         >
             <wa-icon name="chevron-down" variant="classic"></wa-icon>
         </wa-button>
@@ -1965,7 +2004,7 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
                     variant="neutral"
                     size="small"
                     class="hybrid-toggle-button"
-                    :class="{ 'is-committed': isHybridCommitted, 'is-pending': hybridPending }"
+                    :class="{ 'is-committed': isHybridCommitted, 'is-pending': hybridPending, 'needs-attention': isHybridCommitted && terminalAttention }"
                     @click="handleHybridClick"
                 >
                     <wa-icon name="terminal" variant="classic"></wa-icon>
@@ -2049,24 +2088,16 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
                 @change="hybridDontShowAgain = $event.target.checked"
             >Don't show this again</wa-switch>
             <wa-button
-                v-if="hybridDialogIsInfo"
                 slot="footer"
                 variant="neutral"
-                @click="closeHybridDialog"
-            >Close</wa-button>
-            <template v-else>
-                <wa-button
-                    slot="footer"
-                    variant="neutral"
-                    appearance="outlined"
-                    @click="cancelHybridDialog"
-                >Cancel</wa-button>
-                <wa-button
-                    slot="footer"
-                    variant="brand"
-                    @click="confirmHybridDialog"
-                >{{ hybridConfirmLabel }}</wa-button>
-            </template>
+                appearance="outlined"
+                @click="cancelHybridDialog"
+            >Cancel</wa-button>
+            <wa-button
+                slot="footer"
+                variant="brand"
+                @click="confirmHybridDialog"
+            >{{ hybridConfirmLabel }}</wa-button>
         </wa-dialog>
     </div>
 </template>
@@ -2189,6 +2220,12 @@ body.sidebar-closed .message-input-toolbar {
         color: var(--wa-color-success-fill-loud);
     }
     &.is-pending::part(base) {
+        color: var(--wa-color-warning-fill-loud);
+    }
+    /* Committed + the embedded terminal needs the user (and is closed): tint
+       warning to match the callout above the composer — overrides the committed
+       green (declared after it so it wins at equal specificity). */
+    &.needs-attention::part(base) {
         color: var(--wa-color-warning-fill-loud);
     }
 }

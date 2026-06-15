@@ -120,6 +120,15 @@ let dragCounter = 0  // Track enter/leave events for nested elements
 const messageInputRef = ref(null)
 const pendingFormRef = ref(null)
 const hybridTerminalRef = ref(null)
+// Visibility + attention reported by the hybrid terminal block: drive the
+// composer's top separator (visible = open OR the warning callout is up) and
+// the composer hybrid-icon tint (attention = the callout is up).
+const hybridTerminalVisible = ref(false)
+const hybridTerminalAttention = ref(false)
+function onHybridTerminalState(state) {
+    hybridTerminalVisible.value = state.visible
+    hybridTerminalAttention.value = state.attention
+}
 
 // Session data
 const session = computed(() => store.getSession(props.sessionId))
@@ -181,6 +190,61 @@ const hasPendingRequest = computed(() => pendingRequests.value.length > 0)
 const hasAnswerablePendingRequest = computed(() =>
     hasPendingRequest.value && pendingRequest.value.request_type !== 'hybrid_terminal'
 )
+
+// ── Footer accordion ─────────────────────────────────────────────────────────
+// At most one of the three footer panels is open: the message input, the hybrid
+// terminal, or the pending-request form. ``openBlock`` is the single source of
+// truth — opening one reduces the others. Closing the terminal or the pending
+// returns to the composer (they displaced it); only collapsing the composer
+// itself reaches the all-minimized 'none' state. Each panel is driven through
+// emit-free imperative setters (expand/collapse, open/close, restore/minimize),
+// so applying the state never loops back into a request.
+const openBlock = ref('message-input') // 'message-input' | 'terminal' | 'pending' | 'none'
+
+function applyOpenBlock() {
+    const id = openBlock.value
+    if (messageInputRef.value) id === 'message-input' ? messageInputRef.value.expand() : messageInputRef.value.collapse()
+    if (hybridTerminalRef.value) id === 'terminal' ? hybridTerminalRef.value.open() : hybridTerminalRef.value.close()
+    if (pendingFormRef.value) id === 'pending' ? pendingFormRef.value.restoreIfMinimized() : pendingFormRef.value.minimize()
+}
+watch(openBlock, () => nextTick(applyOpenBlock))
+
+// Move keyboard focus into a block's natural target: the composer textarea, the
+// embedded terminal, or the pending form's primary control. Each child's
+// requestFocus is order-independent (focuses now if shown, else once the
+// accordion opens it), so this can fire right after flipping ``openBlock``.
+function focusBlock(id) {
+    if (id === 'message-input') messageInputRef.value?.requestFocus?.()
+    else if (id === 'terminal') hybridTerminalRef.value?.requestFocus?.()
+    else if (id === 'pending') pendingFormRef.value?.requestFocus?.()
+}
+
+// Open a block (the accordion reduces the others). ``focus`` only on user-driven
+// opens — never on a session switch, the initial mount, or an auto-resolve.
+function setOpenBlock(id, { focus = false } = {}) {
+    openBlock.value = id
+    if (focus) focusBlock(id)
+}
+
+// Returning home to the composer (closing the terminal/pending, or a resolve).
+// ``focus`` only on the user-driven path (close), never on an auto-resolve.
+function goToComposer(focus = false) {
+    setOpenBlock('message-input', { focus })
+}
+
+// A new pending request takes the slot (focus it); resolving the last one
+// returns home (no focus — the agent is now working).
+watch(() => pendingRequest.value?.request_id, (id, oldId) => {
+    if (id && id !== oldId) setOpenBlock('pending', { focus: true })
+    else if (!id && oldId && openBlock.value === 'pending') goToComposer()
+})
+
+// Reset on session switch (this component is reused across sessions). Force a
+// re-apply even when the value is unchanged, so the panels reset too.
+watch(() => props.sessionId, () => {
+    openBlock.value = pendingRequest.value ? 'pending' : 'message-input'
+    nextTick(applyOpenBlock)
+})
 
 /**
  * Whether the VirtualScroller should be visible.
@@ -1543,7 +1607,8 @@ defineExpose({
                     :session-id="sessionId"
                     :pending-request="pendingRequest"
                     :pending-count="pendingRequests.length"
-                    @expand="messageInputRef?.collapse()"
+                    @request-open="setOpenBlock('pending', { focus: true })"
+                    @request-collapse="goToComposer(true)"
                 />
                 <!-- Hybrid CLI sessions: the embedded terminal, with a badge in the
                      block header pointing at pending prompts (the TUI surface). -->
@@ -1551,8 +1616,10 @@ defineExpose({
                     v-if="isHybridSession && !parentSessionId"
                     ref="hybridTerminalRef"
                     :session-id="sessionId"
-                    @expand="messageInputRef?.collapse()"
-                    @show-pending-form="pendingFormRef?.restoreIfMinimized()"
+                    @request-open="setOpenBlock('terminal', { focus: true })"
+                    @request-collapse="goToComposer(true)"
+                    @show-pending-form="setOpenBlock('pending', { focus: true })"
+                    @state-change="onHybridTerminalState"
                 />
                 <!-- Message input (main sessions only). Always rendered so nothing the user
                      is preparing is lost when a request appears or resolves. While the
@@ -1568,9 +1635,13 @@ defineExpose({
                     :session-id="sessionId"
                     :project-id="projectId"
                     :sending-locked="hasAnswerablePendingRequest"
-                    :has-panel-above="hasAnswerablePendingRequest || (isHybridSession && !parentSessionId)"
+                    :has-panel-above="hasAnswerablePendingRequest || hybridTerminalVisible"
+                    :terminal-visible="hybridTerminalVisible"
+                    :terminal-attention="hybridTerminalAttention"
                     @needs-title="emit('needs-title')"
-                    @expand="pendingFormRef?.minimize()"
+                    @request-expand="openBlock = 'message-input'"
+                    @request-collapse="openBlock = 'none'"
+                    @open-terminal="setOpenBlock('terminal', { focus: true })"
                 />
             </template>
         </div>
