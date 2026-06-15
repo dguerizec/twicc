@@ -1006,8 +1006,9 @@ function registerSessionCommands() {
             label: 'Open Claude CLI Terminal',
             icon: 'terminal',
             category: 'session',
-            // Hybrid sessions only — the embedded CLI terminal block.
-            when: () => store.getSession(sessionId.value)?.hybrid === true,
+            // Hybrid sessions only — the embedded CLI terminal block. Hidden
+            // entirely while the hybrid feature flag is off.
+            when: () => settingsStore.isClaudeHybridEnabled && store.getSession(sessionId.value)?.hybrid === true,
             // Opens the terminal in the accordion (reducing the others) and
             // focuses the xterm. (Alt+Shift+T toggles instead; this only opens.)
             action: () => gotoChatFooterPanel(route, router, 'twicc:goto-terminal'),
@@ -1023,6 +1024,7 @@ function registerSessionCommands() {
             when: () => {
                 const s = store.getSession(sessionId.value)
                 return !!s
+                    && settingsStore.isClaudeHybridEnabled
                     && s.provider === 'claude_code'
                     && !s.hidden
                     && !s.parent_session_id

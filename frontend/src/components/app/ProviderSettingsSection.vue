@@ -164,8 +164,9 @@ function onOrchestrationToggle(event) {
         </h3>
 
         <!-- Hybrid mode default (Claude Code only): new sessions start in hybrid
-             mode. Drafts only — existing sessions are never enforced. -->
-        <div v-if="provider === 'claude_code'" class="setting-group">
+             mode. Drafts only — existing sessions are never enforced. Hidden while
+             the hybrid feature flag is off (the whole feature is dormant). -->
+        <div v-if="provider === 'claude_code' && settingsStore.isClaudeHybridEnabled" class="setting-group">
             <label class="setting-group-label">Hybrid Mode</label>
             <wa-switch
                 :checked="settingsStore.isClaudeHybridDefault"
@@ -173,7 +174,7 @@ function onOrchestrationToggle(event) {
             >Activate on new sessions</wa-switch>
             <HybridModeExplainer />
         </div>
-        <wa-divider v-if="provider === 'claude_code'"></wa-divider>
+        <wa-divider v-if="provider === 'claude_code' && settingsStore.isClaudeHybridEnabled"></wa-divider>
 
         <div
             v-for="field in supportedFields"

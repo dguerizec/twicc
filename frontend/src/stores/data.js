@@ -1251,8 +1251,12 @@ export const useDataStore = defineStore('data', {
             const settings = this._resolveDraftAgentSettings(projectId, provider, trustState)
             // Hybrid-by-default (synced setting): new Claude Code sessions start in
             // hybrid mode when enabled. Claude Code only — the flag is meaningless
-            // for other providers. Existing sessions are never touched.
-            const hybrid = provider === 'claude_code' && useSettingsStore().isClaudeHybridDefault
+            // for other providers. Existing sessions are never touched. Also gated by
+            // the server hybrid feature flag: never seed a hybrid draft while off, or
+            // it could never be sent (the backend refuses to launch it).
+            const hybrid = provider === 'claude_code'
+                && useSettingsStore().isClaudeHybridEnabled
+                && useSettingsStore().isClaudeHybridDefault
             this.sessions[id] = {
                 id,
                 project_id: projectId,
@@ -1314,8 +1318,11 @@ export const useDataStore = defineStore('data', {
             Object.assign(session, settings)
             // Re-resolve the hybrid flag for the new provider: it is Claude Code
             // only, so switching to another provider clears it; switching to
-            // Claude Code applies the hybrid-by-default setting.
-            session.hybrid = provider === 'claude_code' && useSettingsStore().isClaudeHybridDefault
+            // Claude Code applies the hybrid-by-default setting (when the server
+            // hybrid feature flag is on).
+            session.hybrid = provider === 'claude_code'
+                && useSettingsStore().isClaudeHybridEnabled
+                && useSettingsStore().isClaudeHybridDefault
             saveDraftSession(sessionId, {
                 projectId: session.project_id,
                 title: session.title,
@@ -4341,7 +4348,10 @@ export const useDataStore = defineStore('data', {
                         mtime: now,
                         last_line: 0,
                         draft: true,
-                        hybrid: !!draft.hybrid,
+                        // Gated by the server hybrid feature flag: a persisted
+                        // hybrid draft hydrates as a normal (sendable) draft while
+                        // hybrid mode is off, rather than a stuck hybrid one.
+                        hybrid: !!draft.hybrid && useSettingsStore().isClaudeHybridEnabled,
                         ...settings,
                     }
                 }

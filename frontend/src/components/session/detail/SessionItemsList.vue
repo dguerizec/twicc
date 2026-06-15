@@ -134,6 +134,7 @@ function onHybridTerminalState(state) {
 const session = computed(() => store.getSession(props.sessionId))
 const project = computed(() => store.getProject(props.projectId))
 const providerLabel = computed(() => getProviderLabel(session.value?.provider))
+const settingsStore = useSettingsStore()
 
 // Hybrid CLI mode: the embedded terminal block replaces the pending-request
 // widget and the composer is never sending-locked (steering is allowed).
@@ -1366,7 +1367,6 @@ async function scrollToLineNum(lineNum) {
     const scroller = scrollerRef.value
     if (!scroller) return false
 
-    const settingsStore = useSettingsStore()
     const visItems = visualItems.value
 
     // Step 1: Check if the item is already in the visual items list
@@ -1694,9 +1694,12 @@ defineExpose({
                     @request-collapse="collapsePendingRequest"
                 />
                 <!-- Hybrid CLI sessions: the embedded terminal, with a badge in the
-                     block header pointing at pending prompts (the TUI surface). -->
+                     block header pointing at pending prompts (the TUI surface).
+                     Gated by the hybrid feature flag — see the notice below for the
+                     flag-off case (an existing hybrid session on a server where the
+                     feature is disabled). -->
                 <HybridTerminalBlock
-                    v-if="isHybridSession && !parentSessionId"
+                    v-if="isHybridSession && !parentSessionId && settingsStore.isClaudeHybridEnabled"
                     ref="hybridTerminalRef"
                     :session-id="sessionId"
                     @request-open="setOpenBlock('terminal', { focus: true })"
@@ -1704,6 +1707,20 @@ defineExpose({
                     @show-pending-form="setOpenBlock('pending', { focus: true })"
                     @state-change="onHybridTerminalState"
                 />
+                <!-- Hybrid mode disabled on this server: the session is hybrid but
+                     the feature is gated off, so the CLI terminal can't run. Show a
+                     notice in its place rather than a dead terminal. -->
+                <div
+                    v-else-if="isHybridSession && !parentSessionId"
+                    class="hybrid-disabled-notice"
+                >
+                    <wa-callout variant="warning" size="small">
+                        <wa-icon slot="icon" name="triangle-exclamation" variant="classic"></wa-icon>
+                        This session runs in hybrid Claude CLI mode, which is currently
+                        disabled on this server. It can't be used until hybrid mode is
+                        re-enabled.
+                    </wa-callout>
+                </div>
                 <!-- Message input (main sessions only). Always rendered so nothing the user
                      is preparing is lost when a request appears or resolves. While the
                      request form is displayed it is sending-locked: usable for preparing a
@@ -1836,6 +1853,10 @@ defineExpose({
 }
 
 .stale-banner {
+    padding: var(--wa-space-s);
+}
+
+.hybrid-disabled-notice {
     padding: var(--wa-space-s);
 }
 

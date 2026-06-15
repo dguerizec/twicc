@@ -95,8 +95,10 @@ from twicc.version_check_task import start_version_check_task, stop_version_chec
 from twicc.tips_manifest import init_manifest, start_tips_watcher_task  # noqa: E402
 
 
-async def _cancel_task(task: asyncio.Task, name: str) -> None:
+async def _cancel_task(task: asyncio.Task | None, name: str) -> None:
     """Cancel an asyncio task and wait for it to finish."""
+    if task is None:
+        return
     task.cancel()
     try:
         await task
@@ -291,18 +293,24 @@ async def run_server(port: int):
     # must find the adopted agents so a leftover PermissionRequest of a
     # still-pending prompt reaches them (events for long-gone sessions are
     # dropped harmlessly).
+    from django.conf import settings
     from twicc.agent.registry import get_agent_manager_registry
     from twicc.core.enums import Provider
     from twicc.providers.claude_code.agent.hybrid.hooks_watcher import (
         get_hybrid_hooks_watcher,
     )
 
-    try:
-        await get_agent_manager_registry().get(Provider.CLAUDE_CODE).adopt_running_hybrid_sessions()
-    except Exception:
-        logger.exception("Hybrid boot adoption failed")
-
-    hybrid_hooks_watcher_task = asyncio.create_task(get_hybrid_hooks_watcher().start())
+    # Hybrid CLI mode is gated behind TWICC_CLAUDE_HYBRID_ENABLED (default OFF).
+    # While off, neither the boot adoption nor the hooks watcher run, and the
+    # backend refuses to create or resume any hybrid session (see the guards in
+    # the agent factory and the session-creation service).
+    hybrid_hooks_watcher_task = None
+    if settings.CLAUDE_HYBRID_ENABLED:
+        try:
+            await get_agent_manager_registry().get(Provider.CLAUDE_CODE).adopt_running_hybrid_sessions()
+        except Exception:
+            logger.exception("Hybrid boot adoption failed")
+        hybrid_hooks_watcher_task = asyncio.create_task(get_hybrid_hooks_watcher().start())
 
     def handle_signal(signum, frame):
         logger.info("Received signal %s, initiating shutdown...", signum)

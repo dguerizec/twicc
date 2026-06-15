@@ -119,13 +119,13 @@ if (!authStore.needsLogin) {
         const resp = await fetch('/api/bootstrap/')
         if (resp.ok) {
             bootstrapData = await resp.json()
-            const { settings, settings_version, default_settings, dev_mode, uvx_mode, twicc_launch_prefix, providers, disabledProvidersPresent, disabledProviders, providerStates } = bootstrapData
+            const { settings, settings_version, default_settings, dev_mode, uvx_mode, twicc_launch_prefix, providers, disabledProvidersPresent, disabledProviders, providerStates, claudeHybridEnabled } = bootstrapData
             // Seed the launch prefix into its neutral module *before* any
             // store / provider helper is instantiated — providers read it
             // synchronously via ``getTwiccLaunchPrefix()`` (see
             // ``frontend/src/utils/twiccLaunch.js``).
             setTwiccLaunchPrefix(twicc_launch_prefix)
-            applyDefaultSettings(default_settings, settings, dev_mode, uvx_mode, settings_version, disabledProvidersPresent, disabledProviders)
+            applyDefaultSettings(default_settings, settings, dev_mode, uvx_mode, settings_version, disabledProvidersPresent, disabledProviders, claudeHybridEnabled)
             // Seed the data store's provider lifecycle map.
             useDataStore().applyProviderStates(providerStates ?? {})
             // Seed each provider's bootstrap-driven state (agent-setting categories

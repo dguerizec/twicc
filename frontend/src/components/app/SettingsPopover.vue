@@ -240,9 +240,16 @@ const shortcutGroups = computed(() => {
             shortcuts: [
                 { keys: ['Alt', 'Shift', 'M'], description: 'Focus message input — or the active pending request when one is open (from any session tab)' },
                 { keys: ['Alt', 'Shift', 'PageDown'], description: 'Go to the message input (chat tab)' },
-                { keys: ['Alt', 'Shift', 'PageUp'], description: 'Go to the open pending request — or, from the message input on a hybrid session, the Claude CLI terminal (chat tab)' },
-                { keys: ['Alt', 'Shift', 'T'], description: 'Toggle between the Claude CLI terminal and the message input — hybrid sessions only (from any session tab)' },
-                { keys: ['Alt', 'Shift', 'H'], description: 'Toggle hybrid mode on a Claude session, where it can be toggled (from any session tab)' },
+                // PageUp is dual-purpose: pending-request nav always, plus the hybrid
+                // CLI terminal only when hybrid mode is enabled — drop that clause off.
+                store.isClaudeHybridEnabled
+                    ? { keys: ['Alt', 'Shift', 'PageUp'], description: 'Go to the open pending request — or, from the message input on a hybrid session, the Claude CLI terminal (chat tab)' }
+                    : { keys: ['Alt', 'Shift', 'PageUp'], description: 'Go to the open pending request (chat tab)' },
+                // Hybrid-only chords: listed only when hybrid mode is enabled.
+                ...(store.isClaudeHybridEnabled ? [
+                    { keys: ['Alt', 'Shift', 'T'], description: 'Toggle between the Claude CLI terminal and the message input — hybrid sessions only (from any session tab)' },
+                    { keys: ['Alt', 'Shift', 'H'], description: 'Toggle hybrid mode on a Claude session, where it can be toggled (from any session tab)' },
+                ] : []),
                 { keys: ['Quick triple Esc'], description: 'Emergency stop of the running process' },
             ]
         },

@@ -141,7 +141,8 @@ const providerIcon = computed(() => getProviderIcon(session.value?.provider))
 // (handleSend), exactly like the staged agent settings. Re-clicking a staged
 // (not-yet-committed) toggle un-stages it silently.
 const isHybridAvailable = computed(() =>
-    session.value?.provider === 'claude_code'
+    settingsStore.isClaudeHybridEnabled
+    && session.value?.provider === 'claude_code'
     && !session.value?.hidden
     && !session.value?.parent_session_id
 )

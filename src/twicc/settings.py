@@ -305,3 +305,13 @@ CODEX_PLUGIN_INSTALL_ENABLED = os.environ.get("TWICC_NO_CODEX_PLUGIN", "").strip
 # Idempotent once the key exists, so user toggles from Settings are preserved.
 # Used by devctl in worktree mode so dev servers come up without prompting.
 AUTO_ENABLE_PROVIDERS = os.environ.get("TWICC_AUTO_ENABLE_PROVIDERS", "").strip().lower() in ("1", "true", "yes")
+
+# Hybrid Claude CLI mode (feature flag, default OFF)
+# Set TWICC_CLAUDE_HYBRID_ENABLED=1 to un-gate the whole hybrid mode feature:
+# the startup announcement, the per-session toggle, the Claude settings block,
+# the hybrid-only shortcuts/command-palette entries, the boot adoption of
+# surviving hybrid tmux sessions, and the hybrid-hooks watcher. While off, the
+# backend also refuses to create or resume any hybrid session, and the frontend
+# renders no hybrid surface at all. Kept dormant until Anthropic's programmatic
+# billing change actually lands (it was postponed past its announced date).
+CLAUDE_HYBRID_ENABLED = os.environ.get("TWICC_CLAUDE_HYBRID_ENABLED", "").strip().lower() in ("1", "true", "yes")

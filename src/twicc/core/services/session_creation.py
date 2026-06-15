@@ -93,6 +93,18 @@ async def create_session_from_payload(payload: dict, *, allow_hybrid: bool = Fal
     documents = payload.get("documents") or []
     hidden = bool(payload.get("hidden", False))
     hybrid = bool(payload.get("hybrid")) if allow_hybrid else False
+    if hybrid:
+        # Hybrid mode is a feature-flagged capability (default OFF). Refuse to
+        # mint a new already-hybrid session when the flag is unset — the agent
+        # factory would refuse to launch it anyway (see ClaudeCodeAgentManager.
+        # _create_agent), so reject early with a clear error.
+        from django.conf import settings as django_settings
+
+        if not django_settings.CLAUDE_HYBRID_ENABLED:
+            return SessionCreationResult(
+                False, None, None, None,
+                [SessionCreationError("hybrid", "hybrid_disabled", "Hybrid mode is disabled on this server")],
+            )
     spawned_by_session_id = payload.get("spawned_by_session_id")  # str | None
     annotations = payload.get("annotations", {})
     if annotations is None:

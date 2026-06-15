@@ -952,6 +952,13 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
         from twicc.core.models import Session, SessionType
         from twicc.core.serializers import serialize_session
 
+        if not settings.CLAUDE_HYBRID_ENABLED:
+            await self.send_json({
+                "type": "error",
+                "message": "Hybrid mode is disabled on this server",
+            })
+            return
+
         session_id = content.get("session_id")
         if not session_id:
             await self.send_json({

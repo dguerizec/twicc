@@ -25,8 +25,17 @@ const explainerSeen = computed(() => settingsStore.isClaudeHybridExplainerSeen)
 
 <template>
     <wa-details :open="open" class="hybrid-mode-explainer">
-        <span v-if="!explainerSeen" slot="summary">Why you <strong><em>need</em></strong> hybrid mode</span>
+        <span v-if="!explainerSeen" slot="summary">Why you may <strong><em>need</em></strong> this in the future</span>
         <span v-else slot="summary">What is hybrid mode</span>
+
+        <wa-callout variant="neutral" size="small" class="explainer-maintenance-note">
+            <wa-icon slot="icon" name="screwdriver-wrench" variant="classic"></wa-icon>
+            <strong>Internal reminder</strong> — the copy below was written for Anthropic's
+            programmatic-billing change announced for 15 June 2026, which has since been
+            postponed. Hybrid mode is kept dormant behind the
+            <code>TWICC_CLAUDE_HYBRID_ENABLED</code> flag. Revisit this wording and its
+            source link before the feature is un-gated.
+        </wa-callout>
 
         <wa-callout variant="warning" size="small">
             <wa-icon slot="icon" name="triangle-exclamation" variant="classic"></wa-icon>

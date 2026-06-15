@@ -381,7 +381,7 @@ function handleGlobalKeydown(e) {
                 const head = dataStore.getPendingRequests(route.params.sessionId)?.[0]
                 const hasPending = !!head && head.request_type !== 'hybrid_terminal'
                 const sess = dataStore.getSession(route.params.sessionId)
-                if (hasPending || sess?.hybrid === true) {
+                if (hasPending || (sess?.hybrid === true && settingsStore.isClaudeHybridEnabled)) {
                     gotoChatFooterPanel(route, router, 'twicc:goto-pending-request')
                 }
             }
@@ -393,7 +393,7 @@ function handleGlobalKeydown(e) {
     // (physical key) for layout safety.
     if (e.altKey && e.shiftKey && !e.ctrlKey && !e.metaKey && e.code === 'KeyT' && SESSION_ROUTES.has(route.name)) {
         const sess = dataStore.getSession(route.params.sessionId)
-        if (sess?.hybrid === true && !hasBlockingOverlay()) {
+        if (sess?.hybrid === true && settingsStore.isClaudeHybridEnabled && !hasBlockingOverlay()) {
             e.preventDefault()
             e.stopPropagation()
             gotoChatFooterPanel(route, router, 'twicc:toggle-terminal')
@@ -406,6 +406,7 @@ function handleGlobalKeydown(e) {
     if (e.altKey && e.shiftKey && !e.ctrlKey && !e.metaKey && e.code === 'KeyH' && SESSION_ROUTES.has(route.name)) {
         const sess = dataStore.getSession(route.params.sessionId)
         const toggleable = sess
+            && settingsStore.isClaudeHybridEnabled
             && sess.provider === 'claude_code'
             && !sess.hidden
             && !sess.parent_session_id
@@ -574,8 +575,9 @@ const toastTheme = computed(() => {
     <ProviderActivationDialog v-if="isAppReady" />
 
     <!-- Hybrid mode / billing-change announcement: auto-opens once for users who
-         haven't seen the explainer yet (self-gates on the synced flag). -->
-    <HybridAnnouncementDialog v-if="isAppReady" />
+         haven't seen the explainer yet (self-gates on the synced flag). Gated by
+         the hybrid feature flag — never mounts while hybrid mode is disabled. -->
+    <HybridAnnouncementDialog v-if="isAppReady && settingsStore.isClaudeHybridEnabled" />
 
     <!-- Version mismatch: non-dismissible reload dialog -->
     <wa-dialog :open="versionMismatchDetected || undefined" without-header @wa-hide.prevent>

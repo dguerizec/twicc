@@ -573,6 +573,12 @@ class ClaudeCodeAgentManager(BaseAgentManager):
         (one-way switch, see ``Session.hybrid``).
         """
         if await self._session_is_hybrid(session_id):
+            # ``settings`` is the AgentSettings parameter here; reach Django
+            # settings under an alias to honor the hybrid feature flag.
+            from django.conf import settings as django_settings
+
+            if not django_settings.CLAUDE_HYBRID_ENABLED:
+                raise RuntimeError("Hybrid mode is disabled on this server")
             from twicc.providers.claude_code.agent.hybrid.agent import HybridClaudeAgent
 
             return HybridClaudeAgent(

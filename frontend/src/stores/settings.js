@@ -74,6 +74,9 @@ export const SETTINGS_SCHEMA = {
     _disabledProvidersPresent: false,
     _devMode: false,
     _uvxMode: false,
+    // Server capability flag (from /api/bootstrap/): whether hybrid Claude CLI
+    // mode is enabled on this backend. Gates every hybrid surface in the UI.
+    _claudeHybridEnabled: false,
     _effectiveColorScheme: null,
     _isTouchDevice: false,
     _isMac: false,
@@ -347,6 +350,13 @@ export const useSettingsStore = defineStore('settings', {
          * Whether the app was launched via `uvx twicc` (ephemeral) vs installed package.
          */
         isUvxMode: (state) => state._uvxMode,
+        /**
+         * Whether hybrid Claude CLI mode is enabled on this backend (feature
+         * flag, default OFF). The single source of truth every hybrid surface
+         * reads — toggle, settings block, announcement, shortcuts, palette,
+         * and the hybrid terminal block on an already-hybrid session.
+         */
+        isClaudeHybridEnabled: (state) => state._claudeHybridEnabled,
         /**
          * Effective color scheme: always returns 'light' or 'dark', never 'system'.
          */
@@ -886,8 +896,9 @@ export const useSettingsStore = defineStore('settings', {
  * @param {number} version - Settings version from the backend
  * @param {boolean} disabledProvidersPresent - Whether disabledProviders key exists in settings.json
  * @param {string[]} disabledProviders - List of provider keys that are disabled
+ * @param {boolean} claudeHybridEnabled - Whether hybrid Claude CLI mode is enabled on this backend
  */
-export function applyDefaultSettings(defaultSettings, currentSettings, devMode, uvxMode, version, disabledProvidersPresent, disabledProviders) {
+export function applyDefaultSettings(defaultSettings, currentSettings, devMode, uvxMode, version, disabledProvidersPresent, disabledProviders, claudeHybridEnabled) {
     if (defaultSettings && typeof defaultSettings === 'object') {
         // Only merge defaults for keys declared in the generic schema; provider-owned
         // keys are silently ignored here (their bootstrap-current values flow through
@@ -898,6 +909,7 @@ export function applyDefaultSettings(defaultSettings, currentSettings, devMode, 
     }
     SETTINGS_SCHEMA._devMode = !!devMode
     SETTINGS_SCHEMA._uvxMode = !!uvxMode
+    SETTINGS_SCHEMA._claudeHybridEnabled = !!claudeHybridEnabled
     // Store current settings for applySyncedSettings() to use after store init
     _pendingSyncedSettings = currentSettings
     _pendingSettingsVersion = version
