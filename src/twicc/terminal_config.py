@@ -3,11 +3,9 @@
 File: <data_dir>/terminal-config.json
 """
 
-import os
-import tempfile
-
 import orjson
 
+from twicc.atomic_json import atomic_write_json
 from twicc.paths import get_terminal_config_path
 
 
@@ -21,22 +19,5 @@ def read_terminal_config() -> dict:
 
 
 def write_terminal_config(config: dict) -> None:
-    """Write terminal-config.json atomically.
-
-    Uses write-to-temp-then-rename to avoid partial writes.
-    """
-    path = get_terminal_config_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    content = orjson.dumps(config, option=orjson.OPT_INDENT_2)
-
-    fd, tmp_path = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
-    try:
-        with os.fdopen(fd, "wb") as f:
-            f.write(content)
-        os.replace(tmp_path, path)
-    except BaseException:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-        raise
+    """Write terminal-config.json atomically (whole-blob overwrite)."""
+    atomic_write_json(get_terminal_config_path(), config)

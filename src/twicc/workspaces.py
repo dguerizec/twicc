@@ -5,25 +5,23 @@ Workspaces group projects into named collections with optional layout and
 filter configuration. They are stored as a simple JSON object in
 <data_dir>/workspaces.json.
 
-Follow the exact same pattern as synced_settings.py.
-
-In addition to the low-level read/write helpers, this module hosts the
-in-process serialisation lock, the validation helpers shared by the UI
-and the CLI, the ID slugifier, and the atomic create/update/delete
-operations called by :mod:`twicc.core.services.workspace_mutation`.
+In addition to the low-level :func:`read_workspaces` helper, this module hosts
+the validation helpers shared by the UI and the CLI, the ID slugifier, and the
+atomic create/update/delete operations called by
+:mod:`twicc.core.services.workspace_mutation`. Every write goes through the
+cross-process :func:`twicc.atomic_json.locked_json_file` lock, so the backend's
+writers and the ``twicc`` CLI (a separate process) never clobber one another.
 """
 
-import asyncio
 import logging
-import os
 import re
-import tempfile
 from typing import NamedTuple
 
 import orjson
 from asgiref.sync import sync_to_async
 from channels.layers import get_channel_layer
 
+from twicc.atomic_json import locked_json_file
 from twicc.paths import get_workspaces_path
 
 logger = logging.getLogger(__name__)
@@ -45,12 +43,13 @@ _SLUG_TRIM_HYPHENS_RE = re.compile(r"^-|-$")
 _HEX_COLOR_RE = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$")
 
 
-# Serializes the read-modify-write cycle on workspaces.json across the main
-# process: ``auto_add_project_to_workspaces`` (watcher, views, …),
-# ``_handle_update_workspaces`` (WS handler that writes whole-blob updates
-# from the UI), and the CLI-driven atomic ops below must not interleave
-# their reads and writes, or one side's changes get clobbered.
-_workspaces_lock = asyncio.Lock()
+# The read-modify-write cycle on workspaces.json is serialised by the
+# cross-process ``flock`` each op takes via ``locked_json_file`` (and the WS
+# whole-blob handler via ``file_lock``). It covers BOTH the backend's writers
+# (auto-add from the watcher/views, the UI whole-blob update) AND the ``twicc``
+# CLI atomic ops running in a separate process — so neither side reads a stale
+# snapshot and clobbers the other. (Replaces a former in-process
+# ``asyncio.Lock`` that did not see the CLI process.)
 
 
 class WorkspaceMutationError(NamedTuple):
@@ -95,28 +94,6 @@ def read_workspaces() -> dict:
         return orjson.loads(path.read_bytes())
     except (FileNotFoundError, orjson.JSONDecodeError):
         return {}
-
-
-def write_workspaces(data: dict) -> None:
-    """Write workspaces to workspaces.json atomically.
-
-    Uses write-to-temp-then-rename to avoid partial writes.
-    """
-    path = get_workspaces_path()
-    content = orjson.dumps(data, option=orjson.OPT_INDENT_2)
-
-    # Write to a temp file in the same directory, then atomically replace.
-    fd, tmp_path = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
-    try:
-        with os.fdopen(fd, "wb") as f:
-            f.write(content)
-        os.replace(tmp_path, path)
-    except BaseException:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-        raise
 
 
 def match_pattern(directory: str, pattern: str) -> bool:
@@ -221,35 +198,35 @@ async def auto_add_project_to_workspaces(project_id: str, directory: str) -> Non
     """Auto-add a newly detected project to workspaces whose patterns match
     its directory.
 
-    The read-modify-write on ``workspaces.json`` runs inside
-    ``_workspaces_lock`` so a concurrent ``_handle_update_workspaces``
-    (whole-blob writes from the UI) can't clobber the appended project_id
-    (and vice versa). If at least one workspace was modified, broadcasts
-    ``workspaces_updated`` outside the lock.
+    The read-modify-write on ``workspaces.json`` runs inside the
+    cross-process ``locked_json_file`` lock so a concurrent
+    ``_handle_update_workspaces`` (whole-blob writes from the UI) or a CLI
+    workspace op can't clobber the appended project_id (and vice versa). If at
+    least one workspace was modified, broadcasts ``workspaces_updated`` outside
+    the lock.
 
     Idempotent: a workspace that already lists the project is skipped, no
     write, no broadcast.
     """
     def _read_modify_write() -> list[dict] | None:
-        data = read_workspaces()
-        workspaces = data.get("workspaces", [])
-        modified = False
-        for ws in workspaces:
-            patterns = ws.get("autoProjectPatterns", [])
-            if not patterns or project_id in ws.get("projectIds", []):
-                continue
-            if any(match_pattern(directory, p) for p in patterns):
-                ws.setdefault("projectIds", []).append(project_id)
-                modified = True
-                logger.info("Auto-added project %s to workspace %r",
-                            project_id, ws.get("name", ws.get("id")))
-        if not modified:
-            return None
-        write_workspaces(data)
-        return workspaces
+        with locked_json_file(get_workspaces_path(), default={}) as txn:
+            workspaces = txn.data.get("workspaces", [])
+            modified = False
+            for ws in workspaces:
+                patterns = ws.get("autoProjectPatterns", [])
+                if not patterns or project_id in ws.get("projectIds", []):
+                    continue
+                if any(match_pattern(directory, p) for p in patterns):
+                    ws.setdefault("projectIds", []).append(project_id)
+                    modified = True
+                    logger.info("Auto-added project %s to workspace %r",
+                                project_id, ws.get("name", ws.get("id")))
+            if not modified:
+                return None
+            txn.write()
+            return workspaces
 
-    async with _workspaces_lock:
-        workspaces = await sync_to_async(_read_modify_write)()
+    workspaces = await sync_to_async(_read_modify_write)()
     if workspaces is None:
         return
 
@@ -262,9 +239,9 @@ async def add_project_to_workspaces(project_id: str, workspace_ids: list[str]) -
     The symmetric companion to :func:`auto_add_project_to_workspaces`: that
     one adds a project to workspaces whose *patterns* match its directory,
     this one to the workspaces the user *explicitly* picked (e.g. from the
-    project edit dialog at creation time). Both append under
-    ``_workspaces_lock`` so neither clobbers the other — nor a concurrent
-    whole-blob UI write. Doing the explicit add server-side (instead of a
+    project edit dialog at creation time). Both append under the cross-process
+    ``locked_json_file`` lock so neither clobbers the other — nor a concurrent
+    whole-blob UI write, nor a CLI op. Doing the explicit add server-side (instead of a
     frontend whole-blob write right after the project is created) is what
     keeps it from racing with, and overwriting, the auto-add that
     ``register_project`` runs at creation.
@@ -278,26 +255,25 @@ async def add_project_to_workspaces(project_id: str, workspace_ids: list[str]) -
         return
 
     def _read_modify_write() -> list[dict] | None:
-        data = read_workspaces()
-        workspaces = data.get("workspaces", [])
-        wanted_set = set(wanted)
-        modified = False
-        for ws in workspaces:
-            if ws.get("id") not in wanted_set:
-                continue
-            if project_id in ws.get("projectIds", []):
-                continue
-            ws.setdefault("projectIds", []).append(project_id)
-            modified = True
-            logger.info("Added project %s to workspace %r (explicit)",
-                        project_id, ws.get("name", ws.get("id")))
-        if not modified:
-            return None
-        write_workspaces(data)
-        return workspaces
+        with locked_json_file(get_workspaces_path(), default={}) as txn:
+            workspaces = txn.data.get("workspaces", [])
+            wanted_set = set(wanted)
+            modified = False
+            for ws in workspaces:
+                if ws.get("id") not in wanted_set:
+                    continue
+                if project_id in ws.get("projectIds", []):
+                    continue
+                ws.setdefault("projectIds", []).append(project_id)
+                modified = True
+                logger.info("Added project %s to workspace %r (explicit)",
+                            project_id, ws.get("name", ws.get("id")))
+            if not modified:
+                return None
+            txn.write()
+            return workspaces
 
-    async with _workspaces_lock:
-        workspaces = await sync_to_async(_read_modify_write)()
+    workspaces = await sync_to_async(_read_modify_write)()
     if workspaces is None:
         return
 
@@ -319,10 +295,10 @@ async def create_workspace_atomic(
 ) -> WorkspaceMutationResult:
     """Atomically create a new workspace. Returns the new workspace dict.
 
-    The full create flow runs under ``_workspaces_lock`` so the name
-    uniqueness check and the slug collision check see the same snapshot
-    used for the write. After the lock is released, broadcasts the full
-    new workspaces list as ``workspaces_updated``.
+    The full create flow runs under the cross-process ``locked_json_file``
+    lock so the name uniqueness check and the slug collision check see the
+    same snapshot used for the write. After the lock is released, broadcasts
+    the full new workspaces list as ``workspaces_updated``.
 
     Validation errors (empty/too-long name, duplicate name, invalid color,
     invalid pattern) are returned as a failed ``WorkspaceMutationResult``
@@ -332,51 +308,50 @@ async def create_workspace_atomic(
     auto_project_patterns = list(auto_project_patterns or [])
 
     def _read_validate_write() -> WorkspaceMutationResult:
-        data = read_workspaces()
-        workspaces = data.setdefault("workspaces", [])
+        with locked_json_file(get_workspaces_path(), default={}) as txn:
+            workspaces = txn.data.setdefault("workspaces", [])
 
-        errors: list[WorkspaceMutationError] = []
-        errors.extend(validate_workspace_name(name, existing_workspaces=workspaces))
-        errors.extend(validate_color(color))
-        for p in auto_project_patterns:
-            errors.extend(validate_pattern(p))
-        if errors:
-            return WorkspaceMutationResult(False, None, None, errors)
+            errors: list[WorkspaceMutationError] = []
+            errors.extend(validate_workspace_name(name, existing_workspaces=workspaces))
+            errors.extend(validate_color(color))
+            for p in auto_project_patterns:
+                errors.extend(validate_pattern(p))
+            if errors:
+                return WorkspaceMutationResult(False, None, None, errors)
 
-        trimmed_name = name.strip()
-        existing_ids = {ws.get("id") for ws in workspaces if ws.get("id")}
-        ws_id = slugify_workspace_id(trimmed_name, existing_ids=existing_ids)
+            trimmed_name = name.strip()
+            existing_ids = {ws.get("id") for ws in workspaces if ws.get("id")}
+            ws_id = slugify_workspace_id(trimmed_name, existing_ids=existing_ids)
 
-        # Dedupe while preserving order (append semantics).
-        deduped_projects: list[str] = []
-        seen_projects: set[str] = set()
-        for pid in project_ids:
-            if pid not in seen_projects:
-                deduped_projects.append(pid)
-                seen_projects.add(pid)
+            # Dedupe while preserving order (append semantics).
+            deduped_projects: list[str] = []
+            seen_projects: set[str] = set()
+            for pid in project_ids:
+                if pid not in seen_projects:
+                    deduped_projects.append(pid)
+                    seen_projects.add(pid)
 
-        deduped_patterns: list[str] = []
-        seen_patterns: set[str] = set()
-        for p in auto_project_patterns:
-            trimmed_p = p.strip()
-            if trimmed_p not in seen_patterns:
-                deduped_patterns.append(trimmed_p)
-                seen_patterns.add(trimmed_p)
+            deduped_patterns: list[str] = []
+            seen_patterns: set[str] = set()
+            for p in auto_project_patterns:
+                trimmed_p = p.strip()
+                if trimmed_p not in seen_patterns:
+                    deduped_patterns.append(trimmed_p)
+                    seen_patterns.add(trimmed_p)
 
-        ws = {
-            "id": ws_id,
-            "name": trimmed_name,
-            "archived": bool(archived),
-            "projectIds": deduped_projects,
-            "color": color if color else None,
-            "autoProjectPatterns": deduped_patterns,
-        }
-        workspaces.append(ws)
-        write_workspaces(data)
-        return WorkspaceMutationResult(True, ws_id, ws, None)
+            ws = {
+                "id": ws_id,
+                "name": trimmed_name,
+                "archived": bool(archived),
+                "projectIds": deduped_projects,
+                "color": color if color else None,
+                "autoProjectPatterns": deduped_patterns,
+            }
+            workspaces.append(ws)
+            txn.write()
+            return WorkspaceMutationResult(True, ws_id, ws, None)
 
-    async with _workspaces_lock:
-        result = await sync_to_async(_read_validate_write)()
+    result = await sync_to_async(_read_validate_write)()
 
     if result.success:
         # Re-read inside the broadcast path so the payload always reflects
@@ -415,67 +390,66 @@ async def update_workspace_atomic(
     remove_patterns = list(remove_patterns or [])
 
     def _read_validate_write() -> WorkspaceMutationResult:
-        data = read_workspaces()
-        workspaces = data.setdefault("workspaces", [])
-        ws = next((w for w in workspaces if w.get("id") == workspace_id), None)
-        if ws is None:
-            return WorkspaceMutationResult(False, None, None, [
-                WorkspaceMutationError("WORKSPACE_ID", "workspace_not_found",
-                                       f"Workspace {workspace_id!r} not found."),
-            ])
+        with locked_json_file(get_workspaces_path(), default={}) as txn:
+            workspaces = txn.data.setdefault("workspaces", [])
+            ws = next((w for w in workspaces if w.get("id") == workspace_id), None)
+            if ws is None:
+                return WorkspaceMutationResult(False, None, None, [
+                    WorkspaceMutationError("WORKSPACE_ID", "workspace_not_found",
+                                           f"Workspace {workspace_id!r} not found."),
+                ])
 
-        errors: list[WorkspaceMutationError] = []
-        if new_name is not None:
-            errors.extend(validate_workspace_name(
-                new_name,
-                existing_workspaces=workspaces,
-                current_id=workspace_id,
-                field="--name",
-            ))
-        if not unset_color and color is not None:
-            errors.extend(validate_color(color, field="--color"))
-        for p in add_patterns:
-            errors.extend(validate_pattern(p, field="--add-pattern"))
-        if errors:
-            return WorkspaceMutationResult(False, workspace_id, None, errors)
-
-        if new_name is not None:
-            ws["name"] = new_name.strip()
-        if unset_color:
-            ws["color"] = None
-        elif color is not None:
-            ws["color"] = color
-        if archived is not None:
-            ws["archived"] = bool(archived)
-
-        if add_projects or remove_projects:
-            current_projects = list(ws.get("projectIds", []))
-            seen = set(current_projects)
-            for pid in add_projects:
-                if pid not in seen:
-                    current_projects.append(pid)
-                    seen.add(pid)
-            to_remove = set(remove_projects)
-            current_projects = [pid for pid in current_projects if pid not in to_remove]
-            ws["projectIds"] = current_projects
-
-        if add_patterns or remove_patterns:
-            current_patterns = list(ws.get("autoProjectPatterns", []))
-            seen_p = set(current_patterns)
+            errors: list[WorkspaceMutationError] = []
+            if new_name is not None:
+                errors.extend(validate_workspace_name(
+                    new_name,
+                    existing_workspaces=workspaces,
+                    current_id=workspace_id,
+                    field="--name",
+                ))
+            if not unset_color and color is not None:
+                errors.extend(validate_color(color, field="--color"))
             for p in add_patterns:
-                trimmed_p = p.strip()
-                if trimmed_p not in seen_p:
-                    current_patterns.append(trimmed_p)
-                    seen_p.add(trimmed_p)
-            to_remove_p = set(remove_patterns)
-            current_patterns = [p for p in current_patterns if p not in to_remove_p]
-            ws["autoProjectPatterns"] = current_patterns
+                errors.extend(validate_pattern(p, field="--add-pattern"))
+            if errors:
+                return WorkspaceMutationResult(False, workspace_id, None, errors)
 
-        write_workspaces(data)
-        return WorkspaceMutationResult(True, workspace_id, ws, None)
+            if new_name is not None:
+                ws["name"] = new_name.strip()
+            if unset_color:
+                ws["color"] = None
+            elif color is not None:
+                ws["color"] = color
+            if archived is not None:
+                ws["archived"] = bool(archived)
 
-    async with _workspaces_lock:
-        result = await sync_to_async(_read_validate_write)()
+            if add_projects or remove_projects:
+                current_projects = list(ws.get("projectIds", []))
+                seen = set(current_projects)
+                for pid in add_projects:
+                    if pid not in seen:
+                        current_projects.append(pid)
+                        seen.add(pid)
+                to_remove = set(remove_projects)
+                current_projects = [pid for pid in current_projects if pid not in to_remove]
+                ws["projectIds"] = current_projects
+
+            if add_patterns or remove_patterns:
+                current_patterns = list(ws.get("autoProjectPatterns", []))
+                seen_p = set(current_patterns)
+                for p in add_patterns:
+                    trimmed_p = p.strip()
+                    if trimmed_p not in seen_p:
+                        current_patterns.append(trimmed_p)
+                        seen_p.add(trimmed_p)
+                to_remove_p = set(remove_patterns)
+                current_patterns = [p for p in current_patterns if p not in to_remove_p]
+                ws["autoProjectPatterns"] = current_patterns
+
+            txn.write()
+            return WorkspaceMutationResult(True, workspace_id, ws, None)
+
+    result = await sync_to_async(_read_validate_write)()
 
     if result.success:
         await _broadcast_after_write()
@@ -489,20 +463,19 @@ async def delete_workspace_atomic(workspace_id: str) -> WorkspaceMutationResult:
     to exist in DB and in any other workspace listing them).
     """
     def _read_validate_write() -> WorkspaceMutationResult:
-        data = read_workspaces()
-        workspaces = data.setdefault("workspaces", [])
-        idx = next((i for i, w in enumerate(workspaces) if w.get("id") == workspace_id), None)
-        if idx is None:
-            return WorkspaceMutationResult(False, None, None, [
-                WorkspaceMutationError("WORKSPACE_ID", "workspace_not_found",
-                                       f"Workspace {workspace_id!r} not found."),
-            ])
-        del workspaces[idx]
-        write_workspaces(data)
-        return WorkspaceMutationResult(True, workspace_id, None, None)
+        with locked_json_file(get_workspaces_path(), default={}) as txn:
+            workspaces = txn.data.setdefault("workspaces", [])
+            idx = next((i for i, w in enumerate(workspaces) if w.get("id") == workspace_id), None)
+            if idx is None:
+                return WorkspaceMutationResult(False, None, None, [
+                    WorkspaceMutationError("WORKSPACE_ID", "workspace_not_found",
+                                           f"Workspace {workspace_id!r} not found."),
+                ])
+            del workspaces[idx]
+            txn.write()
+            return WorkspaceMutationResult(True, workspace_id, None, None)
 
-    async with _workspaces_lock:
-        result = await sync_to_async(_read_validate_write)()
+    result = await sync_to_async(_read_validate_write)()
 
     if result.success:
         await _broadcast_after_write()

@@ -9,11 +9,10 @@ The on-disk format is a flat dict ``{<tip_key>: <ISO timestamp UTC>}``.
 from __future__ import annotations
 
 import logging
-import os
-import tempfile
 
 import orjson
 
+from twicc.atomic_json import atomic_write_json
 from twicc.paths import get_seen_tips_path
 
 logger = logging.getLogger(__name__)
@@ -41,19 +40,5 @@ def read_seen_tips() -> dict[str, str]:
 
 
 def write_seen_tips(state: dict[str, str]) -> None:
-    """Persist the seen-tips state atomically (tempfile + os.replace)."""
-    path = get_seen_tips_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    content = orjson.dumps(state, option=orjson.OPT_INDENT_2)
-
-    fd, tmp_path = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
-    try:
-        with os.fdopen(fd, "wb") as f:
-            f.write(content)
-        os.replace(tmp_path, path)
-    except BaseException:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-        raise
+    """Persist the seen-tips state atomically (whole-blob overwrite)."""
+    atomic_write_json(get_seen_tips_path(), state)

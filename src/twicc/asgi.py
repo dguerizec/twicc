@@ -48,7 +48,7 @@ from twicc.providers.helpers import (
 )
 from twicc.external_notifications import notify_agent_event
 from twicc.synced_settings import _settings_lock, prepare_settings_for_client, read_synced_settings, write_synced_settings
-from twicc.workspaces import read_workspaces, write_workspaces
+from twicc.workspaces import read_workspaces
 from twicc.message_snippets import read_message_snippets_config, write_message_snippets_config
 from twicc.seen_tips import read_seen_tips, write_seen_tips
 from twicc.tips_manifest import manifest_to_dict
@@ -1437,16 +1437,19 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
         if not isinstance(workspaces, list):
             return
 
-        from twicc.workspaces import _workspaces_lock
+        from twicc.atomic_json import atomic_write_json, file_lock
+        from twicc.paths import get_workspaces_path
 
         def _write():
-            write_workspaces({"workspaces": workspaces})
+            # Whole-blob overwrite under the same cross-process lock the atomic
+            # read-modify-write ops take (via ``locked_json_file``), so a
+            # concurrent ``auto_add_project_to_workspaces`` (watcher / views) or
+            # a CLI workspace op doesn't read a stale snapshot, append a
+            # project, and overwrite this update.
+            with file_lock(get_workspaces_path()):
+                atomic_write_json(get_workspaces_path(), {"workspaces": workspaces})
 
-        # Serialize with auto-add (watcher / views) so a concurrent
-        # ``auto_add_project_to_workspaces`` doesn't read a stale snapshot,
-        # append a project, and overwrite this whole-blob update.
-        async with _workspaces_lock:
-            await sync_to_async(_write)()
+        await sync_to_async(_write)()
 
         await self.channel_layer.group_send(
             "updates",

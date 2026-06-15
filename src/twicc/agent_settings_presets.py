@@ -15,11 +15,9 @@ their payload — same pattern as ``usage_updated``.
 
 from __future__ import annotations
 
-import os
-import tempfile
-
 import orjson
 
+from twicc.atomic_json import atomic_write_json
 from twicc.core.enums import Provider
 from twicc.providers.helpers import get_provider_helpers
 
@@ -54,22 +52,5 @@ def read_agent_settings_presets(provider: Provider) -> dict:
 
 
 def write_agent_settings_presets(provider: Provider, config: dict) -> None:
-    """Write the presets file for ``provider`` atomically.
-
-    Uses write-to-temp-then-rename to avoid partial writes.
-    """
-    path = _get_path(provider)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    content = orjson.dumps(config, option=orjson.OPT_INDENT_2)
-
-    fd, tmp_path = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
-    try:
-        with os.fdopen(fd, "wb") as f:
-            f.write(content)
-        os.replace(tmp_path, path)
-    except BaseException:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-        raise
+    """Write the presets file for ``provider`` atomically (whole-blob overwrite)."""
+    atomic_write_json(_get_path(provider), config)

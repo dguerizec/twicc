@@ -15,16 +15,20 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import os
 import secrets
 from datetime import datetime, timezone
 from typing import NamedTuple
 
 import orjson
 
+from twicc.atomic_json import locked_json_file
 from twicc.paths import get_api_tokens_path
 
 _TOKEN_PREFIX = "twicc_pat_"
+
+# Empty on-disk store shape. ``locked_json_file`` deep-copies the default when
+# the file is absent, so this module-level literal is never mutated.
+_EMPTY_STORE = {"version": 1, "tokens": []}
 
 
 class TokenRecord(NamedTuple):
@@ -74,19 +78,6 @@ def load_tokens() -> list[TokenRecord]:
     return out
 
 
-def _write(records: list[TokenRecord]) -> None:
-    path = get_api_tokens_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {"version": 1, "tokens": [r._asdict() for r in records]}
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_bytes(orjson.dumps(payload, option=orjson.OPT_INDENT_2))
-    os.replace(tmp, path)
-    try:
-        os.chmod(path, 0o600)
-    except OSError:
-        pass
-
-
 # --- mtime cache for the request hot path -------------------------------
 
 _cache: dict = {"mtime": object(), "records": []}
@@ -117,17 +108,22 @@ def create_token(name: str) -> tuple[str, TokenRecord]:
         created_at=_now_iso(),
         last_used_at=None,
     )
-    _write(load_tokens() + [rec])
+    with locked_json_file(get_api_tokens_path(), default=_EMPTY_STORE) as txn:
+        txn.data.setdefault("version", 1)
+        txn.data.setdefault("tokens", []).append(rec._asdict())
+        txn.write()
     return token, rec
 
 
 def revoke_token(token_id: str) -> bool:
-    records = load_tokens()
-    kept = [r for r in records if r.id != token_id]
-    if len(kept) == len(records):
-        return False
-    _write(kept)
-    return True
+    with locked_json_file(get_api_tokens_path(), default=_EMPTY_STORE) as txn:
+        tokens = txn.data.get("tokens", [])
+        kept = [t for t in tokens if not (isinstance(t, dict) and t.get("id") == token_id)]
+        if len(kept) == len(tokens):
+            return False
+        txn.data["tokens"] = kept
+        txn.write()
+        return True
 
 
 def has_tokens() -> bool:
@@ -147,14 +143,11 @@ def verify_token(token: str) -> TokenRecord | None:
 
 
 def touch_last_used(token_id: str) -> None:
-    records = load_tokens()
-    changed = False
-    new: list[TokenRecord] = []
-    for r in records:
-        if r.id == token_id:
-            new.append(r._replace(last_used_at=_now_iso()))
-            changed = True
-        else:
-            new.append(r)
-    if changed:
-        _write(new)
+    with locked_json_file(get_api_tokens_path(), default=_EMPTY_STORE) as txn:
+        changed = False
+        for t in txn.data.get("tokens", []):
+            if isinstance(t, dict) and t.get("id") == token_id:
+                t["last_used_at"] = _now_iso()
+                changed = True
+        if changed:
+            txn.write()
