@@ -101,6 +101,17 @@ async function edit() {
     const entry = getEntry()
     if (!entry || !insertTextAtCursor) return
     insertTextAtCursor(entry.text)
+    // insertTextAtCursor only focuses when the composer is already expanded; a
+    // collapsed composer just gets the text appended to its draft and stays put
+    // (so reading + commenting never pops it open). But Edit is an explicit "I
+    // want to rework this now", so open + focus the composer. Mirror the "Expand
+    // Message Input" command: dispatch twicc:expand-composer on the collapsed
+    // composer — MessageInput expands it, reduces any pending request, and
+    // focuses the textarea itself. (Not focusChatPrimary, which would steer focus
+    // to a pending request instead of the composer.)
+    document
+        .querySelector('.message-input.collapsed')
+        ?.dispatchEvent(new CustomEvent('twicc:expand-composer'))
     if (entry.medias?.length) {
         await store.restoreDraftAttachments(props.sessionId, entry.medias)
     }
@@ -149,13 +160,13 @@ function discard() {
 
 <style scoped>
 .failed-send-callout {
-    margin-top: var(--wa-space-2xs);
+    margin-top: var(--wa-space-s);
 }
 
 .failed-send-content {
     display: flex;
     flex-direction: column;
-    gap: var(--wa-space-xs);
+    gap: var(--wa-space-m);
 }
 
 .failed-send-note {
