@@ -52,7 +52,7 @@ const explainerSeen = computed(() => settingsStore.isClaudeHybridExplainerSeen)
 
         <p>
             <strong>Real CLI inside —</strong> the CLI runs in a terminal above
-            the message input, minimized by default.
+            the message input, opened on demand.
         </p>
 
         <p>
