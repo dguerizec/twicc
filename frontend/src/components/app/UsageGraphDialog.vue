@@ -126,6 +126,7 @@ function clearSnapshots() {
 // panOffsetMs: shift in ms from default position (<=0 = past, 0 = present)
 const panOffsetMs = ref(0)
 const isDragging = ref(false)
+const isInspecting = ref(false) // touch: long-press inspect (scrub) mode active
 const isFetchingMore = ref(false)
 const noMoreDataLeft = ref(false)
 const fetchedRangeStartMs = ref(null) // left boundary of fetched data (epoch ms)
@@ -137,6 +138,8 @@ let _dragSvgWidth = 1
 let _dragStartY = 0
 let _touchDragDirection = null // 'horizontal' | 'vertical' | null
 let _fetchGeneration = 0 // incremented on range change / open to invalidate stale fetches
+let _longPressTimer = null // touch: pending long-press → inspect mode
+const LONG_PRESS_MS = 450
 
 // ── Chart constants ─────────────────────────────────────────────────
 const SVG_WIDTH = 1094
@@ -230,6 +233,8 @@ function open(period = 'five-hour') {
     activeTab.value = period
     fiveHourHoveredIndex.value = null
     sevenDayHoveredIndex.value = null
+    isInspecting.value = false
+    _clearLongPress()
     _fetchGeneration++ // invalidate any leftover fetches from previous open
     clearSnapshots()
     panOffsetMs.value = 0
@@ -252,6 +257,9 @@ function close() {
         document.removeEventListener('mousemove', _onDocMouseMove)
         document.removeEventListener('mouseup', _onDocMouseUp)
     }
+    // Clean up any pending/active touch inspection
+    _clearLongPress()
+    isInspecting.value = false
     if (_prefetchTimer) {
         clearTimeout(_prefetchTimer)
         _prefetchTimer = null
@@ -471,8 +479,35 @@ function _onDocMouseUp() {
     document.removeEventListener('mouseup', _onDocMouseUp)
 }
 
-// Touch handlers — horizontal drag pans, vertical drag scrolls normally.
+// Touch handlers — horizontal drag pans, vertical drag scrolls normally,
+// holding still ~LONG_PRESS_MS enters inspect mode (scrub the tooltip).
 // touch-action: pan-y on the SVG (set in CSS) lets the browser handle vertical scroll.
+
+function _clearLongPress() {
+    if (_longPressTimer) {
+        clearTimeout(_longPressTimer)
+        _longPressTimer = null
+    }
+}
+
+// Resolve the active panel's hovered-index ref + timestamps (only the active
+// tab's SVG receives touches, so activeTab tells us which one to drive).
+function activeHover() {
+    return activeTab.value === 'five-hour'
+        ? { idxRef: fiveHourHoveredIndex, timestamps: fhTimestamps }
+        : { idxRef: sevenDayHoveredIndex, timestamps: sdTimestamps }
+}
+
+// Position the inspect cursor/tooltip at a touch X, mirroring the mouse-move path.
+function inspectAt(svgEl, clientX) {
+    const rect = svgEl.getBoundingClientRect()
+    const ratio = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width))
+    const { idxRef, timestamps } = activeHover()
+    const ts = timestamps.value
+    if (!ts.length) return
+    idxRef.value = findClosestIndex(ts, tStart.value, tEnd.value, ratio)
+}
+
 function onChartTouchStart(event) {
     if (event.touches.length !== 1) return
     const touch = event.touches[0]
@@ -480,17 +515,35 @@ function onChartTouchStart(event) {
     _dragStartY = touch.clientY
     _dragStartPanOffset = panOffsetMs.value
     _touchDragDirection = null
+    // Arm long-press → inspect mode (cancelled by any real drag or touchend).
+    const svgEl = event.currentTarget
+    _clearLongPress()
+    _longPressTimer = setTimeout(() => {
+        _longPressTimer = null
+        isInspecting.value = true
+        navigator.vibrate?.(10)
+        inspectAt(svgEl, _dragStartX)
+    }, LONG_PRESS_MS)
 }
 
 function onChartTouchMove(event) {
     if (event.touches.length !== 1) return
     const touch = event.touches[0]
 
+    // Inspect mode: scrub along the curve; suppress pan and native scroll.
+    if (isInspecting.value) {
+        event.preventDefault()
+        inspectAt(event.currentTarget, touch.clientX)
+        return
+    }
+
     // Determine direction on first significant move
     if (_touchDragDirection === null) {
         const dx = Math.abs(touch.clientX - _dragStartX)
         const dy = Math.abs(touch.clientY - _dragStartY)
-        if (dx < 5 && dy < 5) return
+        if (dx < 5 && dy < 5) return // ignore jitter; long-press timer stays armed
+        // A real drag → not a long-press.
+        _clearLongPress()
         _touchDragDirection = dx > dy ? 'horizontal' : 'vertical'
         if (_touchDragDirection === 'horizontal') {
             isDragging.value = true
@@ -505,6 +558,13 @@ function onChartTouchMove(event) {
 }
 
 function onChartTouchEnd() {
+    _clearLongPress()
+    if (isInspecting.value) {
+        // Tooltip disappears on release (hover-equivalent).
+        isInspecting.value = false
+        fiveHourHoveredIndex.value = null
+        sevenDayHoveredIndex.value = null
+    }
     if (_touchDragDirection === 'horizontal') {
         isDragging.value = false
     }
@@ -890,6 +950,7 @@ function onTabShow(event) {
                                     @touchstart="onChartTouchStart"
                                     @touchmove="onChartTouchMove"
                                     @touchend="onChartTouchEnd"
+                                    @touchcancel="onChartTouchEnd"
                                 >
                                     <!-- 100% reference line -->
                                     <line
@@ -931,7 +992,7 @@ function onTabShow(event) {
 
                                 <!-- Hover tooltip -->
                                 <div
-                                    v-if="fiveHourHoveredIndex !== null && fhHoveredData && !isTouchDevice"
+                                    v-if="fiveHourHoveredIndex !== null && fhHoveredData"
                                     class="usage-chart-tooltip"
                                     :style="{ left: `${fhTooltipPct}%`, transform: `translateX(-${fhTooltipPct}%)` }"
                                 >
@@ -996,6 +1057,7 @@ function onTabShow(event) {
                                     @touchstart="onChartTouchStart"
                                     @touchmove="onChartTouchMove"
                                     @touchend="onChartTouchEnd"
+                                    @touchcancel="onChartTouchEnd"
                                 >
                                     <!-- 100% reference line -->
                                     <line
@@ -1037,7 +1099,7 @@ function onTabShow(event) {
 
                                 <!-- Hover tooltip -->
                                 <div
-                                    v-if="sevenDayHoveredIndex !== null && sdHoveredData && !isTouchDevice"
+                                    v-if="sevenDayHoveredIndex !== null && sdHoveredData"
                                     class="usage-chart-tooltip"
                                     :style="{ left: `${sdTooltipPct}%`, transform: `translateX(-${sdTooltipPct}%)` }"
                                 >
@@ -1208,6 +1270,7 @@ function onTabShow(event) {
     border-radius: var(--wa-border-radius-m);
     cursor: grab;
     touch-action: pan-y;
+    -webkit-touch-callout: none; /* suppress iOS callout/magnifier on long-press */
 }
 
 .usage-chart-svg.is-dragging {
