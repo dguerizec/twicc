@@ -139,10 +139,16 @@ watchEffect(() => {
 let wantsFocus = false
 function focusTerminalNow() {
     if (!everHadProcess.value) return
-    let tries = 8
+    let tries = 12
     const attempt = () => {
         const api = termApi.value
-        if (api?.started?.value) { api.focus?.(); return }
+        if (api?.started?.value) {
+            api.focus?.()
+            // Cross-tab: the chat panel may still be hidden on the first try, so
+            // focus() is a no-op until the xterm is visible — retry until focus
+            // actually lands inside it.
+            if (document.activeElement?.closest?.('.xterm')) return
+        }
         if (tries-- > 0) setTimeout(attempt, 40)
     }
     nextTick(attempt)

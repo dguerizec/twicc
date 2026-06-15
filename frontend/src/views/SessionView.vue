@@ -33,7 +33,7 @@ import {
     parseRouteTermIndex,
 } from '../utils/granularRoutes'
 import { getAgentDisplayLabel } from '../utils/agentLabel'
-import { focusChatPrimary } from '../utils/focusChat'
+import { focusChatPrimary, gotoChatFooterPanel } from '../utils/focusChat'
 import { fileRootsFromStore } from '../utils/projectRoots'
 
 const route = useRoute()
@@ -980,10 +980,57 @@ function registerSessionCommands() {
             label: 'Focus Message Input',
             icon: 'keyboard',
             category: 'session',
-            // Despite the legacy "Message Input" label, this lands on whichever
-            // primary control the chat is showing: pending request form when
-            // active, message input textarea otherwise.
-            action: () => focusChatPrimary(),
+            // Direct access to the message input specifically — opens it in the
+            // footer accordion (reducing the terminal / pending request) and
+            // focuses the textarea. Distinct from Alt+Shift+M, which lands on the
+            // pending request form instead when one is open. Mirrors Alt+Shift+PageDown.
+            action: () => gotoChatFooterPanel(route, router, 'twicc:goto-message-input'),
+        },
+        {
+            id: 'session.focus-pending',
+            label: 'Focus Pending Request',
+            icon: 'reply',
+            category: 'session',
+            // Only when an answerable pending request form is shown (a request
+            // degraded to badge-only — hybrid_terminal — has no form to focus).
+            when: () => {
+                const reqs = store.getPendingRequests(sessionId.value)
+                return reqs.length > 0 && reqs[0].request_type !== 'hybrid_terminal'
+            },
+            // Opens the pending request in the accordion (reducing the others) and
+            // focuses its primary control. Mirrors Alt+Shift+PageUp.
+            action: () => gotoChatFooterPanel(route, router, 'twicc:goto-pending-request'),
+        },
+        {
+            id: 'session.focus-terminal',
+            label: 'Open Claude CLI Terminal',
+            icon: 'terminal',
+            category: 'session',
+            // Hybrid sessions only — the embedded CLI terminal block.
+            when: () => store.getSession(sessionId.value)?.hybrid === true,
+            // Opens the terminal in the accordion (reducing the others) and
+            // focuses the xterm. (Alt+Shift+T toggles instead; this only opens.)
+            action: () => gotoChatFooterPanel(route, router, 'twicc:goto-terminal'),
+        },
+        {
+            id: 'session.toggle-hybrid',
+            label: 'Toggle Hybrid Mode',
+            icon: 'right-left',
+            category: 'session',
+            // Claude sessions where hybrid is actually toggleable — not a
+            // committed-permanent one (its switch is one-way). Drafts, staged
+            // SDK sessions, and plain non-hybrid SDK sessions all qualify.
+            when: () => {
+                const s = store.getSession(sessionId.value)
+                return !!s
+                    && s.provider === 'claude_code'
+                    && !s.hidden
+                    && !s.parent_session_id
+                    && !(!s.draft && s.hybrid === true)
+            },
+            // Same as clicking the composer's hybrid button (enable/disable a
+            // draft, stage/un-stage, or open the confirm dialog). Mirrors Alt+Shift+H.
+            action: () => gotoChatFooterPanel(route, router, 'twicc:toggle-hybrid'),
         },
         {
             id: 'session.collapse-input',

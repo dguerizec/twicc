@@ -246,6 +246,64 @@ watch(() => props.sessionId, () => {
     nextTick(applyOpenBlock)
 })
 
+// External footer-panel navigation (global Alt+Shift+{PageDown/PageUp/T}
+// shortcuts and the matching command-palette actions, routed through
+// ``gotoChatFooterPanel``). Window events so they reach whichever main session
+// is active — guarded to it (not a backgrounded KeepAlive instance, not a
+// subagent). Each is a no-op when its target panel can't be shown.
+//
+// Focus rule: open the panel (reducing the others) and focus it — but ONLY when
+// focus isn't already inside it. That honors the shortcuts' "go to X if not
+// already there" (already open + focused → nothing happens, no caret jump in the
+// composer), keeps focus when arriving from another panel, and still focuses for
+// the command-palette actions (the palette has stolen focus by the time they run).
+function focusIsInside(selector) {
+    return !!document.activeElement?.closest?.(selector)
+}
+function gotoMessageInput() {
+    if (!sessionActive.value || props.parentSessionId) return
+    setOpenBlock('message-input', { focus: !focusIsInside('.message-input') })
+}
+function gotoPendingRequest() {
+    if (!sessionActive.value || props.parentSessionId) return
+    if (hasAnswerablePendingRequest.value) {
+        setOpenBlock('pending', { focus: !focusIsInside('.pending-request-form') })
+        return
+    }
+    // No pending request: Page Up from the message input on a hybrid session
+    // opens the CLI terminal instead (its "up" neighbour). The command-palette
+    // "Focus Pending Request" never reaches here — its when-guard requires a
+    // pending request.
+    if (openBlock.value === 'message-input' && isHybridSession.value) {
+        setOpenBlock('terminal', { focus: !focusIsInside('.hybrid-terminal-block') })
+    }
+}
+function gotoTerminal() {
+    if (!sessionActive.value || props.parentSessionId) return
+    if (!isHybridSession.value) return
+    setOpenBlock('terminal', { focus: !focusIsInside('.hybrid-terminal-block') })
+}
+// Alt+Shift+T is double-acting: open the terminal when it isn't the open panel,
+// or swap back to the message input when it already is. (The command-palette
+// "Open Claude CLI Terminal" stays open-only, via gotoTerminal above.)
+function toggleTerminal() {
+    if (!sessionActive.value || props.parentSessionId) return
+    if (!isHybridSession.value) return
+    if (openBlock.value === 'terminal') {
+        setOpenBlock('message-input', { focus: !focusIsInside('.message-input') })
+    } else {
+        setOpenBlock('terminal', { focus: !focusIsInside('.hybrid-terminal-block') })
+    }
+}
+// Alt+Shift+H / "Toggle Hybrid Mode": trigger the composer's hybrid button as if
+// clicked (enable / disable a draft, stage / un-stage an SDK session, or open the
+// confirm dialog). The composer's own method gates feasibility (Claude only, not
+// a committed-permanent session).
+function toggleHybrid() {
+    if (!sessionActive.value || props.parentSessionId) return
+    messageInputRef.value?.hybridToggle?.()
+}
+
 /**
  * Whether the VirtualScroller should be visible.
  * Uses v-show (not v-if) to keep the component alive across KeepAlive cycles,
@@ -1232,10 +1290,20 @@ function handleSessionSearchKeydown(e) {
 onMounted(() => {
     window.addEventListener('twicc:toggle-session-search', handleToggleSessionSearch)
     window.addEventListener('keydown', handleSessionSearchKeydown)
+    window.addEventListener('twicc:goto-message-input', gotoMessageInput)
+    window.addEventListener('twicc:goto-pending-request', gotoPendingRequest)
+    window.addEventListener('twicc:goto-terminal', gotoTerminal)
+    window.addEventListener('twicc:toggle-terminal', toggleTerminal)
+    window.addEventListener('twicc:toggle-hybrid', toggleHybrid)
 })
 onBeforeUnmount(() => {
     window.removeEventListener('twicc:toggle-session-search', handleToggleSessionSearch)
     window.removeEventListener('keydown', handleSessionSearchKeydown)
+    window.removeEventListener('twicc:goto-message-input', gotoMessageInput)
+    window.removeEventListener('twicc:goto-pending-request', gotoPendingRequest)
+    window.removeEventListener('twicc:goto-terminal', gotoTerminal)
+    window.removeEventListener('twicc:toggle-terminal', toggleTerminal)
+    window.removeEventListener('twicc:toggle-hybrid', toggleHybrid)
 })
 
 // Watch for pending search from the global SearchOverlay.

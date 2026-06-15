@@ -155,7 +155,7 @@ const isHybridStaged = computed(() => !isHybridCommitted.value && store.isHybrid
 const hybridPending = computed(() => (isDraft.value && isHybrid.value) || isHybridStaged.value)
 
 const hybridTooltipLabel = computed(() => {
-    if (isHybridCommitted.value) return 'Hybrid mode (permanent) — open the terminal'
+    if (isHybridCommitted.value) return 'Hybrid mode (permanent) — open the terminal (Alt+Shift+T)'
     if (isDraft.value && isHybrid.value) return 'Hybrid mode on for this draft — click to turn off'
     if (isHybridStaged.value) return 'Hybrid switch staged — applies on send; click to cancel'
     return 'Turn on hybrid mode'
@@ -167,6 +167,7 @@ const hybridTooltipLabel = computed(() => {
 // the switch differ between variants. (A committed session no longer opens a
 // dialog — the icon opens the embedded terminal instead.)
 const hybridDialogRef = ref(null)
+const hybridConfirmBtnRef = ref(null)
 const hybridDialogVariant = ref(null)
 const hybridDontShowAgain = ref(true)
 // Forced-choice guard: switch variants must not be dismissable by Esc / the X /
@@ -228,6 +229,17 @@ function handleHybridClick() {
     openHybridDialog(seen ? 'sdk-confirm' : 'sdk-explainer')       // B.1.b / B.1.a
 }
 
+// Alt+Shift+H / the "Toggle Hybrid Mode" command: same as clicking the hybrid
+// button, but only where hybrid is actually toggleable — Claude sessions that
+// aren't committed-permanent. A committed session has nothing to toggle (the
+// button there just opens the terminal, which Alt+Shift+T already covers), so
+// the shortcut is a no-op on it. Enable/disable a draft, stage/un-stage an SDK
+// session, or open the confirm dialog — exactly as handleHybridClick decides.
+function hybridToggle() {
+    if (!isHybridAvailable.value || isHybridCommitted.value) return
+    handleHybridClick()
+}
+
 // Persist the synced "seen" flag only when the dialog actually carries the
 // switch and the user left it on. Never on the info / short-confirm variants.
 function persistExplainerSeenIfNeeded() {
@@ -270,6 +282,13 @@ function onHybridDialogAfterHide(event) {
     if (event.target !== hybridDialogRef.value) return
     hybridDialogVariant.value = null
     hybridDialogAllowClose.value = false
+}
+// Land the keyboard on the primary (brand) footer button — Start / Switch — once
+// the dialog has fully shown. Guarded against the nested wa-details/wa-switch
+// bubbling their own wa-after-show up to the dialog.
+function onHybridDialogAfterShow(event) {
+    if (event.target !== hybridDialogRef.value) return
+    hybridConfirmBtnRef.value?.focus()
 }
 
 // Provider's attachment capabilities (file types, max bytes, resize policy).
@@ -668,14 +687,22 @@ function expand() {
     nextTick(adjustTextareaHeight)
 }
 
-// Put the caret at the end and focus the textarea.
-function focusTextarea() {
+// Put the caret at the end and focus the textarea. Retries because the caller
+// may invoke this right after a cross-tab navigation (Alt+Shift+PageDown from
+// another session tab): the chat panel can still be display:none on the first
+// try, where focus() is a no-op — keep trying until it sticks (~0.5s budget).
+function focusTextarea(retries = 12) {
     const textarea = textareaRef.value
-    textarea?.focus()
-    const inner = textarea?.shadowRoot?.querySelector('textarea')
-    if (inner) {
-        const end = inner.value.length
-        inner.setSelectionRange(end, end)
+    if (textarea) {
+        textarea.focus()
+        const inner = textarea.shadowRoot?.querySelector('textarea')
+        if (inner) {
+            const end = inner.value.length
+            inner.setSelectionRange(end, end)
+        }
+    }
+    if (document.activeElement !== textarea && retries > 0) {
+        setTimeout(() => focusTextarea(retries - 1), 40)
     }
 }
 
@@ -1747,7 +1774,7 @@ function getSessionGateState() {
     }
 }
 
-defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSessionGateState, collapse, expand, requestFocus })
+defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSessionGateState, collapse, expand, requestFocus, hybridToggle })
 </script>
 
 <template>
@@ -2076,6 +2103,7 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
             style="--width: min(40rem, calc(100vw - 2rem))"
             @wa-hide="onHybridDialogHide"
             @wa-after-hide="onHybridDialogAfterHide"
+            @wa-after-show="onHybridDialogAfterShow"
         >
             <p class="hybrid-dialog-intro">{{ hybridDialogIntro }}</p>
             <HybridModeExplainer :open="hybridDialogDetailsOpen" />
@@ -2094,8 +2122,10 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
                 @click="cancelHybridDialog"
             >Cancel</wa-button>
             <wa-button
+                ref="hybridConfirmBtnRef"
                 slot="footer"
                 variant="brand"
+                class="hybrid-dialog-confirm"
                 @click="confirmHybridDialog"
             >{{ hybridConfirmLabel }}</wa-button>
         </wa-dialog>
@@ -2242,6 +2272,15 @@ body.sidebar-closed .message-input-toolbar {
 }
 .hybrid-dialog.forced-choice::part(close-button) {
     display: none;
+}
+/* Show the focus ring on the dialog's primary (Start / Switch) button even when
+   focus arrived programmatically (@wa-after-show) — default :focus-visible skips
+   non-keyboard focus, hiding the indicator. :focus-within (not :focus) because
+   wa-button delegates focus into its shadow DOM; the host keeps :focus-within
+   accurate via activeElement. Mirrors the pending-request primary-target rule. */
+.hybrid-dialog-confirm:focus-within::part(base) {
+    outline: var(--wa-focus-ring);
+    outline-offset: var(--wa-focus-ring-offset);
 }
 
 .message-input-actions {

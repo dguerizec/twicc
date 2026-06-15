@@ -6,6 +6,36 @@
  * chat panel.
  */
 
+// Route names whose active tab IS the chat surface (the footer accordion lives
+// here). The non-chat session sub-tabs (files/git/terminal/subagent) keep this
+// panel mounted but hidden, so reaching a footer panel from them needs a route
+// switch first.
+const SESSION_CHAT_ROUTE_NAMES = new Set(['session', 'projects-session'])
+
+/**
+ * Move to a footer accordion panel (message input / pending request / embedded
+ * terminal) by dispatching a ``twicc:goto-*`` window event, which the active
+ * SessionItemsList applies (open the panel, reduce the others, take focus).
+ *
+ * The footer only exists on the chat tab, so when we're on another session
+ * sub-tab we navigate there first and dispatch once the route settles — the
+ * same navigate-then-act flow as Alt+Shift+M. Used by the global Alt+Shift+
+ * {PageUp/PageDown/T} shortcuts and the matching command-palette actions.
+ *
+ * @param {import('vue-router').RouteLocationNormalizedLoaded} route
+ * @param {import('vue-router').Router} router
+ * @param {string} eventName - 'twicc:goto-message-input' | 'twicc:goto-pending-request' | 'twicc:goto-terminal'
+ */
+export function gotoChatFooterPanel(route, router, eventName) {
+    const dispatch = () => window.dispatchEvent(new CustomEvent(eventName))
+    if (SESSION_CHAT_ROUTE_NAMES.has(route.name)) {
+        dispatch()
+    } else {
+        const chatRouteName = route.name.startsWith('projects-session') ? 'projects-session' : 'session'
+        router.push({ name: chatRouteName, params: route.params }).then(dispatch)
+    }
+}
+
 /**
  * Returns the primary interactive target inside the active PendingRequestForm,
  * or null when no pending request is shown. Picks the element that "I want to

@@ -32,7 +32,7 @@ import {
     stopSessionProcess,
 } from './composables/useStopSessionProcess'
 import { canStealFocus, hasBlockingOverlay } from './utils/focusGuard'
-import { focusChatPrimary } from './utils/focusChat'
+import { focusChatPrimary, gotoChatFooterPanel } from './utils/focusChat'
 import { toggleSearchInActiveCodeMirror } from './composables/useCodeMirror'
 import { useSessionSwitcher } from './composables/useSessionSwitcher'
 
@@ -352,6 +352,67 @@ function handleGlobalKeydown(e) {
                 const chatRouteName = route.name.startsWith('projects-session') ? 'projects-session' : 'session'
                 router.push({ name: chatRouteName, params: route.params }).then(() => focusChatPrimary())
             }
+        }
+    }
+    // Alt+Shift+PageDown / PageUp: move between the chat footer panels (the
+    // message-input / pending-request / embedded-terminal accordion). PageDown
+    // always goes to the message input; PageUp to the open pending request (else,
+    // from the message input on a hybrid session, the CLI terminal).
+    //
+    // Chat tab ONLY (SESSION_CHAT_ROUTES): unlike Alt+Shift+T, these are
+    // contextual — where they land depends on what's currently open — so they
+    // make no sense without the footer already in view; we don't yank you to the
+    // chat tab for them. No in-editable guard (the point is to leave the
+    // composer); only a modal-overlay skip. We always swallow the chord (when no
+    // overlay) so a no-op PageUp never falls through to the composer's own PageUp
+    // = message-history shortcut.
+    if (e.altKey && e.shiftKey && !e.ctrlKey && !e.metaKey && (e.code === 'PageDown' || e.code === 'PageUp') && SESSION_CHAT_ROUTES.has(route.name)) {
+        if (!hasBlockingOverlay()) {
+            e.preventDefault()
+            e.stopPropagation()
+            if (e.code === 'PageDown') {
+                gotoChatFooterPanel(route, router, 'twicc:goto-message-input')
+            } else {
+                // PageUp → the open pending request when one is shown, else (from
+                // the message input, hybrid session) the CLI terminal. The active
+                // SessionItemsList makes the final call; we only gate the dispatch
+                // so a non-hybrid session with no pending does nothing.
+                const head = dataStore.getPendingRequests(route.params.sessionId)?.[0]
+                const hasPending = !!head && head.request_type !== 'hybrid_terminal'
+                const sess = dataStore.getSession(route.params.sessionId)
+                if (hasPending || sess?.hybrid === true) {
+                    gotoChatFooterPanel(route, router, 'twicc:goto-pending-request')
+                }
+            }
+        }
+    }
+    // Alt+Shift+T: toggle between the embedded Claude CLI terminal and the message
+    // input — hybrid sessions only, like Alt+Shift+M for the message input (works
+    // from any session sub-tab, navigating to the chat tab first). e.code
+    // (physical key) for layout safety.
+    if (e.altKey && e.shiftKey && !e.ctrlKey && !e.metaKey && e.code === 'KeyT' && SESSION_ROUTES.has(route.name)) {
+        const sess = dataStore.getSession(route.params.sessionId)
+        if (sess?.hybrid === true && !hasBlockingOverlay()) {
+            e.preventDefault()
+            e.stopPropagation()
+            gotoChatFooterPanel(route, router, 'twicc:toggle-terminal')
+        }
+    }
+    // Alt+Shift+H: toggle hybrid mode — same as clicking the composer's hybrid
+    // button, where it's toggleable: enable/disable a Claude draft, stage/un-stage
+    // an SDK session, or open the confirm dialog. A committed-permanent session
+    // has nothing to toggle, so the chord is left untouched there.
+    if (e.altKey && e.shiftKey && !e.ctrlKey && !e.metaKey && e.code === 'KeyH' && SESSION_ROUTES.has(route.name)) {
+        const sess = dataStore.getSession(route.params.sessionId)
+        const toggleable = sess
+            && sess.provider === 'claude_code'
+            && !sess.hidden
+            && !sess.parent_session_id
+            && !(!sess.draft && sess.hybrid === true)  // not committed-permanent
+        if (toggleable && !hasBlockingOverlay()) {
+            e.preventDefault()
+            e.stopPropagation()
+            gotoChatFooterPanel(route, router, 'twicc:toggle-hybrid')
         }
     }
     // Alt+E: toggle the Edit switch of the active Files/Git CodeMirror editor.

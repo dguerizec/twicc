@@ -239,6 +239,10 @@ const shortcutGroups = computed(() => {
             label: 'Session chat',
             shortcuts: [
                 { keys: ['Alt', 'Shift', 'M'], description: 'Focus message input — or the active pending request when one is open (from any session tab)' },
+                { keys: ['Alt', 'Shift', 'PageDown'], description: 'Go to the message input (chat tab)' },
+                { keys: ['Alt', 'Shift', 'PageUp'], description: 'Go to the open pending request — or, from the message input on a hybrid session, the Claude CLI terminal (chat tab)' },
+                { keys: ['Alt', 'Shift', 'T'], description: 'Toggle between the Claude CLI terminal and the message input — hybrid sessions only (from any session tab)' },
+                { keys: ['Alt', 'Shift', 'H'], description: 'Toggle hybrid mode on a Claude session, where it can be toggled (from any session tab)' },
                 { keys: ['Quick triple Esc'], description: 'Emergency stop of the running process' },
             ]
         },

@@ -107,12 +107,23 @@ const FOCUSABLE_SELECTOR = 'a[href], button, input:not([type="hidden"]), textare
     + '[tabindex]:not([tabindex="-1"])'
 let wantsFocus = false
 function focusBodyNow() {
-    nextTick(() => {
+    // Retry: the caller may invoke this right after a cross-tab navigation
+    // (Alt+Shift+PageUp from another session tab), where the chat panel is still
+    // display:none on the first try and focus() is a no-op — keep trying until it
+    // lands inside the form or the budget runs out (~0.5s).
+    let tries = 12
+    const attempt = () => {
         const root = rootRef.value
-        if (!root) return
-        const target = root.querySelector('.auto-focused') || root.querySelector(FOCUSABLE_SELECTOR)
-        target?.focus?.()
-    })
+        if (root) {
+            const target = root.querySelector('.auto-focused') || root.querySelector(FOCUSABLE_SELECTOR)
+            if (target) {
+                target.focus()
+                if (root.contains(document.activeElement)) return
+            }
+        }
+        if (tries-- > 0) setTimeout(attempt, 40)
+    }
+    nextTick(attempt)
 }
 function requestFocus() {
     if (isMinimized.value) wantsFocus = true
