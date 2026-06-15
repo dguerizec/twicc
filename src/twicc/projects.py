@@ -144,14 +144,22 @@ def ensure_project_directory(project_id: str, cwd: str) -> None:
     ensure_project_git_root(project_id, cwd)
 
 
-def ensure_project_git_root(project_id: str, directory: str | None = None) -> None:
+def ensure_project_git_root(project_id: str, directory: str | None = None) -> str | None:
     """
     Resolve and store git_root for a project.
 
     Called:
     - At sync_all (startup) for all projects with a directory
+    - At project registration, once a directory is known (register_project_db_only)
     - When project.directory changes (from ensure_project_directory)
     - When a session gets git info but project.git_root is still None
+
+    Returns the resolved git_root (``None`` when the directory backs no git
+    repository, or is unknown) — even when no DB write was needed — so a caller
+    holding the ``Project`` instance can mirror it onto the in-memory row: the
+    write here is a bare ``UPDATE`` that does not touch the instance, so a
+    serialiser running off the returned object would otherwise report a stale
+    ``git_root``.
 
     Args:
         project_id: The project ID
@@ -163,16 +171,16 @@ def ensure_project_git_root(project_id: str, directory: str | None = None) -> No
             try:
                 directory = Project.objects.values_list('directory', flat=True).get(id=project_id)
             except Project.DoesNotExist:
-                return
+                return None
         if not directory:
-            return
+            return None
 
     result = resolve_git_from_path(directory, use_cache=False)
     git_root = result[0] if result else None
 
     # Check if update needed
     if _project_git_roots.get(project_id) == git_root:
-        return
+        return git_root
 
     # Update DB now; refresh the cache only once the surrounding transaction
     # commits, so a rollback never leaves the cache ahead of the DB (the
@@ -180,6 +188,7 @@ def ensure_project_git_root(project_id: str, directory: str | None = None) -> No
     # write). on_commit runs immediately when there is no active transaction.
     Project.objects.filter(id=project_id).update(git_root=git_root)
     transaction.on_commit(lambda: _project_git_roots.update({project_id: git_root}))
+    return git_root
 
 
 # =============================================================================
@@ -291,8 +300,14 @@ def register_project_db_only(
     instead of the filesystem detection of :func:`ensure_worktree_link`.
 
     Returns ``(project, was_just_created, adopted_directory)`` and runs **no**
-    side effects — no ``project_added`` broadcast, no workspace auto-add — so
-    it is safe to call from inside a ``transaction.atomic()`` block.
+    async side effects — no ``project_added`` broadcast, no workspace auto-add
+    — so it is safe to call from inside a ``transaction.atomic()`` block. It
+    does resolve ``git_root`` when the directory is first established here (a
+    plain DB write, like the directory adoption below, mirrored onto the
+    returned instance) so a never-synced git repo registered via the RPC/API
+    drop-request exposes its repo root immediately, instead of staying
+    ``git_root=None`` until the next startup sync re-resolves it — the
+    worktree-creation affordance and the Git tab both gate on ``git_root``.
 
     Callers that need the side effects must run them themselves once the
     surrounding transaction has committed: broadcast ``project_added`` when
@@ -318,6 +333,14 @@ def register_project_db_only(
         # get_or_create defaults don't apply to a pre-existing row (lost race).
         project.worktree_of_id = worktree_of_id
         project.save(update_fields=["worktree_of"])
+    # Resolve git_root exactly when the directory is first established (row
+    # created, or a directory-less row just adopted one) — not on every
+    # re-registration of an existing project, whose git_root only changes when
+    # its directory does (handled by ensure_project_directory). The bare UPDATE
+    # in ensure_project_git_root leaves the instance untouched, so mirror the
+    # resolved value back onto it for the caller's broadcast / response.
+    if directory and (created or adopted):
+        project.git_root = ensure_project_git_root(project_id, directory)
     return project, created, adopted
 
 
