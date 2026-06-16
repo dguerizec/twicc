@@ -69,6 +69,8 @@ const prevChangeButtonId = useId()
 const nextChangeButtonId = useId()
 const markdownPreviewButtonId = useId()
 const svgPreviewButtonId = useId()
+const htmlPreviewButtonId = useId()
+const htmlPreviewReloadButtonId = useId()
 const viewInFilesButtonId = useId()
 const searchButtonId = useId()
 const editSwitchId = useId()
@@ -172,6 +174,46 @@ onBeforeUnmount(() => {
         URL.revokeObjectURL(_svgBlobUrl)
         _svgBlobUrl = null
     }
+})
+
+// --- HTML preview state ---
+const isHtmlFile = computed(() => {
+    if (!props.filePath) return false
+    return /\.html?$/i.test(props.filePath)
+})
+const showHtmlPreview = ref(false)
+// Bumped to force the preview <iframe> to reload. The iframe renders the file
+// as served from disk (the raw endpoint), not the editor buffer, so unsaved
+// edits are reflected only after saving and reloading.
+const htmlPreviewReloadKey = ref(0)
+
+// base64url-encode a string (unicode-safe) for the standalone raw URL's
+// confinement-root path segment.
+function base64UrlEncode(str) {
+    const bytes = new TextEncoder().encode(str)
+    let binary = ''
+    for (const byte of bytes) binary += String.fromCharCode(byte)
+    return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+}
+
+// URL of the raw-serving endpoint the preview <iframe> points at. The file path
+// lives in the URL *path* (not a query param) so the browser resolves the
+// page's relative CSS/JS/asset references to sibling raw URLs. Project scope
+// uses the project/session prefix; standalone scope (Artifacts tab) carries the
+// confinement root as a base64url path segment.
+const htmlPreviewSrc = computed(() => {
+    if (!props.filePath || !isHtmlFile.value) return null
+    const trailing = props.filePath
+        .replace(/^\/+/, '')
+        .split('/')
+        .map(encodeURIComponent)
+        .join('/')
+    const bust = `?_=${htmlPreviewReloadKey.value}`
+    if (props.projectId) {
+        return `${resolvedApiPrefix.value}/file-raw/${trailing}${bust}`
+    }
+    const rootB64 = base64UrlEncode(props.rootRestriction || '')
+    return `/api/file-raw/${rootB64}/${trailing}${bust}`
 })
 
 // --- Edit mode state ---
@@ -370,6 +412,10 @@ const showImagePreview = computed(() => {
 const showHeader = computed(() => {
     if (props.diffMode) return !!props.filePath
     if (isBinary.value) return false
+    // HTML previews render in an <iframe> independent of the source fetch, so
+    // keep the toolbar (preview/source toggle, reload) reachable right away —
+    // even if the source content hasn't loaded (or failed to load).
+    if (isHtmlFile.value) return !!props.filePath
     return !!props.filePath && hasLoadedOnce.value
 })
 
@@ -385,6 +431,9 @@ const canEdit = computed(() =>
 // These overlay on top of the editor area.
 const showOverlay = computed(() => {
     if (!props.filePath) return false
+    // The HTML preview <iframe> loads independently of the source fetch; never
+    // cover it with the source loading spinner / fetch error placeholder.
+    if (showHtmlPreview.value && isHtmlFile.value) return false
     if (loading.value) return true
     if (error.value) return true
     if (isBinary.value && !imageSrc.value) return true  // non-image binary
@@ -490,6 +539,7 @@ watch(() => props.filePath, async (newPath) => {
     isEditing.value = false
     showMarkdownPreview.value = props.previewByDefault && isMarkdownFile.value
     showSvgPreview.value = props.previewByDefault && isSvgFile.value
+    showHtmlPreview.value = props.previewByDefault && isHtmlFile.value
 
     // In diff mode, content is passed via props — don't fetch.
     if (props.diffMode) {
@@ -529,6 +579,7 @@ function setEditing(enabled) {
         isEditing.value = true
         showMarkdownPreview.value = false  // exit preview when entering edit mode
         showSvgPreview.value = false       // exit SVG preview when entering edit mode
+        showHtmlPreview.value = false      // exit HTML preview when entering edit mode
         saveError.value = null
     } else {
         // Revert silently when leaving edit mode
@@ -606,6 +657,14 @@ function toggleMarkdownPreview() {
 
 function toggleSvgPreview() {
     showSvgPreview.value = !showSvgPreview.value
+}
+
+function toggleHtmlPreview() {
+    showHtmlPreview.value = !showHtmlPreview.value
+}
+
+function reloadHtmlPreview() {
+    htmlPreviewReloadKey.value++
 }
 
 async function save() {
@@ -847,7 +906,7 @@ function goToNextDiff() {
             <div class="header-right">
                 <wa-spinner v-if="switching" class="header-spinner"></wa-spinner>
                 <wa-switch
-                    v-if="!showMarkdownPreview && !showSvgPreview"
+                    v-if="!showMarkdownPreview && !showSvgPreview && !showHtmlPreview"
                     :checked="wordWrap"
                     size="small"
                     @change="onWordWrapToggle"
@@ -885,6 +944,34 @@ function goToNextDiff() {
                     <wa-icon name="eye"></wa-icon>
                 </wa-button>
                 <AppTooltip :for="svgPreviewButtonId">Toggle SVG preview</AppTooltip>
+                <!-- HTML preview toggle: shown for .html files when not editing.
+                     Excluded in diff mode (Git tab): a preview of the working-tree
+                     file would not reflect the diff being viewed. -->
+                <wa-button
+                    v-if="isHtmlFile && !isEditing && !diffMode"
+                    size="small"
+                    variant="neutral"
+                    :appearance="showHtmlPreview ? 'filled' : 'outlined'"
+                    :id="htmlPreviewButtonId"
+                    class="reduced-height"
+                    @click="toggleHtmlPreview"
+                >
+                    <wa-icon name="eye"></wa-icon>
+                </wa-button>
+                <AppTooltip :for="htmlPreviewButtonId">Toggle HTML preview</AppTooltip>
+                <!-- Reload the rendered HTML (reflects the file as saved on disk) -->
+                <wa-button
+                    v-if="isHtmlFile && showHtmlPreview && !isEditing && !diffMode"
+                    size="small"
+                    variant="neutral"
+                    appearance="outlined"
+                    :id="htmlPreviewReloadButtonId"
+                    class="reduced-height"
+                    @click="reloadHtmlPreview"
+                >
+                    <wa-icon name="arrows-rotate"></wa-icon>
+                </wa-button>
+                <AppTooltip :for="htmlPreviewReloadButtonId">Reload preview</AppTooltip>
             </div>
         </div>
 
@@ -908,6 +995,19 @@ function goToNextDiff() {
                 />
             </div>
 
+            <!-- HTML preview (when toggled on for .html files). The iframe loads
+                 the file from the raw endpoint so the page's relative CSS/JS/asset
+                 references resolve to sibling raw URLs. Sandboxed: scripts run but
+                 top-level navigation, popups and modals are not allowed. -->
+            <iframe
+                v-if="showHtmlPreview && isHtmlFile && htmlPreviewSrc && !diffMode"
+                :key="filePath"
+                :src="htmlPreviewSrc"
+                class="html-preview"
+                sandbox="allow-scripts allow-same-origin allow-forms"
+                title="HTML preview"
+            ></iframe>
+
             <!-- CodeMirror diff editor (diff mode) -->
             <DiffEditor
                 v-if="diffMode && showEditor && !showMarkdownPreview && widthMeasured"
@@ -929,7 +1029,7 @@ function goToNextDiff() {
             <!-- CodeMirror editor — mounted once, never destroyed on file switch -->
             <CodeEditor
                 v-if="!diffMode"
-                v-show="showEditor && !showMarkdownPreview && !showSvgPreview"
+                v-show="showEditor && !showMarkdownPreview && !showSvgPreview && !showHtmlPreview"
                 ref="codeEditorRef"
                 v-model="currentContent"
                 :file-path="filePath"
@@ -1098,6 +1198,17 @@ function goToNextDiff() {
     object-fit: contain;
     touch-action: none;
     margin: auto;
+}
+
+.html-preview {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    border: none;
+    /* Rendered pages assume an opaque page background; force white so
+       transparent/unstyled HTML stays readable in dark mode. */
+    background: white;
 }
 
 .editor-overlay {

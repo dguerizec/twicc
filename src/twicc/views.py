@@ -1658,6 +1658,147 @@ async def standalone_file_content(request):
     return JsonResponse(result)
 
 
+# --- Raw file serving for HTML preview ----------------------------------
+#
+# The Files and Artifacts tabs can render an HTML file inside a sandboxed
+# <iframe>. The iframe needs the file (and its relative CSS/JS/asset siblings)
+# served as raw bytes with a real Content-Type — file-content returns JSON, and
+# session_artifact only allows image extensions. These endpoints fill that gap.
+#
+# Crucially, the file path travels in the URL *path* (not a query parameter) so
+# the browser resolves a page's relative references (``href="style.css"``) to
+# sibling raw URLs. Confinement mirrors the JSON endpoints: project scope uses
+# the project/session allowed dirs (validate_path); standalone scope carries a
+# base64url-encoded confinement root as a path segment (so it, too, survives
+# relative resolution) and reuses validate_standalone_root.
+
+# Content types for the web asset extensions mimetypes may miss or map
+# inconsistently across platforms; everything else falls back to mimetypes.
+_RAW_CONTENT_TYPE_OVERRIDES: dict[str, str] = {
+    ".js": "text/javascript",
+    ".mjs": "text/javascript",
+    ".cjs": "text/javascript",
+    ".css": "text/css",
+    ".html": "text/html",
+    ".htm": "text/html",
+    ".svg": "image/svg+xml",
+    ".json": "application/json",
+    ".map": "application/json",
+    ".wasm": "application/wasm",
+    ".webmanifest": "application/manifest+json",
+}
+
+
+def _guess_raw_content_type(path: str) -> str:
+    import mimetypes
+
+    ext = os.path.splitext(path)[1].lower()
+    if ext in _RAW_CONTENT_TYPE_OVERRIDES:
+        return _RAW_CONTENT_TYPE_OVERRIDES[ext]
+    guessed, _ = mimetypes.guess_type(path)
+    return guessed or "application/octet-stream"
+
+
+def _raw_file_response(normalized_path: str):
+    """Return an inline FileResponse for a regular file, or ``None``.
+
+    ``os.stat`` follows symlinks, so a symlinked target is served only when it
+    resolves to a regular file. Callers are responsible for confinement (the
+    path has already been validated against the allowed root/dirs).
+    """
+    import stat
+
+    from django.http import FileResponse
+
+    try:
+        st = os.stat(normalized_path)
+    except OSError:
+        return None
+    if not stat.S_ISREG(st.st_mode):
+        return None
+    try:
+        fp = open(normalized_path, "rb")
+    except OSError:
+        return None
+    response = FileResponse(
+        fp,
+        content_type=_guess_raw_content_type(normalized_path),
+        as_attachment=False,
+    )
+    # Render with the declared type only — never let the browser sniff a
+    # served asset into something executable in a different context.
+    response["X-Content-Type-Options"] = "nosniff"
+    return response
+
+
+def _normalize_raw_filepath(filepath: str) -> str:
+    """Turn a ``<path:filepath>`` capture into a normalized absolute path."""
+    return os.path.normpath("/" + filepath.lstrip("/"))
+
+
+async def file_raw(request, project_id, filepath, session_id=None):
+    """GET raw file bytes for HTML preview (project / session scope).
+
+    Mounted at ``/api/projects/<id>/file-raw/<path:filepath>`` and the
+    session-scoped variant. Confinement matches :func:`file_content`: the
+    file's directory must be within the project/session allowed base dirs.
+    """
+    from twicc.file_tree import validate_path
+
+    if request.method not in ("GET", "HEAD"):
+        return HttpResponseNotAllowed(["GET", "HEAD"])
+
+    normalized = _normalize_raw_filepath(filepath)
+    _session, _dir_path, error = await sync_to_async(validate_path)(
+        project_id, os.path.dirname(normalized), session_id=session_id
+    )
+    if error:
+        return error
+
+    response = await asyncio.to_thread(_raw_file_response, normalized)
+    if response is None:
+        raise Http404("File not found")
+    return response
+
+
+async def standalone_file_raw(request, root_b64, filepath):
+    """GET raw file bytes for HTML preview (standalone / Artifacts scope).
+
+    Mounted at ``/api/file-raw/<root_b64>/<path:filepath>``. ``root_b64`` is the
+    base64url-encoded confinement root (the Artifacts tab passes the session's
+    artifacts dir). Confinement mirrors :func:`standalone_file_content`.
+    """
+    import base64
+
+    if request.method not in ("GET", "HEAD"):
+        return HttpResponseNotAllowed(["GET", "HEAD"])
+
+    try:
+        padding = "=" * (-len(root_b64) % 4)
+        root = base64.urlsafe_b64decode(root_b64 + padding).decode("utf-8")
+    except (ValueError, UnicodeDecodeError):
+        raise Http404("Invalid preview root")
+    root = os.path.normpath(root) if root else ""
+
+    normalized = _normalize_raw_filepath(filepath)
+    error = validate_standalone_root(normalized, root)
+    if error:
+        return error
+
+    # Defense in depth: after symlink resolution the real path must still live
+    # inside the confinement root.
+    if root:
+        resolved_root = os.path.realpath(root)
+        resolved = os.path.realpath(normalized)
+        if resolved != resolved_root and not resolved.startswith(resolved_root + os.sep):
+            raise Http404("File not found")
+
+    response = await asyncio.to_thread(_raw_file_response, normalized)
+    if response is None:
+        raise Http404("File not found")
+    return response
+
+
 async def _standalone_file_modify(request, action):
     """Shared logic for standalone file rename, delete, move and create operations."""
     from twicc.file_content import create_path, delete_path, move_path, rename_path
