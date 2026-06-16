@@ -25,10 +25,13 @@ import shutil
 import threading
 from collections import defaultdict
 from datetime import datetime, timezone
-from typing import NamedTuple
+from typing import TYPE_CHECKING, NamedTuple
 
 import tantivy
 from tantivy import Filter, Occur, Query, TextAnalyzerBuilder, Tokenizer
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 

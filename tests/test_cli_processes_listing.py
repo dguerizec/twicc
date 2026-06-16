@@ -105,10 +105,10 @@ def test_processes_applies_hidden_filter_before_pagination(project, capsysbinary
 def test_processes_rejects_annotation_without_filiation_scope(project, capsys):
     from twicc.cli import processes as cli_processes
 
-    with pytest.raises(SystemExit) as exc:
+    with pytest.raises(typer.Exit) as exc:
         cli_processes.main(annotation=["role=worker"])
 
-    assert exc.value.code == 1
+    assert exc.value.exit_code == 1
     assert "--annotation on processes listing requires" in capsys.readouterr().err
 
 
