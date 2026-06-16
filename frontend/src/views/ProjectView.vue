@@ -1729,7 +1729,10 @@ function updateSidebarClosedClass(closed) {
                         >
                             Compact view
                         </wa-dropdown-item>
+                        <!-- Multi-select needs Shift/Ctrl modifier clicks, which
+                             have no touch equivalent yet — hide it on touch devices. -->
                         <wa-dropdown-item
+                            v-if="!settingsStore.isTouchDevice"
                             type="checkbox"
                             value="multi-select"
                             :checked="selectionStore.active"
