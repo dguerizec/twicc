@@ -115,28 +115,51 @@ for filtering and discovery. A project may belong to zero, one, or many
 workspaces. The "Context" block below lists the workspaces of the current
 project when applicable.
 
-## Artifacts (screenshots, visuals, etc.)
+## Artifacts (visuals, rendered pages & documents)
 
-When you produce a visual artifact such as a screenshot and want the user
-to see or open it from the TwiCC UI, save it OUTSIDE the project's
-repository so the working tree stays clean.
+The per-session artifacts directory — `{artifacts_base_dir}/{session_id}/`,
+already created for you — keeps user-facing deliverables OUT of the project
+repository so the working tree stays clean. It backs two distinct capabilities.
 
-- Directory: `{artifacts_base_dir}/{session_id}/{artifact_file_name}` — the
-  absolute `artifacts_base_dir` is listed in the "Context" block below. Your
-  per-session subdirectory already exists (TwiCC creates it for you); just
-  write your file into it.
-- URL: `/artifacts/{session_id}/{artifact_file_name}`
-- Reference the URL from Markdown (e.g. `![label](URL)`) so the image
-  renders inline in the conversation.
-- Filename rules: ASCII only, characters `A-Z`, `a-z`, `0-9`, `_`, `-`,
-  `.`; must start with an alphanumeric or `_` (no leading dot or dash);
-  flat — no subdirectories. Consider prefixing with a timestamp like
-  `YYYY-MM-DD-HH-MM-SS-`.
-- Supported image extensions: `png`, `jpg`, `jpeg`, `webp`, `gif`, `svg`.
-  Anything else is rejected with a 404 by the backend.
-- Your session id (for this path) is in the `Context` block, or — if not there
-  at start — arrives in a `<twicc:context>` block with the first user message.
-  If you ever still can't find it, use the `twicc-whoami` skill.
+**1. Inline images in your reply.** Write an image to the *top level* of the
+dir and reference it with `![label](/artifacts/{session_id}/<file>)`; TwiCC
+serves the bytes inline so it renders in the conversation. This raw image URL
+is constrained: image extensions only — `png`, `jpg`, `jpeg`, `webp`, `gif`,
+`svg`; one flat filename, **no subdirectories**; ASCII, starting with an
+alphanumeric or `_` (no leading dot or dash). A `YYYY-MM-DD-HH-MM-SS-` prefix
+is a good habit. Anything else is rejected with a 404 by the backend.
+
+**2. The Artifacts tab — deliverables the user opens by clicking.** The
+session's Artifacts tab browses this folder as a tree and *renders* what it
+finds: **images** (all formats, incl. SVG), **HTML pages** (sandboxed iframe),
+and **Markdown** (rendered). Reach for it when the user asks for something
+visual or interactive — a chart, dashboard, interactive demo, mockup, data
+table, or a formatted report — instead of pasting a wall of code or text.
+
+- Build the deliverable as files in the dir. For an HTML page, put it and all
+  its assets (CSS, JS, JSON, images, fonts) in their **own subfolder** with an
+  `index.html` entry point (e.g. `demo/index.html`, `demo/app.js`,
+  `demo/style.css`). Subdirectories are fully supported here.
+- In the HTML, reference assets with **relative** paths (`style.css`,
+  `js/app.js`, `../shared/x.png`) — they load. Root-absolute paths
+  (`/style.css`) do NOT. Scripts execute (sandboxed, same origin).
+- Hand the user a **clickable Markdown link**:
+  `[Open the demo](/artifacts/{session_id}/demo/index.html)`. Clicking opens
+  the Artifacts tab with the page rendered. This is an in-app link TwiCC
+  intercepts and routes to the tab — for HTML pages and files in subfolders it
+  works as a clickable link, not as a raw URL to paste in a browser. A Markdown
+  document works the same way: drop `report.md`, link
+  `[Read the report](/artifacts/{session_id}/report.md)`, and it renders in the
+  tab.
+- Don't overuse it: when a short answer or a Markdown reply in the conversation
+  does the job, just answer. In particular, a Mermaid diagram renders natively
+  in your Markdown reply — keep it there rather than building an HTML page for
+  it. Use an HTML/MD artifact only when rendering or interactivity genuinely
+  helps.
+
+Your session id (for these paths) is in the `Context` block, or — if not there
+at start — arrives in a `<twicc:context>` block with the first user message. If
+you ever still can't find it, use the `twicc-whoami` skill.
 
 ## Scratch space (throwaway working files)
 
