@@ -89,16 +89,18 @@ function findMatchingRoot(absolutePath, roots) {
  *
  * ``artifactsDir`` (optional) is the viewed session's artifacts directory
  * (``<data_dir>/artifacts/<session_id>``, outside the project). When given, an
- * absolute path under it, or a relative ``(./)?artifacts/<session_id>/<tail>``,
- * resolves to it — so the link opens in the Artifacts tab. A plain relative
- * ``artifacts/<other>`` stays project-relative (a real project ``artifacts/``
- * folder keeps working), since a project tree can't contain a subdir named
- * exactly this session's id.
+ * absolute path under it, a relative ``(./)?artifacts/<session_id>/<tail>``, or
+ * the URL form ``/artifacts/<session_id>/<tail>`` (the artifact-serving URL
+ * path) resolves to it — so the link opens in the Artifacts tab. A plain
+ * relative ``artifacts/<other>`` stays project-relative (a real project
+ * ``artifacts/`` folder keeps working), since a project tree can't contain a
+ * subdir named exactly this session's id.
  *
  * Decision flow:
  *   1. If Vue Router can resolve the href → SPA.
  *   2. Else strip the line suffix and require a file extension; otherwise SPA.
- *   3. Absolute path: artifacts dir first, then the roots; no match → file-broken.
+ *   3. Absolute path: artifacts dir first, then the ``/artifacts/<sid>/`` URL
+ *      form, then the roots; no match → file-broken.
  *   4. Relative path: the session's artifacts subdir first, else anchor to the
  *      cwd-role root (else the first root); if no root is available, file-broken.
  */
@@ -118,6 +120,16 @@ export function classifyHref(href, { router, roots, artifactsDir = null }) {
         // Artifacts live outside the project roots → check that dir first.
         if (artifactsDir && path.startsWith(artifactsDir + '/')) {
             return { kind: 'file', absolutePath: path, lineNum }
+        }
+        // The `/artifacts/<session_id>/<tail>` URL form — the artifact-serving
+        // URL path (e.g. `[x](/artifacts/<sid>/x.html)`) — maps onto the
+        // artifacts dir just like the absolute and relative forms.
+        if (artifactsDir) {
+            const sessionId = artifactsDir.slice(artifactsDir.lastIndexOf('/') + 1)
+            const urlPrefix = `/artifacts/${sessionId}/`
+            if (path.startsWith(urlPrefix)) {
+                return { kind: 'file', absolutePath: `${artifactsDir}/${path.slice(urlPrefix.length)}`, lineNum }
+            }
         }
         if (findMatchingRoot(path, roots)) return { kind: 'file', absolutePath: path, lineNum }
         return { kind: 'file-broken', lineNum }
