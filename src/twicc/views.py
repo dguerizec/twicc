@@ -1727,6 +1727,7 @@ def _raw_file_response(normalized_path: str):
     import stat
 
     from django.http import FileResponse
+    from django.utils.cache import add_never_cache_headers
 
     try:
         st = os.stat(normalized_path)
@@ -1746,6 +1747,18 @@ def _raw_file_response(normalized_path: str):
     # Render with the declared type only — never let the browser sniff a
     # served asset into something executable in a different context.
     response["X-Content-Type-Options"] = "nosniff"
+    # Never cache raw-served files. These back the live HTML preview (an <iframe>
+    # whose page pulls sibling CSS/JS/asset URLs from this same endpoint), and the
+    # agent rewrites those files in place. A cached asset would survive even a hard
+    # reload — the iframe's relative sub-resources don't carry the preview's
+    # cache-bust query — leaving the preview running stale JS/CSS. ``no-store`` +
+    # ``private`` (set by add_never_cache_headers) also stops a fronting CDN/tunnel
+    # (e.g. Cloudflare) from edge-caching by file extension in its default mode.
+    add_never_cache_headers(response)
+    # Belt-and-suspenders for CDN tiers (RFC 9213, honored by Cloudflare/Fastly/
+    # Akamai): a dedicated CDN-layer directive, in case an aggressive edge rule
+    # (e.g. Cloudflare "Cache Everything") would otherwise ignore Cache-Control.
+    response["CDN-Cache-Control"] = "no-store"
     return response
 
 
