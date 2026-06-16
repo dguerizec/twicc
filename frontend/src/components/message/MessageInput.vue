@@ -2141,7 +2141,7 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
     flex-direction: column;
     gap: var(--wa-space-2xs);
     padding: var(--wa-space-s);
-    padding-top: 0;
+    padding-top: calc(var(--wa-focus-ring-width) + var(--wa-focus-ring-offset));
     background: var(--main-header-footer-bg-color);
     container: message-input / inline-size;
     /* Anchor for the floating collapse button. */
