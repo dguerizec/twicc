@@ -1,13 +1,51 @@
 <script setup>
 import { computed } from 'vue'
 import { parseApiErrorString, stripAnthropicDocsUrl } from '../../../../../utils/errorParsing'
+import { useDataStore } from '../../../../../stores/data'
+import { sendWsMessage } from '../../../../../composables/useWebSocket'
+import { generateUUID } from '../../../../../utils/crypto'
+import { getProviderHelpers } from '../../../../../providers'
+import { getParsedContent } from '../../../../../utils/parsedContent'
+import { PROCESS_STATE } from '../../../../../constants'
 
 const props = defineProps({
     data: {
         type: Object,
         required: true
+    },
+    // Context for the recovery affordance. Only meaningful for the terminal
+    // (``isApiErrorMessage``) shape; intermediate retry-progress items never
+    // get an affordance (recoveryMode stays null).
+    projectId: {
+        type: String,
+        default: null
+    },
+    sessionId: {
+        type: String,
+        default: null
+    },
+    lineNum: {
+        type: Number,
+        default: null
     }
 })
+
+const store = useDataStore()
+
+// Image-only messages carry no text to resend; fall back to a minimal nudge so
+// the resumed agent re-answers the attachments it already has in context.
+const RESEND_FALLBACK_TEXT = 'Please continue.'
+
+// Sent to the agent for the 'retry' (mid-turn error) case. The ``<twicc-…>``
+// prefix makes the watcher classify it SYSTEM, so it never surfaces as a user
+// message (same hidden channel as the cron-restart messages); the strip of any
+// injected ``<twicc:context>`` block runs first, so the persisted text still
+// starts with ``<twicc-resume>``. The agent reads the instruction and picks the
+// interrupted turn back up.
+const RESUME_SYSTEM_MESSAGE =
+    '<twicc-resume>You were interrupted by a transient server error before you '
+    + 'could finish your turn. Continue from exactly where you left off — pick '
+    + 'the work back up; do not start over.</twicc-resume>'
 
 /**
  * Extract error info from the "bastard" API error format.
@@ -53,6 +91,101 @@ const errorInfo = computed(() => {
         maxRetries: props.data?.maxRetries
     }
 })
+
+// Recovery affordance — only on a TERMINAL error (isApiErrorMessage) that killed
+// the last turn (never on intermediate retry-progress items, the classic shape
+// with retryAttempt). The store getter picks 'resend' | 'retry' | null and adds
+// the "still the last turn, nothing else in flight" guards.
+const recoveryMode = computed(() =>
+    (props.data?.isApiErrorMessage === true && props.sessionId != null && props.lineNum != null)
+        ? store.apiErrorRecovery(props.sessionId, props.lineNum)
+        : null
+)
+
+/** Text of the user message that drove the failed turn (closest one before
+ *  this api_error). Empty when it is an image-only message or not loaded. */
+function resolveResendText() {
+    const items = store.getSessionItems(props.sessionId)
+    const helpers = getProviderHelpers(store.getSession(props.sessionId)?.provider)
+    for (let i = items.length - 1; i >= 0; i--) {
+        const it = items[i]
+        if (it.line_num >= props.lineNum) continue
+        if (it.kind === 'user_message') {
+            return (helpers?.extractUserMessageText(getParsedContent(it)) || '').trim()
+        }
+    }
+    return ''
+}
+
+/**
+ * Re-drive the failed turn by re-sending its original text only. Attachments
+ * are NOT re-sent: the delivered message (text + images) already lives in the
+ * agent's context — restored from its own JSONL on resume (SDK) or held by the
+ * live CLI (hybrid) — so resending them would only duplicate the images.
+ * Carries the session's CURRENT settings untouched (the backend overwrites the
+ * stored bundle with the payload, so omitting them would reset forced settings
+ * to "use global default"), mirroring the composer / failed-send Retry.
+ */
+function resend() {
+    const session = store.getSession(props.sessionId)
+    const text = resolveResendText() || RESEND_FALLBACK_TEXT
+    const requestId = generateUUID()
+    const payload = {
+        type: 'send_message',
+        session_id: props.sessionId,
+        project_id: props.projectId,
+        provider: session?.provider,
+        text,
+        permission_mode: session?.permission_mode ?? null,
+        selected_model: session?.selected_model ?? null,
+        effort: session?.effort ?? null,
+        thinking_enabled: session?.thinking_enabled ?? null,
+        claude_in_chrome: session?.claude_in_chrome ?? null,
+        fast_mode: session?.fast_mode ?? null,
+        context_max: session?.context_max ?? null,
+        request_id: requestId,
+    }
+    // WebSocket down: keep the error + button, the user can resend later.
+    if (!sendWsMessage(payload)) return
+    store.registerOutgoingSend(props.sessionId, props.projectId, requestId, {
+        text,
+        medias: [],
+        images: [],
+        documents: [],
+    })
+}
+
+/**
+ * Ask the agent to resume a turn that died MID-flight (no clean user message to
+ * re-send). Delivers the system-classified ``<twicc-resume>`` instruction
+ * through the normal send path but WITHOUT an optimistic user bubble — the
+ * message must never surface. Carries the session's current settings untouched
+ * (same reset trap as resend). An optimistic STARTING state hides the button and
+ * gives immediate feedback until the agent's continuation lands.
+ */
+function retry() {
+    const session = store.getSession(props.sessionId)
+    const payload = {
+        type: 'send_message',
+        session_id: props.sessionId,
+        project_id: props.projectId,
+        provider: session?.provider,
+        text: RESUME_SYSTEM_MESSAGE,
+        permission_mode: session?.permission_mode ?? null,
+        selected_model: session?.selected_model ?? null,
+        effort: session?.effort ?? null,
+        thinking_enabled: session?.thinking_enabled ?? null,
+        claude_in_chrome: session?.claude_in_chrome ?? null,
+        fast_mode: session?.fast_mode ?? null,
+        context_max: session?.context_max ?? null,
+    }
+    // WebSocket down: keep the error + button, the user can retry later.
+    if (!sendWsMessage(payload)) return
+    // No optimistic bubble (the <twicc-resume> text must not show). The
+    // optimistic STARTING hides the button at once and shows a spinner until the
+    // real process state arrives; the agent's continuation then replaces it.
+    store.setProcessState(props.sessionId, props.projectId, PROCESS_STATE.STARTING)
+}
 </script>
 
 <template>
@@ -68,6 +201,28 @@ const errorInfo = computed(() => {
                         Retry {{ errorInfo.retryAttempt }}/{{ errorInfo.maxRetries }}
                     </span>
                 </div>
+            </div>
+            <div v-if="recoveryMode" class="recovery-actions">
+                <wa-button
+                    v-if="recoveryMode === 'resend'"
+                    size="small"
+                    variant="danger"
+                    appearance="outlined"
+                    @click="resend"
+                >
+                    <wa-icon slot="start" name="paper-plane"></wa-icon>
+                    Resend your message
+                </wa-button>
+                <wa-button
+                    v-else
+                    size="small"
+                    variant="danger"
+                    appearance="outlined"
+                    @click="retry"
+                >
+                    <wa-icon slot="start" name="rotate-right"></wa-icon>
+                    Retry
+                </wa-button>
             </div>
         </wa-callout>
     </div>
@@ -96,5 +251,11 @@ const errorInfo = computed(() => {
 
 .separator {
     margin: 0 var(--wa-space-2xs);
+}
+
+.recovery-actions {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: var(--wa-space-l);
 }
 </style>

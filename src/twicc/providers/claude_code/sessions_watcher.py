@@ -255,6 +255,24 @@ class ClaudeCodeSessionsWatcher(BaseSessionsWatcher):
                                 command_message = True
                                 continue
                         user_message = True
+                    elif kind == ItemKind.API_ERROR and content:
+                        # Two shapes both classify as API_ERROR: intermediate
+                        # retry progress (type=system, subtype=api_error,
+                        # retryAttempt=N/M) which must NOT end the turn — the CLI
+                        # is still retrying — and the terminal surfaced error
+                        # (isApiErrorMessage=true) shown once retries are
+                        # exhausted or the error is non-retryable. Only the
+                        # terminal one ends the turn: the interactive CLI returns
+                        # to an empty composer but never writes a turn_duration,
+                        # so without this a hybrid agent would stay stuck in
+                        # ASSISTANT_TURN. Sniff then parse.
+                        if '"isApiErrorMessage"' in content:
+                            try:
+                                parsed = orjson.loads(content)
+                            except Exception:
+                                continue
+                            if parsed.get("isApiErrorMessage"):
+                                turn_end = True
                     elif kind == ItemKind.SYSTEM and content:
                         if '"turn_duration"' in content:
                             try:

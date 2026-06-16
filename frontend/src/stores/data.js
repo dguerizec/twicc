@@ -699,6 +699,53 @@ export const useDataStore = defineStore('data', {
         getSessionProvider: (state) => (sessionId) => state.sessions[sessionId]?.provider ?? null,
         getSessionItems: (state) => (sessionId) => state.sessionItems[sessionId] || [],
 
+        /**
+         * What recovery (if any) to offer on a terminal API-error item — returns
+         * ``'resend' | 'retry' | null``:
+         *  - ``'resend'`` — the turn errored at its very start: the displayed
+         *    item RIGHT BEFORE it is a real ``user_message``, so re-send that
+         *    prompt (the original text; attachments are already in context).
+         *  - ``'retry'`` — the error hit MID-turn: the item before it is
+         *    anything else (assistant output, a tool result, …), so there is no
+         *    clean message to re-send — ask the agent to resume the interrupted
+         *    turn instead.
+         *  - ``null`` — a displayed item follows this api_error (not the last
+         *    turn), there is no recoverable predecessor, a send is already in
+         *    flight, or the agent is already starting/working.
+         * Purely DB-derived (survives reload, identical SDK/hybrid). The caller
+         * gates on ``isApiErrorMessage`` (terminal shape) first; intermediate
+         * retry-progress items never reach here.
+         * @param {string} sessionId
+         * @param {number} lineNum - this api_error item's line number
+         */
+        apiErrorRecovery: (state) => (sessionId, lineNum) => {
+            // A send/recovery already in progress (optimistic bubble, failed-send
+            // bubble, or the agent already starting/working) → offer nothing.
+            if (state.localState.optimisticMessages[sessionId]) return null
+            const failed = state.localState.failedSends[sessionId]
+            if (failed && Object.keys(failed).length) return null
+            const procState = state.processStates[sessionId]?.state
+            if (procState === PROCESS_STATE.STARTING || procState === PROCESS_STATE.ASSISTANT_TURN) {
+                return null
+            }
+            const items = state.sessionItems[sessionId]
+            if (!items) return null
+            // Walk the DISPLAYED items (ALWAYS / COLLAPSIBLE — debug-only and
+            // not-yet-computed lines don't count) from the tail: nothing
+            // displayed may follow this api_error, and the displayed item right
+            // before it decides the affordance (user_message → resend, anything
+            // else → retry).
+            for (let i = items.length - 1; i >= 0; i--) {
+                const it = items[i]
+                if (it.display_level !== DISPLAY_LEVEL.ALWAYS
+                    && it.display_level !== DISPLAY_LEVEL.COLLAPSIBLE) continue
+                if (it.line_num > lineNum) return null
+                if (it.line_num === lineNum) continue
+                return it.kind === 'user_message' ? 'resend' : 'retry'
+            }
+            return null
+        },
+
         // Process state getter - returns { state, error?, pending_requests? } or null if no active process
         getProcessState: (state) => (sessionId) => state.processStates[sessionId] || null,
 

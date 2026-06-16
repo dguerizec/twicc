@@ -231,6 +231,9 @@ function toggleJsonView() {
                 <ClaudeCodeApiError
                     v-else-if="kind === 'api_error'"
                     :data="content"
+                    :project-id="projectId"
+                    :session-id="sessionId"
+                    :line-num="lineNum"
                 />
                 <CompactSummary
                     v-else-if="kind === 'compact_summary'"
