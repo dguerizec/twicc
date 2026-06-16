@@ -131,8 +131,9 @@ is a good habit. Anything else is rejected with a 404 by the backend.
 
 **2. The Artifacts tab — deliverables the user opens by clicking.** The
 session's Artifacts tab browses this folder as a tree and *renders* what it
-finds: **images** (all formats, incl. SVG), **HTML pages** (sandboxed iframe),
-and **Markdown** (rendered). Reach for it when the user asks for something
+finds: **images** (all formats, incl. SVG), **PDFs**, **audio/video**, **HTML
+pages** (sandboxed iframe), **Markdown** (rendered), and **Mermaid** diagrams
+(`.mmd`). Reach for it when the user asks for something
 visual or interactive — a chart, dashboard, interactive demo, mockup, data
 table, or a formatted report — instead of pasting a wall of code or text.
 

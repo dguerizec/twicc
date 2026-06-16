@@ -6,6 +6,7 @@ import { useSettingsStore } from '../../stores/settings'
 import { vHighlight } from '../../directives/vHighlight.js'
 import { toast } from '../../composables/useToast'
 import { openMediaPreview } from '../../composables/useMediaPreview'
+import { getMermaid, applyMermaidTheme } from '../../utils/mermaid'
 // Uses the combined version that includes both light and dark
 // Then override with our theme file that uses [data-color-scheme] without media queries
 import 'github-markdown-css/github-markdown.css'
@@ -45,56 +46,6 @@ const rendering = ref(true)
 // Component-level and non-reactive: it lives for the component's lifetime and is
 // rebuilt on remount — matching the "streaming only" scope (no cross-mount cache).
 const renderCache = new Map()
-
-// Lazy-loaded mermaid instance (dynamic import to avoid ~500KB in main bundle)
-let mermaidModule = null
-let mermaidInitialized = false
-
-async function getMermaid() {
-    if (!mermaidModule) {
-        mermaidModule = (await import('mermaid')).default
-    }
-    if (!mermaidInitialized) {
-        mermaidInitialized = true
-        mermaidModule.initialize({
-            startOnLoad: false,
-            theme: 'default',
-            securityLevel: 'loose',
-            // Don't inject the "Syntax error" bomb diagram on parse/render
-            // failures: during streaming, the markdown is re-rendered
-            // repeatedly with an incomplete mermaid block, and mermaid would
-            // leave one orphan div per failed attempt in <body>, piling up
-            // below the app.
-            suppressErrorRendering: true,
-        })
-    }
-    return mermaidModule
-}
-
-// Detect whether a mermaid source already pins a theme — via a `theme:` key in
-// YAML front-matter (--- ... ---) or a `theme` field inside an %%{init: ...}%%
-// directive. When it does, the author's choice is left untouched (same diagram
-// in both light and dark).
-function sourceHasOwnTheme(source) {
-    const fm = source.match(/^\s*---\r?\n([\s\S]*?)\r?\n---/)
-    if (fm && /\btheme\s*:/.test(fm[1])) return true
-    return /%%\{\s*init\s*:[\s\S]*?\btheme\b/i.test(source)
-}
-
-// Make a mermaid source render with the given native theme ('dark' or
-// 'default') by injecting an %%{init: {'theme': ...}}%% directive. The directive
-// overrides the global mermaid config per-diagram, so rendering is stateless (no
-// global re-init race between concurrently rendering blocks) and the SVG is
-// fully determined by (source, theme) — exactly what the render cache keys on.
-// Front-matter must stay at the very start of the source, so when present the
-// directive is inserted right after it; otherwise it is prepended.
-function applyMermaidTheme(source, theme) {
-    if (sourceHasOwnTheme(source)) return source
-    const directive = `%%{init: {'theme': '${theme}'}}%%\n`
-    const fm = source.match(/^\s*---\r?\n[\s\S]*?\r?\n---[ \t]*\r?\n?/)
-    if (fm) return source.slice(0, fm[0].length) + directive + source.slice(fm[0].length)
-    return directive + source
-}
 
 // Render mermaid diagrams found inside a (possibly detached) root node. Replaces
 // each <pre><code class="language-mermaid"> with a <div class="mermaid-diagram">

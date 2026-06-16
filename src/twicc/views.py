@@ -1686,6 +1686,24 @@ _RAW_CONTENT_TYPE_OVERRIDES: dict[str, str] = {
     ".map": "application/json",
     ".wasm": "application/wasm",
     ".webmanifest": "application/manifest+json",
+    # Documents / media the Artifacts tab renders directly (PDF viewer,
+    # <audio>/<video>). Pinned so the right type is served regardless of the
+    # platform's mimetypes database.
+    ".pdf": "application/pdf",
+    ".mp3": "audio/mpeg",
+    ".wav": "audio/wav",
+    ".ogg": "audio/ogg",
+    ".oga": "audio/ogg",
+    ".opus": "audio/ogg",
+    ".m4a": "audio/mp4",
+    ".aac": "audio/aac",
+    ".flac": "audio/flac",
+    ".weba": "audio/webm",
+    ".mp4": "video/mp4",
+    ".m4v": "video/mp4",
+    ".webm": "video/webm",
+    ".ogv": "video/ogg",
+    ".mov": "video/quicktime",
 }
 
 

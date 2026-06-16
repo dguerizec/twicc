@@ -5,6 +5,7 @@ import { useSettingsStore } from '../../stores/settings'
 import { useCommandRegistry } from '../../composables/useCommandRegistry'
 import { usePanZoom } from '../../composables/usePanZoom'
 import MarkdownContent from '../ui/MarkdownContent.vue'
+import MermaidDiagram from '../ui/MermaidDiagram.vue'
 import AppTooltip from '../ui/AppTooltip.vue'
 import CodeEditor from '../editor/CodeEditor.vue'
 import DiffEditor from '../editor/DiffEditor.vue'
@@ -71,6 +72,7 @@ const markdownPreviewButtonId = useId()
 const svgPreviewButtonId = useId()
 const htmlPreviewButtonId = useId()
 const htmlPreviewReloadButtonId = useId()
+const mermaidPreviewButtonId = useId()
 const viewInFilesButtonId = useId()
 const searchButtonId = useId()
 const editSwitchId = useId()
@@ -196,25 +198,44 @@ function base64UrlEncode(str) {
     return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
 }
 
-// URL of the raw-serving endpoint the preview <iframe> points at. The file path
-// lives in the URL *path* (not a query param) so the browser resolves the
-// page's relative CSS/JS/asset references to sibling raw URLs. Project scope
-// uses the project/session prefix; standalone scope (Artifacts tab) carries the
-// confinement root as a base64url path segment.
-const htmlPreviewSrc = computed(() => {
-    if (!props.filePath || !isHtmlFile.value) return null
+// URL of the raw-serving endpoint for the current file. The file path lives in
+// the URL *path* (not a query param) so an <iframe> resolves a page's relative
+// CSS/JS/asset references to sibling raw URLs. Project scope uses the
+// project/session prefix; standalone scope (Artifacts tab) carries the
+// confinement root as a base64url path segment. Used by the HTML, PDF, audio
+// and video previews.
+const rawFileUrl = computed(() => {
+    if (!props.filePath) return null
     const trailing = props.filePath
         .replace(/^\/+/, '')
         .split('/')
         .map(encodeURIComponent)
         .join('/')
-    const bust = `?_=${htmlPreviewReloadKey.value}`
     if (props.projectId) {
-        return `${resolvedApiPrefix.value}/file-raw/${trailing}${bust}`
+        return `${resolvedApiPrefix.value}/file-raw/${trailing}`
     }
     const rootB64 = base64UrlEncode(props.rootRestriction || '')
-    return `/api/file-raw/${rootB64}/${trailing}${bust}`
+    return `/api/file-raw/${rootB64}/${trailing}`
 })
+
+// The HTML preview adds a cache-bust token so the reload button forces a fresh
+// load. Relative-asset resolution drops the query, so siblings are unaffected.
+const htmlPreviewSrc = computed(() => {
+    if (!isHtmlFile.value || !rawFileUrl.value) return null
+    return `${rawFileUrl.value}?_=${htmlPreviewReloadKey.value}`
+})
+
+// --- Mermaid preview state (.mmd / .mermaid — rendered to a pan/zoomable SVG) ---
+const isMermaidFile = computed(() => /\.(?:mmd|mermaid)$/i.test(props.filePath || ''))
+const showMermaidPreview = ref(false)
+
+// --- Binary media (PDF / audio / video) — rendered straight from the raw
+// endpoint, which streams with no size cap. They are binary, need no
+// file-content fetch and have no source view. ---
+const isPdfFile = computed(() => /\.pdf$/i.test(props.filePath || ''))
+const isAudioFile = computed(() => /\.(?:mp3|wav|ogg|oga|opus|m4a|aac|flac|weba)$/i.test(props.filePath || ''))
+const isVideoFile = computed(() => /\.(?:mp4|m4v|webm|ogv|mov)$/i.test(props.filePath || ''))
+const isBinaryMediaFile = computed(() => isPdfFile.value || isAudioFile.value || isVideoFile.value)
 
 // --- Edit mode state ---
 const isEditing = ref(false)
@@ -412,6 +433,9 @@ const showImagePreview = computed(() => {
 const showHeader = computed(() => {
     if (props.diffMode) return !!props.filePath
     if (isBinary.value) return false
+    // Binary media (PDF, audio, video) render as a player with no source view —
+    // no toolbar, like a rendered image.
+    if (isBinaryMediaFile.value) return false
     // HTML previews render in an <iframe> independent of the source fetch, so
     // keep the toolbar (preview/source toggle, reload) reachable right away —
     // even if the source content hasn't loaded (or failed to load).
@@ -540,6 +564,7 @@ watch(() => props.filePath, async (newPath) => {
     showMarkdownPreview.value = props.previewByDefault && isMarkdownFile.value
     showSvgPreview.value = props.previewByDefault && isSvgFile.value
     showHtmlPreview.value = props.previewByDefault && isHtmlFile.value
+    showMermaidPreview.value = props.previewByDefault && isMermaidFile.value
 
     // In diff mode, content is passed via props — don't fetch.
     if (props.diffMode) {
@@ -548,6 +573,18 @@ watch(() => props.filePath, async (newPath) => {
         if (!props.diffReadOnly) {
             checkWritable(newPath)
         }
+        return
+    }
+
+    // Binary media (PDF, audio, video) render straight from the raw endpoint;
+    // skip the file-content fetch — it would read up to its 5 MB cap or error
+    // on larger media, while the player streams from file-raw with no cap.
+    if (isBinaryMediaFile.value) {
+        currentContent.value = ''
+        error.value = null
+        isBinary.value = false
+        loading.value = false
+        switching.value = false
         return
     }
 
@@ -580,6 +617,7 @@ function setEditing(enabled) {
         showMarkdownPreview.value = false  // exit preview when entering edit mode
         showSvgPreview.value = false       // exit SVG preview when entering edit mode
         showHtmlPreview.value = false      // exit HTML preview when entering edit mode
+        showMermaidPreview.value = false   // exit Mermaid preview when entering edit mode
         saveError.value = null
     } else {
         // Revert silently when leaving edit mode
@@ -665,6 +703,10 @@ function toggleHtmlPreview() {
 
 function reloadHtmlPreview() {
     htmlPreviewReloadKey.value++
+}
+
+function toggleMermaidPreview() {
+    showMermaidPreview.value = !showMermaidPreview.value
 }
 
 async function save() {
@@ -906,7 +948,7 @@ function goToNextDiff() {
             <div class="header-right">
                 <wa-spinner v-if="switching" class="header-spinner"></wa-spinner>
                 <wa-switch
-                    v-if="!showMarkdownPreview && !showSvgPreview && !showHtmlPreview"
+                    v-if="!showMarkdownPreview && !showSvgPreview && !showHtmlPreview && !showMermaidPreview"
                     :checked="wordWrap"
                     size="small"
                     @change="onWordWrapToggle"
@@ -972,6 +1014,20 @@ function goToNextDiff() {
                     <wa-icon name="arrows-rotate"></wa-icon>
                 </wa-button>
                 <AppTooltip :for="htmlPreviewReloadButtonId">Reload preview</AppTooltip>
+                <!-- Mermaid preview toggle: shown for .mmd files when not editing.
+                     Excluded in diff mode (Git tab). -->
+                <wa-button
+                    v-if="isMermaidFile && !isEditing && !diffMode"
+                    size="small"
+                    variant="neutral"
+                    :appearance="showMermaidPreview ? 'filled' : 'outlined'"
+                    :id="mermaidPreviewButtonId"
+                    class="reduced-height"
+                    @click="toggleMermaidPreview"
+                >
+                    <wa-icon name="eye"></wa-icon>
+                </wa-button>
+                <AppTooltip :for="mermaidPreviewButtonId">Toggle Mermaid preview</AppTooltip>
             </div>
         </div>
 
@@ -1008,6 +1064,33 @@ function goToNextDiff() {
                 title="HTML preview"
             ></iframe>
 
+            <!-- Mermaid preview (when toggled on for .mmd files) — rendered to a
+                 pan/zoomable SVG, same in-panel interaction as a rendered image. -->
+            <MermaidDiagram
+                v-if="showMermaidPreview && isMermaidFile && !diffMode"
+                :key="filePath"
+                :code="currentContent"
+            />
+
+            <!-- PDF preview — the browser's native PDF viewer in an iframe. -->
+            <iframe
+                v-if="isPdfFile && rawFileUrl && !diffMode"
+                :key="filePath"
+                :src="rawFileUrl"
+                class="pdf-preview"
+                title="PDF preview"
+            ></iframe>
+
+            <!-- Audio preview — native <audio> player streaming from file-raw. -->
+            <div v-if="isAudioFile && rawFileUrl && !diffMode" class="media-preview-container">
+                <audio :key="filePath" :src="rawFileUrl" controls class="audio-preview"></audio>
+            </div>
+
+            <!-- Video preview — native <video> player streaming from file-raw. -->
+            <div v-if="isVideoFile && rawFileUrl && !diffMode" class="media-preview-container">
+                <video :key="filePath" :src="rawFileUrl" controls class="video-preview"></video>
+            </div>
+
             <!-- CodeMirror diff editor (diff mode) -->
             <DiffEditor
                 v-if="diffMode && showEditor && !showMarkdownPreview && widthMeasured"
@@ -1029,7 +1112,7 @@ function goToNextDiff() {
             <!-- CodeMirror editor — mounted once, never destroyed on file switch -->
             <CodeEditor
                 v-if="!diffMode"
-                v-show="showEditor && !showMarkdownPreview && !showSvgPreview && !showHtmlPreview"
+                v-show="showEditor && !showMarkdownPreview && !showSvgPreview && !showHtmlPreview && !showMermaidPreview && !isBinaryMediaFile"
                 ref="codeEditorRef"
                 v-model="currentContent"
                 :file-path="filePath"
@@ -1209,6 +1292,33 @@ function goToNextDiff() {
     /* Rendered pages assume an opaque page background; force white so
        transparent/unstyled HTML stays readable in dark mode. */
     background: white;
+}
+
+.pdf-preview {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    border: none;
+}
+
+.media-preview-container {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    display: flex;
+    padding: var(--wa-space-m);
+}
+
+.audio-preview {
+    margin: auto;
+    width: min(540px, 100%);
+}
+
+.video-preview {
+    margin: auto;
+    max-width: 100%;
+    max-height: 100%;
 }
 
 .editor-overlay {
