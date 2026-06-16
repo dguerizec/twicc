@@ -287,6 +287,11 @@ api-tokens.json
 twicc.lock
 twicc.info.json
 
+# Advisory flock anchors (atomic_json.py) for read-modify-write config files —
+# empty 0-byte sidecars created next to the data-dir JSON files (and so appear
+# in worktrees). Created once, never deleted; their presence is not a held lock.
+*.json.lock
+
 # Agent local files
 CLAUDE.local.md
 AGENTS.local.md
