@@ -393,11 +393,15 @@ def get_process_config(backend_port: int, frontend_port: int) -> dict:
                 #   seed, toggles from Settings keep working normally.
                 # - Skip the Codex marketplace + plugin install (~/.codex/config.toml is global
                 #   and already managed by the main install — worktrees must not race on it).
+                # - Disable the empty-session-dirs janitor: artifacts/ and scratch/ are symlinks
+                #   shared with the main instance, which owns the cleanup (a worktree would
+                #   otherwise prune the shared dirs based on its own, partial DB).
                 **({
                     "TWICC_SESSION_COOKIE": f"sessionid_{backend_port}",
                     "TWICC_NO_CRON_RESTART": "1",
                     "TWICC_AUTO_ENABLE_PROVIDERS": "1",
                     "TWICC_NO_CODEX_PLUGIN": "1",
+                    "TWICC_NO_SESSION_DIRS_CLEANUP": "1",
                 } if is_git_worktree() else {}),
             },
         },
