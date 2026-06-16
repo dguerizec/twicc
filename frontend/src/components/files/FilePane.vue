@@ -229,6 +229,14 @@ const htmlPreviewSrc = computed(() => {
 const isMermaidFile = computed(() => /\.(?:mmd|mermaid)$/i.test(props.filePath || ''))
 const showMermaidPreview = ref(false)
 
+// Whether any preview overlay (Markdown / SVG / HTML / Mermaid) is active.
+// A preview is a read-only rendering, so the editing affordances (Search,
+// Edit toggle, Save/Revert) are irrelevant and hidden while it's on; only the
+// preview "eye" stays reachable to toggle back to the source.
+const isPreviewing = computed(() =>
+    showMarkdownPreview.value || showSvgPreview.value || showHtmlPreview.value || showMermaidPreview.value
+)
+
 // --- Binary media (PDF / audio / video) — rendered straight from the raw
 // endpoint, which streams with no size cap. They are binary, need no
 // file-content fetch and have no source view. ---
@@ -689,16 +697,23 @@ watch(
     { immediate: true },
 )
 
+// Entering a preview leaves edit mode (preview and editing are mutually
+// exclusive). The preview "eye" is disabled while there are unsaved changes,
+// so the buffer is always clean here — no revert needed; the saved content
+// simply sits behind the (read-only) preview overlay.
 function toggleMarkdownPreview() {
     showMarkdownPreview.value = !showMarkdownPreview.value
+    if (showMarkdownPreview.value) isEditing.value = false
 }
 
 function toggleSvgPreview() {
     showSvgPreview.value = !showSvgPreview.value
+    if (showSvgPreview.value) isEditing.value = false
 }
 
 function toggleHtmlPreview() {
     showHtmlPreview.value = !showHtmlPreview.value
+    if (showHtmlPreview.value) isEditing.value = false
 }
 
 function reloadHtmlPreview() {
@@ -707,6 +722,7 @@ function reloadHtmlPreview() {
 
 function toggleMermaidPreview() {
     showMermaidPreview.value = !showMermaidPreview.value
+    if (showMermaidPreview.value) isEditing.value = false
 }
 
 async function save() {
@@ -857,7 +873,7 @@ function goToNextDiff() {
         <div v-if="showHeader" class="header">
             <div class="header-left">
                 <wa-button
-                    v-if="!showMarkdownPreview && !showSvgPreview"
+                    v-if="!isPreviewing"
                     :id="searchButtonId"
                     size="small"
                     variant="neutral"
@@ -881,8 +897,10 @@ function goToNextDiff() {
                     <wa-icon name="folder-open"></wa-icon>
                 </wa-button>
                 <AppTooltip :for="viewInFilesButtonId">View in Files tab</AppTooltip>
-                <!-- Edit controls: hidden in read-only diff mode (commit diffs) -->
-                <template v-if="(!diffMode || !diffReadOnly) && isWritable">
+                <!-- Edit controls: hidden in read-only diff mode (commit diffs),
+                     and while a preview is active (editing the source is a
+                     separate mode from previewing the rendered result). -->
+                <template v-if="(!diffMode || !diffReadOnly) && isWritable && !isPreviewing">
                     <wa-switch
                         :id="editSwitchId"
                         :checked="isEditing"
@@ -948,7 +966,7 @@ function goToNextDiff() {
             <div class="header-right">
                 <wa-spinner v-if="switching" class="header-spinner"></wa-spinner>
                 <wa-switch
-                    v-if="!showMarkdownPreview && !showSvgPreview && !showHtmlPreview && !showMermaidPreview"
+                    v-if="!isPreviewing"
                     :checked="wordWrap"
                     size="small"
                     @change="onWordWrapToggle"
@@ -960,12 +978,15 @@ function goToNextDiff() {
                     class="diff-layout-toggle"
                     @change="onSideBySideToggle"
                 >Side by side</wa-switch>
-                <!-- Markdown preview toggle: shown for .md files when not editing -->
+                <!-- Markdown preview toggle: shown for .md files, including while
+                     editing — but disabled until unsaved changes are saved, since
+                     entering the preview leaves edit mode. -->
                 <wa-button
-                    v-if="isMarkdownFile && !isEditing"
+                    v-if="isMarkdownFile"
                     size="small"
                     variant="neutral"
                     :appearance="showMarkdownPreview ? 'filled' : 'outlined'"
+                    :disabled="isEditing && isDirty"
                     :id="markdownPreviewButtonId"
                     class="reduced-height"
                     @click="toggleMarkdownPreview"
@@ -973,12 +994,14 @@ function goToNextDiff() {
                     <wa-icon name="eye"></wa-icon>
                 </wa-button>
                 <AppTooltip :for="markdownPreviewButtonId">Toggle markdown preview</AppTooltip>
-                <!-- SVG preview toggle: shown for .svg files when not editing -->
+                <!-- SVG preview toggle: shown for .svg files, including while
+                     editing — disabled until unsaved changes are saved. -->
                 <wa-button
-                    v-if="isSvgFile && !isEditing"
+                    v-if="isSvgFile"
                     size="small"
                     variant="neutral"
                     :appearance="showSvgPreview ? 'filled' : 'outlined'"
+                    :disabled="isEditing && isDirty"
                     :id="svgPreviewButtonId"
                     class="reduced-height"
                     @click="toggleSvgPreview"
@@ -986,14 +1009,16 @@ function goToNextDiff() {
                     <wa-icon name="eye"></wa-icon>
                 </wa-button>
                 <AppTooltip :for="svgPreviewButtonId">Toggle SVG preview</AppTooltip>
-                <!-- HTML preview toggle: shown for .html files when not editing.
-                     Excluded in diff mode (Git tab): a preview of the working-tree
-                     file would not reflect the diff being viewed. -->
+                <!-- HTML preview toggle: shown for .html files, including while
+                     editing (disabled until saved). Excluded in diff mode (Git
+                     tab): a preview of the working-tree file would not reflect the
+                     diff being viewed. -->
                 <wa-button
-                    v-if="isHtmlFile && !isEditing && !diffMode"
+                    v-if="isHtmlFile && !diffMode"
                     size="small"
                     variant="neutral"
                     :appearance="showHtmlPreview ? 'filled' : 'outlined'"
+                    :disabled="isEditing && isDirty"
                     :id="htmlPreviewButtonId"
                     class="reduced-height"
                     @click="toggleHtmlPreview"
@@ -1001,9 +1026,10 @@ function goToNextDiff() {
                     <wa-icon name="eye"></wa-icon>
                 </wa-button>
                 <AppTooltip :for="htmlPreviewButtonId">Toggle HTML preview</AppTooltip>
-                <!-- Reload the rendered HTML (reflects the file as saved on disk) -->
+                <!-- Reload the rendered HTML (reflects the file as saved on disk).
+                     Only present while the preview is on, which implies not editing. -->
                 <wa-button
-                    v-if="isHtmlFile && showHtmlPreview && !isEditing && !diffMode"
+                    v-if="isHtmlFile && showHtmlPreview && !diffMode"
                     size="small"
                     variant="neutral"
                     appearance="outlined"
@@ -1014,13 +1040,14 @@ function goToNextDiff() {
                     <wa-icon name="arrows-rotate"></wa-icon>
                 </wa-button>
                 <AppTooltip :for="htmlPreviewReloadButtonId">Reload preview</AppTooltip>
-                <!-- Mermaid preview toggle: shown for .mmd files when not editing.
-                     Excluded in diff mode (Git tab). -->
+                <!-- Mermaid preview toggle: shown for .mmd files, including while
+                     editing (disabled until saved). Excluded in diff mode (Git tab). -->
                 <wa-button
-                    v-if="isMermaidFile && !isEditing && !diffMode"
+                    v-if="isMermaidFile && !diffMode"
                     size="small"
                     variant="neutral"
                     :appearance="showMermaidPreview ? 'filled' : 'outlined'"
+                    :disabled="isEditing && isDirty"
                     :id="mermaidPreviewButtonId"
                     class="reduced-height"
                     @click="toggleMermaidPreview"
