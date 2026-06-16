@@ -69,11 +69,25 @@ onMounted(() => {
     notifySessionViewed(sessionId.value, 'mounted')
     // Listen for tab keyboard shortcuts (dispatched by App.vue)
     window.addEventListener('twicc:tab-shortcut', handleTabShortcut)
+    // Listen for live artifact file changes (dispatched by useWebSocket)
+    window.addEventListener('twicc:artifact-files-changed', handleArtifactFilesChanged)
 })
 
 onBeforeUnmount(() => {
     window.removeEventListener('twicc:tab-shortcut', handleTabShortcut)
+    window.removeEventListener('twicc:artifact-files-changed', handleArtifactFilesChanged)
 })
+
+/**
+ * The ArtifactsWatcher relayed changed file(s) under some session. Forward them
+ * to this session's Artifacts panel for live-refresh, but only when this is the
+ * matching, currently-active session view (avoids churning cached background
+ * instances). Paths are relative to the session artifacts dir.
+ */
+function handleArtifactFilesChanged(e) {
+    if (e.detail?.sessionId !== sessionId.value || !isActive.value) return
+    artifactsPanelRef.value?.onArtifactFilesChanged(e.detail.paths || [])
+}
 
 onActivated(() => {
     isActive.value = true

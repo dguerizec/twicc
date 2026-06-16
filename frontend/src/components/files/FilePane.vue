@@ -225,6 +225,10 @@ const htmlPreviewSrc = computed(() => {
     return `${rawFileUrl.value}?_=${htmlPreviewReloadKey.value}`
 })
 
+// Whether an HTML page is currently shown in the preview iframe (vs the source
+// editor). Exposed so the Artifacts tab can decide to live-reload it.
+const isHtmlPreviewActive = computed(() => isHtmlFile.value && showHtmlPreview.value)
+
 // --- Mermaid preview state (.mmd / .mermaid — rendered to a pan/zoomable SVG) ---
 const isMermaidFile = computed(() => /\.(?:mmd|mermaid)$/i.test(props.filePath || ''))
 const showMermaidPreview = ref(false)
@@ -814,8 +818,10 @@ function scrollToLine(lineNum) {
 // Whether the file content is currently being fetched (initial load or file switch)
 const isLoading = computed(() => loading.value || switching.value)
 
-// Expose dirty state, reload, scrollToLine, and loading state for parent components
-defineExpose({ isDirty, isLoading, reload, scrollToLine })
+// Expose dirty state, reload, scrollToLine, and loading state for parent components.
+// reloadHtmlPreview + isHtmlPreviewActive let the Artifacts tab live-reload a
+// rendered HTML page on disk changes.
+defineExpose({ isDirty, isLoading, reload, scrollToLine, reloadHtmlPreview, isHtmlPreviewActive })
 
 function formatSize(bytes) {
     if (bytes < 1024) return `${bytes} B`

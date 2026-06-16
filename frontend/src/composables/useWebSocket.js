@@ -889,6 +889,17 @@ export function useWebSocket() {
                 }
                 break
             }
+            case 'artifact_files_changed': {
+                // The ArtifactsWatcher relayed file change(s) under a session
+                // whose Artifacts tab is already known. Forward to the matching
+                // SessionView (which filters on its own session_id) so an open
+                // Artifacts tab can live-refresh its tree and reload a rendered
+                // HTML page. Paths are relative to the session's artifacts dir.
+                window.dispatchEvent(new CustomEvent('twicc:artifact-files-changed', {
+                    detail: { sessionId: msg.session_id, paths: msg.paths || [] },
+                }))
+                break
+            }
             case 'session_removed':
                 store.removeSession(msg.session_id)
                 break

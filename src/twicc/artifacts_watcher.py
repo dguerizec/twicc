@@ -13,6 +13,11 @@ reads the set in O(1) via :func:`session_has_artifacts`, and an
 ``artifacts_available`` WebSocket message is broadcast on the false->true
 transition so an already-open session view reveals its Artifacts tab live.
 
+Once a session is known, subsequent changes under its dir are relayed as
+``artifact_files_changed`` messages (carrying the changed paths, relative to
+the session artifacts dir) so an open Artifacts tab can live-refresh its tree
+and reload a rendered HTML page.
+
 Purely filesystem-driven: it never touches the ORM, so it starts immediately
 and runs independently of the initial JSONL sync (mirrors
 :class:`twicc.drop_requests_watcher.DropRequestsWatcher`).
@@ -68,7 +73,7 @@ class ArtifactsWatcher:
     async def start(self) -> None:
         self.directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         # Now that the dir (and any symlink) exists, record its canonical path
-        # too so _session_id_for matches event paths reported either way.
+        # too so _session_rel_for matches event paths reported either way.
         resolved = self.directory.resolve()
         self._roots = [self.directory] if resolved == self.directory else [self.directory, resolved]
         # Start awatch FIRST so artifacts written during the boot scan are not
@@ -105,24 +110,44 @@ class ArtifactsWatcher:
     # ------------------------------------------------------------------
     async def _watch_loop(self) -> None:
         async for changes in awatch(self.directory, stop_event=self._stop):
+            # Group the tick's changes by session id, collecting the POSIX
+            # relative path (within the session dir) of each touched entry.
+            touched: dict[str, set[str]] = {}
             for _change_type, raw_path in changes:
-                session_id = self._session_id_for(raw_path)
-                if session_id is None or session_id in self._sessions:
+                resolved = self._session_rel_for(raw_path)
+                if resolved is None:
                     continue
-                # A change touched a not-yet-known session's subtree. Confirm the
-                # directory is actually non-empty (the change could be a deletion,
-                # or the mkdir of a still-empty session dir) before flipping it on.
-                session_dir = self.directory / session_id
-                if await asyncio.to_thread(_dir_non_empty, session_dir):
-                    self._sessions.add(session_id)
-                    logger.info("[ArtifactsWatcher] artifacts detected for session %s", session_id)
-                    await self._broadcast(session_id)
+                session_id, rel = resolved
+                paths = touched.setdefault(session_id, set())
+                if rel:
+                    paths.add(rel)
 
-    def _session_id_for(self, raw_path: str) -> str | None:
-        """Session id = first path segment under the artifacts root, or None.
+            for session_id, rel_paths in touched.items():
+                if session_id not in self._sessions:
+                    # First sighting of this session's subtree. Confirm the dir is
+                    # actually non-empty (the change could be a deletion, or the
+                    # mkdir of a still-empty session dir) before flipping it on.
+                    # The Artifacts tab fetches the full tree on first open, so the
+                    # transition tick itself does not also relay file changes.
+                    session_dir = self.directory / session_id
+                    if await asyncio.to_thread(_dir_non_empty, session_dir):
+                        self._sessions.add(session_id)
+                        logger.info("[ArtifactsWatcher] artifacts detected for session %s", session_id)
+                        await self._broadcast_available(session_id)
+                    continue
+                # Already-known session: relay the changed files so an open
+                # Artifacts tab can live-refresh (and reload a rendered HTML page).
+                if rel_paths:
+                    await self._broadcast_files_changed(session_id, sorted(rel_paths))
 
-        Tries each known root prefix (the watched path and its canonical target)
-        so it works whether awatch reports link-relative or canonical paths.
+    def _session_rel_for(self, raw_path: str) -> tuple[str, str] | None:
+        """Return ``(session_id, rel)`` for a changed path, or ``None``.
+
+        ``session_id`` is the first path segment under the artifacts root; ``rel``
+        is the POSIX path of the change *within* that session dir (``""`` when the
+        change is the session dir itself). Tries each known root prefix (the
+        watched path and its canonical target) so it works whether awatch reports
+        link-relative or canonical paths.
         """
         p = Path(raw_path)
         for base in self._roots:
@@ -130,14 +155,17 @@ class ArtifactsWatcher:
                 rel = p.relative_to(base)
             except ValueError:
                 continue
-            if rel.parts:
-                return rel.parts[0]
+            parts = rel.parts
+            if not parts:
+                continue
+            return parts[0], "/".join(parts[1:])
         return None
 
     # ------------------------------------------------------------------
-    # Broadcast (false->true transition only)
+    # Broadcasts
     # ------------------------------------------------------------------
-    async def _broadcast(self, session_id: str) -> None:
+    async def _broadcast_available(self, session_id: str) -> None:
+        """Announce the false->true transition (session gained its first artifact)."""
         channel_layer = get_channel_layer()
         if channel_layer is None:
             return
@@ -149,6 +177,24 @@ class ArtifactsWatcher:
                     "type": "artifacts_available",
                     "session_id": session_id,
                     "artifacts_dir": str(get_session_artifacts_dir(session_id)),
+                },
+            },
+        )
+
+    async def _broadcast_files_changed(self, session_id: str, paths: list[str]) -> None:
+        """Relay changed file paths (relative to the session artifacts dir)."""
+        channel_layer = get_channel_layer()
+        if channel_layer is None:
+            return
+        await channel_layer.group_send(
+            "updates",
+            {
+                "type": "broadcast",
+                "data": {
+                    "type": "artifact_files_changed",
+                    "session_id": session_id,
+                    "artifacts_dir": str(get_session_artifacts_dir(session_id)),
+                    "paths": paths,
                 },
             },
         )

@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, watch, nextTick, onMounted, onActivated, onDeactivated } from 'vue'
+import { ref, computed, watch, nextTick, onMounted, onActivated, onDeactivated, onBeforeUnmount } from 'vue'
 import { apiFetch } from '../../utils/api'
 import { useContainerBreakpoint } from '../../composables/useContainerBreakpoint'
 import FileTreePanel from './FileTreePanel.vue'
@@ -402,6 +402,108 @@ async function refresh(hints) {
     filePaneRef.value?.reload()
 }
 
+/**
+ * Refresh the tree in place WITHOUT disturbing the open file or preview.
+ *
+ * Unlike refresh()/fetchTree, this never flips `loading`/`loadedDirectory` to a
+ * transient "reloading" state. That transient is what makes the route-sync watch
+ * (below) clear and then re-reveal the selection, which momentarily nulls the
+ * rendered file path and reloads an open HTML preview iframe. Here we fetch into
+ * a local and swap `tree.value` atomically, so the current selection — and any
+ * rendered HTML page — is left untouched. New files still appear in the tree.
+ */
+async function refreshTreeSoft() {
+    const dirPath = directory.value
+    if (!resolvedApiPrefix.value || !dirPath) return
+    try {
+        const res = await apiFetch(
+            `${resolvedApiPrefix.value}/directory-tree/?path=${encodeURIComponent(dirPath)}${optionsQuery()}`
+        )
+        if (!res.ok) return
+        const data = await res.json()
+        isGit.value = !!data.is_git
+        // Keep loadedDirectory consistent and never touch `loading`, so the
+        // route-sync watch sees a settled tree and re-reveals (never clears).
+        loadedDirectory.value = dirPath
+        tree.value = data
+        if (fileTreePanelRef.value?.isSearching && fileTreePanelRef.value?.searchQuery.trim()) {
+            fileTreePanelRef.value.rerunSearch()
+        }
+    } catch {
+        // Best-effort: leave the existing tree in place on failure.
+    }
+}
+
+// ─── Live artifact changes (Artifacts tab) ───────────────────────────────────
+
+// Pending changed paths (relative to the artifacts root) accumulated across a
+// burst of WebSocket messages, flushed once after a short debounce.
+let pendingArtifactPaths = new Set()
+let artifactFlushTimer = null
+
+/**
+ * Whether a changed file should reload the currently-previewed HTML page. An
+ * HTML page pulls its assets (CSS/JS/images) from its own folder and below, so
+ * reload when the page sits directly at the artifacts root (any change), or when
+ * a changed file shares the page's top-level folder — i.e. the two have a common
+ * ancestor below the artifacts root. Paths are relative to the root (forward
+ * slashes).
+ *
+ * @param {string} renderedRel — the previewed HTML file, relative to the root
+ * @param {string[]} paths — changed files, relative to the root
+ */
+function changeAffectsHtmlPage(renderedRel, paths) {
+    const renderedSegments = renderedRel.split('/')
+    if (renderedSegments.length <= 1) return true  // page at the root → any change
+    const topFolder = renderedSegments[0]
+    return paths.some(p => {
+        const segments = p.split('/')
+        return segments.length > 1 && segments[0] === topFolder
+    })
+}
+
+function flushArtifactChanges() {
+    artifactFlushTimer = null
+    const paths = [...pendingArtifactPaths]
+    pendingArtifactPaths = new Set()
+
+    // Always refresh the tree so new files appear — softly, so it never disturbs
+    // the open file or a rendered HTML preview (see refreshTreeSoft).
+    refreshTreeSoft()
+
+    // Reload the *displayed* content only when the change is relevant to it.
+    const renderedRel = selectedFile.value
+    if (!renderedRel) return
+    if (filePaneRef.value?.isHtmlPreviewActive) {
+        // HTML page: reload the rendered iframe when an asset in its folder changed.
+        if (changeAffectsHtmlPage(renderedRel, paths)) {
+            filePaneRef.value.reloadHtmlPreview()
+        }
+    } else if (paths.includes(renderedRel)) {
+        // Any other displayed file (source, markdown/mermaid preview, image…):
+        // reload only when that exact file itself changed.
+        filePaneRef.value?.reload()
+    }
+}
+
+/**
+ * Live-reload hook for the Artifacts tab, called by SessionView when the backend
+ * relays artifact file change(s) for this session. No-op until the panel has
+ * been opened once (the tree fetches fresh on first open anyway).
+ *
+ * @param {string[]} paths — changed files, relative to the artifacts root
+ */
+function onArtifactFilesChanged(paths) {
+    if (!started.value || !paths?.length) return
+    for (const p of paths) pendingArtifactPaths.add(p)
+    if (artifactFlushTimer) clearTimeout(artifactFlushTimer)
+    artifactFlushTimer = setTimeout(flushArtifactChanges, 250)
+}
+
+onBeforeUnmount(() => {
+    if (artifactFlushTimer) clearTimeout(artifactFlushTimer)
+})
+
 // ─── File selection ──────────────────────────────────────────────────────────
 
 /**
@@ -746,7 +848,7 @@ async function revealFile(absolutePath, { lineNum = null } = {}) {
     return !!found
 }
 
-defineExpose({ revealFile, setRootByPath })
+defineExpose({ revealFile, setRootByPath, onArtifactFilesChanged })
 </script>
 
 <template>
