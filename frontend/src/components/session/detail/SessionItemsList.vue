@@ -195,11 +195,12 @@ const hasAnswerablePendingRequest = computed(() =>
 // ── Footer accordion ─────────────────────────────────────────────────────────
 // At most one of the three footer panels is open: the message input, the hybrid
 // terminal, or the pending-request form. ``openBlock`` is the single source of
-// truth — opening one reduces the others. Closing the terminal or the pending
-// returns to the composer (they displaced it); only collapsing the composer
-// itself reaches the all-minimized 'none' state. Each panel is driven through
-// emit-free imperative setters (expand/collapse, open/close, restore/minimize),
-// so applying the state never loops back into a request.
+// truth — opening one reduces the others. Collapsing the composer or the
+// pending-request form reaches the all-minimized 'none' state (their minimize
+// button opens nothing else); closing the terminal returns to the composer (it
+// displaced it). Each panel is driven through emit-free imperative setters
+// (expand/collapse, open/close, restore/minimize), so applying the state never
+// loops back into a request.
 const openBlock = ref('message-input') // 'message-input' | 'terminal' | 'pending' | 'none'
 
 function applyOpenBlock() {
@@ -220,34 +221,37 @@ function focusBlock(id) {
     else if (id === 'pending') pendingFormRef.value?.requestFocus?.()
 }
 
-// Open a block (the accordion reduces the others). ``focus`` only on user-driven
-// opens — never on a session switch, the initial mount, or an auto-resolve.
+// Open a block (the accordion reduces the others). ``focus`` only when a caller
+// wants the caret moved — never on a session switch or the initial mount.
 function setOpenBlock(id, { focus = false } = {}) {
     openBlock.value = id
     if (focus) focusBlock(id)
 }
 
-// Returning home to the composer (closing the terminal/pending, or a resolve).
-// ``focus`` only on the user-driven path (close), never on an auto-resolve.
+// Returning home to the composer — closing the terminal, or the last pending
+// request resolving. ``focus`` is controlled by the caller.
 function goToComposer(focus = false) {
     setOpenBlock('message-input', { focus })
 }
 
-// The pending form's own minimize button. Collapse it explicitly (not only via
-// the openBlock transition) so it still works when ``openBlock`` is already
-// 'message-input' — in that case setOpenBlock is a no-op, the watcher never
-// fires, and applyOpenBlock would never call minimize(). Defense in depth on top
-// of the mount-time accordion init (the immediate sessionId watch below).
+// The pending form's own minimize button — mirrors the composer's: minimize
+// everything ('none') and open nothing else, so reducing the open block never
+// pops another one up. Collapse it explicitly (not only via the openBlock
+// transition) so it still works in the defensive case where ``openBlock`` is
+// already 'none' — there setOpenBlock is a no-op, the watcher never fires, and
+// applyOpenBlock would never call minimize(). Belt and braces on top of the
+// mount-time accordion init (the immediate sessionId watch below).
 function collapsePendingRequest() {
     pendingFormRef.value?.minimize()
-    goToComposer(true)
+    openBlock.value = 'none'
 }
 
 // A new pending request takes the slot (focus it); resolving the last one
-// returns home (no focus — the agent is now working).
+// returns home to the composer and focuses it, ready for the next message —
+// except on touch devices, where stealing focus pops the on-screen keyboard.
 watch(() => pendingRequest.value?.request_id, (id, oldId) => {
     if (id && id !== oldId) setOpenBlock('pending', { focus: true })
-    else if (!id && oldId && openBlock.value === 'pending') goToComposer()
+    else if (!id && oldId && openBlock.value === 'pending') goToComposer(!settingsStore.isTouchDevice)
 })
 
 // Reset on session switch (this component is reused across sessions). Force a
