@@ -87,14 +87,22 @@ function findMatchingRoot(absolutePath, roots) {
  *       Looks like a file path but does not match any known root; the link
  *       should be rendered as plain text (the caller strips the href).
  *
+ * ``artifactsDir`` (optional) is the viewed session's artifacts directory
+ * (``<data_dir>/artifacts/<session_id>``, outside the project). When given, an
+ * absolute path under it, or a relative ``(./)?artifacts/<session_id>/<tail>``,
+ * resolves to it — so the link opens in the Artifacts tab. A plain relative
+ * ``artifacts/<other>`` stays project-relative (a real project ``artifacts/``
+ * folder keeps working), since a project tree can't contain a subdir named
+ * exactly this session's id.
+ *
  * Decision flow:
  *   1. If Vue Router can resolve the href → SPA.
  *   2. Else strip the line suffix and require a file extension; otherwise SPA.
- *   3. Absolute path: match against the roots; no match → file-broken.
- *   4. Relative path: anchor to the cwd-role root (else the first root); if
- *      no root is available, file-broken.
+ *   3. Absolute path: artifacts dir first, then the roots; no match → file-broken.
+ *   4. Relative path: the session's artifacts subdir first, else anchor to the
+ *      cwd-role root (else the first root); if no root is available, file-broken.
  */
-export function classifyHref(href, { router, roots }) {
+export function classifyHref(href, { router, roots, artifactsDir = null }) {
     if (!href) return { kind: 'spa' }
 
     // The SPA check only runs for absolute hrefs: Vue Router resolves a
@@ -107,8 +115,24 @@ export function classifyHref(href, { router, roots }) {
     if (!looksLikeFilePath(path)) return { kind: 'spa' }
 
     if (path.startsWith('/')) {
+        // Artifacts live outside the project roots → check that dir first.
+        if (artifactsDir && path.startsWith(artifactsDir + '/')) {
+            return { kind: 'file', absolutePath: path, lineNum }
+        }
         if (findMatchingRoot(path, roots)) return { kind: 'file', absolutePath: path, lineNum }
         return { kind: 'file-broken', lineNum }
+    }
+
+    // Relative path. A leading "./" is stripped for the artifacts-prefix match.
+    // "artifacts/<this-session-id>/<tail>" is the only relative form a TwiCC
+    // artifact reference takes; reinterpret it against the artifacts dir.
+    if (artifactsDir) {
+        const sessionId = artifactsDir.slice(artifactsDir.lastIndexOf('/') + 1)
+        const prefix = `artifacts/${sessionId}/`
+        const relative = path.replace(/^\.\//, '')
+        if (relative.startsWith(prefix)) {
+            return { kind: 'file', absolutePath: `${artifactsDir}/${relative.slice(prefix.length)}`, lineNum }
+        }
     }
 
     const cwdRoot = roots.find(r => r.roles?.includes('cwd'))

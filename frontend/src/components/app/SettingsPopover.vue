@@ -230,7 +230,7 @@ const shortcutGroups = computed(() => {
         {
             label: 'Session tabs',
             shortcuts: [
-                { keys: ['Alt', 'Shift', '1–4'], description: 'Jump to tab (Chat, Files, Git, Terminal)' },
+                { keys: ['Alt', 'Shift', '1–6'], description: 'Jump to tab (Chat, Files, Git, Terminal, Artifacts, Orchestration)' },
                 { keys: ['Alt', 'Shift', '←/→'], description: 'Previous / next tab' },
                 { keys: ['Alt', 'Shift', '↑/↓'], description: 'Last visited tab' },
             ]

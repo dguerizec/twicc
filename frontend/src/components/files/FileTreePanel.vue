@@ -58,6 +58,11 @@ const props = defineProps({
         type: String,
         default: null,
     },
+    // Optional display label for the root node (defaults to rootPath itself).
+    rootLabel: {
+        type: String,
+        default: null,
+    },
     searchFn: {
         type: Function,
         default: null,
@@ -1194,6 +1199,7 @@ defineExpose({
                     <FileTree
                         :node="displayTree"
                         :path="rootPath"
+                        :root-label="rootLabel"
                         :project-id="projectId"
                         :session-id="sessionId"
                         :is-root="true"

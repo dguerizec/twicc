@@ -288,6 +288,12 @@ async def run_server(port: int):
     heartbeat_task = asyncio.create_task(heartbeat_loop())
     drop_watcher_task = asyncio.create_task(get_drop_requests_watcher().start())
 
+    # Per-session artifacts presence tracking (powers the session's Artifacts
+    # tab). Filesystem-only, so it starts immediately like the drop watcher —
+    # no dependency on the initial JSONL sync.
+    from twicc.artifacts_watcher import get_artifacts_watcher
+    artifacts_watcher_task = asyncio.create_task(get_artifacts_watcher().start())
+
     # Hybrid CLI sessions: adopt tmux survivors FIRST (their claude outlives
     # TwiCC restarts), then start the hook-events watcher — its boot scan
     # must find the adopted agents so a leftover PermissionRequest of a
@@ -351,6 +357,9 @@ async def run_server(port: int):
 
         logger.info("Stopping drop-requests watcher task...")
         await _cancel_task(drop_watcher_task, "Drop-requests watcher task")
+
+        logger.info("Stopping artifacts watcher task...")
+        await _cancel_task(artifacts_watcher_task, "Artifacts watcher task")
 
         logger.info("Stopping hybrid-hooks watcher task...")
         await _cancel_task(hybrid_hooks_watcher_task, "Hybrid-hooks watcher task")

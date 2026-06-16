@@ -75,7 +75,9 @@ export function buildGitRouteParams({ rootKey, commitRef, filePath }) {
 }
 
 export function clearTabRouteParams(tab, params = {}) {
-    if (tab === 'files') {
+    // Artifacts shares the files route shape (rootKey + filePath); its root is
+    // fixed ('artifacts') but it reuses the same FilesPanel routing plumbing.
+    if (tab === 'files' || tab === 'artifacts') {
         return {
             rootKey: null,
             filePath: null,

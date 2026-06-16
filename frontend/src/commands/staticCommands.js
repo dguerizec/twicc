@@ -600,6 +600,30 @@ export function initStaticCommands(router) {
             },
         },
         {
+            id: 'nav.tab.artifacts',
+            label: 'Switch to Artifacts Tab',
+            icon: 'images',
+            category: 'navigation',
+            // Only sessions that have artifacts on disk expose the tab
+            // (mirrors SessionView's `hasArtifacts`).
+            when: () => {
+                const sessionId = routeSessionId()
+                if (!sessionId) return false
+                return !!data.getSession(sessionId)?.has_artifacts
+            },
+            action: () => {
+                const name = isAllProjectsMode() ? 'projects-session-artifacts' : 'session-artifacts'
+                router.push({
+                    name,
+                    params: clearTabRouteParams('artifacts', {
+                        projectId: route.params.projectId,
+                        sessionId: route.params.sessionId,
+                    }),
+                    query: route.query,
+                })
+            },
+        },
+        {
             id: 'nav.tab.orchestration',
             label: 'Switch to Orchestration Tab',
             icon: 'sitemap',

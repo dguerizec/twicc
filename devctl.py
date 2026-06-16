@@ -138,6 +138,11 @@ SYNCED_CONFIG_FILENAMES = (
 )
 SYNCED_CONFIG_GLOBS = ("*-settings-presets.json",)
 
+# Data-dir subdirectories shared with the main data dir via symlink in worktree
+# mode (see link_shared_dirs_from_main): per-session artifacts and scratch live
+# under the main data dir so a worktree instance reads/writes the same files.
+SHARED_LINK_DIRS = ("artifacts", "scratch")
+
 
 def synced_config_files(base_dir: Path) -> list[Path]:
     """Resolve the user preference files present at the root of base_dir.
@@ -217,6 +222,33 @@ def copy_data_from_main() -> bool:
     return True
 
 
+def link_shared_dirs_from_main() -> None:
+    """Symlink the artifacts/ and scratch/ dirs to the main data directory.
+
+    In worktree mode, point ``<worktree>/artifacts`` and ``<worktree>/scratch``
+    at the main data dir's equivalents so a worktree instance shares the very
+    same per-session artifacts and scratch files as the primary instance (a
+    session's Artifacts tab then works in the worktree without copying gigabytes
+    of screenshots). Paired with ``copy_data_from_main`` — i.e. NOT under
+    ``--empty-db``, which keeps the worktree fully isolated.
+
+    Idempotent and conservative: only creates a link when the worktree path is
+    absent (never clobbers an existing real dir or link), and ensures the
+    main-side target exists first so the link is never dangling.
+    """
+    if DATA_DIR == DEFAULT_DATA_DIR:
+        return  # Not a worktree — main instance owns these dirs directly
+    for name in SHARED_LINK_DIRS:
+        target = DATA_DIR / name           # <worktree>/artifacts
+        # is_symlink() catches a broken link (exists() is False for those).
+        if target.exists() or target.is_symlink():
+            continue  # Leave an existing real dir or link untouched
+        source = DEFAULT_DATA_DIR / name   # ~/.twicc/artifacts
+        source.mkdir(parents=True, exist_ok=True)  # never leave the link dangling
+        os.symlink(source, target, target_is_directory=True)
+        print(f"  Linked {name}/ -> {source}")
+
+
 def clear_local_data() -> None:
     """Delete the local database, search index and user config in the worktree.
 
@@ -247,6 +279,15 @@ def clear_local_data() -> None:
         removed_config.append(config_file.name)
     if removed_config:
         print(f"  Cleared config files: {', '.join(removed_config)}")
+
+    # Remove shared-dir symlinks (artifacts/, scratch/) so the fresh start gets
+    # isolated local dirs. Only unlink a symlink — never delete a real directory
+    # or the shared target's contents.
+    for name in SHARED_LINK_DIRS:
+        target = DATA_DIR / name
+        if target.is_symlink():
+            target.unlink()
+            print(f"  Unlinked {name}/ (was shared with main)")
 
 
 def load_env_file() -> dict[str, str]:
@@ -698,8 +739,12 @@ DATABASE, SEARCH INDEX & CONFIG (WORKTREE MODE):
     database, search index, and user config (settings.json, workspaces.json,
     terminal-config.json, message-snippets.json, seen-tips.json, and the
     *-settings-presets.json bundles) from ~/.twicc/ if no local data exists
-    yet. Infra (.env), logs/, and drop-requests/ are never copied.
-    Use --empty-db to skip the copy and start fresh (clears all of them).
+    yet. It also symlinks artifacts/ and scratch/ to ~/.twicc/ so the worktree
+    shares the same per-session artifact and scratch files as the main instance
+    (the Artifacts tab then works for sessions copied into the worktree).
+    Infra (.env), logs/, and drop-requests/ are never copied.
+    Use --empty-db to skip the copy, drop those symlinks, and start fresh
+    (isolated, empty data).
 
 EXAMPLES:
     uv run ./devctl.py start           # Start both servers
@@ -766,12 +811,14 @@ def main():
 
     if command == "start":
         targets = parse_target(target, processes)
-        # In worktree mode: copy DB + search index + user config from main, or clear all if --empty-db
+        # In worktree mode: copy DB + search index + user config from main (and
+        # symlink the shared artifacts/scratch dirs), or clear all if --empty-db
         if is_git_worktree():
             if empty_db:
                 clear_local_data()
             else:
                 copy_data_from_main()
+                link_shared_dirs_from_main()
         print(f"Starting processes (frontend:{frontend_port}, backend:{backend_port})...")
         for key in targets:
             start(key, processes)
@@ -785,12 +832,14 @@ def main():
 
     elif command == "restart":
         targets = parse_target(target, processes)
-        # In worktree mode: copy DB + search index + user config from main, or clear all if --empty-db
+        # In worktree mode: copy DB + search index + user config from main (and
+        # symlink the shared artifacts/scratch dirs), or clear all if --empty-db
         if is_git_worktree():
             if empty_db:
                 clear_local_data()
             else:
                 copy_data_from_main()
+                link_shared_dirs_from_main()
         print(f"Restarting processes (frontend:{frontend_port}, backend:{backend_port})...")
         for key in targets:
             stop(key, processes)

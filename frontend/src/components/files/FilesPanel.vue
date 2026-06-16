@@ -56,6 +56,25 @@ const props = defineProps({
         type: Array,
         default: null,
     },
+    // Hide the "Root:" section of the options menu — for a single fixed root
+    // (e.g. the Artifacts tab) the selector is pure noise.
+    showRootSelector: {
+        type: Boolean,
+        default: true,
+    },
+    // Display label for the tree's root node. Defaults to the absolute path;
+    // set e.g. "Artifacts" to show a friendly name instead (the real path is
+    // still used for all API calls and path math).
+    rootLabel: {
+        type: String,
+        default: null,
+    },
+    // Open markdown / SVG files directly in their rendered preview (the eye
+    // toggle stays available). Used by the Artifacts tab.
+    previewByDefault: {
+        type: Boolean,
+        default: false,
+    },
     routeRootKey: {
         default: undefined,
     },
@@ -683,7 +702,15 @@ async function revealFile(absolutePath, { lineNum = null } = {}) {
 
     // scrollToPath handles lazy-loading directories, setting revealedPaths,
     // and scrolling to the target
-    const found = await fileTreePanelRef.value?.scrollToPath(absolutePath)
+    let found = await fileTreePanelRef.value?.scrollToPath(absolutePath)
+
+    // Miss: the target may have just been created (e.g. a fresh artifact) and
+    // not be in the cached tree yet. Refresh the tree once and retry so it lists
+    // and loads correctly instead of showing a stale "not found".
+    if (!found) {
+        await fetchTree(directory.value)
+        found = await fileTreePanelRef.value?.scrollToPath(absolutePath)
+    }
 
     // Check if the file is already selected (same path) — will need a reload
     const alreadySelected = selectedAbsPath.value === absolutePath
@@ -745,6 +772,7 @@ defineExpose({ revealFile, setRootByPath })
                 :loading="loading"
                 :error="error"
                 :root-path="directory"
+                :root-label="rootLabel"
                 :search-fn="doSearch"
                 :lazy-load-fn="lazyLoadDir"
                 :project-id="projectId"
@@ -777,23 +805,26 @@ defineExpose({ revealFile, setRootByPath })
                     >
                         Show git ignored files
                     </wa-dropdown-item>
-                    <wa-divider></wa-divider>
-                    <wa-dropdown-item disabled class="dropdown-header">
-                        Root:
-                    </wa-dropdown-item>
-                    <wa-dropdown-item
-                        v-for="root in availableRoots"
-                        :key="root.key"
-                        type="checkbox"
-                        :value="'root:' + root.key"
-                        :checked="selectedRootKey === root.key"
-                        :data-root-selected="selectedRootKey === root.key ? 'true' : 'false'"
-                        :disabled="missingRoots.has(root.key)"
-                    >
-                        <div>{{ root.label }}</div>
-                        <div class="root-path">{{ root.path }}</div>
-                        <div v-if="missingRoots.has(root.key)" class="root-missing">Directory no longer exists</div>
-                    </wa-dropdown-item>
+                    <!-- Root selector — hidden for a single fixed root (e.g. Artifacts) -->
+                    <template v-if="showRootSelector">
+                        <wa-divider></wa-divider>
+                        <wa-dropdown-item disabled class="dropdown-header">
+                            Root:
+                        </wa-dropdown-item>
+                        <wa-dropdown-item
+                            v-for="root in availableRoots"
+                            :key="root.key"
+                            type="checkbox"
+                            :value="'root:' + root.key"
+                            :checked="selectedRootKey === root.key"
+                            :data-root-selected="selectedRootKey === root.key ? 'true' : 'false'"
+                            :disabled="missingRoots.has(root.key)"
+                        >
+                            <div>{{ root.label }}</div>
+                            <div class="root-path">{{ root.path }}</div>
+                            <div v-if="missingRoots.has(root.key)" class="root-missing">Directory no longer exists</div>
+                        </wa-dropdown-item>
+                    </template>
                     <wa-divider></wa-divider>
                 </template>
             </FileTreePanel>
@@ -812,6 +843,7 @@ defineExpose({ revealFile, setRootByPath })
                     :is-draft="isDraft"
                     :api-prefix="resolvedApiPrefix"
                     :root-restriction="rootRestriction"
+                    :preview-by-default="previewByDefault"
                 />
                 <div v-show="!selectedFile" class="panel-placeholder">
                     Select a file

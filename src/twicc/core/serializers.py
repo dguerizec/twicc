@@ -67,9 +67,15 @@ def serialize_session(session):
     is immediately visible even before it's written to the JSONL file.
     """
     from twicc.pending_titles import get_pending_title
+    from twicc.artifacts_watcher import session_has_artifacts
+    from twicc.paths import get_session_artifacts_dir
 
     # Use pending title if available, otherwise use the stored title
     title = get_pending_title(session.id) or session.title
+
+    # O(1) in-memory read of the ArtifactsWatcher set (no I/O — safe here per
+    # the module docstring's "no DB / no I/O" contract).
+    has_artifacts = session_has_artifacts(session.id)
 
     provider_helpers = get_provider_helpers(session.provider)
 
@@ -119,6 +125,13 @@ def serialize_session(session):
         },
         # Whether the session has been compacted at least once
         "compacted": session.compacted,
+        # Per-session artifacts (files under <data_dir>/artifacts/<id>/). The
+        # frontend shows an Artifacts tab when ``has_artifacts`` is true and
+        # mounts it on ``artifacts_dir``. ``has_artifacts`` is monotonic and
+        # flips false->true live via the ``artifacts_available`` WS message;
+        # ``artifacts_dir`` is only sent when present so list payloads stay lean.
+        "has_artifacts": has_artifacts,
+        "artifacts_dir": str(get_session_artifacts_dir(session.id)) if has_artifacts else None,
         # Hidden + spawned tree links (cf. hidden-sessions design spec). The
         # frontend never sees a hidden session via REST (filtered server
         # side); the CLI uses these fields when it explicitly opts into

@@ -877,6 +877,18 @@ export function useWebSocket() {
                 }
                 break
             }
+            case 'artifacts_available': {
+                // The ArtifactsWatcher detected the session's first artifact on
+                // disk. Flip has_artifacts on (monotonic) so an open session view
+                // reveals its Artifacts tab live. Ignored if the session isn't in
+                // the store yet — a later fetch carries has_artifacts via the
+                // serializer.
+                const s = store.getSession(msg.session_id)
+                if (s && !s.has_artifacts) {
+                    store.updateSession({ ...s, has_artifacts: true, artifacts_dir: msg.artifacts_dir })
+                }
+                break
+            }
             case 'session_removed':
                 store.removeSession(msg.session_id)
                 break

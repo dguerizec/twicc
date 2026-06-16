@@ -50,6 +50,12 @@ const props = defineProps({
         type: Boolean,
         default: true,
     },
+    // Auto-enable the markdown / SVG preview when opening such a file (the eye
+    // toggle stays, just defaulted on). Used by the Artifacts tab.
+    previewByDefault: {
+        type: Boolean,
+        default: false,
+    },
     displayPath: {
         type: String,
         default: null,
@@ -478,10 +484,12 @@ watch(() => props.filePath, async (newPath) => {
 
     resetZoom()
 
-    // Reset edit mode and preview modes when switching files
+    // Reset edit mode and preview modes when switching files. previewByDefault
+    // (Artifacts tab) opens md/svg files directly in preview; the eye toggle
+    // still lets the user switch to raw.
     isEditing.value = false
-    showMarkdownPreview.value = false
-    showSvgPreview.value = false
+    showMarkdownPreview.value = props.previewByDefault && isMarkdownFile.value
+    showSvgPreview.value = props.previewByDefault && isSvgFile.value
 
     // In diff mode, content is passed via props — don't fetch.
     if (props.diffMode) {

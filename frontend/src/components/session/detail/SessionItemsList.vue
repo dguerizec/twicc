@@ -1196,9 +1196,13 @@ provide('searchHighlightTerms', searchHighlightTerms)
 const fileLinksRouter = useRouter()
 const openFileInFilesTab = inject('viewFileInFilesTab', null)
 provide('markdownFileLinks', {
+    // artifactsDir lets classifyHref route the session's artifact paths
+    // (absolute, or relative "artifacts/<session_id>/…") to the Artifacts tab
+    // via viewFileInFilesTab. Only set once the session has artifacts.
     classifyHref: (href) => classifyHref(href, {
         router: fileLinksRouter,
         roots: fileRootsFromStore(project.value, session.value, store),
+        artifactsDir: session.value?.artifacts_dir || null,
     }),
     openFile: openFileInFilesTab,
 })

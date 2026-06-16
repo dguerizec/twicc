@@ -52,6 +52,9 @@ const sessionItemsListRef = ref(null)
 // Reference to FilesPanel for cross-tab file reveal
 const filesPanelRef = ref(null)
 
+// Reference to the Artifacts tab's FilesPanel (fixed root = session artifacts dir)
+const artifactsPanelRef = ref(null)
+
 const gitPanelRef = ref(null)
 const terminalPanelRef = ref(null)
 
@@ -114,19 +117,28 @@ onDeactivated(() => {
 
 provide('sessionActive', readonly(isActive))
 
-// ─── Cross-tab file reveal (Git → Files) ─────────────────────────────────────
+// ─── Cross-tab file reveal (Git → Files / Artifacts) ─────────────────────────
 
 /**
- * Switch to the Files tab and reveal a specific file.
- * Provided to descendant components (e.g., FilePane in the Git panel).
- *
- * Before revealing, ensures the Files tab root matches the Git tab's
- * current git directory (handles the case where Files tab was on a
- * non-git root like "Project directory").
+ * Reveal a file in the right tab. A path inside the session's artifacts dir
+ * opens in the Artifacts tab; everything else opens in the Files tab on the
+ * matching root. Provided to descendant components (file links in tool uses,
+ * markdown, patch entries, the Git diff "view in files" button).
  *
  * @param {string} absolutePath — the absolute filesystem path to reveal
  */
 async function viewFileInFilesTab(absolutePath, { lineNum = null } = {}) {
+    // Artifacts live outside the project file roots, in their own tab.
+    // artifactsDir is only set when the session has artifacts (so the tab
+    // exists), which naturally gates this branch.
+    if (artifactsDir.value && absolutePath.startsWith(artifactsDir.value + '/')) {
+        const relativePath = absolutePath.slice(artifactsDir.value.length + 1)
+        navigateInTab('artifacts', buildFilesRouteParams({ rootKey: 'artifacts', filePath: relativePath }))
+        await nextTick()
+        await artifactsPanelRef.value?.revealFile(absolutePath, { lineNum })
+        return
+    }
+
     const project = store.getProject(session.value?.project_id)
     const roots = fileRootsFromStore(project, session.value, store)
     const match = roots.find(r => absolutePath.startsWith(r.path + '/'))
@@ -173,6 +185,12 @@ const filesRouteFilePath = computed(() => {
     const decoded = decodePath(parseRouteString(route.params.filePath))
     return decoded === null ? null : decoded
 })
+// Artifacts tab reuses the files route shape (rootKey + filePath).
+const artifactsRouteRootKey = computed(() => parseRouteString(route.params.rootKey))
+const artifactsRouteFilePath = computed(() => {
+    const decoded = decodePath(parseRouteString(route.params.filePath))
+    return decoded === null ? null : decoded
+})
 const gitRouteRootKey = computed(() => parseRouteString(route.params.rootKey))
 const gitRouteCommitRef = computed(() => parseRouteString(route.params.commitRef))
 const gitRouteFilePath = computed(() => {
@@ -183,6 +201,17 @@ const terminalRouteTermIndex = computed(() => parseRouteTermIndex(route.params.t
 
 // Session data
 const session = computed(() => store.getSession(sessionId.value))
+
+// ─── Artifacts tab ───────────────────────────────────────────────────────────
+// has_artifacts is monotonic (flips false->true once the session's
+// <data_dir>/artifacts/<id>/ dir is non-empty; never reset). The tab browses
+// that fixed dir through the standalone file API (apiPrefix '/api') with a
+// server-side root restriction, exactly like the Files tab otherwise.
+const hasArtifacts = computed(() => !!session.value?.has_artifacts)
+const artifactsDir = computed(() => session.value?.artifacts_dir || null)
+const artifactsExternalRoots = computed(() =>
+    artifactsDir.value ? [{ key: 'artifacts', label: 'Artifacts', path: artifactsDir.value }] : []
+)
 
 // `sessionLoadError` drives the "not found" / "error" fallback in the template:
 // - `null`: still loading, loaded successfully, or redirecting via draft alias
@@ -289,6 +318,7 @@ const activeTabId = computed(() => {
     }
     const name = route.name
     if (name === 'session-files' || name === 'projects-session-files') return 'files'
+    if (name === 'session-artifacts' || name === 'projects-session-artifacts') return 'artifacts'
     if (name === 'session-git' || name === 'projects-session-git') return 'git'
     if (name === 'session-terminal' || name === 'projects-session-terminal') return 'terminal'
     if (name === 'session-orchestration' || name === 'projects-session-orchestration') return 'orchestration'
@@ -313,6 +343,9 @@ const compactTabs = computed(() => {
         tabs.push({ id: 'git', label: 'Git', commentsCount: gitCommentsCount.value })
     }
     tabs.push({ id: 'terminal', label: 'Terminal' })
+    if (hasArtifacts.value) {
+        tabs.push({ id: 'artifacts', label: 'Artifacts' })
+    }
     if (hasSpawnRoot.value) {
         tabs.push({ id: 'orchestration', label: 'Orchestration' })
     }
@@ -332,6 +365,23 @@ watch([activeTabId, hasGitRepo], ([tabId, hasGit]) => {
         if (!isActive.value) return
         if (route.params.sessionId !== sessionId.value) return
         if (!store.getProject(session.value?.project_id)) return
+        router.replace({
+            name: buildSessionBaseRouteName(isAllProjectsMode.value),
+            params: { projectId: filterProjectId.value, sessionId: sessionId.value },
+            query: route.query,
+        })
+    }
+}, { immediate: true })
+
+// Redirect away from the artifacts tab if the session has no artifacts
+// (handles direct URL navigation to /artifacts when none exist yet). Mirrors
+// the git-tab guard; the ``session.value`` check avoids a premature redirect
+// before the session row is loaded.
+watch([activeTabId, hasArtifacts], ([tabId, hasArt]) => {
+    if (tabId === 'artifacts' && !hasArt) {
+        if (!isActive.value) return
+        if (route.params.sessionId !== sessionId.value) return
+        if (!session.value) return
         router.replace({
             name: buildSessionBaseRouteName(isAllProjectsMode.value),
             params: { projectId: filterProjectId.value, sessionId: sessionId.value },
@@ -380,6 +430,12 @@ function onFilesNavigate({ rootKey, filePath, replace }) {
     navigateInTab('files', params, replace ? 'replace' : 'push')
 }
 
+function onArtifactsNavigate({ rootKey, filePath, replace }) {
+    const params = buildFilesRouteParams({ rootKey, filePath })
+    rememberToolTabRoute('artifacts', params)
+    navigateInTab('artifacts', params, replace ? 'replace' : 'push')
+}
+
 function onGitNavigate({ rootKey, commitRef, filePath, replace }) {
     const params = buildGitRouteParams({ rootKey, commitRef, filePath })
     rememberToolTabRoute('git', params)
@@ -392,12 +448,13 @@ function onTerminalNavigate({ termIndex, replace }) {
     navigateInTab('terminal', params, replace ? 'replace' : 'push')
 }
 
-const TOOL_TAB_IDS = ['files', 'git', 'terminal', 'orchestration']
+const TOOL_TAB_IDS = ['files', 'artifacts', 'git', 'terminal', 'orchestration']
 
 // Keep the last granular URL visited for each tool tab so switching away and back
 // restores the previous state instead of resetting the panel to its base route.
 const rememberedToolTabRoutes = {
     files: null,
+    artifacts: null,
     git: null,
     terminal: null,
     // Orchestration has no granular sub-route; kept here so the generic
@@ -410,6 +467,13 @@ function getCurrentToolTabRouteParams(tabId) {
         return buildFilesRouteParams({
             rootKey: filesRouteRootKey.value,
             filePath: filesRouteFilePath.value,
+        })
+    }
+
+    if (tabId === 'artifacts') {
+        return buildFilesRouteParams({
+            rootKey: artifactsRouteRootKey.value,
+            filePath: artifactsRouteFilePath.value,
         })
     }
 
@@ -441,6 +505,8 @@ watch(
         activeTabId,
         filesRouteRootKey,
         filesRouteFilePath,
+        artifactsRouteRootKey,
+        artifactsRouteFilePath,
         gitRouteRootKey,
         gitRouteCommitRef,
         gitRouteFilePath,
@@ -518,6 +584,7 @@ const orderedTabs = computed(() => {
     tabs.push('files')
     if (hasGitRepo.value) tabs.push('git')
     tabs.push('terminal')
+    if (hasArtifacts.value) tabs.push('artifacts')
     if (hasSpawnRoot.value) tabs.push('orchestration')
     return tabs
 })
@@ -542,8 +609,10 @@ watch(activeTabId, (newTabId, oldTabId) => {
     if (oldTabId) pushTabHistory(oldTabId)
 })
 
-// Direct tab mapping: Alt+Shift+{1,2,3,4,5} → fixed tabs (subagents are skipped)
-const DIRECT_TAB_MAP = { 1: 'main', 2: 'files', 3: 'git', 4: 'terminal', 5: 'orchestration' }
+// Direct tab mapping: Alt+Shift+{1..6} → fixed tabs (subagents are skipped).
+// Artifacts (5) and Orchestration (6) are conditional — the handler no-ops when
+// the tab is absent.
+const DIRECT_TAB_MAP = { 1: 'main', 2: 'files', 3: 'git', 4: 'terminal', 5: 'artifacts', 6: 'orchestration' }
 
 // Flag set by keyboard tab navigation to auto-focus the relevant element on tab arrival
 let pendingKeyboardFocus = false
@@ -562,6 +631,7 @@ function handleTabShortcut(event) {
         targetTab = DIRECT_TAB_MAP[index]
         if (!targetTab) return
         if (targetTab === 'git' && !hasGitRepo.value) return
+        if (targetTab === 'artifacts' && !hasArtifacts.value) return
         if (targetTab === 'orchestration' && !hasSpawnRoot.value) return
     } else if (type === 'prev' || type === 'next') {
         const tabs = orderedTabs.value
@@ -1306,6 +1376,14 @@ onBeforeUnmount(() => {
                         >Terminal</wa-button>
 
                         <wa-button
+                            v-if="hasArtifacts"
+                            :appearance="activeTabId === 'artifacts' ? 'outlined' : 'plain'"
+                            :variant="activeTabId === 'artifacts' ? 'brand' : 'neutral'"
+                            size="small"
+                            @click="switchToTabAndCollapse('artifacts')"
+                        >Artifacts</wa-button>
+
+                        <wa-button
                             v-if="hasSpawnRoot"
                             :appearance="activeTabId === 'orchestration' ? 'outlined' : 'plain'"
                             :variant="activeTabId === 'orchestration' ? 'brand' : 'neutral'"
@@ -1416,6 +1494,15 @@ onBeforeUnmount(() => {
                     Terminal
                 </wa-button>
             </wa-tab>
+            <wa-tab v-if="hasArtifacts" slot="nav" panel="artifacts">
+                <wa-button
+                    :appearance="activeTabId === 'artifacts' ? 'outlined' : 'plain'"
+                    :variant="activeTabId === 'artifacts' ? 'brand' : 'neutral'"
+                    size="small"
+                >
+                    Artifacts
+                </wa-button>
+            </wa-tab>
             <wa-tab v-if="hasSpawnRoot" slot="nav" panel="orchestration">
                 <wa-button
                     :appearance="activeTabId === 'orchestration' ? 'outlined' : 'plain'"
@@ -1491,6 +1578,23 @@ onBeforeUnmount(() => {
                     :route-term-index="activeTabId === 'terminal' ? terminalRouteTermIndex : undefined"
                     :active="isActive && activeTabId === 'terminal'"
                     @navigate="onTerminalNavigate"
+                />
+            </wa-tab-panel>
+            <wa-tab-panel v-if="hasArtifacts" name="artifacts">
+                <FilesPanel
+                    ref="artifactsPanelRef"
+                    :project-id="null"
+                    :session-id="null"
+                    :api-prefix="'/api'"
+                    :external-roots="artifactsExternalRoots"
+                    :root-restriction="artifactsDir"
+                    :show-root-selector="false"
+                    root-label="Artifacts"
+                    :preview-by-default="true"
+                    :route-root-key="activeTabId === 'artifacts' ? artifactsRouteRootKey : undefined"
+                    :route-file-path="activeTabId === 'artifacts' ? artifactsRouteFilePath : undefined"
+                    :active="isActive && activeTabId === 'artifacts'"
+                    @navigate="onArtifactsNavigate"
                 />
             </wa-tab-panel>
             <wa-tab-panel v-if="hasSpawnRoot" name="orchestration">

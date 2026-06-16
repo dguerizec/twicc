@@ -65,6 +65,12 @@ const props = defineProps({
         type: Boolean,
         default: false,
     },
+    // Display label for the root node only (defaults to its path). Lets callers
+    // show a friendly name (e.g. "Artifacts") without altering the real path.
+    rootLabel: {
+        type: String,
+        default: null,
+    },
     allOpen: {
         type: Boolean,
         default: false,
@@ -151,7 +157,7 @@ function getCompactableChildren(node) {
 
 const compact = computed(() => {
     if (props.node.type !== 'directory' || props.isRoot || !props.compactFolders) {
-        const displayName = props.isRoot ? props.path : props.node.name
+        const displayName = props.isRoot ? (props.rootLabel || props.path) : props.node.name
         return { displayName, effectiveNode: props.node, effectivePath: props.path }
     }
 

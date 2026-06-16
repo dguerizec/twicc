@@ -478,6 +478,10 @@ const canViewInFilesTab = computed(() => {
     // Use the main session (parent for subagents, self for regular sessions)
     const mainSessionId = props.parentSessionId || props.sessionId
     const mainSession = dataStore.getSession(mainSessionId)
+    // Artifacts dir is outside the project roots — it opens in the Artifacts tab.
+    if (mainSession?.artifacts_dir && target.filePath.startsWith(mainSession.artifacts_dir + '/')) {
+        return true
+    }
     const project = dataStore.getProject(mainSession?.project_id || props.projectId)
     const roots = fileRootsFromStore(project, mainSession, dataStore)
     return roots.some(root => target.filePath.startsWith(root.path + '/'))
