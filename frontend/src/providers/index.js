@@ -117,7 +117,7 @@ const PENDING_REQUEST_SENDERS = {
  * ``responseData`` is provider-specific:
  * - claude_code: { request_type: 'tool_approval' | 'ask_user_question',
  *                  decision?: 'allow' | 'deny', updated_input?, updated_permissions?,
- *                  message?, answers? }
+ *                  message?, action?: 'submit' | 'partial' | 'cancel', answers? }
  * - codex:       { tool_name: 'commandExecution' | 'fileChange' | 'permissions',
  *                  decision?: <string|dict>, permissions?, scope?, strictAutoReview? }
  *

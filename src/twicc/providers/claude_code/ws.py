@@ -149,6 +149,50 @@ async def _clamp_setmode_permissions_for_trust(session_id: str, raw_permissions:
         setmode["mode"] = clamped
 
 
+# Deny message sent when the user cancels an AskUserQuestion. Deliberately different
+# from the native CLI cancel (which hard-interrupts the turn — that surfaces as a
+# "terminated due to error" toast in the GUI): we keep the turn alive, exactly like
+# "partial", and have the agent acknowledge the decline and hand control back. The SDK
+# forwards this verbatim as the tool_result content; a non-empty message also avoids
+# the empty ``is_error`` API rejection.
+_QUESTION_CANCEL_MESSAGE = (
+    "The user chose not to answer these questions. Acknowledge this briefly and ask "
+    "them how they would like to proceed."
+)
+
+
+def _build_clarify_message(questions: list[dict], answers: dict) -> str:
+    """Reproduce Claude Code's native "clarify" tool result for a partially
+    answered ``AskUserQuestion``.
+
+    When the user answers some but not all questions, the Claude Code CLI rejects
+    the tool with this exact text: a fixed preamble telling the agent the user
+    wants to clarify, followed by every question in order with its answer (or
+    ``(No answer provided)``). Matching it verbatim means the agent receives the
+    same signal it would from the native TUI.
+
+    ``questions`` is the original ``input.questions`` list; ``answers`` maps a
+    question's text to the user's answer (absent or empty for unanswered ones).
+    """
+    lines = [
+        "The user wants to clarify these questions.",
+        "    This means they may have additional information, context or questions for you.",
+        "    Take their response into account and then reformulate the questions if appropriate.",
+        "    Start by asking them what they would like to clarify.",
+        "",
+        "    Questions asked:",
+    ]
+    for question in questions:
+        text = question.get("question", "")
+        lines.append(f'- "{text}"')
+        answer = answers.get(text)
+        if answer:
+            lines.append(f"  Answer: {answer}")
+        else:
+            lines.append("  (No answer provided)")
+    return "\n".join(lines)
+
+
 class ClaudeCodeWSHandler:
     """Routes Claude Code-specific WebSocket messages to dedicated handlers.
 
@@ -237,11 +281,17 @@ class ClaudeCodeWSHandler:
             "session_id": "...",
             "request_id": "...",
             "request_type": "ask_user_question",
+            "action": "submit" | "partial" | "cancel",  // default "submit"
             "answers": {
                 "question text": "selected label or free text",
                 ...
             }
         }
+        - "submit"  : every question answered → allow the tool with the answers.
+        - "partial" : some answered → deny with the native "clarify" message
+                      (answered ones listed, the rest "(No answer provided)").
+        - "cancel"  : declined → deny (no interrupt) with a fixed message asking the
+                      agent to acknowledge and ask how to proceed.
         """
         try:
             ensure_provider_running(Provider.CLAUDE_CODE)
@@ -292,6 +342,7 @@ class ClaudeCodeWSHandler:
                 response = PermissionResultDeny(message=message)
 
         elif request_type == "ask_user_question":
+            action = content.get("action", "submit")
             answers = content.get("answers", {})
             # Retrieve the original questions from the matching pending request
             process_info = manager.get_agent_info(session_id)
@@ -307,13 +358,27 @@ class ClaudeCodeWSHandler:
                     request_id, session_id,
                 )
                 return
-            original_input = matching.tool_input
-            response = PermissionResultAllow(
-                updated_input={
-                    "questions": original_input.get("questions", []),
-                    "answers": answers,
-                }
-            )
+            original_questions = matching.tool_input.get("questions", [])
+
+            if action == "cancel":
+                # User declined to answer. Same mechanism as "partial" — a plain deny
+                # (no interrupt) so the agent stays alive and processes the message —
+                # but with a fixed text telling it to acknowledge the decline and ask
+                # how to proceed.
+                response = PermissionResultDeny(message=_QUESTION_CANCEL_MESSAGE)
+            elif action == "partial":
+                # User answered some but not all questions. Deny with the native
+                # "clarify" message so the agent sees the partial answers.
+                response = PermissionResultDeny(
+                    message=_build_clarify_message(original_questions, answers)
+                )
+            else:
+                response = PermissionResultAllow(
+                    updated_input={
+                        "questions": original_questions,
+                        "answers": answers,
+                    }
+                )
 
         else:
             logger.warning(

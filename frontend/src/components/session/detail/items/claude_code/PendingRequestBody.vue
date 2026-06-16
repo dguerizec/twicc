@@ -125,6 +125,10 @@ const emit = defineEmits(['submit'])
 const denyButtonId = useId()
 const approveWithChangesButtonId = useId()
 const approveButtonId = useId()
+const submitQuestionsButtonId = useId()
+const submitQuestionsMenuId = useId()
+const submitPartiallyItemId = useId()
+const cancelQuestionsItemId = useId()
 
 // ============================================================================
 // Tool approval state
@@ -534,13 +538,27 @@ function onModeChange(event) {
 // The questions array from the pending request
 const questions = computed(() => toolInput.value.questions || [])
 
-// Whether the submit button should be enabled (at least one answer per question)
-const canSubmitQuestions = computed(() => {
+// Number of questions that currently have an answer.
+const answeredQuestionCount = computed(() => {
+    let count = 0
     for (let i = 0; i < questions.value.length; i++) {
-        if (!getQuestionAnswer(i)) return false
+        if (getQuestionAnswer(i)) count++
     }
-    return questions.value.length > 0
+    return count
 })
+
+// Full submit requires every question to be answered.
+const canSubmitQuestions = computed(
+    () => questions.value.length > 0 && answeredQuestionCount.value === questions.value.length,
+)
+
+// Partial submit is offered only when some — but not all — questions are answered.
+const canSubmitPartial = computed(
+    () =>
+        questions.value.length > 0 &&
+        answeredQuestionCount.value > 0 &&
+        answeredQuestionCount.value < questions.value.length,
+)
 
 // ============================================================================
 // Tool approval handlers
@@ -818,21 +836,55 @@ function getQuestionAnswer(questionIndex) {
 }
 
 /**
- * Submit all question answers.
- * Builds the answers map (question text -> answer value) and emits 'submit'.
+ * Build the answers map (question text -> answer value), omitting any question
+ * left unanswered.
+ *
+ * @returns {Object} Map of question text to answer value
+ */
+function buildQuestionAnswers() {
+    const answers = {}
+    for (let i = 0; i < questions.value.length; i++) {
+        const answer = getQuestionAnswer(i)
+        if (answer) answers[questions.value[i].question] = answer
+    }
+    return answers
+}
+
+/**
+ * Submit every question answer (full answer).
  */
 function handleSubmitQuestions() {
     if (props.isResponding || !canSubmitQuestions.value) return
-
-    const answers = {}
-    for (let i = 0; i < questions.value.length; i++) {
-        const question = questions.value[i]
-        answers[question.question] = getQuestionAnswer(i)
-    }
-
     emit('submit', {
         request_type: 'ask_user_question',
-        answers,
+        action: 'submit',
+        answers: buildQuestionAnswers(),
+    })
+}
+
+/**
+ * Submit the answered questions while leaving the rest unanswered. Claude is
+ * told the user wants to clarify the remaining questions.
+ */
+function handleSubmitPartial() {
+    if (props.isResponding || !canSubmitPartial.value) return
+    emit('submit', {
+        request_type: 'ask_user_question',
+        action: 'partial',
+        answers: buildQuestionAnswers(),
+    })
+}
+
+/**
+ * Decline the questions entirely. No answers are forwarded; Claude acknowledges
+ * the decline and asks how you'd like to proceed.
+ */
+function handleCancelQuestions() {
+    if (props.isResponding) return
+    emit('submit', {
+        request_type: 'ask_user_question',
+        action: 'cancel',
+        answers: {},
     })
 }
 </script>
@@ -1081,18 +1133,52 @@ function handleSubmitQuestions() {
             </div>
         </div>
 
-        <!-- Submit button -->
+        <!-- Submit (full) + dropdown: Submit partially / Cancel -->
         <div class="pending-request-actions">
-            <wa-button
-                variant="brand"
-                size="small"
-                :disabled="isResponding || !canSubmitQuestions"
-                @click="handleSubmitQuestions"
-            >
-                <wa-spinner v-if="isResponding" slot="start"></wa-spinner>
-                <wa-icon v-else name="paper-plane" variant="classic" slot="start"></wa-icon>
-                Submit
-            </wa-button>
+            <wa-button-group label="Submit answers">
+                <wa-button
+                    :id="submitQuestionsButtonId"
+                    variant="brand"
+                    size="small"
+                    :disabled="isResponding || !canSubmitQuestions"
+                    @click="handleSubmitQuestions"
+                >
+                    <wa-spinner v-if="isResponding" slot="start"></wa-spinner>
+                    <wa-icon v-else name="paper-plane" variant="classic" slot="start"></wa-icon>
+                    Submit
+                </wa-button>
+                <AppTooltip :for="submitQuestionsButtonId">Send your answers. Enabled once every question is answered.</AppTooltip>
+                <wa-dropdown placement="top-end">
+                    <wa-button
+                        :id="submitQuestionsMenuId"
+                        slot="trigger"
+                        variant="brand"
+                        size="small"
+                        :disabled="isResponding"
+                    >
+                        <wa-icon name="chevron-up" label="More submit options" variant="classic"></wa-icon>
+                    </wa-button>
+                    <AppTooltip :for="submitQuestionsMenuId">More options.</AppTooltip>
+                    <wa-dropdown-item
+                        :id="submitPartiallyItemId"
+                        :disabled="isResponding || !canSubmitPartial"
+                        @click="handleSubmitPartial"
+                    >
+                        <wa-icon slot="icon" name="paper-plane" variant="classic"></wa-icon>
+                        Submit partially
+                    </wa-dropdown-item>
+                    <AppTooltip placement="left" :for="submitPartiallyItemId">Send the answers you've given and let Claude ask about the rest.</AppTooltip>
+                    <wa-dropdown-item
+                        :id="cancelQuestionsItemId"
+                        :disabled="isResponding"
+                        @click="handleCancelQuestions"
+                    >
+                        <wa-icon slot="icon" name="ban" variant="classic"></wa-icon>
+                        Cancel
+                    </wa-dropdown-item>
+                    <AppTooltip placement="left" :for="cancelQuestionsItemId">Decline to answer. Claude acknowledges and asks how to proceed.</AppTooltip>
+                </wa-dropdown>
+            </wa-button-group>
         </div>
     </template>
 </template>
