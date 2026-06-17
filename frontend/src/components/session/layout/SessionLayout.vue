@@ -108,10 +108,12 @@ function onOverlaySelect(tabId) {
                 v-if="overlay"
                 :overlay="overlay"
                 :active-tab-id="overlayActive"
+                :dock-of="layout.dockOf"
                 :register-target="registerTarget"
                 :unregister-target="unregisterTarget"
                 @select="onOverlaySelect"
                 @close="layout.closeOverlay()"
+                @place="(id, dest) => layout.place(id, dest)"
             />
         </template>
     </div>

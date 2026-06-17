@@ -3,14 +3,16 @@
 // or are collapsed-to-overlay. Backdrop closes it; the gutter stays visible above. Its body
 // is a Teleport target registered under 'overlay' (only the overlay-active panel targets it).
 import { computed, ref, watchEffect } from 'vue'
+import TabPlacementMenu from './TabPlacementMenu.vue'
 
 const props = defineProps({
     overlay: { type: Object, required: true }, // { edge, rect:{x,y,w,h}, tabs }
     activeTabId: { type: String, default: null },
+    dockOf: { type: Function, required: true }, // tabId -> its current dockId | 'center'
     registerTarget: { type: Function, required: true },
     unregisterTarget: { type: Function, required: true },
 })
-const emit = defineEmits(['select', 'close'])
+const emit = defineEmits(['select', 'close', 'place'])
 
 const bodyRef = ref(null)
 
@@ -39,6 +41,11 @@ function onShow(event) { emit('select', event.detail.name) }
                 <wa-tab v-for="t in overlay.tabs" :key="t.id" slot="nav" :panel="t.id" class="overlay-tab">
                     <wa-icon v-if="t.icon" :name="t.icon" class="overlay-tab-icon"></wa-icon>
                     <span>{{ t.label }}</span>
+                    <TabPlacementMenu
+                        :tab-id="t.id"
+                        :current="dockOf(t.id)"
+                        @place="(dest) => emit('place', t.id, dest)"
+                    />
                 </wa-tab>
                 <wa-button
                     slot="nav"
@@ -66,7 +73,7 @@ function onShow(event) { emit('select', event.detail.name) }
 }
 .layout-overlay {
     position: absolute;
-    z-index: 9;
+    z-index: 11;
     display: flex;
     flex-direction: column;
     overflow: hidden;
