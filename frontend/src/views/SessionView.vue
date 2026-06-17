@@ -96,9 +96,6 @@ function handleArtifactFilesChanged(e) {
 onActivated(() => {
     isActive.value = true
 
-    // Start observing compact tab overflow
-    startCompactTabsObserver()
-
     // Register contextual session commands in the command palette
     registerSessionCommands()
 
@@ -125,9 +122,6 @@ onDeactivated(() => {
     // Without this, the throttle can cause last_viewed_at to be stale (set at navigation time)
     // while last_new_content_at was updated during viewing — making the session appear unread.
     forceNotifySessionViewed(sessionId.value, 'deactivated')
-
-    // Stop observing compact tab overflow
-    stopCompactTabsObserver()
 
     // Unregister contextual session commands from the command palette
     unregisterCommands(SESSION_COMMAND_IDS)
@@ -344,33 +338,6 @@ const activeTabId = computed(() => {
     if (name === 'session-terminal' || name === 'projects-session-terminal') return 'terminal'
     if (name === 'session-orchestration' || name === 'projects-session-orchestration') return 'orchestration'
     return 'main'
-})
-
-// All tabs for the compact header dropdown (includes labels, process state, comment counts)
-const compactTabs = computed(() => {
-    const tabs = [
-        { id: 'main', label: 'Chat', commentsCount: chatCommentsCount.value }
-    ]
-    for (const tab of openSubagentTabs.value) {
-        tabs.push({
-            id: tab.id,
-            label: `Agent "${getAgentTabLabel(tab.agentId)}"`,
-            processState: store.getProcessState(tab.agentId) || null,
-            commentsCount: agentCommentsCount(tab.agentId)
-        })
-    }
-    tabs.push({ id: 'files', label: 'Files', commentsCount: filesCommentsCount.value })
-    if (hasGitRepo.value) {
-        tabs.push({ id: 'git', label: 'Git', commentsCount: gitCommentsCount.value })
-    }
-    tabs.push({ id: 'terminal', label: 'Terminal' })
-    if (hasArtifacts.value) {
-        tabs.push({ id: 'artifacts', label: 'Artifacts' })
-    }
-    if (hasSpawnRoot.value) {
-        tabs.push({ id: 'orchestration', label: 'Orchestration' })
-    }
-    return tabs
 })
 
 // Redirect away from git tab if the session has no git repo
@@ -715,18 +682,6 @@ const centerTargetSetters = Object.fromEntries(
         : unregisterLayoutTarget(`center:${id}`))])
 )
 
-/**
- * Navigate to a tab and collapse the compact header overlay.
- * Used by the compact-mode tab buttons inside the header slot.
- * @param {string} panel
- */
-function switchToTabAndCollapse(panel) {
-    switchToTab(panel)
-    if (sessionHeaderRef.value?.isCompactExpanded) {
-        sessionHeaderRef.value.isCompactExpanded = false
-    }
-}
-
 // ═══════════════════════════════════════════════════════════════════════════
 // Keyboard shortcuts: tab navigation (Alt+Shift+1-4, ←/→, ↑)
 // Events dispatched by App.vue, handled here by the active instance only.
@@ -871,80 +826,6 @@ function onTabShow(event) {
         }
     }
 }
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Compact tab nav: scroll overflow controls
-// (mirrors wa-tab-group's native scroll behavior)
-// ═══════════════════════════════════════════════════════════════════════════
-
-const compactTabScrollArea = ref(null)
-const compactTabsCanScrollStart = ref(false)
-const compactTabsCanScrollEnd = ref(false)
-const compactTabsHasOverflow = ref(false)
-let compactTabsResizeObserver = null
-
-/**
- * Update scroll control visibility based on overflow and current scroll position.
- * - hasOverflow: whether the tab area overflows at all (controls DOM presence)
- * - canScrollStart: whether there is hidden content to the left (controls opacity)
- * - canScrollEnd: whether there is hidden content to the right (controls opacity)
- */
-function updateCompactTabsScrollControls() {
-    const el = compactTabScrollArea.value
-    if (!el) {
-        compactTabsHasOverflow.value = false
-        compactTabsCanScrollStart.value = false
-        compactTabsCanScrollEnd.value = false
-        return
-    }
-    const tolerance = 1 // Same safety margin as wa-tab-group
-    compactTabsHasOverflow.value = el.scrollWidth > el.clientWidth + tolerance
-    compactTabsCanScrollStart.value = el.scrollLeft > tolerance
-    compactTabsCanScrollEnd.value = el.scrollLeft + el.clientWidth < el.scrollWidth - tolerance
-}
-
-/**
- * Scroll the compact tabs by one viewport width in the given direction.
- * @param {'start' | 'end'} direction
- */
-function scrollCompactTabs(direction) {
-    const el = compactTabScrollArea.value
-    if (!el) return
-    const delta = direction === 'start' ? -el.clientWidth : el.clientWidth
-    el.scroll({ left: el.scrollLeft + delta, behavior: 'smooth' })
-}
-
-/**
- * Handle native scroll events on the compact tab area to update arrow visibility.
- */
-function onCompactTabsScroll() {
-    updateCompactTabsScrollControls()
-}
-
-// Start/stop the ResizeObserver + scroll listener with KeepAlive lifecycle
-function startCompactTabsObserver() {
-    nextTick(() => {
-        const el = compactTabScrollArea.value
-        if (!el) return
-        updateCompactTabsScrollControls()
-        el.addEventListener('scroll', onCompactTabsScroll, { passive: true })
-        compactTabsResizeObserver = new ResizeObserver(() => updateCompactTabsScrollControls())
-        compactTabsResizeObserver.observe(el)
-    })
-}
-
-function stopCompactTabsObserver() {
-    compactTabScrollArea.value?.removeEventListener('scroll', onCompactTabsScroll)
-    if (compactTabsResizeObserver) {
-        compactTabsResizeObserver.disconnect()
-        compactTabsResizeObserver = null
-    }
-}
-
-// Recalculate scroll controls when the number of tabs changes
-watch(openSubagentTabs, () => {
-    nextTick(() => updateCompactTabsScrollControls())
-})
 
 /**
  * Close a subagent tab.
@@ -1441,131 +1322,7 @@ onBeforeUnmount(() => {
             ref="sessionHeaderRef"
             :session-id="sessionId"
             mode="session"
-            :tabs="compactTabs"
-            :active-tab-id="activeTabId"
-            @select-tab="switchToTab"
-        >
-            <!-- Compact mode: tab navigation inside the header overlay -->
-            <template #compact-extra>
-                <div class="compact-tab-nav" :class="{ 'has-scroll-controls': compactTabsHasOverflow }">
-                    <!-- Scroll left button (faded when at the start) -->
-                    <wa-button
-                        v-if="compactTabsHasOverflow"
-                        class="compact-tab-scroll compact-tab-scroll-start"
-                        :class="{ 'scroll-disabled': !compactTabsCanScrollStart }"
-                        appearance="plain"
-                        size="small"
-                        :disabled="!compactTabsCanScrollStart"
-                        @click="scrollCompactTabs('start')"
-                    >
-                        <wa-icon name="chevron-left" variant="solid" label="Scroll left"></wa-icon>
-                    </wa-button>
-
-                    <!-- Scrollable tabs container -->
-                    <div class="compact-tab-scroll-area" ref="compactTabScrollArea">
-                        <wa-button
-                            :appearance="activeTabId === 'main' ? 'outlined' : 'plain'"
-                            :variant="activeTabId === 'main' ? 'brand' : 'neutral'"
-                            size="small"
-                            @click="switchToTabAndCollapse('main')"
-                            @dragenter="chatTabDragHover.onDragenter"
-                            @dragleave="chatTabDragHover.onDragleave"
-                            @dragover="chatTabDragHover.onDragover"
-                            @drop="chatTabDragHover.onDrop"
-                            :class="{ 'drag-hover-pending': chatTabDragHover.isPending.value }"
-                        >
-                            Chat
-                            <CodeCommentsIndicator slot="end" :count="chatCommentsCount" :show-tooltip="false" class="tab-comments-indicator" />
-                            <wa-icon
-                                v-if="store.getPendingRequests(sessionId).length > 0"
-                                slot="end"
-                                name="hand"
-                                class="pending-request-indicator"
-                            ></wa-icon>
-                        </wa-button>
-
-                        <wa-button
-                            v-for="tab in openSubagentTabs"
-                            :key="tab.id"
-                            :appearance="activeTabId === tab.id ? 'outlined' : 'plain'"
-                            :variant="activeTabId === tab.id ? 'brand' : 'neutral'"
-                            size="small"
-                            @click="switchToTabAndCollapse(tab.id)"
-                        >
-                            <span class="subagent-tab-content">
-                                <span>Agent "{{ getAgentTabLabel(tab.agentId) }}"</span>
-                                <ProcessIndicator
-                                    v-if="store.getProcessState(tab.agentId)"
-                                    :state="store.getProcessState(tab.agentId).state"
-                                    size="small"
-                                />
-                                <CodeCommentsIndicator :count="agentCommentsCount(tab.agentId)" :show-tooltip="false" class="tab-comments-indicator" />
-                                <span class="tab-close-icon" @click.stop="closeTab(tab.id)">
-                                    <wa-icon name="xmark" label="Close tab"></wa-icon>
-                                </span>
-                            </span>
-                        </wa-button>
-
-                        <wa-button
-                            :appearance="activeTabId === 'files' ? 'outlined' : 'plain'"
-                            :variant="activeTabId === 'files' ? 'brand' : 'neutral'"
-                            size="small"
-                            @click="switchToTabAndCollapse('files')"
-                        >
-                            Files
-                            <CodeCommentsIndicator slot="end" :count="filesCommentsCount" :show-tooltip="false" class="tab-comments-indicator" />
-                        </wa-button>
-
-                        <wa-button
-                            v-if="hasGitRepo"
-                            :appearance="activeTabId === 'git' ? 'outlined' : 'plain'"
-                            :variant="activeTabId === 'git' ? 'brand' : 'neutral'"
-                            size="small"
-                            @click="switchToTabAndCollapse('git')"
-                        >
-                            Git
-                            <CodeCommentsIndicator slot="end" :count="gitCommentsCount" :show-tooltip="false" class="tab-comments-indicator" />
-                        </wa-button>
-
-                        <wa-button
-                            :appearance="activeTabId === 'terminal' ? 'outlined' : 'plain'"
-                            :variant="activeTabId === 'terminal' ? 'brand' : 'neutral'"
-                            size="small"
-                            @click="switchToTabAndCollapse('terminal')"
-                        >Terminal</wa-button>
-
-                        <wa-button
-                            v-if="hasArtifacts"
-                            :appearance="activeTabId === 'artifacts' ? 'outlined' : 'plain'"
-                            :variant="activeTabId === 'artifacts' ? 'brand' : 'neutral'"
-                            size="small"
-                            @click="switchToTabAndCollapse('artifacts')"
-                        >Artifacts</wa-button>
-
-                        <wa-button
-                            v-if="hasSpawnRoot"
-                            :appearance="activeTabId === 'orchestration' ? 'outlined' : 'plain'"
-                            :variant="activeTabId === 'orchestration' ? 'brand' : 'neutral'"
-                            size="small"
-                            @click="switchToTabAndCollapse('orchestration')"
-                        >Orchestration</wa-button>
-                    </div>
-
-                    <!-- Scroll right button (faded when at the end) -->
-                    <wa-button
-                        v-if="compactTabsHasOverflow"
-                        class="compact-tab-scroll compact-tab-scroll-end"
-                        :class="{ 'scroll-disabled': !compactTabsCanScrollEnd }"
-                        appearance="plain"
-                        size="small"
-                        :disabled="!compactTabsCanScrollEnd"
-                        @click="scrollCompactTabs('end')"
-                    >
-                        <wa-icon name="chevron-right" variant="solid" label="Scroll right"></wa-icon>
-                    </wa-button>
-                </div>
-            </template>
-        </SessionHeader>
+        />
 
         <SessionLayout
             v-if="session"
@@ -1976,80 +1733,5 @@ wa-tab::part(base) {
     height: 200px;
     color: var(--wa-color-text-quiet);
     font-size: var(--wa-font-size-l);
-}
-
-/* ═══════════════════════════════════════════════════════════════════════════
-   Compact mode: tab nav inside header overlay
-   ═══════════════════════════════════════════════════════════════════════════ */
-
-/* Hidden by default on large viewports */
-.compact-tab-nav {
-    display: none;
-}
-
-@media (max-height: 900px) {
-    /* Hide the real tab-group nav in compact mode */
-    .session-tabs::part(nav) {
-        display: none;
-    }
-
-    /* Show the compact tab nav inside the header overlay */
-    .compact-tab-nav {
-        display: flex;
-        align-items: center;
-        position: relative;
-        padding-inline: var(--wa-space-xs);
-        padding-bottom: var(--wa-space-xs);
-    }
-
-    /* When overflowing, add padding on both sides for the scroll arrows */
-    .compact-tab-nav.has-scroll-controls {
-        padding-inline: calc(var(--wa-space-xs) + 1.5em);
-    }
-
-    /* Scrollable area: horizontal scroll with hidden scrollbar */
-    .compact-tab-scroll-area {
-        display: flex;
-        gap: var(--wa-space-2xs);
-        overflow-x: auto;
-        scrollbar-width: none; /* Firefox */
-        flex: 1;
-        min-width: 0;
-    }
-
-    .compact-tab-scroll-area::-webkit-scrollbar {
-        height: 0; /* Chrome/Safari */
-    }
-
-    /* Prevent tabs from shrinking */
-    .compact-tab-scroll-area > wa-button {
-        flex-shrink: 0;
-    }
-
-    /* Scroll arrow buttons — same style as wa-tab-group */
-    .compact-tab-scroll {
-        position: absolute;
-        top: 0;
-        bottom: 0;
-        width: 1.5em;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        z-index: 1;
-        transition: opacity 0.15s ease;
-    }
-
-    .compact-tab-scroll.scroll-disabled {
-        opacity: 0;
-        pointer-events: none;
-    }
-
-    .compact-tab-scroll-start {
-        left: var(--wa-space-xs);
-    }
-
-    .compact-tab-scroll-end {
-        right: var(--wa-space-xs);
-    }
 }
 </style>

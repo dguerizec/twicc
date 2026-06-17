@@ -33,24 +33,7 @@ const props = defineProps({
         type: String,
         required: true,
     },
-    /**
-     * All available tabs for the compact-mode dropdown selector.
-     * Each entry: { id, label, icon? }
-     */
-    tabs: {
-        type: Array,
-        default: () => [],
-    },
-    /**
-     * ID of the currently active tab (matches a tab.id from the tabs prop).
-     */
-    activeTabId: {
-        type: String,
-        default: null,
-    },
 })
-
-const emit = defineEmits(['select-tab'])
 
 const store = useDataStore()
 const settingsStore = useSettingsStore()
@@ -169,19 +152,6 @@ const indicatorProjectIds = computed(() => {
 // Compact mode state
 const isCompactExpanded = ref(false)
 
-// Active tab object (from the tabs prop, matched by activeTabId)
-const activeTab = computed(() => props.tabs.find(t => t.id === props.activeTabId) || null)
-
-/**
- * Handle tab selection from the compact dropdown.
- */
-function handleCompactTabSelect(event) {
-    const value = event.detail?.item?.value
-    if (value && value !== props.activeTabId) {
-        emit('select-tab', value)
-    }
-}
-
 defineExpose({ isCompactExpanded })
 
 // Edit dialog ref (single project only)
@@ -223,21 +193,6 @@ function handleUnarchive() {
         <div class="detail-title-row">
             <!-- Clickable zone for compact toggle -->
             <div class="compact-toggle-zone" @click="isCompactExpanded = !isCompactExpanded">
-                <!-- Compact tab dropdown: shown only in compact collapsed mode -->
-                <wa-dropdown v-if="tabs.length" class="compact-tab-dropdown" placement="bottom-start" @wa-select="handleCompactTabSelect" @click.stop>
-                    <wa-button slot="trigger" variant="brand" appearance="outlined" size="small" class="compact-active-tab-label" with-caret>
-                        {{ activeTab?.label }}
-                    </wa-button>
-                    <wa-dropdown-item
-                        v-for="tab in tabs"
-                        :key="tab.id"
-                        :value="tab.id"
-                        :class="{ 'active-tab-item': tab.id === activeTabId }"
-                    >
-                        {{ tab.label }}
-                    </wa-dropdown-item>
-                </wa-dropdown>
-
                 <!-- Action group before the title (mirrors the session header):
                      the clickable "Archived" badge (or the Archive button when
                      not archived) followed by the Edit/Manage button. -->
@@ -357,9 +312,6 @@ function handleUnarchive() {
 
             <!-- Navigation list of workspaces/projects (aggregate modes only) -->
             <ProjectDetailNavList :project-id="projectId" class="detail-nav-list" />
-
-            <!-- Slot for extra compact-mode content (e.g. tab nav from ProjectDetailPanel) -->
-            <slot name="compact-extra"></slot>
         </div>
 
         <!-- Edit dialog (single project only) -->
@@ -437,21 +389,6 @@ function handleUnarchive() {
 /* Compact-only indicators: hidden by default (shown only in compact collapsed mode) */
 .compact-indicator {
     display: none;
-}
-
-/* Compact tab dropdown: hidden by default, shown in compact collapsed mode */
-.compact-tab-dropdown {
-    display: none;
-}
-.compact-active-tab-label {
-    font-size: var(--wa-font-size-3xs);
-    &::part(label) {
-        font-size: var(--wa-font-size-s);
-    }
-}
-.active-tab-item {
-    opacity: 0.5;
-    pointer-events: none;
 }
 
 .detail-sparkline-row {
@@ -537,20 +474,9 @@ function handleUnarchive() {
         padding-inline: var(--wa-space-xs);
     }
 
-    /* In compact collapsed mode: show tab dropdown */
-    .detail-header.compact-collapsed .compact-tab-dropdown {
-        display: inline-flex;
-        align-items: center;
-    }
-
     /* In compact collapsed mode: hide the action buttons (archive/edit), like
        the session header — they reappear when the header is expanded. */
     .detail-header.compact-collapsed .detail-title-actions {
-        display: none;
-    }
-
-    /* In compact expanded mode: hide tab dropdown */
-    .detail-header.compact-expanded .compact-tab-dropdown {
         display: none;
     }
 

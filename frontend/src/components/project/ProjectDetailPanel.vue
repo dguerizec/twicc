@@ -209,7 +209,6 @@ const filesAvailableRoots = computed(() => {
 })
 
 // Tab management — derived from route (like SessionView)
-const headerRef = ref(null)
 const filesPanelRef = ref(null)
 const gitPanelRef = ref(null)
 const terminalPanelRef = ref(null)
@@ -371,13 +370,6 @@ function switchToTab(tabId) {
     }
 }
 
-function switchToTabAndCollapse(tabId) {
-    switchToTab(tabId)
-    if (headerRef.value?.isCompactExpanded) {
-        headerRef.value.isCompactExpanded = false
-    }
-}
-
 function onTabShow(event) {
     const panel = event.detail?.name
     // Only handle events from our own tabs (not from nested tab-groups like TerminalPanel's)
@@ -453,22 +445,7 @@ onBeforeUnmount(() => {
 
 <template>
     <div class="project-detail-panel">
-        <ProjectDetailHeader ref="headerRef" :project-id="projectId" :tabs="TABS" :active-tab-id="activeTab" @select-tab="switchToTab">
-            <template #compact-extra>
-                <div class="compact-tab-nav">
-                    <wa-button
-                        v-for="tab in TABS"
-                        :key="tab.id"
-                        size="small"
-                        :variant="activeTab === tab.id ? 'brand' : 'neutral'"
-                        :appearance="activeTab === tab.id ? 'outlined' : 'plain'"
-                        @click="switchToTabAndCollapse(tab.id)"
-                    >
-                        {{ tab.label }}
-                    </wa-button>
-                </div>
-            </template>
-        </ProjectDetailHeader>
+        <ProjectDetailHeader :project-id="projectId" />
 
         <wa-divider></wa-divider>
 
@@ -608,22 +585,13 @@ wa-tab::part(base) {
     display: none;
 }
 
-/* Compact tab nav: hidden by default, shown in compact overlay */
-.compact-tab-nav {
-    display: none;
-}
-
 @media (max-height: 900px) {
     .project-detail-panel {
         padding-top: 0;
     }
 
-    /* Hide the divider and normal tab-group nav */
+    /* Hide the divider (the tab bar now stays inline in the content) */
     wa-divider {
-        display: none;
-    }
-
-    .detail-tabs::part(nav) {
         display: none;
     }
 
@@ -635,15 +603,6 @@ wa-tab::part(base) {
         display: block;
         --spacing: 0;
         --width: var(--divider-size);
-    }
-
-    /* Show the compact tab nav inside the header overlay */
-    .compact-tab-nav {
-        display: flex;
-        align-items: center;
-        gap: var(--wa-space-xs);
-        padding-inline: var(--wa-space-xs);
-        padding-bottom: var(--wa-space-xs);
     }
 }
 </style>
