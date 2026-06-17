@@ -122,6 +122,16 @@ _KIND_HANDLERS: dict[str, tuple[str, str, str]] = {
         "decide_project_trust_from_payload",
         "updated",
     ),
+    "artifact_bookmark:upsert": (
+        "twicc.core.services.artifact_bookmark_mutation",
+        "upsert_artifact_bookmark_from_payload",
+        "updated",
+    ),
+    "artifact_bookmark:delete": (
+        "twicc.core.services.artifact_bookmark_mutation",
+        "delete_artifact_bookmark_from_payload",
+        "deleted",
+    ),
 }
 
 
@@ -135,6 +145,7 @@ _RESULT_ID_FIELDS: tuple[str, ...] = (
     "provider",
     "project_id",
     "workspace_id",
+    "bookmark_id",
 )
 
 

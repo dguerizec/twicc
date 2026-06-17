@@ -9,6 +9,7 @@ from django.utils import timezone
 
 from twicc import paths
 from twicc.core.models import ArtifactBookmark, PinMode, Project, Session, SessionType
+from twicc.core.services import artifact_bookmark_mutation as abm
 
 
 @pytest.fixture
@@ -81,11 +82,16 @@ def client(settings):
 @pytest.fixture(autouse=True)
 def _passthrough_db_write_lock(monkeypatch):
     """The global DB writer is only started at app boot. In tests, run the
-    write factory transparently so the view logic (ORM + serialize + broadcast)
-    can be exercised without the writer lifecycle."""
+    write factory transparently so the logic (ORM + serialize + broadcast) can
+    be exercised without the writer lifecycle. The REST endpoints and the CLI
+    drop-request handler both write through the shared mutation service, so the
+    passthrough is installed on that module's symbol."""
     async def _passthrough(coro_factory):
         return await coro_factory()
-    monkeypatch.setattr("twicc.views.run_under_db_write_lock", _passthrough)
+    monkeypatch.setattr(
+        "twicc.core.services.artifact_bookmark_mutation.run_under_db_write_lock",
+        _passthrough,
+    )
 
 
 def _run(coro):
@@ -166,3 +172,93 @@ def test_method_not_allowed(client, session, project, artifacts_root):
     res = _run(client.put(f"/api/artifact-bookmarks/{bm.id}/",
                           data=orjson.dumps({}), content_type="application/json"))
     assert res.status_code == 405
+
+
+# ── Shared mutation service (the CLI drop-request path) ──────────────────────
+
+
+def test_upsert_payload_creates_with_default_scope(session, project, artifacts_root):
+    _write_artifact(artifacts_root, "sess-ab", "demo/index.html", b"<html></html>")
+    res = _run(abm.upsert_artifact_bookmark_from_payload(
+        {"session_id": "sess-ab", "path": "demo/index.html", "name": "Demo"}))
+    assert res.success
+    bm = ArtifactBookmark.objects.get(id=res.bookmark_id)
+    assert bm.relative_path == "demo/index.html"
+    assert bm.name == "Demo"
+    assert bm.scope == "project"  # default on create
+
+
+def test_upsert_payload_accepts_absolute_path(session, project, artifacts_root):
+    p = _write_artifact(artifacts_root, "sess-ab", "out/report.md", b"# r")
+    res = _run(abm.upsert_artifact_bookmark_from_payload(
+        {"session_id": "sess-ab", "path": str(p), "name": "R", "scope": "all"}))
+    assert res.success
+    bm = ArtifactBookmark.objects.get(id=res.bookmark_id)
+    assert bm.relative_path == "out/report.md"  # absolute resolved to the canonical key
+    assert bm.scope == "all"
+
+
+def test_upsert_payload_preserves_scope_on_update(session, project, artifacts_root):
+    _write_artifact(artifacts_root, "sess-ab", "a.md", b"# a")
+    _run(abm.upsert_artifact_bookmark_from_payload(
+        {"session_id": "sess-ab", "path": "a.md", "name": "A", "scope": "all"}))
+    # Re-upsert with a new name and NO scope → scope must stay "all".
+    res = _run(abm.upsert_artifact_bookmark_from_payload(
+        {"session_id": "sess-ab", "path": "a.md", "name": "A2"}))
+    assert res.success
+    bm = ArtifactBookmark.objects.get(id=res.bookmark_id)
+    assert bm.name == "A2"
+    assert bm.scope == "all"
+    assert ArtifactBookmark.objects.count() == 1  # upsert, not a duplicate
+
+
+def test_upsert_payload_rejections(session, project, artifacts_root):
+    # path resolves under the dir but the file doesn't exist
+    r = _run(abm.upsert_artifact_bookmark_from_payload(
+        {"session_id": "sess-ab", "path": "nope.md", "name": "X"}))
+    assert not r.success and r.errors[0].code == "file_not_found"
+    # path escapes the artifacts dir
+    r = _run(abm.upsert_artifact_bookmark_from_payload(
+        {"session_id": "sess-ab", "path": "../escape.md", "name": "X"}))
+    assert not r.success and r.errors[0].code == "path_escapes"
+    # invalid scope (caught before any filesystem work)
+    r = _run(abm.upsert_artifact_bookmark_from_payload(
+        {"session_id": "sess-ab", "path": "a.md", "name": "X", "scope": "bogus"}))
+    assert not r.success and r.errors[0].code == "invalid_scope"
+    # unknown session
+    r = _run(abm.upsert_artifact_bookmark_from_payload(
+        {"session_id": "ghost", "path": "a.md", "name": "X"}))
+    assert not r.success and r.errors[0].code == "session_not_found"
+
+
+def test_delete_payload_round_trip(session, project, artifacts_root):
+    _write_artifact(artifacts_root, "sess-ab", "a.md", b"# a")
+    up = _run(abm.upsert_artifact_bookmark_from_payload(
+        {"session_id": "sess-ab", "path": "a.md", "name": "A"}))
+    res = _run(abm.delete_artifact_bookmark_from_payload(
+        {"session_id": "sess-ab", "path": "a.md"}))
+    assert res.success and res.bookmark_id == up.bookmark_id
+    assert ArtifactBookmark.objects.count() == 0
+    # deleting again → not_bookmarked (file still on disk, but no row)
+    res = _run(abm.delete_artifact_bookmark_from_payload(
+        {"session_id": "sess-ab", "path": "a.md"}))
+    assert not res.success and res.errors[0].code == "not_bookmarked"
+
+
+def test_cli_artifacts_listing_and_scope_filter(session, project, artifacts_root, capfd):
+    _write_artifact(artifacts_root, "sess-ab", "a.md", b"# a")
+    _write_artifact(artifacts_root, "sess-ab", "b.md", b"# b")
+    _run(abm.upsert_artifact_bookmark_from_payload(
+        {"session_id": "sess-ab", "path": "a.md", "name": "A", "scope": "all"}))
+    _run(abm.upsert_artifact_bookmark_from_payload(
+        {"session_id": "sess-ab", "path": "b.md", "name": "B", "scope": "project"}))
+
+    from twicc.cli import artifacts as cli_artifacts
+
+    cli_artifacts.main()
+    out = orjson.loads(capfd.readouterr().out)
+    assert {b["name"] for b in out} == {"A", "B"}
+
+    cli_artifacts.main(scope="all")
+    out = orjson.loads(capfd.readouterr().out)
+    assert [b["name"] for b in out] == ["A"]

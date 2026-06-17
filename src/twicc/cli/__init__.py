@@ -409,6 +409,154 @@ def agents(
     session_agents(ctx.obj, limit=limit, offset=offset)
 
 
+artifacts_app = typer.Typer(
+    name="artifacts",
+    help="List bookmarked artifacts, or bookmark / unbookmark one.",
+    invoke_without_command=True,
+)
+app.add_typer(artifacts_app)
+
+
+# Mirrors :class:`twicc.core.models.PinMode`. Kept as a flat tuple so the CLI
+# validates a scope locally without importing Django (the check happens before
+# ``django.setup()`` so --help / validation paths stay fast).
+_VALID_ARTIFACT_SCOPES: tuple[str, ...] = ("project", "workspace", "all")
+
+
+def _validate_artifact_scope(scope: str | None) -> None:
+    """Reject an unknown ``--scope`` value with the standard validation envelope."""
+    if scope is None or scope in _VALID_ARTIFACT_SCOPES:
+        return
+    from twicc.cli._drop_request.output import emit_validation_errors
+    from twicc.cli._drop_request.validation import ValidationError
+    emit_validation_errors([ValidationError(
+        "--scope", "invalid_scope",
+        f"Unknown scope {scope!r}. Accepted: {list(_VALID_ARTIFACT_SCOPES)}.",
+    )])
+    raise typer.Exit(1)
+
+
+@artifacts_app.callback(invoke_without_command=True)
+def _artifacts_default(
+    ctx: typer.Context,
+    project: str = typer.Option(
+        None,
+        help=(
+            "Filter by project: a project ID (with or without leading dash) or a "
+            "directory path (absolute or relative). Includes the project's git "
+            "worktrees. Mutually exclusive with --workspace."
+        ),
+    ),
+    workspace: str = typer.Option(
+        None,
+        "--workspace",
+        help=(
+            "Filter by workspace ID: bookmarks of the workspace's projects, each "
+            "member's git worktrees included. Mutually exclusive with --project."
+        ),
+    ),
+    scope: str = typer.Option(
+        None,
+        "--scope",
+        help=(
+            "Filter by each bookmark's own visibility scope: 'project', "
+            "'workspace', or 'all'. E.g. --scope all for the ones bookmarked "
+            "everywhere. Independent of --project / --workspace."
+        ),
+    ),
+    limit: int = typer.Option(20, help="Max number of bookmarks to return."),
+    offset: int = typer.Option(0, help="Skip first N bookmarks."),
+) -> None:
+    """List bookmarked artifacts as JSON (most recently updated first, default action)."""
+    if ctx.invoked_subcommand is not None:
+        return
+
+    if project is not None and workspace is not None:
+        emit_error("Error: --project and --workspace are mutually exclusive.", code=2)
+
+    from twicc.cli.artifacts import main as artifacts_main
+
+    artifacts_main(
+        project=derive_project_id(project)[0] if project is not None else None,
+        workspace=workspace,
+        scope=scope,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@artifacts_app.command(name="bookmark")
+def _artifacts_bookmark(
+    session_id: str = typer.Argument(help="The session that owns the artifact."),
+    path: str = typer.Argument(
+        metavar="PATH",
+        help=(
+            "Artifact path, relative to the session's artifacts directory (the "
+            "value `twicc artifacts` prints as relative_path), or an absolute path "
+            "confined to that directory."
+        ),
+    ),
+    name: str = typer.Option(..., "--name", help="Bookmark name (required)."),
+    scope: str = typer.Option(
+        None,
+        "--scope",
+        help=(
+            "Visibility scope: 'project' (default on create), 'workspace', or "
+            "'all'. Omit when updating to keep the current scope."
+        ),
+    ),
+    timeout: int = typer.Option(
+        30,
+        "--timeout",
+        help=(
+            "Seconds to wait for the server's final status before giving up. The "
+            "request stays on disk; the write may still apply on the server side."
+        ),
+    ),
+) -> None:
+    """Bookmark an artifact (or rename / re-scope an existing bookmark).
+
+    Upserts on the (session, path) key — same effect as the UI's bookmark
+    button + dialog. Requires the live TwiCC server: the write is broadcast so
+    open UIs refresh.
+    """
+    _validate_artifact_scope(scope)
+
+    from twicc.cli.artifacts_mutation import run_bookmark
+
+    run_bookmark(session_id=session_id, path=path, name=name, scope=scope, timeout=timeout)
+
+
+@artifacts_app.command(name="unbookmark")
+def _artifacts_unbookmark(
+    session_id: str = typer.Argument(help="The session that owns the artifact."),
+    path: str = typer.Argument(
+        metavar="PATH",
+        help=(
+            "Artifact path, relative to the session's artifacts directory (the "
+            "value `twicc artifacts` prints as relative_path), or an absolute path "
+            "confined to that directory."
+        ),
+    ),
+    timeout: int = typer.Option(
+        30,
+        "--timeout",
+        help=(
+            "Seconds to wait for the server's final status before giving up. The "
+            "request stays on disk; the removal may still apply on the server side."
+        ),
+    ),
+) -> None:
+    """Remove an artifact bookmark by its (session, path) key.
+
+    Symmetric with ``bookmark`` — the artifact file need not still exist on
+    disk. Requires the live TwiCC server.
+    """
+    from twicc.cli.artifacts_mutation import run_unbookmark
+
+    run_unbookmark(session_id=session_id, path=path, timeout=timeout)
+
+
 @app.command()
 def usage() -> None:
     """Show the latest usage quota snapshot as JSON."""

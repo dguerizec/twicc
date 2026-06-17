@@ -28,6 +28,7 @@ def emit_validation_errors(errors) -> None:
 _SESSION_ID_FIELDS = ("session_id", "provider", "project_id")
 _WORKSPACE_ID_FIELDS = ("workspace_id",)
 _PROJECT_ID_FIELDS = ("project_id",)
+_ARTIFACT_BOOKMARK_ID_FIELDS = ("bookmark_id", "session_id", "project_id")
 
 
 def build_final(outcome, *, request_uuid: str, timeout: int) -> dict:
@@ -40,10 +41,14 @@ def build_final(outcome, *, request_uuid: str, timeout: int) -> dict:
     """
     if outcome.status in ("created", "sent", "updated", "stopped", "deleted"):
         d = outcome.data
-        # Dispatch by which id field is set. ``workspace_id`` is workspace-only;
-        # ``session_id`` is session-only; ``project_id`` alone (without
-        # ``session_id``) means the result describes a project mutation.
-        if "workspace_id" in d:
+        # Dispatch by which id field is set. ``bookmark_id`` is artifact-bookmark
+        # only (and also carries session_id/project_id, so it must be checked
+        # first); ``workspace_id`` is workspace-only; ``session_id`` is
+        # session-only; ``project_id`` alone (without ``session_id``) means the
+        # result describes a project mutation.
+        if "bookmark_id" in d:
+            id_fields = _ARTIFACT_BOOKMARK_ID_FIELDS
+        elif "workspace_id" in d:
             id_fields = _WORKSPACE_ID_FIELDS
         elif "session_id" in d:
             id_fields = _SESSION_ID_FIELDS

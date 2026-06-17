@@ -197,6 +197,16 @@ Change a session without sending a message. `self` targets the current session. 
 Apply the same update to several sessions at once — the batch sibling of `update-session`. Sub-commands: `archive` / `unarchive`, `pin --mode <project|workspace|all>` / `unpin`, `hide` / `unhide`, `annotations --op <OPERATION>` (each `--op` repeatable), and `settings` (same flags as the singular). No `title` (a shared title across sessions doesn't apply). Each sub-command takes a positional `SESSION_ID...` list merged (union) with the same scoped selection as `processes stop`: `--spawned-by <ID|self>` or `--descendants <ID|self>`, plus `--annotation` to narrow that scope. No `parent`, no `--spawn-tree`, no `--siblings` (unlike `send-messages`: you don't batch-mutate your peers). `--timeout` is a wall-clock budget for the whole batch. `settings` resolves per session against its own provider — provider-agnostic aliases (`max`/`min`/`open`/`strict`/…) land on the right value per session, a field a session's provider doesn't support is a silent no-op for that session (per-id status `noop`, counted as success), and a genuinely invalid value on a supported field becomes a per-id error (the other sessions still update). Output is keyed by session id: `{summary: {total, succeeded, failed, all_succeeded}, results: {<id>: <per-id outcome>}}`. A per-session failure never fails the batch (exit `0`); exit `6` when no session was updated.
 - Skill: [`twicc-update-sessions`](src/twicc/agent/plugin/twicc/skills/twicc-update-sessions/SKILL.md).
 
+## Artifacts
+
+### `twicc artifacts` / `twicc artifacts bookmark <SESSION_ID> <PATH>` / `twicc artifacts unbookmark <SESSION_ID> <PATH>`
+List bookmarked artifacts (viewable files saved from a session's Artifacts tab), or add / rename / re-scope / remove a bookmark. A bookmark is keyed on `(session, relative_path)` and carries a name plus a visibility scope (`project`/`workspace`/`all`). The only artifacts TwiCC tracks are bookmarked ones.
+- Listing (read-only, no server needed): `--project TEXT` / `--workspace TEXT` (mutually exclusive; same worktree-aware scope helpers as `twicc sessions`), `--scope <project|workspace|all>` (filter on each bookmark's own scope, independent of project/workspace — e.g. `--scope all` for the ones bookmarked everywhere), `--limit` (default 20), `--offset`. Ordered by most recently updated; each row is `{id, name, scope, session_id, project_id, relative_path, root, file_ext, created_at, updated_at}`.
+- `bookmark` — upsert on `(session, path)`: create, or rename / re-scope an existing bookmark. `PATH` is relative to the session's artifacts directory (the listing's `relative_path`) or an absolute path confined to it. `--name` required; `--scope` defaults to `project` on create and is kept as-is on update when omitted.
+- `unbookmark` — remove the bookmark for `(session, path)` (symmetric with `bookmark`; the file need not still exist).
+- Both writes require the live server (broadcast so open UIs refresh) and take `--timeout`; shared mutation service with the REST endpoints (`core/services/artifact_bookmark_mutation.py`).
+- Skill: [`twicc-artifacts`](src/twicc/agent/plugin/twicc/skills/twicc-artifacts/SKILL.md).
+
 ## Live processes
 
 ### `twicc processes` / `twicc processes <SUBCOMMAND>`
