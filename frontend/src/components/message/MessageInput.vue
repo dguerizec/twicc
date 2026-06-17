@@ -2220,13 +2220,28 @@ body.sidebar-closed .message-input-toolbar {
         padding-left: 3.5rem;
     }
 }
+/* …but in the dockable layout the toggle clearance depends on what surrounds the center zone
+   (classes on the ancestor .session-layout). Priority: a bottom dock/gutter lifts the composer
+   above the toggle, or a left dock column pushes it clear → no padding. A left gutter (no column,
+   no bottom) is a thin rail → only partial clearance. Nothing docked → the base 3.5rem above. */
+body.sidebar-closed :is(.session-layout.has-bottom-region, .session-layout.has-bottom-gutter, .session-layout.has-left-col) .message-input-toolbar {
+    @media (width >= 640px) {
+        padding-left: 0;
+    }
+}
+body.sidebar-closed .session-layout.has-left-gutter:not(.has-left-col):not(.has-bottom-region):not(.has-bottom-gutter) .message-input-toolbar {
+    @media (width >= 640px) {
+        padding-left: 1.5rem;
+    }
+}
 
 .message-input-attachments {
     display: flex;
     align-items: center;
     gap: var(--wa-space-s);
     min-width: 0;
-    @media (width < 640px) {
+    /* React to the composer's own width, not the viewport. */
+    @container message-input (width < 40rem) {
         gap: var(--wa-space-xs);
     }
 }

@@ -7,25 +7,28 @@
  * opens/closes) rather than just the viewport width.
  *
  * @param {Object} options
- * @param {string} options.containerSelector - CSS selector for the container to observe
- *        (e.g. '.main-content'). The composable walks up from the component's root
- *        element using `closest()`.
+ * @param {string} [options.containerSelector] - CSS selector for an ancestor container to observe
+ *        (e.g. '.main-content'); the composable walks up from the component's root element using
+ *        `closest()`. When omitted, the component's OWN root element is observed — a true container
+ *        query on the panel itself, so it reacts to the width it is actually rendered at (a dock
+ *        region or the center slot in the dockable layout) rather than a fixed outer container.
  * @param {number} [options.breakpoint=640] - Width threshold in pixels. `isBelowBreakpoint`
  *        is `true` when the container is narrower than this value.
  * @returns {{ isBelowBreakpoint: import('vue').Ref<boolean> }}
  */
 import { ref, onMounted, onBeforeUnmount, getCurrentInstance } from 'vue'
 
-export function useContainerBreakpoint({ containerSelector, breakpoint = 640 } = {}) {
+export function useContainerBreakpoint({ containerSelector = null, breakpoint = 640 } = {}) {
     const isBelowBreakpoint = ref(false)
     let observer = null
 
     onMounted(() => {
         const el = getCurrentInstance()?.proxy?.$el
-        const container = el?.closest?.(containerSelector)
+        // A selector → observe that ancestor; no selector → observe the root element itself.
+        const container = containerSelector ? el?.closest?.(containerSelector) : el
         if (!container) {
             console.warn(
-                `[useContainerBreakpoint] Container "${containerSelector}" not found from`,
+                `[useContainerBreakpoint] Container ${containerSelector ? `"${containerSelector}"` : '(self)'} not found from`,
                 el
             )
             return

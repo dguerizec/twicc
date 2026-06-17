@@ -76,6 +76,21 @@ body.sidebar-closed .collapsed-bar--sidebar-clearance {
         padding-left: 4rem;
     }
 }
+/* …but in the dockable layout the clearance depends on what surrounds the center zone (classes
+   on the ancestor .session-layout). A bottom dock/gutter lifts the bar above the toggle, or a
+   left dock column pushes it clear → drop the clearance entirely (back to the base padding). A
+   left gutter (no column, no bottom) is a thin rail → keep the vertical room, halve-ish the left. */
+body.sidebar-closed :is(.session-layout.has-bottom-region, .session-layout.has-bottom-gutter, .session-layout.has-left-col) .collapsed-bar--sidebar-clearance {
+    @media (width >= 640px) {
+        padding-block: var(--wa-space-xs);
+        padding-left: var(--wa-space-xs);
+    }
+}
+body.sidebar-closed .session-layout.has-left-gutter:not(.has-left-col):not(.has-bottom-region):not(.has-bottom-gutter) .collapsed-bar--sidebar-clearance {
+    @media (width >= 640px) {
+        padding-left: 2rem;
+    }
+}
 .collapsed-bar-icon {
     flex-shrink: 0;
     font-size: var(--wa-font-size-s);

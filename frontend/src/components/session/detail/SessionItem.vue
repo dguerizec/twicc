@@ -463,7 +463,8 @@ body:not([data-display-mode="debug"]) .json-toggle {
 .session-items {
     --markdown-toolbar-offset: -2.5rem;
 }
-@media (width < 640px) {
+/* React to the chat's own width (center zone / dock), not the viewport. */
+@container session-items-list (width < 40rem) {
     .session-items {
         --markdown-toolbar-offset: -3rem;
     }

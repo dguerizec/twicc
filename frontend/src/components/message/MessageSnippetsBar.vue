@@ -176,8 +176,9 @@ button {
     align-items: center;
 }
 
-/* On mobile: single-line horizontal scroll */
-@media (width < 640px) {
+/* On a narrow composer: single-line horizontal scroll. Reacts to the composer's own
+   width (the message-input container), not the viewport. */
+@container message-input (width < 40rem) {
     .message-snippets-bar {
         flex-wrap: nowrap;
         overflow-x: auto;
@@ -191,7 +192,7 @@ button {
 
 /* Scroll shadow indicators — progressive enhancement (same pattern as SettingsPopover) */
 @supports (container-type: scroll-state) {
-    @media (width < 640px) {
+    @container message-input (width < 40rem) {
         .message-snippets-bar {
             container-type: scroll-state;
         }

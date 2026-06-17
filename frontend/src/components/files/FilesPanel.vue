@@ -103,11 +103,11 @@ const props = defineProps({
 })
 
 // ─── Mobile breakpoint detection ─────────────────────────────────────────────
-// Uses a ResizeObserver on .main-content instead of a viewport media query,
-// so the panel reacts to the actual available width (e.g. sidebar open/close).
+// Container query on the panel's OWN rendered width (ResizeObserver on its root, no selector),
+// not a viewport media query — so it reacts to the width it is actually given: its dock region
+// when docked, the center slot otherwise, or the surrounding content area outside the layout.
 
 const { isBelowBreakpoint: isMobile } = useContainerBreakpoint({
-    containerSelector: '.main-content',
     breakpoint: 800,
 })
 

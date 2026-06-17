@@ -27,14 +27,18 @@ const openOverlayEdge = computed(() => props.layout.openOverlayEdge.value)
 const centerRegion = computed(() => render.value.regions.find((r) => r.kind === 'center'))
 const dockRegions = computed(() => render.value.regions.filter((r) => r.kind !== 'center'))
 
-// Context classes on the root so gutter CSS can react to the mode and to what sits on the
-// left edge (used to inset gutter icons away from the sidebar-reopen toggle when closed).
+// Context classes on the root so descendant CSS can react to the mode and to what sits on the
+// edges. Used to inset gutter icons away from the sidebar-reopen toggle when closed, and to
+// modulate the chat composer's toggle-clearance padding: a bottom dock/gutter lifts the composer
+// above the toggle, a left column pushes it clear, a left gutter clears it only partly.
 const rootClasses = computed(() => {
     const d = render.value
     return {
         [`mode-${d.mode}`]: true,
         'has-left-gutter': d.gutters.some((g) => g.edge === 'left'),
         'has-left-col': d.regions.some((r) => r.kind === 'col-left'),
+        'has-bottom-gutter': d.gutters.some((g) => g.edge === 'bottom'),
+        'has-bottom-region': d.regions.some((r) => r.kind === 'bottom'),
     }
 })
 
