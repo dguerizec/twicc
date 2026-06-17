@@ -399,6 +399,12 @@ export const useDataStore = defineStore('data', {
             // Note: 'main' is always implicitly open, but included for consistency
             sessionOpenTabs: {},
 
+            // Dockable layout intention per session (ephemeral; persistence deferred).
+            // { sessionId: { assignment: { tabId: dockId }, collapsed: [dockId],
+            //                activeSide, activeResize, activeByGroup: { groupKey: tabId } } }
+            // Geometry is NOT stored here — it's recomputed by the pure layout resolver.
+            sessionLayout: {},
+
             // Agent links cache - maps tool_id to agent_id for Task tool_use items
             // { sessionId: { toolId: agentId } }
             // Only caches found agents (not-found triggers polling, not caching)
@@ -962,6 +968,10 @@ export const useDataStore = defineStore('data', {
         // Get open tabs for a session
         getSessionOpenTabs: (state) => (sessionId) =>
             state.localState.sessionOpenTabs[sessionId] || null,
+
+        // Get the dockable layout intention for a session (or null if untouched)
+        getSessionLayout: (state) => (sessionId) =>
+            state.localState.sessionLayout[sessionId] || null,
 
         // Get cached agent link for a tool_id in a session
         // Returns: { agentId, isBackground } or undefined (not in cache)
@@ -3343,6 +3353,65 @@ export const useDataStore = defineStore('data', {
          */
         clearSessionOpenTabs(sessionId) {
             delete this.localState.sessionOpenTabs[sessionId]
+        },
+
+        // ---- Dockable layout (ephemeral per-session intention; persistence deferred) ----
+
+        /** Ensure a layout-intention record exists for a session, return it. */
+        ensureSessionLayout(sessionId) {
+            if (!this.localState.sessionLayout[sessionId]) {
+                this.localState.sessionLayout[sessionId] = {
+                    assignment: {},
+                    collapsed: [],
+                    activeSide: 'left',
+                    activeResize: 'left',
+                    activeByGroup: {},
+                }
+            }
+            return this.localState.sessionLayout[sessionId]
+        },
+
+        /** Assign a tab to a dock, or back to the center ('center' / null clears the entry). */
+        setTabDock(sessionId, tabId, dest) {
+            const layout = this.ensureSessionLayout(sessionId)
+            if (!dest || dest === 'center') {
+                delete layout.assignment[tabId]
+            } else {
+                layout.assignment[tabId] = dest
+            }
+        },
+
+        /** Minimize a dock to its edge gutter. */
+        minimizeDock(sessionId, dockId) {
+            const layout = this.ensureSessionLayout(sessionId)
+            if (!layout.collapsed.includes(dockId)) layout.collapsed.push(dockId)
+        },
+
+        /** Restore a minimized dock from its gutter. */
+        restoreDock(sessionId, dockId) {
+            const layout = this.ensureSessionLayout(sessionId)
+            const i = layout.collapsed.indexOf(dockId)
+            if (i > -1) layout.collapsed.splice(i, 1)
+        },
+
+        /** Which side wins under mutual exclusion (one column fits). */
+        setLayoutActiveSide(sessionId, side) {
+            this.ensureSessionLayout(sessionId).activeSide = side
+        },
+
+        /** Which column has priority while resizing (unused until resize UI lands). */
+        setLayoutActiveResize(sessionId, side) {
+            this.ensureSessionLayout(sessionId).activeResize = side
+        },
+
+        /** Remember the active tab within a region group (groupKey from groupKeyOf). */
+        setLayoutGroupActiveTab(sessionId, groupKey, tabId) {
+            this.ensureSessionLayout(sessionId).activeByGroup[groupKey] = tabId
+        },
+
+        /** Drop all layout intention for a session. */
+        clearSessionLayout(sessionId) {
+            delete this.localState.sessionLayout[sessionId]
         },
 
         // Agent links cache actions
