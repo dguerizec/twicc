@@ -501,6 +501,23 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
             workspaces = await sync_to_async(read_workspaces)()
             await self.send_json({"type": "workspaces_updated", "workspaces": workspaces.get("workspaces", [])})
 
+        # Re-push the full artifact-bookmark set on every WS connect (including
+        # reconnects) so the client store stays in sync without re-fetching, the
+        # same way workspaces/settings/presets do above. Bookmarks are a small
+        # global set, so a full snapshot is cheap and the client replaces its dict
+        # wholesale — catching creations/edits/removals missed while disconnected
+        # (the incremental artifact_bookmark_updated/_removed events cover the
+        # connected case). Larger, per-project data (sessions/items) is handled by
+        # client-side reconciliation instead.
+        if self._should_send("artifact_bookmarks_updated"):
+            from twicc.core.models import ArtifactBookmark
+            from twicc.core.serializers import serialize_artifact_bookmark
+            artifact_bookmarks = await sync_to_async(list)(ArtifactBookmark.objects.all())
+            await self.send_json({
+                "type": "artifact_bookmarks_updated",
+                "bookmarks": [serialize_artifact_bookmark(b) for b in artifact_bookmarks],
+            })
+
         if self._should_send("tips_manifest_pushed"):
             await self.send_json({
                 "type": "tips_manifest_pushed",

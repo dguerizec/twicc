@@ -34,6 +34,7 @@ const routes = [
         children: [
             { path: '', name: 'project', component: { render: () => null } },
             { path: 'files/:rootKey?/:filePath?', name: 'project-files', component: { render: () => null } },
+            { path: 'artifacts/:bookmarkId?', name: 'project-artifacts', component: { render: () => null } },
             { path: 'git/:rootKey?/:commitRef?/:filePath?', name: 'project-git', component: { render: () => null } },
             { path: 'terminal/:termIndex?', name: 'project-terminal', component: { render: () => null } },
             {
@@ -64,6 +65,7 @@ const routes = [
         children: [
             { path: '', name: 'projects-all', component: { render: () => null } },
             { path: 'files/:rootKey?/:filePath?', name: 'projects-files', component: { render: () => null } },
+            { path: 'artifacts/:bookmarkId?', name: 'projects-artifacts', component: { render: () => null } },
             { path: 'git/:rootKey?/:commitRef?/:filePath?', name: 'projects-git', component: { render: () => null } },
             { path: 'terminal/:termIndex?', name: 'projects-terminal', component: { render: () => null } },
             {

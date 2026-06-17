@@ -900,6 +900,22 @@ export function useWebSocket() {
                 }))
                 break
             }
+            case 'artifact_bookmarks_updated': {
+                // Full snapshot pushed on every WS connect (incl. reconnects):
+                // replace the whole set so changes missed while disconnected
+                // (incl. removals) are reflected. Singular *_updated/_removed
+                // below handle the incremental live case.
+                store.setArtifactBookmarks(msg.bookmarks || [])
+                break
+            }
+            case 'artifact_bookmark_updated': {
+                store.upsertArtifactBookmark(msg.bookmark)
+                break
+            }
+            case 'artifact_bookmark_removed': {
+                store.removeArtifactBookmark(msg.bookmark_id)
+                break
+            }
             case 'session_removed':
                 store.removeSession(msg.session_id)
                 break

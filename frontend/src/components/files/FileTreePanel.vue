@@ -40,6 +40,9 @@ import FileDeleteDialog from './FileDeleteDialog.vue'
 import FileCreateDialog from './FileCreateDialog.vue'
 import FileMoveDialog from './FileMoveDialog.vue'
 import AppTooltip from '../ui/AppTooltip.vue'
+import ArtifactBookmarkButton from '../artifacts/ArtifactBookmarkButton.vue'
+import { useDataStore } from '../../stores/data'
+import { isRenderableArtifactPath } from '../../utils/artifactBookmark'
 
 const props = defineProps({
     tree: {
@@ -140,6 +143,12 @@ const props = defineProps({
     },
     /** Absolute path of the git directory (for building fullPath in git mode) */
     gitDirectory: {
+        type: String,
+        default: null,
+    },
+    // When set (the owning session), the mobile header shows an artifact bookmark
+    // toggle for renderable artifacts and surfaces the artifact bookmark name.
+    artifactBookmarkSessionId: {
         type: String,
         default: null,
     },
@@ -264,6 +273,17 @@ function clearSearch(reveal = true) {
 
 const selectedFile = ref(null)
 const selectedFileId = useId()
+
+const dataStore = useDataStore()
+// Mobile header artifact-bookmark integration (artifact context only).
+const headerArtifactBookmark = computed(() =>
+    props.artifactBookmarkSessionId && selectedFile.value
+        ? dataStore.artifactBookmarkFor(props.artifactBookmarkSessionId, selectedFile.value)
+        : null,
+)
+const headerArtifactBookmarkable = computed(() =>
+    !!props.artifactBookmarkSessionId && isRenderableArtifactPath(selectedFile.value),
+)
 const fileOptionsButtonId = useId()
 
 /**
@@ -1083,22 +1103,31 @@ defineExpose({
 
 <template>
     <div class="file-tree-panel" :class="{ 'file-tree-panel--mobile': isMobile }">
-        <!-- Mobile header: shows selected file path, click to open overlay -->
-        <button
-            v-if="isMobile"
-            class="files-panel-header"
-            :class="{ open: fileTreeOpen }"
-            @click="toggleFileTree"
-        >
-            <span class="files-panel-header-label" :id="selectedFileId">
-                {{ selectedFile || headerPlaceholder }}
-            </span>
-            <AppTooltip v-if="selectedFile" :for="selectedFileId">{{ selectedFile }}</AppTooltip>
-            <wa-icon
-                class="chevron"
-                :name="fileTreeOpen ? 'chevron-up' : 'chevron-down'"
-            ></wa-icon>
-        </button>
+        <!-- Mobile header: shows selected file path, click to open overlay. For a
+             bookmarkable artifact it carries the bookmark name (in the label) and
+             a bookmark toggle on the right (kept outside the header button). -->
+        <div v-if="isMobile" class="files-panel-header-row">
+            <button
+                class="files-panel-header"
+                :class="{ open: fileTreeOpen }"
+                @click="toggleFileTree"
+            >
+                <span class="files-panel-header-label" :id="selectedFileId">
+                    {{ selectedFile || headerPlaceholder }}<span v-if="headerArtifactBookmark" class="files-panel-header-artifact-bookmark-name"> ({{ headerArtifactBookmark.name }})</span>
+                </span>
+                <AppTooltip v-if="selectedFile" :for="selectedFileId">{{ selectedFile }}<template v-if="headerArtifactBookmark"> ({{ headerArtifactBookmark.name }})</template></AppTooltip>
+                <wa-icon
+                    class="chevron"
+                    :name="fileTreeOpen ? 'chevron-up' : 'chevron-down'"
+                ></wa-icon>
+            </button>
+            <ArtifactBookmarkButton
+                v-if="headerArtifactBookmarkable"
+                class="files-panel-header-artifact-bookmark-btn"
+                :session-id="artifactBookmarkSessionId"
+                :relative-path="selectedFile"
+            />
+        </div>
 
         <!-- File tree content: inline on desktop, overlay on mobile.
              Use v-show (not v-if) so the tree DOM, search state, scroll
@@ -1382,6 +1411,38 @@ defineExpose({
 }
 
 /* ----- Mobile header (click to open file tree overlay) ----- */
+
+/* Mobile header row: the full-width header button + (for a bookmarkable
+   artifact) the bookmark toggle on the right. Carries the chrome the button
+   used to own (border, background, stacking) so the bottom border spans both. */
+.files-panel-header-row {
+    display: flex;
+    align-items: center;
+    background: var(--wa-color-surface-default);
+    border-bottom: 1px solid var(--wa-color-surface-border);
+    /* Stay above the overlay (z-index: 10) */
+    position: relative;
+    z-index: 11;
+}
+
+.files-panel-header-row > .files-panel-header {
+    flex: 1;
+    min-width: 0;
+    width: auto;
+    border-bottom: none;
+    position: static;
+    z-index: auto;
+}
+
+.files-panel-header-artifact-bookmark-btn {
+    flex-shrink: 0;
+    align-self: center;
+    margin-right: var(--wa-space-2xs);
+}
+
+.files-panel-header-artifact-bookmark-name {
+    color: var(--wa-color-text-quiet);
+}
 
 .files-panel-header {
     display: flex;

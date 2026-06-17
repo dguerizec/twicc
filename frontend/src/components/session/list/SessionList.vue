@@ -13,6 +13,7 @@ import { useWorkspacesStore } from '../../../stores/workspaces'
 import { useSessionSelectionStore } from '../../../stores/sessionSelection'
 import { isWorkspaceProjectId, extractWorkspaceId } from '../../../utils/workspaceIds'
 import { computeSidebarSessionBlocks } from '../../../utils/sidebarSessions'
+import { matchQuery } from '../../../utils/textFilter'
 import VirtualScroller from '../../virtual-scroller/VirtualScroller.vue'
 import SessionListItem from './SessionListItem.vue'
 
@@ -144,55 +145,6 @@ const allSessions = computed(() => {
     return result
 })
 
-/**
- * Check if a query matches a text using subsequence matching.
- * All characters from query must appear in text, in order, but not necessarily consecutive.
- * Case-insensitive.
- *
- * Examples:
- *   matchSubsequence("vs", "virtual scroller") -> true (v...irtual s...croller)
- *   matchSubsequence("vscr", "virtual scroller") -> true (v...irtual scr...oller)
- *   matchSubsequence("xyz", "virtual scroller") -> false
- *
- * @param {string} query - The search query
- * @param {string} text - The text to search in
- * @returns {boolean} True if query is a subsequence of text
- */
-function matchSubsequence(query, text) {
-    const lowerQuery = query.toLowerCase()
-    const lowerText = text.toLowerCase()
-
-    let queryIndex = 0
-    for (let i = 0; i < lowerText.length && queryIndex < lowerQuery.length; i++) {
-        if (lowerText[i] === lowerQuery[queryIndex]) {
-            queryIndex++
-        }
-    }
-    return queryIndex === lowerQuery.length
-}
-
-/**
- * Resolve a sidebar filter query against a display string.
- *
- * - Queries starting with `"` or `'` switch to case-insensitive substring
- *   matching. An optional trailing matching quote is stripped, so both
- *   `"foo` and `"foo"` look for the literal substring `foo`.
- * - Anything else uses the default subsequence (fuzzy) matching.
- *
- * The backend mirrors this dispatch in `_match_session_query` (views.py)
- * so the bulk-archive scope matches the sidebar exactly.
- */
-function matchSessionQuery(query, text) {
-    const first = query[0]
-    if (first === '"' || first === "'") {
-        let needle = query.slice(1)
-        if (needle.endsWith(first)) needle = needle.slice(0, -1)
-        if (!needle) return true
-        return text.toLowerCase().includes(needle.toLowerCase())
-    }
-    return matchSubsequence(query, text)
-}
-
 // Filtered sessions based on the search query. Fuzzy by default; exact
 // substring when the query is wrapped/prefixed with `"` or `'`.
 const sessions = computed(() => {
@@ -203,7 +155,7 @@ const sessions = computed(() => {
         const displayName = (session.draft && !session.title)
             ? 'New session'
             : (session.title || session.id)
-        return matchSessionQuery(query, displayName)
+        return matchQuery(query, displayName)
     })
 })
 

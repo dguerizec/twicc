@@ -579,6 +579,42 @@ class Session(models.Model):
         return self.id
 
 
+class ArtifactBookmark(models.Model):
+    """A user-saved pointer to one rendered artifact file, with a display name
+    and a visibility scope. Scope reuses PinMode and mirrors session pinning:
+    'project' stays local, 'workspace' surfaces in workspace views, 'all' in the
+    global view. "Not bookmarked" = no row."""
+
+    session = models.ForeignKey(
+        Session, on_delete=models.CASCADE, related_name="artifact_bookmarks",
+    )
+    # Denormalised from session.project so scope filtering needs no join.
+    # Intentionally the RAW project: for a worktree session this is the worktree
+    # project, NOT the main repo. The worktree -> main-repo mapping happens at
+    # scope-resolution time on the frontend (see the design doc, §5).
+    project = models.ForeignKey(
+        Project, on_delete=models.CASCADE, related_name="artifact_bookmarks",
+    )
+    # Path relative to the session's artifacts dir, e.g. "demo/index.html".
+    relative_path = models.TextField()
+    name = models.CharField(max_length=255)
+    scope = models.CharField(max_length=16, choices=PinMode.choices)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-updated_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["session", "relative_path"],
+                name="uniq_artifact_bookmark_session_path",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["project"], name="idx_artifactbookmark_project"),
+        ]
+
+
 class SessionItem(models.Model):
     """A session item corresponds to a single line in a JSONL file"""
 

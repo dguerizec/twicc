@@ -19,15 +19,16 @@ import orjson
 from twicc import search
 from twicc.agent.registry import get_agent_manager_registry
 from twicc.core.enums import ItemKind, Provider
-from twicc.core.models import AgentLink, Command, DailyActivity, PinMode, Project, Session, SessionItem, SessionType, ToolResultLink, UsageSnapshot, WeeklyActivity
+from twicc.core.models import AgentLink, ArtifactBookmark, Command, DailyActivity, PinMode, Project, Session, SessionItem, SessionType, ToolResultLink, UsageSnapshot, WeeklyActivity
 from twicc.core.serializers import (
+    serialize_artifact_bookmark,
     serialize_project,
     serialize_session,
     serialize_session_item,
     serialize_session_item_metadata,
 )
 from twicc.core.services.project_mutation import clean_project_agent_defaults
-from twicc.paths import path_to_project_id
+from twicc.paths import get_session_artifacts_dir, path_to_project_id
 from twicc.projects import register_project
 from twicc.providers.db_writer import run_under_db_write_lock
 from twicc.providers.sessions_watcher import mark_session_search_version_current
@@ -3121,6 +3122,128 @@ async def external_notifications_test(request):
 
     results = await test_notification_urls([u.strip() for u in urls])
     return JsonResponse({"results": results})
+
+
+def _confined_artifact_path(session_id, relative_path):
+    """Resolve relative_path inside the session's artifacts dir. Returns the
+    realpath if it stays confined to the artifacts dir, else None."""
+    root_real = os.path.realpath(str(get_session_artifacts_dir(session_id)))
+    abs_path = os.path.realpath(os.path.join(root_real, relative_path))
+    # Must be a strict sub-path of the artifacts dir (never the root itself).
+    if not abs_path.startswith(root_real + os.sep):
+        return None
+    return abs_path
+
+
+async def artifact_bookmark_list(request):
+    """GET /api/artifact-bookmarks/ — list all bookmarks.
+    POST /api/artifact-bookmarks/ — create (or upsert) a bookmark."""
+    if request.method not in ("GET", "POST"):
+        return HttpResponseNotAllowed(["GET", "POST"])
+    if request.method == "POST":
+        return await _create_artifact_bookmark(request)
+    bookmarks = await sync_to_async(list)(ArtifactBookmark.objects.all())
+    return JsonResponse({"bookmarks": [serialize_artifact_bookmark(b) for b in bookmarks]})
+
+
+async def _create_artifact_bookmark(request):
+    try:
+        data = orjson.loads(request.body)
+    except orjson.JSONDecodeError:
+        return JsonResponse({"error": "Invalid JSON"}, status=400)
+
+    session_id = (data.get("session_id") or "").strip()
+    relative_path = (data.get("relative_path") or "").strip()
+    name = (data.get("name") or "").strip()
+    scope = data.get("scope")
+    if not session_id or not relative_path or not name:
+        return JsonResponse({"error": "session_id, relative_path and name are required"}, status=400)
+    if scope not in PinMode.values:
+        return JsonResponse({"error": "Invalid scope"}, status=400)
+
+    try:
+        session = await Session.objects.aget(id=session_id)
+    except Session.DoesNotExist:
+        raise Http404("Session not found")
+
+    # Confinement + existence (renderable-type is enforced client-side, design §4).
+    abs_path = _confined_artifact_path(session_id, relative_path)
+    if abs_path is None:
+        return JsonResponse({"error": "Path escapes the artifacts directory"}, status=400)
+    if not await sync_to_async(os.path.isfile)(abs_path):
+        return JsonResponse({"error": "Artifact file not found"}, status=404)
+
+    # IMPORTANT: run_under_db_write_lock takes a *coroutine factory* (it awaits
+    # the lambda's result). Use the ASYNC ORM method, never sync update_or_create.
+    bookmark, _created = await run_under_db_write_lock(
+        lambda: ArtifactBookmark.objects.aupdate_or_create(
+            session=session, relative_path=relative_path,
+            defaults={"project_id": session.project_id, "name": name, "scope": scope},
+        )
+    )
+    await _broadcast_artifact_bookmark_updated(bookmark)
+    return JsonResponse(serialize_artifact_bookmark(bookmark), status=201 if _created else 200)
+
+
+async def artifact_bookmark_detail(request, bookmark_id):
+    if request.method not in ("GET", "PATCH", "DELETE"):
+        return HttpResponseNotAllowed(["GET", "PATCH", "DELETE"])
+    try:
+        bookmark = await ArtifactBookmark.objects.aget(id=bookmark_id)
+    except ArtifactBookmark.DoesNotExist:
+        raise Http404("Bookmark not found")
+
+    if request.method == "DELETE":
+        await run_under_db_write_lock(lambda: bookmark.adelete())
+        await _broadcast_artifact_bookmark_removed(bookmark_id)
+        return JsonResponse({"ok": True})
+
+    if request.method == "PATCH":
+        try:
+            data = orjson.loads(request.body)
+        except orjson.JSONDecodeError:
+            return JsonResponse({"error": "Invalid JSON"}, status=400)
+        update_fields = []
+        if "name" in data:
+            name = (data.get("name") or "").strip()
+            if not name:
+                return JsonResponse({"error": "name cannot be empty"}, status=400)
+            bookmark.name = name
+            update_fields.append("name")
+        if "scope" in data:
+            if data["scope"] not in PinMode.values:
+                return JsonResponse({"error": "Invalid scope"}, status=400)
+            bookmark.scope = data["scope"]
+            update_fields.append("scope")
+        if update_fields:
+            update_fields.append("updated_at")
+            await run_under_db_write_lock(lambda: bookmark.asave(update_fields=update_fields))
+            await _broadcast_artifact_bookmark_updated(bookmark)
+
+    payload = serialize_artifact_bookmark(bookmark)
+    if request.method == "GET":
+        # Lazy availability check, on open (design §8/§9): stat the file now.
+        # Kept OUT of the pure serializer; only the single-bookmark GET does I/O.
+        abs_path = _confined_artifact_path(bookmark.session_id, bookmark.relative_path)
+        payload["available"] = bool(abs_path and await sync_to_async(os.path.isfile)(abs_path))
+    return JsonResponse(payload)
+
+
+async def _broadcast_artifact_bookmark_updated(bookmark):
+    channel_layer = get_channel_layer()
+    await channel_layer.group_send("updates", {
+        "type": "broadcast",
+        "data": {"type": "artifact_bookmark_updated",
+                 "bookmark": serialize_artifact_bookmark(bookmark)},
+    })
+
+
+async def _broadcast_artifact_bookmark_removed(bookmark_id):
+    channel_layer = get_channel_layer()
+    await channel_layer.group_send("updates", {
+        "type": "broadcast",
+        "data": {"type": "artifact_bookmark_removed", "bookmark_id": bookmark_id},
+    })
 
 
 async def spa_index(request):

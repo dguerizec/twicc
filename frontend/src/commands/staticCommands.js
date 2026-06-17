@@ -19,6 +19,7 @@ import { computeSidebarSessionBlocks } from '../utils/sidebarSessions'
 import { isSessionUnread } from '../utils/sessions'
 import { worktreeLabel } from '../utils/worktree'
 import { toWorkspaceProjectId } from '../utils/workspaceIds'
+import { ARTIFACT_ICON } from '../utils/artifactBookmark'
 import { apiFetch } from '../utils/api'
 import { toast } from '../composables/useToast'
 import {
@@ -502,6 +503,45 @@ export function initStaticCommands(router) {
                         },
                     }
                 })
+            },
+        },
+        {
+            id: 'nav.artifacts-list',
+            label: 'Go to Artifacts List',
+            icon: ARTIFACT_ICON,
+            category: 'navigation',
+            // Switch the sidebar to its Artifacts (bookmarks) mode, keeping the
+            // current scope. Hidden when already there. Mirrors ProjectView's
+            // switchToArtifacts; falls back to all-projects when no project is
+            // in the route (home / settings).
+            when: () => route.name !== 'project-artifacts' && route.name !== 'projects-artifacts',
+            action: () => {
+                const workspaceQuery = route.query.workspace ? { workspace: route.query.workspace } : {}
+                const projectId = routeProjectId()
+                if (isAllProjectsMode() || !projectId) {
+                    router.push({ name: 'projects-artifacts', query: workspaceQuery })
+                } else {
+                    router.push({ name: 'project-artifacts', params: { projectId } })
+                }
+            },
+        },
+        {
+            id: 'nav.sessions-list',
+            label: 'Go to Sessions List',
+            icon: 'comments',
+            category: 'navigation',
+            // The inverse: back to the Sessions sidebar, keeping the current
+            // scope. Only shown while in Artifacts mode. Mirrors
+            // ProjectView's switchToSessions.
+            when: () => route.name === 'project-artifacts' || route.name === 'projects-artifacts',
+            action: () => {
+                const workspaceQuery = route.query.workspace ? { workspace: route.query.workspace } : {}
+                const projectId = routeProjectId()
+                if (isAllProjectsMode() || !projectId) {
+                    router.push({ name: 'projects-all', query: workspaceQuery })
+                } else {
+                    router.push({ name: 'project', params: { projectId } })
+                }
             },
         },
         {

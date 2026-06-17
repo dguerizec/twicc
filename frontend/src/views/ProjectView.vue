@@ -17,6 +17,10 @@ import { getRegisteredProviders, getProviderHelpers, getProviderStore, getProvid
 import { toWorkspaceProjectId } from '../utils/workspaceIds'
 import { splitProjectsByPriority } from '../utils/projectSort'
 import SessionList from '../components/session/list/SessionList.vue'
+import SessionsSidebarControls from '../components/session/SessionsSidebarControls.vue'
+import ArtifactBookmarksSidebarControls from '../components/artifacts/ArtifactBookmarksSidebarControls.vue'
+import ArtifactBookmarkList from '../components/artifacts/ArtifactBookmarkList.vue'
+import ArtifactsBrowserView from './ArtifactsBrowserView.vue'
 import SessionSelectionBar from '../components/session/list/SessionSelectionBar.vue'
 import FetchErrorPanel from '../components/ui/FetchErrorPanel.vue'
 import SettingsPopover from '../components/app/SettingsPopover.vue'
@@ -397,6 +401,12 @@ const sessionId = computed(() => route.params.sessionId || null)
 // Detect "All Projects" mode from route name
 const isAllProjectsMode = computed(() => route.name?.startsWith('projects-'))
 
+// Detect Artifacts mode from the EXACT route names (not endsWith('-artifacts'),
+// which would also match the in-session artifacts tab routes and wrongly flip
+// the sidebar). Swaps the sidebar controls/list and the main-pane region.
+const isArtifactsMode = computed(() =>
+    route.name === 'project-artifacts' || route.name === 'projects-artifacts')
+
 // Workspace state
 const workspacesStore = useWorkspacesStore()
 const activeWorkspaceId = computed(() => route.query.workspace || null)
@@ -610,18 +620,24 @@ const compactView = computed(() => settingsStore.isCompactSessionList)
 // current filter.
 const showActiveAcrossFilters = computed(() => settingsStore.isShowActiveAcrossFilters)
 
-// Reference to SessionList for keyboard navigation
+// References to the lists for keyboard navigation. Only one is mounted at a
+// time (by mode); the active one drives arrow-key navigation from the filter.
 const sessionListRef = ref(null)
+const artifactBookmarkListRef = ref(null)
+const activeListRef = computed(() => isArtifactsMode.value ? artifactBookmarkListRef.value : sessionListRef.value)
 
-// Reference to the search input for focus management
-const searchInputRef = ref(null)
+// References to the two sidebar control components (only one is mounted at a
+// time, by mode). Each exposes focus() which focuses its inner filter input.
+const sessionsControlsRef = ref(null)
+const artifactBookmarksControlsRef = ref(null)
 
 /**
- * Focus the search input field.
+ * Focus the active filter input field.
  * Called when SessionList emits 'focus-search' (e.g., ArrowUp from first item).
  */
 function focusSearchInput() {
-    searchInputRef.value?.focus()
+    if (isArtifactsMode.value) artifactBookmarksControlsRef.value?.focus()
+    else sessionsControlsRef.value?.focus()
 }
 
 // Clear search when project changes
@@ -643,15 +659,15 @@ function handleSearchKeydown(event) {
     // their default text input behavior (cursor movement, text selection, etc.).
     const navigationKeys = ['ArrowDown', 'Enter', 'Escape']
 
-    if (navigationKeys.includes(event.key) && sessionListRef.value) {
-        const handled = sessionListRef.value.handleKeyNavigation(event, { fromSearch: true })
+    if (navigationKeys.includes(event.key) && activeListRef.value) {
+        const handled = activeListRef.value.handleKeyNavigation(event, { fromSearch: true })
         if (handled) {
             event.preventDefault()
             return
         }
     }
 
-    // Escape not handled by SessionList (no highlight) → clear search field
+    // Escape not handled by the list (no highlight) → clear search field
     if (event.key === 'Escape' && searchQuery.value) {
         searchQuery.value = ''
         event.preventDefault()
@@ -757,6 +773,29 @@ function handleSessionOptionsSelect(event) {
     }
 }
 
+// ─── Artifacts mode (sidebar) ────────────────────────────────────────────────
+// Preserve the active workspace query across mode/scope switches, exactly as the
+// session selector does (see :838/:851/:857). Factored once and reused.
+const queryWithWorkspace = () => (activeWorkspaceId.value ? { workspace: activeWorkspaceId.value } : {})
+
+// Sessions → Artifacts and back, keeping the current scope + workspace query.
+function switchToArtifacts() {
+    if (isAllProjectsMode.value) router.push({ name: 'projects-artifacts', query: queryWithWorkspace() })
+    else router.push({ name: 'project-artifacts', params: { projectId: projectId.value } })
+}
+function switchToSessions() {
+    if (isAllProjectsMode.value) router.push({ name: 'projects-all', query: queryWithWorkspace() })
+    else router.push({ name: 'project', params: { projectId: projectId.value } })
+}
+
+// Open an artifact bookmark in the main pane (artifacts route with :bookmarkId).
+function onArtifactBookmarkSelect(b) {
+    if (isAllProjectsMode.value)
+        router.push({ name: 'projects-artifacts', params: { bookmarkId: String(b.id) }, query: queryWithWorkspace() })
+    else
+        router.push({ name: 'project-artifacts', params: { projectId: projectId.value, bookmarkId: String(b.id) } })
+}
+
 // Handle project/workspace selection from the dropdown selector
 function handleSelectorSelect(event) {
     const value = event.detail?.item?.value
@@ -773,6 +812,25 @@ function handleSelectorSelect(event) {
         // desyncs arrow-key navigation and Enter. Re-assert the active row on the
         // toggle once the re-render and WA's reset have settled.
         restoreSelectorActiveItem(toggleItem)
+        return
+    }
+
+    // In Artifacts mode the selector must navigate to the *-artifacts route
+    // variants for the chosen scope (no session in this mode), so changing scope
+    // re-filters the artifact bookmark list instead of dropping back to Sessions mode.
+    if (isArtifactsMode.value) {
+        if (value === ALL_PROJECTS_ID) {
+            router.push({ name: 'projects-artifacts', query: {} })
+        } else if (value.startsWith('workspace:')) {
+            router.push({ name: 'projects-artifacts', query: { workspace: value.slice('workspace:'.length) } })
+        } else if (value === 'ws-all') {
+            router.push({ name: 'projects-artifacts', query: { workspace: activeWorkspaceId.value } })
+        } else if (value === '__manage_workspaces__') {
+            manageWorkspacesDialogRef.value?.open()
+        } else {
+            // Regular project selection.
+            router.push({ name: 'project-artifacts', params: { projectId: value } })
+        }
         return
     }
 
@@ -1281,7 +1339,7 @@ onMounted(() => {
             icon: 'magnifying-glass',
             category: 'ui',
             action: () => {
-                searchInputRef.value?.focus()
+                focusSearchInput()
             },
         },
         {
@@ -1687,94 +1745,30 @@ function updateSidebarClosedClass(closed) {
                     </wa-dropdown>
                 </div>
 
-                <div class="sidebar-header-row">
-                    <!-- Session list options dropdown -->
-                    <wa-dropdown
-                        placement="bottom-end"
-                        class="session-options-dropdown"
-                        @wa-select="handleSessionOptionsSelect"
-                    >
-                        <wa-button
-                            id="session-options-button"
-                            slot="trigger"
-                            variant="neutral"
-                            appearance="filled-outlined"
-                            size="small"
-                        >
-                            <wa-icon name="sliders"></wa-icon>
-                        </wa-button>
-                        <wa-dropdown-item
-                            type="checkbox"
-                            value="show-archived"
-                            :checked="showArchivedSessions"
-                        >
-                            Show archived sessions
-                        </wa-dropdown-item>
-                        <wa-dropdown-item value="archive-older">
-                            <wa-icon slot="icon" name="box-archive"></wa-icon>
-                            {{ trimmedSearchQuery ? 'Archive filtered sessions older than…' : 'Archive sessions older than…' }}
-                            <wa-dropdown-item slot="submenu" value="archive-older-3d">3 days</wa-dropdown-item>
-                            <wa-dropdown-item slot="submenu" value="archive-older-7d">7 days</wa-dropdown-item>
-                            <wa-dropdown-item slot="submenu" value="archive-older-10d">10 days</wa-dropdown-item>
-                            <wa-dropdown-item slot="submenu" value="archive-older-20d">20 days</wa-dropdown-item>
-                            <wa-dropdown-item slot="submenu" value="archive-older-30d">30 days</wa-dropdown-item>
-                            <wa-dropdown-item slot="submenu" value="archive-older-2m">2 months</wa-dropdown-item>
-                            <wa-dropdown-item slot="submenu" value="archive-older-3m">3 months</wa-dropdown-item>
-                            <wa-dropdown-item slot="submenu" value="archive-older-6m">6 months</wa-dropdown-item>
-                        </wa-dropdown-item>
-                        <wa-dropdown-item
-                            type="checkbox"
-                            value="compact-view"
-                            :checked="compactView"
-                        >
-                            Compact view
-                        </wa-dropdown-item>
-                        <!-- Multi-select needs Shift/Ctrl modifier clicks, which
-                             have no touch equivalent yet — hide it on touch devices. -->
-                        <wa-dropdown-item
-                            v-if="!settingsStore.isTouchDevice"
-                            type="checkbox"
-                            value="multi-select"
-                            :checked="selectionStore.active"
-                        >
-                            Multi-select mode
-                        </wa-dropdown-item>
-                        <wa-divider></wa-divider>
-                        <wa-dropdown-item
-                            type="checkbox"
-                            value="show-active"
-                            :checked="showActiveAcrossFilters"
-                        >
-                            <div>Show active sessions across projects</div>
-                            <div class="session-option-hint">All with a running process or unread content</div>
-                        </wa-dropdown-item>
-                    </wa-dropdown>
-                    <AppTooltip for="session-options-button">Session list options</AppTooltip>
-
-                    <!-- Search/filter input -->
-                    <wa-input
-                        ref="searchInputRef"
-                        v-model="searchQuery"
-                        placeholder="Filter sessions..."
-                        size="small"
-                        with-clear
-                        class="session-search"
-                        @keydown="handleSearchKeydown"
-                    >
-                        <wa-icon slot="start" name="magnifying-glass"></wa-icon>
-                    </wa-input>
-                    <wa-button
-                        id="search-advanced-button"
-                        variant="neutral"
-                        appearance="filled-outlined"
-                        size="small"
-                        class="search-advanced-button"
-                        @click="openAdvancedSearch"
-                    >
-                        <wa-icon name="plus"></wa-icon>
-                    </wa-button>
-                    <AppTooltip for="search-advanced-button">Full-text search (Ctrl+Shift+F)</AppTooltip>
-                </div>
+                <SessionsSidebarControls
+                    v-if="!isArtifactsMode"
+                    ref="sessionsControlsRef"
+                    v-model:search-query="searchQuery"
+                    :show-archived-sessions="showArchivedSessions"
+                    :compact-view="compactView"
+                    :multi-select-active="selectionStore.active"
+                    :show-active-across-filters="showActiveAcrossFilters"
+                    :trimmed-search-query="trimmedSearchQuery"
+                    :is-touch-device="settingsStore.isTouchDevice"
+                    @option-select="handleSessionOptionsSelect"
+                    @search-keydown="handleSearchKeydown"
+                    @open-advanced-search="openAdvancedSearch"
+                    @switch-to-artifacts="switchToArtifacts"
+                />
+                <ArtifactBookmarksSidebarControls
+                    v-else
+                    ref="artifactBookmarksControlsRef"
+                    v-model:search-query="searchQuery"
+                    :compact-view="compactView"
+                    @option-select="handleSessionOptionsSelect"
+                    @search-keydown="handleSearchKeydown"
+                    @switch-to-sessions="switchToSessions"
+                />
             </div>
 
             <wa-divider></wa-divider>
@@ -1787,42 +1781,58 @@ function updateSidebarClosedClass(closed) {
                     @deselect-session="handleSessionSelect"
                 />
 
-                <!-- Error state (only for initial load failure) -->
-                <FetchErrorPanel
-                    v-if="didSessionsFailToLoad && !areSessionsFetched"
-                    :loading="isInitialLoading"
-                    @retry="handleRetry"
-                >
-                    Failed to load sessions
-                </FetchErrorPanel>
+                <!-- Sessions mode: error / loading / list -->
+                <template v-if="!isArtifactsMode">
+                    <!-- Error state (only for initial load failure) -->
+                    <FetchErrorPanel
+                        v-if="didSessionsFailToLoad && !areSessionsFetched"
+                        :loading="isInitialLoading"
+                        @retry="handleRetry"
+                    >
+                        Failed to load sessions
+                    </FetchErrorPanel>
 
-                <!-- Initial loading state (only before first fetch) -->
-                <div v-else-if="isInitialLoading" class="sessions-loading">
-                    <wa-spinner></wa-spinner>
-                    <span>Loading...</span>
-                </div>
+                    <!-- Initial loading state (only before first fetch) -->
+                    <div v-else-if="isInitialLoading" class="sessions-loading">
+                        <wa-spinner></wa-spinner>
+                        <span>Loading...</span>
+                    </div>
 
-                <!-- Normal content (shown once we have sessions, handles its own "load more" state) -->
-                <SessionList
+                    <!-- Normal content (shown once we have sessions, handles its own "load more" state) -->
+                    <SessionList
+                        v-else
+                        ref="sessionListRef"
+                        :project-id="effectiveProjectId"
+                        :session-id="sessionId"
+                        :show-project-name="showProjectNameInList"
+                        :search-query="searchQuery"
+                        :show-archived="showArchivedSessions"
+                        :show-archived-projects="showArchivedProjects"
+                        :compact-view="compactView"
+                        :show-active-across-filters="showActiveAcrossFilters"
+                        @select="handleSessionSelect"
+                        @drop-data="handleDropOnSession"
+                        @focus-search="focusSearchInput"
+                    />
+                </template>
+
+                <!-- Artifacts mode: artifact bookmark list -->
+                <ArtifactBookmarkList
                     v-else
-                    ref="sessionListRef"
-                    :project-id="effectiveProjectId"
-                    :session-id="sessionId"
-                    :show-project-name="showProjectNameInList"
+                    ref="artifactBookmarkListRef"
+                    :effective-project-id="effectiveProjectId"
+                    :active-workspace-id="activeWorkspaceId"
                     :search-query="searchQuery"
-                    :show-archived="showArchivedSessions"
-                    :show-archived-projects="showArchivedProjects"
                     :compact-view="compactView"
-                    :show-active-across-filters="showActiveAcrossFilters"
-                    @select="handleSessionSelect"
-                    @drop-data="handleDropOnSession"
+                    :active-bookmark-id="route.params.bookmarkId || null"
+                    @select="onArtifactBookmarkSelect"
                     @focus-search="focusSearchInput"
                 />
 
-                <!-- Floating "New session" button -->
+                <!-- Floating "New session" button (Sessions mode only) -->
                 <!-- In single project mode: split button (main action + dropdown for other projects) -->
                 <wa-button-group
-                    v-if="!isAllProjectsMode"
+                    v-if="!isArtifactsMode && !isAllProjectsMode"
                     class="new-session-split-button"
                     label="New session actions"
                 >
@@ -1956,9 +1966,9 @@ function updateSidebarClosedClass(closed) {
                     <AppTooltip for="new-session-project-picker">Choose a different project</AppTooltip>
                 </template>
 
-                <!-- In all projects mode: dropdown to choose project -->
+                <!-- In all projects mode: dropdown to choose project (Sessions mode only) -->
                 <wa-dropdown
-                    v-if="isAllProjectsMode"
+                    v-if="!isArtifactsMode && isAllProjectsMode"
                     id="new-session-dropdown"
                     ref="newSessionAllDropdownRef"
                     class="new-session-dropdown"
@@ -2272,16 +2282,25 @@ function updateSidebarClosedClass(closed) {
 
         <!-- Main content area -->
         <main slot="end" class="main-content">
-            <div v-show="sessionId" class="session-content">
+            <div v-show="!isArtifactsMode && sessionId" class="session-content">
                 <router-view v-slot="{ Component }">
                     <KeepAlive :max="settingsStore.getMaxCachedSessions">
                         <component :is="Component" :key="route.params.sessionId" />
                     </KeepAlive>
                 </router-view>
             </div>
-            <div v-show="!sessionId" class="project-detail-content">
+            <div v-show="!isArtifactsMode && !sessionId" class="project-detail-content">
                 <KeepAlive>
                     <ProjectDetailPanel :project-id="effectiveProjectId" :active="!sessionId" :key="effectiveProjectId" />
+                </KeepAlive>
+            </div>
+            <div v-show="isArtifactsMode" class="artifacts-browser-content">
+                <KeepAlive>
+                    <ArtifactsBrowserView
+                        :bookmark-id="route.params.bookmarkId || null"
+                        :effective-project-id="effectiveProjectId"
+                        :key="effectiveProjectId"
+                    />
                 </KeepAlive>
             </div>
         </main>
@@ -2381,41 +2400,15 @@ wa-split-panel::part(divider) {
     background: var(--main-header-footer-bg-color);
 }
 
+/* Shared by the first header row (the project selector) and the extracted
+   SessionsSidebarControls / ArtifactBookmarksSidebarControls (which carry their own
+   copy in scoped styles). */
 .sidebar-header-row {
     width: 100%;
     display: flex;
     justify-content: stretch;
     align-items: center;
     gap: var(--wa-space-s);
-}
-
-.session-search {
-    flex: 1;
-    min-width: 3.5rem;
-    max-width: 100%;
-    &:hover {
-        z-index: 10;
-        min-width: min(10rem, calc(100vw - 100px));
-    }
-}
-
-.search-advanced-button {
-    flex-shrink: 0;
-}
-
-.session-options-dropdown {
-    flex-shrink: 0;
-    &::part(menu) {
-        max-width: 90vw !important;
-        width: auto;
-    }
-}
-
-/* Secondary hint line under a dropdown-item label (same style as the
-   "scroll to selected file" subtitle in the files tab root selector). */
-.session-option-hint {
-    font-size: var(--wa-font-size-xs);
-    color: var(--wa-color-text-quiet);
 }
 
 .project-selector {
@@ -2635,7 +2628,8 @@ wa-dropdown-item:hover .row-menu-trigger,
 }
 
 .session-content,
-.project-detail-content {
+.project-detail-content,
+.artifacts-browser-content {
     height: 100%;
 }
 

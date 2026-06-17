@@ -81,6 +81,9 @@ watch(isAppReady, async (ready) => {
             // from every project so the sidebar can render them cross-filter
             // without waiting for their project to be loaded on demand.
             dataStore.loadStickySessions(),
+            // Preload all artifact bookmarks so the Artifacts sidebar mode can
+            // render them across projects without per-project loading.
+            dataStore.loadArtifactBookmarks(),
         ])
         openWs()
     } else {

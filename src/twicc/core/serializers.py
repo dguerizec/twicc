@@ -47,6 +47,27 @@ def serialize_project(project):
     }
 
 
+def serialize_artifact_bookmark(bookmark):
+    """Serialize an ArtifactBookmark to a dict. Pure: no DB queries — FK ids via
+    *_id, root computed from the session id (no relationship access)."""
+    import os
+    from twicc.paths import get_session_artifacts_dir
+
+    rel = bookmark.relative_path
+    return {
+        "id": bookmark.id,
+        "name": bookmark.name,
+        "scope": bookmark.scope,
+        "session_id": bookmark.session_id,
+        "project_id": bookmark.project_id,
+        "relative_path": rel,
+        "root": str(get_session_artifacts_dir(bookmark.session_id)),
+        "file_ext": os.path.splitext(rel)[1].lstrip(".").lower(),
+        "created_at": bookmark.created_at.isoformat() if bookmark.created_at else None,
+        "updated_at": bookmark.updated_at.isoformat() if bookmark.updated_at else None,
+    }
+
+
 def serialize_session(session):
     """
     Serialize a Session model to a dictionary.

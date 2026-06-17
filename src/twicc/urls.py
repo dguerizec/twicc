@@ -32,6 +32,8 @@ urlpatterns = [
     path("api/file-move/", views.standalone_file_move),
     path("api/file-create/", views.standalone_file_create),
     path("api/home-directory/", views.home_directory),
+    path("api/artifact-bookmarks/", views.artifact_bookmark_list),
+    path("api/artifact-bookmarks/<int:bookmark_id>/", views.artifact_bookmark_detail),
     path("api/projects/", views.project_list),
     path("api/projects/<str:project_id>/", views.project_detail),
     path("api/projects/<str:project_id>/trust/resolve/", views.project_trust_resolve),

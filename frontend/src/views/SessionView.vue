@@ -183,7 +183,7 @@ provide('insertTextAtCursor', insertTextAtCursor)
 // was created. It is used only by router.push calls that rebuild the current
 // URL, so that switching tabs (main / subagent / files / git / terminal) never
 // changes the sidebar filter — even when the session lives in a different
-// project than the filter (cross-filter bookmarks, future pin cross-filter).
+// project than the filter (cross-filter artifact bookmarks, future pin cross-filter).
 //
 // projectId (declared further down, after `session`) is the project the session
 // belongs to, driven by `session.project_id`. It is used for API calls, code-
@@ -243,7 +243,7 @@ const sessionLoadError = ref(null)
 //   touches the current history entry).
 // - Otherwise fetch by id. Covers cross-filter deep links (the URL's
 //   projectId is the sidebar filter, not the session's real project) and
-//   direct bookmarks into a project whose sessions haven't been loaded yet.
+//   direct artifact bookmarks into a project whose sessions haven't been loaded yet.
 //   ``loadSessionById`` is idempotent.
 //
 // Called from setup (initial render) and from ``onActivated`` (cached KeepAlive
@@ -1605,6 +1605,7 @@ onBeforeUnmount(() => {
                     :show-root-selector="false"
                     root-label="Artifacts"
                     :preview-by-default="true"
+                    :artifact-bookmark-session-id="session?.id"
                     :route-root-key="activeTabId === 'artifacts' ? artifactsRouteRootKey : undefined"
                     :route-file-path="activeTabId === 'artifacts' ? artifactsRouteFilePath : undefined"
                     :active="isActive && activeTabId === 'artifacts'"

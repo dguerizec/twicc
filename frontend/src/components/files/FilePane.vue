@@ -10,6 +10,8 @@ import AppTooltip from '../ui/AppTooltip.vue'
 import CodeEditor from '../editor/CodeEditor.vue'
 import DiffEditor from '../editor/DiffEditor.vue'
 import TextSelectionComment from '../session/detail/TextSelectionComment.vue'
+import ArtifactBookmarkButton from '../artifacts/ArtifactBookmarkButton.vue'
+import { useDataStore } from '../../stores/data'
 import { useTextSelectionComment } from '../../composables/useTextSelectionComment'
 
 const props = defineProps({
@@ -58,6 +60,18 @@ const props = defineProps({
         default: false,
     },
     displayPath: {
+        type: String,
+        default: null,
+    },
+    // Render-only artifact mode: locks the preview on and hides the source/eye
+    // toggles + the Edit switch (used by the Artifacts browser view).
+    renderOnly: {
+        type: Boolean,
+        default: false,
+    },
+    // When set (the session that owns this artifact), FilePane shows the artifact
+    // bookmark toggle for renderable artifacts. Null outside the Artifacts context.
+    artifactBookmarkSessionId: {
         type: String,
         default: null,
     },
@@ -248,6 +262,31 @@ const isPdfFile = computed(() => /\.pdf$/i.test(props.filePath || ''))
 const isAudioFile = computed(() => /\.(?:mp3|wav|ogg|oga|opus|m4a|aac|flac|weba)$/i.test(props.filePath || ''))
 const isVideoFile = computed(() => /\.(?:mp4|m4v|webm|ogv|mov)$/i.test(props.filePath || ''))
 const isBinaryMediaFile = computed(() => isPdfFile.value || isAudioFile.value || isVideoFile.value)
+
+// Renderable artifact = any type FilePane shows rendered (no source view).
+// Images are detected after load via imageSrc (the binary-image data URI).
+const isRenderableArtifact = computed(() =>
+    isMarkdownFile.value || isSvgFile.value || isHtmlFile.value || isMermaidFile.value
+    || isBinaryMediaFile.value || !!imageSrc.value)
+
+// Path of the current file relative to the artifacts root (rootRestriction),
+// used as the bookmark key. Null when the file is not under the root.
+const relativeArtifactPath = computed(() => {
+    const root = props.rootRestriction
+    const fp = props.filePath
+    if (!root || !fp) return null
+    const prefix = root.endsWith('/') ? root : root + '/'
+    return fp.startsWith(prefix) ? fp.slice(prefix.length) : null
+})
+
+const dataStore = useDataStore()
+// The bookmark for the artifact currently shown (when in artifact context),
+// used to surface its name next to the path and reflect the toggle state.
+const artifactBookmark = computed(() =>
+    props.artifactBookmarkSessionId && relativeArtifactPath.value
+        ? dataStore.artifactBookmarkFor(props.artifactBookmarkSessionId, relativeArtifactPath.value)
+        : null,
+)
 
 // --- Edit mode state ---
 const isEditing = ref(false)
@@ -573,10 +612,11 @@ watch(() => props.filePath, async (newPath) => {
     // (Artifacts tab) opens md/svg files directly in preview; the eye toggle
     // still lets the user switch to raw.
     isEditing.value = false
-    showMarkdownPreview.value = props.previewByDefault && isMarkdownFile.value
-    showSvgPreview.value = props.previewByDefault && isSvgFile.value
-    showHtmlPreview.value = props.previewByDefault && isHtmlFile.value
-    showMermaidPreview.value = props.previewByDefault && isMermaidFile.value
+    const previewOn = props.previewByDefault || props.renderOnly
+    showMarkdownPreview.value = previewOn && isMarkdownFile.value
+    showSvgPreview.value = previewOn && isSvgFile.value
+    showHtmlPreview.value = previewOn && isHtmlFile.value
+    showMermaidPreview.value = previewOn && isMermaidFile.value
 
     // In diff mode, content is passed via props — don't fetch.
     if (props.diffMode) {
@@ -866,17 +906,25 @@ function goToNextDiff() {
 
 <template>
     <div class="file-pane">
-        <!-- File path bar (desktop only, when displayPath is provided) -->
+        <!-- File path bar (desktop only, when displayPath is provided). For a
+             bookmarkable artifact it also carries the bookmark name (in
+             parentheses after the path) and the bookmark toggle (far right). -->
         <template v-if="displayPath">
             <div class="file-path-header">
-                <span class="file-path-label" :id="filePathLabelId">{{ displayPath }}</span>
-                <AppTooltip :for="filePathLabelId">{{ displayPath }}</AppTooltip>
+                <span class="file-path-label" :id="filePathLabelId">{{ displayPath }}<span v-if="artifactBookmark" class="file-path-artifact-bookmark-name"> ({{ artifactBookmark.name }})</span></span>
+                <AppTooltip :for="filePathLabelId">{{ displayPath }}<template v-if="artifactBookmark"> ({{ artifactBookmark.name }})</template></AppTooltip>
+                <ArtifactBookmarkButton
+                    v-if="artifactBookmarkSessionId && isRenderableArtifact && relativeArtifactPath"
+                    class="file-path-artifact-bookmark-btn"
+                    :session-id="artifactBookmarkSessionId"
+                    :relative-path="relativeArtifactPath"
+                />
             </div>
             <wa-divider></wa-divider>
         </template>
 
         <!-- Header toolbar (visible once a file has been loaded) -->
-        <div v-if="showHeader" class="header">
+        <div v-if="showHeader && !renderOnly" class="header">
             <div class="header-left">
                 <wa-button
                     v-if="!isPreviewing"
@@ -906,7 +954,7 @@ function goToNextDiff() {
                 <!-- Edit controls: hidden in read-only diff mode (commit diffs),
                      and while a preview is active (editing the source is a
                      separate mode from previewing the rendered result). -->
-                <template v-if="(!diffMode || !diffReadOnly) && isWritable && !isPreviewing">
+                <template v-if="(!diffMode || !diffReadOnly) && isWritable && !isPreviewing && !renderOnly">
                     <wa-switch
                         :id="editSwitchId"
                         :checked="isEditing"
@@ -988,7 +1036,7 @@ function goToNextDiff() {
                      editing — but disabled until unsaved changes are saved, since
                      entering the preview leaves edit mode. -->
                 <wa-button
-                    v-if="isMarkdownFile"
+                    v-if="isMarkdownFile && !renderOnly"
                     size="small"
                     variant="neutral"
                     :appearance="showMarkdownPreview ? 'filled' : 'outlined'"
@@ -1003,7 +1051,7 @@ function goToNextDiff() {
                 <!-- SVG preview toggle: shown for .svg files, including while
                      editing — disabled until unsaved changes are saved. -->
                 <wa-button
-                    v-if="isSvgFile"
+                    v-if="isSvgFile && !renderOnly"
                     size="small"
                     variant="neutral"
                     :appearance="showSvgPreview ? 'filled' : 'outlined'"
@@ -1020,7 +1068,7 @@ function goToNextDiff() {
                      tab): a preview of the working-tree file would not reflect the
                      diff being viewed. -->
                 <wa-button
-                    v-if="isHtmlFile && !diffMode"
+                    v-if="isHtmlFile && !diffMode && !renderOnly"
                     size="small"
                     variant="neutral"
                     :appearance="showHtmlPreview ? 'filled' : 'outlined'"
@@ -1049,7 +1097,7 @@ function goToNextDiff() {
                 <!-- Mermaid preview toggle: shown for .mmd files, including while
                      editing (disabled until saved). Excluded in diff mode (Git tab). -->
                 <wa-button
-                    v-if="isMermaidFile && !diffMode"
+                    v-if="isMermaidFile && !diffMode && !renderOnly"
                     size="small"
                     variant="neutral"
                     :appearance="showMermaidPreview ? 'filled' : 'outlined'"
@@ -1209,7 +1257,7 @@ function goToNextDiff() {
 .file-path-header {
     display: flex;
     align-items: center;
-    justify-content: center;
+    gap: var(--wa-space-2xs);
     padding: var(--wa-space-2xs) var(--wa-space-s);
     min-height: 1.5rem;
     flex-shrink: 0;
@@ -1227,8 +1275,19 @@ function goToNextDiff() {
     text-overflow: ellipsis;
     white-space: nowrap;
     min-width: 0;
+    flex: 1;
+    text-align: center;
     font-size: var(--wa-font-size-s);
     color: var(--wa-color-text-quiet);
+}
+
+/* Bookmark name shown right after the path, in parentheses. */
+.file-path-artifact-bookmark-name {
+    color: var(--wa-color-text-normal);
+}
+
+.file-path-artifact-bookmark-btn {
+    flex-shrink: 0;
 }
 
 .header {

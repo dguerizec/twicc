@@ -75,6 +75,14 @@ const props = defineProps({
         type: Boolean,
         default: false,
     },
+    renderOnly: {
+        type: Boolean,
+        default: false,
+    },
+    artifactBookmarkSessionId: {
+        type: String,
+        default: null,
+    },
     routeRootKey: {
         default: undefined,
     },
@@ -884,6 +892,7 @@ defineExpose({ revealFile, setRootByPath, onArtifactFilesChanged })
                 :show-refresh="true"
                 :active="active"
                 :is-mobile="isMobile"
+                :artifact-bookmark-session-id="artifactBookmarkSessionId"
                 :commented-paths="commentedPaths"
                 enable-context-menu
                 mode="files"
@@ -946,6 +955,8 @@ defineExpose({ revealFile, setRootByPath, onArtifactFilesChanged })
                     :api-prefix="resolvedApiPrefix"
                     :root-restriction="rootRestriction"
                     :preview-by-default="previewByDefault"
+                    :render-only="renderOnly"
+                    :artifact-bookmark-session-id="artifactBookmarkSessionId"
                 />
                 <div v-show="!selectedFile" class="panel-placeholder">
                     Select a file

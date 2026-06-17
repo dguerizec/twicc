@@ -308,6 +308,7 @@ export const useDataStore = defineStore('data', {
         // Server data
         projects: {},       // { id: { id, sessions_count, mtime, stale, worktree_of } } — worktree_of: parent project id when this project is a git worktree, else null
         sessions: {},       // { id: { id, project_id, provider, last_line, mtime, stale } }
+        artifactBookmarks: {},      // { id: { id, name, scope, session_id, project_id, relative_path, root, file_ext, available? } } — artifact bookmarks
         // Session items indexed by session ID.
         // { sessionId: [{ line_num, content, display_level, ... }] } - line_num is 1-based
         //
@@ -521,6 +522,14 @@ export const useDataStore = defineStore('data', {
     }),
 
     getters: {
+        /**
+         * Find an artifact bookmark by its (session, relative path) — used by the
+         * artifact action bar to reflect the bookmarked state of the shown file.
+         */
+        artifactBookmarkFor: (state) => (sessionId, relativePath) =>
+            Object.values(state.artifactBookmarks).find(
+                b => b.session_id === sessionId && b.relative_path === relativePath,
+            ) || null,
         /**
          * Display-ready list for the Ctrl+` session switcher: the most-recently
          * visited sessions, newest first, one entry per session (the MRU is
@@ -1974,6 +1983,77 @@ export const useDataStore = defineStore('data', {
                 console.error(`Failed to load session ${sessionId}:`, error)
                 throw error
             }
+        },
+        // --- Artifact bookmarks ---
+        async loadArtifactBookmarks() {
+            try {
+                const res = await apiFetch('/api/artifact-bookmarks/')
+                if (!res.ok) {
+                    console.error('Failed to load artifact bookmarks:', res.status, res.statusText)
+                    return
+                }
+                const data = await res.json()
+                this.setArtifactBookmarks(data.bookmarks)
+            } catch (error) {
+                console.error('Failed to load artifact bookmarks:', error)
+            }
+        },
+        // Replace the whole bookmark set from a full snapshot (boot REST load and
+        // the `artifact_bookmarks_updated` WS message pushed on every connect).
+        // A wholesale replace — not a merge — so removals that happened while
+        // disconnected are reflected. The transient per-open `available` flag set
+        // by fetchArtifactBookmarkDetail is intentionally dropped; it is re-fetched lazily.
+        setArtifactBookmarks(list) {
+            const next = {}
+            for (const b of list || []) next[b.id] = b
+            this.artifactBookmarks = next
+        },
+        async fetchArtifactBookmarkDetail(id) {
+            // Always GET the detail (fresh server-side `available` flag), upsert
+            // metadata, and return the full payload incl. `available`, or null on 404.
+            try {
+                const res = await apiFetch(`/api/artifact-bookmarks/${id}/`)
+                if (res.status === 404) { delete this.artifactBookmarks[id]; return null }
+                if (!res.ok) throw new Error(`Failed to load artifact bookmark: ${res.status}`)
+                const b = await res.json()
+                this.artifactBookmarks[b.id] = b
+                return b
+            } catch (error) {
+                console.error(`Failed to fetch artifact bookmark ${id}:`, error)
+                return null
+            }
+        },
+        upsertArtifactBookmark(bookmark) { this.artifactBookmarks[bookmark.id] = bookmark },
+        removeArtifactBookmark(id) { delete this.artifactBookmarks[id] },
+        async createArtifactBookmark({ sessionId, relativePath, name, scope }) {
+            const res = await apiFetch('/api/artifact-bookmarks/', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ session_id: sessionId, relative_path: relativePath, name, scope }),
+            })
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}))
+                throw new Error(err?.error || 'Failed to create artifact bookmark')
+            }
+            const b = await res.json()
+            this.artifactBookmarks[b.id] = b
+            return b
+        },
+        async updateArtifactBookmark(id, patch) {
+            const res = await apiFetch(`/api/artifact-bookmarks/${id}/`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(patch),
+            })
+            if (!res.ok) throw new Error('Failed to update artifact bookmark')
+            const b = await res.json()
+            this.artifactBookmarks[b.id] = b
+            return b
+        },
+        async deleteArtifactBookmark(id) {
+            const res = await apiFetch(`/api/artifact-bookmarks/${id}/`, { method: 'DELETE' })
+            if (!res.ok) throw new Error('Failed to delete artifact bookmark')
+            delete this.artifactBookmarks[id]
         },
         /**
          * Load all items for a session from the API.
