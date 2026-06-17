@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- **Artifacts** — agents can create artifacts for you on request (images, interactive playgrounds, …). They render right inside TwiCC and can optionally be bookmarked for quick access in a dedicated view (+CLI, skill and API).
+
+### Changed
+
 - **Question widget** — ability to cancel or partially submit Claude's questions.
 
 ## [1.8.3] - 2026-06-15
