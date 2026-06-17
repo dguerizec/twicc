@@ -515,6 +515,69 @@ const showOverlay = computed(() => {
     return false
 })
 
+// --- Full-window preview ("expand") ----------------------------------------
+// Any active preview can be blown up to a full-window overlay. It expands IN
+// PLACE (a position:fixed class on the wrapper) and is never moved in the DOM:
+// relocating an <iframe> reloads it, so a teleport would wipe a running HTML
+// page, the PDF scroll position, audio/video playback, etc. Staying put keeps
+// the same nodes, so all of that survives untouched. To let the fixed overlay
+// reach beyond the content pane (whose .main-content establishes a containing
+// block via container-type and sits under the split divider), we ask the host
+// (ProjectView) to drop that containment and lift the pane while expanded — see
+// expandPreviewHost. Available for every preview type, including render-only
+// mode (the Artifacts view, no header toolbar), via a floating toggle.
+const isPreviewFullscreen = ref(false)
+const previewFullscreenButtonId = `preview-fullscreen-${useId()}`
+
+// Provided by ProjectView: toggles .main-content--preview-expanded so the
+// in-place fixed overlay can cover the whole window (sidebar included). Absent
+// when FilePane is used outside a project view → graceful no-op (overlay then
+// stays clamped to its pane).
+const expandPreviewHost = inject('expandPreviewHost', null)
+
+// Mirrors the v-if conditions of the individual preview elements: true iff one
+// of them is actually rendered. Gates both the wrapper and its toggle, so the
+// expand affordance never shows over the bare code editor.
+const hasActivePreview = computed(() =>
+    (showMarkdownPreview.value && isMarkdownFile.value)
+    || showImagePreview.value
+    || (showHtmlPreview.value && isHtmlFile.value && !!htmlPreviewSrc.value && !props.diffMode)
+    || (showMermaidPreview.value && isMermaidFile.value && !props.diffMode)
+    || (isPdfFile.value && !!rawFileUrl.value && !props.diffMode)
+    || (isAudioFile.value && !!rawFileUrl.value && !props.diffMode)
+    || (isVideoFile.value && !!rawFileUrl.value && !props.diffMode),
+)
+
+function togglePreviewFullscreen() {
+    isPreviewFullscreen.value = !isPreviewFullscreen.value
+}
+
+// Escape exits full-window. Capture phase + stopPropagation so it unwraps the
+// overlay first, before any ancestor Escape handler (e.g. a dialog) reacts.
+function onPreviewFullscreenKeydown(event) {
+    if (event.key === 'Escape') {
+        event.stopPropagation()
+        isPreviewFullscreen.value = false
+    }
+}
+
+// While expanded: signal the host (to free the overlay from its pane) and add the
+// Escape listener; revert both on exit. Also collapse if the preview itself goes
+// away (file switched to source/code, preview toggled off) so there is never a
+// stranded fixed overlay, an expanded host, or a dangling listener.
+watch(isPreviewFullscreen, (on) => {
+    expandPreviewHost?.(on)
+    if (on) window.addEventListener('keydown', onPreviewFullscreenKeydown, true)
+    else window.removeEventListener('keydown', onPreviewFullscreenKeydown, true)
+})
+watch(hasActivePreview, (has) => {
+    if (!has) isPreviewFullscreen.value = false
+})
+onBeforeUnmount(() => {
+    window.removeEventListener('keydown', onPreviewFullscreenKeydown, true)
+    if (isPreviewFullscreen.value) expandPreviewHost?.(false)
+})
+
 /**
  * Check if a file is writable without fetching its content.
  * Used in diff mode where content comes from props....
@@ -1114,62 +1177,92 @@ function goToNextDiff() {
 
         <!-- Content area: editor is always mounted once, overlays sit on top -->
         <div ref="editorAreaRef" class="editor-area">
-            <!-- Markdown preview (when toggled on for .md files) -->
-            <div v-if="showMarkdownPreview && isMarkdownFile" class="markdown-preview-container">
-                <MarkdownContent
-                    :source="diffMode ? (modifiedContent ?? '') : currentContent"
-                    :show-toolbar="false"
+            <!-- Preview overlays. To go full-window the wrapper expands IN PLACE
+                 (position:fixed) — it is never teleported, because moving an <iframe>
+                 in the DOM reloads it and we must keep running HTML pages, PDF scroll,
+                 audio/video playback and image/Mermaid pan-zoom intact. ProjectView
+                 drops .main-content's container-type and lifts its z-index while a
+                 preview is expanded (via the injected setter) so the fixed overlay
+                 covers the whole window, sidebar included. The floating toggle is
+                 pinned inside the wrapper, reachable in both states and in render-only
+                 mode (which has no header toolbar). -->
+            <div
+                v-if="hasActivePreview"
+                class="file-pane-preview"
+                :class="{ 'file-pane-preview--fullscreen': isPreviewFullscreen }"
+            >
+                <!-- Markdown preview (when toggled on for .md files) -->
+                <div v-if="showMarkdownPreview && isMarkdownFile" class="markdown-preview-container">
+                    <MarkdownContent
+                        :source="diffMode ? (modifiedContent ?? '') : currentContent"
+                        :show-toolbar="false"
+                    />
+                </div>
+
+                <!-- Image preview (binary images or SVG preview) -->
+                <div v-if="showImagePreview" class="image-preview-container">
+                    <img
+                        ref="imageRef"
+                        :src="imageSrc || svgPreviewUrl"
+                        :alt="fileName"
+                        class="image-preview"
+                    />
+                </div>
+
+                <!-- HTML preview (when toggled on for .html files). The iframe loads
+                     the file from the raw endpoint so the page's relative CSS/JS/asset
+                     references resolve to sibling raw URLs. Sandboxed: scripts run but
+                     top-level navigation, popups and modals are not allowed. -->
+                <iframe
+                    v-if="showHtmlPreview && isHtmlFile && htmlPreviewSrc && !diffMode"
+                    :key="filePath"
+                    :src="htmlPreviewSrc"
+                    class="html-preview"
+                    sandbox="allow-scripts allow-same-origin allow-forms"
+                    title="HTML preview"
+                ></iframe>
+
+                <!-- Mermaid preview (when toggled on for .mmd files) — rendered to a
+                     pan/zoomable SVG, same in-panel interaction as a rendered image. -->
+                <MermaidDiagram
+                    v-if="showMermaidPreview && isMermaidFile && !diffMode"
+                    :key="filePath"
+                    :code="currentContent"
                 />
-            </div>
 
-            <!-- Image preview (binary images or SVG preview) -->
-            <div v-if="showImagePreview" class="image-preview-container">
-                <img
-                    ref="imageRef"
-                    :src="imageSrc || svgPreviewUrl"
-                    :alt="fileName"
-                    class="image-preview"
-                />
-            </div>
+                <!-- PDF preview — the browser's native PDF viewer in an iframe. -->
+                <iframe
+                    v-if="isPdfFile && rawFileUrl && !diffMode"
+                    :key="filePath"
+                    :src="rawFileUrl"
+                    class="pdf-preview"
+                    title="PDF preview"
+                ></iframe>
 
-            <!-- HTML preview (when toggled on for .html files). The iframe loads
-                 the file from the raw endpoint so the page's relative CSS/JS/asset
-                 references resolve to sibling raw URLs. Sandboxed: scripts run but
-                 top-level navigation, popups and modals are not allowed. -->
-            <iframe
-                v-if="showHtmlPreview && isHtmlFile && htmlPreviewSrc && !diffMode"
-                :key="filePath"
-                :src="htmlPreviewSrc"
-                class="html-preview"
-                sandbox="allow-scripts allow-same-origin allow-forms"
-                title="HTML preview"
-            ></iframe>
+                <!-- Audio preview — native <audio> player streaming from file-raw. -->
+                <div v-if="isAudioFile && rawFileUrl && !diffMode" class="media-preview-container">
+                    <audio :key="filePath" :src="rawFileUrl" controls class="audio-preview"></audio>
+                </div>
 
-            <!-- Mermaid preview (when toggled on for .mmd files) — rendered to a
-                 pan/zoomable SVG, same in-panel interaction as a rendered image. -->
-            <MermaidDiagram
-                v-if="showMermaidPreview && isMermaidFile && !diffMode"
-                :key="filePath"
-                :code="currentContent"
-            />
+                <!-- Video preview — native <video> player streaming from file-raw. -->
+                <div v-if="isVideoFile && rawFileUrl && !diffMode" class="media-preview-container">
+                    <video :key="filePath" :src="rawFileUrl" controls class="video-preview"></video>
+                </div>
 
-            <!-- PDF preview — the browser's native PDF viewer in an iframe. -->
-            <iframe
-                v-if="isPdfFile && rawFileUrl && !diffMode"
-                :key="filePath"
-                :src="rawFileUrl"
-                class="pdf-preview"
-                title="PDF preview"
-            ></iframe>
-
-            <!-- Audio preview — native <audio> player streaming from file-raw. -->
-            <div v-if="isAudioFile && rawFileUrl && !diffMode" class="media-preview-container">
-                <audio :key="filePath" :src="rawFileUrl" controls class="audio-preview"></audio>
-            </div>
-
-            <!-- Video preview — native <video> player streaming from file-raw. -->
-            <div v-if="isVideoFile && rawFileUrl && !diffMode" class="media-preview-container">
-                <video :key="filePath" :src="rawFileUrl" controls class="video-preview"></video>
+                <!-- Floating expand / compress toggle (all preview types). -->
+                <wa-button
+                    :id="previewFullscreenButtonId"
+                    class="preview-fullscreen-toggle"
+                    size="small"
+                    variant="neutral"
+                    appearance="filled"
+                    @click="togglePreviewFullscreen"
+                >
+                    <wa-icon :name="isPreviewFullscreen ? 'compress' : 'expand'"></wa-icon>
+                </wa-button>
+                <AppTooltip :for="previewFullscreenButtonId">
+                    {{ isPreviewFullscreen ? 'Exit full screen' : 'Full screen' }}
+                </AppTooltip>
             </div>
 
             <!-- CodeMirror diff editor (diff mode) -->
@@ -1350,6 +1443,39 @@ function goToNextDiff() {
     flex: 1;
     position: relative;
     min-height: 0;
+}
+
+/* Preview wrapper — overlays the editor area exactly like the individual
+   preview containers used to (absolute, inset 0). The inner *-preview rules
+   stay absolute, now relative to this wrapper: same box. */
+.file-pane-preview {
+    position: absolute;
+    inset: 0;
+}
+
+/* Full-window: teleported to <body>, so fixed/inset cover the whole viewport
+   above the app chrome; the opaque background fills around letterboxed media. */
+.file-pane-preview--fullscreen {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    background: var(--wa-color-surface-default, #fff);
+}
+
+/* Floating expand/compress toggle, pinned to the preview's top-right corner,
+   above the preview content so it stays clickable over an iframe. Subtle at
+   rest, solid on hover. */
+.preview-fullscreen-toggle {
+    position: absolute;
+    top: var(--wa-space-s);
+    right: var(--wa-space-s);
+    z-index: 2;
+    opacity: 0.6;
+    transition: opacity 0.15s ease;
+}
+.preview-fullscreen-toggle:hover,
+.file-pane-preview:hover .preview-fullscreen-toggle {
+    opacity: 1;
 }
 
 .markdown-preview-container {

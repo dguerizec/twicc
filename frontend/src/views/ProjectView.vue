@@ -617,6 +617,16 @@ const trimmedSearchQuery = computed(() => sessionsSearchQuery.value.trim())
 // switch matches the sidebar toggle); ProjectView is their single writer.
 const lastArtifactBookmarkId = ref(null)
 
+// A FilePane preview going full-window expands in place (position:fixed) rather
+// than teleporting — moving an <iframe> reloads it. But .main-content's
+// container-type makes it the containing block for fixed descendants (clamping
+// the overlay to this pane), and its z-index sits below the split-panel divider.
+// While a preview is expanded we drop that containment and lift the pane (see
+// .main-content--preview-expanded) so the overlay covers the whole window. Any
+// FilePane under this view drives it through the provided setter.
+const previewExpanded = ref(false)
+provide('expandPreviewHost', (expanded) => { previewExpanded.value = expanded })
+
 // Show archived sessions filter (persistent setting, browser-local via settings store)
 const showArchivedSessions = computed(() => settingsStore.isShowArchivedSessions)
 
@@ -2333,7 +2343,7 @@ function updateSidebarClosedClass(closed) {
         </aside>
 
         <!-- Main content area -->
-        <main slot="end" class="main-content">
+        <main slot="end" class="main-content" :class="{ 'main-content--preview-expanded': previewExpanded }">
             <div v-show="!isArtifactsMode && sessionId" class="session-content">
                 <router-view v-slot="{ Component }">
                     <KeepAlive :max="settingsStore.getMaxCachedSessions">
@@ -2687,6 +2697,19 @@ wa-dropdown-item:hover .row-menu-trigger,
     z-index: 1;
     container-type: inline-size;
     container-name: main-content;
+}
+
+/* A FilePane preview expanded to full-window uses a position:fixed overlay that
+   stays in place (moving its iframe would reload it). Normally container-type
+   makes this pane the overlay's containing block — clamping and clipping it to
+   the content area — and the pane sits under the split divider (z-index:2). While
+   a preview is expanded we drop the containment (containing block becomes the
+   viewport, overflow no longer clips it) and lift the pane above the divider and
+   the other floating chrome, so the overlay covers the whole window, sidebar
+   included. */
+.main-content.main-content--preview-expanded {
+    container-type: normal;
+    z-index: 1000;
 }
 
 .session-content,
