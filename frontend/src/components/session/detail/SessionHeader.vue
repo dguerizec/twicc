@@ -1003,14 +1003,14 @@ wa-divider {
     }
 
     /* Add some padding on the bottom of the first line */
-    .session-header.compact-collapsed .session-title {
+    .session-header .session-title {
         padding-bottom: var(--wa-space-xs);
-        align-items: center;
     }
 
     /* Show the compact context ring when not expanded */
     .session-header.compact-collapsed .compact-context-ring {
         display: inline-flex;
+        margin-block: -0.25rem;
     }
 
     /* Show the compact process indicator when not expanded */
@@ -1053,6 +1053,7 @@ wa-divider {
         opacity: 1;
         visibility: visible;
         transform: translateY(0);
+        margin-top: calc(-1 * var(--wa-space-xs));
     }
 
     .session-header.compact-expanded .compact-toggle-button--non-main-session {
