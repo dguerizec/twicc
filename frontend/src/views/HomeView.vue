@@ -13,6 +13,7 @@ import AppTooltip from '../components/ui/AppTooltip.vue'
 import StartupProgressCallout from '../components/app/StartupProgressCallout.vue'
 import ProjectEditDialog from '../components/project/ProjectEditDialog.vue'
 import WorkspaceManageDialog from '../components/workspace/WorkspaceManageDialog.vue'
+import { ARTIFACT_ICON } from '../utils/artifactBookmark'
 
 const router = useRouter()
 const store = useDataStore()
@@ -108,9 +109,15 @@ onBeforeUnmount(() => {
                 <ActivitySparkline :data="globalWeeklyActivity" />
             </span>
             <AppTooltip for="home-global-sparkline">Overall activity (message turns per week)</AppTooltip>
-            <wa-button v-if="totalSessionsCount > 0" class="view-all-button" variant="brand" appearance="filled-outlined" size="small" @click="router.push({ name: 'projects-all' })">
-                All {{ totalSessionsCount }} session{{ totalSessionsCount === 1 ? '' : 's' }} <wa-icon slot="end" name="arrow-right"></wa-icon>
-            </wa-button>
+            <div class="home-header-actions">
+                <wa-button v-if="totalSessionsCount > 0" variant="brand" appearance="filled-outlined" size="small" @click="router.push({ name: 'projects-all' })">
+                    All {{ totalSessionsCount }} session{{ totalSessionsCount === 1 ? '' : 's' }} <wa-icon slot="end" name="arrow-right"></wa-icon>
+                </wa-button>
+                <wa-button variant="brand" appearance="filled-outlined" size="small" @click="router.push({ name: 'projects-artifacts' })">
+                    <wa-icon slot="start" :name="ARTIFACT_ICON"></wa-icon>
+                    Artifacts <wa-icon slot="end" name="arrow-right"></wa-icon>
+                </wa-button>
+            </div>
         </header>
 
         <!-- Startup progress (initial sync / background compute) -->
@@ -183,8 +190,12 @@ onBeforeUnmount(() => {
     color: var(--wa-color-text-normal);
 }
 
-.view-all-button {
+.home-header-actions {
     margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: var(--wa-space-s);
+    flex-wrap: wrap;
 }
 
 .global-sparkline {

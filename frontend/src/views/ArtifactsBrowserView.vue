@@ -15,6 +15,7 @@ import { useDataStore } from '../stores/data'
 import { buildFilesRouteParams } from '../utils/granularRoutes'
 import FilePane from '../components/files/FilePane.vue'
 import ArtifactBookmarkDialog from '../components/artifacts/ArtifactBookmarkDialog.vue'
+import ArtifactsHelpButton from '../components/artifacts/ArtifactsHelpButton.vue'
 import AppTooltip from '../components/ui/AppTooltip.vue'
 import { ARTIFACT_ICON, artifactTypeIcon } from '../utils/artifactBookmark'
 
@@ -157,6 +158,7 @@ function openInSession() {
         <div v-if="bookmarkId == null" class="abv-empty">
             <wa-icon :name="ARTIFACT_ICON" class="abv-empty__icon"></wa-icon>
             <div>Select an artifact</div>
+            <ArtifactsHelpButton />
         </div>
 
         <!-- Loading (deep-link, not yet in the store) -->

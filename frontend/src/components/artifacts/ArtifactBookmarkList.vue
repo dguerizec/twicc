@@ -24,6 +24,7 @@ import { SESSION_TIME_FORMAT } from '../../constants'
 import ProjectBadge from '../project/ProjectBadge.vue'
 import WorktreeBadge from '../project/WorktreeBadge.vue'
 import AppTooltip from '../ui/AppTooltip.vue'
+import ArtifactsHelpButton from './ArtifactsHelpButton.vue'
 
 const props = defineProps({
     effectiveProjectId: { type: String, default: null },
@@ -239,7 +240,10 @@ defineExpose({ handleKeyNavigation })
     <div class="bookmark-list-container">
         <div v-if="list.length === 0" class="empty-state">
             <template v-if="searchQuery.trim()">No artifacts in this scope match your filter.</template>
-            <template v-else>No bookmarked artifacts in this scope yet — bookmark an artifact from a session's Artifacts tab.</template>
+            <template v-else>
+                <div>No bookmarked artifacts in this scope yet — bookmark an artifact from a session's Artifacts tab.</div>
+                <ArtifactsHelpButton />
+            </template>
         </div>
         <div
             v-else
@@ -421,8 +425,10 @@ defineExpose({ handleKeyNavigation })
 .empty-state {
     flex: 1;
     display: flex;
+    flex-direction: column;
     align-items: center;
     justify-content: center;
+    gap: var(--wa-space-m);
     text-align: center;
     padding: var(--wa-space-l);
     color: var(--wa-color-text-quiet);
