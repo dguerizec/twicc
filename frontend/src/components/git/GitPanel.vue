@@ -59,6 +59,17 @@ const props = defineProps({
     routeFilePath: {
         default: undefined,
     },
+    // Whether this panel currently owns the URL (it is the focused tab). When the
+    // dockable layout shows several tool panels at once, only the focused one owns
+    // the route; non-owners receive blanked route props (the URL params belong to
+    // whoever owns it). Sync-from-route must run for the owner ONLY — a non-owner
+    // would read the blank props as "nothing selected" and wrongly reset its root /
+    // commit / open file. Defaults to true (non-docked: a panel is shown only when
+    // active, so it always owns the route).
+    routeOwner: {
+        type: Boolean,
+        default: true,
+    },
 })
 
 const settingsStore = useSettingsStore()
@@ -821,9 +832,9 @@ async function refreshGitLog() {
 }
 
 watch(
-    () => [props.active, props.routeRootKey, availableGitRoots.value.map(root => root.key).join('|')],
+    () => [props.active, props.routeRootKey, availableGitRoots.value.map(root => root.key).join('|'), props.routeOwner],
     ([active, routeRootKey]) => {
-        if (!active) return
+        if (!active || !props.routeOwner) return
         const roots = availableGitRoots.value
         if (!roots.length) return
 
@@ -905,9 +916,9 @@ watch(
 )
 
 watch(
-    () => [props.active, started.value, loading.value, refreshing.value, selectedRootKey.value, props.routeCommitRef, entries.value.length],
+    () => [props.active, started.value, loading.value, refreshing.value, selectedRootKey.value, props.routeCommitRef, entries.value.length, props.routeOwner],
     ([active, started, isLoading, isRefreshing]) => {
-        if (!active || !started || isLoading || isRefreshing || !selectedRootKey.value || routeRootIssue.value) return
+        if (!active || !props.routeOwner || !started || isLoading || isRefreshing || !selectedRootKey.value || routeRootIssue.value) return
 
         const targetCommitRef = props.routeCommitRef ?? 'index'
 
@@ -962,9 +973,9 @@ watch(
 )
 
 watch(
-    () => [props.active, displayTree.value, props.routeFilePath, selectedRootKey.value, selectedCommit.value?.hash ?? 'index'],
+    () => [props.active, displayTree.value, props.routeFilePath, selectedRootKey.value, selectedCommit.value?.hash ?? 'index', props.routeOwner],
     async ([active, tree, routeFilePath, rootKey, commitHash]) => {
-        if (!active || !rootKey) return
+        if (!active || !props.routeOwner || !rootKey) return
 
         if (routeFilePath == null) {
             if (selectedFile.value) {

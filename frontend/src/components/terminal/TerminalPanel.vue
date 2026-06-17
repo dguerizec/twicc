@@ -43,6 +43,16 @@ const props = defineProps({
     routeTermIndex: {
         default: undefined,
     },
+    // Whether this panel currently owns the URL (it is the focused tab). When the
+    // dockable layout shows several tool panels at once, only the focused one owns
+    // the route; non-owners receive a blanked routeTermIndex. Route reconciliation
+    // must run for the owner ONLY — a non-owner would read the blank index as
+    // "go to term 0" and reset the visible terminal back to Main. Defaults to true
+    // (non-docked: a panel is shown only when active, so it always owns the route).
+    routeOwner: {
+        type: Boolean,
+        default: true,
+    },
 })
 const emit = defineEmits(['navigate'])
 
@@ -507,9 +517,9 @@ function applyRouteTermIndex(target) {
 }
 
 watch(
-    () => [props.active, props.routeTermIndex],
+    () => [props.active, props.routeTermIndex, props.routeOwner],
     ([active, target]) => {
-        if (!active) return
+        if (!active || !props.routeOwner) return
         applyRouteTermIndex(target)
     },
     { immediate: true },

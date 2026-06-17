@@ -79,6 +79,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
     window.removeEventListener('twicc:tab-shortcut', handleTabShortcut)
     window.removeEventListener('twicc:artifact-files-changed', handleArtifactFilesChanged)
+    cancelPaneFocus()
 })
 
 /**
@@ -116,6 +117,9 @@ onActivated(() => {
 
 onDeactivated(() => {
     isActive.value = false
+
+    // Drop any pending pane-focus rAF so it can't navigate this (now cached) session.
+    cancelPaneFocus()
 
     // Force-send session_viewed to ensure last_viewed_at is fresh before leaving.
     // Without this, the throttle can cause last_viewed_at to be stale (set at navigation time)
@@ -442,35 +446,44 @@ function navigateInTab(tab, params = {}, method = 'push') {
 }
 
 // While docking is active several tool panels are visible at once, but only the focused tab
-// (activeTabId) owns the URL. User-initiated navigation (clicking a file / commit / root) is
-// allowed through: combined with click-to-focus on a pane it focuses that tab and drives the
-// URL. The Terminal panel is special — it *reactively* re-grabs the route (replaceToTerm)
-// whenever it is visible but not the route owner, which would fight the focused tab in an
-// infinite URL loop — so only its navigate is gated to the focused tab.
+// (activeTabId) owns the URL. This drives the panels' `route-owner` prop: a non-owner panel
+// receives blanked route props (its params belong to whoever owns the URL) and must NOT
+// sync-from-route — otherwise it reads the blanks as "nothing selected" and clears its open
+// file / commit / terminal tab (the docked-panel-clears-at-blur bug). Focus itself is claimed by
+// interaction (requestPaneFocus) or by the panel's own navigation events — not gated here.
 function ownsRoute(tabId) {
     return !layout.dockingRendered.value || activeTabId.value === tabId
 }
 
+// Each user navigation from a panel cancels a pending pane-focus claim from the same gesture
+// (the navigation already focuses the panel, precisely) — see requestPaneFocus.
 function onFilesNavigate({ rootKey, filePath, replace }) {
+    cancelPaneFocus()
     const params = buildFilesRouteParams({ rootKey, filePath })
     rememberToolTabRoute('files', params)
     navigateInTab('files', params, replace ? 'replace' : 'push')
 }
 
 function onArtifactsNavigate({ rootKey, filePath, replace }) {
+    cancelPaneFocus()
     const params = buildFilesRouteParams({ rootKey, filePath })
     rememberToolTabRoute('artifacts', params)
     navigateInTab('artifacts', params, replace ? 'replace' : 'push')
 }
 
 function onGitNavigate({ rootKey, commitRef, filePath, replace }) {
+    cancelPaneFocus()
     const params = buildGitRouteParams({ rootKey, commitRef, filePath })
     rememberToolTabRoute('git', params)
     navigateInTab('git', params, replace ? 'replace' : 'push')
 }
 
+// No route-ownership gate here: the reactive re-grab that used to loop (applyRouteTermIndex →
+// replaceToTerm when visible-but-not-owner) is now stopped at the source by the panel's
+// `route-owner` prop, so the only navigate events reaching this handler are user/command-driven
+// — and those SHOULD navigate (and focus the terminal), e.g. clicking a term tab while unfocused.
 function onTerminalNavigate({ termIndex, replace }) {
-    if (!ownsRoute('terminal')) return
+    cancelPaneFocus()
     const params = buildTerminalRouteParams({ termIndex })
     rememberToolTabRoute('terminal', params)
     navigateInTab('terminal', params, replace ? 'replace' : 'push')
@@ -634,13 +647,50 @@ function isToolTabShown(tabId) {
     return layout.isToolPanelVisible(tabId)
 }
 
-// Click-to-focus for the center zone (mirror of DockRegion's): clicking the center content
-// while a dock owns the URL restores the URL to the center's active tab. Tab clicks navigate
-// on their own, so skip pointerdowns that land on the nav.
-function onCenterPointerDown(event) {
+// Deferred pane-focus claim. Interacting with a pane that doesn't own the route should focus it
+// (claim the URL) — but a pane interaction that IS a navigation (opening a file, switching a
+// terminal tab, selecting a commit) already focuses the pane precisely via its own navigate.
+// The claim is requested from the CLICK (the end of the gesture) and resolved on the next frame,
+// by which point any navigation the click produced — synchronously (file/commit select) or via a
+// watcher microtask (terminal tab) — has already run and called cancelPaneFocus. So a navigating
+// click wins (one clean navigation, no transient) and a plain click falls through to focus the
+// pane's CURRENT state (switchToTab → the tab's remembered route, which mirrors what it shows).
+// This replaces the old "navigate-to-remembered on pointerdown", a second navigation that raced
+// with — and, fired before the click, preceded — the gesture's real action.
+let paneFocusRaf = null
+let paneFocusTab = null
+function requestPaneFocus(tabId) {
+    if (!tabId) return
+    paneFocusTab = tabId
+    if (paneFocusRaf != null) return
+    paneFocusRaf = requestAnimationFrame(() => {
+        paneFocusRaf = null
+        const tab = paneFocusTab
+        paneFocusTab = null
+        if (tab) switchToTab(tab)
+    })
+}
+function cancelPaneFocus() {
+    paneFocusTab = null
+    if (paneFocusRaf != null) {
+        cancelAnimationFrame(paneFocusRaf)
+        paneFocusRaf = null
+    }
+}
+// Explicit tab navigation from the layout (dock tab click, gutter swap/restore) — an action, so
+// it supersedes any pending pane-focus claim and navigates immediately.
+function onLayoutSelectTab(tabId) {
+    cancelPaneFocus()
+    switchToTab(tabId)
+}
+
+// Click-to-focus for the center zone (mirror of DockRegion's): clicking the center content while
+// a dock owns the URL focuses the center's active tab. Tab clicks navigate on their own, so skip
+// clicks that land on the nav. Listens on click (gesture end) + deferred, like the dock claim.
+function onCenterClick(event) {
     if (!layout.dockingRendered.value) return
     if (event.target?.closest?.('[slot="nav"]')) return
-    switchToTab(centerActiveTab.value)
+    requestPaneFocus(centerActiveTab.value)
 }
 
 // Minimizing the dock that holds the focused tab would leave the URL on a now-hidden panel —
@@ -809,6 +859,7 @@ watch(pendingDropData, (data) => {
 function onTabShow(event) {
     const panel = event.detail?.name
     if (!panel) return
+    cancelPaneFocus()
     switchToTab(panel)
 
     // Auto-focus the chat's primary control (pending request form when active,
@@ -1522,13 +1573,14 @@ onBeforeUnmount(() => {
             :layout="layout"
             :register-target="registerLayoutTarget"
             :unregister-target="unregisterLayoutTarget"
-            @select-tab="switchToTab"
+            @select-tab="onLayoutSelectTab"
+            @focus-pane="requestPaneFocus"
             @minimize="onLayoutMinimize"
         >
         <wa-tab-group
             :active="centerActiveTab"
             @wa-tab-show="onTabShow"
-            @pointerdown.capture="onCenterPointerDown"
+            @click.capture="onCenterClick"
             class="session-tabs"
         >
             <!-- Tab navigation -->
@@ -1714,6 +1766,7 @@ onBeforeUnmount(() => {
                         :project-directory="store.getProject(session?.project_id)?.directory"
                         :route-root-key="activeTabId === 'files' ? filesRouteRootKey : undefined"
                         :route-file-path="activeTabId === 'files' ? filesRouteFilePath : undefined"
+                        :route-owner="ownsRoute('files')"
                         :active="isActive && isToolTabShown('files')"
                         :is-draft="session?.draft === true"
                         @navigate="onFilesNavigate"
@@ -1733,6 +1786,7 @@ onBeforeUnmount(() => {
                         :route-root-key="activeTabId === 'git' ? gitRouteRootKey : undefined"
                         :route-commit-ref="activeTabId === 'git' ? gitRouteCommitRef : undefined"
                         :route-file-path="activeTabId === 'git' ? gitRouteFilePath : undefined"
+                        :route-owner="ownsRoute('git')"
                         :active="isActive && isToolTabShown('git')"
                         :is-draft="session?.draft === true"
                         @navigate="onGitNavigate"
@@ -1748,6 +1802,7 @@ onBeforeUnmount(() => {
                         :session-id="session.id"
                         :project-id="session.project_id"
                         :route-term-index="activeTabId === 'terminal' ? terminalRouteTermIndex : undefined"
+                        :route-owner="ownsRoute('terminal')"
                         :active="isActive && isToolTabShown('terminal')"
                         @navigate="onTerminalNavigate"
                     />
@@ -1769,6 +1824,7 @@ onBeforeUnmount(() => {
                         :artifact-bookmark-session-id="session?.id"
                         :route-root-key="activeTabId === 'artifacts' ? artifactsRouteRootKey : undefined"
                         :route-file-path="activeTabId === 'artifacts' ? artifactsRouteFilePath : undefined"
+                        :route-owner="ownsRoute('artifacts')"
                         :active="isActive && isToolTabShown('artifacts')"
                         @navigate="onArtifactsNavigate"
                     />

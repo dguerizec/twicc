@@ -12,7 +12,7 @@ const props = defineProps({
     registerTarget: { type: Function, required: true },
     unregisterTarget: { type: Function, required: true },
 })
-const emit = defineEmits(['select', 'minimize', 'place'])
+const emit = defineEmits(['select', 'minimize', 'place', 'pane-focus'])
 
 const bodyRef = ref(null)
 
@@ -41,11 +41,14 @@ watchEffect((onCleanup) => {
 
 function onShow(event) { emit('select', event.detail.name) }
 
-// Click-to-focus: interacting anywhere in a pane makes its tab the route owner. Capture phase
-// so it fires even if the panel stops propagation (e.g. xterm). switchToTab no-ops when the
-// tab is already focused, so this is cheap on repeated clicks.
-function onBodyPointerDown() {
-    if (props.activeTabId) emit('select', props.activeTabId)
+// Click-to-focus: interacting anywhere in a pane should make its tab the route owner. We listen
+// on the CLICK (capture phase, so it fires even if the panel stops propagation — e.g. xterm),
+// NOT pointerdown: a click is the END of the gesture, after any file-select / terminal-tab change
+// it produced. This is a *deferred* focus request (see SessionView.requestPaneFocus), superseded
+// by any real navigation from the same gesture — so a navigating click wins and a plain click
+// falls through to focusing the pane's current state, with no competing navigation.
+function onBodyClick() {
+    if (props.activeTabId) emit('pane-focus', props.activeTabId)
 }
 </script>
 
@@ -73,7 +76,7 @@ function onBodyPointerDown() {
                 <wa-icon name="window-minimize"></wa-icon>
             </wa-button>
         </wa-tab-group>
-        <div ref="bodyRef" class="dock-body" @pointerdown.capture="onBodyPointerDown"></div>
+        <div ref="bodyRef" class="dock-body" @click.capture="onBodyClick"></div>
     </div>
 </template>
 

@@ -89,6 +89,17 @@ const props = defineProps({
     routeFilePath: {
         default: undefined,
     },
+    // Whether this panel currently owns the URL (it is the focused tab). When the
+    // dockable layout shows several tool panels at once, only the focused one owns
+    // the route; non-owners receive blanked route props (the URL params belong to
+    // whoever owns it). Sync-from-route must run for the owner ONLY — a non-owner
+    // would read the blank props as "no file selected" and wrongly clear the file
+    // it has open. Defaults to true (non-docked: a panel is shown only when active,
+    // so it always owns the route).
+    routeOwner: {
+        type: Boolean,
+        default: true,
+    },
 })
 
 // ─── Mobile breakpoint detection ─────────────────────────────────────────────
@@ -560,9 +571,9 @@ async function revealRouteFile(absolutePath) {
 }
 
 watch(
-    () => [props.active, props.routeRootKey, availableRoots.value.map(root => root.key).join('|')],
+    () => [props.active, props.routeRootKey, availableRoots.value.map(root => root.key).join('|'), props.routeOwner],
     ([active, routeRootKey]) => {
-        if (!active) return
+        if (!active || !props.routeOwner) return
         const roots = availableRoots.value
         if (!roots.length) return
 
@@ -622,9 +633,9 @@ watch(
 )
 
 watch(
-    () => [props.active, tree.value, directory.value, loadedDirectory.value, props.routeFilePath, props.routeRootKey, loading.value],
+    () => [props.active, tree.value, directory.value, loadedDirectory.value, props.routeFilePath, props.routeRootKey, loading.value, props.routeOwner],
     async ([active, treeData, dirPath, loadedDir, routeFilePath, , isLoading]) => {
-        if (!active || !dirPath || !selectedRootKey.value) return
+        if (!active || !props.routeOwner || !dirPath || !selectedRootKey.value) return
 
         if (!treeData || isLoading || loadedDir !== dirPath) {
             if (routeFilePath != null && selectedFile.value) {

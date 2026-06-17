@@ -16,7 +16,7 @@ const props = defineProps({
     registerTarget: { type: Function, required: true },
     unregisterTarget: { type: Function, required: true },
 })
-const emit = defineEmits(['select-tab', 'minimize'])
+const emit = defineEmits(['select-tab', 'minimize', 'focus-pane'])
 
 // props.layout is the useSessionLayout() return — a bag of refs/functions. Refs accessed
 // through a prop object are NOT auto-unwrapped, so read them via .value here.
@@ -87,6 +87,7 @@ function onOverlaySelect(tabId) {
                 :register-target="registerTarget"
                 :unregister-target="unregisterTarget"
                 @select="(id) => emit('select-tab', id)"
+                @pane-focus="(id) => emit('focus-pane', id)"
                 @minimize="(dockIds) => emit('minimize', dockIds)"
                 @place="(id, dest) => layout.place(id, dest)"
             />

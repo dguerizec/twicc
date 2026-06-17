@@ -68,18 +68,28 @@ with multiple visible docked panes.
 
 - `regionActiveTabId(region)`: route override (if the routed tab is in this region) → per-group
   memory (`activeByGroup`, keyed by `groupKeyOf`) → first content-bearing tab.
-- **Click-to-focus (user-directed: "any focus in a pane should switch the URL"):**
-  - Docks: `DockRegion` has `@pointerdown.capture` on its body → emits `select(activeTabId)` →
-    `switchToTab`. Capture phase so it fires even if the panel stops propagation (xterm).
-  - Center: `SessionView` `onCenterPointerDown` on the center `wa-tab-group` (`@pointerdown.capture`)
-    → `switchToTab(centerActiveTab)`; skips clicks on the nav (`closest('[slot="nav"]')`) so tab
-    clicks navigate on their own.
-- **`ownsRoute` gate — only on `onTerminalNavigate`:** while docked, several panels are visible
-  and each panel emits `@navigate` to sync the URL. **TerminalPanel *reactively* re-grabs the
-  route** (`applyRouteTermIndex(undefined) → replaceToTerm(0)`) whenever it's visible but not the
-  route owner — two panels then fight → infinite URL loop. So Terminal's navigate is gated to the
-  focused tab. **Files/Git/Artifacts emit only on user actions** (verified) → their handlers are
-  ungated (a user click focuses the panel + drives the URL, thanks to click-to-focus).
+- **`route-owner` prop — sync-from-route runs only for the focused panel.** Docking breaks the
+  pre-docking equivalence *visible ⟺ focused ⟺ route owner*: a docked panel is `active` (rendered)
+  without owning the URL. SessionView blanks a non-owner's route props (its params belong to
+  whoever owns the URL), and each panel's sync-from-route watchers used to read the blanks as
+  "nothing selected" and clear their open file / commit / terminal tab at blur. Fix: pass
+  `:route-owner="ownsRoute(tab)"`; FilesPanel/GitPanel/TerminalPanel gate every sync-from-route
+  watcher on it (`if (!props.routeOwner) return`, prop in the dep array). Defaults `true` →
+  non-docked behaviour unchanged. This also kills TerminalPanel's reactive re-grab at the source
+  (`applyRouteTermIndex` no longer runs when not owner), so the old infinite-URL-loop is gone
+  **without** the `onTerminalNavigate` gate (removed — it blocked legit unfocused term-tab clicks).
+- **Click-to-focus (user-directed: "any focus in a pane should switch the URL") — deferred &
+  action-superseded.** A focus claim must NOT race the gesture's real action (open a file, switch
+  a terminal tab). Two-part fix: (1) the claim is requested on the **`click`** (the *end* of the
+  gesture — `pointerdown` fires ~16ms in, before the click, so a `pointerdown`+rAF claim still
+  pre-empted the action — the bug that made the first attempt no-op); (2) it's resolved on the next
+  rAF and cancelled by any navigation the gesture produced (sync for file/commit select, a watcher
+  microtask for terminal-tab). `DockRegion` body `@click.capture` → emits `pane-focus` →
+  SessionLayout `focus-pane` → SessionView `requestPaneFocus` (rAF). The center mirrors it
+  (`onCenterClick`, skipping nav clicks). Every navigate handler + `onTabShow` + `onLayoutSelectTab`
+  call `cancelPaneFocus`. `switchToTab` no-ops if the tab is already focused, so an action that
+  already focused the pane makes the fallback claim a no-op. Result: one navigation per gesture, no
+  transient, no revert.
 - **Minimize returns focus:** `onLayoutMinimize` — minimizing the dock that holds the focused tab
   hands focus back to the center (`switchToTab(centerActiveTab)`). `SessionLayout` bubbles
   `minimize` up to `SessionView` for this (routing is `SessionView`'s job).
@@ -115,10 +125,6 @@ with multiple visible docked panes.
 
 ## Known issues / open (not yet fixed)
 
-- **Open file in a docked panel clears visually when it loses focus** — FilesPanel/GitPanel
-  sync-from-route clears `selectedFile` when their `routeRootKey` goes `undefined` (non-owner).
-  It's restored on refocus via the remembered route. Proper fix: gate the panels' *sync-from-route*
-  on route-ownership (a `routeOwner` prop), so non-owner panels ignore the route entirely. **Not done.**
 - **Compact mode** (`@media max-height:900px`, the header tab dropdown) is **not reconciled** with
   docks — may look rough when docked + short.
 - **Persistence not wired** — `sessionLayout` is ephemeral (resets on reload / KeepAlive eviction).
@@ -131,8 +137,10 @@ with multiple visible docked panes.
 
 - **Finish/validate step 1:** reconcile compact mode; decide on auto-focus-on-dock; validate
   overlays/swap edge cases at small sizes; pick final icons; empty-optional → gutter.
-- **Focus model polish:** the file-clears-on-blur fix (panel `routeOwner` decoupling);
-  tab lifecycle (run work on "became visible/focused", not on tab activation).
+- **Focus model polish:** tab lifecycle (run work on "became visible/focused", not on tab
+  activation). The file-clears-on-blur and focus-race bugs are now fixed (route-owner gating +
+  deferred click-based focus claim — see the route/focus section). Overlay panels (`LayoutOverlay`)
+  still have no focus claim — interacting with a peek overlay doesn't claim the route yet.
 - **Resize UI:** sibling splitters + dock splitters (resolver emits `splitters`; UI wiring deferred,
   watch `wa-split-panel`/`wa-reposition` traps).
 - **Persistence:** persist the intention; 3-tier resolution at creation (mirror
