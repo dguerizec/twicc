@@ -1,5 +1,5 @@
 <script setup>
-import { computed, watch, ref, readonly, provide, inject, onActivated, onDeactivated, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { computed, watch, ref, reactive, readonly, provide, inject, onActivated, onDeactivated, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useDataStore } from '../stores/data'
 import { useSettingsStore } from '../stores/settings'
@@ -8,6 +8,7 @@ import { useCommandRegistry } from '../composables/useCommandRegistry'
 import { requestTitleSuggestion, notifySessionViewed, forceNotifySessionViewed, markSessionReadState, cancelSessionViewedThrottle } from '../composables/useWebSocket'
 import { stopSessionProcess } from '../composables/useStopSessionProcess'
 import { useDragHover } from '../composables/useDragHover'
+import { useSessionLayout } from '../composables/useSessionLayout'
 import { PROCESS_STATE } from '../constants'
 import SessionHeader from '../components/session/detail/SessionHeader.vue'
 import SessionItemsList from '../components/session/detail/SessionItemsList.vue'
@@ -16,6 +17,8 @@ import FilesPanel from '../components/files/FilesPanel.vue'
 import GitPanel from '../components/git/GitPanel.vue'
 import TerminalPanel from '../components/terminal/TerminalPanel.vue'
 import OrchestrationPanel from '../components/orchestration/OrchestrationPanel.vue'
+import SessionLayout from '../components/session/layout/SessionLayout.vue'
+import TabPlacementMenu from '../components/session/layout/TabPlacementMenu.vue'
 import AppTooltip from '../components/ui/AppTooltip.vue'
 import ProcessIndicator from '../components/ui/ProcessIndicator.vue'
 import CodeCommentsIndicator from '../components/ui/CodeCommentsIndicator.vue'
@@ -438,6 +441,16 @@ function navigateInTab(tab, params = {}, method = 'push') {
     })
 }
 
+// While docking is active several tool panels are visible at once, but only the focused tab
+// (activeTabId) owns the URL. User-initiated navigation (clicking a file / commit / root) is
+// allowed through: combined with click-to-focus on a pane it focuses that tab and drives the
+// URL. The Terminal panel is special — it *reactively* re-grabs the route (replaceToTerm)
+// whenever it is visible but not the route owner, which would fight the focused tab in an
+// infinite URL loop — so only its navigate is gated to the focused tab.
+function ownsRoute(tabId) {
+    return !layout.dockingRendered.value || activeTabId.value === tabId
+}
+
 function onFilesNavigate({ rootKey, filePath, replace }) {
     const params = buildFilesRouteParams({ rootKey, filePath })
     rememberToolTabRoute('files', params)
@@ -457,6 +470,7 @@ function onGitNavigate({ rootKey, commitRef, filePath, replace }) {
 }
 
 function onTerminalNavigate({ termIndex, replace }) {
+    if (!ownsRoute('terminal')) return
     const params = buildTerminalRouteParams({ termIndex })
     rememberToolTabRoute('terminal', params)
     navigateInTab('terminal', params, replace ? 'replace' : 'push')
@@ -570,6 +584,86 @@ function switchToTab(panel) {
         navigateInTab(panel, rememberedToolTabRoutes[panel] ?? {})
     }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Dockable layout (opt-in). Until a tool tab is docked, the plain tab group below
+// behaves exactly as before; once docked, the resolver-driven SessionLayout kicks in.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Root element of the docking area, measured by the composable.
+const sessionLayoutRef = ref(null)
+
+// Resolver input: the dockable tool tabs (chat is the fixed center anchor; subagents are
+// center-only and not dockable, so they're excluded here).
+const layoutTabs = computed(() => {
+    const tabs = [{ id: 'main', label: 'Chat', icon: 'comments', fixedCenter: true }]
+    tabs.push({ id: 'files', label: 'Files', icon: 'folder' })
+    if (hasGitRepo.value) tabs.push({ id: 'git', label: 'Git', icon: 'code-branch' })
+    tabs.push({ id: 'terminal', label: 'Terminal', icon: 'terminal' })
+    if (hasArtifacts.value) tabs.push({ id: 'artifacts', label: 'Artifacts', icon: 'image' })
+    if (hasSpawnRoot.value) tabs.push({ id: 'orchestration', label: 'Orchestration', icon: 'diagram-project' })
+    return tabs
+})
+
+const layout = useSessionLayout({
+    sessionId,
+    containerRef: () => sessionLayoutRef.value?.$el,
+    tabs: layoutTabs,
+    routeActiveTabId: activeTabId,
+})
+
+const LAYOUT_TOOL_IDS = ['files', 'git', 'terminal', 'artifacts', 'orchestration']
+
+// A tool tab is shown in the center strip unless it's currently docked.
+function showInCenter(tabId) {
+    return !layout.dockingRendered.value || layout.dockOf(tabId) === 'center'
+}
+function isCenterTab(tabId) {
+    if (tabId === 'main' || tabId.startsWith('agent-')) return true
+    return showInCenter(tabId)
+}
+// The center strip's active tab: the routed tab when it lives in the center, otherwise the
+// last center tab (so focusing a docked tab doesn't blank the center).
+const lastCenterTab = ref('main')
+watch(activeTabId, (id) => { if (id && isCenterTab(id)) lastCenterTab.value = id }, { immediate: true })
+const centerActiveTab = computed(() => isCenterTab(activeTabId.value) ? activeTabId.value : lastCenterTab.value)
+
+// Whether a tool panel is the visible one at its destination (drives its :active prop).
+function isToolTabShown(tabId) {
+    if (showInCenter(tabId)) return centerActiveTab.value === tabId
+    return layout.isToolPanelVisible(tabId)
+}
+
+// Click-to-focus for the center zone (mirror of DockRegion's): clicking the center content
+// while a dock owns the URL restores the URL to the center's active tab. Tab clicks navigate
+// on their own, so skip pointerdowns that land on the nav.
+function onCenterPointerDown(event) {
+    if (!layout.dockingRendered.value) return
+    if (event.target?.closest?.('[slot="nav"]')) return
+    switchToTab(centerActiveTab.value)
+}
+
+// Minimizing the dock that holds the focused tab would leave the URL on a now-hidden panel —
+// hand focus back to the center's active tab.
+function onLayoutMinimize(dockIds) {
+    const focusedLeaving = dockIds.includes(layout.dockOf(activeTabId.value))
+    layout.minimize(dockIds)
+    if (focusedLeaving) switchToTab(centerActiveTab.value)
+}
+
+// Teleport target registry: logical key -> element. The center slot registers its tab-panel
+// targets; dock regions / the overlay register theirs. Tool panels teleport to targetKeyForTab().
+const layoutTargets = reactive({})
+function registerLayoutTarget(key, el) { layoutTargets[key] = el }
+function unregisterLayoutTarget(key) { delete layoutTargets[key] }
+function toolTarget(tabId) { return layoutTargets[layout.targetKeyForTab(tabId)] || null }
+
+// Stable ref callbacks for the center tab-panel targets (avoid re-running on every render).
+const centerTargetSetters = Object.fromEntries(
+    LAYOUT_TOOL_IDS.map((id) => [id, (el) => (el
+        ? registerLayoutTarget(`center:${id}`, el)
+        : unregisterLayoutTarget(`center:${id}`))])
+)
 
 /**
  * Navigate to a tab and collapse the compact header overlay.
@@ -1422,10 +1516,19 @@ onBeforeUnmount(() => {
             </template>
         </SessionHeader>
 
-        <wa-tab-group
+        <SessionLayout
             v-if="session"
-            :active="activeTabId"
+            ref="sessionLayoutRef"
+            :layout="layout"
+            :register-target="registerLayoutTarget"
+            :unregister-target="unregisterLayoutTarget"
+            @select-tab="switchToTab"
+            @minimize="onLayoutMinimize"
+        >
+        <wa-tab-group
+            :active="centerActiveTab"
             @wa-tab-show="onTabShow"
+            @pointerdown.capture="onCenterPointerDown"
             class="session-tabs"
         >
             <!-- Tab navigation -->
@@ -1437,8 +1540,8 @@ onBeforeUnmount(() => {
                 :class="{ 'drag-hover-pending': chatTabDragHover.isPending.value }"
             >
                 <wa-button
-                    :appearance="activeTabId === 'main' ? 'outlined' : 'plain'"
-                    :variant="activeTabId === 'main' ? 'brand' : 'neutral'"
+                    :appearance="centerActiveTab === 'main' ? 'outlined' : 'plain'"
+                    :variant="centerActiveTab === 'main' ? 'brand' : 'neutral'"
                     size="small"
                 >
                     Chat
@@ -1458,8 +1561,8 @@ onBeforeUnmount(() => {
             <template v-for="tab in openSubagentTabs" :key="tab.id">
                 <wa-tab slot="nav" :panel="tab.id">
                     <wa-button
-                        :appearance="activeTabId === tab.id ? 'outlined' : 'plain'"
-                        :variant="activeTabId === tab.id ? 'brand' : 'neutral'"
+                        :appearance="centerActiveTab === tab.id ? 'outlined' : 'plain'"
+                        :variant="centerActiveTab === tab.id ? 'brand' : 'neutral'"
                         size="small"
                     >
                         <span class="subagent-tab-content">
@@ -1478,53 +1581,58 @@ onBeforeUnmount(() => {
                 </wa-tab>
             </template>
 
-            <!-- Tool tabs (always visible, not closeable) -->
-            <wa-tab slot="nav" panel="files">
+            <!-- Tool tabs — shown in the center strip unless docked; arrow places them -->
+            <wa-tab v-if="showInCenter('files')" slot="nav" panel="files">
                 <wa-button
-                    :appearance="activeTabId === 'files' ? 'outlined' : 'plain'"
-                    :variant="activeTabId === 'files' ? 'brand' : 'neutral'"
+                    :appearance="centerActiveTab === 'files' ? 'outlined' : 'plain'"
+                    :variant="centerActiveTab === 'files' ? 'brand' : 'neutral'"
                     size="small"
                 >
                     Files
                     <CodeCommentsIndicator slot="end" :count="filesCommentsCount" :show-tooltip="false" class="tab-comments-indicator" />
                 </wa-button>
+                <TabPlacementMenu tab-id="files" current="center" @place="(dest) => layout.place('files', dest)" />
             </wa-tab>
-            <wa-tab v-if="hasGitRepo" slot="nav" panel="git">
+            <wa-tab v-if="hasGitRepo && showInCenter('git')" slot="nav" panel="git">
                 <wa-button
-                    :appearance="activeTabId === 'git' ? 'outlined' : 'plain'"
-                    :variant="activeTabId === 'git' ? 'brand' : 'neutral'"
+                    :appearance="centerActiveTab === 'git' ? 'outlined' : 'plain'"
+                    :variant="centerActiveTab === 'git' ? 'brand' : 'neutral'"
                     size="small"
                 >
                     Git
                     <CodeCommentsIndicator slot="end" :count="gitCommentsCount" :show-tooltip="false" class="tab-comments-indicator" />
                 </wa-button>
+                <TabPlacementMenu tab-id="git" current="center" @place="(dest) => layout.place('git', dest)" />
             </wa-tab>
-            <wa-tab slot="nav" panel="terminal">
+            <wa-tab v-if="showInCenter('terminal')" slot="nav" panel="terminal">
                 <wa-button
-                    :appearance="activeTabId === 'terminal' ? 'outlined' : 'plain'"
-                    :variant="activeTabId === 'terminal' ? 'brand' : 'neutral'"
+                    :appearance="centerActiveTab === 'terminal' ? 'outlined' : 'plain'"
+                    :variant="centerActiveTab === 'terminal' ? 'brand' : 'neutral'"
                     size="small"
                 >
                     Terminal
                 </wa-button>
+                <TabPlacementMenu tab-id="terminal" current="center" @place="(dest) => layout.place('terminal', dest)" />
             </wa-tab>
-            <wa-tab v-if="hasArtifacts" slot="nav" panel="artifacts">
+            <wa-tab v-if="hasArtifacts && showInCenter('artifacts')" slot="nav" panel="artifacts">
                 <wa-button
-                    :appearance="activeTabId === 'artifacts' ? 'outlined' : 'plain'"
-                    :variant="activeTabId === 'artifacts' ? 'brand' : 'neutral'"
+                    :appearance="centerActiveTab === 'artifacts' ? 'outlined' : 'plain'"
+                    :variant="centerActiveTab === 'artifacts' ? 'brand' : 'neutral'"
                     size="small"
                 >
                     Artifacts
                 </wa-button>
+                <TabPlacementMenu tab-id="artifacts" current="center" @place="(dest) => layout.place('artifacts', dest)" />
             </wa-tab>
-            <wa-tab v-if="hasSpawnRoot" slot="nav" panel="orchestration">
+            <wa-tab v-if="hasSpawnRoot && showInCenter('orchestration')" slot="nav" panel="orchestration">
                 <wa-button
-                    :appearance="activeTabId === 'orchestration' ? 'outlined' : 'plain'"
-                    :variant="activeTabId === 'orchestration' ? 'brand' : 'neutral'"
+                    :appearance="centerActiveTab === 'orchestration' ? 'outlined' : 'plain'"
+                    :variant="centerActiveTab === 'orchestration' ? 'brand' : 'neutral'"
                     size="small"
                 >
                     Orchestration
                 </wa-button>
+                <TabPlacementMenu tab-id="orchestration" current="center" @place="(dest) => layout.place('orchestration', dest)" />
             </wa-tab>
 
             <!-- Main session panel -->
@@ -1550,76 +1658,24 @@ onBeforeUnmount(() => {
                 />
             </wa-tab-panel>
 
-            <!-- Tool panels -->
-            <wa-tab-panel name="files">
-                <FilesPanel
-                    ref="filesPanelRef"
-                    :project-id="session?.project_id"
-                    :session-id="session?.id"
-                    :git-directory="session?.git_directory"
-                    :session-cwd="session?.cwd"
-                    :project-git-root="store.getProject(session?.project_id)?.git_root"
-                    :project-directory="store.getProject(session?.project_id)?.directory"
-                    :route-root-key="activeTabId === 'files' ? filesRouteRootKey : undefined"
-                    :route-file-path="activeTabId === 'files' ? filesRouteFilePath : undefined"
-                    :active="isActive && activeTabId === 'files'"
-                    :is-draft="session?.draft === true"
-                    @navigate="onFilesNavigate"
-                />
+            <!-- Tool panels live in the host below (teleported); here are only their center targets -->
+            <wa-tab-panel v-if="showInCenter('files')" name="files">
+                <div :ref="centerTargetSetters.files" class="layout-center-target"></div>
             </wa-tab-panel>
-            <wa-tab-panel v-if="hasGitRepo" name="git">
-                <GitPanel
-                    ref="gitPanelRef"
-                    :project-id="session?.project_id"
-                    :session-id="session?.id"
-                    :git-directory="session?.git_directory"
-                    :project-git-root="store.getProject(session?.project_id)?.git_root"
-                    :initial-branch="session?.git_branch || ''"
-                    :route-root-key="activeTabId === 'git' ? gitRouteRootKey : undefined"
-                    :route-commit-ref="activeTabId === 'git' ? gitRouteCommitRef : undefined"
-                    :route-file-path="activeTabId === 'git' ? gitRouteFilePath : undefined"
-                    :active="isActive && activeTabId === 'git'"
-                    :is-draft="session?.draft === true"
-                    @navigate="onGitNavigate"
-                />
+            <wa-tab-panel v-if="hasGitRepo && showInCenter('git')" name="git">
+                <div :ref="centerTargetSetters.git" class="layout-center-target"></div>
             </wa-tab-panel>
-            <wa-tab-panel name="terminal">
-                <TerminalPanel
-                    ref="terminalPanelRef"
-                    :context-key="`s:${session.id}`"
-                    :session-id="session.id"
-                    :project-id="session.project_id"
-                    :route-term-index="activeTabId === 'terminal' ? terminalRouteTermIndex : undefined"
-                    :active="isActive && activeTabId === 'terminal'"
-                    @navigate="onTerminalNavigate"
-                />
+            <wa-tab-panel v-if="showInCenter('terminal')" name="terminal">
+                <div :ref="centerTargetSetters.terminal" class="layout-center-target"></div>
             </wa-tab-panel>
-            <wa-tab-panel v-if="hasArtifacts" name="artifacts">
-                <FilesPanel
-                    ref="artifactsPanelRef"
-                    :project-id="null"
-                    :session-id="null"
-                    :api-prefix="'/api'"
-                    :external-roots="artifactsExternalRoots"
-                    :root-restriction="artifactsDir"
-                    :show-root-selector="false"
-                    root-label="Artifacts"
-                    :preview-by-default="true"
-                    :artifact-bookmark-session-id="session?.id"
-                    :route-root-key="activeTabId === 'artifacts' ? artifactsRouteRootKey : undefined"
-                    :route-file-path="activeTabId === 'artifacts' ? artifactsRouteFilePath : undefined"
-                    :active="isActive && activeTabId === 'artifacts'"
-                    @navigate="onArtifactsNavigate"
-                />
+            <wa-tab-panel v-if="hasArtifacts && showInCenter('artifacts')" name="artifacts">
+                <div :ref="centerTargetSetters.artifacts" class="layout-center-target"></div>
             </wa-tab-panel>
-            <wa-tab-panel v-if="hasSpawnRoot" name="orchestration">
-                <OrchestrationPanel
-                    :session-id="session.id"
-                    :project-id="session.project_id"
-                    :active="isActive && activeTabId === 'orchestration'"
-                />
+            <wa-tab-panel v-if="hasSpawnRoot && showInCenter('orchestration')" name="orchestration">
+                <div :ref="centerTargetSetters.orchestration" class="layout-center-target"></div>
             </wa-tab-panel>
         </wa-tab-group>
+        </SessionLayout>
 
         <!-- Session not found (backend returned 404) -->
         <div v-else-if="sessionLoadError === 'not-found'" class="empty-state">
@@ -1642,6 +1698,93 @@ onBeforeUnmount(() => {
             <wa-spinner></wa-spinner>
             <span>Loading session...</span>
         </div>
+
+        <!-- Tool panels: mounted once here, teleported to their center slot, dock region, or overlay.
+             Moving a tab between docks just retargets its Teleport — the instance is never re-mounted. -->
+        <div v-if="session" class="layout-panel-host" aria-hidden="true">
+            <Teleport :to="toolTarget('files')" :disabled="!toolTarget('files')">
+                <div class="layout-tool-wrap" v-show="layout.isToolPanelVisible('files')">
+                    <FilesPanel
+                        ref="filesPanelRef"
+                        :project-id="session?.project_id"
+                        :session-id="session?.id"
+                        :git-directory="session?.git_directory"
+                        :session-cwd="session?.cwd"
+                        :project-git-root="store.getProject(session?.project_id)?.git_root"
+                        :project-directory="store.getProject(session?.project_id)?.directory"
+                        :route-root-key="activeTabId === 'files' ? filesRouteRootKey : undefined"
+                        :route-file-path="activeTabId === 'files' ? filesRouteFilePath : undefined"
+                        :active="isActive && isToolTabShown('files')"
+                        :is-draft="session?.draft === true"
+                        @navigate="onFilesNavigate"
+                    />
+                </div>
+            </Teleport>
+
+            <Teleport v-if="hasGitRepo" :to="toolTarget('git')" :disabled="!toolTarget('git')">
+                <div class="layout-tool-wrap" v-show="layout.isToolPanelVisible('git')">
+                    <GitPanel
+                        ref="gitPanelRef"
+                        :project-id="session?.project_id"
+                        :session-id="session?.id"
+                        :git-directory="session?.git_directory"
+                        :project-git-root="store.getProject(session?.project_id)?.git_root"
+                        :initial-branch="session?.git_branch || ''"
+                        :route-root-key="activeTabId === 'git' ? gitRouteRootKey : undefined"
+                        :route-commit-ref="activeTabId === 'git' ? gitRouteCommitRef : undefined"
+                        :route-file-path="activeTabId === 'git' ? gitRouteFilePath : undefined"
+                        :active="isActive && isToolTabShown('git')"
+                        :is-draft="session?.draft === true"
+                        @navigate="onGitNavigate"
+                    />
+                </div>
+            </Teleport>
+
+            <Teleport :to="toolTarget('terminal')" :disabled="!toolTarget('terminal')">
+                <div class="layout-tool-wrap" v-show="layout.isToolPanelVisible('terminal')">
+                    <TerminalPanel
+                        ref="terminalPanelRef"
+                        :context-key="`s:${session.id}`"
+                        :session-id="session.id"
+                        :project-id="session.project_id"
+                        :route-term-index="activeTabId === 'terminal' ? terminalRouteTermIndex : undefined"
+                        :active="isActive && isToolTabShown('terminal')"
+                        @navigate="onTerminalNavigate"
+                    />
+                </div>
+            </Teleport>
+
+            <Teleport v-if="hasArtifacts" :to="toolTarget('artifacts')" :disabled="!toolTarget('artifacts')">
+                <div class="layout-tool-wrap" v-show="layout.isToolPanelVisible('artifacts')">
+                    <FilesPanel
+                        ref="artifactsPanelRef"
+                        :project-id="null"
+                        :session-id="null"
+                        :api-prefix="'/api'"
+                        :external-roots="artifactsExternalRoots"
+                        :root-restriction="artifactsDir"
+                        :show-root-selector="false"
+                        root-label="Artifacts"
+                        :preview-by-default="true"
+                        :artifact-bookmark-session-id="session?.id"
+                        :route-root-key="activeTabId === 'artifacts' ? artifactsRouteRootKey : undefined"
+                        :route-file-path="activeTabId === 'artifacts' ? artifactsRouteFilePath : undefined"
+                        :active="isActive && isToolTabShown('artifacts')"
+                        @navigate="onArtifactsNavigate"
+                    />
+                </div>
+            </Teleport>
+
+            <Teleport v-if="hasSpawnRoot" :to="toolTarget('orchestration')" :disabled="!toolTarget('orchestration')">
+                <div class="layout-tool-wrap" v-show="layout.isToolPanelVisible('orchestration')">
+                    <OrchestrationPanel
+                        :session-id="session.id"
+                        :project-id="session.project_id"
+                        :active="isActive && isToolTabShown('orchestration')"
+                    />
+                </div>
+            </Teleport>
+        </div>
     </div>
 </template>
 
@@ -1656,6 +1799,21 @@ onBeforeUnmount(() => {
 
 .session-view > wa-divider {
     flex-shrink: 0;
+}
+
+/* Dockable layout: panels are mounted once in this hidden host, then teleported into the
+   center tab-panel / a dock region / the overlay. While here (no target) they stay mounted. */
+.layout-panel-host {
+    display: none;
+}
+.layout-center-target,
+.layout-tool-wrap {
+    flex: 1;
+    min-height: 0;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
