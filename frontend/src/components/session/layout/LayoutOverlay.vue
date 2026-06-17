@@ -42,7 +42,7 @@ function onShow(event) { emit('select', event.detail.name) }
                 </wa-tab>
                 <wa-button
                     slot="nav"
-                    class="overlay-close"
+                    class="overlay-close reduced-height"
                     appearance="plain"
                     size="small"
                     title="Close"
@@ -78,22 +78,16 @@ function onShow(event) { emit('select', event.detail.name) }
     flex: 0 0 auto;
     min-width: 0;
     overflow: hidden;
-    --indicator-color: var(--wa-color-primary-500);
-    --track-color: transparent;
-    --track-width: 2px;
+    --track-width: var(--divider-size);
 }
 .overlay-tabnav::part(body) {
     display: none;
 }
-.overlay-tabnav::part(nav) {
-    border-bottom: 1px solid var(--wa-color-surface-border, rgba(0, 0, 0, 0.12));
-    padding-bottom: 0;
-}
 .overlay-tab::part(base) {
     display: inline-flex;
     align-items: center;
-    gap: 0.35em;
-    padding: 0.25em 0.6em;
+    padding: var(--wa-space-2xs) var(--wa-space-xs);
+    gap: var(--wa-space-2xs);
 }
 .overlay-tab-icon {
     font-size: 0.85em;

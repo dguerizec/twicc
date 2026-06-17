@@ -1348,99 +1348,56 @@ onBeforeUnmount(() => {
                 @drop="chatTabDragHover.onDrop"
                 :class="{ 'drag-hover-pending': chatTabDragHover.isPending.value }"
             >
-                <wa-button
-                    :appearance="centerActiveTab === 'main' ? 'outlined' : 'plain'"
-                    :variant="centerActiveTab === 'main' ? 'brand' : 'neutral'"
-                    size="small"
-                >
-                    Chat
-                    <CodeCommentsIndicator slot="end" :count="chatCommentsCount" :show-tooltip="false" class="tab-comments-indicator" />
-                    <wa-icon
-                        v-if="store.getPendingRequests(sessionId).length > 0"
-                        slot="end"
-                        :id="`session-tab-chat-${sessionId}-pending-request`"
-                        name="hand"
-                        class="pending-request-indicator"
-                    ></wa-icon>
-                </wa-button>
+                Chat
+                <CodeCommentsIndicator :count="chatCommentsCount" :show-tooltip="false" class="tab-comments-indicator" />
+                <wa-icon
+                    v-if="store.getPendingRequests(sessionId).length > 0"
+                    :id="`session-tab-chat-${sessionId}-pending-request`"
+                    name="hand"
+                    class="pending-request-indicator"
+                ></wa-icon>
                 <AppTooltip v-if="store.getPendingRequests(sessionId).length > 0" :for="`session-tab-chat-${sessionId}-pending-request`">Waiting for your response</AppTooltip>
             </wa-tab>
 
             <!-- Subagent tabs with close button -->
             <template v-for="tab in openSubagentTabs" :key="tab.id">
                 <wa-tab slot="nav" :panel="tab.id">
-                    <wa-button
-                        :appearance="centerActiveTab === tab.id ? 'outlined' : 'plain'"
-                        :variant="centerActiveTab === tab.id ? 'brand' : 'neutral'"
-                        size="small"
-                    >
-                        <span class="subagent-tab-content">
-                            <span>Agent "{{ getAgentTabLabel(tab.agentId) }}"</span>
-                            <ProcessIndicator
-                                v-if="store.getProcessState(tab.agentId)"
-                                :state="store.getProcessState(tab.agentId).state"
-                                size="small"
-                            />
-                            <CodeCommentsIndicator :count="agentCommentsCount(tab.agentId)" :show-tooltip="false" class="tab-comments-indicator" />
-                            <span class="tab-close-icon" @click.stop="closeTab(tab.id)">
-                                <wa-icon name="xmark" label="Close tab"></wa-icon>
-                            </span>
+                    <span class="subagent-tab-content">
+                        <span>Agent "{{ getAgentTabLabel(tab.agentId) }}"</span>
+                        <ProcessIndicator
+                            v-if="store.getProcessState(tab.agentId)"
+                            :state="store.getProcessState(tab.agentId).state"
+                            size="small"
+                        />
+                        <CodeCommentsIndicator :count="agentCommentsCount(tab.agentId)" :show-tooltip="false" class="tab-comments-indicator" />
+                        <span class="tab-close-icon" @click.stop="closeTab(tab.id)">
+                            <wa-icon name="xmark" label="Close tab"></wa-icon>
                         </span>
-                    </wa-button>
+                    </span>
                 </wa-tab>
             </template>
 
             <!-- Tool tabs — shown in the center strip unless docked; arrow places them -->
             <wa-tab v-if="showInCenter('files')" slot="nav" panel="files">
-                <wa-button
-                    :appearance="centerActiveTab === 'files' ? 'outlined' : 'plain'"
-                    :variant="centerActiveTab === 'files' ? 'brand' : 'neutral'"
-                    size="small"
-                >
-                    Files
-                    <CodeCommentsIndicator slot="end" :count="filesCommentsCount" :show-tooltip="false" class="tab-comments-indicator" />
-                </wa-button>
+                Files
+                <CodeCommentsIndicator :count="filesCommentsCount" :show-tooltip="false" class="tab-comments-indicator" />
                 <TabPlacementMenu tab-id="files" current="center" @place="(dest) => layout.place('files', dest)" />
             </wa-tab>
             <wa-tab v-if="hasGitRepo && showInCenter('git')" slot="nav" panel="git">
-                <wa-button
-                    :appearance="centerActiveTab === 'git' ? 'outlined' : 'plain'"
-                    :variant="centerActiveTab === 'git' ? 'brand' : 'neutral'"
-                    size="small"
-                >
-                    Git
-                    <CodeCommentsIndicator slot="end" :count="gitCommentsCount" :show-tooltip="false" class="tab-comments-indicator" />
-                </wa-button>
+                Git
+                <CodeCommentsIndicator :count="gitCommentsCount" :show-tooltip="false" class="tab-comments-indicator" />
                 <TabPlacementMenu tab-id="git" current="center" @place="(dest) => layout.place('git', dest)" />
             </wa-tab>
             <wa-tab v-if="showInCenter('terminal')" slot="nav" panel="terminal">
-                <wa-button
-                    :appearance="centerActiveTab === 'terminal' ? 'outlined' : 'plain'"
-                    :variant="centerActiveTab === 'terminal' ? 'brand' : 'neutral'"
-                    size="small"
-                >
-                    Terminal
-                </wa-button>
+                Terminal
                 <TabPlacementMenu tab-id="terminal" current="center" @place="(dest) => layout.place('terminal', dest)" />
             </wa-tab>
             <wa-tab v-if="hasArtifacts && showInCenter('artifacts')" slot="nav" panel="artifacts">
-                <wa-button
-                    :appearance="centerActiveTab === 'artifacts' ? 'outlined' : 'plain'"
-                    :variant="centerActiveTab === 'artifacts' ? 'brand' : 'neutral'"
-                    size="small"
-                >
-                    Artifacts
-                </wa-button>
+                Artifacts
                 <TabPlacementMenu tab-id="artifacts" current="center" @place="(dest) => layout.place('artifacts', dest)" />
             </wa-tab>
             <wa-tab v-if="hasSpawnRoot && showInCenter('orchestration')" slot="nav" panel="orchestration">
-                <wa-button
-                    :appearance="centerActiveTab === 'orchestration' ? 'outlined' : 'plain'"
-                    :variant="centerActiveTab === 'orchestration' ? 'brand' : 'neutral'"
-                    size="small"
-                >
-                    Orchestration
-                </wa-button>
+                Orchestration
                 <TabPlacementMenu tab-id="orchestration" current="center" @place="(dest) => layout.place('orchestration', dest)" />
             </wa-tab>
 
@@ -1637,7 +1594,6 @@ onBeforeUnmount(() => {
     flex: 1;
     min-height: 0;
     overflow: hidden;
-    --indicator-color: transparent;
     --track-width: var(--divider-size);
 }
 
@@ -1659,7 +1615,8 @@ onBeforeUnmount(() => {
 }
 
 wa-tab::part(base) {
-    padding: var(--wa-space-xs);
+    padding: var(--wa-space-2xs) var(--wa-space-xs);
+    gap: var(--wa-space-2xs);
 }
 
 /* Active tab panel needs to fill available space and handle overflow */

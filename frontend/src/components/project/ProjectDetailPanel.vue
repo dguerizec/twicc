@@ -455,13 +455,7 @@ onBeforeUnmount(() => {
             @wa-tab-show="onTabShow"
         >
             <wa-tab v-for="tab in TABS" :key="tab.id" slot="nav" :panel="tab.id">
-                <wa-button
-                    :appearance="activeTab === tab.id ? 'outlined' : 'plain'"
-                    :variant="activeTab === tab.id ? 'brand' : 'neutral'"
-                    size="small"
-                >
-                    {{ tab.label }}
-                </wa-button>
+                {{ tab.label }}
             </wa-tab>
 
             <wa-tab-panel name="stats">
@@ -534,7 +528,6 @@ wa-divider {
     flex: 1;
     min-height: 0;
     overflow: hidden;
-    --indicator-color: transparent;
     --track-width: var(--divider-size);
 }
 
@@ -556,7 +549,8 @@ wa-divider {
 }
 
 wa-tab::part(base) {
-    padding: var(--wa-space-xs);
+    padding: var(--wa-space-2xs) var(--wa-space-xs);
+    gap: var(--wa-space-2xs);
 }
 
 .detail-tabs :deep(wa-tab-panel[active]) {

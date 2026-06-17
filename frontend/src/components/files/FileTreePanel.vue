@@ -1419,7 +1419,7 @@ defineExpose({
     display: flex;
     align-items: center;
     background: var(--wa-color-surface-default);
-    border-bottom: 1px solid var(--wa-color-surface-border);
+    border-bottom: var(--divider-size) solid var(--wa-color-surface-border);
     /* Stay above the overlay (z-index: 10) */
     position: relative;
     z-index: 11;
@@ -1449,7 +1449,7 @@ defineExpose({
     align-items: center;
     gap: var(--wa-space-s);
     width: 100%;
-    padding: var(--wa-space-xs) var(--wa-space-s);
+    padding: calc(1px + var(--wa-space-2xs)) var(--wa-space-s);
     background: var(--wa-color-surface-default);
     border: none;
     border-bottom: 1px solid var(--wa-color-surface-border);

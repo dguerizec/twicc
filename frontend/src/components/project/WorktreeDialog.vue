@@ -621,10 +621,6 @@ defineExpose({
 
 /* Tabs sit directly under the header; trim the panels' default padding so the
    form/list align with the dialog body. */
-.worktree-tabs {
-    --indicator-color: var(--wa-color-brand-fill-loud);
-}
-
 .worktree-tabs wa-tab-panel::part(base) {
     padding-block: var(--wa-space-m) 0;
     padding-inline: 0;

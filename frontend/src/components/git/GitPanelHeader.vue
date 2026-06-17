@@ -289,7 +289,7 @@ function copyHash() {
     align-items: center;
     gap: var(--wa-space-s);
     width: 100%;
-    padding: var(--wa-space-xs) var(--wa-space-s);
+    padding: calc(1px + var(--wa-space-3xs)) var(--wa-space-s);
     background: none;
     border: none;
     cursor: pointer;

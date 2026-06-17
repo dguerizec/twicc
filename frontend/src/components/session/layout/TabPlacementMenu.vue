@@ -57,7 +57,7 @@ function onSelect(event) {
 }
 .placement-trigger {
     --wa-form-control-padding-inline: 0.25em;
-    font-size: 0.7em;
+    font-size: 0.5em;
     opacity: 0.6;
 }
 .placement-trigger:hover {

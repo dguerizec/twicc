@@ -1060,8 +1060,7 @@ defineExpose({ activeIndex })
     align-items: center;
     justify-content: start;
     column-gap: var(--wa-space-m);
-    padding: var(--wa-space-2xs) var(--wa-space-s);
-    border-bottom: 1px solid var(--wa-color-surface-border);
+    border-bottom: var(--divider-size) solid var(--wa-color-surface-border);
     flex-shrink: 0;
     min-height: 2rem;
 }
@@ -1072,9 +1071,12 @@ defineExpose({ activeIndex })
     min-width: 0;
     overflow: hidden;
     font-size: var(--wa-font-size-s);
-    --indicator-color: var(--wa-color-primary-500);
-    --track-color: transparent;
-    --track-width: 2px;
+    --track-width: var(--divider-size);
+    margin-bottom: calc(-1.5 * var(--divider-size));
+    padding-top: 2.5px;
+}
+.terminal-tab-nav::part(tabs) {
+    border-bottom-color: transparent;
 }
 .terminal-tab-nav::part(base) {
     overflow: hidden;
@@ -1090,16 +1092,14 @@ defineExpose({ activeIndex })
     align-items: center;
 }
 .terminal-tab-nav wa-tab::part(base) {
-    padding: 0.25em 0.75em;
-}
-.terminal-tab-nav wa-tab[active] {
-    margin-block-end: 0;
-    color: var(--wa-color-brand);
+    padding: var(--wa-space-2xs) var(--wa-space-xs);
+    gap: var(--wa-space-2xs);
 }
 .terminal-unavailable-tab {
     display: none;
 }
 .add-terminal-button {
+    margin-left: var(--wa-space-2xs);
     align-self: center;
 }
 
@@ -1107,11 +1107,12 @@ defineExpose({ activeIndex })
     margin-inline-start: auto;
     display: flex;
     align-items: center;
-    gap: var(--wa-space-m);
+    gap: var(--wa-space-s);
     flex-shrink: 0;
     wa-divider {
         --spacing: 0px;
     }
+    padding-right: var(--wa-space-xs);
 }
 
 .scroll-edge-button {
