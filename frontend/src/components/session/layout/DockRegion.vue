@@ -53,7 +53,7 @@ function onBodyClick() {
 </script>
 
 <template>
-    <div class="dock-region" :class="region.kind" :style="style">
+    <div class="dock-region" :class="region.kind" :data-rid="region.id" :style="style">
         <wa-tab-group class="dock-tabnav" :active="activeTabId" @wa-tab-show.stop="onShow">
             <wa-tab v-for="t in tabs" :key="t.id" slot="nav" :panel="t.id" class="dock-tab">
                 <wa-icon v-if="t.icon" :name="t.icon" class="dock-tab-icon"></wa-icon>
@@ -86,11 +86,23 @@ function onBodyClick() {
     display: flex;
     flex-direction: column;
     overflow: hidden;
-    border: 1px solid var(--wa-color-surface-border, rgba(0, 0, 0, 0.12));
     background: var(--wa-color-surface-default, transparent);
     min-width: 0;
     min-height: 0;
+    --dock-border: var(--divider-size) solid var(--wa-color-surface-border, rgba(0, 0, 0, 0.12));
 }
+
+/* Borders sit only on inner edges (facing the center or a sibling divider); edges that touch
+   the layout's outer boundary stay bare. The resolver encodes "both siblings shown" in the
+   region id: left-bottom / right-bottom exist ONLY when the side column is split, so their top
+   border is the divider between the two stacked docks; bottom-right exists ONLY when the bottom
+   is split, and owns the vertical divider toward bottom-left. */
+.dock-region.col-left { border-right: var(--dock-border); }
+.dock-region.col-right { border-left: var(--dock-border); }
+.dock-region.bottom { border-top: var(--dock-border); }
+.dock-region[data-rid="left-bottom"],
+.dock-region[data-rid="right-bottom"] { border-top: var(--dock-border); }
+.dock-region[data-rid="bottom-right"] { border-left: var(--dock-border); }
 
 /* wa-tab-group used only for its nav — hide its (empty) body, like TerminalPanel */
 .dock-tabnav {

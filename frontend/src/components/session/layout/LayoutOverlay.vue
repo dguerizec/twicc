@@ -71,9 +71,13 @@ function onShow(event) { emit('select', event.detail.name) }
     flex-direction: column;
     overflow: hidden;
     background: var(--wa-color-surface-default, #fff);
-    border: 1px solid var(--wa-color-surface-border, rgba(0, 0, 0, 0.12));
     box-shadow: var(--wa-shadow-l, 0 10px 40px rgba(0, 0, 0, 0.35));
+    --overlay-border: var(--divider-size) solid var(--wa-color-surface-border, rgba(0, 0, 0, 0.12));
 }
+/* The overlay peeks from one edge; only its inner edge (toward the escape strip / center) is bordered. */
+.layout-overlay.left { border-right: var(--overlay-border); }
+.layout-overlay.right { border-left: var(--overlay-border); }
+.layout-overlay.bottom { border-top: var(--overlay-border); }
 .overlay-tabnav {
     flex: 0 0 auto;
     min-width: 0;

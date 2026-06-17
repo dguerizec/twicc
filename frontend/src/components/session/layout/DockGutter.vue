@@ -89,17 +89,24 @@ function onClick(entry) {
     gap: 0.25rem;
     padding: 0.25rem;
     background: var(--wa-color-surface-lowered, rgba(0, 0, 0, 0.08));
-    border: 1px solid var(--wa-color-surface-border, rgba(0, 0, 0, 0.12));
     z-index: 12; /* above an open overlay backdrop, so gutters stay clickable */
+    --gutter-border: var(--divider-size) solid var(--wa-color-surface-border, rgba(0, 0, 0, 0.12));
 }
-.dock-gutter.left,
+/* Only the center-facing edge is bordered; the three edges on the layout boundary stay bare. */
+.dock-gutter.left {
+    flex-direction: column;
+    align-items: center;
+    border-right: var(--gutter-border);
+}
 .dock-gutter.right {
     flex-direction: column;
     align-items: center;
+    border-left: var(--gutter-border);
 }
 .dock-gutter.bottom {
     flex-direction: row;
     align-items: center;
+    border-top: var(--gutter-border);
 }
 .g-group {
     display: flex;
