@@ -15,6 +15,13 @@ const props = defineProps({
     relativePath: { type: String, required: true },
 })
 
+// Multi-root template (view + toggle buttons, their tooltips, the dialog) → Vue
+// can't auto-inherit a fallthrough class onto a single root, and warns. Consumers
+// (the file-path header, the mobile files-panel header) pass a positioning class,
+// so route $attrs explicitly onto the primary (toggle) button — the always-present,
+// right-most element, which is also where a trailing margin belongs.
+defineOptions({ inheritAttrs: false })
+
 const store = useDataStore()
 const route = useRoute()
 const router = useRouter()
@@ -72,6 +79,7 @@ function viewInArtifacts() {
     </wa-button>
     <AppTooltip v-if="bookmark" :for="viewButtonId">Open in the artifacts list</AppTooltip>
     <wa-button
+        v-bind="$attrs"
         :id="buttonId"
         appearance="plain"
         size="small"
