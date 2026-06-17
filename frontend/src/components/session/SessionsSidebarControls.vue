@@ -12,10 +12,10 @@
 //                          consumed unchanged by ProjectView.handleSessionOptionsSelect
 //  - searchKeydown       : the keydown event from the filter input
 //  - openAdvancedSearch  : the advanced-search button click
-//  - switchToArtifacts   : the new "Switch to artifacts" option
+// (The Sessions ↔ Artifacts view switch is NOT here — it lives in the sidebar
+// header's context row, see SidebarViewSwitch.)
 import { ref } from 'vue'
 import AppTooltip from '../ui/AppTooltip.vue'
-import { ARTIFACT_ICON } from '../../utils/artifactBookmark'
 
 defineProps({
     searchQuery: { type: String, default: '' },
@@ -32,20 +32,13 @@ const emit = defineEmits([
     'optionSelect',
     'searchKeydown',
     'openAdvancedSearch',
-    'switchToArtifacts',
 ])
 
 const searchInputRef = ref(null)
 
-// "Switch to artifacts" lives in the same options dropdown; route it to its own
-// emit rather than through handleSessionOptionsSelect. Other items forward the
-// raw wa-select event unchanged so ProjectView's existing handler reads
-// event.detail.item exactly as before.
+// All options forward the raw wa-select event unchanged; ProjectView's handler
+// reads event.detail.item.
 function onOptionSelect(event) {
-    if (event.detail?.item?.value === 'switch-artifacts') {
-        emit('switchToArtifacts')
-        return
-    }
     emit('optionSelect', event)
 }
 
@@ -119,11 +112,6 @@ defineExpose({ focus })
             >
                 <div>Show active sessions across projects</div>
                 <div class="session-option-hint">All with a running process or unread content</div>
-            </wa-dropdown-item>
-            <wa-divider></wa-divider>
-            <wa-dropdown-item value="switch-artifacts">
-                <wa-icon slot="icon" :name="ARTIFACT_ICON"></wa-icon>
-                Switch to artifacts list
             </wa-dropdown-item>
         </wa-dropdown>
         <AppTooltip for="session-options-button">Session list options</AppTooltip>

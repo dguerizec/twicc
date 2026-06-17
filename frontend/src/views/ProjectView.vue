@@ -20,6 +20,8 @@ import SessionList from '../components/session/list/SessionList.vue'
 import SessionsSidebarControls from '../components/session/SessionsSidebarControls.vue'
 import ArtifactBookmarksSidebarControls from '../components/artifacts/ArtifactBookmarksSidebarControls.vue'
 import ArtifactBookmarkList from '../components/artifacts/ArtifactBookmarkList.vue'
+import SidebarViewSwitch from '../components/sidebar/SidebarViewSwitch.vue'
+import { lastSessionsLocation, lastArtifactsLocation, memoryScope, resetSidebarViewMemory } from '../utils/sidebarViewMemory'
 import ArtifactsBrowserView from './ArtifactsBrowserView.vue'
 import SessionSelectionBar from '../components/session/list/SessionSelectionBar.vue'
 import FetchErrorPanel from '../components/ui/FetchErrorPanel.vue'
@@ -602,9 +604,18 @@ const isInitialLoading = computed(() =>
 )
 const didSessionsFailToLoad = computed(() => store.didSessionsFailToLoad(effectiveProjectId.value))
 
-// Search/filter state for sessions
-const searchQuery = ref('')
-const trimmedSearchQuery = computed(() => searchQuery.value.trim())
+// Filter text is independent per sidebar mode: switching modes must not carry
+// one list's filter into the other, and each keeps its own across the switch.
+const sessionsSearchQuery = ref('')
+const artifactsSearchQuery = ref('')
+const trimmedSearchQuery = computed(() => sessionsSearchQuery.value.trim())
+
+// The open artifact bookmark, frozen while NOT in Artifacts mode so the
+// (v-show-hidden) ArtifactsBrowserView keeps its rendered, running artifact
+// instead of tearing it down when the route drops :bookmarkId. The per-mode
+// last URLs live in the shared sidebarViewMemory module (so the command palette
+// switch matches the sidebar toggle); ProjectView is their single writer.
+const lastArtifactBookmarkId = ref(null)
 
 // Show archived sessions filter (persistent setting, browser-local via settings store)
 const showArchivedSessions = computed(() => settingsStore.isShowArchivedSessions)
@@ -640,10 +651,19 @@ function focusSearchInput() {
     else sessionsControlsRef.value?.focus()
 }
 
-// Clear search when project changes
-watch(effectiveProjectId, () => {
-    searchQuery.value = ''
-})
+// On scope change, reset the per-mode filters, and — only when the scope truly
+// differs from the one the remembered URLs belong to — drop the preserved view
+// state. immediate so a fresh mount that lands on a different project also drops
+// the stale cross-scope memory (the module singleton outlives ProjectView).
+watch(effectiveProjectId, (scope) => {
+    sessionsSearchQuery.value = ''
+    artifactsSearchQuery.value = ''
+    if (memoryScope.value !== scope) {
+        resetSidebarViewMemory()
+        memoryScope.value = scope
+        lastArtifactBookmarkId.value = null
+    }
+}, { immediate: true })
 
 /**
  * Handle keyboard events from the search input.
@@ -667,9 +687,10 @@ function handleSearchKeydown(event) {
         }
     }
 
-    // Escape not handled by the list (no highlight) → clear search field
-    if (event.key === 'Escape' && searchQuery.value) {
-        searchQuery.value = ''
+    // Escape not handled by the list (no highlight) → clear the active mode's filter
+    const activeQuery = isArtifactsMode.value ? artifactsSearchQuery : sessionsSearchQuery
+    if (event.key === 'Escape' && activeQuery.value) {
+        activeQuery.value = ''
         event.preventDefault()
     }
 }
@@ -786,6 +807,36 @@ function switchToArtifacts() {
 function switchToSessions() {
     if (isAllProjectsMode.value) router.push({ name: 'projects-all', query: queryWithWorkspace() })
     else router.push({ name: 'project', params: { projectId: projectId.value } })
+}
+
+// Record the current full route as its mode's last location, so any switch
+// (sidebar toggle or command palette) returns to that exact URL. ProjectView is
+// the single writer of the shared memory; it stays mounted across the toggle
+// (both /…/ and /…/artifacts resolve to it), so this watch never misses a hop.
+watch(() => route.fullPath, () => {
+    const loc = { name: route.name, params: { ...route.params }, query: { ...route.query } }
+    if (isArtifactsMode.value) lastArtifactsLocation.value = loc
+    else lastSessionsLocation.value = loc
+}, { immediate: true })
+
+// Track the open bookmark only while in Artifacts mode; leaving the mode freezes
+// it so the (v-show-hidden) ArtifactsBrowserView keeps rendering the same
+// artifact — no unmount, no iframe reload.
+watch(() => [isArtifactsMode.value, route.params.bookmarkId], () => {
+    if (isArtifactsMode.value) lastArtifactBookmarkId.value = route.params.bookmarkId || null
+}, { immediate: true })
+
+// Sidebar header view switch (SidebarViewSwitch): flip to the other list,
+// restoring that mode's last URL when we have one (same logic the command
+// palette uses), else the mode's bare root.
+function toggleSidebarView() {
+    if (isArtifactsMode.value) {
+        if (lastSessionsLocation.value) router.push(lastSessionsLocation.value)
+        else switchToSessions()
+    } else {
+        if (lastArtifactsLocation.value) router.push(lastArtifactsLocation.value)
+        else switchToArtifacts()
+    }
 }
 
 // Open an artifact bookmark in the main pane (artifacts route with :bookmarkId).
@@ -1743,12 +1794,13 @@ function updateSidebarClosedClass(closed) {
                             </template>
                         </template>
                     </wa-dropdown>
+                    <SidebarViewSwitch :is-artifacts-mode="isArtifactsMode" @toggle="toggleSidebarView" />
                 </div>
 
                 <SessionsSidebarControls
-                    v-if="!isArtifactsMode"
+                    v-show="!isArtifactsMode"
                     ref="sessionsControlsRef"
-                    v-model:search-query="searchQuery"
+                    v-model:search-query="sessionsSearchQuery"
                     :show-archived-sessions="showArchivedSessions"
                     :compact-view="compactView"
                     :multi-select-active="selectionStore.active"
@@ -1758,16 +1810,14 @@ function updateSidebarClosedClass(closed) {
                     @option-select="handleSessionOptionsSelect"
                     @search-keydown="handleSearchKeydown"
                     @open-advanced-search="openAdvancedSearch"
-                    @switch-to-artifacts="switchToArtifacts"
                 />
                 <ArtifactBookmarksSidebarControls
-                    v-else
+                    v-show="isArtifactsMode"
                     ref="artifactBookmarksControlsRef"
-                    v-model:search-query="searchQuery"
+                    v-model:search-query="artifactsSearchQuery"
                     :compact-view="compactView"
                     @option-select="handleSessionOptionsSelect"
                     @search-keydown="handleSearchKeydown"
-                    @switch-to-sessions="switchToSessions"
                 />
             </div>
 
@@ -1781,8 +1831,9 @@ function updateSidebarClosedClass(closed) {
                     @deselect-session="handleSessionSelect"
                 />
 
-                <!-- Sessions mode: error / loading / list -->
-                <template v-if="!isArtifactsMode">
+                <!-- Sessions mode: error / loading / list. Kept mounted via v-show
+                     (not v-if) so its scroll/selection survive a mode switch. -->
+                <div v-show="!isArtifactsMode" class="sidebar-list-region">
                     <!-- Error state (only for initial load failure) -->
                     <FetchErrorPanel
                         v-if="didSessionsFailToLoad && !areSessionsFetched"
@@ -1805,7 +1856,7 @@ function updateSidebarClosedClass(closed) {
                         :project-id="effectiveProjectId"
                         :session-id="sessionId"
                         :show-project-name="showProjectNameInList"
-                        :search-query="searchQuery"
+                        :search-query="sessionsSearchQuery"
                         :show-archived="showArchivedSessions"
                         :show-archived-projects="showArchivedProjects"
                         :compact-view="compactView"
@@ -1814,17 +1865,18 @@ function updateSidebarClosedClass(closed) {
                         @drop-data="handleDropOnSession"
                         @focus-search="focusSearchInput"
                     />
-                </template>
+                </div>
 
-                <!-- Artifacts mode: artifact bookmark list -->
+                <!-- Artifacts mode: artifact bookmark list. Also v-show, so its
+                     scroll/selection survive a mode switch. -->
                 <ArtifactBookmarkList
-                    v-else
+                    v-show="isArtifactsMode"
                     ref="artifactBookmarkListRef"
                     :effective-project-id="effectiveProjectId"
                     :active-workspace-id="activeWorkspaceId"
-                    :search-query="searchQuery"
+                    :search-query="artifactsSearchQuery"
                     :compact-view="compactView"
-                    :active-bookmark-id="route.params.bookmarkId || null"
+                    :active-bookmark-id="lastArtifactBookmarkId"
                     @select="onArtifactBookmarkSelect"
                     @focus-search="focusSearchInput"
                 />
@@ -2297,7 +2349,7 @@ function updateSidebarClosedClass(closed) {
             <div v-show="isArtifactsMode" class="artifacts-browser-content">
                 <KeepAlive>
                     <ArtifactsBrowserView
-                        :bookmark-id="route.params.bookmarkId || null"
+                        :bookmark-id="lastArtifactBookmarkId"
                         :effective-project-id="effectiveProjectId"
                         :key="effectiveProjectId"
                     />
@@ -2614,6 +2666,16 @@ wa-dropdown-item:hover .row-menu-trigger,
     display: flex;
     flex-direction: column;
     position: relative;
+}
+
+/* Sessions list wrapper: lets the whole sessions list (error/loading/list) be
+   display-toggled (v-show) while staying a flex column so the list fills. The
+   artifacts list (v-show too) fills the same way via its own root. */
+.sidebar-list-region {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
 }
 
 .main-content {

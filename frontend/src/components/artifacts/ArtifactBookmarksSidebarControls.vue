@@ -1,8 +1,8 @@
 <script setup>
 // ArtifactBookmarksSidebarControls.vue — the sidebar's second header row in Artifacts
-// mode: a trimmed options dropdown ("Switch to sessions" + "Compact view") and
-// an artifact filter input. No advanced (full-text) search button — that
-// indexes session history, not bookmarks.
+// mode: a trimmed options dropdown ("Compact view") and an artifact filter
+// input. No advanced (full-text) search button — that indexes session history,
+// not bookmarks.
 //
 // Mirrors SessionsSidebarControls' contract:
 //  - update:searchQuery : v-model passthrough for the filter input
@@ -10,7 +10,7 @@
 //                         (only "compact-view" reaches ProjectView's handler)
 //  - searchKeydown      : the keydown event from the filter input (drives
 //                         ArtifactBookmarkList keyboard navigation, like Sessions mode)
-//  - switchToSessions   : the "Switch to sessions" option
+// (The Sessions ↔ Artifacts view switch is NOT here — see SidebarViewSwitch.)
 import { ref } from 'vue'
 import AppTooltip from '../ui/AppTooltip.vue'
 
@@ -23,16 +23,11 @@ const emit = defineEmits([
     'update:searchQuery',
     'optionSelect',
     'searchKeydown',
-    'switchToSessions',
 ])
 
 const searchInputRef = ref(null)
 
 function onOptionSelect(event) {
-    if (event.detail?.item?.value === 'switch-sessions') {
-        emit('switchToSessions')
-        return
-    }
     emit('optionSelect', event)
 }
 
@@ -66,11 +61,6 @@ defineExpose({ focus })
                 :checked="compactView"
             >
                 Compact view
-            </wa-dropdown-item>
-            <wa-divider></wa-divider>
-            <wa-dropdown-item value="switch-sessions">
-                <wa-icon slot="icon" name="comments"></wa-icon>
-                Switch to sessions list
             </wa-dropdown-item>
         </wa-dropdown>
         <AppTooltip for="bookmark-options-button">Artifacts list options</AppTooltip>

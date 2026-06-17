@@ -20,6 +20,7 @@ import { isSessionUnread } from '../utils/sessions'
 import { worktreeLabel } from '../utils/worktree'
 import { toWorkspaceProjectId } from '../utils/workspaceIds'
 import { ARTIFACT_ICON } from '../utils/artifactBookmark'
+import { lastSessionsLocation, lastArtifactsLocation } from '../utils/sidebarViewMemory'
 import { apiFetch } from '../utils/api'
 import { toast } from '../composables/useToast'
 import {
@@ -516,6 +517,8 @@ export function initStaticCommands(router) {
             // in the route (home / settings).
             when: () => route.name !== 'project-artifacts' && route.name !== 'projects-artifacts',
             action: () => {
+                // Same restore-the-last-URL behaviour as the sidebar view switch.
+                if (lastArtifactsLocation.value) { router.push(lastArtifactsLocation.value); return }
                 const workspaceQuery = route.query.workspace ? { workspace: route.query.workspace } : {}
                 const projectId = routeProjectId()
                 if (isAllProjectsMode() || !projectId) {
@@ -535,6 +538,8 @@ export function initStaticCommands(router) {
             // ProjectView's switchToSessions.
             when: () => route.name === 'project-artifacts' || route.name === 'projects-artifacts',
             action: () => {
+                // Same restore-the-last-URL behaviour as the sidebar view switch.
+                if (lastSessionsLocation.value) { router.push(lastSessionsLocation.value); return }
                 const workspaceQuery = route.query.workspace ? { workspace: route.query.workspace } : {}
                 const projectId = routeProjectId()
                 if (isAllProjectsMode() || !projectId) {
