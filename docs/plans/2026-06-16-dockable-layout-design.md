@@ -95,6 +95,19 @@ renderDescription = {
   gutter stays visible.
 - **Optional tabs** (Artifacts/Orchestration): empty → collapsed to gutter by default, click =
   overlay placeholder. With content → real region. (Files/Git assumed always present for now.)
+  > **Amended 2026-06-18 — this rule was reversed.** An optional tab with **no content** is now
+  > treated as **absent**: no tab, no dock, no gutter, no overlay — exactly as if it were never in
+  > `tabs` (the app just omits a not-yet-present tool). It does **not** collapse to a gutter, and
+  > there is no overlay placeholder. Its dock **assignment** is remembered, so it appears at the
+  > right dock once content arrives (a present sibling in the same dock shows alone until then).
+  > The optional set is also wider than this line says: **only Files and Terminal are always
+  > present**; Git, Artifacts, Orchestration (and future tabs) are optional; Chat + subagents are
+  > center-only (not dockable). The resolver now filters `optional && !hasContent` up front
+  > (`isPresent`), so the old "empty-optional → gutter/overlay" path — also referenced above
+  > ("Overlay reserved for: … optional-empty …") and below ("Coexist edge case … optional-empty
+  > bottom dock gutter") — is gone. Rationale + the remaining work (an optional-tab registry, and
+  > persistence so a default layout can pre-assign a not-yet-present tab) live in the
+  > 2026-06-17 impl handoff (2026-06-18 entries).
 - **Resize siblings:** bounded ONLY by `siblingMaxFrac` (one ≤ 80%, other ≥ 20%). NOT clamped to
   any px min. Logic in resolver; **UI wiring deferred**.
 - **Resize docks:** column width vs center, bottom height vs center. Clamps: center `≥

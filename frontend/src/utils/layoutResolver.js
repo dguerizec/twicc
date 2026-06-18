@@ -9,6 +9,8 @@
 //
 // input = {
 //   tabs:       [{ id, label, icon, optional?, hasContent?, fixedCenter? }]
+//               An optional tab with no content is treated as ABSENT (filtered out): it yields
+//               no tab, no dock, no gutter, no overlay — exactly as if it were never passed in.
 //   assignment: { [tabId]: dockId | 'center' }   // chat (fixedCenter) is always center
 //   viewport:   { w, h }                          // session content area, in px
 //   activeSide: 'left' | 'right'                  // which side wins under mutual exclusion
@@ -67,6 +69,12 @@ const DOCK_ANCHOR = {
   'left-bottom': 'end', 'right-bottom': 'end', 'bottom-right': 'end',
 };
 
+// A tab "exists" in the layout iff it is non-optional, or optional WITH content. An optional tab
+// with no content is ABSENT: filtered out before bucketing, so it produces no dock / gutter /
+// overlay. Mirrors reality — the app simply omits a not-yet-present tool (Git/Artifacts/...) from
+// `tabs`; enforcing it here lets a caller pass the full roster + flags and get the same result.
+const isPresent = (t) => !t.optional || t.hasContent;
+
 function bucketTabs(tabs, assignment) {
   const byDock = Object.fromEntries(DOCKS.map((d) => [d, []]));
   const center = [];
@@ -79,14 +87,10 @@ function bucketTabs(tabs, assignment) {
   return { byDock, center };
 }
 
-// A dock "demands" space when it holds at least one content-bearing tab and the
-// user hasn't minimized it. Optional tabs (artifacts/orchestration) without
-// content don't make a dock demand space — a dock that is ONLY empty-optional
-// defaults to a gutter.
+// A dock "demands" space when it holds at least one tab and the user hasn't minimized it.
+// Absent tabs (optional + no content) are filtered out upstream, so every bucketed tab counts.
 function demandOf(byDock, dockId, collapsedSet) {
-  const tabs = byDock[dockId];
-  if (!tabs.length || collapsedSet.has(dockId)) return false;
-  return tabs.some((t) => !t.optional || t.hasContent);
+  return byDock[dockId].length > 0 && !collapsedSet.has(dockId);
 }
 
 function edgeTabs(byDock, edge) {
@@ -99,7 +103,7 @@ export function resolveLayout(input) {
   const activeSide = input.activeSide || 'left';
   const activeResize = input.activeResize || 'left';
   const collapsed = new Set(input.collapsed || []);
-  const { byDock, center } = bucketTabs(input.tabs, input.assignment || {});
+  const { byDock, center } = bucketTabs((input.tabs || []).filter(isPresent), input.assignment || {});
 
   const decisions = [];
   const say = (s) => decisions.push(s);
@@ -207,11 +211,9 @@ export function resolveLayout(input) {
     const out = [];
     for (const d of EDGE_DOCKS[edge]) {
       if (!byDock[d].length) continue;
-      const optionalEmpty = byDock[d].every((t) => t.optional && !t.hasContent);
       let action;
       if (collapsed.has(d)) action = 'restore';
       else if (ra) action = ra;
-      else if (optionalEmpty) action = 'overlay';
       else continue; // shown inside a column / region, not in a gutter
       out.push({ dockId: d, tabs: byDock[d], action, anchor: DOCK_ANCHOR[d] });
     }

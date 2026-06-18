@@ -7,15 +7,19 @@ the design doc [`2026-06-16-dockable-layout-design.md`](./2026-06-16-dockable-la
 → the pure resolver `frontend/src/utils/layoutResolver.js` (the executable spec).
 
 Branch/worktree: `layout` (`.worktrees/layout`). Its own dev instance runs via devctl
-(frontend **5174**, backend **3501**). The branch is ~18 commits, **rebased on top of `main`**
+(frontend **5174**, backend **3501**). The branch is 17 commits, **rebased on top of `main`**
 (currently `60aca151`) — not pushed, not merged. Run `git log main..layout` for the breakdown.
 Persistence is not wired, so layout state is in-memory only (resets on reload).
 
 **Verification status:** verified **live in the browser** — step-1 docking, the route/focus model,
-the overlay route-derivation + focus lifecycle, swap-on-navigate (incl. browser back/forward), and
-the clearance unification (pixel-identical). Still **compile-verified only** (SFC + `node --check`,
-not re-checked live): the container-relative responsiveness and the compact-mode tab decoupling
-(both carried over from the prior session).
+the overlay route-derivation + focus lifecycle, swap-on-navigate (incl. browser back/forward), the
+clearance unification (pixel-identical), and the icons (tab + dock-placement, serve + render). Still
+**compile-verified only** (SFC + `node --check`, not re-checked live): the container-relative
+responsiveness and the compact-mode tab decoupling (both carried over from the prior session).
+
+> Icon set is **Font Awesome Free** — confirmed at the network level: icons load from `ka-f.fontawesome.com`
+> (the free kit host; pro would be `ka-p` + a `?token`), and no kit is configured (`kitCode = ""`). The
+> "Pro" comment inside the served SVG files is just FA's generic build header, not a license signal.
 
 > The dated sections below are chronological. The **2026-06-18 session** (native wa-tab, edge-aware
 > borders, overlay route-derivation + focus lifecycle, swap-on-navigate, mobile arrows, clearance
@@ -252,6 +256,45 @@ exactly one place. The bottom-gutter `.start` inset (`3`/`1.5rem`) is kept liter
 slightly different offset from the toggle). Decided: project/workspace pages will **not** get a layout
 (no central zone), so the clearance stays session-only — not moved to `ProjectView`.
 
+### Real icons — tab icons + custom dock-placement icons
+Tabs no longer rely on guessed/missing glyphs. A single `TAB_ICONS` map in `SessionView` feeds both the
+resolver input (`layoutTabs`) and the center tab strip markup, so the center tabs (Chat/Files/Git/
+Terminal/Artifacts/Orchestration) now show icons; subagent tabs use `robot`; Artifacts uses `shapes`
+(matching the existing artifacts UI in `SidebarViewSwitch`). `ProjectDetailPanel`'s tabs got icons too
+(Stats `chart-simple`, Files/Git/Terminal). Dock-placement icons: the old single shared FA glyph
+(`table-cells-large`, identical for every dock) is replaced by **seven custom SVGs** in
+`public/icons/docks/` (PyCharm-style: layout frame outline + a filled bar where the panel docks, `0 0 24 24`,
+`currentColor`), consumed via `<wa-icon src="/icons/docks/…">` (local endpoint — the only kind `src`
+supports). The placement menu (`TabPlacementMenu`) gained a disabled **"Tab placement"** header + divider,
+and the `center` option was relabeled **"Main area"**. Default choices to revisit if wanted: subagent
+`robot`, Stats `chart-simple`.
+
+### Optional tabs = absent when empty (model change + resolver, prototyped in the playground)
+**Reversed the design's "empty-optional → gutter" rule** (user call, 2026-06-18). An optional tab
+with no content is now treated as **absent**: it produces no tab, no dock, no gutter, no overlay —
+exactly as if it were never in `tabs`. Its dock **assignment** is remembered, so it appears at the
+right dock the moment content arrives (a present sibling in the same dock just shows alone until
+then). The optional set: **Files + Terminal are the only always-present tabs**; Git, Artifacts,
+Orchestration — and future tabs — are optional (Chat + subagents are center-only, not dockable).
+
+Done in the **resolver** — both the interactive playground (`~/.twicc/artifacts/<this-session>/
+layout-playground/`) and the code `frontend/src/utils/layoutResolver.js`, kept in **parity** (only
+the header comment + the `resolve`↔`resolveLayout` name differ). A one-line
+`isPresent(t) = !t.optional || t.hasContent` filter at the top of the resolve function drops
+empty-optional tabs before bucketing; `demandOf` simplified; the `optional`/`hasContent`
+empty→gutter/overlay branch removed. The playground's now-obsolete "empty → gutter" test was
+**deleted**; the suite is **19/19** and four targeted headless checks pass (absent everywhere /
+with-content shows as a column / mixed dock shows present-only / center strip excludes empty-optional).
+The design doc got a dated addendum at its "Optional tabs" rule.
+
+**What's left for the real feature (not done — rides on persistence):** (1) an **optional-tab
+registry** in `SessionView` marking which tool tabs are conditional, to DRY the scattered
+`hasGitRepo`/`hasArtifacts`/`hasSpawnRoot` gates (`layoutTabs` ~589, `toolPanelTabs` ~751, route
+guards ~798); (2) **persistence** of the placement intention for a not-yet-present tab (a default
+layout pre-assigning Artifacts→right-top only pays off once intentions persist). The code-resolver
+change is a **no-op today** (SessionView already omits absent tabs), so nothing changes in the app
+until the registry/persistence land — it's the spec, validated, ready for that wiring.
+
 ## Bugs found & fixed live (don't reintroduce)
 
 1. **`props.layout.render` is a ref** — `SessionLayout` must read composable refs via `.value`
@@ -270,12 +313,15 @@ slightly different offset from the toggle). Decided: project/workspace pages wil
   decided for low risk; not spelled out in the plan.
 - **Click-to-focus** + **minimize-returns-focus** + the **ownsRoute(Terminal-only) loop fix** are
   new this session (the plan only sketched "route = single pointer").
-- Auto-focus-on-dock is still **on** and flagged "to validate" — user hasn't decided to remove it.
+- Auto-focus-on-dock: **kept** (user validated 2026-06-18 — docking a tab focuses it, as desired).
 - Subagent tabs **center-only is settled** (won't change).
 - Resize splitters: still **not wired** (per plan).
-- `optional`/`hasContent` empty-optional → gutter: still **deferred** (plan note stands).
-- Icons are FA guesses (`folder`, `code-branch`, `terminal`, `image`, `diagram-project`,
-  `comments`; dock icons `table-cells-large`/`table-columns`) — may want refining.
+- **Optional-empty model reversed (2026-06-18):** an optional tab with no content is now **absent**
+  (no tab/dock/gutter/overlay), not collapsed-to-gutter — its placement is just remembered for when
+  content arrives. Prototyped in the playground and **ported to the code resolver** (`isPresent`
+  filter; the `optional`/`hasContent` empty→gutter branch removed). See the 2026-06-18 subsection.
+- Icons are **done** (2026-06-18): real tab icons + seven custom dock-placement SVGs (see that
+  section). Only the subagent (`robot`) and Stats (`chart-simple`) defaults are open to a re-pick.
 
 ## Known issues / open (not yet fixed)
 
@@ -292,10 +338,15 @@ slightly different offset from the toggle). Decided: project/workspace pages wil
 
 ## What remains (categorized todo — none trivial, lots left)
 
-- **Finish/validate step 1:** live-verify the prior session's responsiveness + compact decoupling;
-  **decide on auto-focus-on-dock**; pick final icons; empty-optional → gutter. (Compact mode tabs are
-  decoupled; overlay route-derivation, swap-on-navigate, borders and the clearance unification are
-  done + live-verified.)
+- **Finish/validate step 1:** live-verify the prior session's responsiveness + compact decoupling.
+  (Auto-focus-on-dock is **decided = kept**; the optional-empty model is **decided = absent** and
+  done in the resolver — what's left there is the registry + persistence, below. Compact mode tabs
+  are decoupled; overlay route-derivation, swap-on-navigate, borders, the clearance unification and
+  the icons are done + live-verified.)
+- **Optional-tab registry:** declare which tool tabs are conditional (Git/Artifacts/Orchestration +
+  future ones) vs always-present (Files/Terminal), in one place in `SessionView`, to DRY the
+  scattered `hasGitRepo`/`hasArtifacts`/`hasSpawnRoot` gates (`layoutTabs`, `toolPanelTabs`, route
+  guards). Pairs with the optional-empty model (see 2026-06-18 section).
 - **Compact polish (deferred):** optionally **shrink** the inline tab bar in compact to reclaim some
   vertical space (user deferred sizing); judge the now-empty collapsed compact header.
 - **Focus model polish:** tab lifecycle (run work on "became visible/focused", not on tab activation).
@@ -305,12 +356,14 @@ slightly different offset from the toggle). Decided: project/workspace pages wil
   watch `wa-split-panel`/`wa-reposition` traps).
 - **Persistence:** persist the intention; 3-tier resolution at creation (mirror
   `projectAgentDefaults.js` → `_resolveDraftAgentSettings` → `useSessionAgentSettings`); synced +
-  IndexedDB; per-device localStorage override (v2).
+  IndexedDB; per-device localStorage override (v2). Includes **remembering an absent tab's dock**
+  so a default layout can pre-assign a not-yet-present tab and it lands there when content arrives
+  (the payoff of the optional-empty model — the resolver already honors it).
 - **Interactions/UX:** keyboard nav; maximize/restore; reset (project/default/tabbed); drag-and-drop
   placement; named layouts/presets; animations.
-- **Polish/divers:** custom tab styling (vs native WA); coexistence edge case (bottom region +
-  empty-optional bottom gutter); structural-vs-resize-min naming; keep docs/AGENTS.md/CLAUDE.md in
-  sync if rules change.
+- **Polish/divers:** custom tab styling (vs native WA); structural-vs-resize-min naming; keep
+  docs/AGENTS.md/CLAUDE.md in sync if rules change. (The old "bottom region + empty-optional bottom
+  gutter" coexistence edge case is now **moot** — empty-optional docks no longer exist.)
 
 ## Testing notes (how this was verified — reuse for next time)
 
