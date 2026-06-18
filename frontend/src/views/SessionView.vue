@@ -594,6 +594,12 @@ const layout = useSessionLayout({
 
 const LAYOUT_TOOL_IDS = ['files', 'git', 'terminal', 'artifacts', 'orchestration']
 
+// Mobile fallback: below mobileMaxW the resolver folds everything into a plain tab strip and the
+// whole docking system is skipped (no docks possible). Hide the per-tab placement arrows there —
+// they'd offer to place a tab into a dock that can't exist. Gated on `measured` so the arrows
+// don't flash out before the area is first measured on a normal-width screen.
+const layoutTabsMode = computed(() => layout.measured.value && layout.render.value.mode === 'tabs')
+
 // A tool tab is shown in the center strip unless it's currently docked.
 function showInCenter(tabId) {
     return !layout.dockingRendered.value || layout.dockOf(tabId) === 'center'
@@ -1417,24 +1423,24 @@ onBeforeUnmount(() => {
             <wa-tab v-if="showInCenter('files')" slot="nav" panel="files">
                 Files
                 <CodeCommentsIndicator :count="filesCommentsCount" :show-tooltip="false" class="tab-comments-indicator" />
-                <TabPlacementMenu tab-id="files" current="center" @place="(dest) => layout.place('files', dest)" />
+                <TabPlacementMenu v-if="!layoutTabsMode" tab-id="files" current="center" @place="(dest) => layout.place('files', dest)" />
             </wa-tab>
             <wa-tab v-if="hasGitRepo && showInCenter('git')" slot="nav" panel="git">
                 Git
                 <CodeCommentsIndicator :count="gitCommentsCount" :show-tooltip="false" class="tab-comments-indicator" />
-                <TabPlacementMenu tab-id="git" current="center" @place="(dest) => layout.place('git', dest)" />
+                <TabPlacementMenu v-if="!layoutTabsMode" tab-id="git" current="center" @place="(dest) => layout.place('git', dest)" />
             </wa-tab>
             <wa-tab v-if="showInCenter('terminal')" slot="nav" panel="terminal">
                 Terminal
-                <TabPlacementMenu tab-id="terminal" current="center" @place="(dest) => layout.place('terminal', dest)" />
+                <TabPlacementMenu v-if="!layoutTabsMode" tab-id="terminal" current="center" @place="(dest) => layout.place('terminal', dest)" />
             </wa-tab>
             <wa-tab v-if="hasArtifacts && showInCenter('artifacts')" slot="nav" panel="artifacts">
                 Artifacts
-                <TabPlacementMenu tab-id="artifacts" current="center" @place="(dest) => layout.place('artifacts', dest)" />
+                <TabPlacementMenu v-if="!layoutTabsMode" tab-id="artifacts" current="center" @place="(dest) => layout.place('artifacts', dest)" />
             </wa-tab>
             <wa-tab v-if="hasSpawnRoot && showInCenter('orchestration')" slot="nav" panel="orchestration">
                 Orchestration
-                <TabPlacementMenu tab-id="orchestration" current="center" @place="(dest) => layout.place('orchestration', dest)" />
+                <TabPlacementMenu v-if="!layoutTabsMode" tab-id="orchestration" current="center" @place="(dest) => layout.place('orchestration', dest)" />
             </wa-tab>
 
             <!-- Main session panel -->
