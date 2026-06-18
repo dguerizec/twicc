@@ -94,12 +94,13 @@ const sessionLayoutEl = ref(null)
 const resizeSplitters = computed(() => render.value.splitters || [])
 const draggingId = ref(null)
 
-const HANDLE = 9 // px hit-area thickness, centered on the divider line
 function splitterStyle(s) {
-    if (s.axis === 'v') {
-        return { left: `${s.x - HANDLE / 2}px`, top: `${s.y}px`, width: `${HANDLE}px`, height: `${s.h}px` }
-    }
-    return { left: `${s.x}px`, top: `${s.y - HANDLE / 2}px`, width: `${s.w}px`, height: `${HANDLE}px` }
+    // Only the resolver position + the long dimension. The thin dimension and the on-divider
+    // centering live in CSS (--resize-grab + translate -50%), so there's no px magic here and it
+    // adapts to the theme's divider thickness.
+    return s.axis === 'v'
+        ? { left: `${s.x}px`, top: `${s.y}px`, height: `${s.h}px` }
+        : { left: `${s.x}px`, top: `${s.y}px`, width: `${s.w}px` }
 }
 
 let drag = null
@@ -170,7 +171,7 @@ onBeforeUnmount(endDrag)
                 :style="splitterStyle(s)"
                 @pointerdown="onSplitterDown($event, s)"
             >
-                <wa-icon name="grip-lines-vertical" class="splitter-grip"></wa-icon>
+                <wa-icon name="grip-lines-vertical" auto-width class="splitter-grip"></wa-icon>
             </div>
 
             <LayoutOverlay
@@ -241,31 +242,19 @@ body.sidebar-closed .session-layout :deep(.dock-gutter.left .g-group.end) {
     position: absolute;
     z-index: 5;
     touch-action: none;
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    /* Grid so the grip child is centered with place-content (no px offsets, no transform tricks). */
+    display: grid;
+    place-content: center;
+    /* The only sizing knob: the grab-strip thickness. The visible line stays var(--divider-size),
+       which varies with the theme; the strip is centered on its divider with translate, so
+       everything stays aligned whatever the divider thickness is. */
+    --resize-grab: 0.6rem;
 }
-.layout-splitter.axis-v { cursor: col-resize; }
-.layout-splitter.axis-h { cursor: row-resize; }
-/* Touch affordance: a persistent grip on the divider, mirroring the sidebar splitter's
-   .divider-handle — shown only on coarse-pointer (touch) devices where there's no hover to reveal
-   the line. Scaled up so it overflows the thin 9px strip: a pointerdown on the grip bubbles to the
-   strip and starts the drag, so the enlarged grip IS a much larger tap surface to grab (the whole
-   point on touch). Rotated 90° on the horizontal (axis-h) splitters so the grip lines run along the
-   divider. */
-.splitter-grip {
-    display: none;
-    color: var(--wa-color-surface-border);
-    scale: 3;
-}
-.layout-splitter.axis-h .splitter-grip {
-    rotate: 90deg;
-}
-@media (pointer: coarse) {
-    .splitter-grip {
-        display: inline;
-    }
-}
+/* Center each strip on its divider with translate (not a px offset); thin dimension from the token. */
+.layout-splitter.axis-v { width: var(--resize-grab); translate: -50% 0; cursor: col-resize; }
+.layout-splitter.axis-h { height: var(--resize-grab); translate: 0 -50%; cursor: row-resize; }
+
+/* Hover/drag highlight: a line the thickness of the theme's divider, centered in the strip. */
 .layout-splitter::after {
     content: '';
     position: absolute;
@@ -273,8 +262,23 @@ body.sidebar-closed .session-layout :deep(.dock-gutter.left .g-group.end) {
     opacity: 0;
     transition: opacity 0.12s ease;
 }
-.layout-splitter.axis-v::after { top: 0; bottom: 0; left: 50%; transform: translateX(-50%); width: 2px; }
-.layout-splitter.axis-h::after { left: 0; right: 0; top: 50%; transform: translateY(-50%); height: 2px; }
+.layout-splitter.axis-v::after { top: 0; bottom: 0; left: 50%; width: var(--divider-size); translate: -50% 0; }
+.layout-splitter.axis-h::after { left: 0; right: 0; top: 50%; height: var(--divider-size); translate: 0 -50%; }
 .layout-splitter:hover::after { opacity: 0.5; }
 .layout-splitter.dragging::after { opacity: 1; }
+
+/* Touch affordance: a persistent grip centered on the strip (by the strip's grid place-content),
+   mirroring the sidebar splitter's .divider-handle — shown only on coarse-pointer devices where
+   there's no hover. Scaled up so it overflows the thin strip: a pointerdown on it bubbles to the
+   strip and starts the drag, so the grip is a large tap surface. Rotated 90° on the horizontal
+   (axis-h) splitters so the grip lines run along the divider. */
+.splitter-grip {
+    display: none;
+    scale: 3;
+    color: var(--wa-color-surface-border);
+}
+.layout-splitter.axis-h .splitter-grip { rotate: 90deg; }
+@media (pointer: coarse) {
+    .splitter-grip { display: block; }
+}
 </style>
