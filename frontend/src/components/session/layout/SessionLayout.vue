@@ -16,7 +16,7 @@ const props = defineProps({
     registerTarget: { type: Function, required: true },
     unregisterTarget: { type: Function, required: true },
 })
-const emit = defineEmits(['select-tab', 'minimize', 'focus-pane', 'overlay-activate', 'overlay-dismiss'])
+const emit = defineEmits(['select-tab', 'minimize', 'maximize', 'restore-maximized', 'focus-pane', 'overlay-activate', 'overlay-dismiss'])
 
 // props.layout is the useSessionLayout() return — a bag of refs/functions. Refs accessed
 // through a prop object are NOT auto-unwrapped, so read them via .value here.
@@ -25,7 +25,16 @@ const render = computed(() => props.layout.render.value)
 const openOverlayEdge = computed(() => props.layout.openOverlayEdge.value)
 
 const centerRegion = computed(() => render.value.regions.find((r) => r.kind === 'center'))
-const dockRegions = computed(() => render.value.regions.filter((r) => r.kind !== 'center'))
+// Normal dock regions only — excludes the synthetic 'maximized' region, which is handled apart.
+const dockRegions = computed(() => render.value.regions.filter((r) => r.kind !== 'center' && r.kind !== 'maximized'))
+
+// Maximized mode: the resolver returns a single region of kind 'maximized'. A maximized DOCK renders
+// as that one full-bleed DockRegion (center + everything else hidden); a maximized CENTER instead just
+// fills the center slot (the center is the default slot — no teleport), hiding all docks.
+const maximizedRegion = computed(() => render.value.regions.find((r) => r.kind === 'maximized') || null)
+const isCenterMaximized = computed(() => !!maximizedRegion.value?.slots.some((s) => s.dockId === 'center'))
+const maximizedDockRegion = computed(() => (maximizedRegion.value && !isCenterMaximized.value) ? maximizedRegion.value : null)
+const centerVisible = computed(() => !maximizedDockRegion.value)
 
 // Context classes on the root so descendant CSS can react to the mode and to what sits on the
 // edges. Used to inset gutter icons away from the sidebar-reopen toggle when closed, and to
@@ -43,8 +52,9 @@ const rootClasses = computed(() => {
 })
 
 const centerStyle = computed(() => {
-    if (!docking.value || !centerRegion.value) return {}
-    const r = centerRegion.value
+    // When the center is maximized it fills the whole area (the resolver's region rect is the viewport).
+    const r = (isCenterMaximized.value && maximizedRegion.value) || (docking.value && centerRegion.value)
+    if (!r) return {}
     return { left: `${r.x}px`, top: `${r.y}px`, width: `${r.w}px`, height: `${r.h}px` }
 })
 
@@ -137,11 +147,27 @@ onBeforeUnmount(endDrag)
 
 <template>
     <div ref="sessionLayoutEl" class="session-layout" :class="rootClasses">
-        <div class="center-slot" :style="centerStyle">
+        <div class="center-slot" :style="centerStyle" v-show="centerVisible">
             <slot></slot>
         </div>
 
-        <template v-if="docking">
+        <!-- A maximized DOCK: the single full-bleed region with a restore button; nothing else. -->
+        <DockRegion
+            v-if="maximizedDockRegion"
+            :region="maximizedDockRegion"
+            :active-tab-id="layout.regionActiveTabId(maximizedDockRegion)"
+            :maximized="true"
+            :register-target="registerTarget"
+            :unregister-target="unregisterTarget"
+            @select="(id) => emit('select-tab', id)"
+            @pane-focus="(id) => emit('focus-pane', id)"
+            @restore="emit('restore-maximized')"
+            @place="(id, dest) => layout.place(id, dest)"
+        />
+
+        <!-- Normal dockable layout — skipped while maximizing (a maximized center shows only the
+             center slot above; a maximized dock shows only the region above). -->
+        <template v-else-if="docking && !maximizedRegion">
             <DockRegion
                 v-for="r in dockRegions"
                 :key="r.id"
@@ -152,6 +178,7 @@ onBeforeUnmount(endDrag)
                 @select="(id) => emit('select-tab', id)"
                 @pane-focus="(id) => emit('focus-pane', id)"
                 @minimize="(dockIds) => emit('minimize', dockIds)"
+                @maximize="(dockIds, tab) => emit('maximize', dockIds, tab)"
                 @place="(id, dest) => layout.place(id, dest)"
             />
 
@@ -235,11 +262,12 @@ body.sidebar-closed .session-layout.has-bottom-region {
 /* The terminal's extra-keys bar sits where the composer would but is taller, so it clears the toggle
    by --left-x + 1rem — and only when it's actually at the bottom-left: the terminal is the sole or
    bottom-left bottom dock (never bottom-right), or it's in the center and the center reaches the
-   bottom-left (no left column, no bottom dock lifting it). The value is set on the nearest layout
-   element (the bottom dock region / the center slot); it inherits across the panel teleport into the
-   bar, so no :deep into the relocated terminal is needed. */
+   bottom-left (no left column, no bottom dock lifting it), or it's maximized full-bleed. The value is
+   set on the nearest layout element (the bottom dock region / the center slot / the maximized region);
+   it inherits across the panel teleport into the bar, so no :deep into the relocated terminal needed. */
 body.sidebar-closed .session-layout:not(.has-left-col) .dock-region[data-rid="bottom"],
-body.sidebar-closed .session-layout:not(.has-left-col) .dock-region[data-rid="bottom-left"] {
+body.sidebar-closed .session-layout:not(.has-left-col) .dock-region[data-rid="bottom-left"],
+body.sidebar-closed .session-layout .dock-region[data-rid="maximized"] {
     --sidebar-toggle-clearance-extra-keys: calc(var(--sidebar-toggle-clearance-left-x) + 1rem);
 }
 body.sidebar-closed .session-layout:not(.has-left-col):not(.has-bottom-region) .center-slot {

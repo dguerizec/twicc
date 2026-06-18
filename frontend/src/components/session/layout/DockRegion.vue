@@ -9,10 +9,14 @@ import TabPlacementMenu from './TabPlacementMenu.vue'
 const props = defineProps({
     region: { type: Object, required: true },
     activeTabId: { type: String, default: null },
+    // When true this region is the maximized one (fills the whole layout area): its tab bar shows a
+    // restore button instead of minimize/maximize, and the per-tab placement arrows are hidden (the
+    // only exit is restore).
+    maximized: { type: Boolean, default: false },
     registerTarget: { type: Function, required: true },
     unregisterTarget: { type: Function, required: true },
 })
-const emit = defineEmits(['select', 'minimize', 'place', 'pane-focus'])
+const emit = defineEmits(['select', 'minimize', 'maximize', 'restore', 'place', 'pane-focus'])
 
 const bodyRef = ref(null)
 
@@ -72,22 +76,48 @@ function onBodyClick() {
                 <wa-icon v-if="t.icon" :name="t.icon" class="dock-tab-icon"></wa-icon>
                 <span class="dock-tab-label">{{ t.label }}</span>
                 <TabPlacementMenu
+                    v-if="!maximized"
                     :tab-id="t.id"
                     :current="dockOfTab(t.id)"
                     @place="(dest) => emit('place', t.id, dest)"
                 />
             </wa-tab>
             <wa-button
+                v-if="maximized"
                 slot="nav"
-                class="dock-minimize reduced-height"
+                class="dock-winbtn dock-restore reduced-height"
                 appearance="plain"
                 size="small"
-                title="Minimize to gutter"
-                aria-label="Minimize to gutter"
-                @click.stop="emit('minimize', dockIds)"
+                title="Restore"
+                aria-label="Restore"
+                @click.stop="emit('restore')"
             >
-                <wa-icon name="window-minimize"></wa-icon>
+                <wa-icon name="compress"></wa-icon>
             </wa-button>
+            <template v-else>
+                <wa-button
+                    slot="nav"
+                    class="dock-winbtn dock-minimize reduced-height"
+                    appearance="plain"
+                    size="small"
+                    title="Minimize to gutter"
+                    aria-label="Minimize to gutter"
+                    @click.stop="emit('minimize', dockIds)"
+                >
+                    <wa-icon name="window-minimize"></wa-icon>
+                </wa-button>
+                <wa-button
+                    slot="nav"
+                    class="dock-winbtn dock-maximize reduced-height"
+                    appearance="plain"
+                    size="small"
+                    title="Maximize"
+                    aria-label="Maximize"
+                    @click.stop="emit('maximize', dockIds, activeTabId)"
+                >
+                    <wa-icon name="expand"></wa-icon>
+                </wa-button>
+            </template>
         </wa-tab-group>
         <div ref="bodyRef" class="dock-body" @click.capture="onBodyClick"></div>
     </div>
@@ -155,9 +185,13 @@ function onBodyClick() {
 .dock-tab-icon {
     font-size: 0.85em;
 }
-.dock-minimize {
-    margin-inline-start: auto;
+.dock-winbtn {
     --wa-form-control-padding-inline: 0.3em;
+}
+/* The leading window button — minimize (then maximize), or restore when maximized — pushes the whole
+   group to the far right. Keyed on first-of-type so it follows whichever button comes first. */
+.dock-winbtn:first-of-type {
+    margin-inline-start: auto;
 }
 
 .dock-body {

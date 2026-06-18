@@ -16,6 +16,8 @@
 //   activeSide: 'left' | 'right'                  // which side wins under mutual exclusion
 //   activeResize:'left' | 'right'                 // column with priority when resizing (pushes the other to its min)
 //   collapsed:  string[]                          // docks the user manually minimized
+//   maximized?: string[]                          // dockIds the maximized region holds ('center' for
+//               the central zone); when set, one region fills everything and nothing else renders.
 //   config?:    partial DEFAULT_CONFIG override
 // }
 //
@@ -107,6 +109,30 @@ export function resolveLayout(input) {
 
   const decisions = [];
   const say = (s) => decisions.push(s);
+
+  // ---- Maximized mode (highest priority): one region fills the whole area, with its tabs and
+  // nothing else — no other docks, no gutters, no splitters, no overlays. The only exit is restore.
+  // `maximized` is the list of dockIds the maximized region holds ('center' for the central zone);
+  // a single id maximizes one dock, two a merged region. Transient — never persisted. If those docks
+  // hold no (present) tabs, the region comes back empty and the wiring auto-restores. ----
+  if (input.maximized && input.maximized.length) {
+    const docks = input.maximized;
+    const slots = docks.map((d) => d === 'center'
+      ? { dockId: 'center', tabs: center }
+      : { dockId: d, tabs: byDock[d] || [] });
+    const merged = slots.length > 1;
+    say(`maximized: ${docks.join('+')}`);
+    return {
+      mode: 'maximized',
+      viewport: { w: W, h: H },
+      regions: [{
+        id: 'maximized', kind: 'maximized', x: 0, y: 0, w: W, h: H,
+        label: docks.join(' + '), slots, merged,
+        mergedFrom: merged ? docks.slice() : undefined,
+      }],
+      gutters: [], overlays: [], splitters: [], decisions,
+    };
+  }
 
   const leftDemand = demandOf(byDock, 'left-top', collapsed) || demandOf(byDock, 'left-bottom', collapsed);
   const rightDemand = demandOf(byDock, 'right-top', collapsed) || demandOf(byDock, 'right-bottom', collapsed);

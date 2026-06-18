@@ -25,6 +25,7 @@ const EMPTY_INTENTION = Object.freeze({
     activeResize: 'left',
     activeByGroup: Object.freeze({}),
     resizeFractions: Object.freeze({}),
+    maximized: null,
 })
 
 // Stable key for a region's active-tab memory. 'center' for the center; otherwise the
@@ -60,6 +61,7 @@ export function useSessionLayout({ sessionId, containerRef, tabs, routeActiveTab
         activeResize: intention.value.activeResize,
         collapsed: intention.value.collapsed,
         config: intention.value.resizeFractions,
+        maximized: intention.value.maximized,
     }))
 
     // The multi-region layout actually renders only when something is docked, the area is
@@ -153,6 +155,13 @@ export function useSessionLayout({ sessionId, containerRef, tabs, routeActiveTab
     function setActiveResize(side) { store.setLayoutActiveResize(sessionId.value, side) }
     function setResizeFraction(key, value) { store.setLayoutResizeFraction(sessionId.value, key, value) }
 
+    // Maximize: a region (its dockIds, or ['center']) fills the whole layout area; the only exit is
+    // restore. Transient — never persisted. The resolver short-circuits to a single 'maximized' region.
+    function maximize(dockIds) { store.setLayoutMaximized(sessionId.value, dockIds) }
+    function restoreMaximized() { store.setLayoutMaximized(sessionId.value, null) }
+    const maximizedRegion = computed(() => render.value.regions.find((r) => r.kind === 'maximized') || null)
+    const isCenterMaximized = computed(() => !!maximizedRegion.value?.slots.some((s) => s.dockId === 'center'))
+
     // Route drives the focus → keep the active tab visible: reveal it if its dock is minimized
     // (restore) or its side lost mutual exclusion (swap its column in). Then record it as its
     // region's remembered tab so the region keeps it when focus moves away. Mirrors the overlay's
@@ -168,6 +177,12 @@ export function useSessionLayout({ sessionId, containerRef, tabs, routeActiveTab
         if (region) rememberActive(groupKeyOf(region.slots), id)
     })
 
+    // Auto-restore if the maximized region lost every tab (e.g. an optional tab emptied while
+    // maximized) — not supposed to happen, but never leave the user stuck on an empty maximized panel.
+    watch(maximizedRegion, (region) => {
+        if (region && region.slots.every((s) => !s.tabs.length)) restoreMaximized()
+    })
+
     return {
         width, height, measured,
         render, isDockingActive, dockingRendered,
@@ -176,5 +191,6 @@ export function useSessionLayout({ sessionId, containerRef, tabs, routeActiveTab
         openOverlayEdge, routeActiveTabId,
         place, minimize, restore, swapSide, rememberActive,
         setActiveResize, setResizeFraction,
+        maximize, restoreMaximized, maximizedRegion, isCenterMaximized,
     }
 }

@@ -402,9 +402,10 @@ export const useDataStore = defineStore('data', {
             // Dockable layout intention per session (ephemeral; persistence deferred).
             // { sessionId: { assignment: { tabId: dockId }, collapsed: [dockId], activeSide,
             //                activeResize, activeByGroup: { groupKey: tabId },
-            //                resizeFractions: { configKey: number } } }
+            //                resizeFractions: { configKey: number }, maximized: [dockId] | null } }
             // Geometry is NOT stored here — only the user's drag intention (fractions). The pure
-            // layout resolver recomputes px from these (clamped) on every render.
+            // layout resolver recomputes px from these (clamped) on every render. `maximized` is a
+            // transient view state (a region's dockIds, or ['center']) — excluded from persistence.
             sessionLayout: {},
 
             // Agent links cache - maps tool_id to agent_id for Task tool_use items
@@ -3369,6 +3370,7 @@ export const useDataStore = defineStore('data', {
                     activeResize: 'left',
                     activeByGroup: {},
                     resizeFractions: {},
+                    maximized: null,
                 }
             }
             return this.localState.sessionLayout[sessionId]
@@ -3416,6 +3418,12 @@ export const useDataStore = defineStore('data', {
         /** Remember the active tab within a region group (groupKey from groupKeyOf). */
         setLayoutGroupActiveTab(sessionId, groupKey, tabId) {
             this.ensureSessionLayout(sessionId).activeByGroup[groupKey] = tabId
+        },
+
+        /** Maximize a region (the array of dockIds it holds, or ['center']) to fill the layout area,
+         *  or pass null to restore. Transient view state — the only exit is restore. */
+        setLayoutMaximized(sessionId, dockIds) {
+            this.ensureSessionLayout(sessionId).maximized = dockIds && dockIds.length ? dockIds : null
         },
 
         /** Drop all layout intention for a session. */

@@ -704,6 +704,25 @@ function onLayoutMinimize(dockIds) {
     if (focusedLeaving) switchToTab(centerActiveTab.value)
 }
 
+// Maximize (transient view state; the only exit is restore). Maximizing a region routes + focuses its
+// active tab so the URL points into what's shown; restore brings the prior layout back unchanged.
+const isCenterMaximized = computed(() => layout.isCenterMaximized.value)
+const canMaximizeCenter = computed(() => layout.dockingRendered.value && !layoutTabsMode.value)
+// Center tabs' placement arrows: hidden in the mobile tab strip and while the center is maximized
+// (a maximized region is a separate mode — the only exit is restore, no re-docking).
+const showCenterPlacementArrows = computed(() => !layoutTabsMode.value && !isCenterMaximized.value)
+function onCenterMaximize() {
+    layout.maximize(['center'])
+    switchToTab(centerActiveTab.value)
+}
+function onLayoutMaximize(dockIds, tabId) {
+    layout.maximize(dockIds)
+    if (tabId) switchToTab(tabId)
+}
+function onLayoutRestoreMaximized() {
+    layout.restoreMaximized()
+}
+
 // Teleport target registry: logical key -> element. The center slot registers its tab-panel
 // targets; dock regions / the overlay register theirs. Tool panels teleport to targetKeyForTab().
 const layoutTargets = reactive({})
@@ -1361,6 +1380,8 @@ onBeforeUnmount(() => {
             @select-tab="onLayoutSelectTab"
             @focus-pane="requestPaneFocus"
             @minimize="onLayoutMinimize"
+            @maximize="onLayoutMaximize"
+            @restore-maximized="onLayoutRestoreMaximized"
             @overlay-activate="onOverlayActivate"
             @overlay-dismiss="onOverlayDismiss"
         >
@@ -1414,29 +1435,43 @@ onBeforeUnmount(() => {
                 <wa-icon :name="TAB_ICONS.files"></wa-icon>
                 Files
                 <CodeCommentsIndicator :count="filesCommentsCount" :show-tooltip="false" class="tab-comments-indicator" />
-                <TabPlacementMenu v-if="!layoutTabsMode" tab-id="files" current="center" @place="(dest) => layout.place('files', dest)" />
+                <TabPlacementMenu v-if="showCenterPlacementArrows" tab-id="files" current="center" @place="(dest) => layout.place('files', dest)" />
             </wa-tab>
             <wa-tab v-if="isToolTabPresent('git') && showInCenter('git')" slot="nav" panel="git">
                 <wa-icon :name="TAB_ICONS.git"></wa-icon>
                 Git
                 <CodeCommentsIndicator :count="gitCommentsCount" :show-tooltip="false" class="tab-comments-indicator" />
-                <TabPlacementMenu v-if="!layoutTabsMode" tab-id="git" current="center" @place="(dest) => layout.place('git', dest)" />
+                <TabPlacementMenu v-if="showCenterPlacementArrows" tab-id="git" current="center" @place="(dest) => layout.place('git', dest)" />
             </wa-tab>
             <wa-tab v-if="showInCenter('terminal')" slot="nav" panel="terminal">
                 <wa-icon :name="TAB_ICONS.terminal"></wa-icon>
                 Terminal
-                <TabPlacementMenu v-if="!layoutTabsMode" tab-id="terminal" current="center" @place="(dest) => layout.place('terminal', dest)" />
+                <TabPlacementMenu v-if="showCenterPlacementArrows" tab-id="terminal" current="center" @place="(dest) => layout.place('terminal', dest)" />
             </wa-tab>
             <wa-tab v-if="isToolTabPresent('artifacts') && showInCenter('artifacts')" slot="nav" panel="artifacts">
                 <wa-icon :name="TAB_ICONS.artifacts"></wa-icon>
                 Artifacts
-                <TabPlacementMenu v-if="!layoutTabsMode" tab-id="artifacts" current="center" @place="(dest) => layout.place('artifacts', dest)" />
+                <TabPlacementMenu v-if="showCenterPlacementArrows" tab-id="artifacts" current="center" @place="(dest) => layout.place('artifacts', dest)" />
             </wa-tab>
             <wa-tab v-if="isToolTabPresent('orchestration') && showInCenter('orchestration')" slot="nav" panel="orchestration">
                 <wa-icon :name="TAB_ICONS.orchestration"></wa-icon>
                 Orchestration
-                <TabPlacementMenu v-if="!layoutTabsMode" tab-id="orchestration" current="center" @place="(dest) => layout.place('orchestration', dest)" />
+                <TabPlacementMenu v-if="showCenterPlacementArrows" tab-id="orchestration" current="center" @place="(dest) => layout.place('orchestration', dest)" />
             </wa-tab>
+
+            <!-- Maximize / restore the central zone (only when there are docks to hide) -->
+            <wa-button
+                v-if="canMaximizeCenter"
+                slot="nav"
+                class="center-maximize reduced-height"
+                appearance="plain"
+                size="small"
+                :title="isCenterMaximized ? 'Restore' : 'Maximize main area'"
+                :aria-label="isCenterMaximized ? 'Restore' : 'Maximize main area'"
+                @click.stop="isCenterMaximized ? onLayoutRestoreMaximized() : onCenterMaximize()"
+            >
+                <wa-icon :name="isCenterMaximized ? 'compress' : 'expand'"></wa-icon>
+            </wa-button>
 
             <!-- Main session panel -->
             <wa-tab-panel name="main">
@@ -1632,6 +1667,13 @@ onBeforeUnmount(() => {
     min-height: 0;
     overflow: hidden;
     --track-width: var(--divider-size);
+}
+
+/* Maximize/restore the central zone — pushed to the far right of the tab nav (mirrors the dock's
+   minimize/maximize buttons). */
+.center-maximize {
+    margin-inline-start: auto;
+    --wa-form-control-padding-inline: 0.3em;
 }
 
 .session-tabs::part(base) {

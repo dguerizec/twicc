@@ -7,7 +7,7 @@ the design doc [`2026-06-16-dockable-layout-design.md`](./2026-06-16-dockable-la
 → the pure resolver `frontend/src/utils/layoutResolver.js` (the executable spec).
 
 Branch/worktree: `layout` (`.worktrees/layout`). Its own dev instance runs via devctl
-(frontend **5174**, backend **3501**). The branch is **27 commits** on top of `main` — not pushed, not
+(frontend **5174**, backend **3501**). The branch is **28 commits** on top of `main` — not pushed, not
 merged. Run `git log main..layout` for the breakdown. (Last rebased on `daa4a599`; `main` has since
 advanced to `32cce8cf`, so a re-rebase is due.)
 Persistence is not wired, so layout state is in-memory only (resets on reload).
@@ -25,7 +25,7 @@ layout-side is compile-verified-only anymore.
 
 > The dated sections below are chronological. The **2026-06-19 session** (center re-selects Chat when
 > its tab is docked; the sidebar-toggle clearance refined per dock context + the terminal extra-keys
-> bar) is the newest. The **2026-06-18 session** (native wa-tab, edge-aware borders, overlay
+> bar; **maximize/restore** a dock or the central zone) is the newest. The **2026-06-18 session** (native wa-tab, edge-aware borders, overlay
 > route-derivation + focus lifecycle, swap-on-navigate, mobile arrows, clearance single-source,
 > tool-tab registry, resize splitters) is the bulk of current behaviour. Read the newest first where it
 > supersedes earlier notes (notably: the overlay is route-derived; the clearance is now per dock context).
@@ -393,6 +393,33 @@ rule changed, and a new consumer was added). Four files: `App.vue`, `SessionLayo
   (`calc(left-x + 1rem)`) covers terminals **outside** the dockable layout (the project view). Values at
   the bottom-left: `3.5rem` (nothing left) / `2rem` (left gutter); everywhere else: base.
 
+### Maximize / restore (a dock or the central zone)
+A region — a single dock (e.g. `left-top`) **or** the central zone — can be maximized to fill the whole
+layout area: only it renders (with its tabs), **no other docks, no gutters, no splitters**. The only exit
+is **restore**. One unified mechanism (user's call: deliberately *not* PyCharm's "keep the gutters" model
+— far simpler, nothing to arbitrate on a gutter click while maximized).
+
+- **Resolver** (`maximized: string[]` — the region's dockIds, or `['center']`): a highest-priority
+  short-circuit to a single full-bleed region of `kind: 'maximized'`, with empty gutters/splitters/overlays.
+  **Prototyped + tested in the playground first** (4 scenarios), then ported to the code resolver — parity
+  re-verified (23/23 suite on *both* + a 240/240 strict output diff incl. all maximize variants).
+- **State**: `maximized` on the ephemeral layout intention (`data.js` + `setLayoutMaximized`), **excluded
+  from future persistence** (transient view state). The composable exposes `maximize`/`restoreMaximized`
+  + `maximizedRegion`/`isCenterMaximized`, and **auto-restores** if the maximized region loses all its tabs.
+- **UI**: a maximize button (`expand` icon — the same pair as FilePane's fullscreen toggle, `compress` to
+  restore) in each dock's tab bar, **after the minimize**; the central tab bar gets one on the right, shown
+  only when there are docks to hide (`dockingRendered`). Maximizing **routes + focuses** the region's active
+  tab (the URL points into what's shown); restore returns to the **exact** prior layout. A maximized **dock**
+  teleports its panel into the full-bleed region (state preserved — PTY, file selection); a maximized
+  **center** just fills the `.center-slot` and hides all docks. Placement arrows hidden while maximized (no
+  re-docking — it's a separate mode). The terminal's extra-keys clearance also covers the maximized region
+  (`data-rid="maximized"`).
+- **Live-verified in Chrome** (separate tab): dock + center maximize/restore, icons render, no console
+  errors, URL/focus and content preservation all correct.
+
+Files: `layoutResolver.js`, `data.js`, `useSessionLayout.js`, `DockRegion.vue`, `SessionLayout.vue`,
+`SessionView.vue` (+ the playground resolver/tests/harness as the prototype).
+
 ## Bugs found & fixed live (don't reintroduce)
 
 1. **`props.layout.render` is a ref** — `SessionLayout` must read composable refs via `.value`
@@ -475,8 +502,8 @@ rule changed, and a new consumer was added). Four files: `App.vue`, `SessionLayo
   IndexedDB; per-device localStorage override (v2). Includes **remembering an absent tab's dock**
   so a default layout can pre-assign a not-yet-present tab and it lands there when content arrives
   (the payoff of the optional-empty model — the resolver already honors it).
-- **Interactions/UX:** keyboard nav; maximize/restore; reset (project/default/tabbed); drag-and-drop
-  placement; named layouts/presets; animations.
+- **Interactions/UX:** keyboard nav; reset (project/default/tabbed); drag-and-drop placement; named
+  layouts/presets; animations. (Maximize/restore is **done** — see the 2026-06-19 session.)
 - **Polish/divers:** custom tab styling (vs native WA); structural-vs-resize-min naming; keep
   docs/AGENTS.md/CLAUDE.md in sync if rules change. (The old "bottom region + empty-optional bottom
   gutter" coexistence edge case is now **moot** — empty-optional docks no longer exist.)
