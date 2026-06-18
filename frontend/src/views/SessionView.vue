@@ -340,60 +340,54 @@ const activeTabId = computed(() => {
     return 'main'
 })
 
-// Redirect away from git tab if the session has no git repo
-// (handles direct URL navigation and dynamic changes)
-// Guards:
-// - skip when deactivated (KeepAlive)
-// - skip when route belongs to another session
-// - skip when project data hasn't loaded yet (avoid premature redirect on
-//   direct URL navigation — hasGitRepo depends on project.git_root which is
-//   only available after loadProjects() completes)
-watch([activeTabId, hasGitRepo], ([tabId, hasGit]) => {
-    if (tabId === 'git' && !hasGit) {
-        if (!isActive.value) return
-        if (route.params.sessionId !== sessionId.value) return
-        if (!store.getProject(session.value?.project_id)) return
-        router.replace({
-            name: buildSessionBaseRouteName(isAllProjectsMode.value),
-            params: { projectId: filterProjectId.value, sessionId: sessionId.value },
-            query: route.query,
-        })
-    }
-}, { immediate: true })
+// The dockable tool tabs — single source for the tool-tab roster (id, label, FA icon) and its
+// presence condition. `present` gates everything downstream: the resolver input, the ←/→ order,
+// the keyboard shortcuts, the template, and the redirect guard. Only Files and Terminal are always
+// present; Git/Artifacts/Orchestration are conditional (future tabs may be too). `redirectReady` is
+// "enough data is loaded to safely redirect away from an absent tab's URL" — git needs the project
+// row (its repo-ness depends on it), the others just the session row. Chat + subagents are
+// center-only, so they're not in here.
+const TOOL_TABS = [
+    { id: 'files', label: 'Files', icon: 'folder', present: () => true },
+    { id: 'git', label: 'Git', icon: 'code-branch', present: () => hasGitRepo.value, redirectReady: () => !!store.getProject(session.value?.project_id) },
+    { id: 'terminal', label: 'Terminal', icon: 'terminal', present: () => true },
+    { id: 'artifacts', label: 'Artifacts', icon: 'shapes', present: () => hasArtifacts.value, redirectReady: () => !!session.value },
+    { id: 'orchestration', label: 'Orchestration', icon: 'diagram-project', present: () => hasSpawnRoot.value, redirectReady: () => !!session.value },
+]
+function toolTabById(tabId) { return TOOL_TABS.find((t) => t.id === tabId) || null }
+// Non-tool tabs (main, agent-*) are never gated → treated as present.
+function isToolTabPresent(tabId) { const t = toolTabById(tabId); return t ? t.present() : true }
+const presentToolTabs = computed(() => TOOL_TABS.filter((t) => t.present()))
 
-// Redirect away from the artifacts tab if the session has no artifacts
-// (handles direct URL navigation to /artifacts when none exist yet). Mirrors
-// the git-tab guard; the ``session.value`` check avoids a premature redirect
-// before the session row is loaded.
-watch([activeTabId, hasArtifacts], ([tabId, hasArt]) => {
-    if (tabId === 'artifacts' && !hasArt) {
-        if (!isActive.value) return
-        if (route.params.sessionId !== sessionId.value) return
-        if (!session.value) return
-        router.replace({
-            name: buildSessionBaseRouteName(isAllProjectsMode.value),
-            params: { projectId: filterProjectId.value, sessionId: sessionId.value },
-            query: route.query,
-        })
-    }
-}, { immediate: true })
+// FA icon names for the tab nav (chat + the tool tabs), derived from the registry — one place.
+const TAB_ICONS = { main: 'comments', ...Object.fromEntries(TOOL_TABS.map((t) => [t.id, t.icon])) }
 
-// Redirect away from the orchestration tab if the session is not part of a
-// spawned-session tree (handles direct URL navigation and a session that
-// loses/never had a spawn_root). Mirrors the git-tab guard above; the
-// ``session.value`` check avoids a premature redirect before the session row
-// is loaded (when hasSpawnRoot is transiently false).
-watch([activeTabId, hasSpawnRoot], ([tabId, hasRoot]) => {
-    if (tabId === 'orchestration' && !hasRoot) {
-        if (!isActive.value) return
-        if (route.params.sessionId !== sessionId.value) return
-        if (!session.value) return
-        router.replace({
-            name: buildSessionBaseRouteName(isAllProjectsMode.value),
-            params: { projectId: filterProjectId.value, sessionId: sessionId.value },
-            query: route.query,
-        })
-    }
+// The active tab when it's a tool tab that is *definitively* absent for this session — i.e. not
+// present AND we already have enough data to be sure (`redirectReady`); null otherwise. As a
+// computed it tracks every reactive source it reads (the presence flags, the session row, the
+// project row), so it flips to the tab the moment the gating data finishes loading. That is what
+// makes a cold load / direct navigation redirect: a plain watch on the presence flags alone never
+// re-fires, because they stay stably false while only the readiness data changes underneath.
+const absentActiveToolTab = computed(() => {
+    const tab = toolTabById(activeTabId.value)
+    if (!tab || tab.present()) return null
+    if (tab.redirectReady && !tab.redirectReady()) return null  // wait until we can trust "absent"
+    return tab
+})
+
+// Redirect away from a tool-tab URL when that tab isn't available for this session — e.g. a direct
+// navigation / bookmark / back-forward to /git on a non-git session, or /orchestration with no
+// spawn tree. Driven by the registry (replaces three near-identical per-tab watchers). Guards: skip
+// while deactivated (KeepAlive) and if the route belongs to another session.
+watch(absentActiveToolTab, (tab) => {
+    if (!tab) return
+    if (!isActive.value) return
+    if (route.params.sessionId !== sessionId.value) return
+    router.replace({
+        name: buildSessionBaseRouteName(isAllProjectsMode.value),
+        params: { projectId: filterProjectId.value, sessionId: sessionId.value },
+        query: route.query,
+    })
 }, { immediate: true })
 
 function navigateInTab(tab, params = {}, method = 'push') {
@@ -573,28 +567,12 @@ function switchToTab(panel) {
 // Root element of the docking area, measured by the composable.
 const sessionLayoutRef = ref(null)
 
-// Single source for the tool-tab icons (FA names) — used both as the resolver input below and by
-// the center tab strip in the template, so an icon change lives in one place.
-const TAB_ICONS = {
-    main: 'comments',
-    files: 'folder',
-    git: 'code-branch',
-    terminal: 'terminal',
-    artifacts: 'shapes',
-    orchestration: 'diagram-project',
-}
-
-// Resolver input: the dockable tool tabs (chat is the fixed center anchor; subagents are
-// center-only and not dockable, so they're excluded here).
-const layoutTabs = computed(() => {
-    const tabs = [{ id: 'main', label: 'Chat', icon: TAB_ICONS.main, fixedCenter: true }]
-    tabs.push({ id: 'files', label: 'Files', icon: TAB_ICONS.files })
-    if (hasGitRepo.value) tabs.push({ id: 'git', label: 'Git', icon: TAB_ICONS.git })
-    tabs.push({ id: 'terminal', label: 'Terminal', icon: TAB_ICONS.terminal })
-    if (hasArtifacts.value) tabs.push({ id: 'artifacts', label: 'Artifacts', icon: TAB_ICONS.artifacts })
-    if (hasSpawnRoot.value) tabs.push({ id: 'orchestration', label: 'Orchestration', icon: TAB_ICONS.orchestration })
-    return tabs
-})
+// Resolver input: chat is the fixed center anchor; the present tool tabs come from the TOOL_TABS
+// registry above (subagents are center-only and not dockable, so they're excluded here).
+const layoutTabs = computed(() => [
+    { id: 'main', label: 'Chat', icon: TAB_ICONS.main, fixedCenter: true },
+    ...presentToolTabs.value.map((t) => ({ id: t.id, label: t.label, icon: t.icon })),
+])
 
 const layout = useSessionLayout({
     sessionId,
@@ -603,7 +581,7 @@ const layout = useSessionLayout({
     routeActiveTabId: activeTabId,
 })
 
-const LAYOUT_TOOL_IDS = ['files', 'git', 'terminal', 'artifacts', 'orchestration']
+const LAYOUT_TOOL_IDS = TOOL_TABS.map((t) => t.id)
 
 // Mobile fallback: below mobileMaxW the resolver folds everything into a plain tab strip and the
 // whole docking system is skipped (no docks possible). Hide the per-tab placement arrows there —
@@ -738,18 +716,12 @@ const centerTargetSetters = Object.fromEntries(
 // Events dispatched by App.vue, handled here by the active instance only.
 // ═══════════════════════════════════════════════════════════════════════════
 
-// Ordered list of all visible tabs (for sequential ←/→ navigation).
-// Matches the visual order in the wa-tab-group: main, subagents, files, [git], terminal.
+// Ordered list of all visible tabs (for sequential ←/→ navigation): main, subagents, then the
+// present tool tabs in registry order (files, [git], terminal, [artifacts], [orchestration]).
 const orderedTabs = computed(() => {
     const tabs = ['main']
-    for (const tab of openSubagentTabs.value) {
-        tabs.push(tab.id)
-    }
-    tabs.push('files')
-    if (hasGitRepo.value) tabs.push('git')
-    tabs.push('terminal')
-    if (hasArtifacts.value) tabs.push('artifacts')
-    if (hasSpawnRoot.value) tabs.push('orchestration')
+    for (const tab of openSubagentTabs.value) tabs.push(tab.id)
+    tabs.push(...presentToolTabs.value.map((t) => t.id))
     return tabs
 })
 
@@ -794,9 +766,7 @@ function handleTabShortcut(event) {
     if (type === 'direct') {
         targetTab = DIRECT_TAB_MAP[index]
         if (!targetTab) return
-        if (targetTab === 'git' && !hasGitRepo.value) return
-        if (targetTab === 'artifacts' && !hasArtifacts.value) return
-        if (targetTab === 'orchestration' && !hasSpawnRoot.value) return
+        if (!isToolTabPresent(targetTab)) return
     } else if (type === 'prev' || type === 'next') {
         const tabs = orderedTabs.value
         const currentIndex = tabs.indexOf(activeTabId.value)
@@ -1439,7 +1409,7 @@ onBeforeUnmount(() => {
                 <CodeCommentsIndicator :count="filesCommentsCount" :show-tooltip="false" class="tab-comments-indicator" />
                 <TabPlacementMenu v-if="!layoutTabsMode" tab-id="files" current="center" @place="(dest) => layout.place('files', dest)" />
             </wa-tab>
-            <wa-tab v-if="hasGitRepo && showInCenter('git')" slot="nav" panel="git">
+            <wa-tab v-if="isToolTabPresent('git') && showInCenter('git')" slot="nav" panel="git">
                 <wa-icon :name="TAB_ICONS.git"></wa-icon>
                 Git
                 <CodeCommentsIndicator :count="gitCommentsCount" :show-tooltip="false" class="tab-comments-indicator" />
@@ -1450,12 +1420,12 @@ onBeforeUnmount(() => {
                 Terminal
                 <TabPlacementMenu v-if="!layoutTabsMode" tab-id="terminal" current="center" @place="(dest) => layout.place('terminal', dest)" />
             </wa-tab>
-            <wa-tab v-if="hasArtifacts && showInCenter('artifacts')" slot="nav" panel="artifacts">
+            <wa-tab v-if="isToolTabPresent('artifacts') && showInCenter('artifacts')" slot="nav" panel="artifacts">
                 <wa-icon :name="TAB_ICONS.artifacts"></wa-icon>
                 Artifacts
                 <TabPlacementMenu v-if="!layoutTabsMode" tab-id="artifacts" current="center" @place="(dest) => layout.place('artifacts', dest)" />
             </wa-tab>
-            <wa-tab v-if="hasSpawnRoot && showInCenter('orchestration')" slot="nav" panel="orchestration">
+            <wa-tab v-if="isToolTabPresent('orchestration') && showInCenter('orchestration')" slot="nav" panel="orchestration">
                 <wa-icon :name="TAB_ICONS.orchestration"></wa-icon>
                 Orchestration
                 <TabPlacementMenu v-if="!layoutTabsMode" tab-id="orchestration" current="center" @place="(dest) => layout.place('orchestration', dest)" />
@@ -1488,16 +1458,16 @@ onBeforeUnmount(() => {
             <wa-tab-panel v-if="showInCenter('files')" name="files">
                 <div :ref="centerTargetSetters.files" class="layout-center-target"></div>
             </wa-tab-panel>
-            <wa-tab-panel v-if="hasGitRepo && showInCenter('git')" name="git">
+            <wa-tab-panel v-if="isToolTabPresent('git') && showInCenter('git')" name="git">
                 <div :ref="centerTargetSetters.git" class="layout-center-target"></div>
             </wa-tab-panel>
             <wa-tab-panel v-if="showInCenter('terminal')" name="terminal">
                 <div :ref="centerTargetSetters.terminal" class="layout-center-target"></div>
             </wa-tab-panel>
-            <wa-tab-panel v-if="hasArtifacts && showInCenter('artifacts')" name="artifacts">
+            <wa-tab-panel v-if="isToolTabPresent('artifacts') && showInCenter('artifacts')" name="artifacts">
                 <div :ref="centerTargetSetters.artifacts" class="layout-center-target"></div>
             </wa-tab-panel>
-            <wa-tab-panel v-if="hasSpawnRoot && showInCenter('orchestration')" name="orchestration">
+            <wa-tab-panel v-if="isToolTabPresent('orchestration') && showInCenter('orchestration')" name="orchestration">
                 <div :ref="centerTargetSetters.orchestration" class="layout-center-target"></div>
             </wa-tab-panel>
         </wa-tab-group>
@@ -1548,7 +1518,7 @@ onBeforeUnmount(() => {
                 </div>
             </Teleport>
 
-            <Teleport v-if="hasGitRepo" :to="toolTarget('git')" :disabled="!toolTarget('git')">
+            <Teleport v-if="isToolTabPresent('git')" :to="toolTarget('git')" :disabled="!toolTarget('git')">
                 <div class="layout-tool-wrap" v-show="layout.isToolPanelVisible('git')">
                     <GitPanel
                         ref="gitPanelRef"
@@ -1583,7 +1553,7 @@ onBeforeUnmount(() => {
                 </div>
             </Teleport>
 
-            <Teleport v-if="hasArtifacts" :to="toolTarget('artifacts')" :disabled="!toolTarget('artifacts')">
+            <Teleport v-if="isToolTabPresent('artifacts')" :to="toolTarget('artifacts')" :disabled="!toolTarget('artifacts')">
                 <div class="layout-tool-wrap" v-show="layout.isToolPanelVisible('artifacts')">
                     <FilesPanel
                         ref="artifactsPanelRef"
@@ -1605,7 +1575,7 @@ onBeforeUnmount(() => {
                 </div>
             </Teleport>
 
-            <Teleport v-if="hasSpawnRoot" :to="toolTarget('orchestration')" :disabled="!toolTarget('orchestration')">
+            <Teleport v-if="isToolTabPresent('orchestration')" :to="toolTarget('orchestration')" :disabled="!toolTarget('orchestration')">
                 <div class="layout-tool-wrap" v-show="layout.isToolPanelVisible('orchestration')">
                     <OrchestrationPanel
                         :session-id="session.id"

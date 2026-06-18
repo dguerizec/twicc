@@ -295,6 +295,27 @@ layout pre-assigning Artifacts→right-top only pays off once intentions persist
 change is a **no-op today** (SessionView already omits absent tabs), so nothing changes in the app
 until the registry/persistence land — it's the spec, validated, ready for that wiring.
 
+### Tool-tab registry (single source) + cold-load redirect fix
+The conditional-tab knowledge was scattered across `SessionView` — `if (hasGitRepo)` / `hasArtifacts`
+/ `hasSpawnRoot` repeated in `layoutTabs`, `orderedTabs`, `LAYOUT_TOOL_IDS`, the keyboard guards, the
+template `v-if`s, and three near-identical redirect watchers. Now a single declarative `TOOL_TABS`
+registry (`{ id, label, icon, present, redirectReady? }`) is the source: only **Files + Terminal** are
+always present; **Git/Artifacts/Orchestration** (and future tabs) are conditional via `present()`.
+Everything derives from it — `layoutTabs`, `orderedTabs`, `LAYOUT_TOOL_IDS`, `TAB_ICONS` (derived), the
+keyboard guards (`isToolTabPresent`), and the template `v-if`s. Adding a conditional tab is now one
+registry line. (Chat + subagents stay center-only, not in the registry.)
+
+Collapsing the three redirect watchers into one surfaced + fixed a **pre-existing bug**: a **cold load
+/ direct navigation** to an absent tool tab's URL (e.g. `/git` on a non-git session) did **not**
+redirect to chat — only a warm in-app nav did. Root cause: the readiness signals (session row, project
+row) were read inside the watcher callback (`redirectReady`) but were **not** watch dependencies, so on
+a cold load the `immediate` run skipped (data not ready) and never re-fired (the presence flags stay
+stably false while only the readiness data loads). Fix: a computed `absentActiveToolTab` ("the active
+tab is a tool tab that is *definitively* absent — not present AND ready"); being a computed it tracks
+**every** reactive source it reads (presence + session + project), so it flips the moment the gating
+data loads and the watcher redirects. Verified live in Chrome: cold load of `/git`, `/artifacts`,
+`/orchestration` on a session lacking each now redirects to chat; a git-bearing session stays on `/git`.
+
 ## Bugs found & fixed live (don't reintroduce)
 
 1. **`props.layout.render` is a ref** — `SessionLayout` must read composable refs via `.value`
@@ -306,6 +327,12 @@ until the registry/persistence land — it's the spec, validated, ready for that
    *trigger* blocked the dropdown from opening. Moved `@click.stop` onto the `wa-dropdown` itself.
 4. **Infinite URL loop** when two tool tabs docked + interacting — root cause = TerminalPanel's
    reactive route re-grab (see `ownsRoute` above).
+5. **Cold-load redirect to an absent tool tab didn't fire** — direct navigation / bookmark to `/git`
+   (etc.) on a session lacking that tab stayed put instead of redirecting to chat. The readiness
+   guard (`redirectReady`) was read in the watcher callback but wasn't a watch dependency, so the
+   `immediate` run skipped before data loaded and never re-fired. Fixed with a computed
+   (`absentActiveToolTab`) tracking presence + readiness reactively (see 2026-06-18 section).
+   Pre-existing (the old per-tab watchers had it too); warm in-app nav masked it.
 
 ## Decisions / deviations vs the plans
 
@@ -343,10 +370,6 @@ until the registry/persistence land — it's the spec, validated, ready for that
   done in the resolver — what's left there is the registry + persistence, below. Compact mode tabs
   are decoupled; overlay route-derivation, swap-on-navigate, borders, the clearance unification and
   the icons are done + live-verified.)
-- **Optional-tab registry:** declare which tool tabs are conditional (Git/Artifacts/Orchestration +
-  future ones) vs always-present (Files/Terminal), in one place in `SessionView`, to DRY the
-  scattered `hasGitRepo`/`hasArtifacts`/`hasSpawnRoot` gates (`layoutTabs`, `toolPanelTabs`, route
-  guards). Pairs with the optional-empty model (see 2026-06-18 section).
 - **Compact polish (deferred):** optionally **shrink** the inline tab bar in compact to reclaim some
   vertical space (user deferred sizing); judge the now-empty collapsed compact header.
 - **Focus model polish:** tab lifecycle (run work on "became visible/focused", not on tab activation).
