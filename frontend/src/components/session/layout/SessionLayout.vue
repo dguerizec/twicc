@@ -82,15 +82,16 @@ function onOverlayClose() {
     emit('overlay-dismiss')
 }
 
-// ---- Dock resize (splitters of kind 'dock': a side column's width or the bottom's height vs the
-// center). Sibling splitters (kind 'sib') are deferred. The resolver emits each handle's geometry +
-// the math params (origin / extent / from / configKey); we draw an invisible hit strip over the
-// boundary and write the dragged fraction back to the store, which the resolver re-clamps to its px
-// mins on the next render. The fraction is part of the (ephemeral) layout intention — persistence
-// is deferred. Window-level listeners so the drag survives the re-render that repositions the
-// handle. ----
+// ---- Resize splitters. The resolver emits every draggable boundary with its geometry + math params
+// (axis / origin / extent / from / configKey): kind 'dock' (a side column's width or the bottom's
+// height vs the center) and kind 'sib' (between two siblings of a split column, or the two bottom
+// siblings). One generic handler covers both — we draw an invisible hit strip over each boundary and
+// write the dragged fraction to the store, which the resolver re-clamps on the next render (px mins
+// for docks, siblingMaxFrac for sibs). The fraction is part of the (ephemeral) layout intention —
+// persistence is deferred. Window-level listeners so the drag survives the re-render that repositions
+// the handle. ----
 const sessionLayoutEl = ref(null)
-const dockSplitters = computed(() => (render.value.splitters || []).filter((s) => s.kind === 'dock'))
+const resizeSplitters = computed(() => render.value.splitters || [])
 const draggingId = ref(null)
 
 const HANDLE = 9 // px hit-area thickness, centered on the divider line
@@ -119,7 +120,8 @@ function endDrag() {
 }
 function onSplitterDown(event, s) {
     event.preventDefault()
-    // The dragged side column wins the squeeze when both are shown (resolver computes it first).
+    // Only the side-column docks set activeResize (the dragged side wins the squeeze when both show);
+    // sibling and bottom-height splitters leave it untouched.
     if (s.configKey === 'leftColFrac') props.layout.setActiveResize('left')
     else if (s.configKey === 'rightColFrac') props.layout.setActiveResize('right')
     drag = { axis: s.axis, origin: s.axis === 'h' ? s.originY : s.originX, from: s.from || 'start', extent: s.extent, configKey: s.configKey }
@@ -161,10 +163,10 @@ onBeforeUnmount(endDrag)
             />
 
             <div
-                v-for="s in dockSplitters"
+                v-for="s in resizeSplitters"
                 :key="s.id"
                 class="layout-splitter"
-                :class="[`axis-${s.axis}`, { dragging: draggingId === s.id }]"
+                :class="[`axis-${s.axis}`, `kind-${s.kind}`, { dragging: draggingId === s.id }]"
                 :style="splitterStyle(s)"
                 @pointerdown="onSplitterDown($event, s)"
             ></div>
