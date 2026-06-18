@@ -211,16 +211,39 @@ onBeforeUnmount(endDrag)
 }
 
 /* When the session-list sidebar is closed, its reopen toggle floats at the bottom-left of the
-   content area; nearby UI must clear it. The base clearance values live once on body.sidebar-closed
-   (see App.vue); here the session view only *refines* --sidebar-toggle-clearance-x for what sits at
-   the bottom-left — a thin left rail → partial; a bottom dock/gutter or a left column already clears
-   it → none. Nothing docked falls through to the body base (full). The composer and left gutter
-   below consume the value. This is the single place the "which dock context needs how much" lives. */
-body.sidebar-closed .session-layout.has-left-gutter:not(.has-left-col):not(.has-bottom-region):not(.has-bottom-gutter) {
-    --sidebar-toggle-clearance-x: 1.5rem;
+   content area; nearby UI must clear it. The base values live once on body.sidebar-closed (App.vue);
+   here we refine per dock context. --left-x is the left-edge-only clearance (thin left rail →
+   reduced, full left column → none). The composer's -x follows --left-x, but a bottom dock *region*
+   zeroes it (the composer is lifted above the toggle); a bottom *gutter* does not (it's thin — the
+   composer still overlaps the toggle). The composer, the left gutter and the terminal extra-keys bar
+   below consume these — the single place "which dock context needs how much" lives. */
+body.sidebar-closed .session-layout.has-left-gutter:not(.has-left-col) {
+    --sidebar-toggle-clearance-left-x: 1rem;
 }
-body.sidebar-closed .session-layout:is(.has-bottom-region, .has-bottom-gutter, .has-left-col) {
+body.sidebar-closed .session-layout.has-left-col {
+    --sidebar-toggle-clearance-left-x: 0rem;
+}
+body.sidebar-closed .session-layout {
+    --sidebar-toggle-clearance-x: var(--sidebar-toggle-clearance-left-x);
+    /* Terminal extra-keys bar: no clearance by default (overridden below where it sits bottom-left). */
+    --sidebar-toggle-clearance-extra-keys: var(--wa-space-xs);
+}
+body.sidebar-closed .session-layout.has-bottom-region {
     --sidebar-toggle-clearance-x: 0rem;
+}
+
+/* The terminal's extra-keys bar sits where the composer would but is taller, so it clears the toggle
+   by --left-x + 1rem — and only when it's actually at the bottom-left: the terminal is the sole or
+   bottom-left bottom dock (never bottom-right), or it's in the center and the center reaches the
+   bottom-left (no left column, no bottom dock lifting it). The value is set on the nearest layout
+   element (the bottom dock region / the center slot); it inherits across the panel teleport into the
+   bar, so no :deep into the relocated terminal is needed. */
+body.sidebar-closed .session-layout:not(.has-left-col) .dock-region[data-rid="bottom"],
+body.sidebar-closed .session-layout:not(.has-left-col) .dock-region[data-rid="bottom-left"] {
+    --sidebar-toggle-clearance-extra-keys: calc(var(--sidebar-toggle-clearance-left-x) + 1rem);
+}
+body.sidebar-closed .session-layout:not(.has-left-col):not(.has-bottom-region) .center-slot {
+    --sidebar-toggle-clearance-extra-keys: calc(var(--sidebar-toggle-clearance-left-x) + 1rem);
 }
 
 /* The bottom gutter's own start icons sit slightly closer to the toggle than the composer, so they

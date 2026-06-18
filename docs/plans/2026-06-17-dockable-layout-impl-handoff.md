@@ -7,25 +7,28 @@ the design doc [`2026-06-16-dockable-layout-design.md`](./2026-06-16-dockable-la
 → the pure resolver `frontend/src/utils/layoutResolver.js` (the executable spec).
 
 Branch/worktree: `layout` (`.worktrees/layout`). Its own dev instance runs via devctl
-(frontend **5174**, backend **3501**). The branch is **26 commits** on top of `main` — not pushed, not
+(frontend **5174**, backend **3501**). The branch is **27 commits** on top of `main` — not pushed, not
 merged. Run `git log main..layout` for the breakdown. (Last rebased on `daa4a599`; `main` has since
 advanced to `32cce8cf`, so a re-rebase is due.)
 Persistence is not wired, so layout state is in-memory only (resets on reload).
 
 **Verification status:** verified **live in the browser** — step-1 docking, the route/focus model,
 the overlay route-derivation + focus lifecycle, swap-on-navigate (incl. browser back/forward), the
-clearance unification (pixel-identical), and the icons (tab + dock-placement, serve + render). Still
-**compile-verified only** (SFC + `node --check`, not re-checked live): the container-relative
-responsiveness and the compact-mode tab decoupling (both carried over from the prior session).
+clearance (refined per dock context 2026-06-19), and the icons (tab + dock-placement, serve + render).
+The container-relative responsiveness and the compact-mode tab decoupling carried over from the prior
+session were **confirmed live 2026-06-19** (A1/A2 + all of B, plus the reworked A3 clearance) — nothing
+layout-side is compile-verified-only anymore.
 
 > Icon set is **Font Awesome Free** — confirmed at the network level: icons load from `ka-f.fontawesome.com`
 > (the free kit host; pro would be `ka-p` + a `?token`), and no kit is configured (`kitCode = ""`). The
 > "Pro" comment inside the served SVG files is just FA's generic build header, not a license signal.
 
-> The dated sections below are chronological. The **2026-06-18 session** (native wa-tab, edge-aware
-> borders, overlay route-derivation + focus lifecycle, swap-on-navigate, mobile arrows, clearance
-> single-source) is the most recent — read it first for current behaviour where it supersedes earlier
-> notes (notably: the overlay is now route-derived, and the sidebar-toggle clearance is unified).
+> The dated sections below are chronological. The **2026-06-19 session** (center re-selects Chat when
+> its tab is docked; the sidebar-toggle clearance refined per dock context + the terminal extra-keys
+> bar) is the newest. The **2026-06-18 session** (native wa-tab, edge-aware borders, overlay
+> route-derivation + focus lifecycle, swap-on-navigate, mobile arrows, clearance single-source,
+> tool-tab registry, resize splitters) is the bulk of current behaviour. Read the newest first where it
+> supersedes earlier notes (notably: the overlay is route-derived; the clearance is now per dock context).
 
 ## Status: what works
 
@@ -44,10 +47,10 @@ responsiveness and the compact-mode tab decoupling (both carried over from the p
   reveal themselves on navigation** (the "active tab is always visible" invariant — see sections below).
 - **Sidebar-toggle clearance** — single source (`--sidebar-toggle-clearance-x/-y`), consumed by the
   composer + gutters (see 2026-06-18 section).
-- **Container-relative responsiveness** (prior session — see its section, not yet live-verified): the
+- **Container-relative responsiveness** (prior session — **live-verified 2026-06-19**): the
   Files/Git/Artifacts `mobile-layout` and the chat/composer margins react to the panel's own width
   (dock / center zone), not the viewport.
-- **Compact mode decoupled from the tabs** (prior session — see its section, not yet live-verified):
+- **Compact mode decoupled from the tabs** (prior session — **live-verified 2026-06-19**):
   the tab bar stays inline in the content at all heights; compact only collapses the header's chrome.
 
 ## Files
@@ -151,7 +154,7 @@ with multiple visible docked panes. (The overlay and swap parts of this rule wer
   `:active` (`event.detail.name === props.activeTabId`). Note WA does **not** fire `wa-tab-show`
   for an already-active tab.
 
-## Container-relative responsiveness (prior session — not yet live-verified)
+## Container-relative responsiveness (prior session — live-verified 2026-06-19)
 
 In the dockable layout a panel / the chat can be far narrower than the window, so width-responsive
 behaviour keyed on the viewport is wrong. Three changes, all "react to the actual rendered width":
@@ -175,7 +178,7 @@ behaviour keyed on the viewport is wrong. Three changes, all "react to the actua
   (3.5rem / 4rem). Mobile + sidebar-open unchanged. (Geometry confirmed with the user: a left edge is
   always a full-height column XOR a full-height gutter, so the coarse `has-left-*` classes suffice.)
 
-## Compact mode — tabs decoupled from it (prior session — not yet live-verified)
+## Compact mode — tabs decoupled from it (prior session — live-verified 2026-06-19)
 
 Compact mode (`@media max-height:900px`; fires on most laptops once browser chrome is subtracted —
 StatCounter: only native-1080p-at-100% stays above) used to **hide the inline tab nav and relocate
@@ -255,7 +258,9 @@ falls through to the base `3.5rem`). The composer toolbar (`var(...)`), collapse
 (`calc(var(...) + 0.5rem)`) and left gutter (`-y`) consume with **no fallback**, so the value lives in
 exactly one place. The bottom-gutter `.start` inset (`3`/`1.5rem`) is kept literal (single copy,
 slightly different offset from the toggle). Decided: project/workspace pages will **not** get a layout
-(no central zone), so the clearance stays session-only — not moved to `ProjectView`.
+(no central zone), so the clearance stays session-only — not moved to `ProjectView`. **Refined
+2026-06-19** (see that session): the values changed, a bottom *gutter* no longer zeroes the composer,
+and the terminal extra-keys bar now derives from the clearance too.
 
 ### Real icons — tab icons + custom dock-placement icons
 Tabs no longer rely on guessed/missing glyphs. A single `TAB_ICONS` map in `SessionView` feeds both the
@@ -356,6 +361,38 @@ stacking context (`isolation: isolate`) so it stays local and the splitters sit 
 inside is expanded it drops the isolation (`isolation: auto`, so the overlay escapes above the splitters)
 and chains to the host up the tree (ProjectView lifts `.main-content` for the sidebar). See bug 7.
 
+## Session 2026-06-19 — center re-select fix + clearance refinement
+
+All live-verified in the browser.
+
+### Center re-selects Chat when its active tab is docked (bug #8)
+See Bugs log #8 (commit `51dab168`). Docking the very tab the center was *showing* left
+`centerActiveTab` pointing at a tab no longer in the center → blank center. Fixed by re-validating the
+`lastCenterTab` fallback against `isCenterTab` and dropping back to Chat (`main`, always center-only)
+when the remembered tab has left the center. Reactive, URL untouched (the tab is now active in its dock).
+
+### Sidebar-toggle clearance — refined per dock context + terminal extra-keys bar
+Refines the 2026-06-18 single-source clearance (the "single source" architecture stands; values and one
+rule changed, and a new consumer was added). Four files: `App.vue`, `SessionLayout.vue`,
+`TerminalExtraKeysBar.vue`, `CollapsedBar.vue` (`MessageInput.vue` unchanged — already reads `-x`).
+
+- **New left-edge source `--sidebar-toggle-clearance-left-x`** (`App.vue`, refined in `SessionLayout`):
+  the clearance the bottom-left toggle needs from the **left edge alone** — nothing → `2.5rem`, a thin
+  left gutter → `1rem`, a full left column → `0`.
+- **Composer `-x` = left-x, zeroed only by a bottom dock _region_** (it lifts the composer above the
+  toggle). A bottom **gutter** no longer zeroes it (too thin) — the composer **and** the collapsed bar
+  keep the clearance whether a bottom gutter is present or not. Net: bottom region / left column → `0`;
+  left gutter → `1rem` (collapsed `1.5rem`); else → `2.5rem` (collapsed `3rem`).
+- **Terminal `.extra-keys-bar` now derives from the clearance** (was a hardcoded `4rem`): `left-x + 1rem`,
+  but **only when it actually sits at the bottom-left** — the terminal is the **sole or bottom-left**
+  bottom dock (never bottom-right), or it's in the **center** and the center reaches the bottom-left (no
+  left column, no bottom dock lifting it); otherwise its base padding. Driven by
+  `--sidebar-toggle-clearance-extra-keys`, **set on the nearest layout element**
+  (`.center-slot` / `.dock-region[data-rid="bottom"|"bottom-left"]`) so it **inherits across the panel
+  teleport** into the bar — no `:deep` into the relocated terminal. The consumer's fallback
+  (`calc(left-x + 1rem)`) covers terminals **outside** the dockable layout (the project view). Values at
+  the bottom-left: `3.5rem` (nothing left) / `2rem` (left gutter); everywhere else: base.
+
 ## Bugs found & fixed live (don't reintroduce)
 
 1. **`props.layout.render` is a ref** — `SessionLayout` must read composable refs via `.value`
@@ -413,19 +450,17 @@ and chains to the host up the tree (ProjectView lifts `.main-content` for the si
   (see design doc) but not built.
 - **Layout thresholds/values are placeholders** — tune later: the resolver thresholds, the 800px
   container breakpoint (`useContainerBreakpoint`), the 40rem chat/composer `@container` thresholds,
-  and the sidebar-toggle clearance values (now centralized: base `3.5/3.25rem` in `App.vue`, refined
-  `1.5/0` in `SessionLayout`). (The resolver IS correctly reused; an earlier "stuck in widescreen"
-  report was just a too-wide window, not a bug.)
-- **The prior session's responsiveness + compact-tabs decoupling are not yet live-verified** —
-  compile-verified only. (The 2026-06-18 work IS live-verified.)
+  and the sidebar-toggle clearance values (centralized in `App.vue` + refined per dock context in
+  `SessionLayout` — see the 2026-06-19 session for the current values). (The resolver IS correctly
+  reused; an earlier "stuck in widescreen" report was just a too-wide window, not a bug.)
 
 ## What remains (categorized todo — none trivial, lots left)
 
-- **Finish/validate step 1:** live-verify the prior session's responsiveness + compact decoupling.
-  (Auto-focus-on-dock is **decided = kept**; the optional-empty model is **decided = absent** and
-  done in the resolver — what's left there is the registry + persistence, below. Compact mode tabs
-  are decoupled; overlay route-derivation, swap-on-navigate, borders, the clearance unification and
-  the icons are done + live-verified.)
+- **Step 1 — done + fully live-verified (2026-06-19).** The prior session's responsiveness + compact
+  decoupling are confirmed live; auto-focus-on-dock is **decided = kept**; the optional-empty model is
+  **decided = absent** (done in the resolver — what's left there is the registry + persistence, below);
+  overlay route-derivation, swap-on-navigate, borders, the clearance (now per dock context) and the
+  icons are done + live-verified. What's genuinely left below is persistence + new interactions.
 - **Compact polish (deferred):** optionally **shrink** the inline tab bar in compact to reclaim some
   vertical space (user deferred sizing); judge the now-empty collapsed compact header.
 - **Focus model polish:** tab lifecycle (run work on "became visible/focused", not on tab activation).

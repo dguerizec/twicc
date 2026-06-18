@@ -70,16 +70,17 @@ const restoreButtonId = useId()
 }
 /* When the sidebar is collapsed, the toggle overlaps the bottom-left on desktop too — same as
    .message-input-toolbar, reading the centralized --sidebar-toggle-clearance-x but sitting 0.5rem
-   further in (so full=4rem, partial=2rem). */
+   further in (so full=3rem, partial=1.5rem). */
 body.sidebar-closed .collapsed-bar--sidebar-clearance {
     @media (width >= 640px) {
         padding-block: var(--wa-space-s);
         padding-left: calc(var(--sidebar-toggle-clearance-x) + 0.5rem);
     }
 }
-/* When a bottom dock/gutter lifts the bar above the toggle, or a left column pushes it clear, the
-   bar needs no clearance and reverts to its compact base padding. */
-body.sidebar-closed :is(.session-layout.has-bottom-region, .session-layout.has-bottom-gutter, .session-layout.has-left-col) .collapsed-bar--sidebar-clearance {
+/* When a bottom dock *region* lifts the bar above the toggle, or a left column pushes it clear, the
+   bar needs no clearance and reverts to its compact base padding. A bottom *gutter* is too thin to
+   lift it, so it keeps the clearance (like .message-input-toolbar). */
+body.sidebar-closed :is(.session-layout.has-bottom-region, .session-layout.has-left-col) .collapsed-bar--sidebar-clearance {
     @media (width >= 640px) {
         padding-block: var(--wa-space-xs);
         padding-left: var(--wa-space-xs);

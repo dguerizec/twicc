@@ -348,11 +348,13 @@ button {
     -webkit-user-select: none;
 }
 
-/* When sidebar is closed, the sidebar toggle button overlaps
-   the left edge. Add left padding to make room. */
+/* When the sidebar is closed, its reopen toggle overlaps the bottom-left. SessionLayout drives the
+   exact amount per terminal position via --sidebar-toggle-clearance-extra-keys (it inherits across
+   the panel teleport into this bar); the fallback covers terminals outside the dockable layout (e.g.
+   the project view), where it resolves to the left-edge clearance + 1rem. */
 :global(body.sidebar-closed .extra-keys-bar) {
     @media (width >= 640px) {
-        padding-left: 4rem;
+        padding-left: var(--sidebar-toggle-clearance-extra-keys, calc(var(--sidebar-toggle-clearance-left-x) + 1rem));
     }
 }
 

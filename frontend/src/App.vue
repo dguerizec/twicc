@@ -690,13 +690,18 @@ body {
     padding: 0;
 }
 
-/* Clearance the closed-sidebar floating reopen toggle (bottom-left) needs from nearby content —
-   the single source of these values. The session view refines --sidebar-toggle-clearance-x per dock
-   context on .session-layout (see SessionLayout.vue); the composer (MessageInput toolbar +
-   CollapsedBar) and the left gutter consume them with no fallback. Defined here so it also covers
-   composers mounted outside the dockable layout. */
+/* Clearance the closed-sidebar floating reopen toggle (bottom-left) needs from nearby content — the
+   single source of these values. SessionLayout refines them per dock context on .session-layout (see
+   there). Consumers, no fallback: the composer (MessageInput toolbar + CollapsedBar) reads -x; the
+   left gutter reads -y; the terminal extra-keys bar derives from -left-x. Defined here so it also
+   covers components mounted outside the dockable layout (e.g. the project view's terminal). */
 body.sidebar-closed {
-    --sidebar-toggle-clearance-x: 3.5rem;
+    /* Left-edge-only clearance, by left dock context: nothing → full, a thin left gutter → reduced,
+       a full left column → none. The base both -x and the extra-keys bar derive from. */
+    --sidebar-toggle-clearance-left-x: 2.5rem;
+    /* Composer clearance = the left-edge value; a bottom dock region zeroes it in SessionLayout (it
+       lifts the composer above the toggle). Mirrors -left-x here for composers outside the layout. */
+    --sidebar-toggle-clearance-x: var(--sidebar-toggle-clearance-left-x);
     --sidebar-toggle-clearance-y: 3.25rem;
 }
 
