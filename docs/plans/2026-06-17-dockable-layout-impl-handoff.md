@@ -1,4 +1,4 @@
-# Dockable Layout — Implementation Handoff (2026-06-17)
+# Dockable Layout — Implementation Handoff (2026-06-17, last updated 2026-06-18)
 
 Resume point after compaction. **Step 1 is implemented and verified live in the browser.**
 Read order to resume: this doc → the step-1 plan
@@ -7,27 +7,42 @@ the design doc [`2026-06-16-dockable-layout-design.md`](./2026-06-16-dockable-la
 → the pure resolver `frontend/src/utils/layoutResolver.js` (the executable spec).
 
 Branch/worktree: `layout` (`.worktrees/layout`). Its own dev instance runs via devctl
-(frontend **5174**, backend **3501**). Work is 6 commits on branch `layout` (not pushed, not
-merged), now **rebased on top of `main`** — run `git log main..layout` for the breakdown.
-Persistence is not wired, so layout state is in-memory only.
+(frontend **5174**, backend **3501**). The branch is ~18 commits, **rebased on top of `main`**
+(currently `60aca151`) — not pushed, not merged. Run `git log main..layout` for the breakdown.
+Persistence is not wired, so layout state is in-memory only (resets on reload).
 
-**Verification status:** step-1 docking + the route/focus model were verified live in the browser.
-The later work this session — container-relative responsiveness and the compact-mode tab decoupling
-— is implemented and **compile-verified (SFC + `node --check`) but not yet verified live**.
+**Verification status:** verified **live in the browser** — step-1 docking, the route/focus model,
+the overlay route-derivation + focus lifecycle, swap-on-navigate (incl. browser back/forward), and
+the clearance unification (pixel-identical). Still **compile-verified only** (SFC + `node --check`,
+not re-checked live): the container-relative responsiveness and the compact-mode tab decoupling
+(both carried over from the prior session).
+
+> The dated sections below are chronological. The **2026-06-18 session** (native wa-tab, edge-aware
+> borders, overlay route-derivation + focus lifecycle, swap-on-navigate, mobile arrows, clearance
+> single-source) is the most recent — read it first for current behaviour where it supersedes earlier
+> notes (notably: the overlay is now route-derived, and the sidebar-toggle clearance is unified).
 
 ## Status: what works
 
 - Default (nothing docked) view is **unchanged** — the existing `wa-tab-group` behaves as before.
+- Tabs are **native `<wa-tab>`** (no more `<wa-button>` wrappers); unified tab chrome across
+  session/project/dock/overlay/terminal navs (see 2026-06-18 section).
 - Per-tab **placement arrow** (▾) on each tool tab → dropdown (Center + 6 docks). Chat has none (pinned).
+  Hidden in the mobile tab strip (`!layoutTabsMode`). Now also on **overlay** tabs.
 - Docking a tab renders it as a real dock region **with its live panel content** (Teleport — Terminal keeps its PTY across moves; no re-mount).
 - Docked tab **leaves the center strip**; non-docked tabs stay in it.
 - **Gutters** (minimize → edge rail, one icon per tab), **overlays** (95% peek), **swap**, sibling **merges**, **bottom→gutter**, mobile **tabs** mode — all driven by the pure resolver.
-- **Sidebar-closed gutter padding** (CSS): bottom-gutter start inset (3rem / 1.5rem) and left-gutter end inset (3.25rem) — verified to the pixel.
-- **Route/focus model** (the big work of this session — see its own section) — no URL loops, click-to-focus everywhere.
-- **Container-relative responsiveness** (this session — see its section, not yet live-verified): the
+- **Edge-aware borders** on docks/gutters/overlays — a single `--divider-size` line on inner edges
+  only, never on the layout boundary (see 2026-06-18 section).
+- **Route/focus model** — the route is the single pointer to the focused tab; no URL loops,
+  click-to-focus on docks/center. **The overlay is fully route-derived** and **swap/minimized docks
+  reveal themselves on navigation** (the "active tab is always visible" invariant — see sections below).
+- **Sidebar-toggle clearance** — single source (`--sidebar-toggle-clearance-x/-y`), consumed by the
+  composer + gutters (see 2026-06-18 section).
+- **Container-relative responsiveness** (prior session — see its section, not yet live-verified): the
   Files/Git/Artifacts `mobile-layout` and the chat/composer margins react to the panel's own width
   (dock / center zone), not the viewport.
-- **Compact mode decoupled from the tabs** (this session — see its section, not yet live-verified):
+- **Compact mode decoupled from the tabs** (prior session — see its section, not yet live-verified):
   the tab bar stays inline in the content at all heights; compact only collapses the header's chrome.
 
 ## Files
@@ -47,17 +62,27 @@ Modified:
 - `frontend/src/stores/data.js` — ephemeral `localState.sessionLayout` + getter `getSessionLayout` + actions `ensureSessionLayout, setTabDock, minimizeDock, restoreDock, setLayoutActiveSide, setLayoutActiveResize, setLayoutGroupActiveTab, clearSessionLayout`.
 - `frontend/src/views/SessionView.vue` — the integration (host + Teleport + gating + center filtering + route/focus model). Compact-tabs machinery removed (this session).
 
-Modified for responsiveness + compact decoupling (this session):
+Modified for responsiveness + compact decoupling (prior session):
 - `frontend/src/composables/useContainerBreakpoint.js` — observes the component's own root when no
   selector is given.
 - `FilesPanel.vue` / `GitPanel.vue` / `TerminalPanel.vue` — `routeOwner` prop (sync-from-route gate);
   Files/Git also drop the `.main-content` selector (observe self).
 - `SessionItem.vue` / `MessageInput.vue` / `MessageSnippetsBar.vue` — chat/composer `@media`→`@container`.
-- `MessageInput.vue` / `CollapsedBar.vue` — Family B sidebar-toggle clearance modulated by dock classes.
-- `SessionLayout.vue` — adds `has-bottom-region` / `has-bottom-gutter` root classes (+ DockRegion/
-  SessionLayout `pane-focus` plumbing for click-to-focus).
+- `SessionLayout.vue` — adds `has-bottom-region` / `has-bottom-gutter` root classes.
 - `SessionHeader.vue` / `ProjectDetailPanel.vue` / `ProjectDetailHeader.vue` — compact-tab machinery
   removed (tabs stay inline).
+
+Modified/touched on 2026-06-18 (see that section for the why):
+- `useSessionLayout.js` — overlay now route-derived (`openOverlayEdge` computed); removed
+  `overlayActiveTab`/`openOverlay`/`closeOverlay`; added `gutterEdgeForTabAction` + `overlayEdgeForTab`;
+  swap-on-navigate in the route watch.
+- `SessionView.vue` / `SessionLayout.vue` / `LayoutOverlay.vue` — overlay `overlay-activate`/
+  `-dismiss` lifecycle, `layoutTabsMode` arrow gating; native `<wa-tab>` tabs + unified chrome.
+- `DockRegion.vue` / `DockGutter.vue` / `LayoutOverlay.vue` — edge-aware borders (+ `data-rid`).
+- `App.vue` — base `--sidebar-toggle-clearance-x/-y` on `body.sidebar-closed` (single source).
+- `MessageInput.vue` / `CollapsedBar.vue` — consume the clearance var (no fallback); native tabs in
+  `ProjectDetailPanel.vue`; smaller arrow in `TabPlacementMenu.vue`; border-thickness tweaks in
+  `FileTreePanel.vue` / `GitPanelHeader.vue` / `TerminalPanel.vue` / `WorktreeDialog.vue`.
 
 ## Architecture as built
 
@@ -83,10 +108,11 @@ absolute-positioned from the resolver's px rects; no layout math in components).
   `!dockingRendered || dockOf(id)==='center'`. `centerActiveTab` = the routed tab if it's a
   center tab, else `lastCenterTab` (so focusing a docked tab doesn't blank the center).
 
-## Route / focus model (built this session — beyond the plans)
+## Route / focus model (the dock/center model — extended on 2026-06-18 for overlay + swap)
 
 Agreed rule: **the route is the single pointer to the focused tab.** Generalized so it works
-with multiple visible docked panes.
+with multiple visible docked panes. (The overlay and swap parts of this rule were completed on
+2026-06-18 — see that section; the overlay is now fully route-derived.)
 
 - `regionActiveTabId(region)`: route override (if the routed tab is in this region) → per-group
   memory (`activeByGroup`, keyed by `groupKeyOf`) → first content-bearing tab.
@@ -120,7 +146,7 @@ with multiple visible docked panes.
   `:active` (`event.detail.name === props.activeTabId`). Note WA does **not** fire `wa-tab-show`
   for an already-active tab.
 
-## Container-relative responsiveness (this session — not yet live-verified)
+## Container-relative responsiveness (prior session — not yet live-verified)
 
 In the dockable layout a panel / the chat can be far narrower than the window, so width-responsive
 behaviour keyed on the viewport is wrong. Three changes, all "react to the actual rendered width":
@@ -144,7 +170,7 @@ behaviour keyed on the viewport is wrong. Three changes, all "react to the actua
   (3.5rem / 4rem). Mobile + sidebar-open unchanged. (Geometry confirmed with the user: a left edge is
   always a full-height column XOR a full-height gutter, so the coarse `has-left-*` classes suffice.)
 
-## Compact mode — tabs decoupled from it (this session — not yet live-verified)
+## Compact mode — tabs decoupled from it (prior session — not yet live-verified)
 
 Compact mode (`@media max-height:900px`; fires on most laptops once browser chrome is subtracted —
 StatCounter: only native-1080p-at-100% stays above) used to **hide the inline tab nav and relocate
@@ -160,6 +186,71 @@ and project/workspace (`ProjectDetailPanel`/`ProjectDetailHeader`): removed `com
 `switchToTabAndCollapse`, the custom scroll machinery + observers, both `#compact-extra` slots, both
 compact-tab dropdowns (props/handlers/CSS), and the `@media` rules that hid the inline navs. Compact
 tweaks unrelated to the tabs (action-button hiding, divider, padding, stats nav list) are kept.
+
+## Session 2026-06-18 — native tabs, borders, overlay lifecycle, swap, clearance
+
+All live-verified in the browser unless noted. These supersede earlier notes where they overlap.
+
+### Native `wa-tab` + unified tab chrome
+The center (`SessionView`) and project-detail (`ProjectDetailPanel`) tab labels were a `<wa-button>`
+wrapped inside each `<wa-tab>`; now they're native `<wa-tab>` content — the active state comes from
+wa-tab's own indicator, not button `appearance`/`variant`. Unified the tab chrome across the
+session/project/dock/overlay/terminal navs: native indicator (WA default `currentColor`, **no**
+per-component `--indicator-color`), `--track-width: var(--divider-size)`, base padding `2xs xs` +
+`gap 2xs`, `--divider-size` borders, `.reduced-height` (global util in `App.vue`) on the minimize/
+close buttons. The placement arrow shrank to `0.5em`.
+
+### Edge-aware borders (DockRegion / DockGutter / LayoutOverlay)
+A region/gutter/overlay draws a divider only on **inner** edges (facing the center or a sibling),
+never on an edge touching the layout boundary; **single ownership** so each shared edge is exactly one
+`--divider-size` line. Driven purely by CSS from `region.kind` + a `:data-rid="region.id"` attribute
+on `DockRegion` — the resolver encodes "both siblings shown" in the id: `left-bottom`/`right-bottom`
+exist **only** in a split column, so they own the inter-sibling **top** divider; `bottom-right` owns
+the vertical divider toward `bottom-left`. Side columns border the center-facing edge; bottom regions
+the top; gutters/overlays only their center-facing edge. Thickness is `var(--divider-size)` everywhere.
+
+### Overlay = derived from the route (single source of truth) + focus lifecycle
+**Big architectural change — supersedes the old imperative overlay state.** `openOverlayEdge` is now a
+`computed(() => overlayEdgeForTab(routeActiveTabId.value))`: the peek overlay is open **iff** the
+active (route) tab's dock is in overlay mode, on that edge, showing that tab. Removed
+`overlayActiveTab`, `openOverlay`/`closeOverlay`, the stale-overlay watcher, and the (briefly-added)
+auto-open watcher. So bookmarks / direct navigation / **browser back-forward** open and close it for
+free — no second source of truth, no desync (the earlier bug: forward left the overlay open).
+- Gutter/overlay interactions emit `overlay-activate` / `overlay-dismiss` (which are just navigations
+  in `SessionView`). Opening **remembers** the pre-open active tab; an explicit **dismiss** (backdrop,
+  close button, or re-click toggle) returns to it — falling back to the center (`main`), and **never**
+  remembering an overlay-only tab as the return (would re-open immediately).
+- Overlay tabs gained the per-tab `TabPlacementMenu`; overlay `z-index` 9 → **11** (still below the
+  gutters at 12, which stay clickable above it). A DockRegion-style body click-to-focus claim was
+  briefly added to the overlay then **removed** — under route-derivation the overlay always shows the
+  active tab, so it was a permanent no-op.
+
+### Swap-on-navigate (completes the "active tab is always visible" invariant)
+The composable's `watch(routeActiveTabId)` already revealed **minimized** docks (`restore`); it now
+also calls `swapSide(edge)` when the active tab sits in a **`swap`** rail (its side lost mutual
+exclusion, capacity 1). So navigation / back-forward / keyboard tab-switch keep the active tab visible
+— same invariant the overlay derivation upholds. New helper `gutterEdgeForTabAction(tabId, action)`
+(generalizes `overlayEdgeForTab`). The **collapsed-AND-swapped** combo is handled in one watch pass:
+`restoreDock` does a reactive `splice` that synchronously re-derives `render`, so the following swap
+check reads fresh state (the un-collapsed dock now a `swap` item) → `swapSide` fires. Verified live
+(navigating to a collapsed tab on the swapped-out side flipped `activeSide` **and** cleared `collapsed`).
+
+### Mobile fallback hides the placement arrows
+`layoutTabsMode = layout.measured.value && layout.render.value.mode === 'tabs'` (SessionView). The 5
+center `TabPlacementMenu` arrows are `v-if="!layoutTabsMode"` — in the mobile tab strip the docking
+system is skipped, so a tab can't be placed into a dock. Gated on `measured` so the arrows don't flash
+out before the first measurement on a normal-width screen.
+
+### Sidebar-toggle clearance — single source (no more duplicated magic numbers)
+The closed-sidebar reopen toggle's clearance was duplicated literals + copy-pasted `:is/:not` context
+selectors across `MessageInput`, `CollapsedBar`, `SessionLayout`. Now: `--sidebar-toggle-clearance-x`
+/ `-y` are defined **once** on `body.sidebar-closed` (`App.vue`); `SessionLayout` only **refines** `-x`
+per dock context (thin left rail → `1.5rem`; bottom dock/gutter or left column → `0`; nothing docked
+falls through to the base `3.5rem`). The composer toolbar (`var(...)`), collapsed bar
+(`calc(var(...) + 0.5rem)`) and left gutter (`-y`) consume with **no fallback**, so the value lives in
+exactly one place. The bottom-gutter `.start` inset (`3`/`1.5rem`) is kept literal (single copy,
+slightly different offset from the toggle). Decided: project/workspace pages will **not** get a layout
+(no central zone), so the clearance stays session-only — not moved to `ProjectView`.
 
 ## Bugs found & fixed live (don't reintroduce)
 
@@ -193,26 +284,23 @@ tweaks unrelated to the tabs (action-button hiding, divider, padding, stats nav 
   (see design doc) but not built.
 - **Layout thresholds/values are placeholders** — tune later: the resolver thresholds, the 800px
   container breakpoint (`useContainerBreakpoint`), the 40rem chat/composer `@container` thresholds,
-  and the Family B reduced clearances (toolbar 1.5rem / collapsed 2rem, plus the collapsed-bar
-  vertical `padding-block` choice). (The resolver IS correctly reused; an earlier "stuck in
-  widescreen" report was just a too-wide window, not a bug.)
-- **This session's later work is not yet live-verified** (container-relative responsiveness,
-  compact-tabs decoupling) — compile-verified only.
+  and the sidebar-toggle clearance values (now centralized: base `3.5/3.25rem` in `App.vue`, refined
+  `1.5/0` in `SessionLayout`). (The resolver IS correctly reused; an earlier "stuck in widescreen"
+  report was just a too-wide window, not a bug.)
+- **The prior session's responsiveness + compact-tabs decoupling are not yet live-verified** —
+  compile-verified only. (The 2026-06-18 work IS live-verified.)
 
 ## What remains (categorized todo — none trivial, lots left)
 
-- **Finish/validate step 1:** live-verify this session's later work (responsiveness, compact decoupling);
-  decide on auto-focus-on-dock; validate overlays/swap edge cases at small sizes; pick final icons;
-  empty-optional → gutter. (Compact mode is now reconciled — tabs decoupled, see its section.)
+- **Finish/validate step 1:** live-verify the prior session's responsiveness + compact decoupling;
+  **decide on auto-focus-on-dock**; pick final icons; empty-optional → gutter. (Compact mode tabs are
+  decoupled; overlay route-derivation, swap-on-navigate, borders and the clearance unification are
+  done + live-verified.)
 - **Compact polish (deferred):** optionally **shrink** the inline tab bar in compact to reclaim some
   vertical space (user deferred sizing); judge the now-empty collapsed compact header.
-- **Unify the sidebar-toggle clearance:** the gutter-icon insets (3/1.5/3.25rem in `SessionLayout`)
-  and the Family B composer clearance both handle the bottom-left sidebar-reopen toggle — factor into
-  one rule (flagged with the user as a future cleanup).
-- **Focus model polish:** tab lifecycle (run work on "became visible/focused", not on tab
-  activation). The file-clears-on-blur and focus-race bugs are now fixed (route-owner gating +
-  deferred click-based focus claim — see the route/focus section). Overlay panels (`LayoutOverlay`)
-  still have no focus claim — interacting with a peek overlay doesn't claim the route yet.
+- **Focus model polish:** tab lifecycle (run work on "became visible/focused", not on tab activation).
+  The file-clears-on-blur, focus-race, overlay-focus and route-derivation work is **done** (see the
+  route/focus + 2026-06-18 sections) — this is just the remaining "lifecycle hooks" idea.
 - **Resize UI:** sibling splitters + dock splitters (resolver emits `splitters`; UI wiring deferred,
   watch `wa-split-panel`/`wa-reposition` traps).
 - **Persistence:** persist the intention; 3-tier resolution at creation (mirror
