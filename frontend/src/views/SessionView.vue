@@ -651,6 +651,40 @@ function onLayoutSelectTab(tabId) {
     switchToTab(tabId)
 }
 
+// Overlay focus lifecycle. A peek overlay is transient: opening it on a tab makes that tab active
+// (route owner) so its panel syncs from the route — but we remember the tab that was active just
+// before, and an explicit dismiss (backdrop / close button / toggle) returns focus to it. Switching
+// tabs WITHIN the overlay keeps the same remembered tab (captured only on the first open). A
+// non-dismiss close (the tab was placed into a real dock/center, or a resize dropped the overlay)
+// leaves focus on wherever it landed — we only clear the memory (handled by the watcher below).
+let overlayReturnTab = null
+function onOverlayActivate(tabId) {
+    if (overlayReturnTab === null) {
+        const prior = activeTabId.value
+        // Never remember an overlay-only tab as the return target — dismissing to it would just
+        // re-open the overlay (the auto-open watcher below). Fall back to the center anchor.
+        overlayReturnTab = layout.overlayEdgeForTab(prior) ? 'main' : prior
+    }
+    cancelPaneFocus()
+    switchToTab(tabId)
+}
+function onOverlayDismiss() {
+    // No remembered tab (overlay was opened by direct navigation, not a gesture) → fall back to the
+    // center, so dismissing leaves focus on a visible tab and can't re-trigger the auto-open.
+    const back = overlayReturnTab ?? 'main'
+    overlayReturnTab = null
+    cancelPaneFocus()
+    switchToTab(back)
+}
+// Any overlay close clears the remembered return tab. A dismiss already cleared it synchronously
+// above; this catches closes driven purely by the route leaving overlay mode (back/forward, the
+// tab being placed into a real dock, a resize) so a later open recaptures a fresh prior.
+// openOverlayEdge is derived from the route, so the overlay opens/closes on its own — there is no
+// auto-open watcher to maintain; navigating to an overlay-mode tab shows it, navigating away hides it.
+watch(() => layout.openOverlayEdge.value, (edge) => {
+    if (!edge) overlayReturnTab = null
+})
+
 // Click-to-focus for the center zone (mirror of DockRegion's): clicking the center content while
 // a dock owns the URL focuses the center's active tab. Tab clicks navigate on their own, so skip
 // clicks that land on the nav. Listens on click (gesture end) + deferred, like the dock claim.
@@ -1333,6 +1367,8 @@ onBeforeUnmount(() => {
             @select-tab="onLayoutSelectTab"
             @focus-pane="requestPaneFocus"
             @minimize="onLayoutMinimize"
+            @overlay-activate="onOverlayActivate"
+            @overlay-dismiss="onOverlayDismiss"
         >
         <wa-tab-group
             :active="centerActiveTab"

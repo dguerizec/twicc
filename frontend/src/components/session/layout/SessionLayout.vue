@@ -16,7 +16,7 @@ const props = defineProps({
     registerTarget: { type: Function, required: true },
     unregisterTarget: { type: Function, required: true },
 })
-const emit = defineEmits(['select-tab', 'minimize', 'focus-pane'])
+const emit = defineEmits(['select-tab', 'minimize', 'focus-pane', 'overlay-activate', 'overlay-dismiss'])
 
 // props.layout is the useSessionLayout() return — a bag of refs/functions. Refs accessed
 // through a prop object are NOT auto-unwrapped, so read them via .value here.
@@ -51,14 +51,9 @@ const centerStyle = computed(() => {
 const overlay = computed(() =>
     render.value.overlays.find((o) => o.edge === openOverlayEdge.value) || null
 )
-const overlayActive = computed(() => {
-    if (!overlay.value) return null
-    const wanted = props.layout.overlayActiveTab.value[overlay.value.edge]
-    const tabs = overlay.value.tabs
-    if (wanted && tabs.some((t) => t.id === wanted)) return wanted
-    const fc = tabs.find((t) => !t.optional || t.hasContent)
-    return (fc || tabs[0])?.id ?? null
-})
+// The overlay shows the active (route) tab — it's open precisely because that tab is in overlay
+// mode (see useSessionLayout: openOverlayEdge is derived from the route).
+const overlayActive = computed(() => overlay.value ? props.layout.routeActiveTabId.value : null)
 
 function onGutterAction({ edge, dockId, tabId, action }) {
     if (action === 'swap') {
@@ -68,11 +63,23 @@ function onGutterAction({ edge, dockId, tabId, action }) {
         props.layout.restore(dockId)
         emit('select-tab', tabId)
     } else {
-        props.layout.openOverlay(edge, tabId)
+        // The overlay is derived from the route: opening it = navigating to the tab ('activate');
+        // re-clicking the tab already shown = dismissing it (navigate back to the prior tab).
+        if (props.layout.openOverlayEdge.value === edge && props.layout.routeActiveTabId.value === tabId) {
+            emit('overlay-dismiss')
+        } else {
+            emit('overlay-activate', tabId)
+        }
     }
 }
 function onOverlaySelect(tabId) {
-    if (tabId !== overlayActive.value) props.layout.openOverlay(overlay.value.edge, tabId)
+    if (tabId === overlayActive.value) return
+    emit('overlay-activate', tabId)
+}
+// Explicit close (backdrop / close button): dismiss navigates back to the pre-open active tab,
+// which drops the route out of overlay mode and closes the overlay.
+function onOverlayClose() {
+    emit('overlay-dismiss')
 }
 </script>
 
@@ -112,7 +119,7 @@ function onOverlaySelect(tabId) {
                 :register-target="registerTarget"
                 :unregister-target="unregisterTarget"
                 @select="onOverlaySelect"
-                @close="layout.closeOverlay()"
+                @close="onOverlayClose"
                 @place="(id, dest) => layout.place(id, dest)"
             />
         </template>

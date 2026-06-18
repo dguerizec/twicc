@@ -95,7 +95,7 @@ export function useSessionLayout({ sessionId, containerRef, tabs, routeActiveTab
         if (dock === 'center') return `center:${tabId}`
         const edge = edgeOfDock(dock)
         if (openOverlayEdge.value === edge) {
-            return overlayActiveTab.value[edge] === tabId ? 'overlay' : null
+            return routeActiveTabId.value === tabId ? 'overlay' : null
         }
         const shown = render.value.regions.some((r) => r.slots.some((s) => s.dockId === dock))
         return shown ? `region:${dock}` : null
@@ -108,32 +108,30 @@ export function useSessionLayout({ sessionId, containerRef, tabs, routeActiveTab
         const dock = dockOf(tabId)
         if (dock === 'center') return true
         const edge = edgeOfDock(dock)
-        if (openOverlayEdge.value === edge) return overlayActiveTab.value[edge] === tabId
+        if (openOverlayEdge.value === edge) return routeActiveTabId.value === tabId
         const region = render.value.regions.find((r) => r.slots.some((s) => s.dockId === dock))
         if (!region) return false
         return regionActiveTabId(region) === tabId
     }
 
-    // ---- Overlay (peek) state — pure UI, lives here ----
-    const openOverlayEdge = ref(null)     // 'left' | 'right' | 'bottom' | null
-    const overlayActiveTab = ref({})      // edge -> tabId
-
-    function openOverlay(edge, tabId) {
-        if (openOverlayEdge.value === edge && (!tabId || overlayActiveTab.value[edge] === tabId)) {
-            openOverlayEdge.value = null   // toggle closed
-            return
+    // The edge whose overlay would show this tab — i.e. the tab's dock is currently in overlay mode
+    // (peek), not shown in a region. null otherwise. Drives auto-opening the overlay when the route
+    // points at an overlay-only tab (direct navigation / bookmark / browser history). Based on the
+    // gutter items with action 'overlay', so it excludes docks shown in a region and 'restore'/'swap'.
+    function overlayEdgeForTab(tabId) {
+        for (const g of render.value.gutters) {
+            for (const item of g.items) {
+                if (item.action === 'overlay' && item.tabs.some((t) => t.id === tabId)) return g.edge
+            }
         }
-        openOverlayEdge.value = edge
-        if (tabId) overlayActiveTab.value = { ...overlayActiveTab.value, [edge]: tabId }
+        return null
     }
-    function closeOverlay() { openOverlayEdge.value = null }
 
-    // Drop a stale overlay when its edge no longer offers one.
-    watch(render, (d) => {
-        if (openOverlayEdge.value && !d.overlays.some((o) => o.edge === openOverlayEdge.value)) {
-            openOverlayEdge.value = null
-        }
-    })
+    // ---- Overlay (peek) — DERIVED from the route, the single source of truth. The overlay is open
+    // iff the active tab's dock is in overlay mode (overlayEdgeForTab), on that edge, showing the
+    // active tab. Navigation / back-forward / bookmarks drive it directly: no separate state to
+    // desync, nothing to open or close imperatively — opening/closing is just navigating. ----
+    const openOverlayEdge = computed(() => overlayEdgeForTab(routeActiveTabId.value))
 
     // ---- Actions (intention mutations via the store) ----
     function place(tabId, dest) { store.setTabDock(sessionId.value, tabId, dest) }
@@ -161,8 +159,8 @@ export function useSessionLayout({ sessionId, containerRef, tabs, routeActiveTab
         width, height, measured,
         render, isDockingActive, dockingRendered,
         regionActiveTabId, dockOf, groupKeyOf,
-        targetKeyForTab, isToolPanelVisible,
-        openOverlayEdge, overlayActiveTab, openOverlay, closeOverlay,
+        targetKeyForTab, isToolPanelVisible, overlayEdgeForTab,
+        openOverlayEdge, routeActiveTabId,
         place, minimize, restore, swapSide, rememberActive,
     }
 }
