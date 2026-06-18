@@ -3335,6 +3335,20 @@ async def artifact_serve(request, bookmark_id, asset=""):
     return response
 
 
+async def artifact_broker_shim(request):
+    """Serve the built network-broker shim bundle (design §8), injected into
+    artifact HTML documents at ``/_twicc/artifact-broker-shim.js``. Public
+    (non-secret JS, same origin as the artifact); 404 until the frontend build
+    has produced it (``npm run build``)."""
+    if request.method not in ("GET", "HEAD"):
+        return HttpResponseNotAllowed(["GET", "HEAD"])
+    shim = settings.PACKAGE_DIR / "static" / "artifact-broker" / "shim.js"
+    response = await asyncio.to_thread(_raw_file_response, str(shim))
+    if response is None:
+        raise Http404("Broker shim not built")
+    return response
+
+
 async def spa_index(request):
     """Catch-all for Vue Router - serves index.html."""
     index_path = settings.FRONTEND_DIST_DIR / "index.html"

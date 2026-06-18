@@ -122,6 +122,7 @@ jspm_packages/
 # Build outputs
 frontend/dist/
 src/twicc/static/frontend/
+src/twicc/static/artifact-broker/
 src/twicc/staticfiles/
 
 # Logs

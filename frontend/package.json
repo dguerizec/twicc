@@ -4,7 +4,7 @@
   "main": "index.js",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "vite build && vite build --config vite.config.shim.js",
     "preview": "vite preview"
   },
   "type": "module",
@@ -32,6 +32,7 @@
     "@codemirror/merge": "^6.12.1",
     "@codemirror/state": "^6.6.0",
     "@codemirror/view": "^6.40.0",
+    "@mswjs/interceptors": "^0.41.9",
     "@panzoom/panzoom": "^4.6.2",
     "@shikijs/markdown-it": "^3.21.0",
     "@uiw/codemirror-theme-github": "^4.25.8",
@@ -50,6 +51,7 @@
     "markdown-it-async": "^2.2.0",
     "mermaid": "^11.12.2",
     "notivue": "^2.4.5",
+    "penpal": "^7.0.6",
     "pinia": "^3.0.4",
     "shiki": "^3.21.0",
     "vue": "^3.5.27",
