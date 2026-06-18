@@ -193,6 +193,19 @@ SESSION_SAVE_EVERY_REQUEST = False
 
 ROOT_URLCONF = "twicc.urls"
 
+# Django template engine — used for the few server-rendered pages (currently the
+# standalone artifact password page in twicc.artifacts/templates). The SPA itself
+# is a static index.html (not a template), so we only register the dirs that
+# actually hold templates rather than enabling APP_DIRS.
+TEMPLATES = [
+    {
+        "BACKEND": "django.template.backends.django.DjangoTemplates",
+        "DIRS": [PACKAGE_DIR / "artifacts" / "templates"],
+        "APP_DIRS": False,
+        "OPTIONS": {"context_processors": []},
+    },
+]
+
 ASGI_APPLICATION = "twicc.asgi.application"
 
 CHANNEL_LAYERS = {

@@ -11,8 +11,9 @@ from urllib.parse import urlencode
 
 from asgiref.sync import markcoroutinefunction, sync_to_async
 from django.conf import settings
-from django.http import HttpResponseRedirect, JsonResponse
+from django.http import HttpResponse, HttpResponseRedirect, JsonResponse
 
+from twicc.artifacts import NOT_AUTHENTICATED_SVG
 from twicc.auth import tokens as api_tokens
 from twicc.auth.session_auth import (
     SESSION_AUTH_KEY,
@@ -97,11 +98,18 @@ class PasswordAuthMiddleware:
         ):
             if auth_value:
                 await session.aflush()
-            # A protected non-API path is a top-level artifact navigation: send the
-            # browser to the standalone password page, which redirects back here
-            # after a successful login. API requests get a plain 401 JSON (the SPA
-            # drives its own login redirect).
             if is_protected_non_api:
+                # An inline <img> (image rendered inside a message) can't follow an
+                # HTML redirect — it would just show a broken image — so hand image
+                # requests a small "not authenticated" placeholder image. A top-level
+                # artifact navigation instead goes to the standalone password page,
+                # which redirects back here after a successful login.
+                dest = request.headers.get("Sec-Fetch-Dest", "")
+                accept = request.headers.get("Accept", "")
+                if dest == "image" or accept.startswith("image/"):
+                    response = HttpResponse(NOT_AUTHENTICATED_SVG, content_type="image/svg+xml")
+                    response["Cache-Control"] = "no-store"
+                    return response
                 query = urlencode({"redirect": request.get_full_path()})
                 return HttpResponseRedirect(f"/artifacts/auth?{query}")
             return JsonResponse(

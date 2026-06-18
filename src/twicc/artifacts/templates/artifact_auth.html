@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TwiCC — Password required</title>
+<script>
+/* Pick the saved colour scheme before paint to avoid a flash. Dark is the
+   default; switch to light only when the stored setting (or, when "system", the
+   OS preference) asks for it. No framework — just reads the app's localStorage. */
+(function(){try{
+  var s=JSON.parse(localStorage.getItem('twicc-settings')||'{}');
+  var cs=s.colorScheme||'system';
+  var dark=cs==='dark'||(cs!=='light'&&matchMedia('(prefers-color-scheme: dark)').matches);
+  if(!dark)document.documentElement.classList.add('light');
+}catch(e){}})();
+</script>
+<style>
+:root{--bg:#18181b;--card:#27272a;--border:#3f3f46;--text:#f4f4f5;--muted:#a1a1aa;--brand:#06b6d4;--brand-text:#08171c;--input-bg:#18181b;--danger-bg:#7f1d1d;--danger-text:#fecaca;color-scheme:dark}
+:root.light{--bg:#f4f4f5;--card:#ffffff;--border:#e4e4e7;--text:#18181b;--muted:#71717a;--brand:#0891b2;--brand-text:#ffffff;--input-bg:#ffffff;--danger-bg:#fee2e2;--danger-text:#991b1b;color-scheme:light}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif}
+.card{width:100%;max-width:360px;margin:1rem;padding:2rem;background:var(--card);border:1px solid var(--border);border-radius:12px}
+.head{text-align:center;margin-bottom:1.5rem}
+.robot{width:64px;height:auto;display:block;margin:0 auto .6rem}
+.title{margin:0;font-size:1.4rem;font-weight:700;letter-spacing:.05em}
+.sub{margin:.4rem 0 0;font-size:.85rem;color:var(--muted)}
+label{display:block;font-size:.85rem;font-weight:600;margin-bottom:.4rem}
+input[type=password]{width:100%;padding:.6rem .7rem;font-size:1rem;border-radius:8px;border:1px solid var(--border);background:var(--input-bg);color:var(--text)}
+input[type=password]:focus{outline:2px solid var(--brand);outline-offset:1px}
+.err{margin:.9rem 0 0;padding:.55rem .7rem;border-radius:8px;font-size:.85rem;background:var(--danger-bg);color:var(--danger-text)}
+button{width:100%;margin-top:1.1rem;padding:.65rem;font-size:.95rem;font-weight:600;border:none;border-radius:8px;background:var(--brand);color:var(--brand-text);cursor:pointer}
+button:hover{filter:brightness(1.08)}
+</style>
+</head>
+<body>
+<form class="card" method="post" action="/artifacts/auth">
+  <div class="head">
+    <svg class="robot" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512" aria-hidden="true"><path fill="#3178c0" d="M352 0c0-17.7-14.3-32-32-32S288-17.7 288 0l0 64-96 0c-53 0-96 43-96 96l0 224c0 53 43 96 96 96l256 0c53 0 96-43 96-96l0-224c0-53-43-96-96-96l-96 0 0-64zM160 368c0-13.3 10.7-24 24-24l32 0c13.3 0 24 10.7 24 24s-10.7 24-24 24l-32 0c-13.3 0-24-10.7-24-24zm120 0c0-13.3 10.7-24 24-24l32 0c13.3 0 24 10.7 24 24s-10.7 24-24 24l-32 0c-13.3 0-24-10.7-24-24zm120 0c0-13.3 10.7-24 24-24l32 0c13.3 0 24 10.7 24 24s-10.7 24-24 24l-32 0c-13.3 0-24-10.7-24-24zM224 176a48 48 0 1 1 0 96 48 48 0 1 1 0-96zm144 48a48 48 0 1 1 96 0 48 48 0 1 1 -96 0zM64 224c0-17.7-14.3-32-32-32S0 206.3 0 224l0 96c0 17.7 14.3 32 32 32s32-14.3 32-32l0-96zm544-32c-17.7 0-32 14.3-32 32l0 96c0 17.7 14.3 32 32 32s32-14.3 32-32l0-96c0-17.7-14.3-32-32-32z"/></svg>
+    <h1 class="title">TwiCC</h1>
+    <p class="sub">Password required to view this artifact</p>
+  </div>
+  <input type="hidden" name="redirect" value="{{ redirect }}">
+  <label for="pw">Password</label>
+  <input id="pw" type="password" name="password" placeholder="Enter password" autofocus autocomplete="current-password">
+  {% if error %}<p class="err">Incorrect password. Try again.</p>{% endif %}
+  <button type="submit">Sign in</button>
+</form>
+</body>
+</html>
