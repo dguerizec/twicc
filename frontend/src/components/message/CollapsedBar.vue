@@ -68,27 +68,21 @@ const restoreButtonId = useId()
         padding-left: 4rem;
     }
 }
-/* When the sidebar is collapsed, the toggle button overlaps the bottom-left on
-   desktop too — same handling as .message-input-toolbar. */
+/* When the sidebar is collapsed, the toggle overlaps the bottom-left on desktop too — same as
+   .message-input-toolbar, reading the centralized --sidebar-toggle-clearance-x but sitting 0.5rem
+   further in (so full=4rem, partial=2rem). */
 body.sidebar-closed .collapsed-bar--sidebar-clearance {
     @media (width >= 640px) {
         padding-block: var(--wa-space-s);
-        padding-left: 4rem;
+        padding-left: calc(var(--sidebar-toggle-clearance-x) + 0.5rem);
     }
 }
-/* …but in the dockable layout the clearance depends on what surrounds the center zone (classes
-   on the ancestor .session-layout). A bottom dock/gutter lifts the bar above the toggle, or a
-   left dock column pushes it clear → drop the clearance entirely (back to the base padding). A
-   left gutter (no column, no bottom) is a thin rail → keep the vertical room, halve-ish the left. */
+/* When a bottom dock/gutter lifts the bar above the toggle, or a left column pushes it clear, the
+   bar needs no clearance and reverts to its compact base padding. */
 body.sidebar-closed :is(.session-layout.has-bottom-region, .session-layout.has-bottom-gutter, .session-layout.has-left-col) .collapsed-bar--sidebar-clearance {
     @media (width >= 640px) {
         padding-block: var(--wa-space-xs);
         padding-left: var(--wa-space-xs);
-    }
-}
-body.sidebar-closed .session-layout.has-left-gutter:not(.has-left-col):not(.has-bottom-region):not(.has-bottom-gutter) .collapsed-bar--sidebar-clearance {
-    @media (width >= 640px) {
-        padding-left: 2rem;
     }
 }
 .collapsed-bar-icon {

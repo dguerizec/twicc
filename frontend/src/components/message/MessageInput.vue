@@ -2213,25 +2213,12 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
     }
 }
 
-/* When sidebar is closed, the sidebar toggle button overlaps
-   the attach button area. Add left padding to make room. */
+/* When the sidebar is closed its reopen toggle overlaps the toolbar's bottom-left; clear it. The
+   amount is --sidebar-toggle-clearance-x, defined on body.sidebar-closed (App.vue) and refined per
+   dock context on .session-layout — so it's always set whenever this rule applies. */
 body.sidebar-closed .message-input-toolbar {
     @media (width >= 640px) {
-        padding-left: 3.5rem;
-    }
-}
-/* …but in the dockable layout the toggle clearance depends on what surrounds the center zone
-   (classes on the ancestor .session-layout). Priority: a bottom dock/gutter lifts the composer
-   above the toggle, or a left dock column pushes it clear → no padding. A left gutter (no column,
-   no bottom) is a thin rail → only partial clearance. Nothing docked → the base 3.5rem above. */
-body.sidebar-closed :is(.session-layout.has-bottom-region, .session-layout.has-bottom-gutter, .session-layout.has-left-col) .message-input-toolbar {
-    @media (width >= 640px) {
-        padding-left: 0;
-    }
-}
-body.sidebar-closed .session-layout.has-left-gutter:not(.has-left-col):not(.has-bottom-region):not(.has-bottom-gutter) .message-input-toolbar {
-    @media (width >= 640px) {
-        padding-left: 1.5rem;
+        padding-left: var(--sidebar-toggle-clearance-x);
     }
 }
 

@@ -147,8 +147,21 @@ function onOverlayClose() {
     overflow: hidden;
 }
 
-/* When the session-list sidebar is closed, its reopen toggle sits at the bottom-left of the
-   content area. Inset the gutter icons that would otherwise sit under it. */
+/* When the session-list sidebar is closed, its reopen toggle floats at the bottom-left of the
+   content area; nearby UI must clear it. The base clearance values live once on body.sidebar-closed
+   (see App.vue); here the session view only *refines* --sidebar-toggle-clearance-x for what sits at
+   the bottom-left — a thin left rail → partial; a bottom dock/gutter or a left column already clears
+   it → none. Nothing docked falls through to the body base (full). The composer and left gutter
+   below consume the value. This is the single place the "which dock context needs how much" lives. */
+body.sidebar-closed .session-layout.has-left-gutter:not(.has-left-col):not(.has-bottom-region):not(.has-bottom-gutter) {
+    --sidebar-toggle-clearance-x: 1.5rem;
+}
+body.sidebar-closed .session-layout:is(.has-bottom-region, .has-bottom-gutter, .has-left-col) {
+    --sidebar-toggle-clearance-x: 0rem;
+}
+
+/* The bottom gutter's own start icons sit slightly closer to the toggle than the composer, so they
+   keep their own inset (not the shared -x) to stay pixel-stable. */
 body.sidebar-closed .session-layout.mode-widescreen:not(.has-left-gutter):not(.has-left-col) :deep(.dock-gutter.bottom .g-group.start) {
     padding-inline-start: 3rem;
 }
@@ -156,6 +169,6 @@ body.sidebar-closed .session-layout.mode-widescreen.has-left-gutter :deep(.dock-
     padding-inline-start: 1.5rem;
 }
 body.sidebar-closed .session-layout :deep(.dock-gutter.left .g-group.end) {
-    padding-block-end: 3.25rem;
+    padding-block-end: var(--sidebar-toggle-clearance-y);
 }
 </style>

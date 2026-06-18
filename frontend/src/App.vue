@@ -690,6 +690,16 @@ body {
     padding: 0;
 }
 
+/* Clearance the closed-sidebar floating reopen toggle (bottom-left) needs from nearby content —
+   the single source of these values. The session view refines --sidebar-toggle-clearance-x per dock
+   context on .session-layout (see SessionLayout.vue); the composer (MessageInput toolbar +
+   CollapsedBar) and the left gutter consume them with no fallback. Defined here so it also covers
+   composers mounted outside the dockable layout. */
+body.sidebar-closed {
+    --sidebar-toggle-clearance-x: 3.5rem;
+    --sidebar-toggle-clearance-y: 3.25rem;
+}
+
 .app-container {
     min-height: 100dvh;
     background: var(--wa-color-surface-default);
