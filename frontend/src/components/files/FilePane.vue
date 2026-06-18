@@ -553,17 +553,6 @@ function togglePreviewFullscreen() {
     isPreviewFullscreen.value = !isPreviewFullscreen.value
 }
 
-// Open a *bookmarked* HTML artifact in its own tab via the dedicated, id-based
-// endpoint (/artifacts/<id>/). Same origin, so its relative assets resolve under
-// that path like the preview iframe does — but unsandboxed, so it runs as a real,
-// freely usable page; and reachable even from an unauthenticated session (the
-// backend serves a standalone password page). `noopener` keeps it from reaching
-// back into TwiCC. Only offered for bookmarked artifacts (they have a stable id).
-function openHtmlInNewTab() {
-    if (!artifactBookmark.value) return
-    window.open(`/artifacts/${artifactBookmark.value.id}/`, '_blank', 'noopener')
-}
-
 // Escape exits full-window. Capture phase + stopPropagation so it unwraps the
 // overlay first, before any ancestor Escape handler (e.g. a dialog) reacts.
 function onPreviewFullscreenKeydown(event) {
@@ -1265,6 +1254,9 @@ function goToNextDiff() {
                      tab (HTML only — there it runs as a real, unsandboxed page) and the
                      expand / compress toggle (all preview types). -->
                 <div class="preview-actions">
+                    <!-- A real link (wa-button renders an <a> when given href), so
+                         middle-click / ctrl-click / "copy link" / "open in new tab"
+                         all work. Bookmarked HTML only — the id-based dedicated URL. -->
                     <template v-if="showHtmlPreview && isHtmlFile && !diffMode && artifactBookmark">
                         <wa-button
                             :id="previewOpenTabButtonId"
@@ -1272,7 +1264,9 @@ function goToNextDiff() {
                             size="small"
                             variant="neutral"
                             appearance="filled"
-                            @click="openHtmlInNewTab"
+                            :href="`/artifacts/${artifactBookmark.id}/`"
+                            target="_blank"
+                            rel="noopener"
                         >
                             <wa-icon name="up-right-from-square"></wa-icon>
                         </wa-button>
