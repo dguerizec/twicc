@@ -1,0 +1,307 @@
+"""Tests for the artifact network broker's server-side guard (phase 1).
+
+The security core of the broker (see
+``docs/plans/2026-06-18-artifact-network-broker-design.md`` §6.2): a pure
+``classify_ip`` plus the async resolve-and-pin guard. The boundary is **not** a
+block of internal ranges — only the cloud metadata address is ever hard-blocked;
+loopback / LAN / public are classified so the prompt can show the true target.
+"""
+
+import asyncio
+import base64
+
+import httpx
+import orjson
+import pytest
+from django.test import AsyncClient
+
+from twicc.artifacts import proxy as proxy_module
+
+from twicc.artifacts.proxy import (
+    ProxyResult,
+    ResolutionError,
+    ResolvedTarget,
+    ResponseTooLarge,
+    classify_ip,
+    filter_request_headers,
+    filter_response_headers,
+    proxy_fetch,
+    resolve_target,
+)
+
+
+def _run(coro):
+    return asyncio.new_event_loop().run_until_complete(coro)
+
+
+def _fake_resolver(*ips):
+    """Build an injectable resolver that returns a fixed list of IPs, ignoring
+    the host/port — lets the rebinding/metadata cases be tested without DNS."""
+
+    async def resolver(host, port):
+        return list(ips)
+
+    return resolver
+
+
+@pytest.mark.parametrize(
+    "ip, expected",
+    [
+        # The one unconditional hard-block: cloud instance metadata (IMDS).
+        ("169.254.169.254", "metadata"),     # AWS / GCP / Azure IMDS (IPv4)
+        ("fd00:ec2::254", "metadata"),       # AWS IMDS over IPv6
+        # Loopback.
+        ("127.0.0.1", "loopback"),
+        ("127.0.0.5", "loopback"),
+        ("::1", "loopback"),
+        # Private / internal ("lan"): RFC1918, ULA, link-local (non-metadata).
+        ("10.0.0.5", "lan"),
+        ("172.16.0.1", "lan"),
+        ("192.168.1.10", "lan"),
+        ("169.254.0.1", "lan"),              # link-local, but NOT the metadata address
+        ("fc00::1", "lan"),                  # IPv6 ULA (not the metadata address)
+        ("fe80::1", "lan"),                  # IPv6 link-local
+        # Public (globally routable).
+        ("8.8.8.8", "public"),
+        ("1.1.1.1", "public"),
+        ("2606:4700:4700::1111", "public"),
+    ],
+)
+def test_classify_ip(ip, expected):
+    assert classify_ip(ip) == expected
+
+
+# --- resolve_target: server-side resolution, pinning, metadata block ----------
+
+
+def test_resolve_target_public_pins_the_resolved_ip():
+    # 8.8.8.8 is genuinely globally routable (unlike RFC 5737 doc ranges such as
+    # 203.0.113.0/24, which is_global correctly reports as non-global → "lan").
+    target = _run(resolve_target("api.example.com", 443, resolver=_fake_resolver("8.8.8.8")))
+    assert target == ResolvedTarget(ip="8.8.8.8", kind="public")
+
+
+def test_resolve_target_reports_loopback_when_a_name_rebinds_inward():
+    # A name that resolves to 127.0.0.1 must surface as loopback (the honest
+    # target the prompt shows), never silently as the requested host.
+    target = _run(resolve_target("innocent.example.com", 5432, resolver=_fake_resolver("127.0.0.1")))
+    assert target == ResolvedTarget(ip="127.0.0.1", kind="loopback")
+
+
+def test_resolve_target_reports_lan_for_private_ip():
+    target = _run(resolve_target("nas.local", 80, resolver=_fake_resolver("192.168.1.10")))
+    assert target == ResolvedTarget(ip="192.168.1.10", kind="lan")
+
+
+def test_resolve_target_blocks_metadata():
+    target = _run(resolve_target("metadata.evil", 80, resolver=_fake_resolver("169.254.169.254")))
+    assert target.kind == "metadata"
+
+
+def test_resolve_target_blocks_metadata_hidden_among_public_addresses():
+    # Multi-answer trick: a public IP first, the metadata IP second. The block
+    # must win regardless of ordering.
+    resolver = _fake_resolver("8.8.8.8", "169.254.169.254")
+    target = _run(resolve_target("sneaky.evil", 80, resolver=resolver))
+    assert target.kind == "metadata"
+
+
+def test_resolve_target_raises_when_name_does_not_resolve():
+    with pytest.raises(ResolutionError):
+        _run(resolve_target("nxdomain.invalid", 80, resolver=_fake_resolver()))
+
+
+# --- header hygiene -----------------------------------------------------------
+
+
+def test_filter_request_headers_keeps_only_safe_subset():
+    out = filter_request_headers(
+        {
+            "Accept": "application/json",
+            "Accept-Language": "en",
+            "Content-Type": "application/json",
+            "X-Whatever": "keep-me-not",
+        }
+    )
+    assert out == {
+        "accept": "application/json",
+        "accept-language": "en",
+        "content-type": "application/json",
+    }
+
+
+def test_filter_request_headers_strips_ambient_authority():
+    # The TwiCC session cookie and any auth header must NEVER leave for a third
+    # party — that is the whole point of the broker stripping credentials.
+    out = filter_request_headers(
+        {
+            "Cookie": "twicc_session=secret",
+            "Authorization": "Bearer secret",
+            "Host": "twicc.local",
+            "Accept": "text/html",
+        }
+    )
+    assert out == {"accept": "text/html"}
+
+
+def test_filter_response_headers_drops_set_cookie():
+    out = filter_response_headers(
+        {
+            "Content-Type": "application/json",
+            "Set-Cookie": "evil=1",
+            "X-Internal": "leak",
+        }
+    )
+    assert "set-cookie" not in {k.lower() for k in out}
+    assert out.get("content-type") == "application/json"
+
+
+# --- proxy_fetch: pinned outbound request, no redirect, size cap --------------
+
+
+def _mock_client(handler, captured=None):
+    def _wrapped(request):
+        if captured is not None:
+            captured["request"] = request
+        return handler(request)
+
+    return httpx.AsyncClient(transport=httpx.MockTransport(_wrapped))
+
+
+def test_proxy_fetch_pins_ip_preserves_host_and_strips_cookie():
+    captured = {}
+    client = _mock_client(
+        lambda r: httpx.Response(
+            200,
+            headers={"content-type": "application/json", "set-cookie": "evil=1"},
+            content=b'{"ok":true}',
+        ),
+        captured,
+    )
+    result = _run(
+        proxy_fetch(
+            method="GET",
+            url="https://api.example.com:8443/data",
+            headers={"Cookie": "twicc_session=secret", "Accept": "application/json"},
+            body=None,
+            pinned_ip="8.8.8.8",
+            client=client,
+        )
+    )
+    req = captured["request"]
+    assert req.url.host == "8.8.8.8"                       # connection pinned to the IP
+    assert req.headers["host"] == "api.example.com:8443"  # original vhost preserved
+    assert "cookie" not in req.headers                    # ambient authority stripped
+    assert req.extensions.get("sni_hostname") == "api.example.com"  # TLS SNI / cert host
+    assert isinstance(result, ProxyResult)
+    assert result.status == 200
+    assert result.body == b'{"ok":true}'
+    assert "set-cookie" not in {k.lower() for k in result.headers}
+    _run(client.aclose())
+
+
+def test_proxy_fetch_does_not_follow_redirects():
+    # An allowed public host could 302 to an internal one (or to metadata). The
+    # broker must surface the redirect, never follow it.
+    client = _mock_client(lambda r: httpx.Response(302, headers={"location": "http://169.254.169.254/"}))
+    result = _run(
+        proxy_fetch(method="GET", url="https://api.example.com/", headers={}, body=None, pinned_ip="8.8.8.8", client=client)
+    )
+    assert result.status == 302
+    _run(client.aclose())
+
+
+def test_proxy_fetch_caps_response_size():
+    client = _mock_client(lambda r: httpx.Response(200, content=b"x" * 1000))
+    with pytest.raises(ResponseTooLarge):
+        _run(
+            proxy_fetch(
+                method="GET",
+                url="https://api.example.com/",
+                headers={},
+                body=None,
+                pinned_ip="8.8.8.8",
+                client=client,
+                max_bytes=100,
+            )
+        )
+    _run(client.aclose())
+
+
+# --- the Django view: POST /api/artifact-proxy/ -------------------------------
+
+
+def _post(body):
+    return _run(
+        AsyncClient().post("/api/artifact-proxy/", data=orjson.dumps(body), content_type="application/json")
+    )
+
+
+def test_proxy_view_preflight_returns_resolved_target(monkeypatch):
+    async def fake_resolve(host, port, **kw):
+        assert (host, port) == ("api.example.com", 443)
+        return ResolvedTarget(ip="8.8.8.8", kind="public")
+
+    monkeypatch.setattr(proxy_module, "resolve_target", fake_resolve)
+    res = _post({"mode": "preflight", "request": {"url": "https://api.example.com/data"}})
+    assert res.status_code == 200
+    assert orjson.loads(res.content) == {"target": {"ip": "8.8.8.8", "kind": "public"}}
+
+
+def test_proxy_view_preflight_blocks_metadata(monkeypatch):
+    async def fake_resolve(host, port, **kw):
+        return ResolvedTarget(ip="169.254.169.254", kind="metadata")
+
+    monkeypatch.setattr(proxy_module, "resolve_target", fake_resolve)
+    res = _post({"mode": "preflight", "request": {"url": "http://metadata.evil/"}})
+    assert res.status_code == 200
+    assert orjson.loads(res.content) == {"error": "blocked", "reason": "metadata"}
+
+
+def test_proxy_view_rejects_non_http_scheme():
+    res = _post({"mode": "preflight", "request": {"url": "file:///etc/passwd"}})
+    assert res.status_code == 400
+
+
+def test_proxy_view_fetch_pins_approved_ip_and_returns_body(monkeypatch):
+    seen = {}
+
+    async def fake_fetch(*, method, url, headers, body, pinned_ip, client, **kw):
+        seen.update(method=method, url=url, pinned_ip=pinned_ip)
+        return ProxyResult(status=201, reason="Created", headers={"content-type": "application/json"}, body=b'{"id":7}')
+
+    monkeypatch.setattr(proxy_module, "proxy_fetch", fake_fetch)
+    res = _post(
+        {
+            "mode": "fetch",
+            "pinned_ip": "8.8.8.8",
+            "request": {"url": "https://api.example.com/items", "method": "POST"},
+        }
+    )
+    assert res.status_code == 200
+    assert seen == {"method": "POST", "url": "https://api.example.com/items", "pinned_ip": "8.8.8.8"}
+    payload = orjson.loads(res.content)
+    assert payload["status"] == 201
+    assert payload["headers"] == {"content-type": "application/json"}
+    assert base64.b64decode(payload["body_base64"]) == b'{"id":7}'
+
+
+def test_proxy_view_fetch_refuses_metadata_pinned_ip(monkeypatch):
+    called = False
+
+    async def fake_fetch(**kw):
+        nonlocal called
+        called = True
+        return None
+
+    monkeypatch.setattr(proxy_module, "proxy_fetch", fake_fetch)
+    res = _post(
+        {"mode": "fetch", "pinned_ip": "169.254.169.254", "request": {"url": "https://x/", "method": "GET"}}
+    )
+    assert orjson.loads(res.content) == {"error": "blocked", "reason": "metadata"}
+    assert called is False  # never even attempt the fetch
+
+
+def test_proxy_view_rejects_get():
+    res = _run(AsyncClient().get("/api/artifact-proxy/"))
+    assert res.status_code == 405
