@@ -169,7 +169,9 @@ onBeforeUnmount(endDrag)
                 :class="[`axis-${s.axis}`, `kind-${s.kind}`, { dragging: draggingId === s.id }]"
                 :style="splitterStyle(s)"
                 @pointerdown="onSplitterDown($event, s)"
-            ></div>
+            >
+                <wa-icon name="grip-lines-vertical" class="splitter-grip"></wa-icon>
+            </div>
 
             <LayoutOverlay
                 v-if="overlay"
@@ -239,9 +241,31 @@ body.sidebar-closed .session-layout :deep(.dock-gutter.left .g-group.end) {
     position: absolute;
     z-index: 5;
     touch-action: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
 .layout-splitter.axis-v { cursor: col-resize; }
 .layout-splitter.axis-h { cursor: row-resize; }
+/* Touch affordance: a persistent grip on the divider, mirroring the sidebar splitter's
+   .divider-handle — shown only on coarse-pointer (touch) devices where there's no hover to reveal
+   the line. Scaled up so it overflows the thin 9px strip: a pointerdown on the grip bubbles to the
+   strip and starts the drag, so the enlarged grip IS a much larger tap surface to grab (the whole
+   point on touch). Rotated 90° on the horizontal (axis-h) splitters so the grip lines run along the
+   divider. */
+.splitter-grip {
+    display: none;
+    color: var(--wa-color-surface-border);
+    scale: 3;
+}
+.layout-splitter.axis-h .splitter-grip {
+    rotate: 90deg;
+}
+@media (pointer: coarse) {
+    .splitter-grip {
+        display: inline;
+    }
+}
 .layout-splitter::after {
     content: '';
     position: absolute;

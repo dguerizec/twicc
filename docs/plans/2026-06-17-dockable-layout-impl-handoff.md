@@ -338,6 +338,13 @@ bottom siblings); they leave `activeResize` untouched. Validated live (side-spli
 moved 1:1 — 100 px exact). Fractions are ephemeral (reset on
 reload) until persistence lands.
 
+**Touch affordance:** on coarse-pointer devices (`@media (pointer: coarse)`) each handle shows a
+scaled `grip-lines-vertical` grip (rotated 90° on axis-h so its lines run along the divider), mirroring
+the sidebar splitter's `.divider-handle`. The grip overflows the thin 9px strip and a pointerdown on it
+bubbles to the strip → starts the drag, so the enlarged grip is a much larger tap target (the point on
+touch). Verified live (forced-visible on desktop): grip centered, axis-h `rotate:90deg`, and a drag
+started from the grip moves the boundary.
+
 ## Bugs found & fixed live (don't reintroduce)
 
 1. **`props.layout.render` is a ref** — `SessionLayout` must read composable refs via `.value`
