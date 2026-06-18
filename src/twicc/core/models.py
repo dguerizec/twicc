@@ -599,6 +599,11 @@ class ArtifactBookmark(models.Model):
     relative_path = models.TextField()
     name = models.CharField(max_length=255)
     scope = models.CharField(max_length=16, choices=PinMode.choices)
+    # Network-broker allowlist (design 2026-06-18, §10): a dict keyed by the
+    # normalized "scheme://host:port", value {"kind": "public"|"loopback"|"lan"}.
+    # Empty = nothing approved. Mutated only via the browser host (human
+    # consent) — never agent/CLI-facing, so there is no drop-request kind for it.
+    allowed_hosts = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

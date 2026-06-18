@@ -26,6 +26,10 @@ _METADATA_IPS = frozenset(
     ipaddress.ip_address(ip) for ip in ("169.254.169.254", "fd00:ec2::254")
 )
 
+# Effective default port per scheme — used to normalize the allowlist key and to
+# derive the connect port. The scheme set also gates which schemes are allowed.
+_DEFAULT_PORTS = {"http": 80, "https": 443}
+
 
 def classify_ip(ip: str) -> str:
     """Classify a resolved IP into one of four kinds.
@@ -96,6 +100,28 @@ async def resolve_target(host: str, port: int, *, resolver: Resolver = _default_
             return ResolvedTarget(ip=ip, kind="metadata")
     ip, kind = classified[0]
     return ResolvedTarget(ip=ip, kind=kind)
+
+
+def normalize_host_key(url: str) -> str:
+    """The canonical allowlist key for a URL: ``scheme://host:port`` with the
+    scheme/host lower-cased and the **effective** port made explicit (the scheme
+    default when implicit). IPv6 hosts keep their brackets. Raises ``ValueError``
+    for a non-http/https scheme or a missing host.
+
+    This is the exact key stored on ``ArtifactBookmark.allowed_hosts`` and the
+    one the proxy looks up for membership — port-by-port (§6.4).
+    """
+    parsed = httpx.URL(url)
+    scheme = parsed.scheme.lower()
+    if scheme not in _DEFAULT_PORTS:
+        raise ValueError(f"unsupported scheme: {scheme!r}")
+    host = parsed.host.lower()
+    if not host:
+        raise ValueError("missing host")
+    if ":" in host:  # IPv6 literal → bracket it in the key
+        host = f"[{host}]"
+    port = parsed.port or _DEFAULT_PORTS[scheme]
+    return f"{scheme}://{host}:{port}"
 
 
 # Request headers forwarded outbound. Everything else is dropped — notably the
@@ -221,9 +247,6 @@ async def proxy_fetch(
 # JSON body the host inspects; only malformed input (400) and wrong method (405)
 # use HTTP status. Phase 1 enforces the IP guard (metadata block, pinning,
 # caps, header hygiene); the per-artifact allowlist + consent are phases 2/4.
-
-_DEFAULT_PORTS = {"http": 80, "https": 443}
-
 
 def _decode_request_body(req: dict) -> bytes | str | None:
     body = req.get("body")

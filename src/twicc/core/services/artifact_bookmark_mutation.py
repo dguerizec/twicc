@@ -164,6 +164,52 @@ async def delete_artifact_bookmark(*, bookmark) -> None:
 
 
 # ──────────────────────────────────────────────────────────────────────────
+# Network-broker allowlist (allowed_hosts) — REST-only, human consent
+# ──────────────────────────────────────────────────────────────────────────
+#
+# Granting a widget network egress is a *consent* act, so unlike the bookmark
+# upsert/delete there is deliberately NO drop-request kind: the browser host is
+# the only caller. The write still goes through this service (lock + broadcast)
+# to stay aligned with the rest of the bookmark surface.
+
+async def add_artifact_allowed_host(*, bookmark, url: str, kind: str) -> str:
+    """Approve ``url``'s ``scheme://host:port`` (normalized) for this artifact,
+    recording the consented ``kind``. Idempotent on the normalized key (port-by-
+    port — §6.4). Returns the normalized key. Raises ``ValueError`` for an
+    unsupported scheme (via :func:`normalize_host_key`)."""
+    from twicc.artifacts.proxy import normalize_host_key
+
+    key = normalize_host_key(url)
+    allowed = dict(bookmark.allowed_hosts or {})
+    allowed[key] = {"kind": kind}
+    bookmark.allowed_hosts = allowed
+    await run_under_db_write_lock(
+        lambda: bookmark.asave(update_fields=["allowed_hosts", "updated_at"])
+    )
+    await broadcast_artifact_bookmark_updated(bookmark)
+    return key
+
+
+async def remove_artifact_allowed_host(*, bookmark, url: str) -> bool:
+    """Revoke ``url``'s normalized key from this artifact's allowlist. Returns
+    whether an entry was actually removed. Raises ``ValueError`` for an
+    unsupported scheme (via :func:`normalize_host_key`)."""
+    from twicc.artifacts.proxy import normalize_host_key
+
+    key = normalize_host_key(url)
+    allowed = dict(bookmark.allowed_hosts or {})
+    if key not in allowed:
+        return False
+    del allowed[key]
+    bookmark.allowed_hosts = allowed
+    await run_under_db_write_lock(
+        lambda: bookmark.asave(update_fields=["allowed_hosts", "updated_at"])
+    )
+    await broadcast_artifact_bookmark_updated(bookmark)
+    return True
+
+
+# ──────────────────────────────────────────────────────────────────────────
 # Drop-request glue (kind="artifact_bookmark:*")
 # ──────────────────────────────────────────────────────────────────────────
 

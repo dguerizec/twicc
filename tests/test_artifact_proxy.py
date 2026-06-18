@@ -25,6 +25,7 @@ from twicc.artifacts.proxy import (
     classify_ip,
     filter_request_headers,
     filter_response_headers,
+    normalize_host_key,
     proxy_fetch,
     resolve_target,
 )
@@ -305,3 +306,31 @@ def test_proxy_view_fetch_refuses_metadata_pinned_ip(monkeypatch):
 def test_proxy_view_rejects_get():
     res = _run(AsyncClient().get("/api/artifact-proxy/"))
     assert res.status_code == 405
+
+
+# --- normalize_host_key: the allowlist key (scheme + host + effective port) ----
+
+
+@pytest.mark.parametrize(
+    "url, key",
+    [
+        # Default ports are made explicit.
+        ("https://api.example.com/data?x=1", "https://api.example.com:443"),
+        ("http://api.example.com/", "http://api.example.com:80"),
+        # Explicit ports are preserved (port-by-port: §6.4).
+        ("https://api.example.com:8443/p", "https://api.example.com:8443"),
+        ("http://localhost:9000", "http://localhost:9000"),
+        ("http://127.0.0.1:3502/x", "http://127.0.0.1:3502"),
+        # Scheme + host are lower-cased (DNS is case-insensitive).
+        ("HTTPS://API.Example.COM/", "https://api.example.com:443"),
+        # IPv6 literals keep their brackets.
+        ("http://[::1]:8080/x", "http://[::1]:8080"),
+    ],
+)
+def test_normalize_host_key(url, key):
+    assert normalize_host_key(url) == key
+
+
+def test_normalize_host_key_rejects_non_http_scheme():
+    with pytest.raises(ValueError):
+        normalize_host_key("ftp://example.com/x")

@@ -35,6 +35,7 @@ urlpatterns = [
     path("api/home-directory/", views.home_directory),
     path("api/artifact-bookmarks/", views.artifact_bookmark_list),
     path("api/artifact-bookmarks/<int:bookmark_id>/", views.artifact_bookmark_detail),
+    path("api/artifact-bookmarks/<int:bookmark_id>/allowed-hosts/", views.artifact_bookmark_allowed_hosts),
     path("api/artifact-proxy/", artifact_proxy),
     path("api/projects/", views.project_list),
     path("api/projects/<str:project_id>/", views.project_detail),

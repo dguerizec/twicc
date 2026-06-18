@@ -63,6 +63,7 @@ def serialize_artifact_bookmark(bookmark):
         "relative_path": rel,
         "root": str(get_session_artifacts_dir(bookmark.session_id)),
         "file_ext": os.path.splitext(rel)[1].lstrip(".").lower(),
+        "allowed_hosts": bookmark.allowed_hosts,
         "created_at": bookmark.created_at.isoformat() if bookmark.created_at else None,
         "updated_at": bookmark.updated_at.isoformat() if bookmark.updated_at else None,
     }

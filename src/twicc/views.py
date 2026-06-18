@@ -3220,6 +3220,48 @@ async def artifact_bookmark_detail(request, bookmark_id):
     return JsonResponse(payload)
 
 
+async def artifact_bookmark_allowed_hosts(request, bookmark_id):
+    """POST   /api/artifact-bookmarks/<id>/allowed-hosts/ — approve a host:port.
+    DELETE /api/artifact-bookmarks/<id>/allowed-hosts/ — revoke one.
+
+    Network-broker allowlist (design §6.4/§10). Body ``{"url": ...,
+    "kind": "public"|"loopback"|"lan"}`` (``kind`` on POST only). The stored key
+    is the normalized ``scheme://host:port``; ``metadata`` is never approvable.
+    Browser-host only (human consent) — no CLI/drop-request surface. Returns the
+    updated bookmark."""
+    if request.method not in ("POST", "DELETE"):
+        return HttpResponseNotAllowed(["POST", "DELETE"])
+    try:
+        bookmark = await ArtifactBookmark.objects.aget(id=bookmark_id)
+    except ArtifactBookmark.DoesNotExist:
+        raise Http404("Bookmark not found")
+    try:
+        data = orjson.loads(request.body)
+    except orjson.JSONDecodeError:
+        return JsonResponse({"error": "Invalid JSON"}, status=400)
+    url = (data.get("url") or "").strip()
+    if not url:
+        return JsonResponse({"error": "url is required"}, status=400)
+
+    from twicc.core.services.artifact_bookmark_mutation import (
+        add_artifact_allowed_host,
+        remove_artifact_allowed_host,
+    )
+
+    try:
+        if request.method == "POST":
+            kind = data.get("kind")
+            if kind not in ("public", "loopback", "lan"):
+                return JsonResponse({"error": "kind must be one of public/loopback/lan"}, status=400)
+            await add_artifact_allowed_host(bookmark=bookmark, url=url, kind=kind)
+        else:  # DELETE
+            await remove_artifact_allowed_host(bookmark=bookmark, url=url)
+    except ValueError as exc:
+        return JsonResponse({"error": str(exc)}, status=400)
+
+    return JsonResponse(serialize_artifact_bookmark(bookmark))
+
+
 async def artifact_redirect_to_slash(request, bookmark_id):
     """Redirect ``/artifacts/<id>`` → ``/artifacts/<id>/`` so the page's relative
     assets resolve under the bookmark's own directory rather than ``/artifacts/``."""

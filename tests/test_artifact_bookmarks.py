@@ -262,3 +262,119 @@ def test_cli_artifacts_listing_and_scope_filter(session, project, artifacts_root
     cli_artifacts.main(scope="all")
     out = orjson.loads(capfd.readouterr().out)
     assert [b["name"] for b in out] == ["A"]
+
+
+# ── Network-broker allowlist (allowed_hosts) — phase 2 ─────────────────────────
+
+
+def test_new_bookmark_has_empty_allowed_hosts(session, project):
+    bm = ArtifactBookmark.objects.create(
+        session=session, project=project, relative_path="y.html", name="Y", scope=PinMode.PROJECT,
+    )
+    assert bm.allowed_hosts == {}
+
+
+def test_serialize_includes_allowed_hosts(session, project):
+    from twicc.core.serializers import serialize_artifact_bookmark
+
+    bm = ArtifactBookmark.objects.create(
+        session=session, project=project, relative_path="x.html", name="X", scope=PinMode.PROJECT,
+        allowed_hosts={"https://api.example.com:443": {"kind": "public"}},
+    )
+    assert serialize_artifact_bookmark(bm)["allowed_hosts"] == {
+        "https://api.example.com:443": {"kind": "public"}
+    }
+
+
+def test_add_allowed_host_normalizes_and_stores_kind(session, project):
+    bm = ArtifactBookmark.objects.create(
+        session=session, project=project, relative_path="a.html", name="A", scope=PinMode.PROJECT,
+    )
+    key = _run(abm.add_artifact_allowed_host(bookmark=bm, url="https://API.example.com/data?q=1", kind="public"))
+    assert key == "https://api.example.com:443"
+    bm.refresh_from_db()
+    assert bm.allowed_hosts == {"https://api.example.com:443": {"kind": "public"}}
+
+
+def test_add_allowed_host_is_port_specific_and_idempotent(session, project):
+    bm = ArtifactBookmark.objects.create(
+        session=session, project=project, relative_path="b.html", name="B", scope=PinMode.PROJECT,
+    )
+    _run(abm.add_artifact_allowed_host(bookmark=bm, url="http://localhost:9000/a", kind="loopback"))
+    _run(abm.add_artifact_allowed_host(bookmark=bm, url="http://localhost:9000/b", kind="loopback"))  # same host:port
+    _run(abm.add_artifact_allowed_host(bookmark=bm, url="http://localhost:5432/", kind="loopback"))   # different port
+    bm.refresh_from_db()
+    assert set(bm.allowed_hosts) == {"http://localhost:9000", "http://localhost:5432"}
+
+
+def test_remove_allowed_host(session, project):
+    bm = ArtifactBookmark.objects.create(
+        session=session, project=project, relative_path="c.html", name="C", scope=PinMode.PROJECT,
+        allowed_hosts={"https://api.x:443": {"kind": "public"}},
+    )
+    assert _run(abm.remove_artifact_allowed_host(bookmark=bm, url="https://api.x/")) is True
+    bm.refresh_from_db()
+    assert bm.allowed_hosts == {}
+
+
+def test_remove_allowed_host_absent_returns_false(session, project):
+    bm = ArtifactBookmark.objects.create(
+        session=session, project=project, relative_path="d.html", name="D", scope=PinMode.PROJECT,
+    )
+    assert _run(abm.remove_artifact_allowed_host(bookmark=bm, url="https://nope.x/")) is False
+
+
+def test_allow_host_endpoint_adds_entry(client, session, project):
+    bm = ArtifactBookmark.objects.create(
+        session=session, project=project, relative_path="e.html", name="E", scope=PinMode.PROJECT,
+    )
+    res = _run(client.post(
+        f"/api/artifact-bookmarks/{bm.id}/allowed-hosts/",
+        data=orjson.dumps({"url": "https://api.example.com/data", "kind": "public"}),
+        content_type="application/json",
+    ))
+    assert res.status_code == 200
+    assert orjson.loads(res.content)["allowed_hosts"] == {"https://api.example.com:443": {"kind": "public"}}
+    bm.refresh_from_db()
+    assert bm.allowed_hosts == {"https://api.example.com:443": {"kind": "public"}}
+
+
+def test_allow_host_endpoint_rejects_metadata_kind(client, session, project):
+    bm = ArtifactBookmark.objects.create(
+        session=session, project=project, relative_path="f.html", name="F", scope=PinMode.PROJECT,
+    )
+    res = _run(client.post(
+        f"/api/artifact-bookmarks/{bm.id}/allowed-hosts/",
+        data=orjson.dumps({"url": "https://x/", "kind": "metadata"}),
+        content_type="application/json",
+    ))
+    assert res.status_code == 400
+    bm.refresh_from_db()
+    assert bm.allowed_hosts == {}
+
+
+def test_allow_host_endpoint_rejects_bad_scheme(client, session, project):
+    bm = ArtifactBookmark.objects.create(
+        session=session, project=project, relative_path="g.html", name="G", scope=PinMode.PROJECT,
+    )
+    res = _run(client.post(
+        f"/api/artifact-bookmarks/{bm.id}/allowed-hosts/",
+        data=orjson.dumps({"url": "ftp://x/", "kind": "public"}),
+        content_type="application/json",
+    ))
+    assert res.status_code == 400
+
+
+def test_unallow_host_endpoint_removes_entry(client, session, project):
+    bm = ArtifactBookmark.objects.create(
+        session=session, project=project, relative_path="h.html", name="H", scope=PinMode.PROJECT,
+        allowed_hosts={"https://api.x:443": {"kind": "public"}},
+    )
+    res = _run(client.delete(
+        f"/api/artifact-bookmarks/{bm.id}/allowed-hosts/",
+        data=orjson.dumps({"url": "https://api.x/"}),
+        content_type="application/json",
+    ))
+    assert res.status_code == 200
+    bm.refresh_from_db()
+    assert bm.allowed_hosts == {}
