@@ -7,8 +7,9 @@ the design doc [`2026-06-16-dockable-layout-design.md`](./2026-06-16-dockable-la
 → the pure resolver `frontend/src/utils/layoutResolver.js` (the executable spec).
 
 Branch/worktree: `layout` (`.worktrees/layout`). Its own dev instance runs via devctl
-(frontend **5174**, backend **3501**). The branch is 17 commits, **rebased on top of `main`**
-(currently `60aca151`) — not pushed, not merged. Run `git log main..layout` for the breakdown.
+(frontend **5174**, backend **3501**). The branch is **26 commits** on top of `main` — not pushed, not
+merged. Run `git log main..layout` for the breakdown. (Last rebased on `daa4a599`; `main` has since
+advanced to `32cce8cf`, so a re-rebase is due.)
 Persistence is not wired, so layout state is in-memory only (resets on reload).
 
 **Verification status:** verified **live in the browser** — step-1 docking, the route/focus model,
@@ -340,10 +341,20 @@ reload) until persistence lands.
 
 **Touch affordance:** on coarse-pointer devices (`@media (pointer: coarse)`) each handle shows a
 scaled `grip-lines-vertical` grip (rotated 90° on axis-h so its lines run along the divider), mirroring
-the sidebar splitter's `.divider-handle`. The grip overflows the thin 9px strip and a pointerdown on it
+the sidebar splitter's `.divider-handle`. The grip overflows the thin strip and a pointerdown on it
 bubbles to the strip → starts the drag, so the enlarged grip is a much larger tap target (the point on
-touch). Verified live (forced-visible on desktop): grip centered, axis-h `rotate:90deg`, and a drag
-started from the grip moves the boundary.
+touch). Centering is pure CSS: the strip is `display: grid; place-content: center`, and the `wa-icon`
+carries `auto-width` so its box sizes to the narrow glyph (without it the box is centered but the glyph
+paints left — see bug 6). No magic numbers: the strip thickness is a `--resize-grab` token, the strip is
+centered on its divider with `translate`, and the hover line is `var(--divider-size)` (theme-aware).
+
+**Stacking (z-index):** a docked panel's own z-index (sticky selects, the pane-callout overlay, 10–20)
+used to leak into `.session-layout` and paint over the splitters (z 5). Each `.dock-region` now owns a
+stacking context (`isolation: isolate`) so it stays local and the splitters sit above panel content
+(still below gutters 12 / overlay 11). Because that traps the FilePane full-window preview
+(`position: fixed; z-index: 1000`), the region **provides its own `expandPreviewHost`**: while a preview
+inside is expanded it drops the isolation (`isolation: auto`, so the overlay escapes above the splitters)
+and chains to the host up the tree (ProjectView lifts `.main-content` for the sidebar). See bug 7.
 
 ## Bugs found & fixed live (don't reintroduce)
 
@@ -362,6 +373,22 @@ started from the grip moves the boundary.
    `immediate` run skipped before data loaded and never re-fired. Fixed with a computed
    (`absentActiveToolTab`) tracking presence + readiness reactively (see 2026-06-18 section).
    Pre-existing (the old per-tab watchers had it too); warm in-app nav masked it.
+6. **Touch resize grip painted off the divider** — the grip box (`wa-icon`) was centered, but `wa-icon`
+   paints the narrow `grip-lines-vertical` glyph left-aligned inside a square box (glyph ~6px in a ~20px
+   box), so the visible lines sat ~21px off. `getBoundingClientRect` on the box reported "centered" and
+   hid it — only a screenshot exposed it (lesson: paint/stacking offsets need a screenshot, not a rect
+   check). Fixed with `auto-width` (box shrinks to the glyph) + the strip's grid `place-content: center`.
+7. **Docked-panel chrome over splitters → full-window preview trapped** — panel z-index (10–20) leaked
+   over the splitters; `isolation: isolate` on the region fixed that but trapped the FilePane
+   `position:fixed z-1000` full-window preview below the splitters. Fixed by the region providing
+   `expandPreviewHost` that drops its isolation while expanded + chains to the parent host (see the
+   Stacking note in the 2026-06-18 resize section). Don't re-isolate without that escape.
+8. **Center blanked when docking its own active tab** — placing the tab the center was *showing* into a
+   dock left the route on it (now active in the dock) but it was no longer a center tab; `lastCenterTab`
+   still pointed at it, so `centerActiveTab` named a tab with no `<wa-tab>` in the center strip → empty
+   center. Fixed by re-validating the `lastCenterTab` fallback against `isCenterTab` and dropping back to
+   Chat (`main`, always center-only) when the remembered tab has left the center. Reactive (the computed
+   reads `dockingRendered`/`dockOf`), URL untouched. (`SessionView.centerActiveTab`, commit `51dab168`.)
 
 ## Decisions / deviations vs the plans
 
