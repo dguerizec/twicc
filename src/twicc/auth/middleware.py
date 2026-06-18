@@ -19,6 +19,7 @@ from twicc.auth.session_auth import (
     SESSION_FINGERPRINT_KEY,
     is_session_authenticated,
 )
+from twicc.rpc.permissions import RPC_SCOPE_FULL, RPC_SCOPE_READ
 
 logger = logging.getLogger(__name__)
 
@@ -112,15 +113,28 @@ class PasswordAuthMiddleware:
 
 
 class RpcTokenAuthMiddleware:
-    """Bearer-token gate for ``/rpc/`` (independent of the SPA's cookie auth).
+    """Authentication gate for ``/rpc/`` — tags the request with an auth scope.
 
     Protection posture:
       - **Neither** ``TWICC_PASSWORD_HASH`` **nor** any token configured →
         ``/rpc/`` is open (operator opted out of protection; local-only use).
-      - **A password is set OR at least one token exists** → a valid Bearer
-        token is mandatory. The password never itself authenticates RPC; it
-        only forces token-gating on (so the existing "set a password for
-        remote access" recommendation also closes /rpc/ automatically).
+      - **A password is set OR at least one token exists** → the request must
+        carry either a valid Bearer token or a valid SPA session cookie. The
+        password never itself authenticates RPC; it only forces gating on (so
+        the existing "set a password for remote access" recommendation also
+        closes /rpc/ automatically).
+
+    Two ways to authenticate, two scopes (the *authorization* of a scope against
+    the actual command happens in the dispatch view, see
+    ``twicc.rpc.permissions``):
+      - **Bearer token** (a held secret = capability) → ``RPC_SCOPE_FULL``.
+      - **Session cookie** (ambient authority — same-origin artifact pages carry
+        it automatically) → ``RPC_SCOPE_READ``, read-only commands only. A
+        cross-site POST can't ride the cookie at all (``SESSION_COOKIE_SAMESITE``
+        is ``"Lax"``), so this is the same CSRF posture as ``/api/``.
+
+    The scope is stamped on ``request.rpc_scope``; the dispatch view defaults a
+    missing attribute to full access (covers the unprotected pass-through).
     """
 
     async_capable = True
@@ -138,24 +152,48 @@ class RpcTokenAuthMiddleware:
         has_tokens = await sync_to_async(api_tokens.has_tokens)()
 
         if not password_set and not has_tokens:
-            return await self.get_response(request)  # unprotected by choice
+            request.rpc_scope = RPC_SCOPE_FULL  # unprotected by choice
+            return await self.get_response(request)
 
         provided = self._bearer(request)
         record = await sync_to_async(api_tokens.verify_token)(provided) if provided else None
-        if record is None:
-            msg = (
-                "API token required. Create one with `twicc token create`."
-                if not has_tokens
-                else "Invalid or missing API token."
-            )
-            return JsonResponse({"error": msg}, status=401)
+        if record is not None:
+            # Record last_used in memory only — no I/O on the request path. A
+            # burst of authenticated /rpc/ calls is coalesced into at most one
+            # api-tokens.json write per interval by
+            # ``twicc.auth.tokens.start_last_used_flush_task``.
+            api_tokens.note_used(record.id)
+            request.rpc_scope = RPC_SCOPE_FULL
+            return await self.get_response(request)
 
-        # Record last_used in memory only — no I/O on the request path. A burst
-        # of authenticated /rpc/ calls is coalesced into at most one
-        # api-tokens.json write per interval by
-        # ``twicc.auth.tokens.start_last_used_flush_task``.
-        api_tokens.note_used(record.id)
-        return await self.get_response(request)
+        # No valid token: fall back to the SPA's session cookie. A logged-in
+        # user's same-origin artifact page reaches /rpc/ without a token, but at
+        # read-only scope — the dispatch view enforces the command allowlist.
+        if await self._session_authenticated(request):
+            request.rpc_scope = RPC_SCOPE_READ
+            return await self.get_response(request)
+
+        msg = (
+            "API token required. Create one with `twicc token create`."
+            if not has_tokens
+            else "Invalid or missing API token."
+        )
+        return JsonResponse({"error": msg}, status=401)
+
+    @staticmethod
+    async def _session_authenticated(request) -> bool:
+        """Whether the request carries a session bound to the current password hash.
+
+        Mirrors ``PasswordAuthMiddleware``: read the auth markers async (works on
+        the event loop) and validate them against the live ``TWICC_PASSWORD_HASH``
+        (a rotated hash invalidates the session). Returns ``False`` when no
+        password is configured — there is then no authenticated-session concept,
+        so a token is the only way in.
+        """
+        session = request.session
+        auth_value = await session.aget(SESSION_AUTH_KEY)
+        fingerprint = await session.aget(SESSION_FINGERPRINT_KEY)
+        return is_session_authenticated(auth_value, fingerprint, settings.TWICC_PASSWORD_HASH)
 
     @staticmethod
     def _bearer(request):

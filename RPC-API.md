@@ -38,10 +38,14 @@ malformed body, wrong method, failed auth).
 
 ## Authentication
 
-`/rpc/` is gated by Bearer tokens, independently of the web UI's password:
+`/rpc/` accepts two kinds of credential, independently of the web UI's password:
 
 - **Neither a password nor any token configured** → `/rpc/` is open (local-only, protection opted out).
-- **A password is set, or at least one token exists** → a valid token is **mandatory**.
+- **A password is set, or at least one token exists** → a credential is **mandatory**, in one of two forms:
+  - a valid **Bearer token** → **full** access to every command;
+  - failing that, a valid **session cookie** (the one the web UI sets at login) → **read-only commands only**. Same-origin pages — including rendered artifact pages — carry this cookie automatically, so they can call read commands without minting a token. Mutating commands (`create-session`, `send-message`, the `*/stop` controls, `update-*`, `create`/`delete-*`, `artifacts bookmark/unbookmark`) and the `{"argv": […]}` body form stay token-only.
+
+A request with no valid credential gets `401`; a cookie-authenticated request to a non-read command (or the argv form) gets `403`. A cross-site request can't ride the cookie at all (the session cookie is `SameSite=Lax`), so cookie auth only ever serves the user's own same-origin pages.
 
 Mint a token locally — this command is host-only and is itself never exposed over the API:
 

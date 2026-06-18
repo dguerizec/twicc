@@ -11,10 +11,18 @@ from django.http import HttpRequest, HttpResponse
 
 from twicc.rpc.generator import build_registry, render_argv
 from twicc.rpc.invoker import invoke
+from twicc.rpc.permissions import RPC_SCOPE_FULL, RPC_SCOPE_READ, cookie_scope_allows
 
 # Child of the ``twicc`` logger, so it inherits the file handler
 # (backend.log) — unlike ``django.request``, which is not wired to it.
 logger = logging.getLogger(__name__)
+
+# Returned (403) when a cookie-authenticated (read-scope) caller tries a command
+# that is not in the read-only allowlist, or uses the ``argv`` escape hatch.
+_READ_SCOPE_DENIED = (
+    "This command requires an API token. Session-cookie authentication "
+    "(e.g. from an artifact page) is limited to read-only commands."
+)
 
 
 def _json(payload, *, status: int = 200) -> HttpResponse:
@@ -57,6 +65,15 @@ async def dispatch(request: HttpRequest, command_path: str) -> HttpResponse:
     if spec is None:
         return _json({"error": f"Unknown command: {command_path}"}, status=404)
 
+    # Authorization. The middleware authenticated the request and tagged its
+    # scope; a missing tag means the gate was bypassed for an unprotected
+    # instance, i.e. full access. A read-scope (session-cookie) caller may only
+    # reach the read-only allowlist — and never the ``argv`` escape hatch below,
+    # which would otherwise let it name any command regardless of the URL.
+    scope = getattr(request, "rpc_scope", RPC_SCOPE_FULL)
+    if scope == RPC_SCOPE_READ and not cookie_scope_allows(command_path):
+        return _json({"error": _READ_SCOPE_DENIED}, status=403)
+
     raw = request.body
     if not raw:
         body = {}
@@ -77,6 +94,12 @@ async def dispatch(request: HttpRequest, command_path: str) -> HttpResponse:
     # itself: non-empty, and its first token must be an exposed top-level command
     # (denylisted commands are absent from the registry, hence rejected).
     if isinstance(body, dict) and set(body) == {"argv"} and isinstance(body["argv"], list):
+        # The argv form picks the executed command from the body, bypassing the
+        # URL→command mapping the read-scope check above relies on. Reserve it
+        # for token callers so a cookie session can't smuggle a write command
+        # through a read-only URL.
+        if scope == RPC_SCOPE_READ:
+            return _json({"error": _READ_SCOPE_DENIED}, status=403)
         argv = [str(x) for x in body["argv"]]
         allowed_roots = {path.split("/", 1)[0] for path in build_registry()}
         if not argv or argv[0] not in allowed_roots:
