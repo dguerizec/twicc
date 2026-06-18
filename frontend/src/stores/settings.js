@@ -36,6 +36,7 @@ export const SETTINGS_SCHEMA = {
     editorWordWrap: true,
     terminalMacOptionIsMeta: false,
     compactSessionList: false,
+    showAllArtifacts: false,
     showMessageTimestamps: false,
     showArchivedSessions: false,
     showArchivedProjects: false,
@@ -120,6 +121,7 @@ const SETTINGS_VALIDATORS = {
     diffSideBySide: (v) => typeof v === 'boolean',
     editorWordWrap: (v) => typeof v === 'boolean',
     compactSessionList: (v) => typeof v === 'boolean',
+    showAllArtifacts: (v) => typeof v === 'boolean',
     showMessageTimestamps: (v) => typeof v === 'boolean',
     showArchivedSessions: (v) => typeof v === 'boolean',
     showArchivedProjects: (v) => typeof v === 'boolean',
@@ -302,6 +304,7 @@ export const useSettingsStore = defineStore('settings', {
         isDiffSideBySide: (state) => state.diffSideBySide,
         isEditorWordWrap: (state) => state.editorWordWrap,
         isCompactSessionList: (state) => state.compactSessionList,
+        isShowAllArtifacts: (state) => state.showAllArtifacts,
         areMessageTimestampsShown: (state) => state.showMessageTimestamps,
         isShowArchivedSessions: (state) => state.showArchivedSessions,
         isShowArchivedProjects: (state) => state.showArchivedProjects,
@@ -641,6 +644,17 @@ export const useSettingsStore = defineStore('settings', {
         setCompactSessionList(enabled) {
             if (SETTINGS_VALIDATORS.compactSessionList(enabled)) {
                 this.compactSessionList = enabled
+            }
+        },
+
+        /**
+         * Set whether the Artifacts sidebar list ignores the current scope and
+         * shows every bookmark (still sorted by recency). Local-only; off by default.
+         * @param {boolean} enabled
+         */
+        setShowAllArtifacts(enabled) {
+            if (SETTINGS_VALIDATORS.showAllArtifacts(enabled)) {
+                this.showAllArtifacts = enabled
             }
         },
 
@@ -1010,6 +1024,7 @@ export function initSettings() {
             diffSideBySide: store.diffSideBySide,
             editorWordWrap: store.editorWordWrap,
             compactSessionList: store.compactSessionList,
+            showAllArtifacts: store.showAllArtifacts,
             showMessageTimestamps: store.showMessageTimestamps,
             showArchivedSessions: store.showArchivedSessions,
             showArchivedProjects: store.showArchivedProjects,

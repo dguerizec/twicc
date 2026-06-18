@@ -17,6 +17,7 @@ import AppTooltip from '../ui/AppTooltip.vue'
 defineProps({
     searchQuery: { type: String, default: '' },
     compactView: { type: Boolean, default: false },
+    showAllArtifacts: { type: Boolean, default: false },
 })
 
 const emit = defineEmits([
@@ -55,6 +56,13 @@ defineExpose({ focus })
             >
                 <wa-icon name="sliders"></wa-icon>
             </wa-button>
+            <wa-dropdown-item
+                type="checkbox"
+                value="show-all-artifacts"
+                :checked="showAllArtifacts"
+            >
+                Show all (ignore scope)
+            </wa-dropdown-item>
             <wa-dropdown-item
                 type="checkbox"
                 value="compact-view"

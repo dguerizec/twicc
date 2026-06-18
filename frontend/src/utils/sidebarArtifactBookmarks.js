@@ -22,10 +22,12 @@ import { isWorkspaceProjectId } from './workspaceIds'
  * @param {string}   args.effectiveProjectId - current scope id
  * @param {string?}  args.activeWorkspaceId  - current workspace id (workspace scope)
  * @param {string[]} args.projectScopeIds    - data.getProjectScopeIds(effectiveProjectId)
+ * @param {boolean}  [args.showAll]          - ignore scope and return every bookmark
  * @returns {Array} bookmarks, flat, sorted by recency (updated_at desc)
  */
-export function computeArtifactBookmarkList({ bookmarks, workspaces, effectiveProjectId, activeWorkspaceId, projectScopeIds }) {
-    const list = Object.values(bookmarks).filter(b => {
+export function computeArtifactBookmarkList({ bookmarks, workspaces, effectiveProjectId, activeWorkspaceId, projectScopeIds, showAll = false }) {
+    const all = Object.values(bookmarks)
+    const list = showAll ? all : all.filter(b => {
         if (effectiveProjectId === ALL_PROJECTS_ID) return b.scope === 'all'
         if (isWorkspaceProjectId(effectiveProjectId)) {
             if (b.scope === 'project') return false

@@ -636,6 +636,9 @@ const showArchivedProjects = computed(() => settingsStore.isShowArchivedProjects
 // Compact view (persistent setting, browser-local via settings store)
 const compactView = computed(() => settingsStore.isCompactSessionList)
 
+// Artifacts: show every bookmark ignoring the current scope (persistent setting)
+const showAllArtifacts = computed(() => settingsStore.isShowAllArtifacts)
+
 // Always-show-active filter (persistent setting): promotes running/unread
 // sessions from other projects to the top of the sidebar regardless of the
 // current filter.
@@ -795,6 +798,8 @@ function handleSessionOptionsSelect(event) {
         settingsStore.setShowArchivedSessions(item.checked)
     } else if (value === 'compact-view') {
         settingsStore.setCompactSessionList(item.checked)
+    } else if (value === 'show-all-artifacts') {
+        settingsStore.setShowAllArtifacts(item.checked)
     } else if (value === 'show-active') {
         settingsStore.setShowActiveAcrossFilters(item.checked)
     } else if (value === 'multi-select') {
@@ -1826,6 +1831,7 @@ function updateSidebarClosedClass(closed) {
                     ref="artifactBookmarksControlsRef"
                     v-model:search-query="artifactsSearchQuery"
                     :compact-view="compactView"
+                    :show-all-artifacts="showAllArtifacts"
                     @option-select="handleSessionOptionsSelect"
                     @search-keydown="handleSearchKeydown"
                 />
@@ -1886,6 +1892,7 @@ function updateSidebarClosedClass(closed) {
                     :active-workspace-id="activeWorkspaceId"
                     :search-query="artifactsSearchQuery"
                     :compact-view="compactView"
+                    :show-all-artifacts="showAllArtifacts"
                     :active-bookmark-id="lastArtifactBookmarkId"
                     @select="onArtifactBookmarkSelect"
                     @focus-search="focusSearchInput"

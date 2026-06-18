@@ -31,6 +31,9 @@ const props = defineProps({
     activeWorkspaceId: { type: String, default: null },
     searchQuery: { type: String, default: '' },
     compactView: { type: Boolean, default: false },
+    // When true, ignore the current scope and list every bookmark (still sorted
+    // by recency). Driven by the "Show all (ignore scope)" options toggle.
+    showAllArtifacts: { type: Boolean, default: false },
     // The bookmark currently open in the main pane (route param). Marks the
     // matching row as --active (outlined/brand), like the selected session.
     activeBookmarkId: { type: [String, Number], default: null },
@@ -50,6 +53,7 @@ const list = computed(() => {
         effectiveProjectId: props.effectiveProjectId,
         activeWorkspaceId: props.activeWorkspaceId,
         projectScopeIds,
+        showAll: props.showAllArtifacts,
     })
     const q = props.searchQuery.trim()
     if (q) rows = rows.filter(b => matchQuery(q, b.name) || matchQuery(q, b.relative_path))
