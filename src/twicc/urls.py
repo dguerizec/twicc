@@ -103,6 +103,16 @@ urlpatterns = [
     # would happily serve ``index.html`` for these URLs. Authentication is
     # enforced by ``PasswordAuthMiddleware`` via its protected non-API
     # path list.
+    # Standalone password page for direct artifact access (no SPA). Public; the
+    # middleware redirects unauthenticated artifact navigations here.
+    path("artifacts/auth", auth_views.artifact_auth),
+    # Open a bookmarked artifact in its own tab, by bookmark id. The trailing
+    # slash matters: it makes the page's relative assets resolve under the
+    # bookmark's directory. ``<int:>`` keeps these from shadowing the UUID-keyed
+    # ``session_artifact`` route below, so they must precede it.
+    path("artifacts/<int:bookmark_id>", views.artifact_redirect_to_slash),
+    path("artifacts/<int:bookmark_id>/", views.artifact_serve),
+    path("artifacts/<int:bookmark_id>/<path:asset>", views.artifact_serve),
     path(
         "artifacts/<str:session_id>/<str:artifact_file_name>",
         views.session_artifact,

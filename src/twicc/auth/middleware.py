@@ -7,10 +7,11 @@ When TWICC_PASSWORD_HASH is empty/unset, all requests pass through (no protectio
 """
 
 import logging
+from urllib.parse import urlencode
 
 from asgiref.sync import markcoroutinefunction, sync_to_async
 from django.conf import settings
-from django.http import JsonResponse
+from django.http import HttpResponseRedirect, JsonResponse
 
 from twicc.auth import tokens as api_tokens
 from twicc.auth.session_auth import (
@@ -21,10 +22,13 @@ from twicc.auth.session_auth import (
 
 logger = logging.getLogger(__name__)
 
-# Paths that are always accessible (no auth required)
+# Paths that are always accessible (no auth required). ``/artifacts/auth`` is the
+# standalone password page that gates direct artifact access — it must be reachable
+# while unauthenticated, otherwise the redirect below would loop.
 PUBLIC_PATHS = (
     "/api/auth/",
     "/static/",
+    "/artifacts/auth",
 )
 
 # Non-API URL prefixes whose responses leak data and therefore require an
@@ -92,6 +96,13 @@ class PasswordAuthMiddleware:
         ):
             if auth_value:
                 await session.aflush()
+            # A protected non-API path is a top-level artifact navigation: send the
+            # browser to the standalone password page, which redirects back here
+            # after a successful login. API requests get a plain 401 JSON (the SPA
+            # drives its own login redirect).
+            if is_protected_non_api:
+                query = urlencode({"redirect": request.get_full_path()})
+                return HttpResponseRedirect(f"/artifacts/auth?{query}")
             return JsonResponse(
                 {"error": "Authentication required"},
                 status=401,

@@ -265,6 +265,7 @@ function openInSession() {
                     :render-only="true"
                     :active="true"
                     api-prefix="/api"
+                    :artifact-bookmark-session-id="bookmark.session_id"
                 />
             </div>
         </template>

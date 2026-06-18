@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 
 from django.conf import settings
 from django.db import IntegrityError
-from django.http import Http404, HttpResponse, HttpResponseNotAllowed, JsonResponse
+from django.http import Http404, HttpResponse, HttpResponseNotAllowed, HttpResponseRedirect, JsonResponse
 from django.utils import timezone
 
 from asgiref.sync import sync_to_async
@@ -3218,6 +3218,44 @@ async def artifact_bookmark_detail(request, bookmark_id):
         abs_path = confined_artifact_path(bookmark.session_id, bookmark.relative_path)
         payload["available"] = bool(abs_path and await sync_to_async(os.path.isfile)(abs_path))
     return JsonResponse(payload)
+
+
+async def artifact_redirect_to_slash(request, bookmark_id):
+    """Redirect ``/artifacts/<id>`` → ``/artifacts/<id>/`` so the page's relative
+    assets resolve under the bookmark's own directory rather than ``/artifacts/``."""
+    return HttpResponseRedirect(f"/artifacts/{bookmark_id}/")
+
+
+async def artifact_serve(request, bookmark_id, asset=""):
+    """Serve a bookmarked artifact (and its sibling assets) for opening in a tab.
+
+    ``/artifacts/<id>/``        → the bookmarked file itself (typically index.html)
+    ``/artifacts/<id>/<asset>`` → a file resolved relative to the bookmark's
+    directory, so the page's relative CSS/JS/image references load.
+
+    Auth is enforced upstream by ``PasswordAuthMiddleware`` (it redirects
+    unauthenticated requests to the standalone password page). Path confinement
+    and byte serving reuse the same helpers as the file-raw endpoints, so nothing
+    about rendering is duplicated here.
+    """
+    if request.method not in ("GET", "HEAD"):
+        return HttpResponseNotAllowed(["GET", "HEAD"])
+    try:
+        bookmark = await ArtifactBookmark.objects.aget(id=bookmark_id)
+    except ArtifactBookmark.DoesNotExist:
+        raise Http404("Bookmark not found")
+
+    from twicc.core.services.artifact_bookmark_mutation import confined_artifact_path
+
+    # Root request → the bookmarked file; asset request → relative to its dir.
+    rel = os.path.join(os.path.dirname(bookmark.relative_path), asset) if asset else bookmark.relative_path
+    abs_path = confined_artifact_path(bookmark.session_id, rel)
+    if abs_path is None:
+        raise Http404("File not found")
+    response = await asyncio.to_thread(_raw_file_response, abs_path)
+    if response is None:
+        raise Http404("File not found")
+    return response
 
 
 async def spa_index(request):
