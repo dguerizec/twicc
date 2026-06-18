@@ -3,7 +3,7 @@
 // (nav-only, like TerminalPanel) with a per-tab placement arrow and a far-right minimize
 // button; the body is a Teleport target the parent fills with the real panel(s). The region
 // holds one dockId (split) or two (merged) — its body is registered under each.
-import { computed, ref, watchEffect } from 'vue'
+import { computed, ref, watchEffect, inject, provide } from 'vue'
 import TabPlacementMenu from './TabPlacementMenu.vue'
 
 const props = defineProps({
@@ -15,6 +15,19 @@ const props = defineProps({
 const emit = defineEmits(['select', 'minimize', 'place', 'pane-focus'])
 
 const bodyRef = ref(null)
+
+// A docked panel's "expand" (FilePane full-window) is a position:fixed z-index:1000 overlay that
+// covers the viewport. It escapes its pane only because nothing traps it in a stacking context — but
+// our `isolation: isolate` (which keeps the panel's own z-index from painting over the resize
+// splitters) would trap it below them. So while a preview *in this region* is expanded we drop the
+// isolation, and chain to the host provided up the tree (ProjectView lifts `.main-content` so the
+// overlay also covers the sidebar). FilePane injects the nearest `expandPreviewHost`, i.e. this one.
+const parentExpandPreviewHost = inject('expandPreviewHost', null)
+const previewExpanded = ref(false)
+provide('expandPreviewHost', (expanded) => {
+    previewExpanded.value = expanded
+    parentExpandPreviewHost?.(expanded)
+})
 
 const style = computed(() => ({
     left: `${props.region.x}px`,
@@ -53,7 +66,7 @@ function onBodyClick() {
 </script>
 
 <template>
-    <div class="dock-region" :class="region.kind" :data-rid="region.id" :style="style">
+    <div class="dock-region" :class="[region.kind, { 'preview-expanded': previewExpanded }]" :data-rid="region.id" :style="style">
         <wa-tab-group class="dock-tabnav" :active="activeTabId" @wa-tab-show.stop="onShow">
             <wa-tab v-for="t in tabs" :key="t.id" slot="nav" :panel="t.id" class="dock-tab">
                 <wa-icon v-if="t.icon" :name="t.icon" class="dock-tab-icon"></wa-icon>
@@ -83,6 +96,10 @@ function onBodyClick() {
 <style scoped>
 .dock-region {
     position: absolute;
+    /* Own stacking context so the panel's internal z-index (sticky headers, selects, the
+       pane-callout overlay) stays local and can't paint over the resize splitters / gutters /
+       overlay, which live in the parent (.session-layout) stacking context. */
+    isolation: isolate;
     display: flex;
     flex-direction: column;
     overflow: hidden;
@@ -90,6 +107,12 @@ function onBodyClick() {
     min-width: 0;
     min-height: 0;
     --dock-border: var(--divider-size) solid var(--wa-color-surface-border, rgba(0, 0, 0, 0.12));
+}
+/* While a preview inside is expanded to full-window, drop the isolation so its position:fixed
+   z-index:1000 overlay escapes this region and covers the splitters / gutters / overlay (the host up
+   the tree lifts .main-content so it also covers the sidebar). */
+.dock-region.preview-expanded {
+    isolation: auto;
 }
 
 /* Borders sit only on inner edges (facing the center or a sibling divider); edges that touch
