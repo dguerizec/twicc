@@ -222,13 +222,13 @@ const hasGitRepo = computed(() => {
 
 const TABS = computed(() => {
     const tabs = [
-        { id: 'stats', label: 'Stats' },
-        { id: 'files', label: 'Files' },
+        { id: 'stats', label: 'Stats', icon: 'chart-simple' },
+        { id: 'files', label: 'Files', icon: 'folder' },
     ]
     if (hasGitRepo.value) {
-        tabs.push({ id: 'git', label: 'Git' })
+        tabs.push({ id: 'git', label: 'Git', icon: 'code-branch' })
     }
-    tabs.push({ id: 'terminal', label: 'Terminal' })
+    tabs.push({ id: 'terminal', label: 'Terminal', icon: 'terminal' })
     return tabs
 })
 
@@ -455,6 +455,7 @@ onBeforeUnmount(() => {
             @wa-tab-show="onTabShow"
         >
             <wa-tab v-for="tab in TABS" :key="tab.id" slot="nav" :panel="tab.id">
+                <wa-icon :name="tab.icon"></wa-icon>
                 {{ tab.label }}
             </wa-tab>
 

@@ -6,7 +6,7 @@ import { DOCKS } from '../../../utils/layoutResolver'
 export const CENTER = 'center'
 
 export const DOCK_LABELS = {
-    center: 'Center',
+    center: 'Main area',
     'left-top': 'Left top',
     'left-bottom': 'Left bottom',
     'right-top': 'Right top',
@@ -15,15 +15,17 @@ export const DOCK_LABELS = {
     'bottom-right': 'Bottom right',
 }
 
-// Icons (Font Awesome names, as used elsewhere via wa-icon) hinting the dock position.
+// Custom position-hinting icons (PyCharm-style: layout frame + a filled bar where the panel docks).
+// Local SVGs in public/icons/docks/, consumed via `<wa-icon src>`. One per placement, unlike the old
+// single shared FA glyph that couldn't distinguish the positions.
 export const DOCK_ICONS = {
-    center: 'table-columns',
-    'left-top': 'table-cells-large',
-    'left-bottom': 'table-cells-large',
-    'right-top': 'table-cells-large',
-    'right-bottom': 'table-cells-large',
-    'bottom-left': 'table-cells-large',
-    'bottom-right': 'table-cells-large',
+    center: '/icons/docks/center.svg',
+    'left-top': '/icons/docks/left-top.svg',
+    'left-bottom': '/icons/docks/left-bottom.svg',
+    'right-top': '/icons/docks/right-top.svg',
+    'right-bottom': '/icons/docks/right-bottom.svg',
+    'bottom-left': '/icons/docks/bottom-left.svg',
+    'bottom-right': '/icons/docks/bottom-right.svg',
 }
 
 // Order shown in the per-tab placement menu: Center first, then the six docks.

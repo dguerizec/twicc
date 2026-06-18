@@ -38,6 +38,8 @@ function onSelect(event) {
             <wa-icon name="chevron-down"></wa-icon>
         </wa-button>
 
+        <wa-dropdown-item disabled class="placement-header">Tab placement</wa-dropdown-item>
+        <wa-divider></wa-divider>
         <wa-dropdown-item
             v-for="opt in PLACEMENT_OPTIONS"
             :key="opt"
@@ -45,7 +47,7 @@ function onSelect(event) {
             :value="opt"
             :checked="opt === current"
         >
-            <wa-icon slot="icon" :name="DOCK_ICONS[opt]"></wa-icon>
+            <wa-icon slot="icon" :src="DOCK_ICONS[opt]"></wa-icon>
             {{ DOCK_LABELS[opt] }}
         </wa-dropdown-item>
     </wa-dropdown>

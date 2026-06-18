@@ -573,15 +573,26 @@ function switchToTab(panel) {
 // Root element of the docking area, measured by the composable.
 const sessionLayoutRef = ref(null)
 
+// Single source for the tool-tab icons (FA names) — used both as the resolver input below and by
+// the center tab strip in the template, so an icon change lives in one place.
+const TAB_ICONS = {
+    main: 'comments',
+    files: 'folder',
+    git: 'code-branch',
+    terminal: 'terminal',
+    artifacts: 'shapes',
+    orchestration: 'diagram-project',
+}
+
 // Resolver input: the dockable tool tabs (chat is the fixed center anchor; subagents are
 // center-only and not dockable, so they're excluded here).
 const layoutTabs = computed(() => {
-    const tabs = [{ id: 'main', label: 'Chat', icon: 'comments', fixedCenter: true }]
-    tabs.push({ id: 'files', label: 'Files', icon: 'folder' })
-    if (hasGitRepo.value) tabs.push({ id: 'git', label: 'Git', icon: 'code-branch' })
-    tabs.push({ id: 'terminal', label: 'Terminal', icon: 'terminal' })
-    if (hasArtifacts.value) tabs.push({ id: 'artifacts', label: 'Artifacts', icon: 'image' })
-    if (hasSpawnRoot.value) tabs.push({ id: 'orchestration', label: 'Orchestration', icon: 'diagram-project' })
+    const tabs = [{ id: 'main', label: 'Chat', icon: TAB_ICONS.main, fixedCenter: true }]
+    tabs.push({ id: 'files', label: 'Files', icon: TAB_ICONS.files })
+    if (hasGitRepo.value) tabs.push({ id: 'git', label: 'Git', icon: TAB_ICONS.git })
+    tabs.push({ id: 'terminal', label: 'Terminal', icon: TAB_ICONS.terminal })
+    if (hasArtifacts.value) tabs.push({ id: 'artifacts', label: 'Artifacts', icon: TAB_ICONS.artifacts })
+    if (hasSpawnRoot.value) tabs.push({ id: 'orchestration', label: 'Orchestration', icon: TAB_ICONS.orchestration })
     return tabs
 })
 
@@ -1390,6 +1401,7 @@ onBeforeUnmount(() => {
                 @drop="chatTabDragHover.onDrop"
                 :class="{ 'drag-hover-pending': chatTabDragHover.isPending.value }"
             >
+                <wa-icon :name="TAB_ICONS.main"></wa-icon>
                 Chat
                 <CodeCommentsIndicator :count="chatCommentsCount" :show-tooltip="false" class="tab-comments-indicator" />
                 <wa-icon
@@ -1405,6 +1417,7 @@ onBeforeUnmount(() => {
             <template v-for="tab in openSubagentTabs" :key="tab.id">
                 <wa-tab slot="nav" :panel="tab.id">
                     <span class="subagent-tab-content">
+                        <wa-icon name="robot"></wa-icon>
                         <span>Agent "{{ getAgentTabLabel(tab.agentId) }}"</span>
                         <ProcessIndicator
                             v-if="store.getProcessState(tab.agentId)"
@@ -1421,24 +1434,29 @@ onBeforeUnmount(() => {
 
             <!-- Tool tabs — shown in the center strip unless docked; arrow places them -->
             <wa-tab v-if="showInCenter('files')" slot="nav" panel="files">
+                <wa-icon :name="TAB_ICONS.files"></wa-icon>
                 Files
                 <CodeCommentsIndicator :count="filesCommentsCount" :show-tooltip="false" class="tab-comments-indicator" />
                 <TabPlacementMenu v-if="!layoutTabsMode" tab-id="files" current="center" @place="(dest) => layout.place('files', dest)" />
             </wa-tab>
             <wa-tab v-if="hasGitRepo && showInCenter('git')" slot="nav" panel="git">
+                <wa-icon :name="TAB_ICONS.git"></wa-icon>
                 Git
                 <CodeCommentsIndicator :count="gitCommentsCount" :show-tooltip="false" class="tab-comments-indicator" />
                 <TabPlacementMenu v-if="!layoutTabsMode" tab-id="git" current="center" @place="(dest) => layout.place('git', dest)" />
             </wa-tab>
             <wa-tab v-if="showInCenter('terminal')" slot="nav" panel="terminal">
+                <wa-icon :name="TAB_ICONS.terminal"></wa-icon>
                 Terminal
                 <TabPlacementMenu v-if="!layoutTabsMode" tab-id="terminal" current="center" @place="(dest) => layout.place('terminal', dest)" />
             </wa-tab>
             <wa-tab v-if="hasArtifacts && showInCenter('artifacts')" slot="nav" panel="artifacts">
+                <wa-icon :name="TAB_ICONS.artifacts"></wa-icon>
                 Artifacts
                 <TabPlacementMenu v-if="!layoutTabsMode" tab-id="artifacts" current="center" @place="(dest) => layout.place('artifacts', dest)" />
             </wa-tab>
             <wa-tab v-if="hasSpawnRoot && showInCenter('orchestration')" slot="nav" panel="orchestration">
+                <wa-icon :name="TAB_ICONS.orchestration"></wa-icon>
                 Orchestration
                 <TabPlacementMenu v-if="!layoutTabsMode" tab-id="orchestration" current="center" @place="(dest) => layout.place('orchestration', dest)" />
             </wa-tab>
