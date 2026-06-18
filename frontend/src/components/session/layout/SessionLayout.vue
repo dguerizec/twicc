@@ -6,7 +6,7 @@
 // Layout-only interactions (place, minimize, restore, gutter actions, overlay) are dispatched
 // straight to the composable's actions. Tab selection is routed, so it bubbles up as
 // 'select-tab' for the parent (which owns the route).
-import { computed } from 'vue'
+import { computed, ref, onBeforeUnmount } from 'vue'
 import DockRegion from './DockRegion.vue'
 import DockGutter from './DockGutter.vue'
 import LayoutOverlay from './LayoutOverlay.vue'
@@ -81,10 +81,59 @@ function onOverlaySelect(tabId) {
 function onOverlayClose() {
     emit('overlay-dismiss')
 }
+
+// ---- Dock resize (splitters of kind 'dock': a side column's width or the bottom's height vs the
+// center). Sibling splitters (kind 'sib') are deferred. The resolver emits each handle's geometry +
+// the math params (origin / extent / from / configKey); we draw an invisible hit strip over the
+// boundary and write the dragged fraction back to the store, which the resolver re-clamps to its px
+// mins on the next render. The fraction is part of the (ephemeral) layout intention — persistence
+// is deferred. Window-level listeners so the drag survives the re-render that repositions the
+// handle. ----
+const sessionLayoutEl = ref(null)
+const dockSplitters = computed(() => (render.value.splitters || []).filter((s) => s.kind === 'dock'))
+const draggingId = ref(null)
+
+const HANDLE = 9 // px hit-area thickness, centered on the divider line
+function splitterStyle(s) {
+    if (s.axis === 'v') {
+        return { left: `${s.x - HANDLE / 2}px`, top: `${s.y}px`, width: `${HANDLE}px`, height: `${s.h}px` }
+    }
+    return { left: `${s.x}px`, top: `${s.y - HANDLE / 2}px`, width: `${s.w}px`, height: `${HANDLE}px` }
+}
+
+let drag = null
+function onSplitterMove(event) {
+    if (!drag || !sessionLayoutEl.value) return
+    const rect = sessionLayoutEl.value.getBoundingClientRect()
+    const pointer = drag.axis === 'h' ? event.clientY - rect.top : event.clientX - rect.left
+    const frac = (drag.from === 'end' ? drag.origin - pointer : pointer - drag.origin) / drag.extent
+    props.layout.setResizeFraction(drag.configKey, frac)
+}
+function endDrag() {
+    drag = null
+    draggingId.value = null
+    window.removeEventListener('pointermove', onSplitterMove)
+    window.removeEventListener('pointerup', endDrag)
+    document.body.style.userSelect = ''
+    document.body.style.cursor = ''
+}
+function onSplitterDown(event, s) {
+    event.preventDefault()
+    // The dragged side column wins the squeeze when both are shown (resolver computes it first).
+    if (s.configKey === 'leftColFrac') props.layout.setActiveResize('left')
+    else if (s.configKey === 'rightColFrac') props.layout.setActiveResize('right')
+    drag = { axis: s.axis, origin: s.axis === 'h' ? s.originY : s.originX, from: s.from || 'start', extent: s.extent, configKey: s.configKey }
+    draggingId.value = s.id
+    window.addEventListener('pointermove', onSplitterMove)
+    window.addEventListener('pointerup', endDrag)
+    document.body.style.userSelect = 'none'
+    document.body.style.cursor = s.axis === 'v' ? 'col-resize' : 'row-resize'
+}
+onBeforeUnmount(endDrag)
 </script>
 
 <template>
-    <div class="session-layout" :class="rootClasses">
+    <div ref="sessionLayoutEl" class="session-layout" :class="rootClasses">
         <div class="center-slot" :style="centerStyle">
             <slot></slot>
         </div>
@@ -110,6 +159,15 @@ function onOverlayClose() {
                 :open-overlay-edge="openOverlayEdge"
                 @action="onGutterAction"
             />
+
+            <div
+                v-for="s in dockSplitters"
+                :key="s.id"
+                class="layout-splitter"
+                :class="[`axis-${s.axis}`, { dragging: draggingId === s.id }]"
+                :style="splitterStyle(s)"
+                @pointerdown="onSplitterDown($event, s)"
+            ></div>
 
             <LayoutOverlay
                 v-if="overlay"
@@ -171,4 +229,26 @@ body.sidebar-closed .session-layout.mode-widescreen.has-left-gutter :deep(.dock-
 body.sidebar-closed .session-layout :deep(.dock-gutter.left .g-group.end) {
     padding-block-end: var(--sidebar-toggle-clearance-y);
 }
+
+/* Dock resize handles: an invisible hit strip over a column/center or bottom/center boundary. The
+   divider line itself is the adjacent region's border; the ::after is only the grab affordance,
+   revealed on hover and during the drag. Below the gutters (12) and overlay (11) so those win. */
+.layout-splitter {
+    position: absolute;
+    z-index: 5;
+    touch-action: none;
+}
+.layout-splitter.axis-v { cursor: col-resize; }
+.layout-splitter.axis-h { cursor: row-resize; }
+.layout-splitter::after {
+    content: '';
+    position: absolute;
+    background: var(--wa-color-brand-fill-loud);
+    opacity: 0;
+    transition: opacity 0.12s ease;
+}
+.layout-splitter.axis-v::after { top: 0; bottom: 0; left: 50%; transform: translateX(-50%); width: 2px; }
+.layout-splitter.axis-h::after { left: 0; right: 0; top: 50%; transform: translateY(-50%); height: 2px; }
+.layout-splitter:hover::after { opacity: 0.5; }
+.layout-splitter.dragging::after { opacity: 1; }
 </style>

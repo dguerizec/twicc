@@ -316,6 +316,25 @@ tab is a tool tab that is *definitively* absent — not present AND ready"); bei
 data loads and the watcher redirects. Verified live in Chrome: cold load of `/git`, `/artifacts`,
 `/orchestration` on a session lacking each now redirects to chat; a git-bearing session stays on `/git`.
 
+### Dock resize — drag splitters (step 1 of 2)
+The resolver already emitted `splitters` (geometry + math params: `origin` / `extent` / `from` /
+`configKey`); this wires the `kind:'dock'` ones into the UI — drag a side column's width or the bottom
+region's height against the center. `SessionLayout` renders an invisible 9px hit-strip over each
+boundary (`.layout-splitter`; a brand line on hover/drag — the divider itself stays the region border),
+and a pointer drag writes the dragged fraction to the store, fed to the resolver as a `config` override
+(`resolveLayout` re-clamps to its px mins each render — `centerResizeMinW` etc.). Window-level
+pointermove/up so the drag survives the re-render that repositions the handle; the dragged side sets
+`activeResize` (it wins the squeeze). Math ported verbatim from the playground minus its preview
+`scale`: `frac = (from==='end' ? origin - pointer : pointer - origin) / extent`. Store: an ephemeral
+`resizeFractions` map (`configKey -> number`) on the per-session layout intention +
+`setLayoutResizeFraction`; the composable passes it as `config` and exposes `setActiveResize` /
+`setResizeFraction`. Custom hit-strips (not `wa-split-panel`) sidestep the `wa-reposition` trap.
+Validated live in Chrome (synthetic drags): left-dock (`axis-v`/`from-start`) and bottom-dock
+(`axis-h`/`from-end`) move the boundary **1:1** with the cursor (exact px), correct direction, clean
+cursor/selection teardown; right-dock (`axis-v`/`from-end`) covered by composition (its two branches
+each validated). **Sibling splitters (`kind:'sib'`) are step 2.** Fractions are ephemeral (reset on
+reload) until persistence lands.
+
 ## Bugs found & fixed live (don't reintroduce)
 
 1. **`props.layout.render` is a ref** — `SessionLayout` must read composable refs via `.value`
@@ -375,8 +394,10 @@ data loads and the watcher redirects. Verified live in Chrome: cold load of `/gi
 - **Focus model polish:** tab lifecycle (run work on "became visible/focused", not on tab activation).
   The file-clears-on-blur, focus-race, overlay-focus and route-derivation work is **done** (see the
   route/focus + 2026-06-18 sections) — this is just the remaining "lifecycle hooks" idea.
-- **Resize UI:** sibling splitters + dock splitters (resolver emits `splitters`; UI wiring deferred,
-  watch `wa-split-panel`/`wa-reposition` traps).
+- **Resize UI:** **dock splitters done** (drag a side column's width / the bottom's height vs the
+  center — `kind:'dock'`, live, validated; see 2026-06-18 section). **Sibling splitters (`kind:'sib'`)
+  remain** (between two vertical / bottom siblings). Custom hit-strips, not `wa-split-panel` (so the
+  `wa-reposition` trap is sidestepped). Fractions are ephemeral (persistence deferred).
 - **Persistence:** persist the intention; 3-tier resolution at creation (mirror
   `projectAgentDefaults.js` → `_resolveDraftAgentSettings` → `useSessionAgentSettings`); synced +
   IndexedDB; per-device localStorage override (v2). Includes **remembering an absent tab's dock**

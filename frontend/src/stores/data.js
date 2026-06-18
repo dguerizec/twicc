@@ -400,9 +400,11 @@ export const useDataStore = defineStore('data', {
             sessionOpenTabs: {},
 
             // Dockable layout intention per session (ephemeral; persistence deferred).
-            // { sessionId: { assignment: { tabId: dockId }, collapsed: [dockId],
-            //                activeSide, activeResize, activeByGroup: { groupKey: tabId } } }
-            // Geometry is NOT stored here — it's recomputed by the pure layout resolver.
+            // { sessionId: { assignment: { tabId: dockId }, collapsed: [dockId], activeSide,
+            //                activeResize, activeByGroup: { groupKey: tabId },
+            //                resizeFractions: { configKey: number } } }
+            // Geometry is NOT stored here — only the user's drag intention (fractions). The pure
+            // layout resolver recomputes px from these (clamped) on every render.
             sessionLayout: {},
 
             // Agent links cache - maps tool_id to agent_id for Task tool_use items
@@ -3366,6 +3368,7 @@ export const useDataStore = defineStore('data', {
                     activeSide: 'left',
                     activeResize: 'left',
                     activeByGroup: {},
+                    resizeFractions: {},
                 }
             }
             return this.localState.sessionLayout[sessionId]
@@ -3399,9 +3402,15 @@ export const useDataStore = defineStore('data', {
             this.ensureSessionLayout(sessionId).activeSide = side
         },
 
-        /** Which column has priority while resizing (unused until resize UI lands). */
+        /** Which column has priority while resizing (the dragged side wins; the other is squeezed). */
         setLayoutActiveResize(sessionId, side) {
             this.ensureSessionLayout(sessionId).activeResize = side
+        },
+
+        /** Set a draggable layout fraction (e.g. leftColFrac, bottomFrac) — fed to the resolver as a
+         *  config override. Geometry stays computed; only the intention (the 0..1 fraction) is kept. */
+        setLayoutResizeFraction(sessionId, key, value) {
+            this.ensureSessionLayout(sessionId).resizeFractions[key] = value
         },
 
         /** Remember the active tab within a region group (groupKey from groupKeyOf). */

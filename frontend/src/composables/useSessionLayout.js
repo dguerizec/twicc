@@ -24,6 +24,7 @@ const EMPTY_INTENTION = Object.freeze({
     activeSide: 'left',
     activeResize: 'left',
     activeByGroup: Object.freeze({}),
+    resizeFractions: Object.freeze({}),
 })
 
 // Stable key for a region's active-tab memory. 'center' for the center; otherwise the
@@ -58,6 +59,7 @@ export function useSessionLayout({ sessionId, containerRef, tabs, routeActiveTab
         activeSide: intention.value.activeSide,
         activeResize: intention.value.activeResize,
         collapsed: intention.value.collapsed,
+        config: intention.value.resizeFractions,
     }))
 
     // The multi-region layout actually renders only when something is docked, the area is
@@ -146,6 +148,10 @@ export function useSessionLayout({ sessionId, containerRef, tabs, routeActiveTab
     function rememberActive(groupKey, tabId) {
         store.setLayoutGroupActiveTab(sessionId.value, groupKey, tabId)
     }
+    // Resize intention. `activeResize` picks which side column wins when both are shown and space is
+    // tight; `setResizeFraction` writes a draggable fraction (configKey -> 0..1) the resolver clamps.
+    function setActiveResize(side) { store.setLayoutActiveResize(sessionId.value, side) }
+    function setResizeFraction(key, value) { store.setLayoutResizeFraction(sessionId.value, key, value) }
 
     // Route drives the focus → keep the active tab visible: reveal it if its dock is minimized
     // (restore) or its side lost mutual exclusion (swap its column in). Then record it as its
@@ -169,5 +175,6 @@ export function useSessionLayout({ sessionId, containerRef, tabs, routeActiveTab
         targetKeyForTab, isToolPanelVisible, overlayEdgeForTab,
         openOverlayEdge, routeActiveTabId,
         place, minimize, restore, swapSide, rememberActive,
+        setActiveResize, setResizeFraction,
     }
 }
