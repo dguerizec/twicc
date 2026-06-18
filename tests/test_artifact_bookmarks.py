@@ -378,3 +378,32 @@ def test_unallow_host_endpoint_removes_entry(client, session, project):
     assert res.status_code == 200
     bm.refresh_from_db()
     assert bm.allowed_hosts == {}
+
+
+# ── Broker HTML wrapping on the dedicated page (artifact_serve) — phase 3 ──────
+
+
+def test_artifact_serve_wraps_top_level_html(client, session, project, artifacts_root):
+    _write_artifact(artifacts_root, "sess-ab", "demo/index.html",
+                    b"<html><head></head><body>hi</body></html>")
+    bm = ArtifactBookmark.objects.create(
+        session=session, project=project, relative_path="demo/index.html",
+        name="Demo", scope=PinMode.PROJECT,
+    )
+    res = _run(client.get(f"/artifacts/{bm.id}/"))
+    assert res.status_code == 200
+    assert "connect-src 'none'" in res["Content-Security-Policy"]
+    assert b"artifact-broker-shim" in res.content
+
+
+def test_artifact_serve_asset_is_served_raw(client, session, project, artifacts_root):
+    _write_artifact(artifacts_root, "sess-ab", "demo/index.html", b"<html></html>")
+    _write_artifact(artifacts_root, "sess-ab", "demo/app.js", b"console.log(1)")
+    bm = ArtifactBookmark.objects.create(
+        session=session, project=project, relative_path="demo/index.html",
+        name="Demo", scope=PinMode.PROJECT,
+    )
+    res = _run(client.get(f"/artifacts/{bm.id}/app.js"))
+    assert res.status_code == 200
+    # A sub-asset is never wrapped: no broker CSP header.
+    assert not res.has_header("Content-Security-Policy")

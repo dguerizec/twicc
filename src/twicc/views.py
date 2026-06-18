@@ -1763,6 +1763,33 @@ def _raw_file_response(normalized_path: str):
     return response
 
 
+def _serve_artifact_file(normalized_path: str, *, as_document: bool):
+    """Serve an artifact file, wrapping it with the network broker when it is the
+    top-level HTML *document* (``as_document``) — shim injected + strict CSP
+    (design §7/§8). Sub-assets and non-HTML keep streaming raw via
+    :func:`_raw_file_response`. Returns ``None`` for a non-regular/unreadable
+    file (→ 404). Sync (file I/O): call via ``asyncio.to_thread`` like the raw
+    path."""
+    import stat
+
+    if as_document and _guess_raw_content_type(normalized_path) == "text/html":
+        try:
+            st = os.stat(normalized_path)
+        except OSError:
+            return None
+        if not stat.S_ISREG(st.st_mode):
+            return None
+        try:
+            with open(normalized_path, "rb") as fp:
+                html = fp.read()
+        except OSError:
+            return None
+        from twicc.artifacts.broker_html import artifact_html_response
+
+        return artifact_html_response(html)
+    return _raw_file_response(normalized_path)
+
+
 def _normalize_raw_filepath(filepath: str) -> str:
     """Turn a ``<path:filepath>`` capture into a normalized absolute path."""
     return os.path.normpath("/" + filepath.lstrip("/"))
@@ -1787,7 +1814,10 @@ async def file_raw(request, project_id, filepath, session_id=None):
     if error:
         return error
 
-    response = await asyncio.to_thread(_raw_file_response, normalized)
+    from twicc.artifacts.broker_html import is_artifact_document_request
+
+    as_document = is_artifact_document_request(request.headers.get("Sec-Fetch-Dest"))
+    response = await asyncio.to_thread(_serve_artifact_file, normalized, as_document=as_document)
     if response is None:
         raise Http404("File not found")
     return response
@@ -1825,7 +1855,10 @@ async def standalone_file_raw(request, root_b64, filepath):
         if resolved != resolved_root and not resolved.startswith(resolved_root + os.sep):
             raise Http404("File not found")
 
-    response = await asyncio.to_thread(_raw_file_response, normalized)
+    from twicc.artifacts.broker_html import is_artifact_document_request
+
+    as_document = is_artifact_document_request(request.headers.get("Sec-Fetch-Dest"))
+    response = await asyncio.to_thread(_serve_artifact_file, normalized, as_document=as_document)
     if response is None:
         raise Http404("File not found")
     return response
@@ -3294,7 +3327,9 @@ async def artifact_serve(request, bookmark_id, asset=""):
     abs_path = confined_artifact_path(bookmark.session_id, rel)
     if abs_path is None:
         raise Http404("File not found")
-    response = await asyncio.to_thread(_raw_file_response, abs_path)
+    # The bookmarked top-level file (asset == "") is the artifact document → wrap
+    # it with the broker (shim + CSP); sibling assets stream raw.
+    response = await asyncio.to_thread(_serve_artifact_file, abs_path, as_document=(asset == ""))
     if response is None:
         raise Http404("File not found")
     return response
