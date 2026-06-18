@@ -528,6 +528,7 @@ const showOverlay = computed(() => {
 // mode (the Artifacts view, no header toolbar), via a floating toggle.
 const isPreviewFullscreen = ref(false)
 const previewFullscreenButtonId = `preview-fullscreen-${useId()}`
+const previewOpenTabButtonId = `preview-open-tab-${useId()}`
 
 // Provided by ProjectView: toggles .main-content--preview-expanded so the
 // in-place fixed overlay can cover the whole window (sidebar included). Absent
@@ -550,6 +551,15 @@ const hasActivePreview = computed(() =>
 
 function togglePreviewFullscreen() {
     isPreviewFullscreen.value = !isPreviewFullscreen.value
+}
+
+// Open the HTML page on its own tab via the raw endpoint (same origin, so assets
+// resolve to sibling raw URLs like the iframe does). Unlike the sandboxed preview
+// iframe, it then runs as a full unsandboxed page — the point: a real, freely
+// usable interactive page. `noopener` keeps it from reaching back into TwiCC.
+function openHtmlInNewTab() {
+    if (!rawFileUrl.value) return
+    window.open(rawFileUrl.value, '_blank', 'noopener')
 }
 
 // Escape exits full-window. Capture phase + stopPropagation so it unwraps the
@@ -1249,20 +1259,37 @@ function goToNextDiff() {
                     <video :key="filePath" :src="rawFileUrl" controls class="video-preview"></video>
                 </div>
 
-                <!-- Floating expand / compress toggle (all preview types). -->
-                <wa-button
-                    :id="previewFullscreenButtonId"
-                    class="preview-fullscreen-toggle"
-                    size="small"
-                    variant="neutral"
-                    appearance="filled"
-                    @click="togglePreviewFullscreen"
-                >
-                    <wa-icon :name="isPreviewFullscreen ? 'compress' : 'expand'"></wa-icon>
-                </wa-button>
-                <AppTooltip :for="previewFullscreenButtonId">
-                    {{ isPreviewFullscreen ? 'Exit full screen' : 'Full screen' }}
-                </AppTooltip>
+                <!-- Floating actions, top-right of the preview: open the page in a new
+                     tab (HTML only — there it runs as a real, unsandboxed page) and the
+                     expand / compress toggle (all preview types). -->
+                <div class="preview-actions">
+                    <template v-if="showHtmlPreview && isHtmlFile && rawFileUrl && !diffMode">
+                        <wa-button
+                            :id="previewOpenTabButtonId"
+                            class="preview-action-btn"
+                            size="small"
+                            variant="neutral"
+                            appearance="filled"
+                            @click="openHtmlInNewTab"
+                        >
+                            <wa-icon name="up-right-from-square"></wa-icon>
+                        </wa-button>
+                        <AppTooltip :for="previewOpenTabButtonId">Open in new tab</AppTooltip>
+                    </template>
+                    <wa-button
+                        :id="previewFullscreenButtonId"
+                        class="preview-action-btn"
+                        size="small"
+                        variant="neutral"
+                        appearance="filled"
+                        @click="togglePreviewFullscreen"
+                    >
+                        <wa-icon :name="isPreviewFullscreen ? 'compress' : 'expand'"></wa-icon>
+                    </wa-button>
+                    <AppTooltip :for="previewFullscreenButtonId">
+                        {{ isPreviewFullscreen ? 'Exit full screen' : 'Full screen' }}
+                    </AppTooltip>
+                </div>
             </div>
 
             <!-- CodeMirror diff editor (diff mode) -->
@@ -1465,16 +1492,20 @@ function goToNextDiff() {
 /* Floating expand/compress toggle, pinned to the preview's top-right corner,
    above the preview content so it stays clickable over an iframe. Subtle at
    rest, solid on hover. */
-.preview-fullscreen-toggle {
+.preview-actions {
     position: absolute;
     top: var(--wa-space-s);
     right: var(--wa-space-s);
     z-index: 2;
+    display: flex;
+    gap: var(--wa-space-2xs);
+}
+.preview-action-btn {
     opacity: 0.6;
     transition: opacity 0.15s ease;
 }
-.preview-fullscreen-toggle:hover,
-.file-pane-preview:hover .preview-fullscreen-toggle {
+.preview-action-btn:hover,
+.file-pane-preview:hover .preview-action-btn {
     opacity: 1;
 }
 
