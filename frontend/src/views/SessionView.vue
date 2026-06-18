@@ -597,11 +597,18 @@ function isCenterTab(tabId) {
     if (tabId === 'main' || tabId.startsWith('agent-')) return true
     return showInCenter(tabId)
 }
-// The center strip's active tab: the routed tab when it lives in the center, otherwise the
-// last center tab (so focusing a docked tab doesn't blank the center).
+// The center strip's active tab: the routed tab when it lives in the center, otherwise the last
+// center tab (so focusing a docked tab doesn't blank the center). The remembered tab can itself
+// have just left the center: when you dock the very tab the center was showing, its route stays
+// (it's now active in the dock) but it's no longer a center tab, and `lastCenterTab` still points
+// at it. Re-validate the fallback and drop back to Chat ('main', always center-only) so the center
+// re-selects a visible tab — without touching the route.
 const lastCenterTab = ref('main')
 watch(activeTabId, (id) => { if (id && isCenterTab(id)) lastCenterTab.value = id }, { immediate: true })
-const centerActiveTab = computed(() => isCenterTab(activeTabId.value) ? activeTabId.value : lastCenterTab.value)
+const centerActiveTab = computed(() => {
+    if (isCenterTab(activeTabId.value)) return activeTabId.value
+    return isCenterTab(lastCenterTab.value) ? lastCenterTab.value : 'main'
+})
 
 // Whether a tool panel is the visible one at its destination (drives its :active prop).
 function isToolTabShown(tabId) {
