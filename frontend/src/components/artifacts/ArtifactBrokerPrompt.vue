@@ -84,7 +84,7 @@ const calloutText = computed(() => {
         <div slot="footer" class="broker-prompt-footer">
             <p class="broker-prompt-question">Do you want to allow this connection?</p>
             <div class="broker-prompt-actions">
-                <wa-button @click="emit('decision', 'deny')">Deny</wa-button>
+                <wa-button @click="emit('decision', 'deny')">No, deny</wa-button>
                 <wa-button v-if="prompt?.canRemember" @click="emit('decision', 'forever')">Yes, forever</wa-button>
                 <wa-button variant="brand" @click="emit('decision', 'session')">Yes, this session</wa-button>
             </div>
