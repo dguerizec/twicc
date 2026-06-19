@@ -11,7 +11,7 @@ import { computeUsageData } from '../utils/usage'
 import { useSettingsStore } from '../stores/settings'
 import { getProviderHelpers, getProviderLabel, getProviderIcon, getProviderWsHandler, getProviderStore } from '../providers'
 import { playNotificationSound, sendBrowserNotification, isPageActive } from '../utils/notificationSounds'
-import { installPresenceHeartbeat } from '../utils/presence'
+import { installPresenceHeartbeat, isLocallyPresent } from '../utils/presence'
 import { truncateTitle } from '../utils/truncate'
 import { toWorkspaceProjectId } from '../utils/workspaceIds'
 
@@ -130,9 +130,22 @@ if (!__hmrState.visibilityListenerInstalled) {
 // log a "not initialized" warning on every attempt. Presence resumes on the
 // next ping after reconnect.
 if (!__hmrState.presenceHeartbeatInstalled) {
-    installPresenceHeartbeat((data) => {
-        if (__hmrState.wsSendFn) sendWsMessage(data)
-    })
+    installPresenceHeartbeat(
+        (data) => {
+            if (__hmrState.wsSendFn) sendWsMessage(data)
+        },
+        // On resumed local activity, refresh "viewed" for the session currently
+        // on the route. Covers the case where the user steps away and returns
+        // without any focus/visibility change (the window stayed focused), which
+        // no other path would catch — otherwise the session would stay falsely
+        // unread while the user is looking right at it. Throttled + gated inside
+        // notifySessionViewed; the resolved isPageActive() holds because input
+        // only reaches a focused, visible tab.
+        () => {
+            const sessionId = __hmrState.currentRouteSessionId
+            if (sessionId) notifySessionViewed(sessionId, 'presence-active')
+        },
+    )
     __hmrState.presenceHeartbeatInstalled = true
 }
 
@@ -263,20 +276,34 @@ function _sendSessionViewed(sessionId, reason) {
  * were made during the throttle period. This ensures last_viewed_at stays
  * fresh even when content arrives shortly after navigation.
  * @param {string} sessionId - The session ID
+ * @param {string} reason - Why this notification is being sent (for debugging)
+ * @param {object} [options]
+ * @param {boolean} [options.requirePresence=false] - When true, only mark viewed
+ *   if a human is genuinely present here (isLocallyPresent()), not merely if the
+ *   tab is visible+focused. Use for passive auto-marks so an unattended desktop
+ *   does not steal the global last_viewed_at from the user's actual device.
  */
-export function notifySessionViewed(sessionId, reason) {
+export function notifySessionViewed(sessionId, reason, { requirePresence = false } = {}) {
     if (!sessionId) return
     // Skip when the page is not actively watched (tab hidden or window unfocused).
     // The visibility listener installed at module load handles flushing on hide
     // and re-marking on return, so there's nothing more to do here.
     if (!isPageActive()) return
+    // For passive auto-marks (assistant finished, items streaming in), also
+    // require a genuinely present human on this device — a tab left visible+
+    // focused but unattended must NOT advance the (global) last_viewed_at, or it
+    // steals "read" from the device where the user actually is. Explicit marks
+    // (navigation, focus return) pass requirePresence=false and are unaffected.
+    if (requirePresence && !isLocallyPresent()) return
 
     // Clear any cancellation from a previous mark-unread action
     __hmrState.cancelledViewedThrottles.delete(sessionId)
 
-    // Store the latest reason so the throttled callback can use it
+    // Store the latest reason + presence requirement so the throttled callback can use them
     __hmrState.lastViewedReason = __hmrState.lastViewedReason || {}
     __hmrState.lastViewedReason[sessionId] = reason
+    __hmrState.lastViewedRequirePresence = __hmrState.lastViewedRequirePresence || {}
+    __hmrState.lastViewedRequirePresence[sessionId] = requirePresence
 
     // Get or create throttled function for this session
     if (!__hmrState.throttledViewedNotifications.has(sessionId)) {
@@ -287,6 +314,9 @@ export function notifySessionViewed(sessionId, reason) {
             // the timestamp would otherwise mask new content that arrived while
             // the tab was hidden, leaving the session falsely marked as read.
             if (!isPageActive()) return
+            // Same presence requirement on the trailing edge: the user may have
+            // stepped away during the 30s window while the tab kept focus.
+            if (__hmrState.lastViewedRequirePresence?.[sessionId] && !isLocallyPresent()) return
             _sendSessionViewed(sessionId, __hmrState.lastViewedReason?.[sessionId] || 'throttle-trailing')
         }, 30000, true) // 30s throttle, trailing=true (leading=true by default)
         __hmrState.throttledViewedNotifications.set(sessionId, throttledFn)
@@ -301,13 +331,19 @@ export function notifySessionViewed(sessionId, reason) {
  * Used when leaving a session (onDeactivated) to ensure last_viewed_at
  * is up to date before the session becomes visible in the sidebar as potentially unread.
  * @param {string} sessionId - The session ID
+ * @param {string} reason - Why this notification is being sent (for debugging)
+ * @param {object} [options]
+ * @param {boolean} [options.requirePresence=false] - See notifySessionViewed.
  */
-export function forceNotifySessionViewed(sessionId, reason) {
+export function forceNotifySessionViewed(sessionId, reason, { requirePresence = false } = {}) {
     if (!sessionId) return
     // Skip when the page is not actively watched. The visibility listener
     // already handles flushing/marking on tab transitions, so all the public
     // entry points stay gated symmetrically — only the listener bypasses.
     if (!isPageActive()) return
+    // Passive auto-marks (assistant finished) also require a present human, so
+    // an unattended-but-focused desktop does not advance the global last_viewed_at.
+    if (requirePresence && !isLocallyPresent()) return
     // Skip if cancelled by mark-unread (e.g. onDeactivated fires after mark-unread navigates away)
     if (__hmrState.cancelledViewedThrottles.has(sessionId)) return
     // Cancel any pending trailing throttle call to prevent a stale session_viewed
@@ -539,9 +575,10 @@ function notifyProcessStateChange(msg, previousState, route) {
         const isViewingSession = route?.params?.sessionId === sessionId
         // If viewing the session, force-update last_viewed_at immediately.
         // This prevents stale state if the user locks their phone or switches
-        // apps before the trailing throttle call fires.
+        // apps before the trailing throttle call fires. requirePresence: a
+        // desktop left open+focused but unattended must not auto-mark read here.
         if (isViewingSession) {
-            forceNotifySessionViewed(sessionId, 'process-user-turn')
+            forceNotifySessionViewed(sessionId, 'process-user-turn', { requirePresence: true })
         }
         // In-app toast when the user is on TwiCC but not viewing this session
         if (!isViewingSession && !__hmrState.activeUserTurnToasts.has(sessionId)) {
@@ -933,9 +970,11 @@ export function useWebSocket() {
                     store.addSessionItems(msg.session_id, msg.items, msg.updated_metadata)
                 }
                 // If user is currently viewing this session, mark as viewed (throttled
-                // with trailing edge, so last_viewed_at stays fresh as content arrives)
+                // with trailing edge, so last_viewed_at stays fresh as content arrives).
+                // requirePresence: without it, an unattended desktop would mark read via
+                // the final streamed item, defeating the unattended-device guard.
                 if (route.params.sessionId === msg.session_id) {
-                    notifySessionViewed(msg.session_id, 'items-added')
+                    notifySessionViewed(msg.session_id, 'items-added', { requirePresence: true })
                 }
                 break
             case 'process_state': {

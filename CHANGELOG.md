@@ -18,6 +18,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Fixed
 
 - **Claude Code** — usage sync recovers when the OAuth token cache is stale.
+- **Unread sessions** — an idle device left open no longer marks your sessions read.
 
 ## [1.8.3] - 2026-06-15
 

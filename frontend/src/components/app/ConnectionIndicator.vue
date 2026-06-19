@@ -1,6 +1,7 @@
 <script setup>
 import { computed } from 'vue'
 import AppTooltip from '../ui/AppTooltip.vue'
+import { localPresence } from '../../utils/presence'
 
 const props = defineProps({
     status: {
@@ -17,7 +18,17 @@ const statusConfig = {
     CLOSED: { label: 'Disconnected', color: 'var(--wa-color-danger)' }
 }
 
-const config = computed(() => statusConfig[props.status] || statusConfig.CLOSED)
+const config = computed(() => {
+    const base = statusConfig[props.status] || statusConfig.CLOSED
+    // Connected but no human active at this client → blue instead of green, with
+    // an "(Away)" hint in the tooltip. Lets you confirm the presence signal (used
+    // to suppress auto "mark as read" on an unattended device) is working. Other
+    // states keep their own color.
+    if (props.status === 'OPEN' && !localPresence.value) {
+        return { label: `${base.label} (Away)`, color: 'var(--wa-color-blue-60)' }
+    }
+    return base
+})
 </script>
 
 <template>
