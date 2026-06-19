@@ -111,7 +111,7 @@ Four layers. Three are enforcement/transport; the security boundary is the serve
                     │  • block metadata (absolute)    │
                     │  • report TRUE target to host   │
                     │  • per-bookmark host allowlist  │
-                    │  • strips TwiCC cookie outbound │
+                    │  • forwards headers (pass-thru) │
                     │  • size/timeout caps            │
                     └───────────────┬─────────────────┘
                                     ▼  (no CORS server-side)
@@ -185,7 +185,7 @@ Decided (O1): `POST /api/artifact-proxy/` (under `/api/`, so the existing auth g
   "request": {
     "url": "https://api.example.com/data?…",
     "method": "GET",            // any HTTP method: GET/POST/PUT/PATCH/DELETE/…
-    "headers": { "accept": "application/json", … },   // see 6.5 (filtered)
+    "headers": { "accept": "application/json", … },   // see 6.5 (pass-through)
     "body": "…"                  // base64 or text; omit for GET/HEAD
   }
 }
@@ -193,7 +193,7 @@ Decided (O1): `POST /api/artifact-proxy/` (under `/api/`, so the existing auth g
 
 Preflight response (resolution only, no outbound call): `{ "target": { "ip": "203.0.113.5", "kind": "public" | "loopback" | "lan" } }`, so the host can show the **true** destination in the prompt. If the target is the metadata address: `{ "error": "blocked", "reason": "metadata" }` — never reachable; the host renders it as refused, with no allow option.
 
-Fetch response: `{ "status": 200, "statusText": "OK", "headers": {…filtered…}, "body": "…" }` (body base64 for binary). Errors use a distinct shape the host can present (e.g. `{ "error": "blocked", "reason": "metadata" }`, or `{ "error": "upstream", … }`).
+Fetch response: `{ "status": 200, "statusText": "OK", "headers": {…pass-through…}, "body": "…" }` (body base64 for binary). Errors use a distinct shape the host can present (e.g. `{ "error": "blocked", "reason": "metadata" }`, or `{ "error": "upstream", … }`).
 
 > Why not GET with `?url=`? Avoid putting target URLs (and any embedded tokens) in query strings/logs; POST keeps them in the body. Also dovetails with the privacy rule "never place sensitive data in URL params."
 
@@ -222,23 +222,24 @@ Use an async client already in the stack's orbit (the backend already does outbo
 - `grant: "once"` lets the host authorize a single call to a host that is not in the persisted list. Acceptable trust-wise for a single-user tool: the iframe physically cannot call the proxy (its CSP is `connect-src 'none'`), so the proxy's caller is always the trusted host. "Allow once" **may** reach an internal target (`localhost`, LAN) — that is intended, with the user's informed consent on the honest prompt — but the **metadata block always applies** and the fetch is pinned to the exact approved IP, so consent can never be rerouted.
 - Borrow the *rule shape* from KrakenJS `fetch-robot` (archived — do **not** depend on it): allow entries keyed by `origin`/`domain`/`path`/`method`/`headers`, default `credentials: omit`. For v1 the key is **`scheme` + `host` + `port`** (no per-path/method rules — deferred). **Port-by-port, not host-wide:** approving one port does **not** authorize the others. This matters most for internal hosts, where the port *is* the service — approving `localhost:9000` (a user's local tool) must never silently grant `localhost:5432` (their database) or `localhost:3502` (TwiCC itself). **Normalize the port** to its effective value (the explicit port, or the scheme default — 443/80 — when implicit) so matching is exact on `(scheme, host, port)` and an entry without an explicit port can't match a different one. Each entry's value is a small object recording the **approved kind** (`public`/`loopback`/`lan`) for the rebinding re-prompt (§6.2) — a security annotation, not per-path granularity, so it does not reopen O4 (storage shape: §10).
 
-### 6.5 Header & credential hygiene
+### 6.5 Header policy — pass-through (the broker imposes nothing)
 
-- **Strip the TwiCC session cookie** (and any TwiCC auth header) from the outbound request — never forward ambient authority to a third party.
-- Forward only a safe subset of request headers (default like fetch-robot: `accept`, `accept-language`, `content-language`, `content-type`); drop hop-by-hop and identity headers unless explicitly allowlisted.
-- Return only a safe subset of response headers to the host.
-- Per-host **secrets** (a user-stored API key injected for a given host) are a **separate, larger feature** — out of scope here. Note it as future work (§10).
+Headers are **forwarded as-is**. An artifact may legitimately send any header — an `Authorization` token, a custom `X-…`, whatever its API needs — and it is **not the broker's place** to decide what it may use. The user has already consented to the host; deciding *how* the artifact talks to it would be an arbitrary developer-imposed limit. The only headers dropped are **mechanical**, never policy:
 
-### 6.6 Same-origin requests (the artifact's own assets) are NOT brokered
+- **Request:** `host` (we set the real vhost from the pinned target) and `content-length` (httpx recomputes it from the body), plus hop-by-hop headers (RFC 7230 §6.1: `connection`, `keep-alive`, `transfer-encoding`, …).
+- **Response:** `content-length` and `content-encoding` (httpx already content-decoded the streamed body, so a stale value would corrupt it), plus hop-by-hop.
 
-The artifact must reach its **own** files (its `data.json`, etc.) without a prompt. Two cases, handled differently:
+The **TwiCC session cookie is a non-issue** on this path: a browser `fetch` does not expose the cookie in `Request.headers`, and JS cannot set a `Cookie` header — so it never reaches the proxy. Authenticated calls to TwiCC's **own** origin are made **host-direct in the browser** (where the browser attaches the session), never through this proxy — see §6.6. Per-host **secrets** (a user-stored API key injected for a given host) remain a separate, larger feature — out of scope here (§10).
+
+### 6.6 Same-origin requests — own assets auto-served, the rest promptable host-direct
+
+Same-origin requests split by *where they point*, and the execution differs from cross-origin — but the **policy is uniform**: only the metadata address is ever blocked, everything else is reachable with per-host consent.
 
 - **Tag-based loads** (`<img src>`, `<script src>`, `<link rel=stylesheet>`, `<audio>`, …) are governed by `img-src`/`script-src`/`style-src`/… `'self'` — **not** `connect-src`. They load directly and never touch the shim or the broker.
-- **`fetch`/XHR to the artifact's own files** (`fetch('./data.json')`) *is* a `connect-src` call → blocked by `'none'` → intercepted by the shim → handed to the host. The host detects that the resolved URL is **same-origin within the artifact's own confined path** and serves it **directly**: the host is trusted TwiCC code, not under the iframe's CSP — in the SPA it fetches the existing `file-raw` endpoint; in the dedicated page the shell fetches the inner-doc path. **No prompt, no server proxy, no SSRF check** — it is a confined read of the artifact's own bundle.
+- **`fetch`/XHR to the artifact's own files** (`fetch('./data.json')`) *is* a `connect-src` call → blocked by `'none'` → intercepted by the shim → handed to the host. The host detects the URL is **same-origin within the artifact's own directory** and serves it **host-direct, no prompt**: a confined read of the artifact's own bundle (the host is trusted SPA code, not under the iframe CSP — in the SPA it fetches `file-raw`; in the dedicated page the shell fetches the inner-doc path).
+- **`fetch`/XHR to any other same-origin URL** — TwiCC's own API (`/api/…`, `/rpc/…`), etc. — is **not blocked**. It is brokered like any other target: the host shows the **same honest per-host prompt** (the origin resolves to `127.0.0.1` → shown as loopback, no app-specific labelling), and on consent runs the request **host-direct**. Running it in the browser (not the server proxy) is what lets the browser **attach your TwiCC session** — so an artifact that reads/writes TwiCC's own API works exactly as the API's own auth intends (cookie for writes, token for reads — and the artifact's `Authorization` header is forwarded, §6.5). This is the user's deliberate choice: on a single-user self-hosted tool, the operator clicking the prompt *is* the authority; forbidding the artifact from talking to TwiCC would be an arbitrary developer-imposed limit.
 
-  **Confinement is mandatory.** Same-origin auto-serve is restricted to the artifact's own directory (reuse `confined_artifact_path`). A same-origin URL that escapes that scope — `/api/…`, another session's artifacts, the proxy endpoint itself — is **denied**, so this channel can never be turned into "the widget calls TwiCC's own API with the ambient session cookie."
-
-The dividing line for the whole feature: *same-origin within the artifact → host serves locally (confined, no prompt); cross-origin → prompt + allowlist + server proxy + SSRF guard.* Only cross-origin requests are "brokered."
+The dividing line is now about **execution**, not permission: *same-origin → host-direct (own dir: no prompt; otherwise: prompt); cross-origin → prompt + server proxy + IP pin.* The metadata block and the per-host consent apply to every brokered path.
 
 ---
 
@@ -295,6 +296,8 @@ Goal: the agent writes **normal** `fetch`/`XHR` code, third-party libs work unch
 
 The shim must execute **before any artifact script** (no race). Since TwiCC serves the HTML, inject server-side: when serving an artifact **HTML document** (the shared helper from §7), parse the bytes and insert `<script src="/<stable>/artifact-broker-shim.js"></script>` as the **first child of `<head>`** (or inline the script). This requires special-casing `text/html` in the serving path: `_raw_file_response` currently streams raw bytes via `FileResponse`; for the HTML *document* you'll instead read+inject+return an `HttpResponse` (sub-assets keep streaming untouched). Do this only for the top-level document, not for every file.
 
+**Distinguishing the top-level document from a sub-asset** (only the document is wrapped): `artifact_serve` (dedicated page) uses `asset == ""` (the bookmarked root file). The two `file_raw` endpoints (in-SPA preview) read the browser's **`Sec-Fetch-Dest`** request header — `iframe`/`document` ⇒ wrap; `script`/`style`/`image`/`empty` (a sub-resource or a `fetch`) ⇒ raw; absent (non-browser client) ⇒ raw. No frontend marker needed.
+
 ### 8.4 The shim is DX, not security
 
 A determined artifact can still obtain an un-patched network primitive (a fresh iframe, a worker, an exotic sink). **That's fine:** CSP `connect-src 'none'` (+ inheritance + `worker-src 'none'`) means any such attempt is **blocked**, not leaked. So the shim only needs to cover the *happy path* (`fetch` + `XHR`, which is what libraries use); the CSP covers everything it misses. Worst case of a missed sink = a broken request, never an escape.
@@ -306,9 +309,9 @@ A determined artifact can still obtain an un-patched network primitive (a fresh 
 One shared module, two mounts (SPA wrapper, dedicated shell). Responsibilities:
 
 1. **penpal parent** exposing `proxyFetch(req)`.
-2. On a call: **first, if the request is same-origin within the artifact's own confined path, serve it directly — no prompt, no proxy (see §6.6).** Otherwise resolve the artifact's persisted allowlist (from the bookmark). If the target host is allowed → call the server proxy (fetch mode); if the proxy reports the freshly-resolved **kind changed** from the approved one (§6.2), treat it as unknown and re-prompt instead of resolving silently, otherwise resolve. If not → **preflight the proxy** to get the true resolved target (IP + kind), then **show the prompt** built from that real destination, **with the port shown** — e.g. "Allow `localhost:9000` → `127.0.0.1` (this server's localhost)?" (Allow once / Allow this `scheme://host:port` for this artifact / Deny). If the preflight reports the metadata address, render it as refused (no allow option). Keep the penpal promise pending meanwhile (this is the "pause"). On:
-   - **Allow once** → call the proxy with `grant:"once"`, resolve.
-   - **Allow forever** → persist the normalized `scheme://host:port` (+ its kind) onto the bookmark (PATCH endpoint, §10), then call the proxy, resolve.
+2. On a call: **first, if the request is same-origin within the artifact's own directory, serve it host-direct — no prompt (see §6.6).** Otherwise resolve the artifact's persisted allowlist (from the bookmark) and **preflight the proxy** for the true resolved target (IP + kind). If the host is already allowed and the freshly-resolved **kind is unchanged** → proceed; a **kind change** (rebind, §6.2) falls through to a fresh prompt. If not allowed → **show the prompt** built from that real destination, **with the port shown** — e.g. "Allow `localhost:9000` → `127.0.0.1` (this server's localhost)?" (Allow once / Allow this `scheme://host:port` for this artifact / Deny). If the preflight reports the metadata address, render it as refused (no allow option). Keep the penpal promise pending meanwhile (this is the "pause"). **Execution after consent:** a **same-origin** target runs **host-direct** (the browser attaches your TwiCC session → authenticated); a **cross-origin** target goes through the **server proxy** (fetch mode, IP-pinned). On:
+   - **Allow once** → perform the request (host-direct or proxy `grant:"once"` per above), resolve.
+   - **Allow forever** → persist the normalized `scheme://host:port` (+ its kind) onto the bookmark (PATCH endpoint, §10), then perform the request, resolve.
    - **Deny** → reject the penpal promise (the widget's `fetch` rejects; widget handles or fails gracefully).
 3. Concurrency: queue/batch multiple pending prompts for different hosts.
 
@@ -327,7 +330,7 @@ One shared module, two mounts (SPA wrapper, dedicated shell). Responsibilities:
   ```
   - Migration required (remind the user to run it; `devctl.py start` auto-applies — never run `migrate` by hand to bring servers up).
   - Extend `serialize_artifact_bookmark` (`src/twicc/core/serializers.py`).
-  - Add an endpoint (or extend `artifact_bookmark_detail` PATCH, `src/twicc/views.py` ~3177) to append/remove an allowed host. Route mutations through the shared service `twicc/core/services/artifact_bookmark_mutation.py` so the CLI drop-request path stays aligned (existing pattern: `kind="artifact_bookmark:upsert"`).
+  - Endpoint: `POST`/`DELETE /api/artifact-bookmarks/<id>/allowed-hosts/` (add/remove). The write goes through the shared service `twicc/core/services/artifact_bookmark_mutation.py` (lock + broadcast: `add_artifact_allowed_host` / `remove_artifact_allowed_host`), but — **unlike** the bookmark upsert/delete — there is **deliberately no drop-request `kind`**: granting a widget network egress is a **human-consent** act, so the browser host is the only caller, never an agent/CLI surface (mirrors the codebase's "trust is human, not agent-facing" stance).
 - **New backend module** for the proxy + resolution/metadata guard (e.g. `src/twicc/artifacts/proxy.py` — the `twicc.artifacts` package already exists for artifact-facing web resources). Keep the classifier a small, unit-testable pure function (`classify_ip(ip) -> "metadata" | "loopback" | "lan" | "public"`); `metadata` ⇒ hard block, the rest ⇒ promptable with the kind shown to the user.
 - **New routes** in `src/twicc/urls.py`: the proxy endpoint; the dedicated-page shell (or adapt `artifact_serve` to serve the shell at `/artifacts/<id>/` and the raw doc at a sub-path).
 - **Frontend deps:** `@mswjs/interceptors` and `penpal` (remind the user to `npm install`; `devctl.py start` runs `npm ci` via the editable rebuild — never pre-run it). New shared host module + shim bundle (the shim must be buildable to a standalone JS file served at a stable URL).
@@ -376,7 +379,7 @@ All five open questions were settled with the user. These are the authoritative 
 
 - **O1 — Endpoint placement & shell shape → one shared endpoint, both contexts built together.** The proxy is a single `POST /api/artifact-proxy/` shared by the SPA wrapper and the dedicated shell (artifact identity in the body → also covers non-bookmarked previews; under `/api/` unauth is a JSON 401; in both contexts the caller already holds the session cookie — the dedicated page obtained it via `artifact_auth` at `/artifacts/auth`). The dedicated page and the in-SPA preview are implemented **together**, not phased: `/artifacts/<id>/` stops serving `index.html` directly and serves a trusted **shell** that embeds the real artifact in an inner iframe. The inner-doc path naming (e.g. `_doc/`) and whether the shell is a Django template (like `artifact_auth.html`) are implementation cosmetics, not decisions. See §5, §6.1.
 - **O2 — Non-bookmarked HTML previews → broker works, "allow once" only.** The broker is available for any served HTML artifact. "Allow this host forever" is offered **only** when the artifact is bookmarked (the only place to persist the allowlist). Without a bookmark the prompt offers "allow once" / "deny" only. See §9.
-- **O3 — Loopback/LAN policy → uniform per-host prompt; only the cloud metadata address is hard-blocked.** No range blocking, no on/off flag, no deployment detection. Every target the widget requests — `localhost`, LAN, or public — goes through the **same** informed prompt (allow once / allow forever per host:port / deny). The server resolves the hostname, pins the IP, and the prompt shows the **true** resolved destination, so a name can't masquerade as an innocent public host while pointing at the server's own loopback/LAN. The **only** unconditional, non-overridable block is the cloud metadata address (`169.254.169.254` + equivalents). Rationale: TwiCC is single-user self-hosted (the operator *is* the person clicking the prompt); the access method (local vs tunnel) is irrelevant because resolution is server-side; and the deployment cannot be auto-detected to justify any other default. The artifact's own same-origin assets are unaffected — they are not brokered (§6.6). See §3.5, §6.2.
+- **O3 — Loopback/LAN policy → uniform per-host prompt; only the cloud metadata address is hard-blocked.** No range blocking, no on/off flag, no deployment detection. Every target the widget requests — `localhost`, LAN, or public — goes through the **same** informed prompt (allow once / allow forever per host:port / deny). The server resolves the hostname, pins the IP, and the prompt shows the **true** resolved destination, so a name can't masquerade as an innocent public host while pointing at the server's own loopback/LAN. The **only** unconditional, non-overridable block is the cloud metadata address (`169.254.169.254` + equivalents). Rationale: TwiCC is single-user self-hosted (the operator *is* the person clicking the prompt); the access method (local vs tunnel) is irrelevant because resolution is server-side; and the deployment cannot be auto-detected to justify any other default. This is uniform even for **TwiCC's own origin**: the artifact's own files auto-serve (no prompt), but any other same-origin URL (TwiCC's own API) is promptable like everything else — no special case, no developer-imposed limit, only metadata is forbidden (§6.6). See §3.5, §6.2.
 - **O4 — Allowlist granularity → `scheme+host+port`, port-by-port, for v1.** Entries are keyed on scheme + host + the **normalized** port (scheme default when implicit), matched exactly — approving one port does **not** authorize another (`localhost:9000` ≠ `localhost:5432`), which is what keeps an approved local tool from silently exposing the DB / TwiCC itself. The prompt shows `host:port`. Per-path/method rules are deferred. See §6.4.
 - **O5 — CSP rollout → all HTML artifacts, immediately.** The strict CSP applies to every served HTML artifact from the start. No retro-compat concern (artifacts are not deployed anywhere yet), so no "gate behind broker presence" and no grandfathering: every served HTML artifact gets the injected shim **and** the strict CSP together — there is no "artifact without broker", so any widget needing the network always has the broker available. See §7.
 

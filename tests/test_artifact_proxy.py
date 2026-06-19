@@ -115,46 +115,50 @@ def test_resolve_target_raises_when_name_does_not_resolve():
 # --- header hygiene -----------------------------------------------------------
 
 
-def test_filter_request_headers_keeps_only_safe_subset():
+def test_filter_request_headers_forwards_artifact_headers():
+    # Pass-through policy: the artifact's own headers — including Authorization
+    # and arbitrary custom ones — are forwarded verbatim. It is not the broker's
+    # place to decide what an artifact may send (the user consents per host).
+    # Only mechanical headers are dropped: `host` (we set the real vhost),
+    # `content-length` (httpx recomputes), and hop-by-hop headers.
     out = filter_request_headers(
         {
             "Accept": "application/json",
-            "Accept-Language": "en",
-            "Content-Type": "application/json",
-            "X-Whatever": "keep-me-not",
+            "Authorization": "Bearer token-123",
+            "X-Custom": "keep-me",
+            "Host": "twicc.local",
+            "Content-Length": "42",
+            "Connection": "keep-alive",
         }
     )
     assert out == {
         "accept": "application/json",
-        "accept-language": "en",
-        "content-type": "application/json",
+        "authorization": "Bearer token-123",
+        "x-custom": "keep-me",
     }
 
 
-def test_filter_request_headers_strips_ambient_authority():
-    # The TwiCC session cookie and any auth header must NEVER leave for a third
-    # party — that is the whole point of the broker stripping credentials.
-    out = filter_request_headers(
-        {
-            "Cookie": "twicc_session=secret",
-            "Authorization": "Bearer secret",
-            "Host": "twicc.local",
-            "Accept": "text/html",
-        }
-    )
-    assert out == {"accept": "text/html"}
-
-
-def test_filter_response_headers_drops_set_cookie():
+def test_filter_response_headers_forwards_but_drops_mechanical():
+    # Response headers are handed back as-is except the ones that would mismatch
+    # the re-serialized body: httpx already content-decoded the stream, so a
+    # stale `content-encoding`/`content-length` would corrupt it; hop-by-hop is
+    # connection-scoped. Nothing is dropped on policy grounds — `set-cookie` is
+    # inert once reconstructed into a Response object, so it is forwarded too.
     out = filter_response_headers(
         {
             "Content-Type": "application/json",
-            "Set-Cookie": "evil=1",
-            "X-Internal": "leak",
+            "X-Custom": "keep-me",
+            "Set-Cookie": "foo=1",
+            "Content-Encoding": "gzip",
+            "Content-Length": "99",
+            "Transfer-Encoding": "chunked",
         }
     )
-    assert "set-cookie" not in {k.lower() for k in out}
-    assert out.get("content-type") == "application/json"
+    assert out == {
+        "content-type": "application/json",
+        "x-custom": "keep-me",
+        "set-cookie": "foo=1",
+    }
 
 
 # --- proxy_fetch: pinned outbound request, no redirect, size cap --------------
@@ -169,12 +173,12 @@ def _mock_client(handler, captured=None):
     return httpx.AsyncClient(transport=httpx.MockTransport(_wrapped))
 
 
-def test_proxy_fetch_pins_ip_preserves_host_and_strips_cookie():
+def test_proxy_fetch_pins_ip_preserves_host_and_forwards_headers():
     captured = {}
     client = _mock_client(
         lambda r: httpx.Response(
             200,
-            headers={"content-type": "application/json", "set-cookie": "evil=1"},
+            headers={"content-type": "application/json"},
             content=b'{"ok":true}',
         ),
         captured,
@@ -183,7 +187,7 @@ def test_proxy_fetch_pins_ip_preserves_host_and_strips_cookie():
         proxy_fetch(
             method="GET",
             url="https://api.example.com:8443/data",
-            headers={"Cookie": "twicc_session=secret", "Accept": "application/json"},
+            headers={"Authorization": "Bearer t", "Accept": "application/json"},
             body=None,
             pinned_ip="8.8.8.8",
             client=client,
@@ -192,12 +196,11 @@ def test_proxy_fetch_pins_ip_preserves_host_and_strips_cookie():
     req = captured["request"]
     assert req.url.host == "8.8.8.8"                       # connection pinned to the IP
     assert req.headers["host"] == "api.example.com:8443"  # original vhost preserved
-    assert "cookie" not in req.headers                    # ambient authority stripped
+    assert req.headers["authorization"] == "Bearer t"     # artifact header forwarded
     assert req.extensions.get("sni_hostname") == "api.example.com"  # TLS SNI / cert host
     assert isinstance(result, ProxyResult)
     assert result.status == 200
     assert result.body == b'{"ok":true}'
-    assert "set-cookie" not in {k.lower() for k in result.headers}
     _run(client.aclose())
 
 

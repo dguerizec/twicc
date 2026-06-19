@@ -124,44 +124,58 @@ def normalize_host_key(url: str) -> str:
     return f"{scheme}://{host}:{port}"
 
 
-# Request headers forwarded outbound. Everything else is dropped — notably the
-# TwiCC session cookie and any auth header (never forward ambient authority),
-# plus hop-by-hop and identity headers. `Host` is set from the pinned target,
-# not forwarded. Same default safe set as KrakenJS fetch-robot.
-_REQUEST_HEADER_ALLOWLIST = frozenset(
-    {"accept", "accept-language", "content-language", "content-type"}
-)
+# Header policy is **pass-through** (design §6.5): an artifact may legitimately
+# send any header (an `Authorization` token, a custom `X-…`, …), and it is not
+# the broker's place to decide what it may use — the user consents per host. We
+# only drop what is *mechanically* wrong to forward, never on policy grounds.
+#
+# The TwiCC session cookie is a non-issue here: a browser `fetch` does not expose
+# it in `Request.headers` and JS cannot set a `Cookie` header, so it never
+# reaches the proxy. (Authenticated calls to TwiCC's *own* origin go host-direct
+# in the browser — never through this proxy — see §6.6.)
 
-# Response headers handed back to the host. Conservative subset — never
-# `set-cookie` (would let a third party set cookies on the TwiCC origin).
-_RESPONSE_HEADER_ALLOWLIST = frozenset(
+# Hop-by-hop headers (RFC 7230 §6.1) — connection-scoped, never forwarded end to
+# end on either side.
+_HOP_BY_HOP = frozenset(
     {
-        "content-type",
-        "content-language",
-        "content-length",
-        "cache-control",
-        "expires",
-        "etag",
-        "last-modified",
+        "connection",
+        "keep-alive",
+        "proxy-authenticate",
+        "proxy-authorization",
+        "te",
+        "trailer",
+        "transfer-encoding",
+        "upgrade",
     }
 )
 
+# Outbound request: drop hop-by-hop plus the two we control mechanically —
+# `host` (set from the pinned target's real vhost) and `content-length`
+# (recomputed by httpx from the body we hand it).
+_REQUEST_DROP = _HOP_BY_HOP | {"host", "content-length"}
+
+# Inbound response: drop hop-by-hop plus the two that would mismatch the
+# re-serialized body — httpx already content-decoded the stream, so a stale
+# `content-encoding` would make the browser try to decode plain bytes, and a
+# stale `content-length` would mismatch.
+_RESPONSE_DROP = _HOP_BY_HOP | {"content-length", "content-encoding"}
+
 
 def filter_request_headers(headers: dict[str, str]) -> dict[str, str]:
-    """Keep only the safe outbound request headers (lower-cased keys)."""
+    """Forward the artifact's request headers verbatim, minus mechanical ones."""
     return {
         key.lower(): value
         for key, value in headers.items()
-        if key.lower() in _REQUEST_HEADER_ALLOWLIST
+        if key.lower() not in _REQUEST_DROP
     }
 
 
 def filter_response_headers(headers: dict[str, str]) -> dict[str, str]:
-    """Keep only the safe response headers handed back to the host (lower-cased)."""
+    """Hand back the upstream response headers, minus mechanical ones."""
     return {
         key.lower(): value
         for key, value in headers.items()
-        if key.lower() in _RESPONSE_HEADER_ALLOWLIST
+        if key.lower() not in _RESPONSE_DROP
     }
 
 

@@ -1,6 +1,7 @@
 <script setup>
 import { ref, watch, computed, nextTick, useId, inject, onMounted, onBeforeUnmount } from 'vue'
 import { apiFetch } from '../../utils/api'
+import { mountBrokerHost } from '../../artifact-broker/host'
 import { useSettingsStore } from '../../stores/settings'
 import { useCommandRegistry } from '../../composables/useCommandRegistry'
 import { usePanZoom } from '../../composables/usePanZoom'
@@ -11,6 +12,7 @@ import CodeEditor from '../editor/CodeEditor.vue'
 import DiffEditor from '../editor/DiffEditor.vue'
 import TextSelectionComment from '../session/detail/TextSelectionComment.vue'
 import ArtifactBookmarkButton from '../artifacts/ArtifactBookmarkButton.vue'
+import ArtifactBrokerPrompt from '../artifacts/ArtifactBrokerPrompt.vue'
 import { useDataStore } from '../../stores/data'
 import { useTextSelectionComment } from '../../composables/useTextSelectionComment'
 
@@ -287,6 +289,66 @@ const artifactBookmark = computed(() =>
         ? dataStore.artifactBookmarkFor(props.artifactBookmarkSessionId, relativeArtifactPath.value)
         : null,
 )
+
+// --- Network broker (design §9) ---------------------------------------------
+// Wire the host onto the preview <iframe>: the artifact's fetch/XHR (caught by
+// the injected shim) is brokered here — own assets served locally, cross-origin
+// gated behind the allowlist + a consent prompt, then sent to the server proxy.
+const previewIframeRef = ref(null)
+const brokerPrompt = ref(null) // { host, ip, kind, canRemember, settle } | null
+let brokerConnection = null
+
+// The host calls this to ask the user; resolves once (button click or dismiss).
+function showBrokerPrompt(target) {
+    return new Promise((resolve) => {
+        let done = false
+        const settle = (decision) => {
+            if (done) return
+            done = true
+            brokerPrompt.value = null
+            resolve(decision)
+        }
+        brokerPrompt.value = { ...target, settle }
+    })
+}
+
+function onBrokerDecision(decision) {
+    brokerPrompt.value?.settle(decision)
+}
+
+async function persistBrokerAllow(url, kind) {
+    const id = artifactBookmark.value?.id
+    if (id == null) return
+    await apiFetch(`/api/artifact-bookmarks/${id}/allowed-hosts/`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ url, kind }),
+    })
+}
+
+function teardownBroker() {
+    if (brokerConnection) {
+        brokerConnection.destroy()
+        brokerConnection = null
+    }
+    onBrokerDecision('deny') // resolve any prompt left hanging
+}
+
+function setupBroker() {
+    teardownBroker()
+    const iframe = previewIframeRef.value
+    if (!iframe || !isHtmlPreviewActive.value || !htmlPreviewSrc.value) return
+    brokerConnection = mountBrokerHost(iframe, {
+        documentUrl: new URL(htmlPreviewSrc.value, location.href).href,
+        bookmarkId: artifactBookmark.value?.id ?? null,
+        allowedHosts: artifactBookmark.value?.allowed_hosts ?? {},
+        showPrompt: showBrokerPrompt,
+        persistAllow: persistBrokerAllow,
+    })
+}
+
+watch([previewIframeRef, htmlPreviewSrc, isHtmlPreviewActive], setupBroker, { flush: 'post' })
+onBeforeUnmount(teardownBroker)
 
 // --- Edit mode state ---
 const isEditing = ref(false)
@@ -1216,12 +1278,16 @@ function goToNextDiff() {
                      top-level navigation, popups and modals are not allowed. -->
                 <iframe
                     v-if="showHtmlPreview && isHtmlFile && htmlPreviewSrc && !diffMode"
+                    ref="previewIframeRef"
                     :key="filePath"
                     :src="htmlPreviewSrc"
                     class="html-preview"
                     sandbox="allow-scripts allow-same-origin allow-forms"
                     title="HTML preview"
                 ></iframe>
+
+                <!-- Network-broker consent prompt for the preview iframe (§9). -->
+                <ArtifactBrokerPrompt :prompt="brokerPrompt" @decision="onBrokerDecision" />
 
                 <!-- Mermaid preview (when toggled on for .mmd files) — rendered to a
                      pan/zoomable SVG, same in-panel interaction as a rendered image. -->
