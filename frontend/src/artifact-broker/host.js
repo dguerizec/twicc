@@ -58,14 +58,15 @@ async function callProxy(body) {
  *
  * @param {object} opts
  * @param {string} opts.documentUrl  The artifact document's URL (to recognize its own same-origin assets).
- * @param {number|null} opts.bookmarkId  The bookmark id, or null for a non-bookmarked preview.
+ * @param {() => (number|null)} opts.getBookmarkId  Returns the *current* bookmark id (or null). Evaluated per prompt / per call — a bookmark can be created or removed while the artifact stays open (the host is not re-created on a bookmark change), and "Forever" must reflect the live state.
  * @param {object} opts.allowedHosts  The persisted allowlist `{ "scheme://host:port": { kind } }`.
  * @param {(target: {host: string, ip: string, kind: string, canRemember: boolean}) => Promise<'session'|'forever'|'deny'>} opts.showPrompt
  * @param {(url: string, kind: string) => Promise<void>} [opts.persistAllow]  Persist "allow forever" (bookmarked only).
  */
-export function createBrokerHost({ documentUrl, bookmarkId, allowedHosts, showPrompt, persistAllow }) {
+export function createBrokerHost({ documentUrl, getBookmarkId, allowedHosts, showPrompt, persistAllow }) {
     const allowed = { ...(allowedHosts || {}) }
-    const canRemember = bookmarkId != null && typeof persistAllow === 'function'
+    const canPersist = typeof persistAllow === 'function'
+    const currentBookmarkId = () => (typeof getBookmarkId === 'function' ? getBookmarkId() : null)
     // The directory the artifact lives under; its own assets resolve below it.
     const ownDir = new URL('.', documentUrl).href
 
@@ -91,6 +92,11 @@ export function createBrokerHost({ documentUrl, bookmarkId, allowedHosts, showPr
         if (pendingGate[key]) return pendingGate[key]
         const run = gateChain.then(async () => {
             if (isAllowed(key, target.kind)) return // approved while we waited
+            // Evaluated per prompt: "Forever" is offered only if there is a
+            // bookmark to persist onto *right now* — un-bookmarking while the
+            // artifact stays open must drop the option (and bookmarking must add
+            // it) without a reload.
+            const canRemember = canPersist && currentBookmarkId() != null
             const decision = await showPrompt({
                 host: key, ip: target.ip, kind: target.kind, canRemember,
             })
@@ -137,7 +143,7 @@ export function createBrokerHost({ documentUrl, bookmarkId, allowedHosts, showPr
         // only the cloud metadata address is ever blocked; everything else is
         // reachable with the user's per-host consent. Resolve the true target
         // first (honest prompt + pin for the cross-origin proxy).
-        const pre = await callProxy({ bookmark_id: bookmarkId, mode: 'preflight', request: req })
+        const pre = await callProxy({ bookmark_id: currentBookmarkId(), mode: 'preflight', request: req })
         if (pre.error) throw new Error(`blocked: ${pre.reason || pre.error}`)
         const target = pre.target // { ip, kind }
         const key = normalizeHostKey(req.url)
@@ -156,7 +162,7 @@ export function createBrokerHost({ documentUrl, bookmarkId, allowedHosts, showPr
         if (sameOrigin) return await hostDirectFetch(req)
 
         const res = await callProxy({
-            bookmark_id: bookmarkId,
+            bookmark_id: currentBookmarkId(),
             mode: 'fetch',
             grant: 'once',
             pinned_ip: target.ip,

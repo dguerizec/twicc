@@ -35,7 +35,7 @@ const { brokerPrompt, onBrokerDecision } = useArtifactBroker(
     iframeRef,
     () => ({
         documentUrl: new URL(props.innerDocUrl, location.href).href,
-        bookmarkId: props.bookmarkId,
+        getBookmarkId: () => props.bookmarkId,
         allowedHosts: props.allowedHosts,
         persistAllow,
     }),

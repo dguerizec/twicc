@@ -315,7 +315,9 @@ const { brokerPrompt, onBrokerDecision } = useArtifactBroker(
         isHtmlPreviewActive.value && htmlPreviewSrc.value
             ? {
                   documentUrl: new URL(htmlPreviewSrc.value, location.href).href,
-                  bookmarkId: artifactBookmark.value?.id ?? null,
+                  // Getter, not a snapshot: bookmarking / un-bookmarking while the
+                  // preview stays open must change whether "Forever" is offered.
+                  getBookmarkId: () => artifactBookmark.value?.id ?? null,
                   allowedHosts: artifactBookmark.value?.allowed_hosts ?? {},
                   persistAllow: persistBrokerAllow,
               }
