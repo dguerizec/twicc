@@ -306,7 +306,7 @@ A determined artifact can still obtain an un-patched network primitive (a fresh 
 
 ## 9. Component 4 — the host (broker + prompt UI)
 
-One shared module, two mounts (SPA wrapper, dedicated shell). Responsibilities:
+One shared module, two mounts (SPA wrapper, dedicated shell) — **and one shared wiring**: the host-mount + prompt + persist logic lives in a single composable (`useArtifactBroker`), so the dedicated page is *identical* to the in-SPA preview, not a parallel re-implementation. This is a hard requirement — an artifact must behave the same whether embedded in TwiCC or opened in its isolated page. Responsibilities:
 
 1. **penpal parent** exposing `proxyFetch(req)`.
 2. On a call: **first, if the request is same-origin within the artifact's own directory, serve it host-direct — no prompt (see §6.6).** Otherwise resolve the artifact's persisted allowlist (from the bookmark) and **preflight the proxy** for the true resolved target (IP + kind). If the host is already allowed and the freshly-resolved **kind is unchanged** → proceed; a **kind change** (rebind, §6.2) falls through to a fresh prompt. If not allowed → **show the prompt** built from that real destination, **with the port shown** — e.g. "Allow `localhost:9000` → `127.0.0.1` (this server's localhost)?" (Deny / **This session** / **Forever**). If the preflight reports the metadata address, render it as refused (no allow option). Keep the penpal promise pending meanwhile (this is the "pause"). **Execution after consent:** a **same-origin** target runs **host-direct** (the browser attaches your TwiCC session → authenticated); a **cross-origin** target goes through the **server proxy** (fetch mode, IP-pinned). On:
