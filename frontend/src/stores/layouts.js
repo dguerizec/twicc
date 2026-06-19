@@ -17,6 +17,13 @@ function sanitizeIntention(intention) {
     }
 }
 
+// Display order for layouts everywhere they are listed (menus, selectors, manager): alphabetical by
+// name. The stored `state.layouts` keeps insertion order (mutations use it directly); only the
+// display getters sort.
+function sortByName(layouts) {
+    return [...layouts].sort((a, b) => a.name.localeCompare(b.name))
+}
+
 export const useLayoutsStore = defineStore('layouts', {
     state: () => ({
         layouts: [],              // Array of { id, name, intention: { assignment, collapsed, resizeFractions } }
@@ -24,17 +31,17 @@ export const useLayoutsStore = defineStore('layouts', {
     }),
 
     getters: {
-        /** All named layouts, in their stored order. */
-        getAllLayouts: (state) => state.layouts,
+        /** All named layouts, alphabetical by name (display order). */
+        getAllLayouts: (state) => sortByName(state.layouts),
 
         /** A named layout by id (the synthetic single pane is NOT in here). */
         getLayoutById: (state) => (id) => state.layouts.find((l) => l.id === id) || null,
 
-        /** Everything selectable: the synthetic single pane first, then the named layouts. Drives
-         *  every layout picker (session selector, and — later — the project/global default pickers). */
+        /** Everything selectable: the synthetic single pane first, then the named layouts (alphabetical).
+         *  Drives every layout picker (session selector, project/global default pickers). */
         selectableLayouts: (state) => [
             { id: SINGLE_PANE_ID, name: SINGLE_PANE_NAME, synthetic: true },
-            ...state.layouts,
+            ...sortByName(state.layouts),
         ],
 
         /** Resolve an id to a (deep-cloned) intention. ``single-pane`` and any unknown / dangling id

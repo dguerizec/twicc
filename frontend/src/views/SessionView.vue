@@ -22,7 +22,8 @@ import TabPlacementMenu from '../components/session/layout/TabPlacementMenu.vue'
 import LayoutMenu from '../components/session/layout/LayoutMenu.vue'
 import LayoutSaveDialog from '../components/session/layout/LayoutSaveDialog.vue'
 import LayoutManagerDialog from '../components/session/layout/LayoutManagerDialog.vue'
-import { useLayoutsStore } from '../stores/layouts'
+import { useLayoutsStore, SINGLE_PANE_ID } from '../stores/layouts'
+import { ancestorChain } from '../utils/projectAgentDefaults'
 import AppTooltip from '../components/ui/AppTooltip.vue'
 import ProcessIndicator from '../components/ui/ProcessIndicator.vue'
 import CodeCommentsIndicator from '../components/ui/CodeCommentsIndicator.vue'
@@ -745,6 +746,38 @@ const currentLayoutTemplate = computed(() => store.getSessionLayoutTemplate(sess
 function onSelectLayout(layoutId) {
     store.loadLayoutIntoSession(sessionId.value, layoutsStore.intentionForId(layoutId))
 }
+
+// Scope-default rows for the layout menu: the default layout resolved at each distinct level of the
+// session's project chain — worktree (the project itself, when it's a worktree), project (the main
+// repo / nearest path ancestor that sets one), and global (settings). Only levels that resolve to a
+// REAL named layout are shown (single-pane / dangling → skipped, the menu's "Single pane" covers it);
+// most-specific wins on ties, so a layout never appears twice. The menu also drops these ids from its
+// named-layouts list. Order: worktree → project → global.
+const layoutScopeDefaults = computed(() => {
+    const pid = projectId.value
+    if (!pid) return []
+    const chain = ancestorChain(pid, store.projects)   // [self, parent, ...]
+    const self = chain[0]
+    const isWorktree = !!self?.worktree_of
+    const worktreeId = isWorktree ? self?.default_layout_id : null
+    let projDefaultId = null
+    for (let i = isWorktree ? 1 : 0; i < chain.length; i++) {
+        if (chain[i].default_layout_id != null) { projDefaultId = chain[i].default_layout_id; break }
+    }
+    const rows = []
+    const seen = new Set()
+    const add = (scope, label, id) => {
+        if (!id || id === SINGLE_PANE_ID || seen.has(id)) return
+        const layout = layoutsStore.getLayoutById(id)   // null for single-pane / dangling
+        if (!layout) return
+        seen.add(id)
+        rows.push({ scope, label, layoutId: id, layoutName: layout.name })
+    }
+    add('worktree', 'Worktree default', worktreeId)
+    add('project', 'Project default', projDefaultId)
+    add('global', 'Global default', settingsStore.getDefaultLayoutId)
+    return rows
+})
 function onOpenSaveLayout() {
     layoutSaveDialogRef.value?.open()
 }
@@ -1506,7 +1539,7 @@ onBeforeUnmount(() => {
                  auto-margin (a wa-dropdown host is display:contents, so a margin on it is ignored).
                  The layout menu (Save + Select) is always shown; Maximize only when not single pane. -->
             <div slot="nav" class="layout-nav-cluster">
-                <LayoutMenu :has-docks="hasDocks" @save="onOpenSaveLayout" @select="onSelectLayout" @manage="onManageLayouts" />
+                <LayoutMenu :has-docks="hasDocks" :scope-defaults="layoutScopeDefaults" @save="onOpenSaveLayout" @select="onSelectLayout" @manage="onManageLayouts" />
 
                 <wa-button
                     v-if="hasDocks"
