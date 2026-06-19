@@ -7,10 +7,14 @@ the design doc [`2026-06-16-dockable-layout-design.md`](./2026-06-16-dockable-la
 → the pure resolver `frontend/src/utils/layoutResolver.js` (the executable spec).
 
 Branch/worktree: `layout` (`.worktrees/layout`). Its own dev instance runs via devctl
-(frontend **5174**, backend **3501**). The branch is **30 commits** on top of `main` — not pushed, not
+(frontend **5174**, backend **3501**). The branch is **37 commits** on top of `main` — not pushed, not
 merged. Run `git log main..layout` for the breakdown. (Last rebased on `daa4a599`; `main` has since
 advanced to `32cce8cf`, so a re-rebase is due.)
-Persistence is not wired, so layout state is in-memory only (resets on reload).
+**Persistence is now built (steps 1–3b of the layout-persistence plan — see
+`docs/plans/2026-06-19-layout-persistence-impl-plan.md`).** Layout state survives reload, syncs across
+devices, and new sessions open with a resolved global/project default. What's left there: the menu's
+scope-default rows (deferred) and step 4 (the catalog rename/delete manager). **Requires the dev to
+restart their instance** — migrations `0109` (`Session.layout`) + `0110` (`Project.default_layout_id`).
 
 **Verification status:** verified **live in the browser** — step-1 docking, the route/focus model,
 the overlay route-derivation + focus lifecycle, swap-on-navigate (incl. browser back/forward), the
@@ -68,7 +72,7 @@ Created:
   - `SessionLayout.vue` — orchestrator: positions the center slot, renders dock regions/gutters/overlay, owns the root context classes + sidebar-closed gutter CSS.
 
 Modified:
-- `frontend/src/stores/data.js` — ephemeral `localState.sessionLayout` + getter `getSessionLayout` + actions `ensureSessionLayout, setTabDock, minimizeDock, restoreDock, setLayoutActiveSide, setLayoutActiveResize, setLayoutGroupActiveTab, clearSessionLayout`.
+- `frontend/src/stores/data.js` — `localState.sessionLayout` (the live working copy; now **persisted** to `Session.layout`, debounced — see the persistence plan) + getter `getSessionLayout` + actions `ensureSessionLayout, setTabDock, minimizeDock, restoreDock, setLayoutActiveSide, setLayoutActiveResize, setLayoutGroupActiveTab, setLayoutMaximized, loadLayoutIntoSession, persistSessionLayoutDebounced, clearSessionLayout`.
 - `frontend/src/views/SessionView.vue` — the integration (host + Teleport + gating + center filtering + route/focus model). Compact-tabs machinery removed (this session).
 
 Modified for responsiveness + compact decoupling (prior session):
@@ -342,8 +346,8 @@ cursor/selection teardown; right-dock (`axis-v`/`from-end`) covered by compositi
 each validated). **Sibling splitters (`kind:'sib'`) followed (step 2):** the same generic handler renders + drags them
 — `{edge}-split` (axis-h, between a column's two siblings) and `bottom-split` (axis-v, between the two
 bottom siblings); they leave `activeResize` untouched. Validated live (side-split, axis-h/from-start,
-moved 1:1 — 100 px exact). Fractions are ephemeral (reset on
-reload) until persistence lands.
+moved 1:1 — 100 px exact). Fractions now **persist** (they ride the persisted intention's
+`resizeFractions`).
 
 **Touch affordance:** on coarse-pointer devices (`@media (pointer: coarse)`) each handle shows a
 scaled `grip-lines-vertical` grip (rotated 90° on axis-h so its lines run along the divider), mirroring
@@ -486,9 +490,14 @@ focused signals; e.g. Git stops polling when not shown) and a tmux **reaper/GC**
 
 ## Known issues / open (not yet fixed)
 
-- **Persistence not wired** — `sessionLayout` is ephemeral (resets on reload / KeepAlive eviction).
-  The 3-tier (global → project → session, resolved at creation, like agent settings) is designed
-  (see design doc) but not built.
+- **Persistence — BUILT (steps 1–3b).** `Session.layout` (migration 0109) persists + syncs the
+  per-session intention; a `layouts.json` catalog of named layouts (synced, mirrors workspaces.json)
+  with a save/select menu (`LayoutMenu` ▾); and the 3-tier default (global `settings.defaultLayoutId`
+  → project `Project.default_layout_id` (0110) → session) resolved + frozen at creation, mirroring
+  agent settings. Full design + the remaining steps in
+  `docs/plans/2026-06-19-layout-persistence-impl-plan.md`. **Still open:** the menu's scope-default
+  rows (Project/Global shortcuts) and step 4 (catalog rename/delete manager via `LayoutManagerDialog`,
+  with reassignment-on-delete). `maximized` stays transient (never persisted).
 - **Layout thresholds/values are placeholders** — tune later: the resolver thresholds, the 800px
   container breakpoint (`useContainerBreakpoint`), the 40rem chat/composer `@container` thresholds,
   and the sidebar-toggle clearance values (centralized in `App.vue` + refined per dock context in
@@ -510,12 +519,13 @@ focused signals; e.g. Git stops polling when not shown) and a tmux **reaper/GC**
 - **Resize UI: done** — both dock splitters (a column's width / the bottom's height vs the center) and
   sibling splitters (between a column's two siblings / the two bottom siblings) drag live (see the
   2026-06-18 section). Custom hit-strips, not `wa-split-panel` (so the `wa-reposition` trap is
-  sidestepped). Only the fractions' **persistence** is deferred (ephemeral; folds into Persistence).
-- **Persistence:** persist the intention; 3-tier resolution at creation (mirror
-  `projectAgentDefaults.js` → `_resolveDraftAgentSettings` → `useSessionAgentSettings`); synced +
-  IndexedDB; per-device localStorage override (v2). Includes **remembering an absent tab's dock**
-  so a default layout can pre-assign a not-yet-present tab and it lands there when content arrives
-  (the payoff of the optional-empty model — the resolver already honors it).
+  sidestepped). The fractions' **persistence is now done** (resizeFractions ride the persisted
+  intention).
+- **Persistence: BUILT (steps 1–3b)** — `docs/plans/2026-06-19-layout-persistence-impl-plan.md` is the
+  spec + the remaining steps. The "remembering an absent tab's dock" payoff falls out for free (the
+  catalog/intention key tabs by id; the resolver filters `isPresent`). **Remaining:** menu scope-default
+  rows; step 4 (catalog rename/delete manager + reassignment-on-delete); the per-device localStorage
+  override (v2, deferred).
 - **Interactions/UX:** keyboard nav; reset (project/default/tabbed); drag-and-drop placement; named
   layouts/presets; animations. (Maximize/restore is **done** — see the 2026-06-19 session.)
 - **Polish/divers:** structural-vs-resize-min naming; keep docs/AGENTS.md/CLAUDE.md in sync if rules
