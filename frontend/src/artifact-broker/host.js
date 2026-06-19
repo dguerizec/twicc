@@ -60,7 +60,7 @@ async function callProxy(body) {
  * @param {string} opts.documentUrl  The artifact document's URL (to recognize its own same-origin assets).
  * @param {number|null} opts.bookmarkId  The bookmark id, or null for a non-bookmarked preview.
  * @param {object} opts.allowedHosts  The persisted allowlist `{ "scheme://host:port": { kind } }`.
- * @param {(target: {host: string, ip: string, kind: string, canRemember: boolean}) => Promise<'once'|'forever'|'deny'>} opts.showPrompt
+ * @param {(target: {host: string, ip: string, kind: string, canRemember: boolean}) => Promise<'session'|'forever'|'deny'>} opts.showPrompt
  * @param {(url: string, kind: string) => Promise<void>} [opts.persistAllow]  Persist "allow forever" (bookmarked only).
  */
 export function createBrokerHost({ documentUrl, bookmarkId, allowedHosts, showPrompt, persistAllow }) {
@@ -69,13 +69,43 @@ export function createBrokerHost({ documentUrl, bookmarkId, allowedHosts, showPr
     // The directory the artifact lives under; its own assets resolve below it.
     const ownDir = new URL('.', documentUrl).href
 
-    // Serialize prompts: concurrent fetches to different hosts queue one at a time.
-    let promptChain = Promise.resolve()
-    function queuedPrompt(target) {
-        const run = promptChain.then(() => showPrompt(target))
-        // Keep the chain alive regardless of this prompt's outcome.
-        promptChain = run.then(() => {}, () => {})
-        return run
+    // `allowed[key]` covers a host iff it still resolves to the kind it was
+    // approved for (a rebind → re-prompt). Entries seeded from `allowedHosts`
+    // are the persisted "Forever" grants; "This session" grants are added here
+    // in-memory only and vanish when this host instance is torn down (the
+    // artifact reloads) — same shape, just not persisted.
+    function isAllowed(key, kind) {
+        const entry = allowed[key]
+        return !!(entry && entry.kind === kind)
+    }
+
+    // Consent gate. Serializes prompts (one dialog at a time, across hosts) AND
+    // coalesces a burst to the *same* host into a single decision: while a host's
+    // prompt is pending (or in-flight requests are awaiting it), every request to
+    // that host shares the one outcome — allow or deny — instead of each raising
+    // its own prompt. Cleared once settled, so a later request re-evaluates fresh
+    // (an approved host hits `allowed`; a denied one re-asks).
+    let gateChain = Promise.resolve()
+    const pendingGate = {}
+    function gate(key, target, url) {
+        if (pendingGate[key]) return pendingGate[key]
+        const run = gateChain.then(async () => {
+            if (isAllowed(key, target.kind)) return // approved while we waited
+            const decision = await showPrompt({
+                host: key, ip: target.ip, kind: target.kind, canRemember,
+            })
+            if (decision === 'deny') throw new Error('denied by user')
+            // "Forever" persists onto the bookmark; "This session" (and any allow
+            // with no bookmark to persist to) is remembered in-memory only.
+            if (decision === 'forever' && canRemember) await persistAllow(url, target.kind)
+            allowed[key] = { kind: target.kind }
+        })
+        gateChain = run.then(() => {}, () => {}) // keep the chain alive on either outcome
+        const settled = run.finally(() => {
+            if (pendingGate[key] === settled) delete pendingGate[key]
+        })
+        pendingGate[key] = settled
+        return settled
     }
 
     async function hostDirectFetch(req) {
@@ -111,19 +141,14 @@ export function createBrokerHost({ documentUrl, bookmarkId, allowedHosts, showPr
         if (pre.error) throw new Error(`blocked: ${pre.reason || pre.error}`)
         const target = pre.target // { ip, kind }
         const key = normalizeHostKey(req.url)
-        const approved = allowed[key]
 
-        // Pre-approved AND still resolves to the same kind → no prompt. A kind
-        // change (rebind) falls through to a fresh prompt.
-        if (!(approved && approved.kind === target.kind)) {
-            const decision = await queuedPrompt({
-                host: key, ip: target.ip, kind: target.kind, canRemember,
-            })
-            if (decision === 'deny') throw new Error('denied by user')
-            if (decision === 'forever' && canRemember) {
-                await persistAllow(req.url, target.kind)
-                allowed[key] = { kind: target.kind }
-            }
+        // Already allowed (a persisted "Forever" or a prior "This session" grant)
+        // and still the same kind → no prompt, no queue. Otherwise gate it through
+        // serialized, per-host-coalesced consent (which may prompt, and throws
+        // "denied by user" on refusal). A kind change (rebind) is not "allowed" →
+        // it re-prompts.
+        if (!isAllowed(key, target.kind)) {
+            await gate(key, target, req.url)
         }
 
         // Same-origin runs host-direct (browser attaches your TwiCC session →

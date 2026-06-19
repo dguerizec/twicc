@@ -36,12 +36,13 @@ const KIND_LABEL = {
             </wa-callout>
         </div>
 
-        <div slot="footer" class="broker-prompt-actions">
-            <wa-button @click="emit('decision', 'deny')">Deny</wa-button>
-            <wa-button v-if="prompt?.canRemember" @click="emit('decision', 'forever')">
-                Allow always
-            </wa-button>
-            <wa-button variant="brand" @click="emit('decision', 'once')">Allow once</wa-button>
+        <div slot="footer" class="broker-prompt-footer">
+            <p class="broker-prompt-hint">“This session” is kept until you reload this tab.</p>
+            <div class="broker-prompt-actions">
+                <wa-button @click="emit('decision', 'deny')">Deny</wa-button>
+                <wa-button v-if="prompt?.canRemember" @click="emit('decision', 'forever')">Forever</wa-button>
+                <wa-button variant="brand" @click="emit('decision', 'session')">This session</wa-button>
+            </div>
         </div>
     </wa-dialog>
 </template>
@@ -53,6 +54,17 @@ const KIND_LABEL = {
 }
 .broker-prompt-target {
     color: var(--wa-color-neutral-on-quiet, #666);
+}
+.broker-prompt-footer {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+.broker-prompt-hint {
+    margin: 0;
+    font-size: var(--wa-font-size-s, 0.875rem);
+    color: var(--wa-color-neutral-on-quiet, #666);
+    text-align: right;
 }
 .broker-prompt-actions {
     display: flex;
