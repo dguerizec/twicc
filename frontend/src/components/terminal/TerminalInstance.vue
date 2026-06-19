@@ -29,6 +29,15 @@ const props = defineProps({
         type: Boolean,
         default: false,
     },
+    // How this instance decides to connect when it becomes active:
+    //   'auto'    → connect (index > 0, or the Main when a tmux session already exists → attach);
+    //   'manual'  → don't connect; show a Start callout (the Main with nothing to attach to, so merely
+    //               displaying the terminal never auto-creates tmux);
+    //   'pending' → the existence check hasn't resolved yet — do nothing until it does.
+    startMode: {
+        type: String,
+        default: 'auto',
+    },
 })
 
 const {
@@ -95,11 +104,14 @@ watch(isConnected, (connected, wasConnected) => {
     }
 })
 
-// Lazy init: start the terminal only when the tab becomes active for the first time
+// Lazy init: connect the first time the tab is active with startMode 'auto' (a regular sub-tab, or the
+// Main when a tmux session already exists → attach). A 'manual' Main waits for the explicit Start button
+// below; 'pending' waits for the existence check to resolve. Re-runs when startMode flips (pending→auto
+// attaches as soon as discovery confirms a session; pending→manual reveals the Start callout).
 watch(
-    () => props.active,
-    (active) => {
-        if (active && !started.value) {
+    [() => props.active, () => props.startMode],
+    ([active, mode]) => {
+        if (active && !started.value && mode === 'auto') {
             start()
         }
     },
@@ -112,10 +124,10 @@ watch(
         <div ref="containerRef" class="terminal-container"></div>
 
         <!-- Disconnect overlay (only covers terminal area, not ExtraKeysBar) -->
-        <div v-if="started && !isConnected" class="disconnect-overlay">
+        <div v-if="started && !isConnected" class="terminal-overlay">
             <wa-callout variant="warning" appearance="outlined">
                 <wa-icon slot="icon" name="plug-circle-xmark"></wa-icon>
-                <div class="disconnect-content">
+                <div class="terminal-overlay-content">
                     <div>Terminal disconnected</div>
                     <wa-button
                         variant="warning"
@@ -125,6 +137,26 @@ watch(
                     >
                         <wa-icon slot="start" name="arrow-rotate-right"></wa-icon>
                         Reconnect
+                    </wa-button>
+                </div>
+            </wa-callout>
+        </div>
+
+        <!-- Start overlay: the Main terminal with no tmux session to attach to waits for an explicit
+             start, so merely viewing (e.g. a docked-by-default terminal) never spawns tmux. -->
+        <div v-else-if="!started && active && startMode === 'manual'" class="terminal-overlay">
+            <wa-callout variant="neutral" appearance="outlined">
+                <wa-icon slot="icon" name="terminal"></wa-icon>
+                <div class="terminal-overlay-content">
+                    <div>Terminal not started</div>
+                    <wa-button
+                        variant="brand"
+                        appearance="outlined"
+                        size="small"
+                        @click="start"
+                    >
+                        <wa-icon slot="start" name="play"></wa-icon>
+                        Start terminal
                     </wa-button>
                 </div>
             </wa-callout>
@@ -154,7 +186,7 @@ watch(
     overflow-y: auto !important;
 }
 
-.disconnect-overlay {
+.terminal-overlay {
     position: absolute;
     inset: 0;
     display: flex;
@@ -164,7 +196,7 @@ watch(
     z-index: 10;
 }
 
-.disconnect-content {
+.terminal-overlay-content {
     display: flex;
     flex-direction: column;
     align-items: center;

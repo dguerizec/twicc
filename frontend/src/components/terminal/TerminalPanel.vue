@@ -650,6 +650,44 @@ watch(
     { immediate: true },
 )
 
+// --- Main-terminal start decision -------------------------------------------
+// The Main sub-tab (index 0) must NOT auto-create its PTY/tmux just because the terminal is displayed
+// (e.g. docked by default) — merely viewing a session would otherwise spawn a tmux session. It ATTACHES
+// when a tmux session already exists for it, else shows a "Start" callout (the user connects explicitly).
+// Other sub-tabs auto-connect as before. Existence comes from the list_terminals discovery above (main
+// WS, no PTY). startMode per index: 'auto' (connect/attach), 'manual' (show Start), 'pending' (discovery
+// not back yet) — with a 4s safety net so a dropped discovery never strands the Main on a blank area.
+const discoveryTimedOut = ref(false)
+let discoveryTimer = null
+watch(
+    () => props.active,
+    (active) => {
+        if (active && terminalTabsStore.indices[props.contextKey] === undefined && discoveryTimer === null) {
+            discoveryTimer = setTimeout(() => { discoveryTimedOut.value = true }, 4000)
+        }
+    },
+    { immediate: true },
+)
+watch(
+    () => terminalTabsStore.indices[props.contextKey],
+    (indices) => {
+        if (indices !== undefined && discoveryTimer !== null) {
+            clearTimeout(discoveryTimer)
+            discoveryTimer = null
+        }
+    },
+)
+onBeforeUnmount(() => {
+    if (discoveryTimer !== null) clearTimeout(discoveryTimer)
+})
+
+function startModeFor(index) {
+    if (index !== 0) return 'auto'
+    const indices = terminalTabsStore.indices[props.contextKey]
+    if (indices === undefined) return discoveryTimedOut.value ? 'manual' : 'pending'
+    return indices.includes(0) ? 'auto' : 'manual'
+}
+
 // Watch the terminalTabsStore for backend terminal updates
 watch(
     () => terminalTabsStore.indices[props.contextKey],
@@ -973,6 +1011,7 @@ defineExpose({ activeIndex })
                     :cwd="props.cwd"
                     :terminal-index="term.index"
                     :active="active && activeIndex === term.index"
+                    :start-mode="startModeFor(term.index)"
                     @disconnected="onTerminalDisconnected(term.index)"
                 />
             </div>
