@@ -24,6 +24,11 @@ const docking = computed(() => props.layout.dockingRendered.value)
 const render = computed(() => props.layout.render.value)
 const openOverlayEdge = computed(() => props.layout.openOverlayEdge.value)
 
+// The route owner — the one tab whose content the URL points at, across all regions. Each DockRegion
+// compares it to its own shown tab: the region that owns it keeps a full-opacity tab bar, the others
+// dim theirs, so the active region stands out among the several that can show content at once.
+const focusedTabId = computed(() => props.layout.routeActiveTabId.value)
+
 const centerRegion = computed(() => render.value.regions.find((r) => r.kind === 'center'))
 // Normal dock regions only — excludes the synthetic 'maximized' region, which is handled apart.
 const dockRegions = computed(() => render.value.regions.filter((r) => r.kind !== 'center' && r.kind !== 'maximized'))
@@ -156,6 +161,7 @@ onBeforeUnmount(endDrag)
             v-if="maximizedDockRegion"
             :region="maximizedDockRegion"
             :active-tab-id="layout.regionActiveTabId(maximizedDockRegion)"
+            :focused-tab-id="focusedTabId"
             :maximized="true"
             :register-target="registerTarget"
             :unregister-target="unregisterTarget"
@@ -173,6 +179,7 @@ onBeforeUnmount(endDrag)
                 :key="r.id"
                 :region="r"
                 :active-tab-id="layout.regionActiveTabId(r)"
+                :focused-tab-id="focusedTabId"
                 :register-target="registerTarget"
                 :unregister-target="unregisterTarget"
                 @select="(id) => emit('select-tab', id)"

@@ -9,6 +9,9 @@ import TabPlacementMenu from './TabPlacementMenu.vue'
 const props = defineProps({
     region: { type: Object, required: true },
     activeTabId: { type: String, default: null },
+    // The global route owner (the tab the URL points at). When it lives in this region the region's
+    // tab bar stays full opacity; otherwise the bar is dimmed, marking it as a non-active region.
+    focusedTabId: { type: String, default: null },
     // When true this region is the maximized one (fills the whole layout area): its tab bar shows a
     // restore button instead of minimize/maximize, and the per-tab placement arrows are hidden (the
     // only exit is restore).
@@ -32,6 +35,11 @@ provide('expandPreviewHost', (expanded) => {
     previewExpanded.value = expanded
     parentExpandPreviewHost?.(expanded)
 })
+
+// This region owns the route when its shown tab is the URL's tab (the route overrides a region's
+// active tab, so its activeTabId equals focusedTabId precisely for the owning region). Non-owning
+// regions dim their tab bar to mark them as inactive.
+const isRouteActive = computed(() => props.activeTabId != null && props.activeTabId === props.focusedTabId)
 
 const style = computed(() => ({
     left: `${props.region.x}px`,
@@ -71,8 +79,12 @@ function onBodyClick() {
 
 <template>
     <div class="dock-region" :class="[region.kind, { 'preview-expanded': previewExpanded }]" :data-rid="region.id" :style="style">
-        <wa-tab-group class="dock-tabnav" :active="activeTabId" @wa-tab-show.stop="onShow">
-            <wa-tab v-for="t in tabs" :key="t.id" slot="nav" :panel="t.id" class="dock-tab">
+        <wa-tab-group class="dock-tabnav" :class="{ 'tabnav-dimmed': !isRouteActive }" :active="activeTabId" @wa-tab-show.stop="onShow">
+            <!-- Clicking a tab label claims focus for it (deferred, like onBodyClick). wa-tab-show
+                 handles switching to a *different* tab; this also covers clicking the tab that is
+                 ALREADY this group's active one (no wa-tab-show fires then) while another region owns
+                 the route. The placement arrow stops its own click, so it never reaches here. -->
+            <wa-tab v-for="t in tabs" :key="t.id" slot="nav" :panel="t.id" class="dock-tab" @click="emit('pane-focus', t.id)">
                 <wa-icon v-if="t.icon" :name="t.icon" class="dock-tab-icon"></wa-icon>
                 <span class="dock-tab-label">{{ t.label }}</span>
                 <TabPlacementMenu
@@ -163,6 +175,13 @@ function onBodyClick() {
     min-width: 0;
     overflow: hidden;
     --track-width: var(--divider-size);
+    transition: opacity var(--wa-transition-fast, 0.15s) var(--wa-transition-easing, ease);
+}
+/* Active-region cue: a dock that doesn't own the route dims its tab bar (this nav-only group; the
+   panel content lives in .dock-body and stays full opacity), so the region holding the URL's tab
+   reads as the active one among the several that can show content at once. */
+.dock-tabnav.tabnav-dimmed {
+    opacity: 0.5;
 }
 .dock-tabnav::part(base) {
     overflow: hidden;

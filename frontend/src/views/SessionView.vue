@@ -616,6 +616,12 @@ function isToolTabShown(tabId) {
     return layout.isToolPanelVisible(tabId)
 }
 
+// Is the center the region that owns the route (its shown tab is the URL's tab)? True whenever the
+// route owner is a center tab — including single-pane mode, where every tab is a center tab, so the
+// center bar always reads as active (opacity 1). False only when a dock owns the route, which dims
+// the center's tab bar to mark it as a non-active region.
+const isCenterRouteActive = computed(() => isCenterTab(activeTabId.value))
+
 // Deferred pane-focus claim. Interacting with a pane that doesn't own the route should focus it
 // (claim the URL) — but a pane interaction that IS a navigation (opening a file, switching a
 // terminal tab, selecting a commit) already focuses the pane precisely via its own navigate.
@@ -694,6 +700,15 @@ function onCenterClick(event) {
     if (!layout.dockingRendered.value) return
     if (event.target?.closest?.('[slot="nav"]')) return
     requestPaneFocus(centerActiveTab.value)
+}
+
+// Clicking a center tab's label claims focus for that tab (deferred). wa-tab-show (→ onTabShow)
+// handles switching to a *different* tab and supersedes this; this also covers clicking the tab
+// that is ALREADY the center's active one (no wa-tab-show fires then) while a dock owns the route.
+// Sub-controls inside a tab (placement arrow, close icon) stop their own click, so it never lands here.
+function onCenterTabClick(tabId) {
+    if (!layout.dockingRendered.value) return
+    requestPaneFocus(tabId)
 }
 
 // Minimizing the dock that holds the focused tab would leave the URL on a now-hidden panel —
@@ -1390,9 +1405,11 @@ onBeforeUnmount(() => {
             @wa-tab-show="onTabShow"
             @click.capture="onCenterClick"
             class="session-tabs"
+            :class="{ 'tabnav-dimmed': !isCenterRouteActive }"
         >
             <!-- Tab navigation -->
             <wa-tab slot="nav" panel="main"
+                @click="onCenterTabClick('main')"
                 @dragenter="chatTabDragHover.onDragenter"
                 @dragleave="chatTabDragHover.onDragleave"
                 @dragover="chatTabDragHover.onDragover"
@@ -1413,7 +1430,7 @@ onBeforeUnmount(() => {
 
             <!-- Subagent tabs with close button -->
             <template v-for="tab in openSubagentTabs" :key="tab.id">
-                <wa-tab slot="nav" :panel="tab.id">
+                <wa-tab slot="nav" :panel="tab.id" @click="onCenterTabClick(tab.id)">
                     <span class="subagent-tab-content">
                         <wa-icon name="robot"></wa-icon>
                         <span>Agent "{{ getAgentTabLabel(tab.agentId) }}"</span>
@@ -1431,29 +1448,29 @@ onBeforeUnmount(() => {
             </template>
 
             <!-- Tool tabs — shown in the center strip unless docked; arrow places them -->
-            <wa-tab v-if="showInCenter('files')" slot="nav" panel="files">
+            <wa-tab v-if="showInCenter('files')" slot="nav" panel="files" @click="onCenterTabClick('files')">
                 <wa-icon :name="TAB_ICONS.files"></wa-icon>
                 Files
                 <CodeCommentsIndicator :count="filesCommentsCount" :show-tooltip="false" class="tab-comments-indicator" />
                 <TabPlacementMenu v-if="showCenterPlacementArrows" tab-id="files" current="center" @place="(dest) => layout.place('files', dest)" />
             </wa-tab>
-            <wa-tab v-if="isToolTabPresent('git') && showInCenter('git')" slot="nav" panel="git">
+            <wa-tab v-if="isToolTabPresent('git') && showInCenter('git')" slot="nav" panel="git" @click="onCenterTabClick('git')">
                 <wa-icon :name="TAB_ICONS.git"></wa-icon>
                 Git
                 <CodeCommentsIndicator :count="gitCommentsCount" :show-tooltip="false" class="tab-comments-indicator" />
                 <TabPlacementMenu v-if="showCenterPlacementArrows" tab-id="git" current="center" @place="(dest) => layout.place('git', dest)" />
             </wa-tab>
-            <wa-tab v-if="showInCenter('terminal')" slot="nav" panel="terminal">
+            <wa-tab v-if="showInCenter('terminal')" slot="nav" panel="terminal" @click="onCenterTabClick('terminal')">
                 <wa-icon :name="TAB_ICONS.terminal"></wa-icon>
                 Terminal
                 <TabPlacementMenu v-if="showCenterPlacementArrows" tab-id="terminal" current="center" @place="(dest) => layout.place('terminal', dest)" />
             </wa-tab>
-            <wa-tab v-if="isToolTabPresent('artifacts') && showInCenter('artifacts')" slot="nav" panel="artifacts">
+            <wa-tab v-if="isToolTabPresent('artifacts') && showInCenter('artifacts')" slot="nav" panel="artifacts" @click="onCenterTabClick('artifacts')">
                 <wa-icon :name="TAB_ICONS.artifacts"></wa-icon>
                 Artifacts
                 <TabPlacementMenu v-if="showCenterPlacementArrows" tab-id="artifacts" current="center" @place="(dest) => layout.place('artifacts', dest)" />
             </wa-tab>
-            <wa-tab v-if="isToolTabPresent('orchestration') && showInCenter('orchestration')" slot="nav" panel="orchestration">
+            <wa-tab v-if="isToolTabPresent('orchestration') && showInCenter('orchestration')" slot="nav" panel="orchestration" @click="onCenterTabClick('orchestration')">
                 <wa-icon :name="TAB_ICONS.orchestration"></wa-icon>
                 Orchestration
                 <TabPlacementMenu v-if="showCenterPlacementArrows" tab-id="orchestration" current="center" @place="(dest) => layout.place('orchestration', dest)" />
@@ -1676,6 +1693,9 @@ onBeforeUnmount(() => {
     --wa-form-control-padding-inline: 0.3em;
 }
 
+.session-tabs::part(tabs) {
+    align-items: center;
+}
 .session-tabs::part(base) {
     height: 100%;
     overflow: hidden;
@@ -1696,6 +1716,16 @@ onBeforeUnmount(() => {
 wa-tab::part(base) {
     padding: var(--wa-space-2xs) var(--wa-space-xs);
     gap: var(--wa-space-2xs);
+}
+
+/* Active-region cue: when a dock owns the route, the center is a non-active region, so its tab bar
+   (the nav strip only — not the panels below) is dimmed. The center bar is full opacity whenever the
+   route owner is a center tab, including single-pane mode (every tab is a center tab there). */
+.session-tabs.tabnav-dimmed::part(nav) {
+    opacity: 0.5;
+}
+.session-tabs::part(nav) {
+    transition: opacity var(--wa-transition-fast, 0.15s) var(--wa-transition-easing, ease);
 }
 
 /* Active tab panel needs to fill available space and handle overflow */
