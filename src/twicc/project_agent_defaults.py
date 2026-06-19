@@ -35,6 +35,10 @@ class ProjectDefaultsRow(NamedTuple):
     default_provider: str | None
     # ``{ "<provider>": { "<AgentSettings field>": value } }`` or ``None``.
     default_agent_settings: dict | None
+    # Default layout id (named-layout id / "single-pane" / None=inherit). Used by the
+    # sibling layout resolver (twicc/project_layout_default.py), which reuses this row + the
+    # chain walk here; the agent-defaults resolution ignores it.
+    default_layout_id: str | None
 
 
 def _segments(path: str) -> list[str]:
@@ -150,10 +154,11 @@ def load_defaults_rows() -> list[ProjectDefaultsRow]:
             worktree_of_id=row["worktree_of_id"],
             default_provider=row["default_provider"],
             default_agent_settings=row["default_agent_settings"],
+            default_layout_id=row["default_layout_id"],
         )
         for row in Project.objects.values(
             "id", "directory", "worktree_of_id",
-            "default_provider", "default_agent_settings",
+            "default_provider", "default_agent_settings", "default_layout_id",
         )
     ]
 
@@ -177,6 +182,7 @@ def _target_row(
         worktree_of_id=None,
         default_provider=None,
         default_agent_settings=None,
+        default_layout_id=None,
     )
 
 

@@ -137,6 +137,12 @@ class Project(models.Model):
     # bundle PER provider (not just default_provider's) lets a session created
     # with a non-default provider still pick up that provider's project bundle.
     default_agent_settings = models.JSONField(null=True, blank=True, default=None)
+    # Per-project default dockable layout for new sessions: the id of a named
+    # layout (from layouts.json) or the synthetic "single-pane". NULL = inherit
+    # (walk the worktree/path chain, then the global settings.json default).
+    # Resolved at session creation only — a later change never touches an
+    # existing session. See docs/plans/2026-06-19-layout-persistence-impl-plan.md.
+    default_layout_id = models.CharField(max_length=64, null=True, blank=True, default=None)
     # ---- Worktree creation ------------------------------------------
     # Absolute base directory under which new git worktrees of this project
     # are created from the UI. Free-form and intentionally unconstrained: a

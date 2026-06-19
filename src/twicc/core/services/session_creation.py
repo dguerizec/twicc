@@ -110,11 +110,9 @@ async def create_session_from_payload(payload: dict, *, allow_hybrid: bool = Fal
     if annotations is None:
         annotations = {}
     # Dockable-layout intention to freeze onto the new row. The web UI draft
-    # carries its resolved/seeded layout here; a CLI session omits it (single
-    # pane — CLI-side default resolution lands in a later step). Must be a dict.
+    # carries its resolved/seeded layout here; a CLI session omits it, and we
+    # resolve the project/global default below (just before stashing).
     layout = payload.get("layout")
-    if not isinstance(layout, dict):
-        layout = {}
 
     errors: list[SessionCreationError] = []
     if not session_id:
@@ -335,6 +333,11 @@ async def create_session_from_payload(payload: dict, *, allow_hybrid: bool = Fal
         )
 
     system_prompt_addendum = await sync_to_async(_build_addendum)()
+
+    # No layout in the payload (CLI path) → resolve the inherited project/global default to freeze.
+    if not isinstance(layout, dict):
+        from twicc.project_layout_default import resolve_project_layout_default
+        layout = await sync_to_async(resolve_project_layout_default)(project_id, directory=directory_hint)
 
     set_pending_session_attributes(
         session_id,

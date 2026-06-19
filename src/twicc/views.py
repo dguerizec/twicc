@@ -574,6 +574,14 @@ async def project_detail(request, project_id):
                 return JsonResponse({"error": err}, status=400)
             project.default_agent_settings = clean_settings
             update_fields.append("default_agent_settings")
+        if "default_layout_id" in data:
+            # A named-layout id or "single-pane"; empty/None = inherit. Dangling ids are tolerated
+            # (resolution falls back to inherit → global → single pane), so no existence check here.
+            layout_id = data["default_layout_id"]
+            if layout_id is not None and not isinstance(layout_id, str):
+                return JsonResponse({"error": "default_layout_id must be a string or null"}, status=400)
+            project.default_layout_id = layout_id or None
+            update_fields.append("default_layout_id")
         await run_under_db_write_lock(
             lambda: project.asave(update_fields=update_fields)
         )

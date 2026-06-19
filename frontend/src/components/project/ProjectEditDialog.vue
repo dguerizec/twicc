@@ -4,6 +4,7 @@ import { ref, computed, watch, nextTick, useId } from 'vue'
 import { useDataStore } from '../../stores/data'
 import { useWorkspacesStore } from '../../stores/workspaces'
 import { useSettingsStore } from '../../stores/settings'
+import { useLayoutsStore } from '../../stores/layouts'
 import { apiFetch } from '../../utils/api'
 import { matchPattern } from '../../utils/workspacePatterns'
 import DirectoryPickerPopup from '../files/DirectoryPickerPopup.vue'
@@ -25,6 +26,7 @@ const emit = defineEmits(['saved'])
 const store = useDataStore()
 const workspacesStore = useWorkspacesStore()
 const settingsStore = useSettingsStore()
+const layoutsStore = useLayoutsStore()
 
 // Refs for the dialog and form elements
 const dialogRef = ref(null)
@@ -43,6 +45,10 @@ const localDirectory = ref('')
 const localName = ref('')
 const localColor = ref('')
 const localArchived = ref(false)
+// Per-project default layout (edit mode): the picker holds '__inherit__' (= NULL) or a layout id.
+const LAYOUT_INHERIT = '__inherit__'
+const localDefaultLayoutId = ref(LAYOUT_INHERIT)
+const selectableLayouts = computed(() => layoutsStore.selectableLayouts)
 // Absolute base directory for this project's git worktrees (edit mode, git
 // projects only). Empty = inherit the global defaultWorktreeDirectory.
 const localWorktreeDirectory = ref('')
@@ -214,6 +220,7 @@ watch(
             localWorktreeDirectory.value = newProject.worktree_directory || ''
             localTrustChoice.value = trustChoiceFromValue(newProject.trust)
             localTrustPropagation.value = newProject.trust_propagation ?? false
+            localDefaultLayoutId.value = newProject.default_layout_id || LAYOUT_INHERIT
         } else {
             // Create mode: reset all fields
             localDirectory.value = ''
@@ -223,6 +230,7 @@ watch(
             localWorktreeDirectory.value = ''
             localTrustChoice.value = 'inherit'
             localTrustPropagation.value = false
+            localDefaultLayoutId.value = LAYOUT_INHERIT
         }
     },
     { immediate: true }
@@ -294,6 +302,7 @@ function open() {
         localWorktreeDirectory.value = props.project.worktree_directory || ''
         localTrustChoice.value = trustChoiceFromValue(props.project.trust)
         localTrustPropagation.value = props.project.trust_propagation ?? false
+        localDefaultLayoutId.value = props.project.default_layout_id || LAYOUT_INHERIT
         agentDefaultsRef.value?.reset()
     }
     resetWorkspaceState()
@@ -526,6 +535,13 @@ async function handleSave() {
         if (showWorktreeDirectory.value) {
             body.worktree_directory = localWorktreeDirectory.value.trim() || null
         }
+        // Per-project default layout: send only when changed; '__inherit__' → null (inherit).
+        const originalLayoutId = props.project.default_layout_id || LAYOUT_INHERIT
+        if (localDefaultLayoutId.value !== originalLayoutId) {
+            body.default_layout_id = localDefaultLayoutId.value === LAYOUT_INHERIT
+                ? null
+                : localDefaultLayoutId.value
+        }
         let response
         try {
             response = await apiFetch(`/api/projects/${props.project.id}/`, {
@@ -740,6 +756,30 @@ defineExpose({
                                     — descendants inherit this decision until you decide otherwise.
                                 </span>
                             </wa-switch>
+                        </div>
+
+                        <wa-divider v-if="!isCreateMode"></wa-divider>
+
+                        <!-- Default layout (edit mode) -->
+                        <div v-if="!isCreateMode" class="form-group">
+                            <label class="form-label">Default layout for new sessions</label>
+                            <wa-select
+                                :value.prop="localDefaultLayoutId"
+                                @change="localDefaultLayoutId = $event.target.value"
+                                size="small"
+                            >
+                                <wa-option :value="LAYOUT_INHERIT">Inherit</wa-option>
+                                <wa-option
+                                    v-for="l in selectableLayouts"
+                                    :key="l.id"
+                                    :value="l.id"
+                                    :label="l.name"
+                                >{{ l.name }}</wa-option>
+                            </wa-select>
+                            <div class="form-hint">
+                                Layout new sessions in this project open with. Inherit = use the parent
+                                project's default (for a worktree), then the global default.
+                            </div>
                         </div>
 
                         <wa-divider v-if="!isCreateMode"></wa-divider>
