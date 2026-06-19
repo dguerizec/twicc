@@ -18,9 +18,9 @@
 | 4 | **the host** (`host.js` + `ArtifactBrokerPrompt.vue` + FilePane) **+ final policy** (header pass-through + same-origin promptable host-direct) — E2E-verified | ✅ committed `0fe6ed64` |
 | 4-consent | **"This session" grants** (in-memory, until reload) replacing per-request "once" + **burst coalescing** (N concurrent requests to one host → 1 prompt) — E2E-verified | ✅ committed `f42c96da` |
 | doc | `window.parent` origin-isolation finding (tested + reverted, §13) | ✅ committed `35163802` |
-| **5** | **dedicated-page shell, UNIFIED with the in-SPA preview** (`/artifacts/<id>/`) | ✅ **DONE + E2E-verified (2026-06-19) — UNCOMMITTED (see §2)** |
-| 4-rest | proxy server-side allowlist re-check (defense-in-depth, §6.4) | ⬜ deferred |
-| 6 | docs (CLAUDE.md/AGENTS.md broker posture, artifacts skill) | ⬜ not started |
+| **5** | **dedicated-page shell, UNIFIED with the in-SPA preview** (`/artifacts/<id>/`) | ✅ committed `f8967aaf` (E2E-verified 2026-06-19) |
+| 4-rest | proxy server-side allowlist re-check (defense-in-depth, §6.4) | ❌ **decided against 2026-06-19** (design §6.4 "Decision update"; rationale in §7) |
+| 6 | docs (system_prompt Artifacts preamble + CLAUDE.md/AGENTS.md broker posture) | ✅ **DONE 2026-06-19 — UNCOMMITTED** (not the CLI `twicc-artifacts` skill — unrelated) |
 
 `git log --oneline`: the last *committed* state is a docs commit `414cf8b4` on top of `f42c96da` (consent) · `35163802` (origin-isolation doc) · `0fe6ed64` (phase 4 + policy) · `0b8f65e3` (3c) · `44dc128a` (3a/b) · `2ab97b3f` (2) · `1dc326a5` (1). **Phase 5 is implemented + verified but NOT yet committed** — the working tree carries the phase-5 diff (see §2 for the file list). Run `git status`/`git log` for the true state.
 
@@ -140,7 +140,7 @@ A test artifact (`broker-test.html` in this session's artifacts dir — **kept o
 - ✅ **Consent (button 10):** 4 **concurrent** fetches to a fresh host → **ONE** prompt (coalescing); re-run after "This session" → **zero** prompts (in-memory grant). Deny rejects; Forever persists to `allowed_hosts` (DB-verified) + survives reload.
 - ✅ Shim reconnects cleanly after a preview reload and after a backend restart. No console errors.
 
-**Known minor limitation (not a bug):** `setupBroker`'s watch depends on the iframe/src, not on `artifactBookmark`. So bookmarking *while* previewing requires a reload before "Forever" is offered / the persisted allowlist is picked up (the shim handshakes once → host can only safely re-mount on an iframe reload). Theoretical async-bookmark-load race; not observed.
+**Known minor limitation (not a bug):** `setupBroker`'s watch depends on the iframe/src, not on `artifactBookmark`, so the host is not re-created on a bookmark change. Mostly mitigated (2026-06-19): the host reads the bookmark id through a **getter** (`getBookmarkId`), so **whether "Forever" is offered** now reflects the live bookmark (bookmark/un-bookmark while previewing → the option appears/disappears with no reload). What still needs a reload: the **seeded persisted allowlist** (`allowedHosts` is still a mount-time snapshot) — so a host you "Forever"-approved in another tab isn't picked up until the artifact reloads. Theoretical async-bookmark-load race; not observed.
 
 **Phase 5 — dedicated page `/artifacts/<id>/` E2E-verified (2026-06-19, Chrome MCP, bookmark id 6):**
 - ✅ Shell mounts; artifact renders in the inner iframe; "Shim status: ready".
@@ -156,8 +156,8 @@ A test artifact (`broker-test.html` in this session's artifacts dir — **kept o
 
 ## 7. Known deferred / TODO (phase 5 is DONE — see §2)
 
-- **Proxy server-side allowlist re-check (§6.4).** The proxy does metadata-block + pin + fetch but does **not** re-validate the target against the bookmark's `allowed_hosts` (the host gates client-side). Add a server-side check in `artifact_proxy` fetch mode (load bookmark, normalize key, require membership / a valid once-grant — mind that "This session" grants are **not** persisted, so the proxy can't see them; the `grant:'once'` field carries the host's decision) + tests. Defense-in-depth (the iframe can't reach the proxy anyway thanks to CSP, but the proxy shouldn't be a confused deputy).
-- **Phase 6 — docs:** CLAUDE.md + AGENTS.md (broker posture: widgets use plain `fetch`, it's brokered, header pass-through, only metadata blocked), the artifacts skill.
+- ~~**Proxy server-side allowlist re-check (§6.4).**~~ **RESOLVED 2026-06-19 — decided against, won't build.** Evaluated the threat model: the iframe (the only untrusted party) can't reach the proxy (CSP `connect-src 'none'`); the endpoint is auth-gated + `SameSite=Lax` so cross-site forgery can't ride the cookie → only first-party trusted code (the host, which already prompts) calls it; metadata is already re-blocked on the fetch path; and an `allowed_hosts` re-check would break the in-memory "This session"/"once" grants (not persisted) and contradict the consent-is-client-authority model. Residual (first-party XSS → SSRF) accepted. Full rationale written into design §6.4 ("Decision update 2026-06-19"). The `grant:"once"` payload field is now vestigial (proxy ignores it) — left in place, harmless.
+- ~~**Phase 6 — docs.**~~ **DONE 2026-06-19 (uncommitted).** Added: (a) `src/twicc/agent/system_prompt.py` Artifacts preamble — a "the page may use the network" note for agents *building* artifacts (plain `fetch`, brokered, per-host consent, headers forwarded, only metadata unreachable); (b) `CLAUDE.md` + `AGENTS.md` — an **Artifact Network Broker** section (invariants/guardrails + design pointer) and `allowed_hosts` on the `ArtifactBookmark` note. **Not** the `twicc-artifacts` skill — it's CLI bookmarking, unrelated to the broker (so no plugin version bump).
 - **Hardening — `window.parent` bypass (design §13): accepted residual risk in v1.** `allow-same-origin` lets a malicious artifact reach `window.parent`. The cheap fix (opaque origin + explicit-origin CSP) was **E2E-prototyped 2026-06-19 and works** (hole closed; assets + broker + authenticated API survive) **but kills `localStorage`/`cookie`/IndexedDB**, so it was **reverted** — keep `allow-same-origin`. The real fix = a **separate real origin** for artifacts (keeps storage + closes the hole) but is a genuine project, out of v1. Full write-up in design §13.
 - **Timed consent grants** (5 min / 1 h via the value object's `expires_at`) — deferred extension of §9; v1 ships session + forever.
 

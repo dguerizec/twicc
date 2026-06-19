@@ -144,6 +144,15 @@ table, or a formatted report — instead of pasting a wall of code or text.
 - In the HTML, reference assets with **relative** paths (`style.css`,
   `js/app.js`, `../shared/x.png`) — they load. Root-absolute paths
   (`/style.css`) do NOT. Scripts execute (sandboxed, same origin).
+- **The page may use the network.** Write ordinary `fetch('https://…')` /
+  `XMLHttpRequest` to pull in external data (an API, a feed) — TwiCC brokers
+  outbound calls server-side, so browser CORS does not block them. No special
+  API or proxy URL: just `fetch`. The user is shown an honest per-host prompt
+  and consents the first time the page contacts a given host (so a dashboard
+  that hits one API asks once). Request headers — including `Authorization` —
+  are forwarded unchanged. The **only** address never reachable is the cloud
+  instance-metadata endpoint (`169.254.169.254`). Don't add network calls a
+  static deliverable doesn't need.
 - Hand the user a **clickable Markdown link**:
   `[Open the demo](/artifacts/{session_id}/demo/index.html)`. Clicking opens
   the Artifacts tab with the page rendered. This is an in-app link TwiCC
