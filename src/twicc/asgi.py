@@ -50,6 +50,7 @@ from twicc.providers.helpers import (
 from twicc.external_notifications import notify_agent_event
 from twicc.synced_settings import _settings_lock, prepare_settings_for_client, read_synced_settings, write_synced_settings
 from twicc.workspaces import read_workspaces
+from twicc.layouts import read_layouts
 from twicc.message_snippets import read_message_snippets_config, write_message_snippets_config
 from twicc.seen_tips import read_seen_tips, write_seen_tips
 from twicc.tips_manifest import manifest_to_dict
@@ -512,6 +513,10 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
             workspaces = await sync_to_async(read_workspaces)()
             await self.send_json({"type": "workspaces_updated", "workspaces": workspaces.get("workspaces", [])})
 
+        if self._should_send("layouts_updated"):
+            layouts = await sync_to_async(read_layouts)()
+            await self.send_json({"type": "layouts_updated", "layouts": layouts.get("layouts", [])})
+
         # Re-push the full artifact-bookmark set on every WS connect (including
         # reconnects) so the client store stays in sync without re-fetching, the
         # same way workspaces/settings/presets do above. Bookmarks are a small
@@ -634,6 +639,9 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
 
         elif msg_type == "update_workspaces":
             await self._handle_update_workspaces(content)
+
+        elif msg_type == "update_layouts":
+            await self._handle_update_layouts(content)
 
         elif msg_type == "update_terminal_config":
             await self._handle_update_terminal_config(content)
@@ -1569,6 +1577,34 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
             {
                 "type": "broadcast",
                 "data": {"type": "workspaces_updated", "workspaces": workspaces},
+            },
+        )
+
+    async def _handle_update_layouts(self, content: dict) -> None:
+        """Handle the named-layouts catalog update from a client (whole-blob).
+
+        The catalog is small, user-global config; the frontend sends the full
+        list and we overwrite ``layouts.json`` wholesale (under the cross-process
+        file lock), then broadcast it back so every client converges.
+        """
+        layouts = content.get("layouts")
+        if not isinstance(layouts, list):
+            return
+
+        from twicc.atomic_json import atomic_write_json, file_lock
+        from twicc.paths import get_layouts_path
+
+        def _write():
+            with file_lock(get_layouts_path()):
+                atomic_write_json(get_layouts_path(), {"layouts": layouts})
+
+        await sync_to_async(_write)()
+
+        await self.channel_layer.group_send(
+            "updates",
+            {
+                "type": "broadcast",
+                "data": {"type": "layouts_updated", "layouts": layouts},
             },
         )
 

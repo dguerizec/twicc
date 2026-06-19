@@ -19,6 +19,9 @@ import TerminalPanel from '../components/terminal/TerminalPanel.vue'
 import OrchestrationPanel from '../components/orchestration/OrchestrationPanel.vue'
 import SessionLayout from '../components/session/layout/SessionLayout.vue'
 import TabPlacementMenu from '../components/session/layout/TabPlacementMenu.vue'
+import LayoutMenu from '../components/session/layout/LayoutMenu.vue'
+import LayoutSaveDialog from '../components/session/layout/LayoutSaveDialog.vue'
+import { useLayoutsStore } from '../stores/layouts'
 import AppTooltip from '../components/ui/AppTooltip.vue'
 import ProcessIndicator from '../components/ui/ProcessIndicator.vue'
 import CodeCommentsIndicator from '../components/ui/CodeCommentsIndicator.vue'
@@ -42,6 +45,7 @@ import { fileRootsFromStore } from '../utils/projectRoots'
 const route = useRoute()
 const router = useRouter()
 const store = useDataStore()
+const layoutsStore = useLayoutsStore()
 const settingsStore = useSettingsStore()
 const codeCommentsStore = useCodeCommentsStore()
 const { registerCommands, unregisterCommands } = useCommandRegistry()
@@ -722,10 +726,27 @@ function onLayoutMinimize(dockIds) {
 // Maximize (transient view state; the only exit is restore). Maximizing a region routes + focuses its
 // active tab so the URL points into what's shown; restore brings the prior layout back unchanged.
 const isCenterMaximized = computed(() => layout.isCenterMaximized.value)
-const canMaximizeCenter = computed(() => layout.dockingRendered.value && !layoutTabsMode.value)
+// "Not single pane": the render has at least one non-center region (a dock or a maximized region) or
+// a gutter. Gates the Save + Maximize buttons (the Select menu shows always — it's how you enter a
+// layout from single pane). False in single-pane and the mobile tab strip (no dock regions there).
+const hasDocks = computed(() => {
+    const r = layout.render.value
+    return r.regions.some((reg) => reg.kind !== 'center') || r.gutters.length > 0
+})
 // Center tabs' placement arrows: hidden in the mobile tab strip and while the center is maximized
 // (a maximized region is a separate mode — the only exit is restore, no re-docking).
 const showCenterPlacementArrows = computed(() => !layoutTabsMode.value && !isCenterMaximized.value)
+
+// Layout catalog — Save / Select. Loading copies a catalog layout's intention into the session;
+// saving stores the session's current structure (the template subset) as a named/overwritten layout.
+const layoutSaveDialogRef = ref(null)
+const currentLayoutTemplate = computed(() => store.getSessionLayoutTemplate(sessionId.value))
+function onSelectLayout(layoutId) {
+    store.loadLayoutIntoSession(sessionId.value, layoutsStore.intentionForId(layoutId))
+}
+function onOpenSaveLayout() {
+    layoutSaveDialogRef.value?.open()
+}
 function onCenterMaximize() {
     layout.maximize(['center'])
     switchToTab(centerActiveTab.value)
@@ -1476,19 +1497,24 @@ onBeforeUnmount(() => {
                 <TabPlacementMenu v-if="showCenterPlacementArrows" tab-id="orchestration" current="center" @place="(dest) => layout.place('orchestration', dest)" />
             </wa-tab>
 
-            <!-- Maximize / restore the central zone (only when there are docks to hide) -->
-            <wa-button
-                v-if="canMaximizeCenter"
-                slot="nav"
-                class="center-maximize reduced-height"
-                appearance="plain"
-                size="small"
-                :title="isCenterMaximized ? 'Restore' : 'Maximize main area'"
-                :aria-label="isCenterMaximized ? 'Restore' : 'Maximize main area'"
-                @click.stop="isCenterMaximized ? onLayoutRestoreMaximized() : onCenterMaximize()"
-            >
-                <wa-icon :name="isCenterMaximized ? 'compress' : 'expand'"></wa-icon>
-            </wa-button>
+            <!-- Right-aligned nav cluster: [Layout menu ▾] [Maximize]. A real-box wrapper carries the
+                 auto-margin (a wa-dropdown host is display:contents, so a margin on it is ignored).
+                 The layout menu (Save + Select) is always shown; Maximize only when not single pane. -->
+            <div slot="nav" class="layout-nav-cluster">
+                <LayoutMenu :has-docks="hasDocks" @save="onOpenSaveLayout" @select="onSelectLayout" />
+
+                <wa-button
+                    v-if="hasDocks"
+                    class="layout-winbtn reduced-height"
+                    appearance="plain"
+                    size="small"
+                    :title="isCenterMaximized ? 'Restore' : 'Maximize main area'"
+                    :aria-label="isCenterMaximized ? 'Restore' : 'Maximize main area'"
+                    @click.stop="isCenterMaximized ? onLayoutRestoreMaximized() : onCenterMaximize()"
+                >
+                    <wa-icon :name="isCenterMaximized ? 'compress' : 'expand'"></wa-icon>
+                </wa-button>
+            </div>
 
             <!-- Main session panel -->
             <wa-tab-panel name="main">
@@ -1553,6 +1579,9 @@ onBeforeUnmount(() => {
             <wa-spinner></wa-spinner>
             <span>Loading session...</span>
         </div>
+
+        <!-- Save-layout dialog (opened from the tab nav's Save button) -->
+        <LayoutSaveDialog v-if="session" ref="layoutSaveDialogRef" :intention="currentLayoutTemplate" />
 
         <!-- Tool panels: mounted once here, teleported to their center slot, dock region, or overlay.
              Moving a tab between docks just retargets its Teleport — the instance is never re-mounted. -->
@@ -1686,10 +1715,16 @@ onBeforeUnmount(() => {
     --track-width: var(--divider-size);
 }
 
-/* Maximize/restore the central zone — pushed to the far right of the tab nav (mirrors the dock's
-   minimize/maximize buttons). */
-.center-maximize {
+/* Right-aligned tab-nav cluster: [Select] [Save] [Maximize]. A real-box wrapper carries the
+   auto-margin so the whole cluster is pushed to the far right of the nav (a wa-dropdown host is
+   display:contents, so a margin on it has no effect — hence the wrapper). */
+.layout-nav-cluster {
     margin-inline-start: auto;
+    display: flex;
+    align-items: center;
+    gap: var(--wa-space-3xs);
+}
+.layout-winbtn {
     --wa-form-control-padding-inline: 0.3em;
 }
 

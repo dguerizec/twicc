@@ -415,6 +415,15 @@ export function sendWorkspaces(workspaces) {
 }
 
 /**
+ * Send the named-layouts catalog to the backend for persistence.
+ * The backend overwrites layouts.json and broadcasts the catalog to all clients.
+ * @param {Array} layouts - The layouts array
+ */
+export function sendLayouts(layouts) {
+    sendWsMessage({ type: 'update_layouts', layouts })
+}
+
+/**
  * Send terminal config to the backend for persistence.
  * The backend will broadcast the updated config to all connected clients.
  * @param {Object} config - The terminal config key-value pairs
@@ -1197,6 +1206,12 @@ export function useWebSocket() {
                 // Lazy import to avoid circular dependency (useWebSocket.js → workspaces.js)
                 import('../stores/workspaces').then(({ useWorkspacesStore }) => {
                     useWorkspacesStore().applyWorkspaces(msg.workspaces)
+                })
+                break
+            case 'layouts_updated':
+                // Apply the named-layouts catalog from backend (connect push / another client's update)
+                import('../stores/layouts').then(({ useLayoutsStore }) => {
+                    useLayoutsStore().applyLayouts(msg.layouts)
                 })
                 break
             case 'terminal_config_updated':

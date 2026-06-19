@@ -85,6 +85,17 @@ function hydrateLayoutIntention(persisted) {
     return e
 }
 
+/** The catalog template subset (structure only) of an intention — what a named layout stores, and
+ *  what is applied when loading one (runtime fields / maximized are session-only). */
+function layoutTemplate(intention) {
+    const i = intention || {}
+    return {
+        assignment: { ...(i.assignment || {}) },
+        collapsed: [...(i.collapsed || [])],
+        resizeFractions: { ...(i.resizeFractions || {}) },
+    }
+}
+
 // How long a ``text`` streaming block can stay quiet before we flip its
 // ``stopped`` flag and let the WorkingAssistantMessage placeholder reappear.
 // Used by streamBlockDelta below. Codex's ``item/completed`` event can lag
@@ -1017,6 +1028,10 @@ export const useDataStore = defineStore('data', {
         // Get the dockable layout intention for a session (or null if untouched)
         getSessionLayout: (state) => (sessionId) =>
             state.localState.sessionLayout[sessionId] || null,
+
+        // The catalog template (structure only) of a session's current layout — for "Save layout".
+        getSessionLayoutTemplate: (state) => (sessionId) =>
+            layoutTemplate(state.localState.sessionLayout[sessionId]),
 
         // Get cached agent link for a tool_id in a session
         // Returns: { agentId, isBackground } or undefined (not in cache)
@@ -3539,6 +3554,19 @@ export const useDataStore = defineStore('data', {
             layoutPersistDebouncers.delete(sessionId)
             layoutPersistPending.delete(sessionId)
             delete this.localState.sessionLayout[sessionId]
+        },
+
+        /** Replace a session's live layout with a copy of a catalog layout's template intention
+         *  (assignment / collapsed / resizeFractions). Runtime fields and maximized reset to defaults.
+         *  ``intention`` = {} ⇒ single pane. Persists (debounced). */
+        loadLayoutIntoSession(sessionId, intention) {
+            const e = emptyLayoutIntention()
+            const t = layoutTemplate(intention)
+            e.assignment = t.assignment
+            e.collapsed = t.collapsed
+            e.resizeFractions = t.resizeFractions
+            this.localState.sessionLayout[sessionId] = e
+            this.persistSessionLayoutDebounced(sessionId)
         },
 
         // Agent links cache actions

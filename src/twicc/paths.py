@@ -127,6 +127,11 @@ def get_workspaces_path() -> Path:
     return get_data_dir() / "workspaces.json"
 
 
+def get_layouts_path() -> Path:
+    """Path to the named dockable-layouts catalog file."""
+    return get_data_dir() / "layouts.json"
+
+
 def get_drop_requests_dir() -> Path:
     """Directory holding ``<request_uuid>.json`` drop-files written by the CLI
     and picked up by :class:`twicc.drop_requests_watcher.DropRequestsWatcher`.
