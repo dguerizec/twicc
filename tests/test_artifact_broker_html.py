@@ -2,12 +2,17 @@
 shim as the first child of <head> and lock egress down with the CSP header
 (design 2026-06-18 §7 + §8.3)."""
 
+import orjson
 import pytest
 
 from twicc.artifacts.broker_html import (
     ARTIFACT_CSP,
+    ARTIFACT_INNER_DOC_PATH,
+    ARTIFACT_SHELL_CSS_URL,
+    ARTIFACT_SHELL_JS_URL,
     BROKER_SHIM_URL,
     artifact_html_response,
+    artifact_shell_response,
     inject_broker_shim,
     is_artifact_document_request,
 )
@@ -68,3 +73,51 @@ def test_artifact_html_response_injects_and_sets_csp():
 )
 def test_is_artifact_document_request(dest, expected):
     assert is_artifact_document_request(dest) is expected
+
+
+# ── The dedicated-page trusted shell (phase 5, design §5/§9) ───────────────────
+
+
+def _shell_data(resp):
+    """Extract the JSON the shell injects for its frontend bundle to read."""
+    body = resp.content.decode()
+    start = body.index(">", body.index('id="twicc-shell-data"')) + 1
+    end = body.index("</script>", start)
+    return orjson.loads(body[start:end])
+
+
+def test_artifact_shell_response_is_trusted_page_not_the_artifact():
+    resp = artifact_shell_response(bookmark_id=7, allowed_hosts={})
+    # The shell is TwiCC's own trusted page: it must NOT carry the artifact CSP
+    # nor inject the artifact shim — the untrusted artifact stays locked in its
+    # own iframe (served at the inner-doc route).
+    assert not resp.has_header("Content-Security-Policy")
+    assert BROKER_SHIM_URL.encode() not in resp.content
+    assert resp["Content-Type"].startswith("text/html")
+    assert resp["X-Content-Type-Options"] == "nosniff"
+
+
+def test_artifact_shell_response_references_bundle_and_mount():
+    resp = artifact_shell_response(bookmark_id=7, allowed_hosts={})
+    body = resp.content.decode()
+    assert ARTIFACT_SHELL_JS_URL in body   # loads the shared Vue broker bundle
+    assert ARTIFACT_SHELL_CSS_URL in body
+    assert 'id="app"' in body              # Vue mount point
+
+
+def test_artifact_shell_response_embeds_inner_doc_and_allowlist():
+    allowed = {"https://api.example.com:443": {"kind": "public"}}
+    resp = artifact_shell_response(bookmark_id=7, allowed_hosts=allowed)
+    data = _shell_data(resp)
+    assert data["bookmarkId"] == 7
+    assert data["innerDocUrl"] == f"/artifacts/7/{ARTIFACT_INNER_DOC_PATH}"
+    assert data["allowedHosts"] == allowed
+
+
+def test_artifact_shell_response_escapes_script_breakout():
+    # A value containing "</script>" must not terminate the data <script> tag.
+    resp = artifact_shell_response(
+        bookmark_id=1, allowed_hosts={"https://x</script><b>:443": {"kind": "public"}}
+    )
+    assert b"</script><b>" not in resp.content        # raw breakout neutralized
+    assert _shell_data(resp)["allowedHosts"]          # still valid JSON, round-trips

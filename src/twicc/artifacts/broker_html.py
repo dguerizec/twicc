@@ -14,12 +14,27 @@ from __future__ import annotations
 
 import re
 
+import orjson
 from django.http import HttpResponse
 from django.utils.cache import add_never_cache_headers
 
 # Stable same-origin URL the injected tag points at; the built shim bundle is
 # served here (route + bundle: phase 3c).
 BROKER_SHIM_URL = "/_twicc/artifact-broker-shim.js"
+
+# The dedicated artifact page (`/artifacts/<id>/`) serves a trusted *shell*
+# (below) that iframes the artifact at this sentinel sub-path and serves its
+# relative assets from the sibling paths. The name is deliberately reserved-
+# looking so it can't collide with a real artifact asset (design §5).
+ARTIFACT_INNER_DOC_PATH = "__twicc_doc__"
+
+# Stable same-origin URLs for the built shell bundle (Vue + the shared broker
+# composable/prompt). Served from static/artifact-shell/ like the shim; the dir
+# is gitignored — produced by `npm run build`.
+ARTIFACT_SHELL_JS_URL = "/_twicc/artifact-shell/shell.js"
+ARTIFACT_SHELL_CSS_URL = "/_twicc/artifact-shell/shell.css"
+
+_SHELL_DATA_ID = "twicc-shell-data"
 
 # Egress lockdown (design §7). `connect-src 'none'` blocks every network call
 # (fetch/XHR/WebSocket/EventSource/sendBeacon/<a ping>) — the iframe's only exit
@@ -82,6 +97,52 @@ def artifact_html_response(html: bytes) -> HttpResponse:
     stale)."""
     response = HttpResponse(inject_broker_shim(html), content_type="text/html; charset=utf-8")
     response["Content-Security-Policy"] = ARTIFACT_CSP
+    response["X-Content-Type-Options"] = "nosniff"
+    add_never_cache_headers(response)
+    response["CDN-Cache-Control"] = "no-store"
+    return response
+
+
+def _shell_html(bookmark_id: int, allowed_hosts: dict | None) -> bytes:
+    """The trusted shell page's markup. It carries, for its Vue bundle to read,
+    the inner-doc URL to iframe, the bookmark id, and the persisted allowlist."""
+    data = {
+        "innerDocUrl": f"/artifacts/{bookmark_id}/{ARTIFACT_INNER_DOC_PATH}",
+        "bookmarkId": bookmark_id,
+        "allowedHosts": allowed_hosts or {},
+    }
+    # Embed as JSON in a <script type="application/json">. Escaping '<' to its
+    # JSON unicode form is enough to neutralize a "</script>" breakout while
+    # staying valid JSON (the allowlist is normalized server-side, but escape
+    # defensively all the same).
+    payload = orjson.dumps(data).decode().replace("<", "\\u003c")
+    return (
+        "<!DOCTYPE html>\n"
+        '<html lang="en">\n'
+        "<head>\n"
+        '<meta charset="utf-8">\n'
+        '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
+        "<title>Artifact</title>\n"
+        f'<link rel="stylesheet" href="{ARTIFACT_SHELL_CSS_URL}">\n'
+        f'<script type="application/json" id="{_SHELL_DATA_ID}">{payload}</script>\n'
+        f'<script type="module" src="{ARTIFACT_SHELL_JS_URL}"></script>\n'
+        "</head>\n"
+        '<body>\n<div id="app"></div>\n</body>\n'
+        "</html>\n"
+    ).encode()
+
+
+def artifact_shell_response(*, bookmark_id: int, allowed_hosts: dict | None) -> HttpResponse:
+    """Build the trusted **shell** page for the dedicated artifact tab
+    (``/artifacts/<id>/``). The shell is TwiCC's own code: it iframes the
+    artifact's inner document (served, sandboxed + strict-CSP, at the
+    :data:`ARTIFACT_INNER_DOC_PATH` route) and mounts the *same* broker host +
+    consent prompt the in-SPA preview uses, so an artifact behaves identically in
+    both contexts (design §5/§9).
+
+    No artifact CSP here and no shim injection: this page runs trusted TwiCC code
+    only; the untrusted artifact stays locked down in its own iframe."""
+    response = HttpResponse(_shell_html(bookmark_id, allowed_hosts), content_type="text/html; charset=utf-8")
     response["X-Content-Type-Options"] = "nosniff"
     add_never_cache_headers(response)
     response["CDN-Cache-Control"] = "no-store"

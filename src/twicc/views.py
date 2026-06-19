@@ -3320,16 +3320,30 @@ async def artifact_serve(request, bookmark_id, asset=""):
     except ArtifactBookmark.DoesNotExist:
         raise Http404("Bookmark not found")
 
+    from twicc.artifacts.broker_html import ARTIFACT_INNER_DOC_PATH, artifact_shell_response
     from twicc.core.services.artifact_bookmark_mutation import confined_artifact_path
 
-    # Root request → the bookmarked file; asset request → relative to its dir.
-    rel = os.path.join(os.path.dirname(bookmark.relative_path), asset) if asset else bookmark.relative_path
-    abs_path = confined_artifact_path(bookmark.session_id, rel)
+    abs_root = confined_artifact_path(bookmark.session_id, bookmark.relative_path)
+    if asset == "":
+        # Root request. An HTML artifact gets the trusted *shell* page (it iframes
+        # the artifact's inner doc + mounts the broker), so the dedicated page
+        # behaves exactly like the in-SPA preview (design §5/§9). A non-HTML
+        # artifact has no broker need → served directly, unchanged.
+        if abs_root is not None and _guess_raw_content_type(abs_root) == "text/html":
+            return artifact_shell_response(bookmark_id=bookmark.id, allowed_hosts=bookmark.allowed_hosts)
+        abs_path, as_document = abs_root, True
+    elif asset == ARTIFACT_INNER_DOC_PATH:
+        # The shell's iframe target: the artifact document itself, wrapped (shim
+        # + strict CSP).
+        abs_path, as_document = abs_root, True
+    else:
+        # A sibling asset, resolved relative to the bookmark's dir → streamed raw.
+        rel = os.path.join(os.path.dirname(bookmark.relative_path), asset)
+        abs_path, as_document = confined_artifact_path(bookmark.session_id, rel), False
+
     if abs_path is None:
         raise Http404("File not found")
-    # The bookmarked top-level file (asset == "") is the artifact document → wrap
-    # it with the broker (shim + CSP); sibling assets stream raw.
-    response = await asyncio.to_thread(_serve_artifact_file, abs_path, as_document=(asset == ""))
+    response = await asyncio.to_thread(_serve_artifact_file, abs_path, as_document=as_document)
     if response is None:
         raise Http404("File not found")
     return response
@@ -3346,6 +3360,24 @@ async def artifact_broker_shim(request):
     response = await asyncio.to_thread(_raw_file_response, str(shim))
     if response is None:
         raise Http404("Broker shim not built")
+    return response
+
+
+async def artifact_shell_asset(request, asset):
+    """Serve the built artifact-*shell* bundle (phase 5) from
+    ``static/artifact-shell/`` (``shell.js`` / ``shell.css``). Trusted same-origin
+    TwiCC code — Vue + the shared broker composable/prompt — loaded by the
+    dedicated artifact page. Public (non-secret); 404 until ``npm run build``
+    produced it. The route captures a single path segment; confine defensively."""
+    if request.method not in ("GET", "HEAD"):
+        return HttpResponseNotAllowed(["GET", "HEAD"])
+    base = (settings.PACKAGE_DIR / "static" / "artifact-shell").resolve()
+    target = (base / asset).resolve()
+    if not str(target).startswith(str(base) + os.sep):
+        raise Http404("Not found")
+    response = await asyncio.to_thread(_raw_file_response, str(target))
+    if response is None:
+        raise Http404("Artifact shell not built")
     return response
 
 

@@ -383,17 +383,56 @@ def test_unallow_host_endpoint_removes_entry(client, session, project):
 # ── Broker HTML wrapping on the dedicated page (artifact_serve) — phase 3 ──────
 
 
-def test_artifact_serve_wraps_top_level_html(client, session, project, artifacts_root):
+def test_artifact_serve_root_returns_trusted_shell(client, session, project, artifacts_root):
+    # The dedicated page (root) now serves the trusted *shell* (which iframes the
+    # artifact + mounts the broker), so it behaves like the in-SPA preview. The
+    # shell is NOT the artifact: no artifact CSP, no shim injected here.
+    _write_artifact(artifacts_root, "sess-ab", "demo/index.html",
+                    b"<html><head></head><body>hi</body></html>")
+    bm = ArtifactBookmark.objects.create(
+        session=session, project=project, relative_path="demo/index.html",
+        name="Demo", scope=PinMode.PROJECT,
+        allowed_hosts={"https://api.example.com:443": {"kind": "public"}},
+    )
+    res = _run(client.get(f"/artifacts/{bm.id}/"))
+    assert res.status_code == 200
+    assert not res.has_header("Content-Security-Policy")
+    assert b"artifact-broker-shim" not in res.content
+    assert b"/_twicc/artifact-shell/shell.js" in res.content   # the shell bundle
+    assert f"/artifacts/{bm.id}/__twicc_doc__".encode() in res.content  # the inner doc
+    assert b"api.example.com" in res.content                   # allowlist seeded in
+
+
+def test_artifact_serve_inner_doc_wraps_the_artifact(client, session, project, artifacts_root):
+    # The inner-doc sentinel serves the artifact document itself, wrapped (shim +
+    # strict CSP) — this is what the shell's iframe loads.
     _write_artifact(artifacts_root, "sess-ab", "demo/index.html",
                     b"<html><head></head><body>hi</body></html>")
     bm = ArtifactBookmark.objects.create(
         session=session, project=project, relative_path="demo/index.html",
         name="Demo", scope=PinMode.PROJECT,
     )
-    res = _run(client.get(f"/artifacts/{bm.id}/"))
+    res = _run(client.get(f"/artifacts/{bm.id}/__twicc_doc__"))
     assert res.status_code == 200
     assert "connect-src 'none'" in res["Content-Security-Policy"]
     assert b"artifact-broker-shim" in res.content
+
+
+def test_artifact_serve_non_html_root_served_directly(client, session, project, artifacts_root):
+    # A non-HTML artifact has no broker need → served directly (unchanged), not
+    # wrapped in the shell.
+    _write_artifact(artifacts_root, "sess-ab", "report.md", b"# title")
+    bm = ArtifactBookmark.objects.create(
+        session=session, project=project, relative_path="report.md",
+        name="Report", scope=PinMode.PROJECT,
+    )
+    res = _run(client.get(f"/artifacts/{bm.id}/"))
+    assert res.status_code == 200
+    assert not res.has_header("Content-Security-Policy")
+    # Served directly as a raw FileResponse (streaming), not the shell.
+    body = b"".join(res.streaming_content)
+    assert b"/_twicc/artifact-shell/" not in body   # not the shell
+    assert b"# title" in body                        # the file's own bytes
 
 
 def test_artifact_serve_asset_is_served_raw(client, session, project, artifacts_root):

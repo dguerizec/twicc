@@ -1,7 +1,7 @@
 <script setup>
 import { ref, watch, computed, nextTick, useId, inject, onMounted, onBeforeUnmount } from 'vue'
 import { apiFetch } from '../../utils/api'
-import { mountBrokerHost } from '../../artifact-broker/host'
+import { useArtifactBroker } from '../../composables/useArtifactBroker'
 import { useSettingsStore } from '../../stores/settings'
 import { useCommandRegistry } from '../../composables/useCommandRegistry'
 import { usePanZoom } from '../../composables/usePanZoom'
@@ -292,30 +292,13 @@ const artifactBookmark = computed(() =>
 
 // --- Network broker (design §9) ---------------------------------------------
 // Wire the host onto the preview <iframe>: the artifact's fetch/XHR (caught by
-// the injected shim) is brokered here — own assets served locally, cross-origin
-// gated behind the allowlist + a consent prompt, then sent to the server proxy.
+// the injected shim) is brokered — own assets served locally, cross-origin gated
+// behind the allowlist + a consent prompt, then sent to the server proxy. The
+// mount/prompt wiring lives in the shared `useArtifactBroker` composable so the
+// dedicated artifact page behaves identically (phase 5, design §9).
 const previewIframeRef = ref(null)
-const brokerPrompt = ref(null) // { host, ip, kind, canRemember, settle } | null
-let brokerConnection = null
 
-// The host calls this to ask the user; resolves once (button click or dismiss).
-function showBrokerPrompt(target) {
-    return new Promise((resolve) => {
-        let done = false
-        const settle = (decision) => {
-            if (done) return
-            done = true
-            brokerPrompt.value = null
-            resolve(decision)
-        }
-        brokerPrompt.value = { ...target, settle }
-    })
-}
-
-function onBrokerDecision(decision) {
-    brokerPrompt.value?.settle(decision)
-}
-
+// Persist "Forever" onto the bookmark's allowlist via the REST endpoint.
 async function persistBrokerAllow(url, kind) {
     const id = artifactBookmark.value?.id
     if (id == null) return
@@ -326,29 +309,19 @@ async function persistBrokerAllow(url, kind) {
     })
 }
 
-function teardownBroker() {
-    if (brokerConnection) {
-        brokerConnection.destroy()
-        brokerConnection = null
-    }
-    onBrokerDecision('deny') // resolve any prompt left hanging
-}
-
-function setupBroker() {
-    teardownBroker()
-    const iframe = previewIframeRef.value
-    if (!iframe || !isHtmlPreviewActive.value || !htmlPreviewSrc.value) return
-    brokerConnection = mountBrokerHost(iframe, {
-        documentUrl: new URL(htmlPreviewSrc.value, location.href).href,
-        bookmarkId: artifactBookmark.value?.id ?? null,
-        allowedHosts: artifactBookmark.value?.allowed_hosts ?? {},
-        showPrompt: showBrokerPrompt,
-        persistAllow: persistBrokerAllow,
-    })
-}
-
-watch([previewIframeRef, htmlPreviewSrc, isHtmlPreviewActive], setupBroker, { flush: 'post' })
-onBeforeUnmount(teardownBroker)
+const { brokerPrompt, onBrokerDecision } = useArtifactBroker(
+    previewIframeRef,
+    () =>
+        isHtmlPreviewActive.value && htmlPreviewSrc.value
+            ? {
+                  documentUrl: new URL(htmlPreviewSrc.value, location.href).href,
+                  bookmarkId: artifactBookmark.value?.id ?? null,
+                  allowedHosts: artifactBookmark.value?.allowed_hosts ?? {},
+                  persistAllow: persistBrokerAllow,
+              }
+            : null,
+    [previewIframeRef, htmlPreviewSrc, isHtmlPreviewActive],
+)
 
 // --- Edit mode state ---
 const isEditing = ref(false)

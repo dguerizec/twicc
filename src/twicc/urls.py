@@ -38,6 +38,7 @@ urlpatterns = [
     path("api/artifact-bookmarks/<int:bookmark_id>/allowed-hosts/", views.artifact_bookmark_allowed_hosts),
     path("api/artifact-proxy/", artifact_proxy),
     path("_twicc/artifact-broker-shim.js", views.artifact_broker_shim),
+    path("_twicc/artifact-shell/<str:asset>", views.artifact_shell_asset),
     path("api/projects/", views.project_list),
     path("api/projects/<str:project_id>/", views.project_detail),
     path("api/projects/<str:project_id>/trust/resolve/", views.project_trust_resolve),

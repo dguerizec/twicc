@@ -18,43 +18,44 @@
 | 4 | **the host** (`host.js` + `ArtifactBrokerPrompt.vue` + FilePane) **+ final policy** (header pass-through + same-origin promptable host-direct) — E2E-verified | ✅ committed `0fe6ed64` |
 | 4-consent | **"This session" grants** (in-memory, until reload) replacing per-request "once" + **burst coalescing** (N concurrent requests to one host → 1 prompt) — E2E-verified | ✅ committed `f42c96da` |
 | doc | `window.parent` origin-isolation finding (tested + reverted, §13) | ✅ committed `35163802` |
-| **5** | **dedicated-page shell, UNIFIED with the in-SPA preview** (`/artifacts/<id>/`) | ⬜ **NEXT — user asked to do it now (see §2)** |
+| **5** | **dedicated-page shell, UNIFIED with the in-SPA preview** (`/artifacts/<id>/`) | ✅ **DONE + E2E-verified (2026-06-19) — UNCOMMITTED (see §2)** |
 | 4-rest | proxy server-side allowlist re-check (defense-in-depth, §6.4) | ⬜ deferred |
 | 6 | docs (CLAUDE.md/AGENTS.md broker posture, artifacts skill) | ⬜ not started |
 
-`git log --oneline`: a docs-only commit (this hand-off + the §9 shared-wiring note) sits on top of `f42c96da` (consent) · `35163802` (origin-isolation doc) · `0fe6ed64` (phase 4 + policy) · `0b8f65e3` (3c) · `44dc128a` (3a/b) · `2ab97b3f` (2) · `1dc326a5` (1). The last *feature* commit is `f42c96da`. Run `git log` for the true HEAD; working tree clean.
+`git log --oneline`: the last *committed* state is a docs commit `414cf8b4` on top of `f42c96da` (consent) · `35163802` (origin-isolation doc) · `0fe6ed64` (phase 4 + policy) · `0b8f65e3` (3c) · `44dc128a` (3a/b) · `2ab97b3f` (2) · `1dc326a5` (1). **Phase 5 is implemented + verified but NOT yet committed** — the working tree carries the phase-5 diff (see §2 for the file list). Run `git status`/`git log` for the true state.
 
 ---
 
-## 2. THE IMMEDIATE NEXT STEP (resume here) — Phase 5, the UNIFIED dedicated-page shell
+## 2. Phase 5 — UNIFIED dedicated-page shell (DONE 2026-06-19, UNCOMMITTED) + what's next
 
-**User directive (2026-06-19):** make an artifact behave **identically** whether it runs in the in-SPA preview *or* in its isolated page (`/artifacts/<id>/`). The trusted **shell** (iframe-the-artifact + mount the broker host + show the prompt) "should have been done the same on both sides" — i.e. **one shared shell**, not two parallel implementations. Do it **now**, before things diverge further. *(I had only started reading the code when the user interrupted to compact — no phase-5 code written yet. Resume by presenting the plan + confirming the one open decision below, then implement.)*
+**User directive (2026-06-19):** make an artifact behave **identically** in the in-SPA preview *or* its isolated page (`/artifacts/<id>/`) — **one shared shell**, not two parallel implementations. Built with **option A** (a small Vite Vue bundle reusing the exact composable + dialog), per the user's call, with a hard constraint: **minimal bundle, pull in none of the main SPA**. **Implemented + E2E-verified; NOT yet committed** (user commits on request).
 
-### Why it's needed (today's asymmetry)
-- **In-SPA preview (works):** `FilePane.vue` renders the artifact in an `<iframe>` (backend-served, shim+CSP injected) and mounts the broker **host** on it (`mountBrokerHost`) + renders `<ArtifactBrokerPrompt>`. The host lives in the parent (the SPA) → broker works.
-- **Dedicated page (broker dead):** `artifact_serve` (`/artifacts/<id>/`, `asset==""`) serves the artifact **as the top-level document** (shim+CSP injected). There is **no host** — `window.parent` is itself → the shim's `connect()` finds no host → it never installs its interceptor → the artifact's `fetch` falls straight to the CSP `connect-src 'none'` → **blocked**. So a dedicated-page artifact cannot use the network at all.
+### What was the asymmetry (now fixed)
+- **In-SPA preview:** `FilePane.vue` iframes the artifact (backend-served, shim+CSP) and mounts the broker **host** on it in the SPA parent → broker works.
+- **Dedicated page (was broken):** `artifact_serve` served the artifact **as the top-level document** → no parent host → the shim's `connect()` found nobody → no interceptor → the artifact's `fetch` hit CSP `connect-src 'none'` → blocked. A dedicated-page artifact had no network at all.
 
-### The fix
-**Backend** (`views.py` `artifact_serve` ~3304, `_serve_artifact_file` ~1766, `urls.py` artifact routes 112–119):
-- `/artifacts/<id>/` (`asset==""`) → serve a **trusted shell page** (TwiCC HTML), **not** the artifact.
-- Add an **inner-doc route** (sentinel, e.g. `/artifacts/<id>/_doc`) that serves the artifact's **root file as a document** (the current `asset==""` behavior: `_serve_artifact_file(root, as_document=True)`).
-- The shell's `<iframe src>` points at the inner-doc URL. The artifact's relative assets (`./x.css`) resolve to `/artifacts/<id>/x.css` → the existing **sub-asset** route (`asset!=""` → raw). Pick a sentinel that can't collide with a real asset name.
-- Auth already handled: `PasswordAuthMiddleware` gates `/artifacts/`; the page holds the session cookie (so the shell can POST "Forever" to `/api/artifact-bookmarks/<id>/allowed-hosts/`). CSP already has `frame-src 'self'` → the shell may iframe the same-origin inner doc.
+### What was built
+**Backend:**
+- `broker_html.py` — `ARTIFACT_INNER_DOC_PATH = "__twicc_doc__"`, `ARTIFACT_SHELL_JS_URL`/`_CSS_URL`, `artifact_shell_response(*, bookmark_id, allowed_hosts)` (+ `_shell_html`): builds the **trusted shell** page (no artifact CSP, no shim — TwiCC's own code; injects `<script id="twicc-shell-data">` with `{innerDocUrl, bookmarkId, allowedHosts}`, `<` escaped against breakout).
+- `views.py` `artifact_serve` (~3304): `asset==""` → **shell** for an HTML root (else served directly, unchanged for non-HTML); `asset==ARTIFACT_INNER_DOC_PATH` → the artifact doc **wrapped** (shim+CSP); other asset → raw. New `artifact_shell_asset(request, asset)` serves `static/artifact-shell/` (like the shim).
+- `urls.py`: `path("_twicc/artifact-shell/<str:asset>", views.artifact_shell_asset)`. The inner-doc sentinel rides the existing `<path:asset>` route — no new route.
 
-**Frontend (the unification):** extract `FilePane.vue`'s inline broker wiring — `mountBrokerHost` + `showBrokerPrompt`/`onBrokerDecision`/`persistBrokerAllow` + `setupBroker`/`teardownBroker` watch + the `<ArtifactBrokerPrompt>` — into **one shared composable** `useArtifactBroker(iframeRef, opts)`. Then:
-- `FilePane.vue` refactors to use the composable (no behaviour change).
-- The **dedicated shell** is a small page that mounts the **same** composable + `<ArtifactBrokerPrompt>` around its inner iframe. So both sides are literally the same broker shell — the user's requirement.
+**Frontend (the unification):**
+- `frontend/src/composables/useArtifactBroker.js` — the shared wiring (prompt state machine + host mount/teardown + watch). Caller passes `(iframeRef, getConfig, watchSources)`; `getConfig` returns `{documentUrl, bookmarkId, allowedHosts, persistAllow}` or null. **No store/router import** (keeps the shell light).
+- `FilePane.vue` refactored onto it — **identical watch sources + config → zero behaviour change** (its `persistBrokerAllow` still uses `apiFetch`).
+- `frontend/src/artifact-shell/{main.js,ArtifactShellApp.vue}` — the shell app: iframes the inner doc (same sandbox as the preview), mounts the **same** composable + **same** `ArtifactBrokerPrompt.vue`; `persistAllow` is a plain same-origin `fetch` (page holds the cookie). `main.js` imports only Vue + 4 WA components (dialog/button/callout/icon) + WA css/default theme.
+- `frontend/vite.config.shell.js` — standalone lib build → `static/artifact-shell/{shell.js,shell.css}`, `base:'/_twicc/artifact-shell/'`, `define: process.env.NODE_ENV='production'` (lib mode doesn't substitute it → Vue throws `process is not defined` without this). `package.json` build script chains it; output gitignored.
 
-### The one open decision (confirm before building)
-**How to build/serve the shell.** It is a separate Django-served page (not the SPA — `/artifacts/` is outside the SPA catch-all). Options:
-- **(A, faithful to "same on both sides")** a small **Vite-built Vue bundle** that mounts a tiny app: the inner iframe + `useArtifactBroker` + `<ArtifactBrokerPrompt>`. Reuses the exact Vue composable + dialog. Cost: the bundle pulls in Vue + the Web Awesome dialog/button (register them). Mirror the shim's build setup (`vite.config.shim.js` → add a `vite.config.shell.js`, served from a static file like the shim).
-- **(B, lighter)** a Django template + vanilla JS shell that reuses `host.js` (framework-agnostic, already shared) but **re-implements** the prompt in plain HTML. Smaller, but two prompt implementations → drifts from the in-SPA one, which is exactly what the user wants to avoid.
+**Bundle:** `shell.js` ~67.5 kB gzip + `shell.css` ~19.9 kB gzip — Vue + the dialog/button/callout/icon + penpal, nothing of the SPA (82 modules).
 
-**Recommend (A)** to honour "pareil des deux côtés"; confirm the bundle-weight trade-off with the user first.
+### ⚠️ Test-env gotcha that cost real time (NOT a bug)
+On a **hidden/background tab**, the browser **freezes Web Animations** → the wa-dialog's hide animation never reaches `finished` → `wa-after-hide`/`dialog.close()` never fire → **the consent dialog stays open and its `<dialog>` overlay blocks the page**. Looks exactly like a close bug; it isn't. Symptom signature: `document.visibilityState==='hidden'` + the panel's `getAnimations()` stuck at `"running"` + `open` reverting to true. **Bring the tab to the foreground before testing any WA animated open/close.** No real-world impact (a user must see the modal tab to click a decision → it's visible → animation runs → closes). Verified: identical component closes instantly on a **visible** tab (both FilePane and the shell).
 
-### Scope notes
-- The dedicated page is **bookmarked-only** (it has an `<id>`). **Non-bookmarked** artifacts stay **in-SPA-preview only** (unchanged). The design already specifies all this: §5 (two run contexts), §6.1 O1 ("implemented together", inner-doc path is cosmetic), §9 ("two mounts, host.js shared").
-- This was always meant to ship *with* phase 4 (O1) but slipped; doing it now keeps the two contexts from diverging.
+### What's next (resume here)
+Phase 5 is done. Remaining, in order:
+1. **Commit phase 5** when the user asks (the diff spans the files in §5).
+2. **Proxy server-side allowlist re-check** (§6.4/§7) — defense-in-depth, independent.
+3. **Phase 6 docs** (CLAUDE.md/AGENTS.md broker posture + artifacts skill).
 
 ---
 
@@ -81,11 +82,12 @@ uv run ./devctl.py start back
 `.env` has **no** `TWICC_PASSWORD_HASH`, so `/api/*` and `/rpc/` are **un-authenticated** in this worktree (handy for curl). Starting/restarting servers is user-reserved — the user has been authorizing it for this worktree.
 
 ### Building the frontend / the shim (NON-OBVIOUS)
-The hatchling build hook (`hatch_build.py`) **SKIPS `npm ci` + `npm run build` if `src/twicc/static/frontend/index.html` exists** — so a devctl restart does **NOT** rebuild the frontend. To rebuild the **shim** bundle (the only frontend piece not HMR'd — it's served from the built static file; the future **shell** bundle, phase 5 option A, will be the same):
+The hatchling build hook (`hatch_build.py`) **SKIPS `npm ci` + `npm run build` if `src/twicc/static/frontend/index.html` exists** — so a devctl restart does **NOT** rebuild the frontend. The **shim** and the **shell** bundles are the only frontend pieces NOT HMR'd — they're served from built static files, so editing `frontend/src/artifact-broker/*` or `frontend/src/artifact-shell/*` (or their vite configs) needs a rebuild:
 ```bash
-cd frontend && npm run build   # = vite build && vite build --config vite.config.shim.js
+cd frontend && npm run build   # = vite build && vite build --config vite.config.shim.js && vite build --config vite.config.shell.js
+# (or just the one you touched, e.g. `npx vite build --config vite.config.shell.js`)
 ```
-The shim output `src/twicc/static/artifact-broker/shim.js` is **gitignored**. Deps `penpal@7.0.6` + `@mswjs/interceptors@0.41.9` are in `package.json`/lock; `npm ci` if missing.
+Outputs `static/artifact-broker/shim.js` + `static/artifact-shell/{shell.js,shell.css}` are **gitignored**. They're served with never-cache headers, so a browser reload picks up a rebuild **without** a backend restart. Deps `penpal@7.0.6` + `@mswjs/interceptors@0.41.9` (+ `vue`, `@awesome.me/webawesome` for the shell) are in `package.json`/lock; `npm ci` if missing.
 
 ### Migrations
 `0109_artifactbookmark_allowed_hosts` exists and is applied. devctl auto-applies migrations at backend startup — **never `migrate` by hand.**
@@ -109,17 +111,19 @@ The shim output `src/twicc/static/artifact-broker/shim.js` is **gitignored**. De
 
 **Backend (Python):**
 - `src/twicc/artifacts/proxy.py` — `classify_ip`, `resolve_target` (resolve+pin), `normalize_host_key`, `filter_request_headers`/`filter_response_headers` (**pass-through, mechanical-only drops**), `proxy_fetch` (pinned), the `artifact_proxy` view (preflight/fetch modes). Tests: `tests/test_artifact_proxy.py` (39).
-- `src/twicc/artifacts/broker_html.py` — `inject_broker_shim`, `ARTIFACT_CSP`, `artifact_html_response`, `is_artifact_document_request`, `BROKER_SHIM_URL`. Tests: `tests/test_artifact_broker_html.py` (13).
-- `src/twicc/views.py` — `_serve_artifact_file` (~1766) wired into `artifact_serve` (~3304)/`file_raw`/`standalone_file_raw`; `artifact_proxy`; `artifact_bookmark_allowed_hosts`; `artifact_broker_shim`. *(Phase 5 touches `artifact_serve` + adds an inner-doc route.)*
+- `src/twicc/artifacts/broker_html.py` — `inject_broker_shim`, `ARTIFACT_CSP`, `artifact_html_response`, `is_artifact_document_request`, `BROKER_SHIM_URL`; **phase 5:** `ARTIFACT_INNER_DOC_PATH`, `ARTIFACT_SHELL_JS_URL`/`_CSS_URL`, `artifact_shell_response`/`_shell_html`. Tests: `tests/test_artifact_broker_html.py` (17).
+- `src/twicc/views.py` — `_serve_artifact_file` (~1766) wired into `artifact_serve` (~3304, **phase 5: shell / inner-doc / raw branching**)/`file_raw`/`standalone_file_raw`; `artifact_proxy`; `artifact_bookmark_allowed_hosts`; `artifact_broker_shim`; **phase 5: `artifact_shell_asset`** (serves the built shell bundle).
 - `src/twicc/core/models.py` — `ArtifactBookmark.allowed_hosts` (JSONField, migration `0109`); `serializers.py` exposes it; `services/artifact_bookmark_mutation.py` — `add/remove_artifact_allowed_host` (lock + broadcast, REST-only); `confined_artifact_path`.
-- `src/twicc/urls.py` — `api/artifact-proxy/`, `api/artifact-bookmarks/<id>/allowed-hosts/`, `_twicc/artifact-broker-shim.js`, `artifacts/<id>/…` (artifact_serve), `artifacts/auth`. Tests: `tests/test_artifact_bookmarks.py`.
+- `src/twicc/urls.py` — `api/artifact-proxy/`, `api/artifact-bookmarks/<id>/allowed-hosts/`, `_twicc/artifact-broker-shim.js`, **`_twicc/artifact-shell/<str:asset>` (phase 5)**, `artifacts/<id>/…` (artifact_serve), `artifacts/auth`. Tests: `tests/test_artifact_bookmarks.py` (incl. shell / inner-doc / non-HTML-direct).
 
 **Frontend:**
 - `frontend/src/artifact-broker/shim.js` (3c) — runs in the iframe; intercepts fetch/XHR → `host.proxyFetch` over penpal; wraps broker errors as `TypeError('broker: …')`.
 - `frontend/src/artifact-broker/host.js` — `createBrokerHost` (`proxyFetch`: own-dir → `hostDirectFetch` no prompt; else preflight + **consent gate** `gate()` with per-host coalescing + `isAllowed`; same-origin → `hostDirectFetch` authenticated, cross-origin → server proxy) + `mountBrokerHost(iframe, opts)` (penpal parent). Framework-agnostic — both mounts call it.
 - `frontend/src/components/artifacts/ArtifactBrokerPrompt.vue` — consent dialog (wa-dialog; **Deny / Forever / This session** + "until you reload this tab" caption; warns when target isn't public). Emits `'deny'|'forever'|'session'`.
-- `frontend/src/components/files/FilePane.vue` — mounts the host on the preview iframe (`previewIframeRef`, `brokerPrompt`, `showBrokerPrompt`/`onBrokerDecision`/`persistBrokerAllow`, `setupBroker`/`teardownBroker` watch + `onBeforeUnmount`). **Phase 5 extracts this wiring into a shared `useArtifactBroker` composable.**
-- Build config (3c): `frontend/vite.config.shim.js`, `vite.config.js` (`/_twicc` dev proxy), `package.json`/lock.
+- `frontend/src/composables/useArtifactBroker.js` (**phase 5**) — the shared broker wiring (prompt state machine + host mount/teardown + watch); used by both `FilePane.vue` and the shell. No store/router import.
+- `frontend/src/components/files/FilePane.vue` — now uses `useArtifactBroker(previewIframeRef, getConfig, [previewIframeRef, htmlPreviewSrc, isHtmlPreviewActive])`; keeps its own `persistBrokerAllow` (via `apiFetch`). Behaviour unchanged.
+- `frontend/src/artifact-shell/{main.js,ArtifactShellApp.vue}` (**phase 5**) — the dedicated-page shell app: iframes the inner doc (same sandbox), mounts the same composable + `ArtifactBrokerPrompt.vue`; `persistAllow` = plain same-origin `fetch`.
+- Build config: `frontend/vite.config.shim.js` (3c), **`frontend/vite.config.shell.js` (phase 5)**, `vite.config.js` (`/_twicc` dev proxy), `package.json` (build chains shim + shell)/lock. Both shim + shell outputs gitignored.
 
 ---
 
@@ -138,9 +142,19 @@ A test artifact (`broker-test.html` in this session's artifacts dir — **kept o
 
 **Known minor limitation (not a bug):** `setupBroker`'s watch depends on the iframe/src, not on `artifactBookmark`. So bookmarking *while* previewing requires a reload before "Forever" is offered / the persisted allowlist is picked up (the shim handshakes once → host can only safely re-mount on an iframe reload). Theoretical async-bookmark-load race; not observed.
 
+**Phase 5 — dedicated page `/artifacts/<id>/` E2E-verified (2026-06-19, Chrome MCP, bookmark id 6):**
+- ✅ Shell mounts; artifact renders in the inner iframe; "Shim status: ready".
+- ✅ Cross-origin `example.com` via the **server proxy**, with the **persisted "Forever" allowlist seeded into the shell** → no prompt, 200.
+- ✅ Own asset host-direct, no prompt. Metadata `169.254.169.254` blocked.
+- ✅ **Header forwarding** (`Authorization` + `X-Twicc-Test` echoed) through the proxy.
+- ✅ Consent **prompt renders in the shell** (host/ip/kind + warning callout for loopback; Deny/Forever/This session).
+- ✅ **Coalescing** (4 concurrent → 1 prompt) + **"This session"** grant (re-fire → 0 prompts).
+- ✅ Dialog **closes cleanly** on a visible tab (see the §2 hidden-tab gotcha).
+- ✅ **FilePane non-regression**: the in-SPA preview still prompts + closes correctly.
+
 ---
 
-## 7. Known deferred / TODO (besides phase 5 in §2)
+## 7. Known deferred / TODO (phase 5 is DONE — see §2)
 
 - **Proxy server-side allowlist re-check (§6.4).** The proxy does metadata-block + pin + fetch but does **not** re-validate the target against the bookmark's `allowed_hosts` (the host gates client-side). Add a server-side check in `artifact_proxy` fetch mode (load bookmark, normalize key, require membership / a valid once-grant — mind that "This session" grants are **not** persisted, so the proxy can't see them; the `grant:'once'` field carries the host's decision) + tests. Defense-in-depth (the iframe can't reach the proxy anyway thanks to CSP, but the proxy shouldn't be a confused deputy).
 - **Phase 6 — docs:** CLAUDE.md + AGENTS.md (broker posture: widgets use plain `fetch`, it's brokered, header pass-through, only metadata blocked), the artifacts skill.
@@ -152,7 +166,7 @@ A test artifact (`broker-test.html` in this session's artifacts dir — **kept o
 ## 8. How to resume
 
 1. Read this hand-off + the design doc.
-2. `git -C <worktree> log --oneline -8` and `git status --short` to confirm state (clean; last feature commit `f42c96da`, a docs-only commit on top).
-3. Confirm servers: `curl -s http://localhost:3502/_twicc/artifact-broker-shim.js | head -c 40` (should be JS) — if down, restart per §3 (mind the zombie; a backend restart is needed for any `.py` change).
-4. **Do §2 — phase 5 (unified dedicated-page shell).** Present the plan + confirm the open decision (shell build A vs B), then implement: backend shell + inner-doc route, extract `useArtifactBroker`, build the shell, refactor FilePane, E2E-verify **both** contexts (open `/artifacts/<id>/` in a tab → the broker prompt must work there too).
-5. Then: proxy server-side re-check → phase 6 docs.
+2. `git -C <worktree> log --oneline -8` and `git status --short`: last *commit* is the docs `414cf8b4`; **the phase-5 diff is UNCOMMITTED in the working tree** (backend + `useArtifactBroker` + `artifact-shell/` + vite config + this doc). Run the tests to confirm green: `TWICC_DATA_DIR=$PWD .venv/bin/python -m pytest -q` (644 passing).
+3. Confirm servers: `curl -s http://localhost:3502/_twicc/artifact-shell/shell.js | head -c 40` (should be JS) — if down/404, restart per §3 (a `.py` change needs a backend restart; a frontend-bundle change needs `npm run build` only).
+4. **Commit phase 5 when the user asks.** Then: proxy server-side re-check (§6.4/§7) → phase 6 docs.
+5. To re-run the dedicated-page E2E: open `/artifacts/<id>/` (e.g. `/artifacts/6/`) **in a foreground tab** (the §2 hidden-tab animation gotcha) and exercise the broker-test buttons.
