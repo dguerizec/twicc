@@ -502,8 +502,8 @@ focused signals; e.g. Git stops polling when not shown) and a tmux **reaper/GC**
   **decided = absent** (done in the resolver — what's left there is the registry + persistence, below);
   overlay route-derivation, swap-on-navigate, borders, the clearance (now per dock context) and the
   icons are done + live-verified. What's genuinely left below is persistence + new interactions.
-- **Compact polish (deferred):** optionally **shrink** the inline tab bar in compact to reclaim some
-  vertical space (user deferred sizing); judge the now-empty collapsed compact header.
+- **Compact tab bar + custom tab styling: DONE** (user-confirmed 2026-06-19). The inline compact tab
+  bar and the tab visual styling are finished — do **not** re-list these as remaining.
 - **Focus model polish:** tab lifecycle (run work on "became visible/focused", not on tab activation).
   The file-clears-on-blur, focus-race, overlay-focus and route-derivation work is **done** (see the
   route/focus + 2026-06-18 sections) — this is just the remaining "lifecycle hooks" idea.
@@ -518,8 +518,8 @@ focused signals; e.g. Git stops polling when not shown) and a tmux **reaper/GC**
   (the payoff of the optional-empty model — the resolver already honors it).
 - **Interactions/UX:** keyboard nav; reset (project/default/tabbed); drag-and-drop placement; named
   layouts/presets; animations. (Maximize/restore is **done** — see the 2026-06-19 session.)
-- **Polish/divers:** custom tab styling (vs native WA); structural-vs-resize-min naming; keep
-  docs/AGENTS.md/CLAUDE.md in sync if rules change. (The old "bottom region + empty-optional bottom
+- **Polish/divers:** structural-vs-resize-min naming; keep docs/AGENTS.md/CLAUDE.md in sync if rules
+  change. (Custom tab styling is **done** — see above. The old "bottom region + empty-optional bottom
   gutter" coexistence edge case is now **moot** — empty-optional docks no longer exist.)
 
 ## Testing notes (how this was verified — reuse for next time)
