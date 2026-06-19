@@ -11,11 +11,12 @@ const props = defineProps({
     hasDocks: { type: Boolean, default: false },
 })
 
-const emit = defineEmits(['save', 'select'])
+const emit = defineEmits(['save', 'select', 'manage'])
 
-// Uppercase sentinel for the Save item — layout ids are always lowercased slugs, so it can never
-// collide with a named layout's id.
+// Uppercase sentinels for the action items — layout ids are always lowercased slugs, so they can
+// never collide with a named layout's id.
 const SAVE_VALUE = '__SAVE__'
+const MANAGE_VALUE = '__MANAGE__'
 
 const layoutsStore = useLayoutsStore()
 const namedLayouts = computed(() => layoutsStore.getAllLayouts)
@@ -24,6 +25,7 @@ function onSelect(event) {
     const value = event.detail?.item?.value
     if (!value) return
     if (value === SAVE_VALUE) emit('save')
+    else if (value === MANAGE_VALUE) emit('manage')
     else emit('select', value)
 }
 </script>
@@ -58,6 +60,14 @@ function onSelect(event) {
         <wa-dropdown-item disabled class="layout-menu-header">Select layout</wa-dropdown-item>
         <wa-dropdown-item :value="SINGLE_PANE_ID">Single pane</wa-dropdown-item>
         <wa-dropdown-item v-for="l in namedLayouts" :key="l.id" :value="l.id">{{ l.name }}</wa-dropdown-item>
+
+        <template v-if="namedLayouts.length">
+            <wa-divider></wa-divider>
+            <wa-dropdown-item :value="MANAGE_VALUE">
+                <wa-icon slot="icon" name="sliders"></wa-icon>
+                Manage layouts…
+            </wa-dropdown-item>
+        </template>
     </wa-dropdown>
 </template>
 

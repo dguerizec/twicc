@@ -14,6 +14,7 @@ import NotificationSettings from './NotificationSettings.vue'
 import TipsSettings from '../settings/TipsSettings.vue'
 import AppTooltip from '../ui/AppTooltip.vue'
 import ChangelogDialog from './ChangelogDialog.vue'
+import LayoutManagerDialog from '../session/layout/LayoutManagerDialog.vue'
 import ProviderSettingsSection from './ProviderSettingsSection.vue'
 import { sendChangelogSeen, sendValidateUsageDumpPath, sendValidateUsageFile, sendValidateTmuxConfigPath } from '../../composables/useWebSocket'
 import { useProviderActivation } from '../../composables/useProviderActivation'
@@ -595,6 +596,11 @@ const displayModeOptions = [
 /** Handle the global default-layout change. */
 function onDefaultLayoutChange(event) {
     store.setDefaultLayoutId(event.target.value)
+}
+
+const layoutManagerDialogRef = ref(null)
+function onManageLayouts() {
+    layoutManagerDialogRef.value?.open()
 }
 
 /**
@@ -1278,6 +1284,12 @@ function onChangelogClose() {
                             button at the right of the tab bar) and choose “Save layout”.
                         </span>
                     </div>
+                    <div class="setting-group">
+                        <wa-button appearance="accent" size="small" @click="onManageLayouts">
+                            <wa-icon slot="start" name="sliders"></wa-icon>
+                            Manage layouts…
+                        </wa-button>
+                    </div>
                 </section>
 
                 <!-- Title Suggestion Section -->
@@ -1633,6 +1645,7 @@ function onChangelogClose() {
         </footer>
     </wa-popover>
     <ChangelogDialog ref="changelogDialogRef" @close="onChangelogClose" />
+    <LayoutManagerDialog ref="layoutManagerDialogRef" />
 </template>
 
 <style scoped>

@@ -21,6 +21,7 @@ import SessionLayout from '../components/session/layout/SessionLayout.vue'
 import TabPlacementMenu from '../components/session/layout/TabPlacementMenu.vue'
 import LayoutMenu from '../components/session/layout/LayoutMenu.vue'
 import LayoutSaveDialog from '../components/session/layout/LayoutSaveDialog.vue'
+import LayoutManagerDialog from '../components/session/layout/LayoutManagerDialog.vue'
 import { useLayoutsStore } from '../stores/layouts'
 import AppTooltip from '../components/ui/AppTooltip.vue'
 import ProcessIndicator from '../components/ui/ProcessIndicator.vue'
@@ -746,6 +747,10 @@ function onSelectLayout(layoutId) {
 }
 function onOpenSaveLayout() {
     layoutSaveDialogRef.value?.open()
+}
+const layoutManagerDialogRef = ref(null)
+function onManageLayouts() {
+    layoutManagerDialogRef.value?.open()
 }
 function onCenterMaximize() {
     layout.maximize(['center'])
@@ -1501,7 +1506,7 @@ onBeforeUnmount(() => {
                  auto-margin (a wa-dropdown host is display:contents, so a margin on it is ignored).
                  The layout menu (Save + Select) is always shown; Maximize only when not single pane. -->
             <div slot="nav" class="layout-nav-cluster">
-                <LayoutMenu :has-docks="hasDocks" @save="onOpenSaveLayout" @select="onSelectLayout" />
+                <LayoutMenu :has-docks="hasDocks" @save="onOpenSaveLayout" @select="onSelectLayout" @manage="onManageLayouts" />
 
                 <wa-button
                     v-if="hasDocks"
@@ -1582,6 +1587,9 @@ onBeforeUnmount(() => {
 
         <!-- Save-layout dialog (opened from the tab nav's Save button) -->
         <LayoutSaveDialog v-if="session" ref="layoutSaveDialogRef" :intention="currentLayoutTemplate" />
+
+        <!-- Catalog manager (rename / delete + reassignment), opened from the layout menu's "Manage…" -->
+        <LayoutManagerDialog v-if="session" ref="layoutManagerDialogRef" />
 
         <!-- Tool panels: mounted once here, teleported to their center slot, dock region, or overlay.
              Moving a tab between docks just retargets its Teleport — the instance is never re-mounted. -->
