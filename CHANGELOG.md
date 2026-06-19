@@ -15,6 +15,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Question widget** — ability to cancel or partially submit Claude's questions.
 - **Claude Agent SDK** — Upgrade from 0.2.99 to 0.2.104 (bundled Claude Code CLI: 2.1.175 → 2.1.181)
 
+### Fixed
+
+- **Claude Code** — usage sync recovers when the OAuth token cache is stale.
+
 ## [1.8.3] - 2026-06-15
 
 ### Summary

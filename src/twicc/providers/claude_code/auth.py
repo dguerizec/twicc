@@ -29,13 +29,19 @@ CREDENTIALS_PATH = Path.home() / ".claude" / ".credentials.json"
 KEYCHAIN_SERVICE = "Claude Code-credentials"
 
 # Track expiresAt values for which a token refresh has already been attempted
-# (and failed), to avoid retrying the SDK call for the same stale token.
+# (and failed), to avoid re-spawning the costly SDK throwaway call for the same
+# dead token on every cycle. The key is always the value read from *storage* at
+# refresh time (never a cached one), so a token that moves forward bypasses the
+# guard naturally; ``note_credentials_accepted()`` clears it once any token is
+# accepted by the API. Mirrors the equivalent guard in the Codex refresh path.
 _failed_refresh_expires: set[int] = set()
 
-# Cached (token, expiresAt) tuple. Populated by get_credentials() on first
-# read, reused on subsequent calls, and invalidated by refresh_token_via_sdk()
-# so we don't hit the macOS Keychain (which can prompt for authorization)
-# on every usage sync.
+# Cached (token, expiresAt) tuple. Populated by get_credentials() on first read
+# and reused on subsequent calls (so we don't hit the macOS Keychain — which can
+# prompt for authorization — on every usage sync). Dropped by
+# ``invalidate_credentials_cache()`` — called both at the start of a refresh
+# attempt and on a usage-API 401 — so a token refreshed underneath us (by a real
+# session, or a logout/login) is picked up on the re-read.
 _cached_credentials: tuple[str, int] | None = None
 
 # Timeout for the SDK token refresh call
@@ -122,8 +128,9 @@ def get_credentials() -> tuple[str, int] | None:
 
     Returns the cached value if available; otherwise reads from the
     Keychain (macOS) or file, caches it, and returns. The cache is
-    invalidated by ``refresh_token_via_sdk()`` so a refreshed token
-    is picked up on the next call.
+    dropped by ``invalidate_credentials_cache()`` (at the start of a
+    refresh attempt and on a usage-API 401) so a refreshed or
+    re-logged-in token is picked up on the next call.
 
     Returns:
         A (token, expires_at_ms) tuple, or None if not found.
@@ -149,6 +156,30 @@ def get_credentials() -> tuple[str, int] | None:
     return _cached_credentials
 
 
+def invalidate_credentials_cache() -> None:
+    """Drop the cached credentials so the next read goes back to storage.
+
+    Call this after any external action that may have rewritten the
+    credentials store (a real session refreshing the OAuth token, or a
+    logout/login), and on a usage-API 401 before deciding whether the
+    rejection is mere cache staleness or a genuinely expired token.
+    """
+    global _cached_credentials
+    _cached_credentials = None
+
+
+def note_credentials_accepted() -> None:
+    """Forget past refresh failures after the API accepts the current token.
+
+    A successful usage fetch proves the live token works, so any expiresAt
+    recorded in :data:`_failed_refresh_expires` is moot. Clearing keeps the
+    guard from pinning a later expiry to a stale "already attempted" verdict
+    and stops the set growing unbounded over the process lifetime. Mirrors
+    the equivalent helper in the Codex credentials path.
+    """
+    _failed_refresh_expires.clear()
+
+
 def refresh_token_via_sdk(expires_at: int) -> bool:
     """
     Attempt to refresh the OAuth token by making a throwaway SDK call.
@@ -156,23 +187,25 @@ def refresh_token_via_sdk(expires_at: int) -> bool:
     The SDK automatically refreshes the stored credentials when it connects.
     We send a trivial prompt and discard the response.
 
-    Invalidates the credentials cache before the SDK call, then re-reads
-    via ``get_credentials()`` so the cache is repopulated with the
-    refreshed token.
+    ``expires_at`` is the value seen on the failed call (read fresh from
+    storage by the caller, never from the cache); we use it as a cache key
+    so a permanently-stale token doesn't trigger an endless refresh loop.
+    The credentials cache is invalidated before the SDK call, then re-read
+    after to detect whether ``expiresAt`` actually moved forward — that's
+    the success signal.
 
     Returns True if the token was refreshed (expiresAt changed), False otherwise.
     """
-    global _cached_credentials
-
-    if expires_at in _failed_refresh_expires:
+    if expires_at and expires_at in _failed_refresh_expires:
         logger.info("Token refresh already attempted for expiresAt=%d, skipping", expires_at)
         return False
 
-    _failed_refresh_expires.add(expires_at)
+    if expires_at:
+        _failed_refresh_expires.add(expires_at)
 
     logger.info("Attempting token refresh via SDK (current expiresAt=%d)", expires_at)
 
-    _cached_credentials = None
+    invalidate_credentials_cache()
 
     try:
         asyncio.run(_sdk_throwaway_call())
