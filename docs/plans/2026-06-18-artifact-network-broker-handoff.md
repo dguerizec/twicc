@@ -10,25 +10,26 @@
 
 | Phase | What | State |
 |---|---|---|
-| Design | doc + decisions O1–O5 + refinements | ✅ committed `462acd90` (+ later edits folded into later commits) |
-| 1 | server proxy + IP guard (`classify_ip`, `resolve_target`, pinned `proxy_fetch`, `/api/artifact-proxy/`) | ✅ committed `1dc326a5` |
-| 2 | `ArtifactBookmark.allowed_hosts` + migration 0109 + serializer + REST mutation endpoint/service | ✅ committed `2ab97b3f` |
-| 3a/b | broker HTML serving: shim injection + strict CSP, wired into `artifact_serve` + `file_raw`/`standalone_file_raw` | ✅ committed `44dc128a` |
-| 3c | shim bundle (penpal + @mswjs/interceptors → IIFE) built + served at `/_twicc/artifact-broker-shim.js` | ✅ committed `0b8f65e3` |
-| 4 | **the host** (`host.js` + `ArtifactBrokerPrompt.vue` + FilePane) **+ final policy** (header pass-through + same-origin promptable host-direct) — E2E-verified | ✅ committed `0fe6ed64` |
-| 4-consent | **"This session" grants** (in-memory, until reload) replacing per-request "once" + **burst coalescing** (N concurrent requests to one host → 1 prompt) — E2E-verified | ✅ committed `f42c96da` |
-| doc | `window.parent` origin-isolation finding (tested + reverted, §13) | ✅ committed `35163802` |
-| **5** | **dedicated-page shell, UNIFIED with the in-SPA preview** (`/artifacts/<id>/`) | ✅ committed `f8967aaf` (E2E-verified 2026-06-19) |
-| 4-rest | proxy server-side allowlist re-check (defense-in-depth, §6.4) | ❌ **decided against 2026-06-19** (design §6.4 "Decision update"; rationale in §7) |
-| 6 | docs (system_prompt Artifacts preamble + CLAUDE.md/AGENTS.md broker posture) | ✅ **DONE 2026-06-19 — UNCOMMITTED** (not the CLI `twicc-artifacts` skill — unrelated) |
+| Design | doc + decisions O1–O5 + refinements | ✅ committed |
+| 1 | server proxy + IP guard (`classify_ip`, `resolve_target`, pinned `proxy_fetch`, `/api/artifact-proxy/`) | ✅ committed |
+| 2 | `ArtifactBookmark.allowed_hosts` + migration 0109 + serializer + REST mutation endpoint/service | ✅ committed |
+| 3a/b | broker HTML serving: shim injection + strict CSP, wired into `artifact_serve` + `file_raw`/`standalone_file_raw` | ✅ committed |
+| 3c | shim bundle (penpal + @mswjs/interceptors → IIFE) built + served at `/_twicc/artifact-broker-shim.js` | ✅ committed |
+| 4 | **the host** (`host.js` + `ArtifactBrokerPrompt.vue` + FilePane) **+ final policy** (header pass-through + same-origin promptable host-direct) — E2E-verified | ✅ committed |
+| 4-consent | **"This session" grants** + **burst coalescing** (N concurrent requests to one host → 1 prompt) — E2E-verified. *(Later upgraded: "This session" → a per-artifact module cache that survives reloads — §4/§9.)* | ✅ committed |
+| doc | `window.parent` origin-isolation finding (tested + reverted, §13) | ✅ committed |
+| **5** | **dedicated-page shell, UNIFIED with the in-SPA preview** (`/artifacts/<id>/`) — E2E-verified | ✅ committed |
+| 4-rest | proxy server-side allowlist re-check (defense-in-depth, §6.4) | ❌ **decided against** (design §6.4 "Decision update"; rationale in §7) |
+| 6 | docs (system_prompt Artifacts preamble + CLAUDE.md/AGENTS.md broker posture) | ✅ committed (not the CLI `twicc-artifacts` skill — unrelated) |
+| polish | consent-dialog rework (explicit question, "Yes, …"/"No, deny" buttons, adaptive loopback/LAN callout) + live "Forever" eligibility + timed-grant tier dropped | ✅ committed |
 
-`git log --oneline` recent broker commits (newest first): consent-dialog UX (`No, deny`/`Yes, …` + adaptive callout) · `652b61de` ("This session" module cache, survives reloads) · `f2dfc268` (live "Forever" eligibility) · `f8967aaf` (**phase 5** — unified dedicated-page shell) · `f42c96da` (consent) · `0fe6ed64` (phase 4 + policy) · `0b8f65e3`/`44dc128a` (3) · `2ab97b3f` (2) · `1dc326a5` (1), interleaved with `docs(artifacts)` commits. **Run `git log` for the true HEAD** (this hand-off doesn't track every hash).
+**HEAD = post-rebase onto local `main` (2026-06-19).** The branch was rebased onto local `main`, so all its commits carry **new SHAs**; the pre-rebase tip is preserved as tag **`artifacts-fetch-pre-rebase`**. This hand-off intentionally **does not pin commit hashes** (they churn on every rebase) — run `git log --oneline` for the true HEAD and history. Everything above is committed; **nothing broker-related is uncommitted**. Deferred (out of v1, by decision): nothing actionable — see §7.
 
 ---
 
-## 2. Phase 5 — UNIFIED dedicated-page shell (DONE 2026-06-19, UNCOMMITTED) + what's next
+## 2. Phase 5 — UNIFIED dedicated-page shell (DONE — committed)
 
-**User directive (2026-06-19):** make an artifact behave **identically** in the in-SPA preview *or* its isolated page (`/artifacts/<id>/`) — **one shared shell**, not two parallel implementations. Built with **option A** (a small Vite Vue bundle reusing the exact composable + dialog), per the user's call, with a hard constraint: **minimal bundle, pull in none of the main SPA**. **Implemented + E2E-verified; NOT yet committed** (user commits on request).
+**User directive (2026-06-19):** make an artifact behave **identically** in the in-SPA preview *or* its isolated page (`/artifacts/<id>/`) — **one shared shell**, not two parallel implementations. Built with **option A** (a small Vite Vue bundle reusing the exact composable + dialog), per the user's call, with a hard constraint: **minimal bundle, pull in none of the main SPA**. **Implemented, E2E-verified, and committed.**
 
 ### What was the asymmetry (now fixed)
 - **In-SPA preview:** `FilePane.vue` iframes the artifact (backend-served, shim+CSP) and mounts the broker **host** on it in the SPA parent → broker works.
@@ -51,11 +52,8 @@
 ### ⚠️ Test-env gotcha that cost real time (NOT a bug)
 On a **hidden/background tab**, the browser **freezes Web Animations** → the wa-dialog's hide animation never reaches `finished` → `wa-after-hide`/`dialog.close()` never fire → **the consent dialog stays open and its `<dialog>` overlay blocks the page**. Looks exactly like a close bug; it isn't. Symptom signature: `document.visibilityState==='hidden'` + the panel's `getAnimations()` stuck at `"running"` + `open` reverting to true. **Bring the tab to the foreground before testing any WA animated open/close.** No real-world impact (a user must see the modal tab to click a decision → it's visible → animation runs → closes). Verified: identical component closes instantly on a **visible** tab (both FilePane and the shell).
 
-### What's next (resume here)
-Phase 5 is done. Remaining, in order:
-1. **Commit phase 5** when the user asks (the diff spans the files in §5).
-2. **Proxy server-side allowlist re-check** (§6.4/§7) — defense-in-depth, independent.
-3. **Phase 6 docs** (CLAUDE.md/AGENTS.md broker posture + artifacts skill).
+### Status: done
+Phase 5 shipped, plus everything that followed — the consent-dialog polish (explicit question, "Yes, …"/"No, deny" buttons, adaptive loopback/LAN callout), the "This session" module cache (survives reloads), live "Forever" eligibility, the proxy no-recheck **decision** (§7), and phase 6 docs. All committed; the branch is **rebased onto `main`**. Nothing broker-related is left — see §8 for the non-feature leftovers (test-artifact cleanup, push/merge).
 
 ---
 
@@ -157,7 +155,7 @@ A test artifact (`broker-test.html` in this session's artifacts dir — **kept o
 ## 7. Known deferred / TODO (phase 5 is DONE — see §2)
 
 - ~~**Proxy server-side allowlist re-check (§6.4).**~~ **RESOLVED 2026-06-19 — decided against, won't build.** Evaluated the threat model: the iframe (the only untrusted party) can't reach the proxy (CSP `connect-src 'none'`); the endpoint is auth-gated + `SameSite=Lax` so cross-site forgery can't ride the cookie → only first-party trusted code (the host, which already prompts) calls it; metadata is already re-blocked on the fetch path; and an `allowed_hosts` re-check would break the in-memory "This session"/"once" grants (not persisted) and contradict the consent-is-client-authority model. Residual (first-party XSS → SSRF) accepted. Full rationale written into design §6.4 ("Decision update 2026-06-19"). The `grant:"once"` payload field is now vestigial (proxy ignores it) — left in place, harmless.
-- ~~**Phase 6 — docs.**~~ **DONE 2026-06-19 (uncommitted).** Added: (a) `src/twicc/agent/system_prompt.py` Artifacts preamble — a "the page may use the network" note for agents *building* artifacts (plain `fetch`, brokered, per-host consent, headers forwarded, only metadata unreachable); (b) `CLAUDE.md` + `AGENTS.md` — an **Artifact Network Broker** section (invariants/guardrails + design pointer) and `allowed_hosts` on the `ArtifactBookmark` note. **Not** the `twicc-artifacts` skill — it's CLI bookmarking, unrelated to the broker (so no plugin version bump).
+- ~~**Phase 6 — docs.**~~ **DONE 2026-06-19 (committed).** Added: (a) `src/twicc/agent/system_prompt.py` Artifacts preamble — a "the page may use the network" note for agents *building* artifacts (plain `fetch`, brokered, per-host consent, headers forwarded, only metadata unreachable); (b) `CLAUDE.md` + `AGENTS.md` — an **Artifact Network Broker** section (invariants/guardrails + design pointer) and `allowed_hosts` on the `ArtifactBookmark` note. **Not** the `twicc-artifacts` skill — it's CLI bookmarking, unrelated to the broker (so no plugin version bump).
 - **Hardening — `window.parent` bypass (design §13): accepted residual risk in v1.** `allow-same-origin` lets a malicious artifact reach `window.parent`. The cheap fix (opaque origin + explicit-origin CSP) was **E2E-prototyped 2026-06-19 and works** (hole closed; assets + broker + authenticated API survive) **but kills `localStorage`/`cookie`/IndexedDB**, so it was **reverted** — keep `allow-same-origin`. The real fix = a **separate real origin** for artifacts (keeps storage + closes the hole) but is a genuine project, out of v1. Full write-up in design §13.
 - ~~**Timed consent grants** (5 min / 1 h).~~ **Decided against 2026-06-19** — the per-artifact session cache (module-level, survives reloads) already lets you iterate on an artifact without re-approving, so the extra tier isn't worth the complexity. (The `allowed_hosts` value object stays extensible if ever revisited.)
 
@@ -165,8 +163,10 @@ A test artifact (`broker-test.html` in this session's artifacts dir — **kept o
 
 ## 8. How to resume
 
+The broker feature is **complete for v1 and fully committed** (phases 1–6 + the consent-dialog polish); the branch is **rebased onto local `main`**. No broker work is left.
+
 1. Read this hand-off + the design doc.
-2. `git -C <worktree> log --oneline -8` and `git status --short`: last *commit* is the docs `414cf8b4`; **the phase-5 diff is UNCOMMITTED in the working tree** (backend + `useArtifactBroker` + `artifact-shell/` + vite config + this doc). Run the tests to confirm green: `TWICC_DATA_DIR=$PWD .venv/bin/python -m pytest -q` (644 passing).
-3. Confirm servers: `curl -s http://localhost:3502/_twicc/artifact-shell/shell.js | head -c 40` (should be JS) — if down/404, restart per §3 (a `.py` change needs a backend restart; a frontend-bundle change needs `npm run build` only).
-4. **Commit phase 5 when the user asks.** Then: proxy server-side re-check (§6.4/§7) → phase 6 docs.
-5. To re-run the dedicated-page E2E: open `/artifacts/<id>/` (e.g. `/artifacts/6/`) **in a foreground tab** (the §2 hidden-tab animation gotcha) and exercise the broker-test buttons.
+2. `git -C <worktree> log --oneline -20` and `git status --short` — the working tree should be clean and the broker commits sit on top of `main` (pre-rebase tip preserved as tag `artifacts-fetch-pre-rebase`). Confirm green: `TWICC_DATA_DIR=$PWD .venv/bin/python -m pytest -q` (644 passing) and `cd frontend && npm run build`.
+3. The shim + shell bundles aren't HMR'd — after editing `artifact-broker/*` or `artifact-shell/*`, rebuild (`npm run build`); after any `.py` edit, restart the backend (§3, mind the zombie).
+4. To re-run the dedicated-page E2E: open `/artifacts/<id>/` (e.g. `/artifacts/6/`) **in a foreground tab** (the hidden-tab animation gotcha — a background tab freezes the wa-dialog close animation) and exercise the broker-test buttons.
+5. What's left is **non-feature**: clean up the test artifact (`broker-test.html` + bookmark id 6, kept on purpose) when no longer needed; push / merge to `main`. The deferred items in §7 are all closed (decided against), nothing actionable.
