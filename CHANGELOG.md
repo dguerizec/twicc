@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
-- **Artifacts** — agents can create artifacts for you on request (images, interactive playgrounds, …). They render right inside TwiCC and can optionally be bookmarked for quick access in a dedicated view (+CLI, skill and API).
+- **Artifacts** — agents can create artifacts (images, interactive playgrounds that can make network requests you approve, …) rendered inside TwiCC, bookmarkable for quick access in a dedicated view (+CLI/skill/API).
 
 ### Changed
 
