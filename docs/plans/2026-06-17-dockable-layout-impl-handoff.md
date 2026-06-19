@@ -548,9 +548,9 @@ focused signals; e.g. Git stops polling when not shown) and a tmux **reaper/GC**
   `docs/plans/2026-06-19-layout-persistence-impl-plan.md` is the spec. The "remembering an absent tab's
   dock" payoff falls out for free (the catalog/intention key tabs by id; the resolver filters
   `isPresent`). **Deferred only:** per-device localStorage override, per-project named layouts, schema
-  `version`, CLI catalog commands (v2). Doc chore still pending (plan §7): add `layouts.json` to the
-  data-dir inventory in `CLAUDE.md` / `AGENTS.md` and note `Session.layout` / `Project.default_layout_id`
-  in the models section.
+  `version`, CLI catalog commands (v2). Doc chore (plan §7) is **done**: `layouts.json` is in the data-dir
+  inventory of `CLAUDE.md` / `AGENTS.md`, and `Session.layout` / `Project.default_layout_id` are noted in
+  the models section.
 - **Interactions/UX:** keyboard nav; reset (project/default/tabbed); drag-and-drop placement;
   animations. (Maximize/restore, named layouts/presets, save/select/manage are **done**.)
 - **Polish/divers:** structural-vs-resize-min naming; keep docs/AGENTS.md/CLAUDE.md in sync if rules

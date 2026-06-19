@@ -1,8 +1,9 @@
 # Dockable layout — persistence + named layouts (implementation plan)
 
 **Date:** 2026-06-19 · **Branch:** `layout` · **Status:** **BUILT** — steps 1–4 + the menu's scope-default
-rows + alphabetical listing are all implemented and live-verified. Only the §6 v2 items remain deferred,
-plus the §7 doc chore (add `layouts.json` to the `CLAUDE.md`/`AGENTS.md` data-dir inventory).
+rows + alphabetical listing are all implemented and live-verified. The §7 doc chore is **done**
+(`layouts.json` + `Session.layout` / `Project.default_layout_id` are in `CLAUDE.md`/`AGENTS.md`). Only the
+§6 v2 items remain deferred.
 
 Companion to `2026-06-16-dockable-layout-design.md` (§ "Storage / persistence") and the impl handoff
 `2026-06-17-dockable-layout-impl-handoff.md` (§ "What remains → Persistence"). This plan supersedes the
@@ -298,7 +299,7 @@ Steps 1–2 are the smallest *useful* unit (persistence is meaningless to the us
 
 ## 7. Doc/sync chores when this lands
 
-- `CLAUDE.md` + `AGENTS.md`: add `layouts.json` to the synced-config inventory; note `Session.layout` /
-  `Project.default_layout_id` in the models section.
+- **DONE** — `CLAUDE.md` + `AGENTS.md`: `layouts.json` added to the synced-config inventory; `Session.layout` /
+  `Project.default_layout_id` noted in the models section (both files kept in sync).
 - The settings panel's shortcut/section docs if any new shortcut is added (none planned).
 - Mark the impl handoff's "Persistence" item as in-progress/done as steps complete.
