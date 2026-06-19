@@ -7,7 +7,7 @@ the design doc [`2026-06-16-dockable-layout-design.md`](./2026-06-16-dockable-la
 → the pure resolver `frontend/src/utils/layoutResolver.js` (the executable spec).
 
 Branch/worktree: `layout` (`.worktrees/layout`). Its own dev instance runs via devctl
-(frontend **5174**, backend **3501**). The branch is **28 commits** on top of `main` — not pushed, not
+(frontend **5174**, backend **3501**). The branch is **30 commits** on top of `main` — not pushed, not
 merged. Run `git log main..layout` for the breakdown. (Last rebased on `daa4a599`; `main` has since
 advanced to `32cce8cf`, so a re-rebase is due.)
 Persistence is not wired, so layout state is in-memory only (resets on reload).
@@ -25,7 +25,8 @@ layout-side is compile-verified-only anymore.
 
 > The dated sections below are chronological. The **2026-06-19 session** (center re-selects Chat when
 > its tab is docked; the sidebar-toggle clearance refined per dock context + the terminal extra-keys
-> bar; **maximize/restore** a dock or the central zone) is the newest. The **2026-06-18 session** (native wa-tab, edge-aware borders, overlay
+> bar; **maximize/restore** a dock or the central zone; **terminal explicit-start** — separate concern,
+> own doc) is the newest. The **2026-06-18 session** (native wa-tab, edge-aware borders, overlay
 > route-derivation + focus lifecycle, swap-on-navigate, mobile arrows, clearance single-source,
 > tool-tab registry, resize splitters) is the bulk of current behaviour. Read the newest first where it
 > supersedes earlier notes (notably: the overlay is route-derived; the clearance is now per dock context).
@@ -419,6 +420,19 @@ is **restore**. One unified mechanism (user's call: deliberately *not* PyCharm's
 
 Files: `layoutResolver.js`, `data.js`, `useSessionLayout.js`, `DockRegion.vue`, `SessionLayout.vue`,
 `SessionView.vue` (+ the playground resolver/tests/harness as the prototype).
+
+### Terminal explicit-start (separate concern — full doc:`2026-06-19-terminal-lifecycle-layout-analysis.md`)
+A docked-by-default terminal used to auto-create its PTY/tmux just by being shown (region-active on
+render), spawning a tmux session for every session merely viewed. Fixed **on this branch** (commit
+`6ad90552`): the **Main** terminal sub-tab (index 0) no longer auto-creates — it **attaches** if a tmux
+session already exists for it, else shows a **"Start" callout** (reuse of the disconnect overlay); **new
+sub-tabs (index > 0)** auto-connect as before (login + snippet flows untouched). Existence is read from the
+`list_terminals` discovery (`terminalTabs.indices`, main WS, no PTY). `TerminalInstance` gained a
+`startMode` prop (`auto`/`manual`/`pending`, 4s safety net); `TerminalPanel.startModeFor(index)` decides.
+Same in tmux + non-tmux (non-tmux → always Start). **Live-verified in Chrome both modes** (incl. real tmux:
+first visit Start → tmux created → reload auto-attaches). The analysis doc holds the full decisions (Q1–Q5)
+and the still-**open** items: the general **focus-model lifecycle** (Option C — per-tab visible/hidden/
+focused signals; e.g. Git stops polling when not shown) and a tmux **reaper/GC** (Option D), both deferred.
 
 ## Bugs found & fixed live (don't reintroduce)
 

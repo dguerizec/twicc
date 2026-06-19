@@ -214,9 +214,11 @@ The **Main (index-0)** session terminal:
 "Start terminal" callout (reusing the disconnect-overlay UI) whose button calls `start()`. `TerminalPanel`
 computes `startModeFor(index)` from `terminalTabs.indices[contextKey]` (index 0: `pending` until discovery
 resolves, then `auto` if index 0 exists else `manual`; index > 0: always `auto`), with a 4s safety net so a
-dropped discovery falls back to `manual`. Verified in Chrome: no-session → Start callout (no auto-create);
-press Start → connect; an existing session (`indices=[0]`) → silent auto-attach; non-tmux → always Start; no
-console errors. Files: `TerminalInstance.vue`, `TerminalPanel.vue`.
+dropped discovery falls back to `manual`. Verified in Chrome **in both modes**: no-session → Start callout
+(no auto-create); press Start → connect; **non-tmux** → always Start (no persistence); and **real tmux**
+(Settings → Terminal enabled) → first visit Start → tmux session created → **reload auto-attaches** (the
+session persists, `indices=[0]`, no callout); no console errors. Files: `TerminalInstance.vue`,
+`TerminalPanel.vue`.
 
 ---
 
