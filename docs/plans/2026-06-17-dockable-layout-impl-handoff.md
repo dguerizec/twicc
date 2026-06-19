@@ -1,27 +1,33 @@
-# Dockable Layout — Implementation Handoff (2026-06-17, last updated 2026-06-18)
+# Dockable Layout — Implementation Handoff (2026-06-17, last updated 2026-06-19)
 
-Resume point after compaction. **Step 1 is implemented and verified live in the browser.**
+Resume point after compaction. **The feature is functionally complete** — docking + route/focus +
+maximize/restore, and the full persistence stack (per-session `Session.layout`, named-layouts catalog
+with save/select/manage, 3-tier defaults, per-scope menu rows, alphabetical listing). All live-verified.
 Read order to resume: this doc → the step-1 plan
 [`2026-06-16-dockable-layout-impl-step1.md`](./2026-06-16-dockable-layout-impl-step1.md) →
 the design doc [`2026-06-16-dockable-layout-design.md`](./2026-06-16-dockable-layout-design.md)
 → the pure resolver `frontend/src/utils/layoutResolver.js` (the executable spec).
 
 Branch/worktree: `layout` (`.worktrees/layout`). Its own dev instance runs via devctl
-(frontend **5174**, backend **3501**). The branch is **37 commits** on top of `main` — not pushed, not
+(frontend **5174**, backend **3501**). The branch is **42 commits** on top of `main` — not pushed, not
 merged. Run `git log main..layout` for the breakdown. (Last rebased on `daa4a599`; `main` has since
-advanced to `32cce8cf`, so a re-rebase is due.)
-**Persistence is now built (steps 1–3b of the layout-persistence plan — see
-`docs/plans/2026-06-19-layout-persistence-impl-plan.md`).** Layout state survives reload, syncs across
-devices, and new sessions open with a resolved global/project default. What's left there: the menu's
-scope-default rows (deferred) and step 4 (the catalog rename/delete manager). **Requires the dev to
-restart their instance** — migrations `0109` (`Session.layout`) + `0110` (`Project.default_layout_id`).
+advanced to `54fd6b15` — ~22 commits, so a re-rebase is due before merge.)
+**Persistence is COMPLETE** (steps 1–4 of the layout-persistence plan — see
+`docs/plans/2026-06-19-layout-persistence-impl-plan.md`). Layout state survives reload, syncs across
+devices, new sessions open with a resolved global/project default, the named-layouts catalog has a
+save/select menu **and** a rename/delete-with-reassignment manager (step 4), the menu surfaces per-scope
+default rows (worktree → project → global, no duplication with the named list), and every layout list is
+alphabetical. **Requires the dev to restart their instance** — migrations `0109` (`Session.layout`) +
+`0110` (`Project.default_layout_id`). What's left there is only the explicitly-deferred v2 items
+(per-device localStorage override, per-project named layouts, schema `version`, CLI catalog commands).
 
 **Verification status:** verified **live in the browser** — step-1 docking, the route/focus model,
 the overlay route-derivation + focus lifecycle, swap-on-navigate (incl. browser back/forward), the
 clearance (refined per dock context 2026-06-19), and the icons (tab + dock-placement, serve + render).
 The container-relative responsiveness and the compact-mode tab decoupling carried over from the prior
 session were **confirmed live 2026-06-19** (A1/A2 + all of B, plus the reworked A3 clearance) — nothing
-layout-side is compile-verified-only anymore.
+layout-side is compile-verified-only anymore. The **fullscreen-artifact-over-gutters** fix (see Bugs log
+#9) was diagnosed and verified live by DOM hit-test in Chrome.
 
 > Icon set is **Font Awesome Free** — confirmed at the network level: icons load from `ka-f.fontawesome.com`
 > (the free kit host; pro would be `ka-p` + a `?token`), and no kit is configured (`kitCode = ""`). The
@@ -462,15 +468,29 @@ focused signals; e.g. Git stops polling when not shown) and a tmux **reaper/GC**
    check). Fixed with `auto-width` (box shrinks to the glyph) + the strip's grid `place-content: center`.
 7. **Docked-panel chrome over splitters → full-window preview trapped** — panel z-index (10–20) leaked
    over the splitters; `isolation: isolate` on the region fixed that but trapped the FilePane
-   `position:fixed z-1000` full-window preview below the splitters. Fixed by the region providing
-   `expandPreviewHost` that drops its isolation while expanded + chains to the parent host (see the
-   Stacking note in the 2026-06-18 resize section). Don't re-isolate without that escape.
+   `position:fixed z-1000` full-window preview below the splitters. Originally "fixed" by the region
+   providing `expandPreviewHost` that drops its isolation while expanded — but **that provide/inject was
+   dead** (teleport: the panels' logical parent is SessionView, not the dock region), so the class never
+   applied. The real fix is CSS `:has()` — see bug #9. The base `isolation: isolate` stays (it's what
+   keeps panel z-index off the splitters); only the drop trigger changed.
 8. **Center blanked when docking its own active tab** — placing the tab the center was *showing* into a
    dock left the route on it (now active in the dock) but it was no longer a center tab; `lastCenterTab`
    still pointed at it, so `centerActiveTab` named a tab with no `<wa-tab>` in the center strip → empty
    center. Fixed by re-validating the `lastCenterTab` fallback against `isCenterTab` and dropping back to
    Chat (`main`, always center-only) when the remembered tab has left the center. Reactive (the computed
    reads `dockingRendered`/`dockOf`), URL untouched. (`SessionView.centerActiveTab`, commit `51dab168`.)
+9. **Fullscreen artifact preview painted *under* the gutters** — a FilePane preview expanded to full
+   window (`position:fixed; z-index:1000`) sat below a dock's gutters. Root cause (confirmed live by DOM
+   hit-test in Chrome): the preview lives in a `.dock-region` whose `isolation: isolate` traps its
+   z-index at the region's z-auto level, while the gutters (z-index:12) resolve one stacking context
+   higher (`.main-content`) and paint over it. Crucially, bug #7's "drop the isolation via
+   `expandPreviewHost` provide/inject" mechanism was in fact **dead**: the tool panels teleport from
+   SessionView's hidden host, so the injected host never reached the dock region and the
+   `preview-expanded` class never applied (verified by calling the injected host directly — no effect).
+   Replaced the whole chain with one self-contained CSS rule,
+   `.dock-region:has(.file-pane-preview--fullscreen) { isolation: auto }`: the region drops its
+   isolation exactly while it holds a fullscreen preview, so the overlay escapes above the
+   splitters/gutters. No JS, no provide/inject. (commit `6f189f0c`.)
 
 ## Decisions / deviations vs the plans
 
@@ -480,7 +500,8 @@ focused signals; e.g. Git stops polling when not shown) and a tmux **reaper/GC**
   new this session (the plan only sketched "route = single pointer").
 - Auto-focus-on-dock: **kept** (user validated 2026-06-18 — docking a tab focuses it, as desired).
 - Subagent tabs **center-only is settled** (won't change).
-- Resize splitters: still **not wired** (per plan).
+- Resize splitters: **wired** (2026-06-18) — dock + sibling splitters drag live (custom hit-strips,
+  fractions persisted). See the 2026-06-18 resize section.
 - **Optional-empty model reversed (2026-06-18):** an optional tab with no content is now **absent**
   (no tab/dock/gutter/overlay), not collapsed-to-gutter — its placement is just remembered for when
   content arrives. Prototyped in the playground and **ported to the code resolver** (`isPresent`
@@ -490,14 +511,16 @@ focused signals; e.g. Git stops polling when not shown) and a tmux **reaper/GC**
 
 ## Known issues / open (not yet fixed)
 
-- **Persistence — BUILT (steps 1–3b).** `Session.layout` (migration 0109) persists + syncs the
-  per-session intention; a `layouts.json` catalog of named layouts (synced, mirrors workspaces.json)
-  with a save/select menu (`LayoutMenu` ▾); and the 3-tier default (global `settings.defaultLayoutId`
-  → project `Project.default_layout_id` (0110) → session) resolved + frozen at creation, mirroring
-  agent settings. Full design + the remaining steps in
-  `docs/plans/2026-06-19-layout-persistence-impl-plan.md`. **Still open:** the menu's scope-default
-  rows (Project/Global shortcuts) and step 4 (catalog rename/delete manager via `LayoutManagerDialog`,
-  with reassignment-on-delete). `maximized` stays transient (never persisted).
+- **Persistence — COMPLETE (steps 1–4 + scope rows + alphabetical listing).** `Session.layout`
+  (migration 0109) persists + syncs the per-session intention; a `layouts.json` catalog of named layouts
+  (synced, mirrors workspaces.json) with a save/select menu (`LayoutMenu` ▾) **and** a rename/delete
+  manager (`LayoutManagerDialog`, reassignment-on-delete); the 3-tier default (global
+  `settings.defaultLayoutId` → project `Project.default_layout_id` (0110) → session) resolved + frozen at
+  creation, mirroring agent settings; per-scope default rows in the menu (worktree → project → global,
+  deduped against the named list); and alphabetical ordering wherever layouts are listed. Full design in
+  `docs/plans/2026-06-19-layout-persistence-impl-plan.md`. **Deferred (v2):** per-device localStorage
+  override, per-project named layouts, schema `version`, CLI catalog commands. `maximized` stays
+  transient (never persisted).
 - **Layout thresholds/values are placeholders** — tune later: the resolver thresholds, the 800px
   container breakpoint (`useContainerBreakpoint`), the 40rem chat/composer `@container` thresholds,
   and the sidebar-toggle clearance values (centralized in `App.vue` + refined per dock context in
@@ -521,13 +544,15 @@ focused signals; e.g. Git stops polling when not shown) and a tmux **reaper/GC**
   2026-06-18 section). Custom hit-strips, not `wa-split-panel` (so the `wa-reposition` trap is
   sidestepped). The fractions' **persistence is now done** (resizeFractions ride the persisted
   intention).
-- **Persistence: BUILT (steps 1–3b)** — `docs/plans/2026-06-19-layout-persistence-impl-plan.md` is the
-  spec + the remaining steps. The "remembering an absent tab's dock" payoff falls out for free (the
-  catalog/intention key tabs by id; the resolver filters `isPresent`). **Remaining:** menu scope-default
-  rows; step 4 (catalog rename/delete manager + reassignment-on-delete); the per-device localStorage
-  override (v2, deferred).
-- **Interactions/UX:** keyboard nav; reset (project/default/tabbed); drag-and-drop placement; named
-  layouts/presets; animations. (Maximize/restore is **done** — see the 2026-06-19 session.)
+- **Persistence: COMPLETE (steps 1–4 + scope rows + alphabetical listing)** —
+  `docs/plans/2026-06-19-layout-persistence-impl-plan.md` is the spec. The "remembering an absent tab's
+  dock" payoff falls out for free (the catalog/intention key tabs by id; the resolver filters
+  `isPresent`). **Deferred only:** per-device localStorage override, per-project named layouts, schema
+  `version`, CLI catalog commands (v2). Doc chore still pending (plan §7): add `layouts.json` to the
+  data-dir inventory in `CLAUDE.md` / `AGENTS.md` and note `Session.layout` / `Project.default_layout_id`
+  in the models section.
+- **Interactions/UX:** keyboard nav; reset (project/default/tabbed); drag-and-drop placement;
+  animations. (Maximize/restore, named layouts/presets, save/select/manage are **done**.)
 - **Polish/divers:** structural-vs-resize-min naming; keep docs/AGENTS.md/CLAUDE.md in sync if rules
   change. (Custom tab styling is **done** — see above. The old "bottom region + empty-optional bottom
   gutter" coexistence edge case is now **moot** — empty-optional docks no longer exist.)

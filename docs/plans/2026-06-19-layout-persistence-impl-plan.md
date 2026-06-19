@@ -1,6 +1,8 @@
 # Dockable layout — persistence + named layouts (implementation plan)
 
-**Date:** 2026-06-19 · **Branch:** `layout` · **Status:** plan, validated model — not yet built.
+**Date:** 2026-06-19 · **Branch:** `layout` · **Status:** **BUILT** — steps 1–4 + the menu's scope-default
+rows + alphabetical listing are all implemented and live-verified. Only the §6 v2 items remain deferred,
+plus the §7 doc chore (add `layouts.json` to the `CLAUDE.md`/`AGENTS.md` data-dir inventory).
 
 Companion to `2026-06-16-dockable-layout-design.md` (§ "Storage / persistence") and the impl handoff
 `2026-06-17-dockable-layout-impl-handoff.md` (§ "What remains → Persistence"). This plan supersedes the
