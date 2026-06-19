@@ -429,7 +429,7 @@ defineExpose({ open, close, openForWorkspace, openNew })
                         <!-- Delete confirmation -->
                         <template v-if="deleteConfirmId === workspace.id">
                             <span class="delete-confirm-label">Delete?</span>
-                            <button class="action-btn action-btn-danger" @click="confirmDelete(workspace.id)" title="Confirm delete">
+                            <button class="action-btn action-btn-confirm-danger" @click="confirmDelete(workspace.id)" title="Confirm delete">
                                 <wa-icon name="check" />
                             </button>
                             <button class="action-btn" @click="cancelDelete" title="Cancel delete">
@@ -827,7 +827,7 @@ defineExpose({ open, close, openForWorkspace, openNew })
 
 .delete-confirm-label {
     font-size: var(--wa-font-size-xs);
-    color: var(--wa-color-danger-text);
+    color: var(--wa-color-danger-60);
     white-space: nowrap;
 }
 
@@ -848,7 +848,13 @@ defineExpose({ open, close, openForWorkspace, openNew })
 }
 
 .action-btn-danger:hover {
-    color: var(--wa-color-danger-text);
+    color: var(--wa-color-danger-60);
+}
+
+/* The delete-confirmation check stays red at rest and on hover (destructive confirm). */
+.action-btn-confirm-danger,
+.action-btn-confirm-danger:hover {
+    color: var(--wa-color-danger-60);
 }
 
 /* -- Form ------------------------------------------------------------------- */

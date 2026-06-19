@@ -560,7 +560,7 @@ defineExpose({ open, close })
 }
 
 .action-btn-danger:hover {
-    color: var(--wa-color-danger-text);
+    color: var(--wa-color-danger-60);
 }
 
 /* ── Form ─────────────────────────────────────────────────────────── */
@@ -630,7 +630,7 @@ defineExpose({ open, close })
 }
 
 .step-remove-btn:hover {
-    color: var(--wa-color-danger-text);
+    color: var(--wa-color-danger-60);
 }
 
 /* ── Modifier toggles (matches ExtraKeysBar styling) ─────────────── */

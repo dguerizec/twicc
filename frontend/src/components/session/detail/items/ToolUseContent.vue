@@ -1105,7 +1105,7 @@ wa-details {
 }
 
 .tool-result-error {
-    color: var(--wa-color-danger-text);
+    color: var(--wa-color-danger-60);
 }
 
 .tool-result-empty {

@@ -793,7 +793,7 @@ defineExpose({ open, close })
 }
 
 .action-btn-danger:hover {
-    color: var(--wa-color-danger-text);
+    color: var(--wa-color-danger-60);
 }
 
 /* ── Form ─────────────────────────────────────────────────────────── */

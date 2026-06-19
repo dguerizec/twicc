@@ -759,7 +759,7 @@ defineExpose({ open, close })
 }
 
 .action-btn-danger:hover {
-    color: var(--wa-color-danger-text);
+    color: var(--wa-color-danger-60);
 }
 
 /* ── Form (label field — snippet text/options are in TerminalSnippetTextEditor) ── */
