@@ -53,6 +53,27 @@ async function callProxy(body) {
     return await res.json()
 }
 
+// Module-level "This session" grant cache, keyed by artifact identity. It
+// deliberately OUTLIVES a single host instance. The in-SPA preview re-mounts the
+// host on every edit (a cache-bust query forces the iframe to reload), and the
+// dedicated page re-mounts on reload — which would otherwise wipe the in-memory
+// grants and make the user re-approve every already-approved host each time the
+// agent iterates on the artifact. Holding the grants in MODULE scope (never on
+// `window` / in DOM storage) lets them survive the reload while staying
+// unreachable AND unforgeable by the same-origin artifact iframe — `sessionStorage`
+// would let a malicious artifact pre-approve hosts and bypass the prompt entirely
+// (design §13). Cleared only when the host page itself reloads (this module
+// re-evaluates) or the tab closes. Shared by both run contexts (this file is the
+// one host core).
+const sessionGrants = new Map() // artifactKey -> { "scheme://host:port": { kind } }
+
+function artifactKeyFor(documentUrl) {
+    const u = new URL(documentUrl)
+    // The cache-bust token lives in the query (`?_=…`), so origin + pathname is
+    // stable across reloads of the *same* artifact (and distinct per artifact).
+    return u.origin + u.pathname
+}
+
 /**
  * Build the broker host core.
  *
@@ -64,17 +85,26 @@ async function callProxy(body) {
  * @param {(url: string, kind: string) => Promise<void>} [opts.persistAllow]  Persist "allow forever" (bookmarked only).
  */
 export function createBrokerHost({ documentUrl, getBookmarkId, allowedHosts, showPrompt, persistAllow }) {
-    const allowed = { ...(allowedHosts || {}) }
+    // Per-artifact "This session" grants persist across host re-mounts via the
+    // module cache. Seed the live set from them PLUS the persisted "Forever"
+    // grants (from the DB, passed in `allowedHosts`).
+    const artifactKey = artifactKeyFor(documentUrl)
+    let sessionGranted = sessionGrants.get(artifactKey)
+    if (!sessionGranted) {
+        sessionGranted = {}
+        sessionGrants.set(artifactKey, sessionGranted)
+    }
+    const allowed = { ...(allowedHosts || {}), ...sessionGranted }
     const canPersist = typeof persistAllow === 'function'
     const currentBookmarkId = () => (typeof getBookmarkId === 'function' ? getBookmarkId() : null)
     // The directory the artifact lives under; its own assets resolve below it.
     const ownDir = new URL('.', documentUrl).href
 
     // `allowed[key]` covers a host iff it still resolves to the kind it was
-    // approved for (a rebind → re-prompt). Entries seeded from `allowedHosts`
-    // are the persisted "Forever" grants; "This session" grants are added here
-    // in-memory only and vanish when this host instance is torn down (the
-    // artifact reloads) — same shape, just not persisted.
+    // approved for (a rebind → re-prompt). It is seeded from `allowedHosts` (the
+    // persisted "Forever" grants) plus this artifact's `sessionGranted` cache
+    // (the "This session" grants, which survive a host re-mount — same shape,
+    // just not written to the DB).
     function isAllowed(key, kind) {
         const entry = allowed[key]
         return !!(entry && entry.kind === kind)
@@ -101,10 +131,12 @@ export function createBrokerHost({ documentUrl, getBookmarkId, allowedHosts, sho
                 host: key, ip: target.ip, kind: target.kind, canRemember,
             })
             if (decision === 'deny') throw new Error('denied by user')
-            // "Forever" persists onto the bookmark; "This session" (and any allow
-            // with no bookmark to persist to) is remembered in-memory only.
+            // "Forever" additionally persists onto the bookmark (survives a tab
+            // close); every grant is also recorded in the module cache so it
+            // survives the artifact reloading (but not a page reload / tab close).
             if (decision === 'forever' && canRemember) await persistAllow(url, target.kind)
             allowed[key] = { kind: target.kind }
+            sessionGranted[key] = { kind: target.kind }
         })
         gateChain = run.then(() => {}, () => {}) // keep the chain alive on either outcome
         const settled = run.finally(() => {

@@ -37,7 +37,7 @@ const KIND_LABEL = {
         </div>
 
         <div slot="footer" class="broker-prompt-footer">
-            <p class="broker-prompt-hint">“This session” lasts until you reload the artifact.</p>
+            <p class="broker-prompt-hint">“This session” is kept until you reload or close this tab.</p>
             <div class="broker-prompt-actions">
                 <wa-button @click="emit('decision', 'deny')">Deny</wa-button>
                 <wa-button v-if="prompt?.canRemember" @click="emit('decision', 'forever')">Forever</wa-button>
