@@ -46,6 +46,23 @@ export function useSessionLayout({ sessionId, containerRef, tabs, routeActiveTab
     // ---- Intention (null-safe; mutations go through store actions only) ----
     const intention = computed(() => store.getSessionLayout(sessionId.value) || EMPTY_INTENTION)
 
+    // Apply the persisted ``Session.layout`` to the live working copy — reactively. The session can
+    // load AFTER this composable mounts (async fetch via loadSessionById / loadSessions, which assign
+    // ``this.sessions[id]`` directly, bypassing add/updateSession), so a one-shot hydrate at mount
+    // would read an empty layout and stick on single pane until some later broadcast. Watching the
+    // persisted blob re-seeds the working copy the moment it appears (or changes cross-device); the
+    // store action no-ops while a local edit is in flight (ours wins).
+    watch(
+        [sessionId, () => store.getSession(sessionId.value)?.layout],
+        () => {
+            const id = sessionId.value
+            if (!id) return
+            store.ensureSessionLayout(id)
+            store._hydrateSessionLayoutFromPersisted(id, store.getSession(id)?.layout)
+        },
+        { immediate: true },
+    )
+
     // A present tab is "docked" when assigned to one of the six docks.
     const isDockingActive = computed(() => {
         const a = intention.value.assignment

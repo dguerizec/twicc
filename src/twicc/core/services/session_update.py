@@ -545,6 +545,22 @@ async def apply_session_pinned_change(session, pinned) -> None:
     )
 
 
+async def apply_session_layout_change(session, layout: dict) -> None:
+    """Persist a ``layout`` change on a :class:`Session` row.
+
+    ``layout`` is the per-session dockable-layout intention — a plain dict
+    (``{}`` = single pane). Written by the HTTP ``PATCH
+    /api/projects/.../sessions/<id>/`` endpoint, debounced from the frontend
+    as the user docks / resizes / loads layouts. The caller validates the
+    shape (an object) and emits the ``session_updated`` broadcast so a payload
+    combining several field updates fires a single frame.
+    """
+    session.layout = layout if isinstance(layout, dict) else {}
+    await run_under_db_write_lock(
+        lambda: session.asave(update_fields=["layout"])
+    )
+
+
 async def update_session_pinned_from_payload(payload: dict) -> UpdateSessionResult:
     """Pin or unpin an existing session.
 

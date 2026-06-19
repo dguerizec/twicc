@@ -928,6 +928,18 @@ async def session_detail(request, project_id, session_id, parent_session_id=None
             await apply_session_pinned_change(session, pinned)
             needs_broadcast = True
 
+        # Handle layout update: the per-session dockable-layout intention
+        # (an object; {} = single pane). Persisted from the frontend via a
+        # debounced PATCH as the user docks / resizes / loads layouts. Shares
+        # the combined broadcast below.
+        if "layout" in data:
+            layout = data["layout"]
+            if not isinstance(layout, dict):
+                return JsonResponse({"error": "layout must be an object"}, status=400)
+            from twicc.core.services.session_update import apply_session_layout_change
+            await apply_session_layout_change(session, layout)
+            needs_broadcast = True
+
         # Broadcast session_updated for archived/pinned changes.
         # Title changes don't need this: writing to JSONL triggers the
         # file watcher which broadcasts session_updated automatically.

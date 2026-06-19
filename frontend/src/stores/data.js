@@ -43,6 +43,48 @@ import { initBuffer, feedDelta, flushBuffer, destroySessionBuffers, destroyAllBu
 // Map of debounced save functions per session (to avoid mixing debounces)
 const debouncedSaves = new Map()
 
+// ---- Dockable-layout persistence (Session.layout) -------------------------------------------------
+// Per-session debounced PATCH of the layout intention to the backend; mirrors `debouncedSaves`. The
+// `pending` set guards against the echoed `session_updated` re-hydrating (clobbering) a layout we just
+// changed locally — our working copy is authoritative until the PATCH settles.
+const layoutPersistDebouncers = new Map() // sessionId -> debounced fn
+const layoutPersistPending = new Set()    // sessionIds with an unsaved / in-flight layout change
+const LAYOUT_PERSIST_DEBOUNCE_MS = 500
+
+/** A fresh empty intention — single pane. Matches EMPTY_INTENTION in useSessionLayout.js. */
+function emptyLayoutIntention() {
+    return { assignment: {}, collapsed: [], activeSide: 'left', activeResize: 'left',
+             activeByGroup: {}, resizeFractions: {}, maximized: null }
+}
+
+/** The persisted subset, in a FIXED key order (so echo / cross-device compares are stable). Everything
+ *  except the transient `maximized`, which is never persisted. */
+function stripLayoutForPersist(intention) {
+    const i = intention || {}
+    return {
+        assignment: { ...(i.assignment || {}) },
+        collapsed: [...(i.collapsed || [])],
+        activeSide: i.activeSide === 'right' ? 'right' : 'left',
+        activeResize: i.activeResize === 'right' ? 'right' : 'left',
+        activeByGroup: { ...(i.activeByGroup || {}) },
+        resizeFractions: { ...(i.resizeFractions || {}) },
+    }
+}
+
+/** Tolerant merge of a persisted blob into a fresh working copy (fill defaults, drop unknown keys).
+ *  This is the no-version migration strategy; `maximized` always resets to null (never persisted). */
+function hydrateLayoutIntention(persisted) {
+    const e = emptyLayoutIntention()
+    const p = persisted && typeof persisted === 'object' ? persisted : {}
+    if (p.assignment && typeof p.assignment === 'object') e.assignment = { ...p.assignment }
+    if (Array.isArray(p.collapsed)) e.collapsed = [...p.collapsed]
+    if (p.activeSide === 'left' || p.activeSide === 'right') e.activeSide = p.activeSide
+    if (p.activeResize === 'left' || p.activeResize === 'right') e.activeResize = p.activeResize
+    if (p.activeByGroup && typeof p.activeByGroup === 'object') e.activeByGroup = { ...p.activeByGroup }
+    if (p.resizeFractions && typeof p.resizeFractions === 'object') e.resizeFractions = { ...p.resizeFractions }
+    return e
+}
+
 // How long a ``text`` streaming block can stay quiet before we flip its
 // ``stopped`` flag and let the WorkingAssistantMessage placeholder reappear.
 // Used by streamBlockDelta below. Codex's ``item/completed`` event can lag
@@ -1208,6 +1250,7 @@ export const useDataStore = defineStore('data', {
         // Sessions
         addSession(session) {
             this.$patch({ sessions: { [session.id]: session } })
+            this._hydrateSessionLayoutFromPersisted(session.id, session.layout)
             this.tryFinalizePendingBinding(session.id)
         },
         updateSession(session) {
@@ -1226,6 +1269,9 @@ export const useDataStore = defineStore('data', {
                 session = { ...session, last_new_content_at: prev.last_new_content_at }
             }
             this.$patch({ sessions: { [session.id]: session } })
+            // Re-seed the live layout working copy from the persisted Session.layout (initial load /
+            // cross-device sync), unless we have an unsaved local edit in flight (guarded inside).
+            this._hydrateSessionLayoutFromPersisted(session.id, session.layout)
             this.tryFinalizePendingBinding(session.id)
         },
         /**
@@ -3358,20 +3404,13 @@ export const useDataStore = defineStore('data', {
             delete this.localState.sessionOpenTabs[sessionId]
         },
 
-        // ---- Dockable layout (ephemeral per-session intention; persistence deferred) ----
+        // ---- Dockable layout (per-session intention; persisted to Session.layout, synced) ----
 
-        /** Ensure a layout-intention record exists for a session, return it. */
+        /** Ensure a layout-intention record exists for a session, return it. Seeded once (tolerant
+         *  merge) from the persisted ``Session.layout`` so a saved layout applies on load. */
         ensureSessionLayout(sessionId) {
             if (!this.localState.sessionLayout[sessionId]) {
-                this.localState.sessionLayout[sessionId] = {
-                    assignment: {},
-                    collapsed: [],
-                    activeSide: 'left',
-                    activeResize: 'left',
-                    activeByGroup: {},
-                    resizeFractions: {},
-                    maximized: null,
-                }
+                this.localState.sessionLayout[sessionId] = hydrateLayoutIntention(this.sessions[sessionId]?.layout)
             }
             return this.localState.sessionLayout[sessionId]
         },
@@ -3384,12 +3423,14 @@ export const useDataStore = defineStore('data', {
             } else {
                 layout.assignment[tabId] = dest
             }
+            this.persistSessionLayoutDebounced(sessionId)
         },
 
         /** Minimize a dock to its edge gutter. */
         minimizeDock(sessionId, dockId) {
             const layout = this.ensureSessionLayout(sessionId)
             if (!layout.collapsed.includes(dockId)) layout.collapsed.push(dockId)
+            this.persistSessionLayoutDebounced(sessionId)
         },
 
         /** Restore a minimized dock from its gutter. */
@@ -3397,37 +3438,106 @@ export const useDataStore = defineStore('data', {
             const layout = this.ensureSessionLayout(sessionId)
             const i = layout.collapsed.indexOf(dockId)
             if (i > -1) layout.collapsed.splice(i, 1)
+            this.persistSessionLayoutDebounced(sessionId)
         },
 
         /** Which side wins under mutual exclusion (one column fits). */
         setLayoutActiveSide(sessionId, side) {
             this.ensureSessionLayout(sessionId).activeSide = side
+            this.persistSessionLayoutDebounced(sessionId)
         },
 
         /** Which column has priority while resizing (the dragged side wins; the other is squeezed). */
         setLayoutActiveResize(sessionId, side) {
             this.ensureSessionLayout(sessionId).activeResize = side
+            this.persistSessionLayoutDebounced(sessionId)
         },
 
         /** Set a draggable layout fraction (e.g. leftColFrac, bottomFrac) — fed to the resolver as a
          *  config override. Geometry stays computed; only the intention (the 0..1 fraction) is kept. */
         setLayoutResizeFraction(sessionId, key, value) {
             this.ensureSessionLayout(sessionId).resizeFractions[key] = value
+            this.persistSessionLayoutDebounced(sessionId)
         },
 
         /** Remember the active tab within a region group (groupKey from groupKeyOf). */
         setLayoutGroupActiveTab(sessionId, groupKey, tabId) {
             this.ensureSessionLayout(sessionId).activeByGroup[groupKey] = tabId
+            this.persistSessionLayoutDebounced(sessionId)
         },
 
         /** Maximize a region (the array of dockIds it holds, or ['center']) to fill the layout area,
-         *  or pass null to restore. Transient view state — the only exit is restore. */
+         *  or pass null to restore. Transient view state — the only exit is restore. NOT persisted. */
         setLayoutMaximized(sessionId, dockIds) {
             this.ensureSessionLayout(sessionId).maximized = dockIds && dockIds.length ? dockIds : null
         },
 
-        /** Drop all layout intention for a session. */
+        /** Schedule a debounced PATCH of the layout intention to the backend (Session.layout).
+         *  Coalesces resize-drag bursts and discrete place/minimize edits. No-op for drafts (no
+         *  backend row yet — their layout, when added, lives in IndexedDB). */
+        persistSessionLayoutDebounced(sessionId) {
+            const session = this.sessions[sessionId]
+            if (!session || session.draft) return
+            layoutPersistPending.add(sessionId)
+            if (!layoutPersistDebouncers.has(sessionId)) {
+                layoutPersistDebouncers.set(
+                    sessionId,
+                    debounce((id) => this.persistSessionLayout(id), LAYOUT_PERSIST_DEBOUNCE_MS),
+                )
+            }
+            layoutPersistDebouncers.get(sessionId)(sessionId)
+        },
+
+        /** PATCH the stripped intention (no transient ``maximized``) onto Session.layout. */
+        async persistSessionLayout(sessionId) {
+            const session = this.sessions[sessionId]
+            const intention = this.localState.sessionLayout[sessionId]
+            if (!session || session.draft || !session.project_id || !intention) {
+                layoutPersistPending.delete(sessionId)
+                return
+            }
+            const payload = stripLayoutForPersist(intention)
+            try {
+                const response = await apiFetch(
+                    `/api/projects/${session.project_id}/sessions/${sessionId}/`,
+                    {
+                        method: 'PATCH',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ layout: payload }),
+                    },
+                )
+                if (response.ok) {
+                    // Reflect locally so the echoed ``session_updated`` matches (no re-hydrate).
+                    if (this.sessions[sessionId]) this.sessions[sessionId].layout = payload
+                } else {
+                    console.error('Failed to persist session layout', sessionId, response.status)
+                }
+            } catch (e) {
+                console.error('Failed to persist session layout', sessionId, e)
+            } finally {
+                layoutPersistPending.delete(sessionId)
+            }
+        },
+
+        /** Re-seed the working copy from a persisted ``Session.layout`` (initial load / cross-device
+         *  sync), unless an unsaved local change is in flight (ours wins). Only acts on a session
+         *  already being viewed (has a working copy); otherwise ensureSessionLayout seeds it lazily. */
+        _hydrateSessionLayoutFromPersisted(sessionId, persisted) {
+            if (persisted === undefined) return
+            const cur = this.localState.sessionLayout[sessionId]
+            if (!cur) return
+            if (layoutPersistPending.has(sessionId)) return
+            const next = hydrateLayoutIntention(persisted)
+            if (JSON.stringify(stripLayoutForPersist(cur)) === JSON.stringify(stripLayoutForPersist(next))) return
+            this.localState.sessionLayout[sessionId] = next
+        },
+
+        /** Drop all layout intention for a session (cancel any pending persist). */
         clearSessionLayout(sessionId) {
+            const d = layoutPersistDebouncers.get(sessionId)
+            if (d) d.cancel()
+            layoutPersistDebouncers.delete(sessionId)
+            layoutPersistPending.delete(sessionId)
             delete this.localState.sessionLayout[sessionId]
         },
 

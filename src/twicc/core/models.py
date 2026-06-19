@@ -452,6 +452,13 @@ class Session(models.Model):
     # Free-form agent-facing data attached at session creation time. The core
     # does not interpret it and the UI does not expose editing controls for it.
     annotations = models.JSONField(default=dict, blank=True)
+    # Per-session dockable-layout intention (user UI state): tab->dock assignment,
+    # minimized docks, resize fractions, active-tab-per-region memory, etc. ``{}``
+    # means single pane (no docks). Seeded at creation from the resolved
+    # global/project default layout, then freely mutated and persisted by the
+    # frontend (debounced ``PATCH /api/projects/<id>/sessions/<id>/``). Excludes the
+    # transient ``maximized`` view state, which is never persisted.
+    layout = models.JSONField(default=dict, blank=True)
     # TwiCC system-prompt addendum frozen at session creation time. Composed by
     # ``core.services.session_creation`` and stashed via
     # ``pending_session_attributes``; the watcher copies it here when it
