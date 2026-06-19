@@ -88,7 +88,7 @@ function onClick(entry) {
     justify-content: space-between;
     gap: 0.25rem;
     padding: 0.25rem;
-    background: var(--wa-color-surface-lowered, rgba(0, 0, 0, 0.08));
+    background: var(--wa-color-surface-default, transparent); /* match .dock-region */
     z-index: 12; /* above an open overlay backdrop, so gutters stay clickable */
     --gutter-border: var(--divider-size) solid var(--wa-color-surface-border, rgba(0, 0, 0, 0.12));
 }

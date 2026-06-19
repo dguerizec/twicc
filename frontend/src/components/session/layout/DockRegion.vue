@@ -3,7 +3,7 @@
 // (nav-only, like TerminalPanel) with a per-tab placement arrow and a far-right minimize
 // button; the body is a Teleport target the parent fills with the real panel(s). The region
 // holds one dockId (split) or two (merged) — its body is registered under each.
-import { computed, ref, watchEffect, inject, provide } from 'vue'
+import { computed, ref, watchEffect } from 'vue'
 import TabPlacementMenu from './TabPlacementMenu.vue'
 
 const props = defineProps({
@@ -22,19 +22,6 @@ const props = defineProps({
 const emit = defineEmits(['select', 'minimize', 'maximize', 'restore', 'place', 'pane-focus'])
 
 const bodyRef = ref(null)
-
-// A docked panel's "expand" (FilePane full-window) is a position:fixed z-index:1000 overlay that
-// covers the viewport. It escapes its pane only because nothing traps it in a stacking context — but
-// our `isolation: isolate` (which keeps the panel's own z-index from painting over the resize
-// splitters) would trap it below them. So while a preview *in this region* is expanded we drop the
-// isolation, and chain to the host provided up the tree (ProjectView lifts `.main-content` so the
-// overlay also covers the sidebar). FilePane injects the nearest `expandPreviewHost`, i.e. this one.
-const parentExpandPreviewHost = inject('expandPreviewHost', null)
-const previewExpanded = ref(false)
-provide('expandPreviewHost', (expanded) => {
-    previewExpanded.value = expanded
-    parentExpandPreviewHost?.(expanded)
-})
 
 // This region owns the route when its shown tab is the URL's tab (the route overrides a region's
 // active tab, so its activeTabId equals focusedTabId precisely for the owning region). Non-owning
@@ -78,7 +65,7 @@ function onBodyClick() {
 </script>
 
 <template>
-    <div class="dock-region" :class="[region.kind, { 'preview-expanded': previewExpanded }]" :data-rid="region.id" :style="style">
+    <div class="dock-region" :class="region.kind" :data-rid="region.id" :style="style">
         <wa-tab-group class="dock-tabnav" :class="{ 'tabnav-dimmed': !isRouteActive }" :active="activeTabId" @wa-tab-show.stop="onShow">
             <!-- Clicking a tab label claims focus for it (deferred, like onBodyClick). wa-tab-show
                  handles switching to a *different* tab; this also covers clicking the tab that is
@@ -150,10 +137,13 @@ function onBodyClick() {
     min-height: 0;
     --dock-border: var(--divider-size) solid var(--wa-color-surface-border, rgba(0, 0, 0, 0.12));
 }
-/* While a preview inside is expanded to full-window, drop the isolation so its position:fixed
-   z-index:1000 overlay escapes this region and covers the splitters / gutters / overlay (the host up
-   the tree lifts .main-content so it also covers the sidebar). */
-.dock-region.preview-expanded {
+/* While a FilePane preview inside is expanded to full-window (position:fixed; z-index:1000), drop the
+   isolation so the overlay escapes this region and covers the splitters / gutters — otherwise it is
+   trapped at the region's z-auto level and the gutters (z-index:12, resolved a context higher) paint
+   over it. Pure CSS via :has() — no provide/inject chain (the panels teleport, so an inject-based host
+   never reliably reached this region). Verified live: dropping only this isolation puts the fullscreen
+   image above the gutters. */
+.dock-region:has(.file-pane-preview--fullscreen) {
     isolation: auto;
 }
 
