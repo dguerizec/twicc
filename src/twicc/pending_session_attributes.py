@@ -40,6 +40,10 @@ class PendingSessionAttributes(NamedTuple):
     # Hybrid CLI mode flag. Only ever True when set through the trusted
     # human path (web UI); see ``Session.hybrid`` in :mod:`twicc.core.models`.
     hybrid: bool
+    # Dockable-layout intention frozen onto ``Session.layout`` at creation
+    # (resolved global/project default, or the web UI draft's seeded layout).
+    # ``{}`` = single pane; falls through to the model default.
+    layout: dict
 
 
 # session_id -> PendingSessionAttributes
@@ -55,6 +59,7 @@ def set_pending_session_attributes(
     annotations: dict | None = None,
     system_prompt_addendum: str | None = None,
     hybrid: bool = False,
+    layout: dict | None = None,
 ) -> None:
     """Store pending structural attributes to be applied at row creation."""
     _pending[session_id] = PendingSessionAttributes(
@@ -64,6 +69,7 @@ def set_pending_session_attributes(
         annotations=annotations or {},
         system_prompt_addendum=system_prompt_addendum,
         hybrid=hybrid,
+        layout=layout or {},
     )
     logger.debug(
         "Set pending session attributes for %s: hidden=%s spawned_by_id=%s "

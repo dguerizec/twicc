@@ -4,6 +4,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId, watch } fro
 import { useRouter } from 'vue-router'
 import { useSettingsStore, SETTINGS_SCHEMA } from '../../stores/settings'
 import { useDataStore } from '../../stores/data'
+import { useLayoutsStore } from '../../stores/layouts'
 import { useAuthStore } from '../../stores/auth'
 import { useTipsStore } from '../../stores/tips'
 import { getProviderHelpers, getProviderLabel, getProviderOptions, getRegisteredProviders, getProviderIcon } from '../../providers'
@@ -21,6 +22,7 @@ import { vPopoverFocusFix } from '../../directives/vPopoverFocusFix'
 const router = useRouter()
 const store = useSettingsStore()
 const dataStore = useDataStore()
+const layoutsStore = useLayoutsStore()
 const authStore = useAuthStore()
 const tipsStore = useTipsStore()
 
@@ -73,6 +75,7 @@ const sections = computed(() => [
     ...providerSections.value.filter(s => s.enabled),
     { id: 'notifications',             label: 'Notifications' },
     { id: 'sessions',      label: 'Sessions' },
+    { id: 'layouts',       label: 'Layouts', synced: true },
     { id: 'title',         label: 'Title suggestion', navLabel: 'Titles', synced: true },
     { id: 'editor',        label: 'Editor' },
     { id: 'terminal',      label: 'Terminal' },
@@ -342,6 +345,9 @@ const forcedChangelogOpen = ref(false)
 
 // Settings from store
 const defaultProvider = computed(() => store.getDefaultProvider)
+// Global default layout for new sessions: the picker value + the selectable list (Single pane + named).
+const defaultLayoutId = computed(() => store.getDefaultLayoutId || 'single-pane')
+const selectableLayouts = computed(() => layoutsStore.selectableLayouts)
 const providerOptions = getProviderOptions()
 const enabledProviderOptions = computed(() =>
     providerOptions.filter(opt => enabledProviders.value.has(opt.value))
@@ -585,6 +591,11 @@ const displayModeOptions = [
     { value: DISPLAY_MODE.DEBUG, label: 'Debug' },
 ]
 
+
+/** Handle the global default-layout change. */
+function onDefaultLayoutChange(event) {
+    store.setDefaultLayoutId(event.target.value)
+}
 
 /**
  * Handle default-provider change.
@@ -1241,6 +1252,31 @@ function onChangelogClose() {
                             size="small"
                         ></wa-slider>
                         <span class="setting-group-hint">Number of sessions kept in memory for instant switching.</span>
+                    </div>
+                </section>
+
+                <!-- Layouts Section -->
+                <section v-if="activeSection === 'layouts'" class="settings-section">
+                    <h3 class="settings-section-title">Layouts <wa-icon name="cloud" class="synced-icon"></wa-icon></h3>
+                    <div class="setting-group">
+                        <label class="setting-group-label">Default layout for new sessions</label>
+                        <wa-select
+                            :value.prop="defaultLayoutId"
+                            @change="onDefaultLayoutChange"
+                            size="small"
+                        >
+                            <wa-option
+                                v-for="l in selectableLayouts"
+                                :key="l.id"
+                                :value="l.id"
+                                :label="l.name"
+                            >{{ l.name }}</wa-option>
+                        </wa-select>
+                        <span class="setting-group-hint">
+                            Save new layouts from a session: dock some panels, then open the layout
+                            menu (the <wa-icon name="chevron-down" class="inline-hint-icon"></wa-icon>
+                            button at the right of the tab bar) and choose “Save layout”.
+                        </span>
                     </div>
                 </section>
 
@@ -2154,6 +2190,10 @@ wa-popover > wa-divider {
     font-size: var(--wa-font-size-s);
     color: var(--wa-color-text-quiet);
     font-style: italic;
+}
+/* Inline icon inside a hint (e.g. the layout-menu chevron) — keep it on the text baseline. */
+.settings-sections .setting-group-hint .inline-hint-icon {
+    vertical-align: -0.1em;
 }
 
 .usage-file-input-row {

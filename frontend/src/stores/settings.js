@@ -52,6 +52,7 @@ export const SETTINGS_SCHEMA = {
     notifExtraUsageStartBrowser: false,
     // --- Synced settings (defaults from backend, null as placeholder) ---
     defaultProvider: null,
+    defaultLayoutId: null,
     disabledProviders: [],
     orchestrationDisabledProviders: [],
     titleGenerationEnabled: null,
@@ -278,6 +279,9 @@ export const useSettingsStore = defineStore('settings', {
          * Current display mode: 'simplified', 'normal', or 'debug'.
          */
         getDefaultProvider: (state) => state.defaultProvider,
+        // Global default layout id (a named-layout id or 'single-pane'); null until the backend
+        // synced-settings push lands — callers treat null as 'single-pane'.
+        getDefaultLayoutId: (state) => state.defaultLayoutId,
         getDisplayMode: (state) => state.displayMode,
         getFontSize: (state) => state.fontSize,
         getColorScheme: (state) => state.colorScheme,
@@ -838,6 +842,12 @@ export const useSettingsStore = defineStore('settings', {
          * sending these values back to the backend.
          * @param {Object} remoteSettings - Settings object from backend
          */
+        /** Set the global default layout id (a named-layout id or 'single-pane'). Auto-synced via
+         *  the collectAllSyncedSettings watcher. */
+        setDefaultLayoutId(id) {
+            this.defaultLayoutId = id || 'single-pane'
+        },
+
         applySyncedSettings(remoteSettings, version) {
             if (!remoteSettings || typeof remoteSettings !== 'object') return
             // Reject incoming settings with a version older than what we already have.
@@ -1001,6 +1011,7 @@ export function initSettings() {
     const collectAllSyncedSettings = () => {
         const dict = {
             defaultProvider: store.defaultProvider,
+            defaultLayoutId: store.defaultLayoutId,
             orchestrationDisabledProviders: store.orchestrationDisabledProviders,
             displayMode: store.displayMode,
             fontSize: store.fontSize,

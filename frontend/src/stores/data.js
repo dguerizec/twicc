@@ -8,8 +8,10 @@ import { DISPLAY_LEVEL, DISPLAY_MODE, PROCESS_STATE, SYNTHETIC_ITEM } from '../c
 import { getProviderHelpers, getProviderStore } from '../providers'
 import { getSessionCutoffMs, isSessionUnread } from '../utils/sessions'
 import { resolveProjectDefaultProvider, resolveProjectAgentDefaults } from '../utils/projectAgentDefaults'
+import { resolveProjectLayoutId } from '../utils/layoutDefaults'
 import { resolveProjectTrust } from '../utils/trust'
 import { useSettingsStore } from './settings'
+import { useLayoutsStore } from './layouts'
 import {
     saveDraftMessage,
     getDraftMessage,
@@ -1387,6 +1389,11 @@ export const useDataStore = defineStore('data', {
             const hybrid = provider === 'claude_code'
                 && useSettingsStore().isClaudeHybridEnabled
                 && useSettingsStore().isClaudeHybridDefault
+            // Seed the dockable layout from the resolved project → global default (snapshot at
+            // creation, like the agent settings). The draft renders with it immediately; on send it
+            // rides the create payload and is frozen onto Session.layout. {} = single pane.
+            const layoutId = resolveProjectLayoutId(projectId, this.projects, useSettingsStore().getDefaultLayoutId)
+            const layout = useLayoutsStore().intentionForId(layoutId)
             this.sessions[id] = {
                 id,
                 project_id: projectId,
@@ -1396,10 +1403,11 @@ export const useDataStore = defineStore('data', {
                 last_line: 0,
                 draft: true,
                 hybrid,
+                layout,
                 ...settings,
             }
-            // Persist to IndexedDB (hybrid included so the default survives a reload)
-            saveDraftSession(id, { projectId, provider, hybrid, ...settings }).catch(err =>
+            // Persist to IndexedDB (hybrid + layout included so the seeded default survives a reload)
+            saveDraftSession(id, { projectId, provider, hybrid, layout, ...settings }).catch(err =>
                 console.warn('Failed to save draft session to IndexedDB:', err)
             )
             return id

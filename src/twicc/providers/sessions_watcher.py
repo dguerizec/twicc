@@ -438,6 +438,8 @@ class BaseSessionsWatcher:
                 kwargs["system_prompt_addendum"] = pending.system_prompt_addendum
             if pending.hybrid:
                 kwargs["hybrid"] = True
+            if pending.layout:
+                kwargs["layout"] = pending.layout
         return Session.objects.create(**kwargs)
 
     # ------------------------------------------------------------------

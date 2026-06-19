@@ -36,6 +36,11 @@ logger = logging.getLogger(__name__)
 # :data:`SYNCED_SETTINGS_DEFAULTS` below.
 _GENERIC_SYNCED_SETTINGS_DEFAULTS: dict = {
     "defaultProvider": Provider.CLAUDE_CODE.value,
+    # Global default dockable layout for new sessions: the id of a named layout
+    # from layouts.json, or the synthetic "single-pane" (no docks). Resolved at
+    # session creation (project default → this global fallback). See
+    # docs/plans/2026-06-19-layout-persistence-impl-plan.md.
+    "defaultLayoutId": "single-pane",
     "titleGenerationEnabled": True,
     "titleAutoApply": True,
     "titleSystemPrompt": (

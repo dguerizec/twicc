@@ -1488,6 +1488,9 @@ async function handleSend() {
     // sessions switch through the one-way `set_session_hybrid` WS command.
     if (isDraft.value) {
         payload.hybrid = session.value?.hybrid === true
+        // Dockable layout seeded on the draft (resolved project → global default) — frozen onto
+        // Session.layout at creation. {} = single pane.
+        payload.layout = session.value?.layout || {}
     }
 
     // For draft sessions without a title, open the rename dialog (non-blocking)

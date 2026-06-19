@@ -277,6 +277,7 @@ settings.json
 terminal-config.json
 message-snippets.json
 workspaces.json
+layouts.json
 seen-tips.json
 # RPC API token store (SHA-256 digests; lives in the data dir, appears in worktrees).
 api-tokens.json

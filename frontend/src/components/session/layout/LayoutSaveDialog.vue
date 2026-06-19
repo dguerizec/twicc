@@ -4,6 +4,7 @@
 // convenience and the project/global default pickers come with the defaults machinery (step 3).
 import { ref, computed, nextTick, useId } from 'vue'
 import { useLayoutsStore } from '../../../stores/layouts'
+import { useSettingsStore } from '../../../stores/settings'
 
 const props = defineProps({
     // The template intention to store (assignment / collapsed / resizeFractions) — the session's
@@ -14,6 +15,7 @@ const props = defineProps({
 const emit = defineEmits(['saved'])
 
 const layoutsStore = useLayoutsStore()
+const settingsStore = useSettingsStore()
 
 const dialogRef = ref(null)
 const nameInputRef = ref(null)
@@ -22,7 +24,8 @@ const saveButtonRef = ref(null)
 // Sentinel for the "create a new one" choice in the target select.
 const NEW = '__new__'
 const target = ref(NEW)   // either NEW or an existing layout id (overwrite)
-const newName = ref('Default')
+const newName = ref('')
+const setAsDefault = ref(false)
 const errorMessage = ref('')
 
 const instanceId = useId()
@@ -53,7 +56,10 @@ function handleDialogAfterShow(e) {
 function open() {
     errorMessage.value = ''
     target.value = NEW
-    newName.value = 'Default'
+    newName.value = ''
+    // Default-check "set as global default" only on the very first save (while the global default is
+    // still single pane) — so a fresh user's first layout becomes the default without an extra trip.
+    setAsDefault.value = (settingsStore.getDefaultLayoutId || 'single-pane') === 'single-pane'
     syncFormState()
     if (dialogRef.value) dialogRef.value.open = true
 }
@@ -85,6 +91,7 @@ function handleSave() {
         }
         savedId = layoutsStore.upsertLayout({ id: existing.id, name: existing.name, intention: props.intention })
     }
+    if (setAsDefault.value && savedId) settingsStore.setDefaultLayoutId(savedId)
     emit('saved', savedId)
     close()
 }
@@ -124,6 +131,11 @@ defineExpose({ open, close })
                     placeholder="Layout name"
                 ></wa-input>
             </div>
+
+            <wa-checkbox
+                :checked="setAsDefault"
+                @change="setAsDefault = $event.target.checked"
+            >Set as global default for new sessions</wa-checkbox>
 
             <wa-callout v-if="errorMessage" variant="danger" size="small">{{ errorMessage }}</wa-callout>
         </form>

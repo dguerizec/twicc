@@ -109,6 +109,12 @@ async def create_session_from_payload(payload: dict, *, allow_hybrid: bool = Fal
     annotations = payload.get("annotations", {})
     if annotations is None:
         annotations = {}
+    # Dockable-layout intention to freeze onto the new row. The web UI draft
+    # carries its resolved/seeded layout here; a CLI session omits it (single
+    # pane — CLI-side default resolution lands in a later step). Must be a dict.
+    layout = payload.get("layout")
+    if not isinstance(layout, dict):
+        layout = {}
 
     errors: list[SessionCreationError] = []
     if not session_id:
@@ -338,6 +344,7 @@ async def create_session_from_payload(payload: dict, *, allow_hybrid: bool = Fal
         annotations=annotations,
         system_prompt_addendum=system_prompt_addendum,
         hybrid=hybrid,
+        layout=layout,
     )
 
     # --- invoke the agent manager --------------------------------
