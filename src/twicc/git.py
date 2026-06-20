@@ -662,30 +662,14 @@ def _parse_index_files(git_directory: str) -> list[dict] | None:
 _NUMSTAT_UNTRACKED_MAX_BYTES = 1_000_000
 
 
-def _get_numstat_vs_head(git_directory: str) -> dict[str, tuple[int | None, int | None]]:
-    """Map ``path -> (additions, deletions)`` for tracked changes vs ``HEAD``.
+def _parse_numstat_z(stdout: str) -> dict[str, tuple[int | None, int | None]]:
+    """Parse NUL-terminated ``--numstat -z`` output into ``path -> (add, del)``.
 
-    A single ``git diff HEAD --numstat -z`` — it combines staged + unstaged
-    changes, i.e. the file's total diff against the last commit. Binary files
-    map to ``(None, None)``. Returns ``{}`` on failure (e.g. a repo with no
-    commits yet).
+    Binary files map to ``(None, None)``. A rename has an empty path field
+    followed by two extra NUL fields (old, new); it is keyed by the new path.
     """
-    try:
-        result = subprocess.run(
-            ["git", "-C", git_directory, "diff", "HEAD", "--numstat", "-z"],
-            capture_output=True,
-            text=True,
-            timeout=_GIT_TIMEOUT,
-        )
-        if result.returncode != 0:
-            return {}
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        return {}
-
     stats: dict[str, tuple[int | None, int | None]] = {}
-    # -z numstat: records are NUL-separated, each "add\tdel\tpath". For renames
-    # the path field is empty and followed by two extra NUL fields (old, new).
-    tokens = result.stdout.split("\x00")
+    tokens = stdout.split("\x00")
     i = 0
     while i < len(tokens):
         rec = tokens[i]
@@ -709,6 +693,44 @@ def _get_numstat_vs_head(git_directory: str) -> dict[str, tuple[int | None, int 
         dels = None if del_s == "-" else int(del_s)
         stats[path] = (adds, dels)
     return stats
+
+
+def _get_numstat_vs_head(git_directory: str) -> dict[str, tuple[int | None, int | None]]:
+    """``path -> (additions, deletions)`` for tracked changes vs ``HEAD``.
+
+    A single ``git diff HEAD --numstat -z`` — combines staged + unstaged changes
+    (the file's total diff against the last commit). Returns ``{}`` on failure
+    (e.g. a repo with no commits yet).
+    """
+    try:
+        result = subprocess.run(
+            ["git", "-C", git_directory, "diff", "HEAD", "--numstat", "-z"],
+            capture_output=True,
+            text=True,
+            timeout=_GIT_TIMEOUT,
+        )
+        if result.returncode != 0:
+            return {}
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return {}
+    return _parse_numstat_z(result.stdout)
+
+
+def _get_commit_numstat(git_directory: str, commit_hash: str) -> dict[str, tuple[int | None, int | None]]:
+    """``path -> (additions, deletions)`` for the files changed by a commit."""
+    try:
+        result = subprocess.run(
+            ["git", "-C", git_directory, "diff-tree", "--no-commit-id",
+             "--numstat", "--root", "-r", "-z", commit_hash],
+            capture_output=True,
+            text=True,
+            timeout=_GIT_TIMEOUT,
+        )
+        if result.returncode != 0:
+            return {}
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return {}
+    return _parse_numstat_z(result.stdout)
 
 
 def _count_untracked_lines(git_directory: str, path: str) -> int | None:
@@ -855,12 +877,21 @@ def get_commit_files(git_directory: str, commit_hash: str) -> dict:
     """Return commit changed files as stats + file tree.
 
     Returns a dict with:
-    - ``stats``: ``{modified, added, deleted}`` counts
-    - ``tree``: file tree in the same format as the directory-tree API
+    - ``stats``: ``{modified, added, deleted, conflicted}`` counts
+    - ``tree``: file tree in the same format as the directory-tree API, each file
+      node also carrying ``additions``/``deletions`` line counts where known
 
     Raises GitError on failure.
     """
     files = _parse_commit_files(git_directory, commit_hash)
+
+    numstat = _get_commit_numstat(git_directory, commit_hash)
+    for f in files:
+        adds, dels = numstat.get(f["path"], (None, None))
+        if adds is not None:
+            f["additions"] = adds
+        if dels is not None:
+            f["deletions"] = dels
 
     # Use abbreviated hash (first 7 chars) for the root node name.
     short_hash = commit_hash[:7] if len(commit_hash) > 7 else commit_hash
