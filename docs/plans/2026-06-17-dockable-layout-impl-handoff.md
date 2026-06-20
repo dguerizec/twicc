@@ -9,9 +9,10 @@ the design doc [`2026-06-16-dockable-layout-design.md`](./2026-06-16-dockable-la
 → the pure resolver `frontend/src/utils/layoutResolver.js` (the executable spec).
 
 Branch/worktree: `layout` (`.worktrees/layout`). Its own dev instance runs via devctl
-(frontend **5174**, backend **3501**). The branch is **44 commits** on top of `main` — not pushed, not
-merged. Run `git log main..layout` for the breakdown. (Rebased onto local `main` `54fd6b15` on
-2026-06-19; `origin/main` is further ahead at `e0cd600b` — reconcile before pushing/merging.)
+(frontend **5174**, backend **3501**). The branch is **47 commits** on top of `main` — not pushed, not
+merged. Run `git log main..layout` for the breakdown. (Rebased onto local `main` `6f8f5b7b` on
+2026-06-20; local `main` is now 54 commits ahead of `origin/main` `e0cd600b`, which is an ancestor — a
+push of `main` fast-forwards, no reconcile needed.)
 **Persistence is COMPLETE** (steps 1–4 of the layout-persistence plan — see
 `docs/plans/2026-06-19-layout-persistence-impl-plan.md`). Layout state survives reload, syncs across
 devices, new sessions open with a resolved global/project default, the named-layouts catalog has a
@@ -518,44 +519,43 @@ focused signals; e.g. Git stops polling when not shown) and a tmux **reaper/GC**
   `settings.defaultLayoutId` → project `Project.default_layout_id` (0111) → session) resolved + frozen at
   creation, mirroring agent settings; per-scope default rows in the menu (worktree → project → global,
   deduped against the named list); and alphabetical ordering wherever layouts are listed. Full design in
-  `docs/plans/2026-06-19-layout-persistence-impl-plan.md`. **Deferred (v2):** per-device localStorage
-  override, per-project named layouts, schema `version`, CLI catalog commands. `maximized` stays
+  `docs/plans/2026-06-19-layout-persistence-impl-plan.md`. **v2 = WON'T-DO** (triaged 2026-06-20):
+  per-device localStorage override, per-project named layouts, CLI catalog commands — dropped. A schema
+  `version` field stays a **contingency** (add only if a *breaking* reshape of the intention lands; the
+  tolerant merge with `EMPTY_INTENTION` covers additive/removed fields today). `maximized` stays
   transient (never persisted).
-- **Layout thresholds/values are placeholders** — tune later: the resolver thresholds, the 800px
-  container breakpoint (`useContainerBreakpoint`), the 40rem chat/composer `@container` thresholds,
-  and the sidebar-toggle clearance values (centralized in `App.vue` + refined per dock context in
-  `SessionLayout` — see the 2026-06-19 session for the current values). (The resolver IS correctly
-  reused; an earlier "stuck in widescreen" report was just a too-wide window, not a bug.)
+- **Layout thresholds/values — DONE** (tuned 2026-06-20): the resolver `DEFAULT_CONFIG` thresholds were
+  adjusted and `railW` config-ized; the 800px container breakpoint (`useContainerBreakpoint`), the 40rem
+  chat/composer `@container` thresholds, and the sidebar-toggle clearance values (in `App.vue` +
+  `SessionLayout`) are accepted as-is. (The resolver IS correctly reused; an earlier "stuck in widescreen"
+  report was just a too-wide window, not a bug.)
 
-## What remains (categorized todo — none trivial, lots left)
+## What remains (triaged with the dev 2026-06-20)
 
-- **Step 1 — done + fully live-verified (2026-06-19).** The prior session's responsiveness + compact
-  decoupling are confirmed live; auto-focus-on-dock is **decided = kept**; the optional-empty model is
-  **decided = absent** (done in the resolver — what's left there is the registry + persistence, below);
-  overlay route-derivation, swap-on-navigate, borders, the clearance (now per dock context) and the
-  icons are done + live-verified. What's genuinely left below is persistence + new interactions.
-- **Compact tab bar + custom tab styling: DONE** (user-confirmed 2026-06-19). The inline compact tab
-  bar and the tab visual styling are finished — do **not** re-list these as remaining.
-- **Focus model polish:** tab lifecycle (run work on "became visible/focused", not on tab activation).
-  The file-clears-on-blur, focus-race, overlay-focus and route-derivation work is **done** (see the
-  route/focus + 2026-06-18 sections) — this is just the remaining "lifecycle hooks" idea.
-- **Resize UI: done** — both dock splitters (a column's width / the bottom's height vs the center) and
-  sibling splitters (between a column's two siblings / the two bottom siblings) drag live (see the
-  2026-06-18 section). Custom hit-strips, not `wa-split-panel` (so the `wa-reposition` trap is
-  sidestepped). The fractions' **persistence is now done** (resizeFractions ride the persisted
-  intention).
-- **Persistence: COMPLETE (steps 1–4 + scope rows + alphabetical listing)** —
-  `docs/plans/2026-06-19-layout-persistence-impl-plan.md` is the spec. The "remembering an absent tab's
-  dock" payoff falls out for free (the catalog/intention key tabs by id; the resolver filters
-  `isPresent`). **Deferred only:** per-device localStorage override, per-project named layouts, schema
-  `version`, CLI catalog commands (v2). Doc chore (plan §7) is **done**: `layouts.json` is in the data-dir
-  inventory of `CLAUDE.md` / `AGENTS.md`, and `Session.layout` / `Project.default_layout_id` are noted in
-  the models section.
-- **Interactions/UX:** keyboard nav; reset (project/default/tabbed); drag-and-drop placement;
-  animations. (Maximize/restore, named layouts/presets, save/select/manage are **done**.)
-- **Polish/divers:** structural-vs-resize-min naming; keep docs/AGENTS.md/CLAUDE.md in sync if rules
-  change. (Custom tab styling is **done** — see above. The old "bottom region + empty-optional bottom
-  gutter" coexistence edge case is now **moot** — empty-optional docks no longer exist.)
+Everything structural is **done** (see the dated sections above): step-1 docking + responsiveness +
+compact decoupling; overlay route-derivation, swap-on-navigate, edge-aware borders, per-dock-context
+clearance, icons; resize splitters (dock + sibling, fractions persisted); maximize/restore; the full
+persistence stack (steps 1–4 + scope rows + alphabetical); the mobile file-tree default-open
+(`cf584212` then rebased); and the placeholder tuning. After triage the open list is short:
+
+**To do**
+- **tmux reaper / GC** — a periodic (or boot-time) sweep of orphaned `twicc-*` tmux sessions that were
+  opened but never used (Option D in `2026-06-19-terminal-lifecycle-layout-analysis.md`). Lower urgency
+  since the Main terminal's manual-start already shrinks the accumulation case; separate concern.
+
+**Won't do** (decided 2026-06-20)
+- Persistence **v2**: per-device localStorage override, per-project named layouts, CLI catalog commands.
+  (Schema `version` is a contingency only — see Known issues.)
+- **Drag-and-drop** placement of a tab into a dock — the ▾ placement menu suffices.
+- **Keyboard navigation** in the docks / tabs — the current interactions suffice.
+- **Reset** action — already reachable by picking a layout in the selector.
+- Transition **animations**.
+- **Focus-model lifecycle hooks** / "became visible/focused" (e.g. Git stops polling when hidden;
+  Option C in the terminal doc) — revisit later only if it becomes necessary.
+- **structural-min vs resize-min** rename (cosmetic).
+
+**Standing (not a task)** — keep `CLAUDE.md` / `AGENTS.md` in sync if layout rules change; the concrete
+`layouts.json` + `Session.layout` / `Project.default_layout_id` doc updates are already in this branch.
 
 ## Testing notes (how this was verified — reuse for next time)
 
