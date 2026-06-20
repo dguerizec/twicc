@@ -782,7 +782,6 @@ body.sidebar-closed {
     &[data-theme="awesome"] {
         --divider-size: 4px;
     }
-
     --main-shadow-size: var(--wa-shadow-offset-y-s);
 
     /* Diff editor colors (light mode) */
@@ -791,6 +790,10 @@ body.sidebar-closed {
     --diff-insertedLineBackground: #C0FFD8;
     --diff-insertedTextBackground: #A7E9B8;
     --diff-selectionBackground: var(--selection-bg-color);
+}
+
+wa-split-panel {
+    --divider-width: var(--divider-size) !important;
 }
 
 .wa-dark {

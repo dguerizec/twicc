@@ -86,8 +86,8 @@ function onClick(entry) {
     position: absolute;
     display: flex;
     justify-content: space-between;
-    gap: 0.25rem;
-    padding: 0.25rem;
+    gap: 2px;
+    padding: 2px;
     background: var(--wa-color-surface-default, transparent); /* match .dock-region */
     z-index: 12; /* above an open overlay backdrop, so gutters stay clickable */
     --gutter-border: var(--divider-size) solid var(--wa-color-surface-border, rgba(0, 0, 0, 0.12));
@@ -110,7 +110,7 @@ function onClick(entry) {
 }
 .g-group {
     display: flex;
-    gap: 0.25rem;
+    gap: 2px;
 }
 .dock-gutter.left .g-group,
 .dock-gutter.right .g-group {
@@ -122,23 +122,23 @@ function onClick(entry) {
     align-items: center;
 }
 .g-icon {
-    width: 1.5rem;
-    height: 1.5rem;
+    width: 22px;
+    height: 22px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
     border-radius: var(--wa-border-radius-s, 4px);
-    background: var(--wa-color-surface-default, rgba(0, 0, 0, 0.06));
-    border: 1px solid var(--wa-color-surface-border, rgba(0, 0, 0, 0.12));
-    color: inherit;
+    background: transparent;
+    border: none;
+    color: var(--wa-color-text-quiet);
     cursor: pointer;
     padding: 0;
+    transition: background-color 0.15s, color 0.15s;
 }
 .g-icon:hover {
-    border-color: var(--wa-color-brand-border-loud, var(--wa-color-primary-500));
+    color: inherit;
 }
 .g-icon.open {
-    background: var(--wa-color-brand-fill-loud, var(--wa-color-primary-500));
-    color: var(--wa-color-brand-on-loud, #fff);
+    color: inherit;
 }
 </style>

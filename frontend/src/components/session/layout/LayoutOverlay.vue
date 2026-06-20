@@ -94,6 +94,9 @@ function onShow(event) { emit('select', event.detail.name) }
 .overlay-tabnav::part(body) {
     display: none;
 }
+.overlay-tabnav::part(tabs) {
+    align-items: center;
+}
 .overlay-tab::part(base) {
     display: inline-flex;
     align-items: center;

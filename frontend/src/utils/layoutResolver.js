@@ -32,18 +32,19 @@ export const DOCKS = [
 export const DEFAULT_CONFIG = {
   // --- Structural thresholds: decide the layout STRUCTURE (columns shown, merges, mode) ---
   centerMinW: 460,        // min comfortable width for the chat / center
-  centerMinH: 220,        // min comfortable height for the center
-  sideMinW: 280,          // min width for a persistent side column
-  sideMergeBelowH: 300,   // side-column height below which the two vertical siblings merge into one tab bar
-  bottomMinH: 150,        // min height for the bottom region (else it overlays)
-  bottomMergeBelowW: 560, // bottom-span width below which the two bottom siblings merge into one tab bar
-  bottomComfortW: 560,    // center-col width below which the bottom flips to full width (classic)
+  centerMinH: 300,        // min comfortable height for the center
+  sideMinW: 300,          // min width for a persistent side column
+  sideMergeBelowH: 600,   // side-column height below which the two vertical siblings merge into one tab bar
+  bottomMinH: 300,        // min height for the bottom region (else it overlays)
+  bottomMergeBelowW: 600, // bottom-span width below which the two bottom siblings merge into one tab bar
+  bottomComfortW: 600,    // center-col width below which the bottom flips to full width (classic)
   mobileMaxW: 520,        // at or below this width -> pure tabs (no docks)
   overlayCoverage: 0.95,  // an opened overlay covers 95%, leaving a 5% escape strip
+  railW: 30,              // px width/height of a collapsed-dock edge gutter (the thin icon rail)
   // --- Splitter ratios: the user-draggable layout intention (persisted, clamped at render) ---
-  leftColFrac: 0.22,
-  rightColFrac: 0.22,
-  bottomFrac: 0.30,
+  leftColFrac: 0.25,
+  rightColFrac: 0.25,
+  bottomFrac: 0.33,
   leftSplitFrac: 0.5,
   rightSplitFrac: 0.5,
   bottomSplitFrac: 0.5,
@@ -254,7 +255,7 @@ export function resolveLayout(input) {
   // ---- Geometry. Gutters take REAL space, and each gutter's extent mirrors the region
   // it replaces: in widescreen the bottom (and its gutter) sits under the center only; in
   // classic the bottom is full width and the side columns/gutters span only the top band. ----
-  const RAIL = 26;
+  const RAIL = cfg.railW;
   const leftGut = !!gutterData.left, rightGut = !!gutterData.right, bottomGut = !!gutterData.bottom;
   const fullBottom = (bottomSpan === 'full'); // classic owns the full width at the bottom
 
