@@ -33,6 +33,14 @@ PIDS_DIR = DEVCTL_DIR / "pids"
 DEFAULT_BACKEND_PORT = 3500
 DEFAULT_FRONTEND_PORT = 5173
 
+# How long `stop` waits for a process to exit on its own after SIGTERM before
+# escalating to SIGKILL, and how long it then waits for the kill to take effect.
+# The backend's graceful shutdown (agents, providers, db writer, search index)
+# can take a few seconds; we must not return until it has released the data-dir
+# lock, or a following `start` races it and loses (see stop() for the rationale).
+STOP_GRACE_TIMEOUT = 10.0
+STOP_KILL_TIMEOUT = 3.0
+
 # Default data directory (same as twicc.paths)
 DEFAULT_DATA_DIR = Path.home() / ".twicc"
 TWICC_DATA_DIR_ENV = "TWICC_DATA_DIR"
@@ -430,6 +438,30 @@ def is_running(proc_key: str, processes: dict) -> tuple[bool, int | None]:
         return False, None
 
 
+def _pid_alive(pid: int) -> bool:
+    """Return True if *pid* still exists (signal 0 probe, no signal delivered)."""
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def wait_for_exit(pid: int, timeout: float) -> bool:
+    """Poll until *pid* is gone or *timeout* seconds elapse.
+
+    devctl is not the process's parent (a previous invocation detached it via
+    start_new_session), so we can't waitpid() it — we probe liveness with
+    signal 0. Returns True if the process exited within the timeout.
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if not _pid_alive(pid):
+            return True
+        time.sleep(0.1)
+    return not _pid_alive(pid)
+
+
 def verify_port(proc_key: str, log_start_pos: int, processes: dict, timeout: float = 5.0) -> bool:
     """Verify that process started on the expected port by checking NEW log lines only."""
     config = processes[proc_key]
@@ -585,7 +617,17 @@ def start(proc_key: str, processes: dict) -> bool:
 
 
 def stop(proc_key: str, processes: dict) -> bool:
-    """Stop a process and all its children (process group)."""
+    """Stop a process group and wait for it to actually exit.
+
+    Sends SIGTERM to the whole group, then BLOCKS until the leader PID is gone
+    (escalating to SIGKILL if it overruns STOP_GRACE_TIMEOUT). This wait is the
+    whole point: the backend holds an exclusive flock on the data dir for the
+    entire duration of its graceful shutdown and releases it only once fully
+    stopped. Returning early — as a fire-and-forget SIGTERM would — lets the
+    `start` that `restart` runs next race the dying process for the lock and
+    lose with "Another TwiCC instance is already running". The kernel frees the
+    flock on death either way, so a SIGKILL escalation always unblocks start.
+    """
     config = processes[proc_key]
     running, pid = is_running(proc_key, processes)
 
@@ -593,23 +635,41 @@ def stop(proc_key: str, processes: dict) -> bool:
         print(f"  {config['name']}: not running")
         return True
 
+    # Send SIGTERM to the entire process group (negative PID): kills npm AND its
+    # node/vite children, or the backend AND its spawn-compute child. Fall back
+    # to the single PID if the group signal fails.
     try:
-        # Send SIGTERM to the entire process group (negative PID)
-        # This kills npm AND its child processes (node/vite)
         os.killpg(pid, signal.SIGTERM)
-        print(f"  {config['name']}: stopped (was PID {pid})")
-        config["pid"].unlink(missing_ok=True)
-        return True
     except OSError as e:
-        # Fallback: try killing just the process if group kill fails
         try:
             os.kill(pid, signal.SIGTERM)
-            print(f"  {config['name']}: stopped (was PID {pid})")
-            config["pid"].unlink(missing_ok=True)
-            return True
         except OSError:
             print(f"  {config['name']}: failed to stop - {e}")
             return False
+
+    # Wait for the (lock-holding) leader to actually exit before returning.
+    if wait_for_exit(pid, STOP_GRACE_TIMEOUT):
+        print(f"  {config['name']}: stopped (was PID {pid})")
+        config["pid"].unlink(missing_ok=True)
+        return True
+
+    # Grace period exceeded — escalate to SIGKILL so the next start isn't blocked.
+    print(f"  {config['name']}: still alive after {STOP_GRACE_TIMEOUT:.0f}s, sending SIGKILL...")
+    try:
+        os.killpg(pid, signal.SIGKILL)
+    except OSError:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except OSError:
+            pass
+
+    if wait_for_exit(pid, STOP_KILL_TIMEOUT):
+        print(f"  {config['name']}: killed (was PID {pid})")
+        config["pid"].unlink(missing_ok=True)
+        return True
+
+    print(f"  {config['name']}: failed to stop (PID {pid} still alive after SIGKILL)")
+    return False
 
 
 def status(processes: dict):
