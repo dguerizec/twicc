@@ -5,6 +5,7 @@ import { useArtifactBroker } from '../../composables/useArtifactBroker'
 import { useSettingsStore } from '../../stores/settings'
 import { useCommandRegistry } from '../../composables/useCommandRegistry'
 import { usePanZoom } from '../../composables/usePanZoom'
+import { useFocusRetry } from '../../composables/useFocusRetry'
 import MarkdownContent from '../ui/MarkdownContent.vue'
 import MermaidDiagram from '../ui/MermaidDiagram.vue'
 import AppTooltip from '../ui/AppTooltip.vue'
@@ -956,13 +957,52 @@ function scrollToLine(lineNum) {
     }
 }
 
+// Focus the pane's primary content for a tab activation: the CodeMirror editor when a file is shown
+// as source/diff (so the user can read / scroll / navigate it with the keyboard), otherwise the
+// preview — a scrollable or natively-interactive element inside it (so arrows / PageUp-Down / space
+// act on the preview). Returns whether focus now lands inside our content (drives the retry pump).
+const previewWrapRef = ref(null)
+const requestContentFocus = useFocusRetry()
+function focusContent() {
+    requestContentFocus(focusContentOnce)
+}
+function focusContentOnce() {
+    if (showEditor.value) {
+        const ed = props.diffMode ? diffEditorRef.value : codeEditorRef.value
+        const root = ed?.$el
+        if (root && root.contains(document.activeElement)) return true
+        ed?.focus?.()
+        return !!root && root.contains(document.activeElement)
+    }
+    const wrap = previewWrapRef.value
+    if (!wrap) return false
+    if (wrap.contains(document.activeElement)) return true
+    // Prefer a natively-interactive element (iframe / pdf embed / media) then a scrollable container,
+    // else the wrap itself made programmatically focusable. preventScroll so focusing never jumps it.
+    const target = wrap.querySelector('iframe, embed, video, audio') || firstScrollable(wrap) || wrap
+    if (!/^(IFRAME|EMBED|VIDEO|AUDIO)$/.test(target.tagName) && target.tabIndex < 0) target.tabIndex = -1
+    try {
+        target.focus({ preventScroll: true })
+    } catch {
+        // Focusing can throw on a not-yet-upgraded element — benign, the pump retries.
+    }
+    return wrap.contains(document.activeElement)
+}
+function firstScrollable(root) {
+    const els = [root, ...root.querySelectorAll('*')]
+    return els.find((el) => {
+        const oy = getComputedStyle(el).overflowY
+        return (oy === 'auto' || oy === 'scroll') && el.scrollHeight > el.clientHeight
+    }) || null
+}
+
 // Whether the file content is currently being fetched (initial load or file switch)
 const isLoading = computed(() => loading.value || switching.value)
 
 // Expose dirty state, reload, scrollToLine, and loading state for parent components.
 // reloadHtmlPreview + isHtmlPreviewActive let the Artifacts tab live-reload a
 // rendered HTML page on disk changes.
-defineExpose({ isDirty, isLoading, reload, scrollToLine, reloadHtmlPreview, isHtmlPreviewActive })
+defineExpose({ isDirty, isLoading, reload, scrollToLine, reloadHtmlPreview, isHtmlPreviewActive, focusContent })
 
 function formatSize(bytes) {
     if (bytes < 1024) return `${bytes} B`
@@ -1226,6 +1266,7 @@ function goToNextDiff() {
                  mode (which has no header toolbar). -->
             <div
                 v-if="hasActivePreview"
+                ref="previewWrapRef"
                 class="file-pane-preview"
                 :class="{ 'file-pane-preview--fullscreen': isPreviewFullscreen }"
             >

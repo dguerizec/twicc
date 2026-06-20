@@ -46,6 +46,12 @@ const props = defineProps({
         type: Boolean,
         default: false,
     },
+    // Bumped by the parent to focus the tree's search input on a real navigation toward
+    // this tab (forwarded straight to FileTreePanel; never tied to `active`/visibility).
+    focusRequest: {
+        type: Number,
+        default: 0,
+    },
     isDraft: {
         type: Boolean,
         default: false,
@@ -432,9 +438,20 @@ async function fetchCommitDetail(commitHash) {
 // ---------------------------------------------------------------------------
 
 const fileTreePanelRef = ref(null)
+const filePaneRef = ref(null)
 
 /** Selected file relative path from the FileTreePanel. */
 const selectedFile = computed(() => fileTreePanelRef.value?.selectedFile ?? null)
+
+// On a tab-activation focus request from the layout (focusRequest bumped by SessionView), focus the
+// panel's primary content: the diff viewer when a file's diff is shown (so keyboard nav keeps reading
+// it), otherwise the tree's search filter. Each target self-persists its focus against the
+// post-activation reveal steal (see useFocusRetry); we just pick which one. When a file is selected but
+// its diff isn't rendered yet (loading, or an image diff with no FilePane), we fall back to the filter.
+watch(() => props.focusRequest, () => {
+    if (selectedFile.value && filePaneRef.value) filePaneRef.value.focusContent()
+    else fileTreePanelRef.value?.focusSearchInput()
+})
 
 const GIT_STATUS_MAP = {
     modified:  { letter: 'M', cls: 'git-badge-modified' },
@@ -1276,7 +1293,6 @@ onMounted(() => {
                         :project-id="projectId"
                         :session-id="sessionId"
                         :show-refresh="isViewingIndex"
-                        :active="active"
                         :is-mobile="isMobile"
                         :commented-paths="commentedPaths"
                         mode="git"
@@ -1368,6 +1384,7 @@ onMounted(() => {
                             <!-- Kept mounted: content updates in-place via prop changes, no destroy/recreate -->
                             <FilePane
                                 v-else-if="selectedFile && diffData"
+                                ref="filePaneRef"
                                 :project-id="projectId"
                                 :session-id="sessionId"
                                 :file-path="selectedFilePath"

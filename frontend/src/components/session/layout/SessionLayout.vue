@@ -16,7 +16,7 @@ const props = defineProps({
     registerTarget: { type: Function, required: true },
     unregisterTarget: { type: Function, required: true },
 })
-const emit = defineEmits(['select-tab', 'minimize', 'maximize', 'restore-maximized', 'focus-pane', 'overlay-activate', 'overlay-dismiss'])
+const emit = defineEmits(['select-tab', 'tab-activate', 'minimize', 'maximize', 'restore-maximized', 'focus-pane', 'overlay-activate', 'overlay-dismiss'])
 
 // props.layout is the useSessionLayout() return — a bag of refs/functions. Refs accessed
 // through a prop object are NOT auto-unwrapped, so read them via .value here.
@@ -166,6 +166,7 @@ onBeforeUnmount(endDrag)
             :register-target="registerTarget"
             :unregister-target="unregisterTarget"
             @select="(id) => emit('select-tab', id)"
+            @tab-activate="(id) => emit('tab-activate', id)"
             @pane-focus="(id) => emit('focus-pane', id)"
             @restore="emit('restore-maximized')"
             @place="(id, dest) => layout.place(id, dest)"
@@ -183,6 +184,7 @@ onBeforeUnmount(endDrag)
                 :register-target="registerTarget"
                 :unregister-target="unregisterTarget"
                 @select="(id) => emit('select-tab', id)"
+                @tab-activate="(id) => emit('tab-activate', id)"
                 @pane-focus="(id) => emit('focus-pane', id)"
                 @minimize="(dockIds) => emit('minimize', dockIds)"
                 @maximize="(dockIds, tab) => emit('maximize', dockIds, tab)"

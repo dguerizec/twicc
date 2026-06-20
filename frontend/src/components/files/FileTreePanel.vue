@@ -19,7 +19,6 @@
  *   isDraft: for FileTree API prefix
  *   extraQuery: for FileTree lazy-load query string
  *   showRefresh: whether to show the Refresh option in the dropdown
- *   active: whether the panel is currently active (for auto-focus)
  *   mode: 'files' | 'git' — passed through to FileTree
  *
  * Events:
@@ -43,6 +42,7 @@ import AppTooltip from '../ui/AppTooltip.vue'
 import ArtifactBookmarkButton from '../artifacts/ArtifactBookmarkButton.vue'
 import { useDataStore } from '../../stores/data'
 import { isRenderableArtifactPath } from '../../utils/artifactBookmark'
+import { useFocusRetry } from '../../composables/useFocusRetry'
 
 const props = defineProps({
     tree: {
@@ -93,10 +93,6 @@ const props = defineProps({
     showRefresh: {
         type: Boolean,
         default: true,
-    },
-    active: {
-        type: Boolean,
-        default: false,
     },
     mode: {
         type: String,
@@ -368,29 +364,31 @@ function handleOptionsSelect(event) {
 
 const searchInputRef = ref(null)
 
-/**
- * Focus the search input field.
- * wa-input is a web component, so we need to call .focus() on it directly.
- */
-function focusSearchInput() {
-    try {
-        searchInputRef.value?.focus()
-    } catch {
-        // WaInput.focus() can throw if the web component's internal <input>
-        // element isn't ready yet (e.g. shadow DOM not fully initialized).
-        // This is a benign race condition — silently ignore.
-    }
+const requestSearchFocus = useFocusRetry()
+
+function holdsFocus(el) {
+    // wa-input retargets focus into its shadow <input>, so the host is document.activeElement.
+    return document.activeElement === el || el?.shadowRoot?.activeElement != null
 }
 
-// Auto-focus search input when the panel becomes active
-watch(
-    () => props.active,
-    (active) => {
-        if (active) {
-            nextTick(() => focusSearchInput())
+// Focus the search input. Routed through the focus-retry pump because the request can fire before the
+// field is visible (the panel is still navigating in; the field renders only once the tree has loaded,
+// v-if="tree && searchFn") and because a route-sync reveal can steal focus to a tree item right after.
+// Exposed so the parent panels (which route filter-vs-viewer focus) and the picker popups can call it.
+function focusSearchInput() {
+    requestSearchFocus(() => {
+        const el = searchInputRef.value
+        if (!el) return false
+        if (!holdsFocus(el)) {
+            try {
+                el.focus()
+            } catch {
+                // WaInput.focus() can throw if its shadow <input> isn't ready yet. Benign — retry.
+            }
         }
-    }
-)
+        return holdsFocus(el)
+    })
+}
 
 // ─── Keyboard navigation ─────────────────────────────────────────────────────
 

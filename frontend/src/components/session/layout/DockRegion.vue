@@ -19,7 +19,7 @@ const props = defineProps({
     registerTarget: { type: Function, required: true },
     unregisterTarget: { type: Function, required: true },
 })
-const emit = defineEmits(['select', 'minimize', 'maximize', 'restore', 'place', 'pane-focus'])
+const emit = defineEmits(['select', 'tab-activate', 'minimize', 'maximize', 'restore', 'place', 'pane-focus'])
 
 const bodyRef = ref(null)
 
@@ -51,7 +51,16 @@ watchEffect((onCleanup) => {
     onCleanup(() => { for (const d of ids) props.unregisterTarget(`region:${d}`) })
 })
 
-function onShow(event) { emit('select', event.detail.name) }
+// wa-tab-group emits wa-tab-show not only on a user tab switch but also when it (re)mounts and
+// asserts its initial active tab — and this region IS destroyed/recreated whenever dockingRendered
+// flips, e.g. on every KeepAlive return (the area measures 0×0 while detached). A fresh tab-group
+// has activeTab === undefined, so it fires wa-tab-show for the tab it already shows. Treating that
+// as a switch would navigate the route onto a docked secondary the user never touched. A genuine
+// switch always targets a DIFFERENT tab than the region's current active one (clicking the active
+// tab fires no wa-tab-show — onBodyClick claims it instead), so only forward real changes.
+function onShow(event) {
+    if (event.detail.name !== props.activeTabId) emit('select', event.detail.name)
+}
 
 // Click-to-focus: interacting anywhere in a pane should make its tab the route owner. We listen
 // on the CLICK (capture phase, so it fires even if the panel stops propagation — e.g. xterm),
@@ -62,16 +71,23 @@ function onShow(event) { emit('select', event.detail.name) }
 function onBodyClick() {
     if (props.activeTabId) emit('pane-focus', props.activeTabId)
 }
+
+// A tab HEADER click is an explicit activation: focus its panel's filter (tab-activate) AND claim the
+// route for it (pane-focus, deferred — superseded by a real switch). A body click only claims (no focus).
+function onTabClick(tabId) {
+    emit('tab-activate', tabId)
+    emit('pane-focus', tabId)
+}
 </script>
 
 <template>
     <div class="dock-region" :class="region.kind" :data-rid="region.id" :style="style">
         <wa-tab-group class="dock-tabnav" :class="{ 'tabnav-dimmed': !isRouteActive }" :active="activeTabId" @wa-tab-show.stop="onShow">
-            <!-- Clicking a tab label claims focus for it (deferred, like onBodyClick). wa-tab-show
-                 handles switching to a *different* tab; this also covers clicking the tab that is
-                 ALREADY this group's active one (no wa-tab-show fires then) while another region owns
-                 the route. The placement arrow stops its own click, so it never reaches here. -->
-            <wa-tab v-for="t in tabs" :key="t.id" slot="nav" :panel="t.id" class="dock-tab" @click="emit('pane-focus', t.id)">
+            <!-- Clicking a tab header activates it: focuses its filter + claims the route (onTabClick).
+                 wa-tab-show handles switching to a *different* tab; the claim also covers clicking the
+                 tab that is ALREADY this group's active one (no wa-tab-show fires then) while another
+                 region owns the route. The placement arrow stops its own click, so it never reaches here. -->
+            <wa-tab v-for="t in tabs" :key="t.id" slot="nav" :panel="t.id" class="dock-tab" @click="onTabClick(t.id)">
                 <wa-icon v-if="t.icon" :name="t.icon" class="dock-tab-icon"></wa-icon>
                 <span class="dock-tab-label">{{ t.label }}</span>
                 <TabPlacementMenu

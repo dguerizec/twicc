@@ -40,6 +40,12 @@ const props = defineProps({
         type: Boolean,
         default: false,
     },
+    // Bumped by the parent to focus the tree's search input on a real navigation toward
+    // this tab (forwarded straight to FileTreePanel; never tied to `active`/visibility).
+    focusRequest: {
+        type: Number,
+        default: 0,
+    },
     isDraft: {
         type: Boolean,
         default: false,
@@ -530,6 +536,15 @@ onBeforeUnmount(() => {
  */
 const selectedFile = computed(() => fileTreePanelRef.value?.selectedFile ?? null)
 
+// On a tab-activation focus request from the layout (focusRequest bumped by SessionView), focus the
+// panel's primary content: the file viewer when a file is open (so keyboard nav keeps reading/scrolling
+// it), otherwise the tree's search filter. Each target self-persists its focus against the post-activation
+// reveal steal (see useFocusRetry); we just pick which one.
+watch(() => props.focusRequest, () => {
+    if (selectedFile.value && filePaneRef.value) filePaneRef.value.focusContent()
+    else fileTreePanelRef.value?.focusSearchInput()
+})
+
 /**
  * Absolute path of the currently selected file.
  */
@@ -901,7 +916,6 @@ defineExpose({ revealFile, setRootByPath, onArtifactFilesChanged })
                 :is-draft="isDraft"
                 :extra-query="optionsQuery()"
                 :show-refresh="true"
-                :active="active"
                 :is-mobile="isMobile"
                 :artifact-bookmark-session-id="artifactBookmarkSessionId"
                 :commented-paths="commentedPaths"

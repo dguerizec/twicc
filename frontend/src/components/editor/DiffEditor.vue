@@ -568,6 +568,7 @@ defineExpose({
     isDirty,
     resetDirty() { isDirty.value = false },
     openSearch() { toggleSearchPanel(getModifiedView()) },
+    focus() { getModifiedView()?.focus() },
     getModifiedView,
     getOriginalView,
 })
