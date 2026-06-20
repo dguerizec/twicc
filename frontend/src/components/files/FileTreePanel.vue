@@ -303,6 +303,20 @@ function onFileSelect(path) {
     }
 }
 
+// In mobile mode, default the file-tree overlay OPEN whenever there is a tree to browse but no file
+// is selected yet — i.e. arriving on /files, /git, /artifacts with no file/commit in the URL (or the
+// panel becoming narrow with nothing selected). Saves a click, handy now that docks can show several
+// of these tabs at once. Git "no changes" is excluded for free: rootPath is null then, so the
+// condition is false. The watch only fires on these dep transitions, so a manual close persists and
+// selecting a file (which clears the condition) never reopens it.
+watch(
+    () => props.isMobile && !selectedFile.value && !!props.rootPath,
+    (shouldOpen) => {
+        if (shouldOpen) fileTreeOpen.value = true
+    },
+    { immediate: true },
+)
+
 /**
  * Handle focus change from a click on any tree node (file or directory).
  * Updates focusedPath so keyboard navigation resumes from the clicked item.
