@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, watch, nextTick, provide, onMounted, onActivated, onDeactivated, useId } from 'vue'
+import { ref, computed, watch, nextTick, provide, onMounted, onUnmounted, onActivated, onDeactivated, useId } from 'vue'
 import { apiFetch } from '../../utils/api'
 import { useSettingsStore } from '../../stores/settings'
 import { useContainerBreakpoint } from '../../composables/useContainerBreakpoint'
@@ -597,10 +597,13 @@ watch(displayTree, (tree) => {
  * Fetch index files from the dedicated endpoint.
  * Lightweight alternative to re-fetching the entire git log.
  */
-async function refreshIndexFiles() {
+async function refreshIndexFiles({ silent = false } = {}) {
     // Only show loading state if we have no data yet — avoids flashing
     // the tree empty when refreshing with existing content visible.
-    const isInitialLoad = !indexFilesData.value
+    // Background polling passes silent:true so the empty "No changes" state
+    // never flashes a spinner on each tick (the loading placeholder otherwise
+    // takes precedence over the "No changes" one).
+    const isInitialLoad = !silent && !indexFilesData.value
     if (isInitialLoad) commitFilesLoading.value = true
     let treeChanged = false
     try {
@@ -1102,6 +1105,86 @@ watch(
 )
 
 // ---------------------------------------------------------------------------
+// Live polling of uncommitted changes
+// ---------------------------------------------------------------------------
+// While the Git pane is visible (props.active) AND we're viewing the index
+// (uncommitted changes), poll in the background so the change tree — and the
+// open file's diff — stay live without the user pressing Refresh. Each tick
+// runs exactly what the "Refresh" options-menu item triggers (refreshIndexFiles),
+// just silently. We never poll a historical commit (immutable) and pause while
+// the browser tab is hidden. Because props.active is only ever true for the one
+// visible session/project pane, at most one loop runs at a time.
+
+const POLL_INTERVAL_MS = 5000
+let pollTimer = null
+let pollInFlight = false
+
+/** True while a background poll is warranted (visible pane, viewing the index). */
+const shouldPoll = computed(() => props.active && isViewingIndex.value)
+
+/** Also gate on browser-tab visibility — no point polling a hidden tab. */
+function pollActive() {
+    return shouldPoll.value && !document.hidden
+}
+
+function cancelPoll() {
+    if (pollTimer !== null) {
+        clearTimeout(pollTimer)
+        pollTimer = null
+    }
+}
+
+/**
+ * (Re)arm the loop. `immediate` runs a tick now (used when the browser tab
+ * regains focus, to catch up on changes made while it was hidden); otherwise the
+ * next tick is scheduled POLL_INTERVAL_MS after the previous one *completes*, so
+ * a slow repo self-throttles and ticks never overlap.
+ */
+function armPoll({ immediate = false } = {}) {
+    cancelPoll()
+    if (!pollActive() || pollInFlight) return
+    if (immediate) {
+        pollTick()
+    } else {
+        pollTimer = setTimeout(pollTick, POLL_INTERVAL_MS)
+    }
+}
+
+async function pollTick() {
+    pollTimer = null
+    if (!pollActive()) return
+    pollInFlight = true
+    try {
+        await refreshIndexFiles({ silent: true })
+    } finally {
+        pollInFlight = false
+    }
+    armPoll()
+}
+
+function onPollVisibilityChange() {
+    if (document.hidden) {
+        cancelPoll()
+    } else {
+        armPoll({ immediate: true })
+    }
+}
+
+document.addEventListener('visibilitychange', onPollVisibilityChange)
+
+// Start/stop the loop as the pane's visibility or index/commit view changes.
+// No immediate tick here: when the pane becomes active the activation watch
+// above already issues a fresh refreshIndexFiles(), and switching back from a
+// commit to the index triggers the same via the selectedCommit watch — so we
+// only schedule the *next* tick and avoid a double fetch.
+watch(shouldPoll, () => armPoll(), { immediate: true })
+
+onUnmounted(() => {
+    cancelPoll()
+    document.removeEventListener('visibilitychange', onPollVisibilityChange)
+})
+
+// ---------------------------------------------------------------------------
 // Split panel position (KeepAlive-safe)
 // ---------------------------------------------------------------------------
 
@@ -1300,7 +1383,7 @@ onMounted(() => {
                         :context-menu-mode="contextMenuMode"
                         :git-directory="effectiveGitDirectory"
                         @file-select="handleFileSelect"
-                        @refresh="refreshIndexFiles"
+                        @refresh="refreshIndexFiles()"
                         @option-select="handleOptionsSelect"
                         @git-stage="handleGitAction('git-stage', $event)"
                         @git-unstage="handleGitAction('git-unstage', $event)"
