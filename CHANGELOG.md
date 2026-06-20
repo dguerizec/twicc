@@ -15,7 +15,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Remote access** — when no password is set, TwiCC now only accepts connections from the same machine; set a password to reach it from other devices.
 - **Question widget** — ability to cancel or partially submit Claude's questions.
-- **Claude Agent SDK** — Upgrade from 0.2.99 to 0.2.104 (bundled Claude Code CLI: 2.1.175 → 2.1.181)
+- **Claude Agent SDK** — Upgrade from 0.2.99 to 0.2.105 (bundled Claude Code CLI: 2.1.175 → 2.1.183)
 
 ### Fixed
 
