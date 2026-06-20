@@ -71,6 +71,8 @@ uv tool upgrade twicc
 
 ### Productivity
 
+- **Dockable layout**: arrange a session's tool tabs (Files, Git, Terminal, Artifacts, …) into a multi-pane workspace — dock them around the chat to see several at once, resize and maximize panes, and save named layouts with per-project and global defaults
+- **Artifacts**: agents can produce rendered artifacts — images, formatted reports, and interactive HTML playgrounds (which can make outbound network requests you approve per host) — displayed inside TwiCC and bookmarkable for quick access in a dedicated view
 - **Command palette** (Ctrl+K / Cmd+K): jump to any project, session, or workspace, change session settings, and trigger common actions from a single keyboard-driven menu
 - **Session switcher**: hold Ctrl and tap the key above Tab (the backtick on QWERTY) to flip between your recently-visited sessions; add Shift to pick from the sessions shown in the sidebar instead
 - **Session list multi-select**: select several sessions at once and apply batch actions — pin, mark read/unread, archive, and more
@@ -128,7 +130,7 @@ On each startup, TwiCC detects changes and updates its database accordingly. Whi
 
 The interface is fully usable from a mobile browser. Combined with a tunnel service like [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/), [ngrok](https://ngrok.com/), or [Tailscale Funnel](https://tailscale.com/docs/features/tailscale-funnel), you can access TwiCC from anywhere and interact with Claude Code or Codex from your phone.
 
-> **Important:** if you expose TwiCC over the internet, enable password protection (see [Configuration](#configuration)) and prefer a tunnel service with its own access control. TwiCC has no built-in access control beyond optional password protection.
+> **Important:** by default, when no password is set, TwiCC only accepts connections from the machine it runs on. To reach it from another device — through a tunnel or over your LAN — set a password (see [Configuration](#configuration)). Even then, prefer a tunnel service with its own access control: TwiCC has no built-in access control beyond optional password protection.
 
 > **Tip:** on Android, the author uses [Unexpected Keyboard](https://play.google.com/store/apps/details?id=juloo.keyboard2) for an even better terminal experience — it natively exposes Ctrl, Esc, Tab, and other keys that complement TwiCC's built-in keys bar.
 
