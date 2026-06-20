@@ -55,13 +55,14 @@ function onClick(entry) {
                 v-for="entry in startIcons"
                 :key="entry.item.dockId + ':' + entry.tab.id"
                 type="button"
-                class="g-icon"
+                class="g-chip"
                 :class="{ open: isOpen(entry) }"
                 :title="`${entry.tab.label} — ${verb(entry)}`"
                 :aria-label="`${entry.tab.label} — ${verb(entry)}`"
                 @click="onClick(entry)"
             >
                 <wa-icon :name="entry.tab.icon"></wa-icon>
+                <span class="g-label">{{ entry.tab.label }}</span>
             </button>
         </div>
         <div class="g-group end">
@@ -69,13 +70,14 @@ function onClick(entry) {
                 v-for="entry in endIcons"
                 :key="entry.item.dockId + ':' + entry.tab.id"
                 type="button"
-                class="g-icon"
+                class="g-chip"
                 :class="{ open: isOpen(entry) }"
                 :title="`${entry.tab.label} — ${verb(entry)}`"
                 :aria-label="`${entry.tab.label} — ${verb(entry)}`"
                 @click="onClick(entry)"
             >
                 <wa-icon :name="entry.tab.icon"></wa-icon>
+                <span class="g-label">{{ entry.tab.label }}</span>
             </button>
         </div>
     </div>
@@ -83,11 +85,13 @@ function onClick(entry) {
 
 <style scoped>
 .dock-gutter {
+    --gutter-size: 30px; /* Keep updated with railW from layoutResolver.js */
+    --gutter-padding: 2px;
     position: absolute;
     display: flex;
     justify-content: space-between;
-    gap: 2px;
-    padding: 2px;
+    gap: var(--gutter-padding);
+    padding: var(--gutter-padding);
     background: var(--wa-color-surface-default, transparent); /* match .dock-region */
     z-index: 12; /* above an open overlay backdrop, so gutters stay clickable */
     --gutter-border: var(--divider-size) solid var(--wa-color-surface-border, rgba(0, 0, 0, 0.12));
@@ -112,33 +116,64 @@ function onClick(entry) {
     display: flex;
     gap: 2px;
 }
-.dock-gutter.left .g-group,
-.dock-gutter.right .g-group {
-    flex-direction: column;
-    align-items: center;
+
+.dock-gutter {
+    .g-group {
+        align-items: center;
+        height: var(--gutter-size);
+        position: absolute;
+    }
+    &.left, &.right {
+        .g-group {
+            transform: rotate(-90deg);
+            &.start {
+                top: calc(var(--gutter-padding) - var(--gutter-size));
+                right: 0;
+                transform-origin: bottom right;
+            }
+            &.end {
+                bottom: calc(var(--gutter-padding) - var(--gutter-size));
+                left: 0;
+                transform-origin: top left;
+            }
+        }
+    }
+    &.bottom .g-group {
+        top: var(--gutter-padding);
+        &.start {
+            left: var(--gutter-padding);
+        }
+        &.end {
+            right: var(--gutter-padding);
+        }
+    }
 }
-.dock-gutter.bottom .g-group {
+.g-chip {
+    display: inline-flex;
     flex-direction: row;
     align-items: center;
-}
-.g-icon {
-    width: 22px;
-    height: 22px;
-    display: inline-flex;
-    align-items: center;
     justify-content: center;
+    gap: 5px;
     border-radius: var(--wa-border-radius-s, 4px);
     background: transparent;
     border: none;
     color: var(--wa-color-text-quiet);
     cursor: pointer;
-    padding: 0;
+    padding: 3px 7px;
+    font-size: 0.75rem;
+    line-height: 1;
+    white-space: nowrap;
     transition: background-color 0.15s, color 0.15s;
 }
-.g-icon:hover {
+.g-chip wa-icon {
+    flex: 0 0 auto;
+    font-size: 1.1em;
+    margin-inline-end: 0;
+}
+.g-chip:hover {
     color: inherit;
 }
-.g-icon.open {
+.g-chip.open {
     color: inherit;
 }
 </style>
