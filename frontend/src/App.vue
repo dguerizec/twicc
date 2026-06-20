@@ -24,6 +24,7 @@ import GlobalMediaPreview from './components/media/GlobalMediaPreview.vue'
 import ProjectTrustDialog from './components/project/ProjectTrustDialog.vue'
 import ProjectEditDialog from './components/project/ProjectEditDialog.vue'
 import WorktreeDialog from './components/project/WorktreeDialog.vue'
+import TerminalPool from './components/terminal/TerminalPool.vue'
 import { registerTrustDialog, ensureProjectTrust } from './composables/useTrustGate'
 import { initStaticCommands } from './commands/staticCommands'
 import {
@@ -626,6 +627,11 @@ const toastTheme = computed(() => {
     <div class="app-container" @dragover.prevent @drop.prevent>
         <router-view />
     </div>
+
+    <!-- App-level pool hosting every TerminalPanel-managed terminal instance.
+         Instances are teleported into the active panel's slots and survive
+         navigation, enabling parent-terminal attachment. -->
+    <TerminalPool v-if="isAppReady" />
 
     <!-- Toast notification system (theme inverted for contrast) -->
     <Notivue v-slot="item">

@@ -86,6 +86,38 @@ export const useWorkspacesStore = defineStore('workspaces', {
             }
         },
 
+        /**
+         * Working directory for a workspace terminal: the longest common path
+         * prefix of the workspace's visible project directories (its "common
+         * directory"). Returns the single project's dir when there's only one,
+         * '/' when the projects diverge at the root, or null when the workspace
+         * has no resolvable dirs. Used both by the workspace terminal panel and
+         * when attaching a workspace terminal into a child panel.
+         */
+        getTerminalCwd() {
+            return (workspaceId) => {
+                const dataStore = useDataStore()
+                const dirs = this.getVisibleProjectIds(workspaceId)
+                    .map(pid => dataStore.getProject(pid))
+                    .map(p => p?.directory)
+                    .filter(Boolean)
+                if (dirs.length === 0) return null
+                if (dirs.length === 1) return dirs[0]
+                // Find the longest common path prefix
+                const parts = dirs.map(d => d.split('/'))
+                const common = []
+                for (let i = 0; i < parts[0].length; i++) {
+                    const segment = parts[0][i]
+                    if (parts.every(p => p[i] === segment)) {
+                        common.push(segment)
+                    } else {
+                        break
+                    }
+                }
+                return common.length > 1 ? common.join('/') : '/'
+            }
+        },
+
         /** Whether a workspace is activable (has at least one visible project). */
         isActivable() {
             return (workspaceId) => this.getVisibleProjectIds(workspaceId).length > 0

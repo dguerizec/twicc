@@ -1,6 +1,7 @@
 <script setup>
 import { inject, nextTick, onUnmounted, ref, watch } from 'vue'
 import { useTerminal } from '../../composables/useTerminal'
+import { useTerminalPoolStore } from '../../stores/terminalPool'
 
 const emit = defineEmits(['disconnected'])
 
@@ -24,6 +25,15 @@ const props = defineProps({
     terminalIndex: {
         type: Number,
         default: 0,
+    },
+    // Pool key (`${contextKey}#${index}`) under which this instance registers its
+    // API in the terminal pool store, so the displaying panel's toolbar can reach
+    // it across the <Teleport> boundary (provide/inject can't). When null, the
+    // instance is rendered inline (e.g. the hybrid CLI block) and falls back to
+    // the legacy provide/inject API registry of its parent.
+    poolKey: {
+        type: String,
+        default: null,
     },
     active: {
         type: Boolean,
@@ -88,7 +98,11 @@ function focusContent() {
     return !!containerRef.value && containerRef.value.contains(document.activeElement)
 }
 
-// Register terminal API with parent (TerminalPanel) for toolbar + ExtraKeysBar routing
+// Register terminal API so the displaying panel's toolbar + ExtraKeysBar can
+// route to it. Pooled instances (poolKey set) are teleported out of the panel's
+// component tree, so they publish to the app-level pool store; inline instances
+// (no poolKey, e.g. the hybrid block) use the legacy provide/inject of a parent.
+const poolStore = useTerminalPoolStore()
 const registerTerminal = inject('registerTerminal', null)
 const unregisterTerminal = inject('unregisterTerminal', null)
 
@@ -122,9 +136,14 @@ const terminalApi = {
     focus,
     focusContent,
 }
-registerTerminal?.(props.terminalIndex, terminalApi)
+if (props.poolKey) {
+    poolStore.registerApi(props.poolKey, terminalApi)
+} else {
+    registerTerminal?.(props.terminalIndex, terminalApi)
+}
 onUnmounted(() => {
-    unregisterTerminal?.(props.terminalIndex)
+    if (props.poolKey) poolStore.unregisterApi(props.poolKey)
+    else unregisterTerminal?.(props.terminalIndex)
 })
 
 // Notify parent when the terminal's PTY exits (Ctrl+D, `exit`, shell crash, etc.)

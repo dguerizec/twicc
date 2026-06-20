@@ -1,18 +1,19 @@
 <script setup>
-import { computed, inject, nextTick, onBeforeUnmount, onMounted, provide, reactive, ref, watch } from 'vue'
+import { computed, inject, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch, watchEffect } from 'vue'
 import { useRoute } from 'vue-router'
 import { useSettingsStore } from '../../stores/settings'
 import { useDataStore } from '../../stores/data'
 import { useTerminalConfigStore } from '../../stores/terminalConfig'
 import { useWorkspacesStore } from '../../stores/workspaces'
 import { useTerminalTabsStore } from '../../stores/terminalTabs'
+import { useTerminalPoolStore } from '../../stores/terminalPool'
 import { useTerminalCommandStore } from '../../stores/terminalCommand'
 import { sendWsMessage } from '../../composables/useWebSocket'
 import { useFocusRetry } from '../../composables/useFocusRetry'
 import { toast } from '../../composables/useToast'
 import { getUnavailablePlaceholders } from '../../utils/snippetPlaceholders'
 import AppTooltip from '../ui/AppTooltip.vue'
-import TerminalInstance from './TerminalInstance.vue'
+import AttachTerminalMenu from './AttachTerminalMenu.vue'
 import TerminalRenameDialog from './TerminalRenameDialog.vue'
 import TerminalExtraKeysBar from './TerminalExtraKeysBar.vue'
 import TerminalCombosDialog from './TerminalCombosDialog.vue'
@@ -70,6 +71,7 @@ const dataStore = useDataStore()
 const terminalConfigStore = useTerminalConfigStore()
 const workspacesStore = useWorkspacesStore()
 const terminalTabsStore = useTerminalTabsStore()
+const poolStore = useTerminalPoolStore()
 const insertTextAtCursor = inject('insertTextAtCursor', null)
 
 const session = computed(() => props.sessionId ? dataStore.getSession(props.sessionId) : null)
@@ -169,10 +171,89 @@ const manageSnippetsDialogRef = ref(null)
 const snippetSendDialogRef = ref(null)
 const renameDialogRef = ref(null)
 
-// Terminal instance registration (provide/inject for toolbar + ExtraKeysBar routing)
-const terminalApis = reactive(new Map())
-provide('registerTerminal', (index, api) => { terminalApis.set(index, api) })
-provide('unregisterTerminal', (index) => { terminalApis.delete(index) })
+// --- Pool slots --------------------------------------------------------------
+// Terminal instances live in the app-level pool (TerminalPool.vue); this panel
+// renders only slot <div>s and publishes them to the pool, which teleports the
+// matching instance into the active panel's slot. The pool is keyed by each
+// terminal's home identity `${contextKey}#${index}`.
+const ownKey = (index) => poolStore.keyFor(props.contextKey, index)
+// Attachable ancestor scopes (project / worktree-project / workspace / global).
+const isAncestorScope = (ctx) => ctx === 'global' || ctx.startsWith('p:') || ctx.startsWith('w:')
+// A terminal must persist across navigation (so it stays connected and
+// attachable from a child panel) when it has NO server-side session to re-attach
+// to — i.e. a non-tmux terminal of an attachable ancestor scope. tmux terminals
+// (re-attachable) and session terminals (never attached) are torn down on
+// navigation as before.
+const ownPersist = computed(() => isAncestorScope(props.contextKey) && !usesTmux.value)
+
+// Whether ancestor terminals are tmux-backed (global setting). tmux scopes are
+// discovered server-side (attachable even when not connected); non-tmux scopes
+// are discovered from the pool (only currently-connected instances). Defined here
+// (before route reconciliation) so a route can resolve an attached token at mount.
+const ancestorsUseTmux = computed(() => settingsStore.isTerminalUseTmux)
+
+// Ordered list of attachable ancestor scopes for this panel. Empty for the
+// global panel (it has no parents). Every other panel has at least 'global'.
+const ancestorScopes = computed(() => {
+    const ctx = props.contextKey
+    if (ctx === 'global') return []
+
+    const scopes = []
+
+    // The single project this panel belongs to (session → its project; project
+    // panel → that project). Workspace panels own no single project.
+    let ownProjectId = null
+    if (ctx.startsWith('s:')) {
+        ownProjectId = resolvedProjectId.value
+    } else if (ctx.startsWith('p:')) {
+        ownProjectId = ctx.slice(2)
+    }
+
+    if (ownProjectId) {
+        const proj = dataStore.getProject(ownProjectId)
+        const mainRepoId = dataStore.getMainRepoProjectId(ownProjectId)
+        if (ctx.startsWith('s:') && proj?.worktree_of) {
+            // Session inside a git worktree: the worktree project itself, then
+            // its main repository as "Project".
+            scopes.push({ scope: 'worktree', label: 'Worktree', contextKey: `p:${ownProjectId}`, projectId: ownProjectId })
+            scopes.push({ scope: 'project', label: 'Project', contextKey: `p:${mainRepoId}`, projectId: mainRepoId })
+        } else if (ctx.startsWith('s:')) {
+            // Session inside a plain project.
+            scopes.push({ scope: 'project', label: 'Project', contextKey: `p:${ownProjectId}`, projectId: ownProjectId })
+        } else if (proj?.worktree_of) {
+            // Worktree-project panel: only its main repository sits above it.
+            scopes.push({ scope: 'project', label: 'Project', contextKey: `p:${mainRepoId}`, projectId: mainRepoId })
+        }
+
+        // Workspaces containing the (main-repo) project — one section each.
+        const workspaces = workspacesStore.getWorkspacesForProject(mainRepoId)
+        const multiple = workspaces.length > 1
+        for (const ws of workspaces) {
+            scopes.push({
+                scope: `workspace:${ws.id}`,
+                label: multiple ? `Workspace (${ws.name})` : 'Workspace',
+                contextKey: `w:${ws.id}`,
+                wsId: ws.id,
+                cwd: workspacesStore.getTerminalCwd(ws.id),
+            })
+        }
+    }
+
+    // Global is the ancestor of every non-global panel.
+    scopes.push({ scope: 'global', label: 'Global', contextKey: 'global' })
+    return scopes
+})
+// Slot elements by pool key (filled by template function refs).
+const slotEls = reactive({})
+function setSlotEl(key, el) {
+    if (el) slotEls[key] = el
+    else delete slotEls[key]
+}
+// Keys this panel currently publishes (to release them when no longer wanted).
+const publishedKeys = new Set()
+// Own keys that have had a live instance — used to detect a secondary terminal's
+// exit (its descriptor vanishing from the pool while we're active).
+const seenOwnKeys = new Set()
 
 const INVALID_ROUTE_TERM_INDEX = -1
 
@@ -180,6 +261,16 @@ const INVALID_ROUTE_TERM_INDEX = -1
 const terminals = ref([{ index: 0, label: 'Main' }])
 const activeIndex = ref(0)
 const nextIndex = ref(1) // monotonically increasing counter
+
+// --- Attached parent-scope terminals ---
+// Terminals borrowed from an ancestor scope (worktree → project → workspace →
+// global) and rendered before the panel's own tabs. The attachment registry
+// lives in the pool store (so it survives navigation); this panel reads its own
+// attachments from there. `activeAttachedKey` holds the pool key of the active
+// tab when it is an attached one (else null → an own tab, tracked by
+// `activeIndex`, is active). The wa-tab panel name of an attached tab IS its pool
+// key (which never starts with "term-", so it's distinguishable from own tabs).
+const activeAttachedKey = ref(null)
 const pendingRouteTermIndex = ref(null)
 const unavailableRouteTermIndex = ref(undefined)
 let nextNavigationReplace = false
@@ -190,19 +281,38 @@ const isRouteTermUnavailable = computed(() =>
     unavailableRouteTermIndex.value !== undefined
     && (backendIndicesReady || unavailableRouteTermIndex.value === INVALID_ROUTE_TERM_INDEX)
 )
-const fallbackTermIndex = computed(() => findFallbackTermIndex(props.routeTermIndex ?? activeIndex.value))
-const activeTabPanel = computed(() => isRouteTermUnavailable.value ? '__unavailable__' : `term-${activeIndex.value}`)
-const activeApi = computed(() => terminalApis.get(activeIndex.value) || null)
-const isActiveMain = computed(() => activeIndex.value === 0)
-const unavailableRouteMessage = computed(() => (
-    unavailableRouteTermIndex.value === INVALID_ROUTE_TERM_INDEX
-        ? 'Requested terminal is not available.'
-        : `Terminal \`${unavailableRouteTermIndex.value}\` is no longer available.`
+const fallbackTermIndex = computed(() => findFallbackTermIndex(
+    typeof props.routeTermIndex === 'number' ? props.routeTermIndex : activeIndex.value
 ))
+const isActiveAttached = computed(() => activeAttachedKey.value !== null)
+// The pool key of the active tab (attached key, or the own tab's home key).
+const activeKey = computed(() => activeAttachedKey.value ?? ownKey(activeIndex.value))
+// Route value for the active tab: a plain index for own tabs, the attached pool
+// key otherwise (encoded to the URL token by buildTerminalRouteParams). Matches
+// the space of `props.routeTermIndex` for echo-suppression in the navigate watch.
+const currentRouteValue = computed(() =>
+    activeAttachedKey.value !== null ? activeAttachedKey.value : activeIndex.value
+)
+// The route-unavailable callout only applies to own terminals; an explicitly
+// activated attached tab is shown even if the URL points at a dead own index.
+const showUnavailableState = computed(() => isRouteTermUnavailable.value && !isActiveAttached.value)
+const activeTabPanel = computed(() => {
+    if (activeAttachedKey.value !== null) return activeAttachedKey.value
+    return isRouteTermUnavailable.value ? '__unavailable__' : `term-${activeIndex.value}`
+})
+const activeApi = computed(() => poolStore.getApi(activeKey.value))
+const isActiveMain = computed(() => activeAttachedKey.value === null && activeIndex.value === 0)
+const unavailableRouteMessage = computed(() => {
+    const v = unavailableRouteTermIndex.value
+    if (v === INVALID_ROUTE_TERM_INDEX) return 'Requested terminal is not available.'
+    // String value = an attached parent terminal's pool key (internal format).
+    if (typeof v === 'string') return 'The attached terminal is no longer available.'
+    return `Terminal \`${v}\` is no longer available.`
+})
 
 // Flattened toolbar state from the active terminal's API.
-// Note: reactive Map's .get() wraps results in reactive(), which auto-unwraps
-// refs — so activeApi.value.isConnected returns the boolean directly, not a Ref.
+// Note: the API lives in the pool store's reactive state, which auto-unwraps the
+// refs inside it — so activeApi.value.isConnected returns the boolean, not a Ref.
 const tb = reactive({
     get isConnected() { return activeApi.value?.isConnected ?? false },
     get canScrollUp() { return activeApi.value?.canScrollUp ?? false },
@@ -213,10 +323,16 @@ const tb = reactive({
     get touchMode() { return activeApi.value?.touchMode ?? 'scroll' },
 })
 
+/** Activate an own terminal tab (clears any active attached tab). */
+function activateOwnTab(index) {
+    activeAttachedKey.value = null
+    activeIndex.value = index
+}
+
 function createTerminal() {
     const index = nextIndex.value++
     terminals.value.push({ index, label: `Term ${index + 1}` })
-    activeIndex.value = index
+    activateOwnTab(index)
 }
 
 function findFallbackTermIndex(target = activeIndex.value) {
@@ -228,7 +344,18 @@ function findFallbackTermIndex(target = activeIndex.value) {
 
 function syncActiveIndex(index) {
     syncingFromRoute = true
+    // Route reconciliation always lands on an own tab, so leaving an attached tab.
+    activeAttachedKey.value = null
     activeIndex.value = index
+    nextTick(() => {
+        syncingFromRoute = false
+    })
+}
+
+/** Activate an attached tab from a route reconciliation (no echo navigate). */
+function syncActiveAttached(key) {
+    syncingFromRoute = true
+    activeAttachedKey.value = key
     nextTick(() => {
         syncingFromRoute = false
     })
@@ -250,6 +377,11 @@ function removeTerminalTab(index) {
         nextNavigationReplace = false
         activeIndex.value = prevTerminal?.index ?? 0
     }
+    // Release the pool slot (unmounts the instance if nothing else references it).
+    const key = ownKey(index)
+    seenOwnKeys.delete(key)
+    publishedKeys.delete(key)
+    poolStore.clearSlot(key)
     // Eagerly remove from store so that syncTerminalsFromBackend doesn't
     // re-add this tab before the backend's terminal_killed broadcast arrives.
     terminalTabsStore.removeIndex(props.contextKey, index)
@@ -266,16 +398,15 @@ function killTerminal(index) {
     removeTerminalTab(index)
 }
 
-/** Called when a TerminalInstance's WS disconnects (PTY died, Ctrl+D, network, etc.) */
-function onTerminalDisconnected(index) {
-    if (index === 0) return // main terminal: keep tab, show reconnect overlay
-    removeTerminalTab(index)
-}
-
 function onTerminalTabShow(event) {
     const panelName = event.detail?.name
-    if (panelName?.startsWith('term-')) {
+    if (!panelName || panelName === '__unavailable__') return
+    if (panelName.startsWith('term-')) {
+        activeAttachedKey.value = null
         activeIndex.value = parseInt(panelName.slice(5), 10)
+    } else {
+        // Attached tab — its wa-tab panel name is the pool key.
+        activeAttachedKey.value = panelName
     }
 }
 
@@ -386,11 +517,11 @@ function handleSnippetSendTo(snippet, target) {
         // (not `isConnected`) because the latter fires on `websocket.accept`,
         // before tmux has attached the pane — input sent that early gets eaten.
         const stopWatch = watch(
-            () => terminalApis.get(newIndex)?.isReady,
+            () => poolStore.getApi(ownKey(newIndex))?.isReady,
             (ready) => {
                 if (ready) {
                     stopWatch()
-                    terminalApis.get(newIndex)?.handleSnippetPress?.(snippet)
+                    poolStore.getApi(ownKey(newIndex))?.handleSnippetPress?.(snippet)
                     if (usesTmux.value && label) {
                         sendWsMessage({
                             type: 'rename_terminal',
@@ -407,10 +538,10 @@ function handleSnippetSendTo(snippet, target) {
         setTimeout(() => stopWatch(), 10000)
     } else {
         const targetIndex = Number(target)
-        const api = terminalApis.get(targetIndex)
+        const api = poolStore.getApi(ownKey(targetIndex))
         if (api) {
             sendSnippetToApi(api, snippet)
-            activeIndex.value = targetIndex
+            activateOwnTab(targetIndex)
         }
     }
 }
@@ -452,11 +583,11 @@ watch(
             // `isConnected` (WS accepted) so the command doesn't land before the
             // tmux pane is wired or the shell has rendered its prompt.
             const stopWatch = watch(
-                () => terminalApis.get(targetIndex)?.isReady,
+                () => poolStore.getApi(ownKey(targetIndex))?.isReady,
                 (ready) => {
                     if (!ready) return
                     stopWatch()
-                    terminalApis.get(targetIndex)?.handleSnippetPress?.({
+                    poolStore.getApi(ownKey(targetIndex))?.handleSnippetPress?.({
                         snippet: entry.snippet,
                         appendEnter: entry.appendEnter,
                         placeholders: [],
@@ -471,20 +602,75 @@ watch(
     { immediate: true },
 )
 
-watch(activeIndex, (newIndex) => {
+// Push the active tab into the URL (own index, or attached pool key → token).
+watch(currentRouteValue, (val) => {
     if (!props.active) return
     if (syncingFromRoute) return
     if (pendingRouteTermIndex.value != null) return
-    if (newIndex === props.routeTermIndex) return
+    if (val === props.routeTermIndex) return
     emit('navigate', {
-        termIndex: newIndex,
+        termIndex: val,
         replace: nextNavigationReplace,
     })
     nextNavigationReplace = false
 })
 
+/**
+ * Attach an ancestor terminal identified by its pool key, materialising the
+ * descriptor from the matching ancestor scope (used when a route points at an
+ * attached terminal that isn't attached yet — deep link / back-forward after
+ * detach). Returns false if no ancestor scope matches the key's context.
+ */
+function attachKeyFromRoute(key) {
+    const hash = key.lastIndexOf('#')
+    if (hash === -1) return false
+    const contextKey = key.slice(0, hash)
+    const index = Number.parseInt(key.slice(hash + 1), 10)
+    if (!Number.isInteger(index)) return false
+    const scope = ancestorScopes.value.find(s => s.contextKey === contextKey)
+    if (!scope) return false
+    // Only attach if the requested terminal actually EXISTS — never spawn a
+    // phantom from a stale URL. tmux: it must already be live in the pool or
+    // listed by discovery; non-tmux: it must be live in the pool. (For an
+    // undiscovered tmux ancestor we kick off discovery and a watcher retries.)
+    if (ancestorsUseTmux.value) {
+        if (!poolStore.descriptors[key] && !(terminalTabsStore.indices[contextKey] || []).includes(index)) {
+            return false
+        }
+    } else if (!poolStore.descriptors[key]) {
+        return false
+    }
+    poolStore.attach(props.contextKey, key, {
+        contextKey,
+        index,
+        projectId: scope.projectId ?? null,
+        sessionId: null,
+        cwd: scope.cwd ?? null,
+        startMode: 'auto',
+        persist: !ancestorsUseTmux.value,
+    })
+    return true
+}
+
 function applyRouteTermIndex(target) {
     if (!props.active) return
+
+    // Attached parent-scope terminal (route token decoded to a pool key).
+    if (typeof target === 'string') {
+        pendingRouteTermIndex.value = null
+        if (poolStore.attachmentsFor(props.contextKey).includes(target) || attachKeyFromRoute(target)) {
+            unavailableRouteTermIndex.value = undefined
+            syncActiveAttached(target)
+        } else {
+            // Not attachable yet (terminal not found). For tmux the ancestor's
+            // list may simply be undiscovered — fetch it so the retry watcher can
+            // resolve us once it (and any live instance) is known.
+            if (ancestorsUseTmux.value) requestAncestorDiscovery()
+            unavailableRouteTermIndex.value = target
+            syncActiveIndex(findFallbackTermIndex(0))
+        }
+        return
+    }
 
     if (target === undefined) {
         pendingRouteTermIndex.value = null
@@ -533,16 +719,47 @@ watch(
     { immediate: true },
 )
 
+// Retry attached-route resolution when the inputs it needs become available:
+// ancestor scopes (data loaded late), the source instance going live (non-tmux),
+// or tmux discovery listing it. Lets a browser-history landing on an attachment
+// URL auto-(re)attach as soon as the target terminal exists. No-op once the
+// target is attached (so it never loops).
+watch(
+    () => {
+        const t = props.routeTermIndex
+        if (typeof t !== 'string') return undefined
+        const hash = t.lastIndexOf('#')
+        if (hash === -1) return undefined
+        const ctx = t.slice(0, hash)
+        return [
+            ancestorScopes.value.length,
+            poolStore.descriptors[t] ? 1 : 0,
+            (terminalTabsStore.indices[ctx] || []).length,
+        ].join(':')
+    },
+    () => {
+        const target = props.routeTermIndex
+        if (typeof target === 'string'
+            && props.active && props.routeOwner
+            && activeAttachedKey.value !== target
+            && !poolStore.attachmentsFor(props.contextKey).includes(target)) {
+            applyRouteTermIndex(target)
+        }
+    },
+)
+
 // Focus the active terminal — its xterm, or the Start/Reconnect overlay button when no live terminal —
 // for an activation gesture. Routed through the shared focus-retry pump (like the tool tabs): a single
 // .focus() is unreliable here because switching a sub-tab fires a route claim + navigate whose reveal
 // frames steal focus right after, and a keyboard tab switch flips props.active before the panel is shown.
 // The pump re-asserts each frame until focus holds (focusContent returns whether it landed) — and since
 // it re-evaluates the target each frame, it follows the state as it transitions (connecting → connected).
+// `showUnavailableState` (not isRouteTermUnavailable) is the right gate: an active ATTACHED tab is shown
+// and focusable even when the own-route index is unavailable.
 const requestTerminalFocus = useFocusRetry()
 function focusActiveTerminal() {
     requestTerminalFocus(() => {
-        if (isRouteTermUnavailable.value) return true // nothing focusable — satisfy the pump so it stops
+        if (showUnavailableState.value) return true // nothing focusable — satisfy the pump so it stops
         const api = activeApi.value
         if (!api) return null // active TerminalInstance not registered yet — wait for it to appear
         return api.focusContent?.() ?? false
@@ -630,6 +847,201 @@ function handleDisconnect() {
     // For the main terminal, the tab stays with the reconnect overlay.
     activeApi.value?.disconnect?.()
 }
+
+// --- Attach parent-scope terminals ------------------------------------------
+// `ancestorScopes` / `ancestorsUseTmux` are defined earlier (in the pool-slots
+// section), before the route reconciliation — so a route can resolve an attached
+// token on first mount. Here we build the menu sections and manage attachments
+// (which live in the pool store so they survive navigation).
+
+// Menu sections: per ancestor scope, the attachable terminals (only scopes that
+// currently have at least one are kept). tmux → server-discovered list; non-tmux
+// → currently-connected pool instances.
+const attachSections = computed(() => {
+    const myAttached = poolStore.attachmentsFor(props.contextKey)
+    return ancestorScopes.value
+        .map((scope) => {
+            let entries // [{ index, label }]
+            if (ancestorsUseTmux.value) {
+                entries = (terminalTabsStore.indices[scope.contextKey] || []).map((index) => ({
+                    index,
+                    label: terminalTabsStore.getLabel(scope.contextKey, index) || defaultLabel(index),
+                }))
+            } else {
+                entries = poolStore.liveKeysForContext(scope.contextKey)
+                    .map((key) => poolStore.descriptors[key])
+                    .map((d) => ({ index: d.index, label: d.label || defaultLabel(d.index) }))
+                    .sort((a, b) => a.index - b.index)
+            }
+            const items = entries.map(({ index, label }) => {
+                const key = poolStore.keyFor(scope.contextKey, index)
+                return {
+                    key,
+                    contextKey: scope.contextKey,
+                    index,
+                    scopeLabel: scope.label,
+                    projectId: scope.projectId ?? null,
+                    cwd: scope.cwd ?? null,
+                    label,
+                    attached: myAttached.includes(key),
+                }
+            })
+            return { scope: scope.scope, label: scope.label, items }
+        })
+        .filter((section) => section.items.length > 0)
+})
+
+// Attached tabs for this panel (read from the pool), with a reactive display
+// label "<Scope>: <terminal name>" (the name follows an ancestor-level rename).
+const attachedTabs = computed(() =>
+    poolStore.attachmentsFor(props.contextKey)
+        .map((key) => {
+            const d = poolStore.descriptors[key]
+            if (!d) return null
+            const scope = ancestorScopes.value.find((s) => s.contextKey === d.contextKey)
+            const scopeLabel = scope ? scope.label : d.contextKey
+            const foreignLabel = (ancestorsUseTmux.value
+                ? terminalTabsStore.getLabel(d.contextKey, d.index)
+                : d.label) || defaultLabel(d.index)
+            return {
+                key,
+                contextKey: d.contextKey,
+                index: d.index,
+                projectId: d.projectId,
+                cwd: d.cwd,
+                scopeLabel,
+                displayLabel: `${scopeLabel}: ${foreignLabel}`,
+            }
+        })
+        .filter(Boolean)
+)
+
+/** Discover the terminals of every tmux ancestor scope (called when the menu
+ *  opens). Non-tmux scopes are read live from the pool — nothing to fetch. */
+function requestAncestorDiscovery() {
+    if (!ancestorsUseTmux.value || !dataStore.wsConnected) return
+    for (const scope of ancestorScopes.value) {
+        sendWsMessage({ type: 'list_terminals', terminal_context: scope.contextKey })
+    }
+}
+
+/** Attach an ancestor terminal, or focus it if already attached. */
+function attachTerminal(item) {
+    poolStore.attach(props.contextKey, item.key, {
+        contextKey: item.contextKey,
+        index: item.index,
+        projectId: item.projectId,
+        sessionId: null, // ancestors are never sessions
+        cwd: item.cwd,
+        startMode: 'auto',
+        label: item.label,
+        persist: !ancestorsUseTmux.value,
+    })
+    activeAttachedKey.value = item.key
+}
+
+/** Detach an attached tab (never kills the source terminal). */
+function detachTerminal(key) {
+    const before = poolStore.attachmentsFor(props.contextKey)
+    const idx = before.indexOf(key)
+    poolStore.detach(props.contextKey, key)
+    if (activeAttachedKey.value === key) {
+        const remaining = poolStore.attachmentsFor(props.contextKey)
+        activeAttachedKey.value = remaining[idx] ?? remaining[idx - 1] ?? null
+    }
+}
+
+function handleDetach() {
+    if (activeAttachedKey.value !== null) detachTerminal(activeAttachedKey.value)
+}
+
+// Keep `activeAttachedKey` valid: when its tab leaves the attachment list (manual
+// detach, or the pool auto-removed it because its source terminal exited), move
+// to another attached tab or back to the own tabs.
+watch(
+    () => poolStore.attachmentsFor(props.contextKey).slice(),
+    (keys) => {
+        if (activeAttachedKey.value !== null && !keys.includes(activeAttachedKey.value)) {
+            activeAttachedKey.value = keys.length ? keys[keys.length - 1] : null
+        }
+    },
+)
+
+// Focus the attached terminal when it becomes the active tab — through the same
+// focus-retry pump as own tabs (switching to an attached tab changes
+// activeAttachedKey, not activeIndex, so the activeIndex watcher above misses it).
+watch(activeAttachedKey, (key) => {
+    if (key === null) return
+    focusActiveTerminal()
+})
+
+// --- Pool slot publishing ----------------------------------------------------
+// While this panel is active, publish a slot for each tab (own + attached) so the
+// pool teleports the matching instance into it. All own tabs get a slot (only the
+// active one is visible — preserves the no-resize-flash behavior); the pool keeps
+// inactive ones alive in place. When the panel goes inactive or unmounts we
+// release every slot (un-attached own terminals are then torn down; attached and
+// tmux ones persist server-side / in the pool).
+watchEffect(() => {
+    if (!props.active) {
+        for (const key of publishedKeys) poolStore.clearSlot(key)
+        publishedKeys.clear()
+        seenOwnKeys.clear()
+        return
+    }
+    const wanted = new Set()
+    for (const t of terminals.value) {
+        const key = ownKey(t.index)
+        wanted.add(key)
+        seenOwnKeys.add(key)
+        poolStore.setSlot(key, {
+            contextKey: props.contextKey,
+            index: t.index,
+            projectId: resolvedProjectId.value,
+            sessionId: props.sessionId,
+            cwd: props.cwd,
+            startMode: startModeFor(t.index),
+            label: t.label,
+            persist: ownPersist.value,
+        }, slotEls[key], activeAttachedKey.value === null && t.index === activeIndex.value)
+    }
+    for (const tab of attachedTabs.value) {
+        wanted.add(tab.key)
+        // The descriptor is owned by the home panel — only relocate it here.
+        poolStore.setSlotTarget(tab.key, slotEls[tab.key], activeAttachedKey.value === tab.key)
+    }
+    for (const key of [...publishedKeys]) {
+        if (!wanted.has(key)) {
+            poolStore.clearSlot(key)
+            publishedKeys.delete(key)
+        }
+    }
+    for (const key of wanted) publishedKeys.add(key)
+})
+
+// Close an own secondary tab when its instance exits (the pool drops its
+// descriptor on PTY exit). Guarded by `props.active` so navigation/teardown —
+// where descriptors legitimately disappear — never closes tabs.
+watch(
+    () => terminals.value
+        .filter((t) => t.index > 0)
+        .map((t) => {
+            const key = ownKey(t.index)
+            return { index: t.index, exited: seenOwnKeys.has(key) && !poolStore.descriptors[key] }
+        }),
+    (list) => {
+        if (!props.active) return
+        for (const { index, exited } of list) {
+            if (exited) removeTerminalTab(index)
+        }
+    },
+    { deep: true },
+)
+
+onBeforeUnmount(() => {
+    for (const key of publishedKeys) poolStore.clearSlot(key)
+    publishedKeys.clear()
+})
 
 // --- Discovery and cross-device sync ---
 
@@ -799,20 +1211,20 @@ function handleTerminalTabShortcut(event) {
     if (type === 'direct') {
         // Direct access: number N → the Nth terminal tab (1-based positional)
         const term = terminals.value[index - 1]
-        if (term) activeIndex.value = term.index
+        if (term) activateOwnTab(term.index)
     } else if (type === 'prev' || type === 'next') {
         const currentIdx = terminals.value.findIndex(t => t.index === activeIndex.value)
         if (currentIdx === -1) return
         const newIdx = type === 'next'
             ? (currentIdx + 1) % terminals.value.length
             : (currentIdx - 1 + terminals.value.length) % terminals.value.length
-        activeIndex.value = terminals.value[newIdx].index
+        activateOwnTab(terminals.value[newIdx].index)
     } else if (type === 'last-visited') {
         const validIndices = new Set(terminals.value.map(t => t.index))
         for (let i = terminalTabHistory.length - 1; i >= 0; i--) {
             const idx = terminalTabHistory[i]
             if (idx !== activeIndex.value && validIndices.has(idx)) {
-                activeIndex.value = idx
+                activateOwnTab(idx)
                 return
             }
         }
@@ -848,6 +1260,18 @@ defineExpose({ activeIndex })
                     tabindex="-1"
                 ></wa-tab>
 
+                <!-- Attached parent-scope terminals, rendered before the own tabs -->
+                <wa-tab
+                    v-for="tab in attachedTabs"
+                    :key="tab.key"
+                    slot="nav"
+                    :panel="tab.key"
+                    class="terminal-attached-tab"
+                >
+                    <wa-icon name="link" class="terminal-attached-icon"></wa-icon>
+                    {{ tab.displayLabel }}
+                </wa-tab>
+
                 <wa-tab
                     v-for="term in terminals"
                     :key="term.index"
@@ -871,7 +1295,15 @@ defineExpose({ activeIndex })
             </wa-tab-group>
 
             <!-- Right: rename button (always visible) + terminal-specific actions (when connected) -->
-            <div v-if="!isRouteTermUnavailable" class="terminal-actions">
+            <div v-if="!showUnavailableState" class="terminal-actions">
+                <!-- Attach a terminal from a parent level (worktree → project → workspace → global) -->
+                <AttachTerminalMenu
+                    v-if="ancestorScopes.length"
+                    :sections="attachSections"
+                    @open="requestAncestorDiscovery"
+                    @attach="attachTerminal"
+                />
+
                 <template v-if="tb.isConnected">
                     <!-- Scroll to edge buttons -->
                     <wa-button
@@ -967,22 +1399,38 @@ defineExpose({ activeIndex })
 
                 <wa-divider v-if="tb.isConnected" orientation="vertical"></wa-divider>
 
-                <!-- Rename button — always available -->
-                <wa-button
-                    id="terminal-rename-button"
-                    variant="neutral"
-                    appearance="filled"
-                    size="small"
-                    class="rename-button reduced-height"
-                    @click="openRenameDialog(activeIndex)"
-                >
-                    <wa-icon name="pen-to-square" variant="regular"></wa-icon>
-                </wa-button>
-                <AppTooltip for="terminal-rename-button">Rename tab</AppTooltip>
+                <!-- Rename button — own tabs only (attached tabs are renamed at their own level) -->
+                <template v-if="!isActiveAttached">
+                    <wa-button
+                        id="terminal-rename-button"
+                        variant="neutral"
+                        appearance="filled"
+                        size="small"
+                        class="rename-button reduced-height"
+                        @click="openRenameDialog(activeIndex)"
+                    >
+                        <wa-icon name="pen-to-square" variant="regular"></wa-icon>
+                    </wa-button>
+                    <AppTooltip for="terminal-rename-button">Rename tab</AppTooltip>
+                </template>
 
-                <template v-if="tb.isConnected">
+                <!-- Detach button — for an attached parent terminal (never kills its tmux) -->
+                <template v-if="isActiveAttached">
+                    <wa-button
+                        id="terminal-detach-button"
+                        variant="neutral"
+                        appearance="filled"
+                        size="small"
+                        class="disconnect-button reduced-height"
+                        @click="handleDetach"
+                    >
+                        <wa-icon name="link-slash" label="Detach terminal"></wa-icon>
+                    </wa-button>
+                    <AppTooltip for="terminal-detach-button">Detach terminal</AppTooltip>
+                </template>
 
-                    <!-- Disconnect / Kill button -->
+                <!-- Disconnect / Kill button — own tabs -->
+                <template v-else-if="tb.isConnected">
                     <wa-button
                         id="terminal-disconnect-button"
                         variant="danger"
@@ -998,36 +1446,37 @@ defineExpose({ activeIndex })
             </div>
         </div>
 
-        <div v-if="isRouteTermUnavailable" class="terminal-unavailable-state">
+        <div v-if="showUnavailableState" class="terminal-unavailable-state">
             <wa-callout variant="warning" appearance="filled-outlined" class="terminal-unavailable-callout">
                 {{ unavailableRouteMessage }}
             </wa-callout>
         </div>
 
-        <!-- Terminal panels: all overlay each other, only the active one is visible.
-             Uses visibility:hidden (not display:none) so hidden terminals keep their
-             dimensions — prevents xterm.js resize flash on tab switch. -->
-        <div v-if="!isRouteTermUnavailable" class="terminal-panels-container">
+        <!-- Terminal panels: empty slots. The app-level pool teleports each live
+             TerminalInstance into the matching slot (by element ref). Slots overlay
+             each other; only the active one is visible. visibility:hidden (not
+             display:none) keeps hidden terminals' dimensions — no resize flash. -->
+        <div v-if="!showUnavailableState" class="terminal-panels-container">
+            <!-- Attached parent-scope terminals (foreign context, hosted in the pool) -->
+            <div
+                v-for="tab in attachedTabs"
+                :key="tab.key"
+                :class="['terminal-panel-wrapper', { active: activeAttachedKey === tab.key }]"
+            >
+                <div class="terminal-slot" :ref="(el) => setSlotEl(tab.key, el)"></div>
+            </div>
+
             <div
                 v-for="term in terminals"
                 :key="term.index"
-                :class="['terminal-panel-wrapper', { active: activeIndex === term.index }]"
+                :class="['terminal-panel-wrapper', { active: activeAttachedKey === null && activeIndex === term.index }]"
             >
-                <TerminalInstance
-                    :context-key="props.contextKey"
-                    :session-id="props.sessionId"
-                    :project-id="resolvedProjectId"
-                    :cwd="props.cwd"
-                    :terminal-index="term.index"
-                    :active="active && activeIndex === term.index"
-                    :start-mode="startModeFor(term.index)"
-                    @disconnected="onTerminalDisconnected(term.index)"
-                />
+                <div class="terminal-slot" :ref="(el) => setSlotEl(ownKey(term.index), el)"></div>
             </div>
         </div>
 
         <TerminalExtraKeysBar
-            v-if="!isRouteTermUnavailable"
+            v-if="!showUnavailableState"
             :active-modifiers="activeApi?.activeModifiers ?? { ctrl: false, alt: false, shift: false }"
             :locked-modifiers="activeApi?.lockedModifiers ?? { ctrl: false, alt: false, shift: false }"
             :is-touch-device="settingsStore.isTouchDevice"
@@ -1146,6 +1595,11 @@ defineExpose({ activeIndex })
 .terminal-unavailable-tab {
     display: none;
 }
+/* Attached parent-scope tabs are marked by their link icon alone. */
+.terminal-attached-icon {
+    font-size: 0.8em;
+    opacity: 0.7;
+}
 .add-terminal-button {
     margin-left: var(--wa-space-2xs);
     align-self: center;
@@ -1221,5 +1675,14 @@ defineExpose({ activeIndex })
 
 .terminal-panel-wrapper.active {
     visibility: visible;
+}
+
+/* Teleport target for the pooled TerminalInstance. Flex column so the instance's
+   .terminal-area (flex: 1) fills it. */
+.terminal-slot {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
 }
 </style>

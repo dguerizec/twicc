@@ -96,28 +96,14 @@ const terminalProjectId = computed(() => {
     return props.projectId
 })
 
-// For workspace terminals, compute the lowest common ancestor of all project directories
-const terminalCwd = computed(() => {
-    if (!isWorkspaceMode.value || !workspaceProjectIds.value) return null
-    const dirs = workspaceProjectIds.value
-        .map(pid => dataStore.getProject(pid))
-        .map(p => p?.directory)
-        .filter(Boolean)
-    if (dirs.length === 0) return null
-    if (dirs.length === 1) return dirs[0]
-    // Find the longest common path prefix
-    const parts = dirs.map(d => d.split('/'))
-    const common = []
-    for (let i = 0; i < parts[0].length; i++) {
-        const segment = parts[0][i]
-        if (parts.every(p => p[i] === segment)) {
-            common.push(segment)
-        } else {
-            break
-        }
-    }
-    return common.length > 1 ? common.join('/') : '/'
-})
+// For workspace terminals, the working directory is the lowest common ancestor
+// of all project directories (computed by the workspaces store, shared with the
+// attach-parent-terminals feature).
+const terminalCwd = computed(() =>
+    isWorkspaceMode.value && workspaceId.value
+        ? workspacesStore.getTerminalCwd(workspaceId.value)
+        : null
+)
 
 const homeDir = ref(null)
 
