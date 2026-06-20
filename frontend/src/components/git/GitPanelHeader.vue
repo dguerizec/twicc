@@ -14,7 +14,7 @@ const props = defineProps({
         type: Object,
         default: null,
     },
-    /** File change counts: { modified, added, deleted }. */
+    /** File change counts: { modified, added, deleted, conflicted }. */
     stats: {
         type: Object,
         default: null,
@@ -70,7 +70,7 @@ const commitShortHash = computed(() => {
 const hasStats = computed(() => {
     if (!props.stats) return false
     const s = props.stats
-    return s.modified > 0 || s.added > 0 || s.deleted > 0
+    return s.modified > 0 || s.added > 0 || s.deleted > 0 || s.conflicted > 0
 })
 
 // ---------------------------------------------------------------------------
@@ -191,6 +191,14 @@ function copyHash() {
                 >
                     <span class="status-count">{{ stats.deleted }}</span>
                     <img :src="minusIcon" class="status-icon" alt="deleted">
+                </span>
+
+                <span
+                    v-if="stats.conflicted > 0"
+                    class="status-badge conflicted"
+                >
+                    <span class="status-count">{{ stats.conflicted }}</span>
+                    <wa-icon name="triangle-exclamation" class="status-icon" label="conflicts"></wa-icon>
                 </span>
             </div>
 
@@ -386,6 +394,15 @@ function copyHash() {
 
 .status-badge.deleted .status-count {
     color: #FF757C;
+}
+
+.status-badge.conflicted .status-count {
+    color: #ff5c5c;
+}
+
+.status-badge.conflicted .status-icon {
+    color: #ff5c5c;
+    font-size: 0.7rem;
 }
 
 /* ----- Chevron ----- */

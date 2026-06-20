@@ -78,7 +78,7 @@ def _build_file_tree(files: list[dict], root_name: str = "") -> dict:
 
     Directories are sorted before files, both alphabetically (case-insensitive).
     """
-    _STATUS_KEYS = ("status", "staged_status", "unstaged_status")
+    _STATUS_KEYS = ("status", "staged_status", "unstaged_status", "conflicted", "conflict_code")
 
     # Build a nested dict first, then convert to the tree format.
     tree: dict = {}
@@ -128,7 +128,7 @@ def _build_file_tree(files: list[dict], root_name: str = "") -> dict:
 
 
 def _compute_stats(files: list[dict]) -> dict:
-    """Compute {modified, added, deleted} counts from a flat file list.
+    """Compute {modified, added, deleted, conflicted} counts from a flat file list.
 
     Works with both commit files (``"status"`` key) and index files
     (``"staged_status"`` / ``"unstaged_status"`` keys).  For index files the
@@ -138,8 +138,12 @@ def _compute_stats(files: list[dict]) -> dict:
     modified = 0
     added = 0
     deleted = 0
+    conflicted = 0
 
     for f in files:
+        if f.get("conflicted"):
+            conflicted += 1
+            continue
         # Commit files have "status", index files have "staged_status"/"unstaged_status".
         status = f.get("status") or f.get("staged_status") or f.get("unstaged_status")
         if status in ("modified", "renamed"):
@@ -149,7 +153,7 @@ def _compute_stats(files: list[dict]) -> dict:
         elif status == "deleted":
             deleted += 1
 
-    return {"modified": modified, "added": added, "deleted": deleted}
+    return {"modified": modified, "added": added, "deleted": deleted, "conflicted": conflicted}
 
 
 # ---------------------------------------------------------------------------
@@ -570,7 +574,10 @@ def _parse_index_files(git_directory: str) -> list[dict] | None:
         {
             "path": "...",
             "staged_status": "modified"|"added"|"deleted"|"renamed"|None,
-            "unstaged_status": "modified"|"added"|"deleted"|None,
+            "unstaged_status": "modified"|"added"|"deleted"|"untracked"|None,
+            # conflicted entries only:
+            "conflicted": True,
+            "conflict_code": "UU",   # the raw XY porcelain code
         }
 
     The ``git status --porcelain`` format is ``XY path`` where:
@@ -578,7 +585,9 @@ def _parse_index_files(git_directory: str) -> list[dict] | None:
     - Y = worktree (unstaged) status
 
     A file can be both staged and unstaged (e.g. partially staged changes).
-    Untracked files (``??``) are reported as unstaged added.
+    Untracked files (``??``) are reported with ``unstaged_status="untracked"``.
+    Unmerged/conflicted entries are reported with ``conflicted=True`` and the
+    raw two-letter ``conflict_code`` (staged/unstaged left None).
 
     Returns None if no changes or on failure.
     """
@@ -614,6 +623,21 @@ def _parse_index_files(git_directory: str) -> list[dict] | None:
                 "path": path,
                 "staged_status": None,
                 "unstaged_status": "untracked",
+            })
+            continue
+
+        # Unmerged (conflicted) entries. In porcelain v1 these are the codes
+        # DD, AU, UD, UA, DU, AA, UU — i.e. either side is "U", or both sides
+        # are an identical add/delete. They don't map to a normal staged/unstaged
+        # change, so surface them explicitly (with the raw XY code) instead of
+        # dropping them — "U" otherwise normalizes to None and the file vanishes.
+        if x == "U" or y == "U" or (x == y and x in ("A", "D")):
+            files.append({
+                "path": path,
+                "staged_status": None,
+                "unstaged_status": None,
+                "conflicted": True,
+                "conflict_code": x + y,
             })
             continue
 

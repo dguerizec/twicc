@@ -35,10 +35,11 @@
  *   focus(path): emitted when any node is clicked (file or directory), for focus tracking
  */
 
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, useId } from 'vue'
 import { apiFetch } from '../../utils/api'
 import { getIconUrl, getFileIconId, getFolderIconId } from '../../utils/fileIcons'
 import CodeCommentsIndicator from '../ui/CodeCommentsIndicator.vue'
+import AppTooltip from '../ui/AppTooltip.vue'
 
 const props = defineProps({
     node: {
@@ -300,7 +301,7 @@ const isSelected = computed(() => {
 })
 
 /**
- * Map a git status string to its badge letter and CSS class.
+ * Map a normalized git status to its badge letter and CSS colour class (by change type).
  */
 const STATUS_MAP = {
     modified:  { letter: 'M', cls: 'git-badge-modified' },
@@ -311,41 +312,83 @@ const STATUS_MAP = {
     untracked: { letter: 'U', cls: 'git-badge-untracked' },
 }
 
+/** Human label for the unmerged (conflict) two-letter porcelain codes. */
+const CONFLICT_LABELS = {
+    DD: 'both deleted',
+    AU: 'added by us',
+    UD: 'deleted by them',
+    UA: 'added by them',
+    DU: 'deleted by us',
+    AA: 'both added',
+    UU: 'both modified',
+}
+
+/** One slot of the staged|unstaged code: a type-coloured letter, or a dim placeholder. */
+function badgeSlot(status) {
+    if (!status) return { ch: '·', cls: 'git-badge-slot-empty' }
+    const entry = STATUS_MAP[status]
+    return entry
+        ? { ch: entry.letter, cls: entry.cls }
+        : { ch: status[0].toUpperCase(), cls: 'git-badge-modified' }
+}
+
+const capitalize = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s)
+
+/** Stable per-node id so the git badge can anchor an AppTooltip. */
+const gitBadgeId = useId()
+
 /**
  * Git status badge for files in git mode.
  *
- * Supports two data formats:
- * - **Commit files**: node has `status` → single badge letter (e.g. "M")
- * - **Index files**: node has `staged_status` / `unstaged_status` →
- *   badge letter from the primary status + "u" suffix if unstaged.
+ * Renders the two-column porcelain status (X = staged, Y = unstaged) as a
+ * two-letter code, each letter coloured by its change type, with a dim "·" for
+ * an empty side — so staged vs unstaged reads from position, like `git status`.
+ * Untracked → "??"; conflicts → the raw unmerged code in a dedicated colour.
+ * Commit files keep a single status letter. A tooltip spells the code out.
  *
- * Returns null for directories or files without any status.
+ * Returns `{ parts: [{ ch, cls? }], tooltip, conflict? }` or null.
  */
 const gitBadge = computed(() => {
     if (props.mode !== 'git' || props.node.type !== 'file') return null
 
     const node = props.node
 
-    // Commit files: simple single status
+    // Commit files: a single status letter.
     if (node.status) {
-        const entry = STATUS_MAP[node.status]
-        return entry || { letter: node.status[0].toUpperCase(), cls: 'git-badge-modified' }
+        const entry = STATUS_MAP[node.status] || { letter: node.status[0].toUpperCase(), cls: 'git-badge-modified' }
+        return { parts: [{ ch: entry.letter, cls: entry.cls }], tooltip: capitalize(node.status) }
     }
 
-    // Index files: staged_status / unstaged_status
+    // Conflicted (unmerged) files: surface the raw XY code in the conflict colour.
+    if (node.conflicted) {
+        const code = node.conflict_code || 'UU'
+        return {
+            conflict: true,
+            parts: [{ ch: code[0] }, { ch: code[1] }],
+            tooltip: 'Conflict — ' + (CONFLICT_LABELS[code] || 'unmerged'),
+        }
+    }
+
+    // Index files: staged_status (X) / unstaged_status (Y).
     const staged = node.staged_status
     const unstaged = node.unstaged_status
     if (!staged && !unstaged) return null
 
-    // Primary status determines the letter and color (staged wins if present)
-    const primary = staged || unstaged
-    const entry = STATUS_MAP[primary] || { letter: primary[0].toUpperCase(), cls: 'git-badge-modified' }
-
-    // Add unstaged class if the file has unstaged changes
-    if (unstaged) {
-        return { letter: entry.letter, cls: entry.cls + ' git-badge-unstaged' }
+    // Untracked: git shows "??".
+    if (unstaged === 'untracked' && !staged) {
+        return {
+            parts: [{ ch: '?', cls: 'git-badge-untracked' }, { ch: '?', cls: 'git-badge-untracked' }],
+            tooltip: 'Untracked',
+        }
     }
-    return entry
+
+    const tip = []
+    if (staged) tip.push(`Staged: ${staged}`)
+    if (unstaged) tip.push(`Unstaged: ${unstaged}`)
+    return {
+        parts: [badgeSlot(staged), badgeSlot(unstaged)],
+        tooltip: tip.join(' · '),
+    }
 })
 
 const commentCount = computed(() => {
@@ -442,7 +485,13 @@ function onTouchEnd(event) {
             />
             <span class="node-name">{{ compact.displayName }}</span>
             <CodeCommentsIndicator :count="commentCount" :show-tooltip="false" class="comment-badge" />
-            <span v-if="gitBadge" class="git-badge" :class="gitBadge.cls">{{ gitBadge.letter }}</span>
+            <span
+                v-if="gitBadge"
+                :id="gitBadgeId"
+                class="git-badge"
+                :class="{ 'git-badge-conflict': gitBadge.conflict }"
+            ><span v-for="(part, i) in gitBadge.parts" :key="i" :class="part.cls">{{ part.ch }}</span></span>
+            <AppTooltip v-if="gitBadge" :for="gitBadgeId">{{ gitBadge.tooltip }}</AppTooltip>
         </div>
 
         <!-- Children (only rendered when directory is open) -->
@@ -578,9 +627,7 @@ function onTouchEnd(event) {
     background-color: var(--node-bg-color);
     padding-block: .15rem;
     padding-inline: .5rem .25rem;
-    &.git-badge-unstaged {
-        font-style: italic;
-    }
+    letter-spacing: .5px;
 }
 
 .git-badge-modified {
@@ -601,6 +648,16 @@ function onTouchEnd(event) {
 
 .git-badge-untracked {
     color: #7c8594;
+}
+
+.git-badge-slot-empty {
+    /* dim placeholder for the "clean" side of the staged|unstaged code */
+    color: #5b6472;
+}
+
+/* Unmerged/conflicted entries: the whole raw XY code in a dedicated colour. */
+.git-badge-conflict {
+    color: #ff5c5c;
 }
 
 </style>
