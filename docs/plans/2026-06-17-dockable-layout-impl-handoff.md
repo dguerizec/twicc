@@ -9,7 +9,7 @@ the design doc [`2026-06-16-dockable-layout-design.md`](./2026-06-16-dockable-la
 → the pure resolver `frontend/src/utils/layoutResolver.js` (the executable spec).
 
 Branch/worktree: `layout` (`.worktrees/layout`). Its own dev instance runs via devctl
-(frontend **5174**, backend **3501**). The branch is **47 commits** on top of `main` — not pushed, not
+(frontend **5174**, backend **3501**). The branch is **48 commits** on top of `main` — not pushed, not
 merged. Run `git log main..layout` for the breakdown. (Rebased onto local `main` `6f8f5b7b` on
 2026-06-20; local `main` is now 54 commits ahead of `origin/main` `e0cd600b`, which is an ancestor — a
 push of `main` fast-forwards, no reconcile needed.)
@@ -532,16 +532,14 @@ focused signals; e.g. Git stops polling when not shown) and a tmux **reaper/GC**
 
 ## What remains (triaged with the dev 2026-06-20)
 
-Everything structural is **done** (see the dated sections above): step-1 docking + responsiveness +
-compact decoupling; overlay route-derivation, swap-on-navigate, edge-aware borders, per-dock-context
-clearance, icons; resize splitters (dock + sibling, fractions persisted); maximize/restore; the full
-persistence stack (steps 1–4 + scope rows + alphabetical); the mobile file-tree default-open
-(`cf584212` then rebased); and the placeholder tuning. After triage the open list is short:
-
-**To do**
-- **tmux reaper / GC** — a periodic (or boot-time) sweep of orphaned `twicc-*` tmux sessions that were
-  opened but never used (Option D in `2026-06-19-terminal-lifecycle-layout-analysis.md`). Lower urgency
-  since the Main terminal's manual-start already shrinks the accumulation case; separate concern.
+Everything is now **done or decided won't-do** — nothing is left to build. Done (see the dated sections
+above): step-1 docking + responsiveness + compact decoupling; overlay route-derivation, swap-on-navigate,
+edge-aware borders, per-dock-context clearance, icons; resize splitters (dock + sibling, fractions
+persisted); maximize/restore; the full persistence stack (steps 1–4 + scope rows + alphabetical); the
+mobile file-tree default-open; the placeholder tuning; and the **tmux reaper** — a daily GC of never-used
+orphaned `twicc-*` tmux sessions (`tmux_cleanup_task.py`; the `@twicc_used` flag set on the first PTY
+input from any source; grandfather-once via a data-dir sentinel; hybrid excluded by socket; Option D of
+`2026-06-19-terminal-lifecycle-layout-analysis.md`).
 
 **Won't do** (decided 2026-06-20)
 - Persistence **v2**: per-device localStorage override, per-project named layouts, CLI catalog commands.

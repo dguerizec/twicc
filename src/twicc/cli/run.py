@@ -85,6 +85,7 @@ from twicc.orchestrator import get_orchestrator_registry  # noqa: E402
 from twicc.paths import get_data_dir  # noqa: E402
 from twicc.pricing_task import start_price_sync_task, sync_all_providers  # noqa: E402
 from twicc.session_dirs_cleanup_task import start_session_dirs_cleanup_task  # noqa: E402
+from twicc.tmux_cleanup_task import start_tmux_cleanup_task  # noqa: E402
 from twicc.auth.tokens import start_last_used_flush_task  # noqa: E402
 from twicc.search import SearchIndexLockedError, init_search_index, shutdown_search_index  # noqa: E402
 from twicc.search_indexing_task import (  # noqa: E402
@@ -269,6 +270,7 @@ async def run_server(port: int):
     # Cross-provider periodic tasks
     price_sync_task = asyncio.create_task(start_price_sync_task(shutdown_event))
     session_dirs_cleanup_task = asyncio.create_task(start_session_dirs_cleanup_task(shutdown_event))
+    tmux_cleanup_task = asyncio.create_task(start_tmux_cleanup_task(shutdown_event))
     last_used_flush_task = asyncio.create_task(start_last_used_flush_task(shutdown_event))
     version_check_task = asyncio.create_task(start_version_check_task())
 
@@ -342,6 +344,9 @@ async def run_server(port: int):
         # no-op path (coroutine already returned) and the mid-sleep case.
         logger.info("Stopping session dirs cleanup task...")
         await _cancel_task(session_dirs_cleanup_task, "Session dirs cleanup task")
+
+        logger.info("Stopping tmux reaper task...")
+        await _cancel_task(tmux_cleanup_task, "tmux reaper task")
 
         logger.info("Stopping token last-used flush task...")
         await _cancel_task(last_used_flush_task, "Token last-used flush task")

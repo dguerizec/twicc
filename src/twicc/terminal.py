@@ -80,6 +80,12 @@ TERMINAL_LABEL_MAX_LENGTH = 30
 # tmux user option name for storing terminal labels
 _TMUX_LABEL_OPTION = "@twicc_label"
 
+# tmux user option flagging a session as "used": set (to "1") on the FIRST byte of input written
+# to its PTY, from any source (typing, snippets, an auto-injected provider-login command). Read by
+# the tmux reaper (twicc.tmux_cleanup_task) to spare used sessions. MUST be set per-session
+# (set-option -t) only — never -g/-s, or format expansion would resolve it for every session.
+TMUX_USED_OPTION = "@twicc_used"
+
 
 class TerminalInfo(NamedTuple):
     """A terminal's index and optional display label from tmux."""
@@ -932,6 +938,9 @@ async def terminal_application(scope, receive, send):
 
     async def receive_loop():
         """Process incoming WebSocket messages until disconnect."""
+        # Set @twicc_used once, on the first input to a (non-hybrid) tmux session, so the tmux
+        # reaper spares it. Local to the loop → persists across iterations, fires at most once.
+        marked_used = False
         while True:
             message = await receive()
 
@@ -954,6 +963,14 @@ async def terminal_application(scope, receive, send):
                             os.write(master_fd, data.encode())
                         except OSError:
                             return
+                        # First real input → mark the session "used" for the tmux reaper. Skip
+                        # hybrid (separate socket, out of the reaper's scope). Once per connection.
+                        if use_tmux and not hybrid_attach and not marked_used:
+                            marked_used = True
+                            await asyncio.to_thread(
+                                tmux_set_option, terminal_context, TMUX_USED_OPTION, "1",
+                                terminal_index=terminal_index,
+                            )
 
                 elif msg_type == "resize":
                     cols = msg.get("cols", DEFAULT_COLS)

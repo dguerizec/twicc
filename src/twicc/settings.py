@@ -326,6 +326,13 @@ CODEX_PLUGIN_INSTALL_ENABLED = os.environ.get("TWICC_NO_CODEX_PLUGIN", "").strip
 # instance, which owns the cleanup.
 SESSION_DIRS_CLEANUP_ENABLED = os.environ.get("TWICC_NO_SESSION_DIRS_CLEANUP", "").strip().lower() not in ("1", "true", "yes")
 
+# Daily reaper of never-used, orphaned twicc terminal tmux sessions
+# Set TWICC_NO_TMUX_CLEANUP=1 to disable the reaper that kills ``twicc-*`` tmux
+# sessions on the shared ``twicc`` socket which were opened but never received any
+# input (cf. twicc.tmux_cleanup_task). Worktrees set this: the tmux socket is
+# shared per-user with the main instance, which owns the reaping.
+TMUX_CLEANUP_ENABLED = os.environ.get("TWICC_NO_TMUX_CLEANUP", "").strip().lower() not in ("1", "true", "yes")
+
 # Auto-enable every registered provider at first boot
 # Set TWICC_AUTO_ENABLE_PROVIDERS=1 to bypass the initial provider activation
 # dialog: at backend startup, if ``disabledProviders`` is absent from

@@ -404,12 +404,16 @@ def get_process_config(backend_port: int, frontend_port: int) -> dict:
                 # - Disable the empty-session-dirs janitor: artifacts/ and scratch/ are symlinks
                 #   shared with the main instance, which owns the cleanup (a worktree would
                 #   otherwise prune the shared dirs based on its own, partial DB).
+                # - Disable the tmux reaper: the ``twicc`` tmux socket is shared per-user with the
+                #   main instance, which owns the reaping (a worktree would otherwise kill the
+                #   main instance's terminal sessions).
                 **({
                     "TWICC_SESSION_COOKIE": f"sessionid_{backend_port}",
                     "TWICC_NO_CRON_RESTART": "1",
                     "TWICC_AUTO_ENABLE_PROVIDERS": "1",
                     "TWICC_NO_CODEX_PLUGIN": "1",
                     "TWICC_NO_SESSION_DIRS_CLEANUP": "1",
+                    "TWICC_NO_TMUX_CLEANUP": "1",
                 } if is_git_worktree() else {}),
             },
         },
