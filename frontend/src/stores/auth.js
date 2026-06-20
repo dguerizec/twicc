@@ -12,6 +12,13 @@ export const useAuthStore = defineStore('auth', {
         checking: true,
         // True when checkAuth is retrying after network errors
         connectionError: false,
+        // Set (to a reason string) when the server refuses this request because
+        // the instance has no password and is being reached over a non-local
+        // URL. main.js renders a terminal access-blocked screen when truthy.
+        accessDenied: null,
+        // Command the operator must run to set a password (carries the correct
+        // launch prefix for how this TwiCC was started). Shown on that screen.
+        setPasswordCommand: null,
     }),
 
     getters: {
@@ -60,6 +67,8 @@ export const useAuthStore = defineStore('auth', {
                     const data = await res.json()
                     this.authenticated = data.authenticated
                     this.passwordRequired = data.password_required
+                    this.accessDenied = data.access_denied || null
+                    this.setPasswordCommand = data.set_password_command || null
                     this.connectionError = false
                     this.checking = false
                     return // Success
@@ -94,6 +103,8 @@ export const useAuthStore = defineStore('auth', {
                 const data = await res.json()
                 this.authenticated = data.authenticated
                 this.passwordRequired = data.password_required
+                this.accessDenied = data.access_denied || null
+                this.setPasswordCommand = data.set_password_command || null
                 // If we were in a connection error state, clear it
                 if (this.connectionError) {
                     this.connectionError = false

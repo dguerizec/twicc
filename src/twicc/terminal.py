@@ -42,6 +42,7 @@ from urllib.parse import parse_qs
 from asgiref.sync import sync_to_async
 from django.conf import settings
 
+from twicc.auth.local_access import scope_remote_access_blocked
 from twicc.auth.session_auth import (
     SESSION_AUTH_KEY,
     SESSION_FINGERPRINT_KEY,
@@ -721,6 +722,16 @@ async def terminal_application(scope, receive, send):
         return
 
     # ── Authentication ────────────────────────────────────────────────
+    # Unprotected instance (no password): refuse non-local connections —
+    # there's nothing to authenticate against. No-op when a password is
+    # configured or the operator opted out (see twicc.auth.local_access).
+    if scope_remote_access_blocked(scope):
+        logger.warning("Terminal WebSocket rejected: remote access requires a password")
+        await send({"type": "websocket.accept"})
+        await send({"type": "websocket.send", "text": json.dumps({"type": "auth_failure"})})
+        await send({"type": "websocket.close", "code": WS_CLOSE_AUTH_FAILURE})
+        return
+
     # A session bound to an older password hash (rotated since login)
     # is rejected the same way as an unauthenticated one.
     if settings.TWICC_PASSWORD_HASH:

@@ -15,6 +15,7 @@ from django.http import HttpResponse, HttpResponseRedirect, JsonResponse
 
 from twicc.artifacts import NOT_AUTHENTICATED_SVG
 from twicc.auth import tokens as api_tokens
+from twicc.auth.local_access import remote_access_blocked
 from twicc.auth.session_auth import (
     SESSION_AUTH_KEY,
     SESSION_FINGERPRINT_KEY,
@@ -42,6 +43,17 @@ PROTECTED_NON_API_PREFIXES: tuple[str, ...] = (
 )
 
 
+def _is_data_path(request) -> bool:
+    """Whether the path serves sensitive data (must be gated) rather than a
+    public endpoint or the SPA shell (which stay open so the frontend can load
+    and render the access-blocked screen)."""
+    if any(request.path.startswith(p) for p in PUBLIC_PATHS):
+        return False
+    if any(request.path.startswith(prefix) for prefix in PROTECTED_NON_API_PREFIXES):
+        return True
+    return request.path.startswith("/api/")
+
+
 class PasswordAuthMiddleware:
     """Middleware that enforces password authentication via session.
 
@@ -66,8 +78,18 @@ class PasswordAuthMiddleware:
             logger.info("Password protection disabled (TWICC_PASSWORD_HASH not set)")
 
     async def __call__(self, request):
-        # No password configured = no protection
+        # No password configured: nothing to authenticate against. Refuse
+        # data-bearing endpoints for non-local requests (unless the operator
+        # opted out via TWICC_ALLOW_INSECURE_REMOTE) so a forgotten password
+        # doesn't leave the instance silently reachable over the network. Public
+        # paths and the SPA shell stay open so the frontend can load and render
+        # the "set a password" screen (driven by /api/auth/check/).
         if not self.password_required:
+            if _is_data_path(request) and remote_access_blocked(request):
+                return JsonResponse(
+                    {"error": "remote_access_requires_password"},
+                    status=403,
+                )
             return await self.get_response(request)
 
         # Allow public paths
@@ -160,7 +182,16 @@ class RpcTokenAuthMiddleware:
         has_tokens = await sync_to_async(api_tokens.has_tokens)()
 
         if not password_set and not has_tokens:
-            request.rpc_scope = RPC_SCOPE_FULL  # unprotected by choice
+            # Unprotected by choice — but still refuse non-local callers, for the
+            # same reason as PasswordAuthMiddleware: with neither a password nor a
+            # token there's nothing to authenticate, so /rpc/ must not be open
+            # over the network (a valid token below stays accepted remotely).
+            if remote_access_blocked(request):
+                return JsonResponse(
+                    {"error": "Remote access requires a password or an API token."},
+                    status=403,
+                )
+            request.rpc_scope = RPC_SCOPE_FULL
             return await self.get_response(request)
 
         provided = self._bearer(request)

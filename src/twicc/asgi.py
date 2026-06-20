@@ -22,6 +22,7 @@ from django.core.asgi import get_asgi_application
 from django.urls import path
 
 from twicc.agent import AgentInfo, serialize_agent_info
+from twicc.auth.local_access import scope_remote_access_blocked
 from twicc.auth.session_auth import (
     SESSION_AUTH_KEY,
     SESSION_FINGERPRINT_KEY,
@@ -383,6 +384,16 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
         When set, only messages whose ``type`` matches the list are sent.
         When absent, all messages are sent (backward compatible).
         """
+        # Unprotected instance (no password): refuse non-local connections —
+        # there's nothing to authenticate against. No-op when a password is
+        # configured or the operator opted out (see twicc.auth.local_access).
+        if scope_remote_access_blocked(self.scope):
+            logger.warning("WebSocket connection rejected: remote access requires a password")
+            await self.accept()
+            await self.send_json({"type": "auth_failure"})
+            await self.close(code=WS_CLOSE_AUTH_FAILURE)
+            return
+
         # Check authentication if password protection is enabled.
         # A session bound to an older password hash (rotated since login)
         # is rejected the same way as an unauthenticated one.

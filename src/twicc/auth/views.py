@@ -20,6 +20,7 @@ from django.http import HttpResponse, HttpResponseRedirect, JsonResponse
 from django.shortcuts import render
 
 from twicc.auth.hashers import verify_password
+from twicc.auth.local_access import remote_access_blocked
 from twicc.auth.session_auth import (
     SESSION_AUTH_KEY,
     SESSION_FINGERPRINT_KEY,
@@ -106,9 +107,22 @@ async def auth_check(request):
         - {"authenticated": true, "password_required": true} if authenticated
         - {"authenticated": true, "password_required": false} if no password configured
         - {"authenticated": false, "password_required": true} if not authenticated
+        - {"authenticated": false, "password_required": false, "access_denied": ...,
+          "set_password_command": ...} when no password is configured and the
+          request is non-local (the frontend renders an access-blocked screen
+          telling the operator which command sets a password). Always reachable
+          (this endpoint is public) so the SPA can learn it's blocked before
+          fetching any protected data.
     """
     stored_hash = settings.TWICC_PASSWORD_HASH
     if not stored_hash:
+        if remote_access_blocked(request):
+            return JsonResponse({
+                "authenticated": False,
+                "password_required": False,
+                "access_denied": "remote_no_password",
+                "set_password_command": f"{settings.TWICC_LAUNCH_PREFIX} password set",
+            })
         return JsonResponse({"authenticated": True, "password_required": False})
 
     session = request.session

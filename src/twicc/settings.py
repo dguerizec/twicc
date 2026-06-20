@@ -173,6 +173,14 @@ MIDDLEWARE = [
 # interactively. If not set or empty, the app is accessible without authentication.
 TWICC_PASSWORD_HASH = os.environ.get("TWICC_PASSWORD_HASH", "")
 
+# Local-only safety net: when no password is configured there is nothing to
+# authenticate against, so by default TwiCC refuses any non-loopback request
+# (a forgotten password must not leave the instance silently reachable over the
+# network — see twicc.auth.local_access). An operator who deliberately wants
+# unauthenticated remote access can set this to bypass the refusal. Intentionally
+# not surfaced in the UI or the access-blocked screen.
+TWICC_ALLOW_INSECURE_REMOTE = os.environ.get("TWICC_ALLOW_INSECURE_REMOTE", "").strip().lower() in ("1", "true", "yes")
+
 # Session settings
 SESSION_COOKIE_NAME = os.environ.get("TWICC_SESSION_COOKIE", "sessionid")
 SESSION_ENGINE = "django.contrib.sessions.backends.db"
