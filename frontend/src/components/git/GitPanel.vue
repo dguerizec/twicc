@@ -1820,6 +1820,10 @@ wa-callout {
     min-width: 0;
     font-size: var(--wa-font-size-s);
     color: var(--wa-color-text-quiet);
+    /* Truncate the START of the path so the file name stays visible (rtl puts
+       the ellipsis on the left; text-align: left keeps short paths normal). */
+    direction: rtl;
+    text-align: left;
 }
 
 .path-header-badge {

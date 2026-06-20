@@ -1474,7 +1474,10 @@ function goToNextDiff() {
     white-space: nowrap;
     min-width: 0;
     flex: 1;
-    text-align: center;
+    /* Truncate the START of the path so the file name stays visible (rtl puts
+       the ellipsis on the left; text-align: left keeps short paths normal). */
+    direction: rtl;
+    text-align: left;
     font-size: var(--wa-font-size-s);
     color: var(--wa-color-text-quiet);
 }

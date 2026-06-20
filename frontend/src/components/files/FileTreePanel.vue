@@ -1515,6 +1515,13 @@ defineExpose({
     white-space: nowrap;
     min-width: 0;
     flex: 1;
+    /* Truncate the START of the path so the file name (at the end, what matters
+       most) stays visible. An rtl base direction moves the ellipsis to the left;
+       text-align: left keeps short, non-truncated paths left-aligned as usual.
+       The path stays a single LTR run, so it (and any " (bookmark)" suffix) reads
+       normally. */
+    direction: rtl;
+    text-align: left;
 }
 
 .mobile-header-badge {
@@ -1533,7 +1540,7 @@ defineExpose({
 .file-tree-panel--mobile > .file-tree-panel-content {
     position: absolute;
     inset: 0;
-    top: 3rem;
+    top: 2rem;
     z-index: 10;
     overflow: hidden;
     background: var(--wa-color-surface-default);
