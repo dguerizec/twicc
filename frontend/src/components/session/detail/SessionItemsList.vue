@@ -1199,6 +1199,39 @@ provide('searchHighlightTerms', searchHighlightTerms)
 // late-arriving sync data (cwd, git_directory) is picked up on the next render.
 const fileLinksRouter = useRouter()
 const openFileInFilesTab = inject('viewFileInFilesTab', null)
+
+/**
+ * Probe candidate absolute paths via the lightweight `meta_only` endpoint and
+ * return the first (in order) that exists on disk, or null if none do.
+ */
+async function firstExistingPath(paths) {
+    const checks = await Promise.all(paths.map(async (p) => {
+        try {
+            const res = await apiFetch(`/api/file-content/?path=${encodeURIComponent(p)}&meta_only=true`)
+            return res.ok
+        } catch {
+            return false
+        }
+    }))
+    const idx = checks.findIndex(Boolean)
+    return idx === -1 ? null : paths[idx]
+}
+
+/**
+ * Open a relative markdown file link that may belong to several nested roots:
+ * pick the first candidate that exists, then reveal it. A single candidate
+ * (absolute paths, artifact refs, or a single-root project) skips the probe and
+ * opens directly — same cost as before. Falls back to the first candidate when
+ * none exist, preserving the prior "no longer available in this root" surface.
+ */
+async function openMarkdownFileLink(candidates, opts) {
+    if (!openFileInFilesTab || !candidates?.length) return
+    const target = candidates.length > 1
+        ? ((await firstExistingPath(candidates)) ?? candidates[0])
+        : candidates[0]
+    openFileInFilesTab(target, opts)
+}
+
 provide('markdownFileLinks', {
     // artifactsDir lets classifyHref route the session's artifact paths
     // (absolute, or relative "artifacts/<session_id>/…") to the Artifacts tab
@@ -1208,7 +1241,7 @@ provide('markdownFileLinks', {
         roots: fileRootsFromStore(project.value, session.value, store),
         artifactsDir: session.value?.artifacts_dir || null,
     }),
-    openFile: openFileInFilesTab,
+    openFile: openMarkdownFileLink,
 })
 
 // Provide a function for child components (e.g., ToolUseContent) to request

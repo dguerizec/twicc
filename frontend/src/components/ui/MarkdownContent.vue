@@ -109,7 +109,7 @@ function annotateFileLinksIn(root) {
 
         const result = fileLinks.classifyHref(href)
         if (result.kind === 'file') {
-            a.setAttribute('data-file-resolved', result.absolutePath)
+            a.setAttribute('data-file-candidates', JSON.stringify(result.candidates))
             if (result.lineNum != null) a.setAttribute('data-file-line', String(result.lineNum))
         } else if (result.kind === 'file-broken') {
             a.setAttribute('data-file-broken', 'true')
@@ -263,14 +263,14 @@ function svgToDataUrl(svg) {
 
 // Build a MediaItem for an <img>. Walks up to a wrapping <a> (if any) to
 // preserve the link as an item-level attribute so the dialog can offer
-// "Open link". Skips file-link annotations (data-file-resolved /
+// "Open link". Skips file-link annotations (data-file-candidates /
 // data-file-broken) since those aren't real URLs the user can open.
 function buildImgItem(img) {
     if (!img.src) return null
     const anchor = img.closest('a')
     let link = null
     if (anchor
-        && !anchor.hasAttribute('data-file-resolved')
+        && !anchor.hasAttribute('data-file-candidates')
         && !anchor.hasAttribute('data-file-broken')) {
         link = anchor.getAttribute('href') || null
     }
@@ -313,7 +313,7 @@ function buildMediaItems(root, clickedEl) {
 //   - <img> or Mermaid SVG → open MediaPreviewDialog (wins over link nav,
 //                            but the wrapping <a href>'s URL is preserved
 //                            as an "Open link" affordance inside the dialog)
-//   - data-file-resolved   → open in Files tab via injected openFile
+//   - data-file-candidates → open in Files tab via injected openFile
 //   - data-file-broken     → swallow the click (link is rendered as plain text)
 //   - external / mailto    → leave the browser to handle (target=_blank or default)
 //   - anchor-only (#…)     → leave the browser to scroll
@@ -341,12 +341,18 @@ function handleLinkClick(event) {
         return
     }
 
-    const fileAbs = anchor.getAttribute('data-file-resolved')
-    if (fileAbs) {
+    const candidatesAttr = anchor.getAttribute('data-file-candidates')
+    if (candidatesAttr) {
         event.preventDefault()
         const lineAttr = anchor.getAttribute('data-file-line')
         const lineNum = lineAttr ? parseInt(lineAttr, 10) : null
-        fileLinks?.openFile?.(fileAbs, { lineNum })
+        let candidates = null
+        try {
+            candidates = JSON.parse(candidatesAttr)
+        } catch {
+            candidates = null
+        }
+        if (candidates?.length) fileLinks?.openFile?.(candidates, { lineNum })
         return
     }
 

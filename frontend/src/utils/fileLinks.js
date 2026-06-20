@@ -81,8 +81,12 @@ function findMatchingRoot(absolutePath, roots) {
  * Returns one of:
  *   - { kind: 'spa' }
  *       Leave as a regular SPA link (router.push at click time).
- *   - { kind: 'file', absolutePath, lineNum }
- *       Open this absolute path in the Files tab.
+ *   - { kind: 'file', candidates, lineNum }
+ *       Open one of these absolute paths in the Files tab. ``candidates`` is an
+ *       ordered, de-duplicated, non-empty list: deterministic forms (absolute
+ *       paths, artifact refs) yield a single entry, while a relative project
+ *       path yields one candidate per distinct root (see below). The caller
+ *       opens the first candidate that actually exists on disk.
  *   - { kind: 'file-broken', lineNum }
  *       Looks like a file path but does not match any known root; the link
  *       should be rendered as plain text (the caller strips the href).
@@ -101,8 +105,13 @@ function findMatchingRoot(absolutePath, roots) {
  *   2. Else strip the line suffix and require a file extension; otherwise SPA.
  *   3. Absolute path: artifacts dir first, then the ``/artifacts/<sid>/`` URL
  *      form, then the roots; no match → file-broken.
- *   4. Relative path: the session's artifacts subdir first, else anchor to the
- *      cwd-role root (else the first root); if no root is available, file-broken.
+ *   4. Relative path: the session's artifacts subdir first, else one candidate
+ *      per distinct root, in roots order (project / git root first, matching
+ *      TwiCC's documented "relative to the project root" convention); if no
+ *      root is available, file-broken. A relative path is genuinely ambiguous
+ *      when roots nest (a cwd inside the git root): the same link resolves to
+ *      a different file under each root, so existence — checked by the caller —
+ *      is what disambiguates, not a single up-front guess.
  */
 export function classifyHref(href, { router, roots, artifactsDir = null }) {
     if (!href) return { kind: 'spa' }
@@ -119,7 +128,7 @@ export function classifyHref(href, { router, roots, artifactsDir = null }) {
     if (path.startsWith('/')) {
         // Artifacts live outside the project roots → check that dir first.
         if (artifactsDir && path.startsWith(artifactsDir + '/')) {
-            return { kind: 'file', absolutePath: path, lineNum }
+            return { kind: 'file', candidates: [path], lineNum }
         }
         // The `/artifacts/<session_id>/<tail>` URL form — the artifact-serving
         // URL path (e.g. `[x](/artifacts/<sid>/x.html)`) — maps onto the
@@ -128,27 +137,34 @@ export function classifyHref(href, { router, roots, artifactsDir = null }) {
             const sessionId = artifactsDir.slice(artifactsDir.lastIndexOf('/') + 1)
             const urlPrefix = `/artifacts/${sessionId}/`
             if (path.startsWith(urlPrefix)) {
-                return { kind: 'file', absolutePath: `${artifactsDir}/${path.slice(urlPrefix.length)}`, lineNum }
+                return { kind: 'file', candidates: [`${artifactsDir}/${path.slice(urlPrefix.length)}`], lineNum }
             }
         }
-        if (findMatchingRoot(path, roots)) return { kind: 'file', absolutePath: path, lineNum }
+        if (findMatchingRoot(path, roots)) return { kind: 'file', candidates: [path], lineNum }
         return { kind: 'file-broken', lineNum }
     }
 
-    // Relative path. A leading "./" is stripped for the artifacts-prefix match.
+    // Relative path. A leading "./" is stripped throughout.
     // "artifacts/<this-session-id>/<tail>" is the only relative form a TwiCC
     // artifact reference takes; reinterpret it against the artifacts dir.
+    const relative = path.replace(/^\.\//, '')
     if (artifactsDir) {
         const sessionId = artifactsDir.slice(artifactsDir.lastIndexOf('/') + 1)
         const prefix = `artifacts/${sessionId}/`
-        const relative = path.replace(/^\.\//, '')
         if (relative.startsWith(prefix)) {
-            return { kind: 'file', absolutePath: `${artifactsDir}/${relative.slice(prefix.length)}`, lineNum }
+            return { kind: 'file', candidates: [`${artifactsDir}/${relative.slice(prefix.length)}`], lineNum }
         }
     }
 
-    const cwdRoot = roots.find(r => r.roles?.includes('cwd'))
-    const baseRoot = (cwdRoot || roots[0])?.path
-    if (!baseRoot) return { kind: 'file-broken', lineNum }
-    return { kind: 'file', absolutePath: `${baseRoot}/${path}`, lineNum }
+    // Anchor against each root, in roots order (project / git root first), and
+    // de-duplicate. When roots nest, "<rel>" under the ancestor and under the
+    // descendant are different paths; the caller opens whichever exists.
+    const candidates = []
+    for (const root of roots) {
+        if (!root?.path) continue
+        const abs = `${root.path}/${relative}`
+        if (!candidates.includes(abs)) candidates.push(abs)
+    }
+    if (candidates.length === 0) return { kind: 'file-broken', lineNum }
+    return { kind: 'file', candidates, lineNum }
 }

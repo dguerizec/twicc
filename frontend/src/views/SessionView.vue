@@ -166,7 +166,16 @@ async function viewFileInFilesTab(absolutePath, { lineNum = null } = {}) {
 
     const project = store.getProject(session.value?.project_id)
     const roots = fileRootsFromStore(project, session.value, store)
-    const match = roots.find(r => absolutePath.startsWith(r.path + '/'))
+    // Most-specific (deepest) matching root wins. When roots nest (a cwd inside
+    // the git root), the ancestor root would otherwise capture every descendant
+    // file and bury it under a longer relative path in the wrong tab — so the
+    // "Working directory" root could never be the target of a nested file.
+    let match = null
+    for (const r of roots) {
+        if (r.path && absolutePath.startsWith(r.path + '/') && (!match || r.path.length > match.path.length)) {
+            match = r
+        }
+    }
     const rootKey = match?.key
     const relativePath = match ? absolutePath.slice(match.path.length + 1) : undefined
 
