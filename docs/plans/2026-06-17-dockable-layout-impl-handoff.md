@@ -9,16 +9,16 @@ the design doc [`2026-06-16-dockable-layout-design.md`](./2026-06-16-dockable-la
 → the pure resolver `frontend/src/utils/layoutResolver.js` (the executable spec).
 
 Branch/worktree: `layout` (`.worktrees/layout`). Its own dev instance runs via devctl
-(frontend **5174**, backend **3501**). The branch is **42 commits** on top of `main` — not pushed, not
-merged. Run `git log main..layout` for the breakdown. (Last rebased on `daa4a599`; `main` has since
-advanced to `54fd6b15` — ~22 commits, so a re-rebase is due before merge.)
+(frontend **5174**, backend **3501**). The branch is **44 commits** on top of `main` — not pushed, not
+merged. Run `git log main..layout` for the breakdown. (Rebased onto local `main` `54fd6b15` on
+2026-06-19; `origin/main` is further ahead at `e0cd600b` — reconcile before pushing/merging.)
 **Persistence is COMPLETE** (steps 1–4 of the layout-persistence plan — see
 `docs/plans/2026-06-19-layout-persistence-impl-plan.md`). Layout state survives reload, syncs across
 devices, new sessions open with a resolved global/project default, the named-layouts catalog has a
 save/select menu **and** a rename/delete-with-reassignment manager (step 4), the menu surfaces per-scope
 default rows (worktree → project → global, no duplication with the named list), and every layout list is
-alphabetical. **Requires the dev to restart their instance** — migrations `0109` (`Session.layout`) +
-`0110` (`Project.default_layout_id`). What's left there is only the explicitly-deferred v2 items
+alphabetical. **Requires the dev to restart their instance** — migrations `0110` (`Session.layout`) +
+`0111` (`Project.default_layout_id`). What's left there is only the explicitly-deferred v2 items
 (per-device localStorage override, per-project named layouts, schema `version`, CLI catalog commands).
 
 **Verification status:** verified **live in the browser** — step-1 docking, the route/focus model,
@@ -512,10 +512,10 @@ focused signals; e.g. Git stops polling when not shown) and a tmux **reaper/GC**
 ## Known issues / open (not yet fixed)
 
 - **Persistence — COMPLETE (steps 1–4 + scope rows + alphabetical listing).** `Session.layout`
-  (migration 0109) persists + syncs the per-session intention; a `layouts.json` catalog of named layouts
+  (migration 0110) persists + syncs the per-session intention; a `layouts.json` catalog of named layouts
   (synced, mirrors workspaces.json) with a save/select menu (`LayoutMenu` ▾) **and** a rename/delete
   manager (`LayoutManagerDialog`, reassignment-on-delete); the 3-tier default (global
-  `settings.defaultLayoutId` → project `Project.default_layout_id` (0110) → session) resolved + frozen at
+  `settings.defaultLayoutId` → project `Project.default_layout_id` (0111) → session) resolved + frozen at
   creation, mirroring agent settings; per-scope default rows in the menu (worktree → project → global,
   deduped against the named list); and alphabetical ordering wherever layouts are listed. Full design in
   `docs/plans/2026-06-19-layout-persistence-impl-plan.md`. **Deferred (v2):** per-device localStorage
