@@ -35,11 +35,11 @@
  *   focus(path): emitted when any node is clicked (file or directory), for focus tracking
  */
 
-import { ref, computed, watch, useId } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { apiFetch } from '../../utils/api'
 import { getIconUrl, getFileIconId, getFolderIconId } from '../../utils/fileIcons'
 import CodeCommentsIndicator from '../ui/CodeCommentsIndicator.vue'
-import AppTooltip from '../ui/AppTooltip.vue'
+import GitStatusBadge from '../ui/GitStatusBadge.vue'
 
 const props = defineProps({
     node: {
@@ -300,108 +300,6 @@ const isSelected = computed(() => {
     return props.selectedPath === ep || props.selectedPath.startsWith(ep + '/')
 })
 
-/**
- * Map a normalized git status to its badge letter and CSS colour class (by change type).
- */
-const STATUS_MAP = {
-    modified:  { letter: 'M', cls: 'git-badge-modified' },
-    added:     { letter: 'A', cls: 'git-badge-added' },
-    deleted:   { letter: 'D', cls: 'git-badge-deleted' },
-    renamed:   { letter: 'R', cls: 'git-badge-renamed' },
-    copied:    { letter: 'C', cls: 'git-badge-added' },
-    untracked: { letter: 'U', cls: 'git-badge-untracked' },
-}
-
-/** Human label for the unmerged (conflict) two-letter porcelain codes. */
-const CONFLICT_LABELS = {
-    DD: 'both deleted',
-    AU: 'added by us',
-    UD: 'deleted by them',
-    UA: 'added by them',
-    DU: 'deleted by us',
-    AA: 'both added',
-    UU: 'both modified',
-}
-
-/** One slot of the staged|unstaged code: a type-coloured letter, or a dim placeholder. */
-function badgeSlot(status) {
-    if (!status) return { ch: '·', cls: 'git-badge-slot-empty' }
-    const entry = STATUS_MAP[status]
-    return entry
-        ? { ch: entry.letter, cls: entry.cls }
-        : { ch: status[0].toUpperCase(), cls: 'git-badge-modified' }
-}
-
-const capitalize = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s)
-
-/** Stable per-node id so the git badge can anchor an AppTooltip. */
-const gitBadgeId = useId()
-
-/** Per-file +added / −removed line counts (git index view only), or null. */
-const diffStat = computed(() => {
-    if (props.mode !== 'git' || props.node.type !== 'file') return null
-    const add = props.node.additions
-    const del = props.node.deletions
-    const a = typeof add === 'number' && add > 0 ? add : null
-    const d = typeof del === 'number' && del > 0 ? del : null
-    if (a === null && d === null) return null
-    return { additions: a, deletions: d }
-})
-
-/**
- * Git status badge for files in git mode.
- *
- * Renders the two-column porcelain status (X = staged, Y = unstaged) as a
- * two-letter code, each letter coloured by its change type, with a dim "·" for
- * an empty side — so staged vs unstaged reads from position, like `git status`.
- * Untracked → "??"; conflicts → the raw unmerged code in a dedicated colour.
- * Commit files keep a single status letter. A tooltip spells the code out.
- *
- * Returns `{ parts: [{ ch, cls? }], tooltip, conflict? }` or null.
- */
-const gitBadge = computed(() => {
-    if (props.mode !== 'git' || props.node.type !== 'file') return null
-
-    const node = props.node
-
-    // Commit files: a single status letter.
-    if (node.status) {
-        const entry = STATUS_MAP[node.status] || { letter: node.status[0].toUpperCase(), cls: 'git-badge-modified' }
-        return { parts: [{ ch: entry.letter, cls: entry.cls }], tooltip: capitalize(node.status) }
-    }
-
-    // Conflicted (unmerged) files: surface the raw XY code in the conflict colour.
-    if (node.conflicted) {
-        const code = node.conflict_code || 'UU'
-        return {
-            conflict: true,
-            parts: [{ ch: code[0] }, { ch: code[1] }],
-            tooltip: 'Conflict — ' + (CONFLICT_LABELS[code] || 'unmerged'),
-        }
-    }
-
-    // Index files: staged_status (X) / unstaged_status (Y).
-    const staged = node.staged_status
-    const unstaged = node.unstaged_status
-    if (!staged && !unstaged) return null
-
-    // Untracked: git shows "??".
-    if (unstaged === 'untracked' && !staged) {
-        return {
-            parts: [{ ch: '?', cls: 'git-badge-untracked' }, { ch: '?', cls: 'git-badge-untracked' }],
-            tooltip: 'Untracked',
-        }
-    }
-
-    const tip = []
-    if (staged) tip.push(`Staged: ${staged}`)
-    if (unstaged) tip.push(`Unstaged: ${unstaged}`)
-    return {
-        parts: [badgeSlot(staged), badgeSlot(unstaged)],
-        tooltip: tip.join(' · '),
-    }
-})
-
 const commentCount = computed(() => {
     if (props.commentedPaths.size === 0) return 0
     return props.commentedPaths.has(nodePath.value) ? 1 : 0
@@ -469,7 +367,6 @@ function onTouchEnd(event) {
                 { 'is-clickable': node.type === 'file' },
                 { 'is-focused': isFocused },
                 { 'is-selected': isSelected },
-                { 'has-git-badge': gitBadge },
             ]"
             :style="{ '--level': depth }"
             :data-path="nodePath"
@@ -496,18 +393,7 @@ function onTouchEnd(event) {
             />
             <span class="node-name">{{ compact.displayName }}</span>
             <CodeCommentsIndicator :count="commentCount" :show-tooltip="false" class="comment-badge" />
-            <span v-if="gitBadge" class="git-meta">
-                <span v-if="diffStat" class="git-diffstat">
-                    <span v-if="diffStat.additions !== null" class="diffstat-add">+{{ diffStat.additions }}</span>
-                    <span v-if="diffStat.deletions !== null" class="diffstat-del">−{{ diffStat.deletions }}</span>
-                </span>
-                <span
-                    :id="gitBadgeId"
-                    class="git-badge"
-                    :class="{ 'git-badge-conflict': gitBadge.conflict }"
-                ><span v-for="(part, i) in gitBadge.parts" :key="i" :class="part.cls">{{ part.ch }}</span></span>
-            </span>
-            <AppTooltip v-if="gitBadge" :for="gitBadgeId">{{ gitBadge.tooltip }}</AppTooltip>
+            <GitStatusBadge v-if="mode === 'git' && node.type === 'file'" :node="node" class="git-meta" />
         </div>
 
         <!-- Children (only rendered when directory is open) -->
@@ -631,77 +517,17 @@ function onTouchEnd(event) {
 
 /* ----- Git status badge (git mode only) ----- */
 
-/* The git badge and its line-stat sit in one sticky group pinned to the right
-   edge, so they stay visible regardless of the node name's width. */
+/* Positioning wrapper for the GitStatusBadge in a tree row: pinned to the right
+   edge (sticky) so the flag stays visible regardless of the node name's width.
+   The badge / line-stat visuals all live in GitStatusBadge.vue. */
 .git-meta {
     position: sticky;
     right: 0;
     flex-shrink: 0;
     margin-left: auto;
-    display: inline-flex;
-    align-items: center;
-    gap: .65rem;
     background-color: var(--node-bg-color);
-    padding-left: .4rem;
-}
-
-.git-diffstat {
-    display: inline-flex;
-    gap: .35rem;
-    font-size: var(--wa-font-size-xs);
-    font-family: var(--wa-font-family-code);
-    font-variant-numeric: tabular-nums;
-    line-height: 1.6;
-    white-space: nowrap;
-}
-
-.diffstat-add {
-    color: #3a9a28;
-}
-
-.diffstat-del {
-    color: #e5484d;
-}
-
-.git-badge {
-    flex-shrink: 0;
-    font-size: var(--wa-font-size-xs);
-    font-weight: 600;
-    font-family: var(--wa-font-family-code);
-    line-height: 1.6;
     padding-block: .15rem;
-    padding-inline: 0 .25rem;
-    letter-spacing: .5px;
-}
-
-.git-badge-modified {
-    color: #c4841d;
-}
-
-.git-badge-added {
-    color: #3a9a28;
-}
-
-.git-badge-deleted {
-    color: #e5484d;
-}
-
-.git-badge-renamed {
-    color: #6e56cf;
-}
-
-.git-badge-untracked {
-    color: #7c8594;
-}
-
-.git-badge-slot-empty {
-    /* dim placeholder for the "clean" side of the staged|unstaged code */
-    color: #5b6472;
-}
-
-/* Unmerged/conflicted entries: the whole raw XY code in a dedicated colour. */
-.git-badge-conflict {
-    color: #ff5c5c;
+    padding-inline: .4rem .25rem;
 }
 
 </style>

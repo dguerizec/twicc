@@ -39,6 +39,7 @@ import FileDeleteDialog from './FileDeleteDialog.vue'
 import FileCreateDialog from './FileCreateDialog.vue'
 import FileMoveDialog from './FileMoveDialog.vue'
 import AppTooltip from '../ui/AppTooltip.vue'
+import GitStatusBadge from '../ui/GitStatusBadge.vue'
 import ArtifactBookmarkButton from '../artifacts/ArtifactBookmarkButton.vue'
 import { useDataStore } from '../../stores/data'
 import { isRenderableArtifactPath } from '../../utils/artifactBookmark'
@@ -281,6 +282,20 @@ const headerArtifactBookmarkable = computed(() =>
     !!props.artifactBookmarkSessionId && isRenderableArtifactPath(selectedFile.value),
 )
 const fileOptionsButtonId = useId()
+
+/** Git status node for the selected file — drives the mobile header flag (git mode only). */
+const selectedFileNode = computed(() => {
+    if (props.mode !== 'git') return null
+    const file = selectedFile.value
+    const tree = props.tree
+    if (!file || !tree) return null
+    let node = tree
+    for (const part of file.split('/')) {
+        node = node.children?.find(c => c.name === part)
+        if (!node) return null
+    }
+    return node.type === 'file' ? node : null
+})
 
 /**
  * Handle file selection from either the main tree or search results.
@@ -1128,6 +1143,7 @@ defineExpose({
                     {{ selectedFile || headerPlaceholder }}<span v-if="headerArtifactBookmark" class="files-panel-header-artifact-bookmark-name"> ({{ headerArtifactBookmark.name }})</span>
                 </span>
                 <AppTooltip v-if="selectedFile" :for="selectedFileId">{{ selectedFile }}<template v-if="headerArtifactBookmark"> ({{ headerArtifactBookmark.name }})</template></AppTooltip>
+                <GitStatusBadge v-if="selectedFileNode" :node="selectedFileNode" class="mobile-header-badge" />
                 <wa-icon
                     class="chevron"
                     :name="fileTreeOpen ? 'chevron-up' : 'chevron-down'"
@@ -1499,6 +1515,10 @@ defineExpose({
     white-space: nowrap;
     min-width: 0;
     flex: 1;
+}
+
+.mobile-header-badge {
+    flex-shrink: 0;
 }
 
 .files-panel-header .chevron {

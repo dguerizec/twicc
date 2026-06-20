@@ -11,6 +11,7 @@ import {
 } from './GitLog'
 import GitPanelHeader from './GitPanelHeader.vue'
 import AppTooltip from '../ui/AppTooltip.vue'
+import GitStatusBadge from '../ui/GitStatusBadge.vue'
 import FileTreePanel from '../files/FileTreePanel.vue'
 import FilePane from '../files/FilePane.vue'
 import { searchTreeFiles } from '../../utils/treeSearch'
@@ -453,39 +454,18 @@ watch(() => props.focusRequest, () => {
     else fileTreePanelRef.value?.focusSearchInput()
 })
 
-const GIT_STATUS_MAP = {
-    modified:  { letter: 'M', cls: 'git-badge-modified' },
-    added:     { letter: 'A', cls: 'git-badge-added' },
-    deleted:   { letter: 'D', cls: 'git-badge-deleted' },
-    renamed:   { letter: 'R', cls: 'git-badge-renamed' },
-    copied:    { letter: 'C', cls: 'git-badge-added' },
-    untracked: { letter: 'U', cls: 'git-badge-untracked' },
-}
-
-const selectedFileStatus = computed(() => {
+/** The tree node for the currently selected file (or null) — drives its status flag. */
+const selectedFileNode = computed(() => {
     const file = selectedFile.value
     const tree = displayTree.value
     if (!file || !tree) return null
 
-    const parts = file.split('/')
     let node = tree
-    for (const part of parts) {
+    for (const part of file.split('/')) {
         node = node.children?.find(c => c.name === part)
         if (!node) return null
     }
-    if (node.type !== 'file') return null
-
-    if (node.status) {
-        return GIT_STATUS_MAP[node.status] || { letter: node.status[0].toUpperCase(), cls: 'git-badge-modified' }
-    }
-
-    const primary = node.staged_status || node.unstaged_status
-    if (!primary) return null
-    const entry = GIT_STATUS_MAP[primary] || { letter: primary[0].toUpperCase(), cls: 'git-badge-modified' }
-    if (node.unstaged_status) {
-        return { letter: entry.letter, cls: entry.cls + ' git-badge-unstaged' }
-    }
-    return entry
+    return node.type === 'file' ? node : null
 })
 
 /**
@@ -1426,7 +1406,7 @@ onMounted(() => {
                         <template v-if="!isMobile && selectedFile">
                             <div class="file-path-header">
                                 <span class="file-path-label">{{ selectedFile }}</span>
-                                <span v-if="selectedFileStatus" class="git-badge" :class="selectedFileStatus.cls">{{ selectedFileStatus.letter }}</span>
+                                <GitStatusBadge v-if="selectedFileNode" :node="selectedFileNode" class="path-header-badge" />
                             </div>
                             <wa-divider></wa-divider>
                         </template>
@@ -1842,20 +1822,10 @@ wa-callout {
     color: var(--wa-color-text-quiet);
 }
 
-.git-badge {
+.path-header-badge {
     flex-shrink: 0;
     margin-left: var(--wa-space-xs);
-    font-size: var(--wa-font-size-xs);
-    font-weight: 600;
-    font-family: var(--wa-font-family-code);
 }
-
-.git-badge-unstaged { font-style: italic; }
-.git-badge-modified  { color: #c4841d; }
-.git-badge-added     { color: #3a9a28; }
-.git-badge-deleted   { color: #e5484d; }
-.git-badge-renamed   { color: #6e56cf; }
-.git-badge-untracked { color: #7c8594; }
 
 .diff-loading-overlay {
     position: absolute;
