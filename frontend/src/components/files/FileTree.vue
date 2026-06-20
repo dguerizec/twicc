@@ -337,6 +337,17 @@ const capitalize = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s)
 /** Stable per-node id so the git badge can anchor an AppTooltip. */
 const gitBadgeId = useId()
 
+/** Per-file +added / −removed line counts (git index view only), or null. */
+const diffStat = computed(() => {
+    if (props.mode !== 'git' || props.node.type !== 'file') return null
+    const add = props.node.additions
+    const del = props.node.deletions
+    const a = typeof add === 'number' && add > 0 ? add : null
+    const d = typeof del === 'number' && del > 0 ? del : null
+    if (a === null && d === null) return null
+    return { additions: a, deletions: d }
+})
+
 /**
  * Git status badge for files in git mode.
  *
@@ -485,12 +496,17 @@ function onTouchEnd(event) {
             />
             <span class="node-name">{{ compact.displayName }}</span>
             <CodeCommentsIndicator :count="commentCount" :show-tooltip="false" class="comment-badge" />
-            <span
-                v-if="gitBadge"
-                :id="gitBadgeId"
-                class="git-badge"
-                :class="{ 'git-badge-conflict': gitBadge.conflict }"
-            ><span v-for="(part, i) in gitBadge.parts" :key="i" :class="part.cls">{{ part.ch }}</span></span>
+            <span v-if="gitBadge" class="git-meta">
+                <span v-if="diffStat" class="git-diffstat">
+                    <span v-if="diffStat.additions !== null" class="diffstat-add">+{{ diffStat.additions }}</span>
+                    <span v-if="diffStat.deletions !== null" class="diffstat-del">−{{ diffStat.deletions }}</span>
+                </span>
+                <span
+                    :id="gitBadgeId"
+                    class="git-badge"
+                    :class="{ 'git-badge-conflict': gitBadge.conflict }"
+                ><span v-for="(part, i) in gitBadge.parts" :key="i" :class="part.cls">{{ part.ch }}</span></span>
+            </span>
             <AppTooltip v-if="gitBadge" :for="gitBadgeId">{{ gitBadge.tooltip }}</AppTooltip>
         </div>
 
@@ -615,18 +631,46 @@ function onTouchEnd(event) {
 
 /* ----- Git status badge (git mode only) ----- */
 
-.git-badge {
+/* The git badge and its line-stat sit in one sticky group pinned to the right
+   edge, so they stay visible regardless of the node name's width. */
+.git-meta {
     position: sticky;
     right: 0;
     flex-shrink: 0;
     margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: .65rem;
+    background-color: var(--node-bg-color);
+    padding-left: .4rem;
+}
+
+.git-diffstat {
+    display: inline-flex;
+    gap: .35rem;
+    font-size: var(--wa-font-size-xs);
+    font-family: var(--wa-font-family-code);
+    font-variant-numeric: tabular-nums;
+    line-height: 1.6;
+    white-space: nowrap;
+}
+
+.diffstat-add {
+    color: #3a9a28;
+}
+
+.diffstat-del {
+    color: #e5484d;
+}
+
+.git-badge {
+    flex-shrink: 0;
     font-size: var(--wa-font-size-xs);
     font-weight: 600;
     font-family: var(--wa-font-family-code);
     line-height: 1.6;
-    background-color: var(--node-bg-color);
     padding-block: .15rem;
-    padding-inline: .5rem .25rem;
+    padding-inline: 0 .25rem;
     letter-spacing: .5px;
 }
 

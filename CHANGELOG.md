@@ -15,6 +15,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Git tab** — the uncommitted-changes tree refreshes live while the tab is visible.
 - **Git status badges** — the change tree shows the full staged/unstaged code (e.g. `AM`) with a tooltip, and conflicted files are now surfaced.
+- **Git diff stats** — each changed file in the tree shows its +added / −removed line counts.
 - **Remote access** — when no password is set, TwiCC now only accepts connections from the same machine; set a password to reach it from other devices.
 - **Question widget** — ability to cancel or partially submit Claude's questions.
 - **Claude Agent SDK** — Upgrade from 0.2.99 to 0.2.105 (bundled Claude Code CLI: 2.1.175 → 2.1.183)

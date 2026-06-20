@@ -78,7 +78,10 @@ def _build_file_tree(files: list[dict], root_name: str = "") -> dict:
 
     Directories are sorted before files, both alphabetically (case-insensitive).
     """
-    _STATUS_KEYS = ("status", "staged_status", "unstaged_status", "conflicted", "conflict_code")
+    _STATUS_KEYS = (
+        "status", "staged_status", "unstaged_status", "conflicted", "conflict_code",
+        "additions", "deletions",
+    )
 
     # Build a nested dict first, then convert to the tree format.
     tree: dict = {}
@@ -654,18 +657,113 @@ def _parse_index_files(git_directory: str) -> list[dict] | None:
     return files if files else None
 
 
+# Untracked files larger than this are not line-counted (avoids reading huge
+# blobs on every live poll); they simply carry no +/- stat.
+_NUMSTAT_UNTRACKED_MAX_BYTES = 1_000_000
+
+
+def _get_numstat_vs_head(git_directory: str) -> dict[str, tuple[int | None, int | None]]:
+    """Map ``path -> (additions, deletions)`` for tracked changes vs ``HEAD``.
+
+    A single ``git diff HEAD --numstat -z`` — it combines staged + unstaged
+    changes, i.e. the file's total diff against the last commit. Binary files
+    map to ``(None, None)``. Returns ``{}`` on failure (e.g. a repo with no
+    commits yet).
+    """
+    try:
+        result = subprocess.run(
+            ["git", "-C", git_directory, "diff", "HEAD", "--numstat", "-z"],
+            capture_output=True,
+            text=True,
+            timeout=_GIT_TIMEOUT,
+        )
+        if result.returncode != 0:
+            return {}
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return {}
+
+    stats: dict[str, tuple[int | None, int | None]] = {}
+    # -z numstat: records are NUL-separated, each "add\tdel\tpath". For renames
+    # the path field is empty and followed by two extra NUL fields (old, new).
+    tokens = result.stdout.split("\x00")
+    i = 0
+    while i < len(tokens):
+        rec = tokens[i]
+        if not rec:
+            i += 1
+            continue
+        parts = rec.split("\t", 2)
+        if len(parts) < 3:
+            i += 1
+            continue
+        add_s, del_s, path = parts
+        if path == "":
+            # Rename: use the new path (second of the two trailing fields).
+            path = tokens[i + 2] if i + 2 < len(tokens) else ""
+            i += 3
+        else:
+            i += 1
+        if not path:
+            continue
+        adds = None if add_s == "-" else int(add_s)
+        dels = None if del_s == "-" else int(del_s)
+        stats[path] = (adds, dels)
+    return stats
+
+
+def _count_untracked_lines(git_directory: str, path: str) -> int | None:
+    """Line count of an untracked file (all additions). None if binary/too large."""
+    full = os.path.join(git_directory, path)
+    try:
+        if os.path.getsize(full) > _NUMSTAT_UNTRACKED_MAX_BYTES:
+            return None
+        with open(full, "rb") as fh:
+            data = fh.read()
+    except OSError:
+        return None
+    if b"\x00" in data:
+        return None  # binary
+    if not data:
+        return 0
+    count = data.count(b"\n")
+    if not data.endswith(b"\n"):
+        count += 1
+    return count
+
+
+def _attach_line_stats(files: list[dict], git_directory: str) -> None:
+    """Annotate each (non-conflict) index file with ``additions``/``deletions``."""
+    numstat = _get_numstat_vs_head(git_directory)
+    for f in files:
+        if f.get("conflicted"):
+            continue
+        path = f["path"]
+        if f.get("unstaged_status") == "untracked" and not f.get("staged_status"):
+            adds = _count_untracked_lines(git_directory, path)
+            dels = 0 if adds is not None else None
+        else:
+            adds, dels = numstat.get(path, (None, None))
+        if adds is not None:
+            f["additions"] = adds
+        if dels is not None:
+            f["deletions"] = dels
+
+
 def get_index_files(git_directory: str) -> dict | None:
     """Return working-tree changed files as stats + file tree.
 
     Returns a dict with:
-    - ``stats``: ``{modified, added, deleted}`` counts
-    - ``tree``: file tree in the same format as the directory-tree API
+    - ``stats``: ``{modified, added, deleted, conflicted}`` counts
+    - ``tree``: file tree in the same format as the directory-tree API, each file
+      node also carrying ``additions``/``deletions`` line counts where known
 
     Returns None if there are no changes.
     """
     files = _parse_index_files(git_directory)
     if not files:
         return None
+
+    _attach_line_stats(files, git_directory)
 
     return {
         "stats": _compute_stats(files),
