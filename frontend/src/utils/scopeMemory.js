@@ -36,6 +36,9 @@ const ALL_PROJECTS_NAMES = new Set([
 const HOME_NAMES = new Set(['session', 'projects-session', 'project', 'projects-all'])
 
 // --- Pure helpers ---
+//
+// These only ever receive normalized vue-router RouteLocations (from guards), so
+// `route.params` and `route.query` are always objects — hence the unguarded reads.
 
 // Stable per-scope key, or null for non-scope routes (home '/', login, …).
 export function scopeKey(route) {
@@ -56,6 +59,8 @@ export function isScopeHome(route) {
 }
 
 // The sub-screen id within a scope: '' for the base, else the tool tab / 'subagent'.
+// Assumes tab ids are single-segment (no hyphen): files/git/terminal/artifacts/
+// orchestration/subagent. A future hyphenated tab name would need a different split.
 export function tabOf(name) {
     if (HOME_NAMES.has(name)) return ''
     return name.split('-').pop()
