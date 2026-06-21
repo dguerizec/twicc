@@ -1391,13 +1391,7 @@ onMounted(() => {
             label: 'Toggle Sidebar',
             icon: 'table-columns',
             category: 'ui',
-            action: () => {
-                const checkbox = document.getElementById('sidebar-toggle-state')
-                if (checkbox) {
-                    checkbox.checked = !checkbox.checked
-                    checkbox.dispatchEvent(new Event('change'))
-                }
-            },
+            action: () => { toggleSidebar() },
         },
         {
             id: 'ui.focus-search',
@@ -1432,6 +1426,8 @@ onMounted(() => {
     window.addEventListener('twicc:open-new-workspace-dialog', openNewWorkspaceDialog)
     window.addEventListener('twicc:open-manage-workspaces-dialog', openManageWorkspacesDialog)
     window.addEventListener('twicc:open-edit-workspace-dialog', openEditWorkspaceDialog)
+    // Alt+Shift+B sidebar toggle shortcut (dispatched by App.vue)
+    window.addEventListener('twicc:toggle-sidebar', handleToggleSidebarShortcut)
 })
 
 function openNewProjectDialog() {
@@ -1453,6 +1449,7 @@ onBeforeUnmount(() => {
     window.removeEventListener('twicc:open-new-workspace-dialog', openNewWorkspaceDialog)
     window.removeEventListener('twicc:open-manage-workspaces-dialog', openManageWorkspacesDialog)
     window.removeEventListener('twicc:open-edit-workspace-dialog', openEditWorkspaceDialog)
+    window.removeEventListener('twicc:toggle-sidebar', handleToggleSidebarShortcut)
 })
 
 // Guard flag to ignore reposition events triggered by width restore after auto-collapse
@@ -1522,6 +1519,23 @@ function handleSplitReposition(event) {
         saveSidebarState({ open: true, width: newWidth })
         updateSidebarClosedClass(false)
     }
+}
+
+// Toggle the whole sidebar open/closed — identical to clicking the footer toggle
+// button: it flips the hidden checkbox that drives the CSS layout (its `change`
+// runs handleSidebarToggle). Shared by the command palette and the Alt+Shift+B
+// shortcut so neither re-implements the toggle. Returns true when it acted.
+function toggleSidebar() {
+    const checkbox = document.getElementById('sidebar-toggle-state')
+    if (!checkbox) return false
+    checkbox.checked = !checkbox.checked
+    checkbox.dispatchEvent(new Event('change'))
+    return true
+}
+// Alt+Shift+B (dispatched by App.vue): toggle the sidebar, flagging the event handled
+// so App.vue swallows the key only when this view is mounted to act on it.
+function handleToggleSidebarShortcut(event) {
+    if (toggleSidebar() && event?.detail) event.detail.handled = true
 }
 
 // Handle sidebar toggle (called when checkbox changes)
@@ -2334,7 +2348,7 @@ function updateSidebarClosedClass(closed) {
                             <wa-icon class="icon-expand" name="angles-right"></wa-icon>
                         </wa-button>
                     </label>
-                    <AppTooltip for="sidebar-toggle-label">Toggle sidebar</AppTooltip>
+                    <AppTooltip for="sidebar-toggle-label">Toggle sidebar (Alt+Shift+B)</AppTooltip>
 
                     <!-- Placeholder to occupy the same space a the sidebar toggle button that is absolute for goot reasons -->
                     <wa-button variant="neutral" appearance="filled-outlined" size="small" style="visibility: hidden; pointer-events: none"><wa-icon name="angles-left"></wa-icon></wa-button>

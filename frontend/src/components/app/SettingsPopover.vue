@@ -229,6 +229,7 @@ const shortcutGroups = computed(() => {
                 // the description names its position too.
                 { keys: ['Ctrl', backquoteKeyLabel.value], description: 'Switch between recent sessions — hold Ctrl, tap the key above Tab (or ↑/↓) to cycle, release to switch' },
                 { keys: ['Ctrl', 'Shift', backquoteKeyLabel.value], description: 'Same, through the sessions currently shown in the sidebar (tap Shift while open to toggle either source)' },
+                { keys: ['Alt', 'Shift', 'B'], description: 'Toggle the sidebar' },
             ]
         },
         {
@@ -255,6 +256,13 @@ const shortcutGroups = computed(() => {
                     { keys: ['Alt', 'Shift', 'H'], description: 'Toggle hybrid mode on a Claude session, where it can be toggled (from any session tab)' },
                 ] : []),
                 { keys: ['Quick triple Esc'], description: 'Emergency stop of the running process' },
+            ]
+        },
+        {
+            label: 'Session layout',
+            shortcuts: [
+                { keys: ['Alt', 'Shift', '↵'], description: 'Maximize the focused pane (chat or a docked tool panel) — press again to restore' },
+                { keys: ['Alt', 'Shift', 'Backspace'], description: 'Minimize the focused docked panel to the gutter' },
             ]
         },
         {

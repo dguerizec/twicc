@@ -434,6 +434,38 @@ function handleGlobalKeydown(e) {
             e.stopPropagation()
         }
     }
+    // Alt+Shift+Enter: maximize the focused dockable pane, or restore it when already
+    // maximized — a toggle, mirroring the maximize/restore double-click on a region.
+    // Alt+Shift+Backspace: minimize the focused docked panel. Enter / Backspace are special
+    // keys (same physical key and e.code on every layout, no shifted-glyph issue), unlike
+    // +/−, and sit together under the right hand. Session routes only (project-detail panels
+    // have no docking). The active SessionView flips detail.handled when it acts, so we
+    // swallow the key (and any composed character) only then.
+    if (e.altKey && e.shiftKey && !e.ctrlKey && !e.metaKey && SESSION_ROUTES.has(route.name)) {
+        let layoutAction = null
+        if (e.code === 'Enter' || e.code === 'NumpadEnter') layoutAction = 'maximize'
+        else if (e.code === 'Backspace') layoutAction = 'minimize'
+        if (layoutAction && !hasBlockingOverlay()) {
+            const detail = { action: layoutAction, handled: false }
+            window.dispatchEvent(new CustomEvent('twicc:layout-shortcut', { detail }))
+            if (detail.handled) {
+                e.preventDefault()
+                e.stopPropagation()
+            }
+        }
+    }
+    // Alt+Shift+B: toggle the sidebar — the keyboard equivalent of the sidebar footer
+    // toggle button. Global (any route where ProjectView is mounted); its listener flips
+    // detail.handled so we swallow the key (and the character macOS composes from
+    // Alt+Shift+B) only when it actually toggled. e.code is the physical key (layout-safe).
+    if (e.altKey && e.shiftKey && !e.ctrlKey && !e.metaKey && e.code === 'KeyB' && !hasBlockingOverlay()) {
+        const detail = { handled: false }
+        window.dispatchEvent(new CustomEvent('twicc:toggle-sidebar', { detail }))
+        if (detail.handled) {
+            e.preventDefault()
+            e.stopPropagation()
+        }
+    }
     // Triple-Escape: emergency stop of the current chat session's process.
     // Only active on chat routes (session, projects-session), only when a
     // stoppable process exists. Does NOT preventDefault/stopPropagation —

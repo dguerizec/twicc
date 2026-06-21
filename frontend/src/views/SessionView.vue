@@ -79,12 +79,15 @@ onMounted(() => {
     notifySessionViewed(sessionId.value, 'mounted')
     // Listen for tab keyboard shortcuts (dispatched by App.vue)
     window.addEventListener('twicc:tab-shortcut', handleTabShortcut)
+    // Listen for layout keyboard shortcuts (maximize / minimize / restore the focused pane)
+    window.addEventListener('twicc:layout-shortcut', handleLayoutShortcut)
     // Listen for live artifact file changes (dispatched by useWebSocket)
     window.addEventListener('twicc:artifact-files-changed', handleArtifactFilesChanged)
 })
 
 onBeforeUnmount(() => {
     window.removeEventListener('twicc:tab-shortcut', handleTabShortcut)
+    window.removeEventListener('twicc:layout-shortcut', handleLayoutShortcut)
     window.removeEventListener('twicc:artifact-files-changed', handleArtifactFilesChanged)
     cancelPaneFocus()
 })
@@ -911,6 +914,62 @@ function onCenterTabDblClick(event) {
     else onCenterMaximize()
 }
 
+// ─── Layout actions on the focused pane (keyboard shortcuts + palette) ───────
+// These drive the SAME handlers as the on-screen maximize / minimize / restore
+// buttons, targeting the region that holds the focused (route) tab — i.e. the
+// region whose button you'd otherwise click. No new layout logic lives here.
+
+// The dock region currently holding the focused tab, or null in single pane /
+// the mobile tab strip (where no maximize/minimize button exists). The center
+// is itself a region, so a focused center returns the center region.
+function focusedDockRegion() {
+    if (!layout.dockingRendered.value) return null
+    return layout.render.value.regions.find(
+        (r) => r.slots.some((s) => s.tabs.some((t) => t.id === activeTabId.value)),
+    ) || null
+}
+// Maximize is available on any focused region (center included), unless already maximized.
+function canMaximizeFocusedPane() {
+    return !layout.maximizedRegion.value && !!focusedDockRegion()
+}
+// Minimize only exists on real dock regions — the center has no minimize button.
+function canMinimizeFocusedPane() {
+    if (layout.maximizedRegion.value) return false
+    const region = focusedDockRegion()
+    return !!region && !region.slots.some((s) => s.dockId === 'center')
+}
+function maximizeFocusedPane() {
+    if (!canMaximizeFocusedPane()) return false
+    onLayoutMaximize(focusedDockRegion().slots.map((s) => s.dockId), activeTabId.value)
+    return true
+}
+function minimizeFocusedPane() {
+    if (!canMinimizeFocusedPane()) return false
+    onLayoutMinimize(focusedDockRegion().slots.map((s) => s.dockId))
+    return true
+}
+function restoreMaximizedPane() {
+    if (!layout.maximizedRegion.value) return false
+    onLayoutRestoreMaximized()
+    return true
+}
+// Alt+Shift+Enter toggles: restore when a pane is maximized, else maximize the focused one —
+// same as the maximize/restore double-click on a region.
+function toggleMaximizeFocusedPane() {
+    return layout.maximizedRegion.value ? restoreMaximizedPane() : maximizeFocusedPane()
+}
+
+// Alt+Shift+{Enter|Backspace} (dispatched by App.vue). Only the active session view acts;
+// `handled` is flipped back so App.vue swallows the key only when something happened (so
+// e.g. Alt+Shift+Enter in single pane, with nothing to maximize, stays inert).
+function handleLayoutShortcut(event) {
+    if (!isActive.value) return
+    let acted = false
+    if (event.detail?.action === 'maximize') acted = toggleMaximizeFocusedPane()
+    else if (event.detail?.action === 'minimize') acted = minimizeFocusedPane()
+    if (acted && event.detail) event.detail.handled = true
+}
+
 // Teleport target registry: logical key -> element. The center slot registers its tab-panel
 // targets; dock regions / the overlay register theirs. Tool panels teleport to targetKeyForTab().
 const layoutTargets = reactive({})
@@ -1200,6 +1259,9 @@ const SESSION_COMMAND_IDS = [
     'session.context',
     'session.chrome',
     'session.fast-mode',
+    'session.maximize-pane',
+    'session.minimize-pane',
+    'session.restore-pane',
 ]
 
 // Read/unread gate for the current session, mirroring SessionListItem's
@@ -1550,6 +1612,30 @@ function buildSessionSettingsCommands() {
             label: 'Change Session Fast Mode…',
             icon: 'gauge-high',
         }),
+        {
+            id: 'session.maximize-pane',
+            label: 'Maximize Focused Pane',
+            icon: 'expand',
+            category: 'session',
+            when: () => isActive.value && canMaximizeFocusedPane(),
+            action: () => maximizeFocusedPane(),
+        },
+        {
+            id: 'session.minimize-pane',
+            label: 'Minimize Focused Pane',
+            icon: 'window-minimize',
+            category: 'session',
+            when: () => isActive.value && canMinimizeFocusedPane(),
+            action: () => minimizeFocusedPane(),
+        },
+        {
+            id: 'session.restore-pane',
+            label: 'Restore Maximized Pane',
+            icon: 'compress',
+            category: 'session',
+            when: () => isActive.value && !!layout.maximizedRegion.value,
+            action: () => restoreMaximizedPane(),
+        },
     ]
 }
 
@@ -1672,7 +1758,7 @@ onBeforeUnmount(() => {
                     class="layout-winbtn reduced-height"
                     appearance="plain"
                     size="small"
-                    :title="isCenterMaximized ? 'Restore' : 'Maximize main area'"
+                    :title="isCenterMaximized ? 'Restore (Alt+Shift+Enter)' : 'Maximize main area (Alt+Shift+Enter)'"
                     :aria-label="isCenterMaximized ? 'Restore' : 'Maximize main area'"
                     @click.stop="isCenterMaximized ? onLayoutRestoreMaximized() : onCenterMaximize()"
                 >

@@ -121,7 +121,7 @@ function onEmptyBarDblClick(event) {
                 class="dock-winbtn dock-restore reduced-height"
                 appearance="plain"
                 size="small"
-                title="Restore"
+                title="Restore (Alt+Shift+Enter)"
                 aria-label="Restore"
                 @click.stop="emit('restore')"
             >
@@ -133,7 +133,7 @@ function onEmptyBarDblClick(event) {
                     class="dock-winbtn dock-minimize reduced-height"
                     appearance="plain"
                     size="small"
-                    title="Minimize to gutter"
+                    title="Minimize to gutter (Alt+Shift+Backspace)"
                     aria-label="Minimize to gutter"
                     @click.stop="emit('minimize', dockIds)"
                 >
@@ -144,7 +144,7 @@ function onEmptyBarDblClick(event) {
                     class="dock-winbtn dock-maximize reduced-height"
                     appearance="plain"
                     size="small"
-                    title="Maximize"
+                    title="Maximize (Alt+Shift+Enter)"
                     aria-label="Maximize"
                     @click.stop="emit('maximize', dockIds, activeTabId)"
                 >
