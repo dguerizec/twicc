@@ -1000,6 +1000,13 @@ watch(pendingDropData, (data) => {
 function onTabShow(event) {
     const panel = event.detail?.name
     if (!panel) return
+    // wa-tab-group re-emits wa-tab-show whenever its :active binding changes programmatically — most
+    // notably on KeepAlive return, where the docking area measures 0×0 and `dockingRendered` flips,
+    // recomputing centerActiveTab (a docked tool tab → 'main'). Acting on that would navigate the route
+    // OFF the docked tab back to Chat. A genuine user switch always targets a tab DIFFERENT from the
+    // center's current active (clicking the already-active tab fires no wa-tab-show), so forward only
+    // real changes — mirrors DockRegion.onShow's spurious-wa-tab-show guard.
+    if (panel === centerActiveTab.value) return
     cancelPaneFocus()
     switchToTab(panel)
 
