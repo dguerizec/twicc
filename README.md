@@ -2,7 +2,7 @@
 
 > **T**he **W**eb **I**nterface for **C**laude and **C**odex
 
-A single self-hosted web interface for both [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (Anthropic) and [Codex](https://openai.com/codex/) (OpenAI). Browse projects and sessions, run agents, follow them in real time, track costs and quotas, and stay in control of your AI coding work — from desktop or mobile, in your browser.
+One self-hosted web interface for both [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (Anthropic) and [Codex](https://openai.com/codex/) (OpenAI): browse your projects and sessions, run agents and follow them live, track costs and quotas, and stay in control of your AI coding work — from your desktop or your phone.
 
 ![TwiCC screenshot](https://raw.githubusercontent.com/twidi/twicc/main/frontend/public/screenshots/session-example.webp)
 
@@ -15,11 +15,11 @@ A single self-hosted web interface for both [Claude Code](https://docs.anthropic
 
 ## Disclaimer
 
-This is a personal project made by Twidi for his own needs. It is freely available and you are welcome to use it however you see fit.
+TwiCC started as a personal project Twidi built for his own needs — but it's shared in the genuine hope that others find it useful too. It's freely available; use it however you see fit.
 
-That said, **no support is guaranteed**. Suggestions, issues, and pull requests are welcome, but there is no commitment to address them.
+That said, **no support is guaranteed**. Suggestions, issues, and pull requests are welcome, but there's no commitment to address them.
 
-Note: the project was almost entirely vibe-coded, with general oversight from the author.
+Note: TwiCC is almost entirely vibe-coded. The author keeps a general eye on it, but reviews far less now than in the early days — so expect the occasional rough edge.
 
 ## Quick start
 
@@ -54,43 +54,68 @@ uv tool upgrade twicc
 
 ### Claude Code and Codex, side by side
 
-- **Both providers in one UI**, using your existing credentials — nothing extra to set up
-- **Live conversation** with full tool-use details, real-time streaming of assistant text and thinking
-- **Per-session agent control**: model (Opus 4.8, Sonnet 4.6, …), context window (200K / 1M), effort, thinking, fast mode, permissions (including Claude Code's classifier-gated "auto" mode), with reusable presets
-- **Interactive tool approvals** and provider questions, answered directly from the browser
-- **Persistent Claude Code cron jobs**: scheduled tasks survive TwiCC restarts and are auto-renewed before their 7-day expiry — they would otherwise be lost on a Claude Code CLI restart
-- **Provider status monitoring** (Anthropic and OpenAI status pages) with in-app outage notifications
+- **Both providers in one UI**, using your existing credentials — nothing extra to set up, and TwiCC walks you through logging in if you haven't
+- **Per-session agent control**: model (Opus 4.8, Sonnet 4.6, …), context window (200K / 1M), effort, thinking, fast mode, permissions (including Claude Code's "auto" mode), with reusable presets and per-project defaults; stop a run at any time
+- **Interactive tool approvals and provider questions**, answered directly from the browser
+- **Persistent Claude Code cron jobs**: scheduled tasks survive restarts and auto-renew before their 7-day expiry
+- **Provider status monitoring** (Anthropic and OpenAI) with in-app outage notifications
 
 ### Mobile-first, work from anywhere
 
 - **Fully responsive UI**, designed for touch from the start
-- **Mobile-friendly terminal**: touch selection, paste, proper scrollbar, scroll/select toggle, support for tmux and alternate-screen apps
-- **Extra keys bar** (Essentials / More / F-keys) with modifiers (tap for one-shot, double-tap to lock), arrow keys, special characters, function keys
+- **Mobile-friendly terminal**: touch selection, paste, proper scrollbar, scroll/select toggle, tmux and alternate-screen apps — and several at once with an optional custom `tmux.conf`
+- **Extra keys bar** (Essentials / More / F-keys) with modifiers, arrow keys, special characters, and function keys
 - **User-defined key combos** and reusable text snippets for the terminal
-- **Tunnel-ready**: combined with a tunnel ([Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/), [ngrok](https://ngrok.com/), [Tailscale Funnel](https://tailscale.com/docs/features/tailscale-funnel), …), TwiCC turns a phone into a usable Claude or Codex frontend — see [Remote access](#remote-access) below
+- **Settings sync**: your settings, snippets, layouts, and presets follow you across devices
+- **Tunnel-ready**: pair with a tunnel ([Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/), [ngrok](https://ngrok.com/), [Tailscale Funnel](https://tailscale.com/docs/features/tailscale-funnel), …) to use TwiCC from your phone — see [Remote access](#remote-access)
 
-### Productivity
+### The conversation
 
-- **Dockable layout**: arrange a session's tool tabs (Files, Git, Terminal, Artifacts, …) into a multi-pane workspace — dock them around the chat to see several at once, resize and maximize panes, and save named layouts with per-project and global defaults
-- **Artifacts**: agents can produce rendered artifacts — images, formatted reports, and interactive HTML playgrounds (which can make outbound network requests you approve per host) — displayed inside TwiCC and bookmarkable for quick access in a dedicated view
-- **Command palette** (Ctrl+K / Cmd+K): jump to any project, session, or workspace, change session settings, and trigger common actions from a single keyboard-driven menu
-- **Session switcher**: hold Ctrl and tap the key above Tab (the backtick on QWERTY) to flip between your recently-visited sessions; add Shift to pick from the sessions shown in the sidebar instead
-- **Session list multi-select**: select several sessions at once and apply batch actions — pin, mark read/unread, archive, and more
-- **External notifications**: push to your devices via [Apprise](https://appriseit.com) (ntfy, Pushover, Telegram, and 130+ other services), with a per-target "only when you're away" option
-- **Slash commands and file references**: `/` for Claude Code skills and commands, `$` for Codex skills, `@` for the file picker — all from the message input
-- **Message snippets**: reusable text snippets with placeholders, scoped globally or per-project, for the prompts you keep retyping
-- **Inline code comments**: click a line number in a code block to annotate, then send a formatted review comment back to the agent — human review of AI-generated code, right from the browser
-- **Selection comments**: select text in Chat, Files, Git, or Terminal to copy it or attach a comment, then send the selection and your note back to the agent, preformatted and ready to go
+- **Live conversation**: full tool-use details, real-time streaming of text and thinking, rich rendering (markdown, code, Mermaid, images with pan/zoom), and image/file attachments
+- **Display modes**: collapse tool-call groups, switch between a simplified and a full view, and optionally show message timestamps and day dividers
+- **Slash commands and file references**: `/` for Claude Code, `$` for Codex, `@` for files — from the message input
+- **Snippets and history**: reusable text snippets with placeholders (global or per-project), plus a picker to reuse earlier messages
+- **Drafts**: unsent messages and new sessions are saved locally and survive a reload
+
+### Code and files
+
+- **File browser and editor**: browse, view, and edit project files right in the browser
+- **Git integration**: log, diffs (including side-by-side image diff), commit details
+- **Inline code comments**: click a line number to annotate, then send a formatted review back to the agent
+- **Selection comments**: select text in Chat, Files, Git, or Terminal to quote it or attach a note for the agent
+
+### Stay on top of your sessions
+
+- **Unread tracking**: new assistant content is flagged per session and rolled up to the project
+- **Notifications**: get pinged when a session needs you — a turn finishes, or an approval or question is waiting — via sound and browser notifications
+- **External notifications**: push to your devices via [Apprise](https://appriseit.com) (ntfy, Pushover, Telegram, 130+ services), with an "only when away" option
+- **Always show active sessions**: surface running and unread sessions from other scopes, so you never lose track
+
+### Organizing your sessions
+
+- **Pinned sessions**: pin to a project, a workspace, or everywhere — pinned sessions stay on top in each context
+- **Session switcher**: hold Ctrl and tap the key above Tab to flip between recent sessions
+- **Batch actions**: multi-select sessions to pin, mark read/unread, or archive at once
+- **Automatic titles**: each session gets a suggested title on its own
+- **Archiving**: archive projects and sessions, including bulk archive of old ones
+
+### Layout and artifacts
+
+- **Dockable layout**: arrange a session's tool tabs into a multi-pane workspace, resize and maximize panes, and save named layouts with per-project and global defaults
+- **Artifacts**: agents produce rendered artifacts — images, reports, interactive HTML playgrounds (with network calls you approve per host) — shown inside TwiCC and bookmarkable in a dedicated view
+- **Themes**: light/dark color scheme and several visual themes with a customizable accent color
+
+### Search and navigation
+
+- **Command palette** (Ctrl+K / Cmd+K): jump to any project, session, or workspace, change settings, and trigger actions
 - **Full-text search** across all sessions (Ctrl+Shift+F), plus in-session search (Ctrl+F)
-- **Multiple simultaneous terminals**, with optional custom `tmux.conf`
-- **Git integration**: log, diffs (including side-by-side image diff), file browser, commit details
-- **Project and session archiving** (including bulk archive of old sessions)
+- **Bookmarkable URLs**: the open tab, file, and commit live in the URL — Back/Forward, reload, and open-in-new-tab all work
 
 ### Costs, usage and activity
 
 - **Cost tracking** per session and per project
 - **Quota graphs and burn rate** for the Claude Code and Codex 5h / 7-day windows
-- **Extra usage alerts**: get notified when a provider starts drawing on your paid extra-usage credits
+- **Extra usage alerts** when a provider starts drawing on your paid extra-usage credits
 - **Activity heatmaps and stats** — daily and weekly, per project, per workspace, and across all projects
 
 ### Workspaces and projects
@@ -98,7 +123,8 @@ uv tool upgrade twicc
 - **Workspaces**: group projects into named, color-coded buckets, with optional auto-add by directory pattern
 - **Workspace scoping**: session list, search, snippets, and aggregated stats, all per workspace
 - **Workspace-level tabs**: Files, Git, and Terminal, in addition to the per-project ones
-- **Git worktree support** across the app: create a worktree in a couple of clicks, and existing ones are detected and surfaced, with their sessions, cost, and activity rolling up into the main repository
+- **Git worktree support**: create one in a couple of clicks; existing ones are detected and surfaced, with their sessions, cost, and activity rolling up to the main repo
+- **Per-project trust**: builds on Claude Code's and Codex's own trust into a single per-project level that gates what your sessions can do
 
 ### Self-aware: agent skills and CLI
 
@@ -120,11 +146,9 @@ See [`ORCHESTRATION.md`](ORCHESTRATION.md).
 
 ## How it works
 
-TwiCC reads the JSONL data files written by each provider and indexes them into a local SQLite database (`~/.twicc/db/data.sqlite`). Claude Code sessions are read from `~/.claude/projects/`; Codex sessions are read from `~/.codex/sessions/`. **Provider data files remain the source of truth** — TwiCC never modifies them. Whether you use Claude Code or Codex directly from the terminal or through TwiCC, everything shows up in the same place.
+TwiCC reads the JSONL data files written by each provider and indexes them into a local SQLite database (`~/.twicc/db/data.sqlite`). Claude Code sessions are read from `~/.claude/projects/`; Codex sessions are read from `~/.codex/sessions/`. **Provider data files remain the source of truth** — TwiCC never modifies them. Whether you use Claude Code or Codex directly from the terminal or through TwiCC, everything shows up in the same place. On each startup it re-syncs any changes, and while running it keeps watching for new and updated sessions.
 
 When you start a session or send messages through TwiCC, it uses the provider SDK under the hood: the [Claude Agent SDK](https://github.com/anthropics/claude-code-sdk-python) for Claude Code and OpenAI's vendored Codex SDK for Codex. This means it uses your existing provider credentials and configuration — there is nothing extra to set up. The conversation data written by the provider is then picked up by TwiCC's file watcher and broadcast to the UI in real time over WebSocket.
-
-On each startup, TwiCC detects changes and updates its database accordingly. While running, it watches the filesystem for new sessions and updates them in real time.
 
 ## Remote access
 
@@ -191,7 +215,7 @@ Delete `~/.twicc/db/data.sqlite*` and restart TwiCC. It will rebuild from the pr
 
 For Claude Code sessions, TwiCC uses the official [Claude Agent SDK](https://github.com/anthropics/claude-code-sdk-python) with the Claude Code system prompt. This is permitted by Anthropic's terms of service.
 
-**Billing change on June 15, 2026:** until that date, SDK usage is billed against the same plan quota as the regular Claude Code CLI. Starting **June 15, 2026**, Anthropic moves SDK usage to a **separate, plan-specific credits quota** dedicated to the SDK. In practice, TwiCC sessions will no longer share the Claude Code plan quota and may be more constrained depending on your plan tier — see Anthropic's documentation for details.
+**Billing change (announced, then postponed):** Anthropic had announced that, starting June 15, 2026, SDK usage would move to a **separate, plan-specific credits quota** instead of sharing the regular Claude Code plan quota. That change has since been **postponed**, so for now SDK usage is still billed against the same plan quota as the Claude Code CLI. Either way, TwiCC is ready: it ships a **hybrid mode** (currently dormant) that runs your Claude sessions through the real `claude` CLI instead of the SDK — keeping them on your plan's subscription quota while preserving every TwiCC feature. If the change ever lands, the hybrid mode can simply be switched on.
 
 ### Is this allowed by OpenAI?
 
