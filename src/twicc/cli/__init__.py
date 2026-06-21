@@ -1273,6 +1273,13 @@ from twicc.cli.update_project.command import update_project_app  # noqa: E402
 app.add_typer(update_project_app)
 
 
+# ``settings`` is a Typer group: the bare callback prints the full synced
+# settings JSON, and ``get`` retrieves a single key. Both are offline reads
+# with lazy Django setup inside their bodies, so importing here is cheap.
+from twicc.cli.settings.command import settings_app  # noqa: E402
+app.add_typer(settings_app)
+
+
 # ``info`` is a single read-only command taking zero or more positional
 # section names (presets, commands, models, agent-settings). The command
 # performs lazy Django setup inside its body, so importing it here stays
