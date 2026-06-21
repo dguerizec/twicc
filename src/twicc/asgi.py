@@ -670,6 +670,9 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
         elif msg_type == "rename_terminal":
             await self._handle_rename_terminal(content)
 
+        elif msg_type == "set_terminal_autoattach":
+            await self._handle_set_terminal_autoattach(content)
+
         elif msg_type == "validate_usage_dump_path":
             await self._handle_validate_usage_dump_path(content)
 
@@ -1870,6 +1873,7 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
             "terminal_context": terminal_context,
             "terminals": [t.index for t in terminals],
             "labels": {str(t.index): t.label for t in terminals if t.label},
+            "autoAttach": {str(t.index): True for t in terminals if t.auto_attach},
         })
 
     async def _handle_kill_terminal(self, data):
@@ -1933,6 +1937,37 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
                     "terminal_context": terminal_context,
                     "terminal_index": terminal_index,
                     "label": label,
+                },
+            },
+        )
+
+    async def _handle_set_terminal_autoattach(self, data):
+        """Handle set_terminal_autoattach: set/clear the auto-attach-into-children flag.
+
+        The flag is stored as a tmux user option (persists across reconnections) and
+        broadcast to all clients for cross-device sync. tmux-only by construction.
+        """
+        terminal_context = data.get("terminal_context")
+        terminal_index = data.get("terminal_index")
+        enabled = bool(data.get("enabled"))
+        if not terminal_context or terminal_index is None:
+            await self.send_json({"type": "error", "message": "Missing terminal_context or terminal_index"})
+            return
+
+        from twicc.terminal import set_tmux_terminal_autoattach
+
+        await asyncio.to_thread(set_tmux_terminal_autoattach, terminal_context, terminal_index, enabled)
+
+        # Broadcast to all clients (including the sender, for confirmation)
+        await self.channel_layer.group_send(
+            "updates",
+            {
+                "type": "broadcast",
+                "data": {
+                    "type": "terminal_autoattach_changed",
+                    "terminal_context": terminal_context,
+                    "terminal_index": terminal_index,
+                    "enabled": enabled,
                 },
             },
         )

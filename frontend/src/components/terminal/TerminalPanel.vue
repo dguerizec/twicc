@@ -243,6 +243,36 @@ const ancestorScopes = computed(() => {
     scopes.push({ scope: 'global', label: 'Global', contextKey: 'global' })
     return scopes
 })
+
+// Keys of ancestor terminals whose owner flagged them "auto-attach in children"
+// (the @twicc_autoattach tmux user option, surfaced via discovery + the
+// terminal_autoattach_changed broadcast). This is the source of truth for the
+// panel's NON-detachable (forced) tabs — derived, never written into the pool's
+// attachment registry, so toggling the parent flag makes the child tab appear/
+// disappear symmetrically. tmux-only (non-tmux scopes carry no backend flag).
+// Declared HERE (with ancestorScopes, before route reconciliation) to avoid a
+// TDZ: applyRouteTermIndex reads forcedKeys.value during the immediate route watch.
+const forcedKeys = computed(() => {
+    if (!ancestorsUseTmux.value) return []
+    const keys = []
+    for (const scope of ancestorScopes.value) {
+        for (const index of terminalTabsStore.indices[scope.contextKey] || []) {
+            if (terminalTabsStore.isAutoAttach(scope.contextKey, index)) {
+                keys.push(poolStore.keyFor(scope.contextKey, index))
+            }
+        }
+    }
+    return keys
+})
+const isForced = (key) => forcedKeys.value.includes(key)
+
+// Declared early (before the slot-publishing watchEffect, which calls
+// startModeFor() synchronously during setup). startModeFor reads
+// discoveryTimedOut; a `ref` is NOT hoisted like the function is, so declaring it
+// down in the "Main-terminal start decision" section caused a TDZ when a panel
+// mounts active with no tmux session discovered yet (indices === undefined).
+const discoveryTimedOut = ref(false)
+
 // Slot elements by pool key (filled by template function refs).
 const slotEls = reactive({})
 function setSlotEl(key, el) {
@@ -658,7 +688,9 @@ function applyRouteTermIndex(target) {
     // Attached parent-scope terminal (route token decoded to a pool key).
     if (typeof target === 'string') {
         pendingRouteTermIndex.value = null
-        if (poolStore.attachmentsFor(props.contextKey).includes(target) || attachKeyFromRoute(target)) {
+        if (poolStore.attachmentsFor(props.contextKey).includes(target)
+            || forcedKeys.value.includes(target)
+            || attachKeyFromRoute(target)) {
             unavailableRouteTermIndex.value = undefined
             syncActiveAttached(target)
         } else {
@@ -883,7 +915,7 @@ const attachSections = computed(() => {
                     projectId: scope.projectId ?? null,
                     cwd: scope.cwd ?? null,
                     label,
-                    attached: myAttached.includes(key),
+                    attached: myAttached.includes(key) || forcedKeys.value.includes(key),
                 }
             })
             return { scope: scope.scope, label: scope.label, items }
@@ -893,28 +925,39 @@ const attachSections = computed(() => {
 
 // Attached tabs for this panel (read from the pool), with a reactive display
 // label "<Scope>: <terminal name>" (the name follows an ancestor-level rename).
-const attachedTabs = computed(() =>
-    poolStore.attachmentsFor(props.contextKey)
+const attachedTabs = computed(() => {
+    const manual = poolStore.attachmentsFor(props.contextKey)
+    // Forced first (in ancestor order), then any manual-only extras. A key that
+    // is both forced and manual renders once, as forced (non-detachable).
+    const orderedKeys = [...forcedKeys.value, ...manual.filter((k) => !forcedKeys.value.includes(k))]
+    return orderedKeys
         .map((key) => {
+            const forced = isForced(key)
+            // Prefer the live pool descriptor; for a forced key whose owner panel
+            // was never opened this session, synthesize from the ancestor scope.
             const d = poolStore.descriptors[key]
-            if (!d) return null
-            const scope = ancestorScopes.value.find((s) => s.contextKey === d.contextKey)
-            const scopeLabel = scope ? scope.label : d.contextKey
+            const hash = key.lastIndexOf('#')
+            const contextKey = key.slice(0, hash)
+            const index = Number.parseInt(key.slice(hash + 1), 10)
+            const scope = ancestorScopes.value.find((s) => s.contextKey === contextKey)
+            if (!d && !scope) return null // unknown ancestor (data not loaded yet) → skip
+            const projectId = d?.projectId ?? scope?.projectId ?? null
+            const cwd = d?.cwd ?? scope?.cwd ?? null
+            const scopeLabel = scope ? scope.label : contextKey
+            // Label source MUST match the original: tmux → store label (cross-device,
+            // from discovery); non-tmux → the live descriptor's client-side label
+            // (terminalTabsStore.labels is fed only by tmux-only messages, so
+            // getLabel() is '' in non-tmux mode). Forced tabs are tmux-only.
             const foreignLabel = (ancestorsUseTmux.value
-                ? terminalTabsStore.getLabel(d.contextKey, d.index)
-                : d.label) || defaultLabel(d.index)
+                ? terminalTabsStore.getLabel(contextKey, index)
+                : (d?.label || terminalTabsStore.getLabel(contextKey, index))) || defaultLabel(index)
             return {
-                key,
-                contextKey: d.contextKey,
-                index: d.index,
-                projectId: d.projectId,
-                cwd: d.cwd,
-                scopeLabel,
+                key, contextKey, index, projectId, cwd, forced, scopeLabel,
                 displayLabel: `${scopeLabel}: ${foreignLabel}`,
             }
         })
         .filter(Boolean)
-)
+})
 
 /** Discover the terminals of every tmux ancestor scope (called when the menu
  *  opens). Non-tmux scopes are read live from the pool — nothing to fetch. */
@@ -924,6 +967,24 @@ function requestAncestorDiscovery() {
         sendWsMessage({ type: 'list_terminals', terminal_context: scope.contextKey })
     }
 }
+
+// Proactively discover ancestor terminals (and thus their AutoAttach flags) once
+// the panel is active, so forced tabs appear without opening the attach menu.
+// Only fetch scopes still unknown to the store (the `=== undefined` guard prevents
+// spam); the terminal_autoattach_changed / _renamed / _killed broadcasts keep them
+// fresh afterwards. The ancestor-key dep re-runs it if scopes load late.
+watch(
+    [() => props.active, () => dataStore.wsConnected, () => ancestorScopes.value.map((s) => s.contextKey).join('|')],
+    () => {
+        if (!props.active || !ancestorsUseTmux.value || !dataStore.wsConnected) return
+        for (const scope of ancestorScopes.value) {
+            if (terminalTabsStore.indices[scope.contextKey] === undefined) {
+                sendWsMessage({ type: 'list_terminals', terminal_context: scope.contextKey })
+            }
+        }
+    },
+    { immediate: true },
+)
 
 /** Attach an ancestor terminal, or focus it if already attached. */
 function attachTerminal(item) {
@@ -952,7 +1013,40 @@ function detachTerminal(key) {
 }
 
 function handleDetach() {
-    if (activeAttachedKey.value !== null) detachTerminal(activeAttachedKey.value)
+    // Forced (auto-attached) tabs cannot be detached from a child — only the
+    // owning ancestor panel can turn the flag off.
+    if (activeAttachedKey.value !== null && !isForced(activeAttachedKey.value)) {
+        detachTerminal(activeAttachedKey.value)
+    }
+}
+
+// --- AutoAttach-in-children (owner side) ------------------------------------
+// Shown only when ALL hold: the panel's own scope can be an ancestor of others
+// (global / p: / w:); it is tmux-backed (the flag is a tmux user option); and a
+// real tmux SESSION exists for the active tab. The last point matters: the flag
+// lives on the tmux session, so there is nothing to pin for a Main that was never
+// started (its "Start terminal" state) or any index without a live tmux session.
+// `terminalTabsStore.indices` is the discovered set of live tmux sessions here —
+// the same source startModeFor() trusts.
+const canBroadcast = computed(() =>
+    isAncestorScope(props.contextKey)
+    && usesTmux.value
+    && (terminalTabsStore.indices[props.contextKey] || []).includes(activeIndex.value))
+// AutoAttach flag of the active OWN tab (the toggle's target).
+const activeOwnAutoAttach = computed(() =>
+    terminalTabsStore.isAutoAttach(props.contextKey, activeIndex.value))
+
+function toggleAutoAttach() {
+    if (isActiveAttached.value) return
+    const next = !activeOwnAutoAttach.value
+    // Optimistic local write; the broadcast confirms cross-device.
+    terminalTabsStore.setAutoAttach(props.contextKey, activeIndex.value, next)
+    sendWsMessage({
+        type: 'set_terminal_autoattach',
+        terminal_context: props.contextKey,
+        terminal_index: activeIndex.value,
+        enabled: next,
+    })
 }
 
 // Keep `activeAttachedKey` valid: when its tab leaves the attachment list (manual
@@ -961,7 +1055,12 @@ function handleDetach() {
 watch(
     () => poolStore.attachmentsFor(props.contextKey).slice(),
     (keys) => {
-        if (activeAttachedKey.value !== null && !keys.includes(activeAttachedKey.value)) {
+        // A forced (auto-attached) key is never in `attachments`, so guard against
+        // it here — otherwise an unrelated manual attach/detach would yank an
+        // active forced tab off-screen.
+        if (activeAttachedKey.value !== null
+            && !keys.includes(activeAttachedKey.value)
+            && !forcedKeys.value.includes(activeAttachedKey.value)) {
             activeAttachedKey.value = keys.length ? keys[keys.length - 1] : null
         }
     },
@@ -1007,8 +1106,27 @@ watchEffect(() => {
     }
     for (const tab of attachedTabs.value) {
         wanted.add(tab.key)
-        // The descriptor is owned by the home panel — only relocate it here.
-        poolStore.setSlotTarget(tab.key, slotEls[tab.key], activeAttachedKey.value === tab.key)
+        const isActive = activeAttachedKey.value === tab.key
+        if (tab.forced && !poolStore.descriptors[tab.key]) {
+            // Forced tab whose owner panel was never opened this session — create
+            // the instance here. setSlotTarget would early-return on the missing
+            // descriptor (blank tab); setSlot materializes it. persist:false → tmux
+            // is re-attachable, so a GC on navigation is fine (rebuilt from the flag).
+            poolStore.setSlot(tab.key, {
+                contextKey: tab.contextKey,
+                index: tab.index,
+                projectId: tab.projectId,
+                sessionId: null,
+                cwd: tab.cwd,
+                startMode: 'auto',
+                label: tab.displayLabel,
+                persist: false,
+            }, slotEls[tab.key], isActive)
+        } else {
+            // Descriptor owned by the home panel (manual) or already materialized
+            // (forced) — only relocate it here.
+            poolStore.setSlotTarget(tab.key, slotEls[tab.key], isActive)
+        }
     }
     for (const key of [...publishedKeys]) {
         if (!wanted.has(key)) {
@@ -1078,7 +1196,8 @@ watch(
 // Other sub-tabs auto-connect as before. Existence comes from the list_terminals discovery above (main
 // WS, no PTY). startMode per index: 'auto' (connect/attach), 'manual' (show Start), 'pending' (discovery
 // not back yet) — with a 4s safety net so a dropped discovery never strands the Main on a blank area.
-const discoveryTimedOut = ref(false)
+// discoveryTimedOut is declared early (pool-slots section) to avoid a TDZ in the
+// slot-publishing watchEffect → startModeFor path.
 let discoveryTimer = null
 watch(
     () => props.active,
@@ -1399,6 +1518,21 @@ defineExpose({ activeIndex })
 
                 <wa-divider v-if="tb.isConnected" orientation="vertical"></wa-divider>
 
+                <!-- AutoAttach into children — owner toggle (tmux ancestor scopes only) -->
+                <template v-if="canBroadcast && !isActiveAttached">
+                    <wa-button
+                        id="terminal-autoattach-button"
+                        variant="neutral"
+                        :appearance="activeOwnAutoAttach ? 'filled' : 'plain'"
+                        size="small"
+                        class="autoattach-button reduced-height"
+                        @click="toggleAutoAttach"
+                    >
+                        <wa-icon name="thumbtack" :label="activeOwnAutoAttach ? 'Disable auto-attach in children' : 'Auto-attach in children'"></wa-icon>
+                    </wa-button>
+                    <AppTooltip for="terminal-autoattach-button">{{ activeOwnAutoAttach ? 'Auto-attached in children — click to stop' : 'Auto-attach this terminal in children' }}</AppTooltip>
+                </template>
+
                 <!-- Rename button — own tabs only (attached tabs are renamed at their own level) -->
                 <template v-if="!isActiveAttached">
                     <wa-button
@@ -1414,8 +1548,9 @@ defineExpose({ activeIndex })
                     <AppTooltip for="terminal-rename-button">Rename tab</AppTooltip>
                 </template>
 
-                <!-- Detach button — for an attached parent terminal (never kills its tmux) -->
-                <template v-if="isActiveAttached">
+                <!-- Detach button — for a MANUALLY attached parent terminal (never kills its
+                     tmux). Forced (auto-attached) tabs cannot be detached from a child. -->
+                <template v-if="isActiveAttached && !isForced(activeAttachedKey)">
                     <wa-button
                         id="terminal-detach-button"
                         variant="neutral"

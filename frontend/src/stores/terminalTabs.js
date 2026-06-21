@@ -6,6 +6,9 @@ export const useTerminalTabsStore = defineStore('terminalTabs', {
         indices: {},
         // contextKey → { terminalIndex: label } — labels from tmux user options
         labels: {},
+        // contextKey → { terminalIndex: true } — "auto-attach into children" flags
+        // from the @twicc_autoattach tmux user option (only truthy entries kept)
+        autoAttach: {},
     }),
     actions: {
         setIndices(contextKey, terminalIndices) {
@@ -26,6 +29,9 @@ export const useTerminalTabsStore = defineStore('terminalTabs', {
             }
             if (this.labels[contextKey]) {
                 delete this.labels[contextKey][index]
+            }
+            if (this.autoAttach[contextKey]) {
+                delete this.autoAttach[contextKey][index]
             }
         },
         setLabels(contextKey, labelsMap) {
@@ -48,6 +54,27 @@ export const useTerminalTabsStore = defineStore('terminalTabs', {
         },
         getLabel(contextKey, index) {
             return this.labels[contextKey]?.[index] || ''
+        },
+        setAutoAttachMap(contextKey, map) {
+            this.autoAttach[contextKey] = {}
+            for (const [index, enabled] of Object.entries(map || {})) {
+                if (enabled) {
+                    this.autoAttach[contextKey][Number(index)] = true
+                }
+            }
+        },
+        setAutoAttach(contextKey, index, enabled) {
+            if (!this.autoAttach[contextKey]) {
+                this.autoAttach[contextKey] = {}
+            }
+            if (enabled) {
+                this.autoAttach[contextKey][index] = true
+            } else {
+                delete this.autoAttach[contextKey][index]
+            }
+        },
+        isAutoAttach(contextKey, index) {
+            return !!this.autoAttach[contextKey]?.[index]
         },
     },
 })

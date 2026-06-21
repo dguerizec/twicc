@@ -80,6 +80,10 @@ TERMINAL_LABEL_MAX_LENGTH = 30
 # tmux user option name for storing terminal labels
 _TMUX_LABEL_OPTION = "@twicc_label"
 
+# tmux user option flagging a terminal to auto-attach into descendant panels
+# (set to "1" when enabled, unset otherwise). Read back in list_tmux_terminals.
+_TMUX_AUTOATTACH_OPTION = "@twicc_autoattach"
+
 # tmux user option flagging a session as "used": set (to "1") on the FIRST byte of input written
 # to its PTY, from any source (typing, snippets, an auto-injected provider-login command). Read by
 # the tmux reaper (twicc.tmux_cleanup_task) to spare used sessions. MUST be set per-session
@@ -88,9 +92,10 @@ TMUX_USED_OPTION = "@twicc_used"
 
 
 class TerminalInfo(NamedTuple):
-    """A terminal's index and optional display label from tmux."""
+    """A terminal's index and metadata read from tmux."""
     index: int
     label: str  # empty string if no custom label set
+    auto_attach: bool = False  # mirrors the @twicc_autoattach user option
 
 
 @sync_to_async
@@ -458,7 +463,7 @@ def list_tmux_terminals(terminal_context: str) -> list[TerminalInfo]:
     try:
         result = subprocess.run(
             [tmux_path, "-L", tmux_socket_for(terminal_context), "list-sessions",
-             "-F", "#{session_name}\t#{@twicc_label}"],
+             "-F", "#{session_name}\t#{@twicc_label}\t#{@twicc_autoattach}"],
             capture_output=True,
             text=True,
             timeout=5,
@@ -473,13 +478,18 @@ def list_tmux_terminals(terminal_context: str) -> list[TerminalInfo]:
     for line in result.stdout.strip().split("\n"):
         if not line:
             continue
-        name, _, label = line.partition("\t")
+        # split() (not partition()) so we can read the third column; an unset
+        # user option expands to "" → label "" / auto_attach False.
+        parts = line.split("\t")
+        name = parts[0]
+        label = parts[1] if len(parts) > 1 else ""
+        auto_attach = len(parts) > 2 and parts[2] == "1"
         if name == prefix:
-            terminals.append(TerminalInfo(index=0, label=label))
+            terminals.append(TerminalInfo(index=0, label=label, auto_attach=auto_attach))
         elif name.startswith(prefix + "__"):
             suffix = name[len(prefix) + 2:]
             try:
-                terminals.append(TerminalInfo(index=int(suffix), label=label))
+                terminals.append(TerminalInfo(index=int(suffix), label=label, auto_attach=auto_attach))
             except ValueError:
                 continue
     return sorted(terminals, key=lambda t: t.index)
@@ -572,6 +582,36 @@ def _unset_tmux_terminal_label(terminal_context: str, terminal_index: int) -> bo
     try:
         result = subprocess.run(
             [tmux_path, "-L", tmux_socket_for(terminal_context), "set-option", "-u", "-t", name, _TMUX_LABEL_OPTION],
+            capture_output=True, timeout=5,
+        )
+        return result.returncode == 0
+    except (subprocess.TimeoutExpired, OSError):
+        return False
+
+
+def set_tmux_terminal_autoattach(terminal_context: str, terminal_index: int, enabled: bool) -> bool:
+    """Set/clear the "auto-attach into children" flag on a tmux terminal session.
+
+    Stored as a tmux user option (``@twicc_autoattach`` = ``"1"``) on the session,
+    read back via ``list_tmux_terminals``. Twin of ``set_tmux_terminal_label``.
+
+    Returns True on success, False on failure (tmux not installed, no session…).
+    """
+    if not enabled:
+        return _unset_tmux_terminal_autoattach(terminal_context, terminal_index)
+    return tmux_set_option(terminal_context, _TMUX_AUTOATTACH_OPTION, "1", terminal_index)
+
+
+def _unset_tmux_terminal_autoattach(terminal_context: str, terminal_index: int) -> bool:
+    """Remove the auto-attach user option from a tmux terminal session."""
+    tmux_path = get_tmux_path()
+    if tmux_path is None:
+        return False
+
+    name = tmux_session_name(terminal_context, terminal_index)
+    try:
+        result = subprocess.run(
+            [tmux_path, "-L", tmux_socket_for(terminal_context), "set-option", "-u", "-t", name, _TMUX_AUTOATTACH_OPTION],
             capture_output=True, timeout=5,
         )
         return result.returncode == 0

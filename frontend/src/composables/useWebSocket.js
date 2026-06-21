@@ -1258,6 +1258,7 @@ export function useWebSocket() {
                     if (msg.labels) {
                         store.setLabels(msg.terminal_context, msg.labels)
                     }
+                    store.setAutoAttachMap(msg.terminal_context, msg.autoAttach || {})
                 })
                 break
             case 'terminal_created':
@@ -1273,6 +1274,11 @@ export function useWebSocket() {
             case 'terminal_renamed':
                 import('../stores/terminalTabs').then(({ useTerminalTabsStore }) => {
                     useTerminalTabsStore().setLabel(msg.terminal_context, msg.terminal_index, msg.label)
+                })
+                break
+            case 'terminal_autoattach_changed':
+                import('../stores/terminalTabs').then(({ useTerminalTabsStore }) => {
+                    useTerminalTabsStore().setAutoAttach(msg.terminal_context, msg.terminal_index, !!msg.enabled)
                 })
                 break
             case 'stream_block_start':
