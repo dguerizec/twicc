@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import typer
 
+from twicc.cli.settings.notifications import notifications_app
 from twicc.cli.settings.provider import provider_app
 
 settings_app = typer.Typer(
@@ -28,6 +29,7 @@ settings_app = typer.Typer(
 )
 
 settings_app.add_typer(provider_app)
+settings_app.add_typer(notifications_app)
 
 
 def build_settings_dump() -> dict:

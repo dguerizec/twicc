@@ -309,3 +309,293 @@ def test_set_default_accepts_enabled_provider():
     disabled = ["codex"]  # only codex is disabled
     should_reject = provider in disabled
     assert should_reject is False
+
+
+# ---------------------------------------------------------------------------
+# Task 10 — pure notification-target list edits (_targets.py)
+# ---------------------------------------------------------------------------
+
+
+def test_add_target_generates_id_and_defaults():
+    from twicc.cli.settings._targets import add_target
+    new = add_target([], url="json://x", name="n", flags={})
+    assert new[-1]["url"] == "json://x" and new[-1]["id"] and new[-1]["tested"] is None
+    assert new[-1]["enabled"] is True
+
+
+def test_update_target_resets_tested_on_url_change():
+    from twicc.cli.settings._targets import update_target
+    targets = [{"id": "a", "url": "json://x", "tested": True}]
+    out = update_target(targets, "a", {"url": "json://y"})
+    assert out[0]["url"] == "json://y" and out[0]["tested"] is None
+
+
+def test_remove_and_missing_id_errors():
+    from twicc.cli.settings._targets import remove_target, find_target, TargetNotFound
+    targets = [{"id": "a"}]
+    assert remove_target(targets, "a") == []
+    with pytest.raises(TargetNotFound):
+        find_target(targets, "zzz")
+
+
+def test_add_target_defaults_all_notify_flags():
+    from twicc.cli.settings._targets import add_target
+    new = add_target([], url="json://x", name="", flags={})
+    t = new[-1]
+    assert t["notifyUserTurn"] is True
+    assert t["notifyPendingRequest"] is True
+    assert t["notifyExtraUsageStart"] is True
+    assert t["awayOnly"] is True
+
+
+def test_add_target_flags_override_defaults():
+    from twicc.cli.settings._targets import add_target
+    new = add_target([], url="json://x", name="", flags={"enabled": False, "awayOnly": False})
+    t = new[-1]
+    assert t["enabled"] is False
+    assert t["awayOnly"] is False
+    # Unoverridden defaults stay.
+    assert t["notifyUserTurn"] is True
+
+
+def test_add_target_does_not_mutate_input():
+    from twicc.cli.settings._targets import add_target
+    original = [{"id": "existing", "url": "json://a"}]
+    result = add_target(original, url="json://b", name="", flags={})
+    assert len(original) == 1
+    assert len(result) == 2
+
+
+def test_update_target_preserves_tested_when_url_unchanged():
+    from twicc.cli.settings._targets import update_target
+    targets = [{"id": "a", "url": "json://x", "tested": True, "name": "old"}]
+    out = update_target(targets, "a", {"name": "new"})
+    assert out[0]["name"] == "new"
+    assert out[0]["tested"] is True  # not reset
+
+
+def test_update_target_does_not_mutate_input():
+    from twicc.cli.settings._targets import update_target
+    original = [{"id": "a", "url": "json://x", "tested": True}]
+    update_target(original, "a", {"url": "json://y"})
+    assert original[0]["tested"] is True  # original unchanged
+
+
+def test_update_target_raises_for_missing_id():
+    from twicc.cli.settings._targets import update_target, TargetNotFound
+    with pytest.raises(TargetNotFound):
+        update_target([{"id": "a"}], "zzz", {"name": "x"})
+
+
+def test_remove_target_does_not_mutate_input():
+    from twicc.cli.settings._targets import remove_target
+    original = [{"id": "a"}, {"id": "b"}]
+    result = remove_target(original, "a")
+    assert len(original) == 2
+    assert len(result) == 1
+    assert result[0]["id"] == "b"
+
+
+def test_remove_target_raises_for_missing_id():
+    from twicc.cli.settings._targets import remove_target, TargetNotFound
+    with pytest.raises(TargetNotFound):
+        remove_target([{"id": "a"}], "zzz")
+
+
+# ---------------------------------------------------------------------------
+# Task 11 — notifications list / add / update / remove
+# ---------------------------------------------------------------------------
+
+
+def test_notifications_list_projection_includes_globals(temp_settings):
+    """build_notifications_list returns targets + publicBaseUrl + notifyOnExtraUsageStart."""
+    from twicc.cli.settings.notifications import build_notifications_list
+
+    seeded = {
+        "externalNotificationTargets": [
+            {"id": "t1", "url": "json://x", "enabled": True},
+        ],
+        "publicBaseUrl": "https://example.com",
+        "notifyOnExtraUsageStart": False,
+    }
+    result = build_notifications_list(seeded)
+    assert result["externalNotificationTargets"] == seeded["externalNotificationTargets"]
+    assert result["publicBaseUrl"] == "https://example.com"
+    assert result["notifyOnExtraUsageStart"] is False
+
+
+def test_notifications_list_projection_defaults_when_absent():
+    """build_notifications_list falls back gracefully when keys are absent."""
+    from twicc.cli.settings.notifications import build_notifications_list
+
+    result = build_notifications_list({})
+    assert result["externalNotificationTargets"] == []
+    assert result["publicBaseUrl"] == ""
+    assert result["notifyOnExtraUsageStart"] is True
+
+
+def _build_add_patch(current_targets, url, name="", **toggles):
+    """Build the full-list patch for an add operation (pure, no server)."""
+    from twicc.cli.settings._targets import add_target
+    from twicc.cli.settings.notifications import _build_flags_dict
+
+    flags = _build_flags_dict(
+        toggles.get("enabled"),
+        toggles.get("user_turn"),
+        toggles.get("pending"),
+        toggles.get("extra_usage"),
+        toggles.get("away_only"),
+    )
+    new_list = add_target(current_targets, url=url, name=name, flags=flags)
+    return {"externalNotificationTargets": new_list}, new_list[-1]["id"]
+
+
+def _build_update_patch(current_targets, target_id, **kwargs):
+    """Build the full-list patch for an update operation (pure, no server).
+
+    Raises TargetNotFound if the id is missing.
+    """
+    from twicc.cli.settings._targets import update_target
+    from twicc.cli.settings.notifications import _build_flags_dict
+
+    patch = _build_flags_dict(
+        kwargs.get("enabled"),
+        kwargs.get("user_turn"),
+        kwargs.get("pending"),
+        kwargs.get("extra_usage"),
+        kwargs.get("away_only"),
+    )
+    if "url" in kwargs:
+        patch["url"] = kwargs["url"]
+    if "name" in kwargs:
+        patch["name"] = kwargs["name"]
+    new_list = update_target(current_targets, target_id, patch)
+    return {"externalNotificationTargets": new_list}
+
+
+def _build_remove_patch(current_targets, target_id):
+    """Build the full-list patch for a remove operation (pure, no server).
+
+    Raises TargetNotFound if the id is missing.
+    """
+    from twicc.cli.settings._targets import remove_target
+
+    new_list = remove_target(current_targets, target_id)
+    return {"externalNotificationTargets": new_list}
+
+
+def test_add_builds_expected_whole_list_patch():
+    """add builds a whole-list patch with the new target appended."""
+    existing = [{"id": "e1", "url": "json://a", "enabled": True, "tested": True}]
+    patch, new_id = _build_add_patch(existing, url="json://b", name="mine")
+    new_list = patch["externalNotificationTargets"]
+    assert len(new_list) == 2
+    assert new_list[0]["id"] == "e1"   # existing entry preserved
+    assert new_list[1]["url"] == "json://b"
+    assert new_list[1]["name"] == "mine"
+    assert new_list[1]["id"] == new_id
+    # defaults applied
+    assert new_list[1]["enabled"] is True
+    assert new_list[1]["notifyUserTurn"] is True
+    assert new_list[1]["awayOnly"] is True
+
+
+def test_add_with_explicit_toggles_overrides_defaults():
+    """Explicit --disabled / --no-away-only override the add_target defaults."""
+    patch, _ = _build_add_patch([], url="json://x", enabled=False, away_only=False)
+    t = patch["externalNotificationTargets"][0]
+    assert t["enabled"] is False
+    assert t["awayOnly"] is False
+    # Unoverridden defaults still apply.
+    assert t["notifyUserTurn"] is True
+    assert t["notifyPendingRequest"] is True
+
+
+def test_add_with_no_explicit_toggles_uses_all_defaults():
+    """No flags → all defaults from add_target apply."""
+    patch, _ = _build_add_patch([], url="json://x")
+    t = patch["externalNotificationTargets"][0]
+    assert t["enabled"] is True
+    assert t["notifyUserTurn"] is True
+    assert t["notifyPendingRequest"] is True
+    assert t["notifyExtraUsageStart"] is True
+    assert t["awayOnly"] is True
+    assert t["tested"] is None
+
+
+def test_update_builds_expected_whole_list_patch():
+    """update mutates only the target with the given id, rest unchanged."""
+    current = [
+        {"id": "t1", "url": "json://x", "enabled": True, "tested": True, "name": "old"},
+        {"id": "t2", "url": "json://y", "enabled": False, "tested": None, "name": "other"},
+    ]
+    patch = _build_update_patch(current, "t1", name="new", enabled=False)
+    new_list = patch["externalNotificationTargets"]
+    assert len(new_list) == 2
+    assert new_list[0]["id"] == "t1"
+    assert new_list[0]["name"] == "new"
+    assert new_list[0]["enabled"] is False
+    assert new_list[0]["tested"] is True  # url unchanged → tested preserved
+    # t2 untouched
+    assert new_list[1]["id"] == "t2"
+    assert new_list[1]["enabled"] is False
+
+
+def test_update_url_resets_tested():
+    """Changing --url via update resets tested to None."""
+    current = [{"id": "t1", "url": "json://x", "tested": True}]
+    patch = _build_update_patch(current, "t1", url="json://z")
+    t = patch["externalNotificationTargets"][0]
+    assert t["url"] == "json://z"
+    assert t["tested"] is None
+
+
+def test_update_raises_for_missing_id():
+    """update raises TargetNotFound for an unknown id."""
+    from twicc.cli.settings._targets import TargetNotFound
+
+    with pytest.raises(TargetNotFound):
+        _build_update_patch([{"id": "t1"}], "nonexistent", name="x")
+
+
+def test_remove_builds_expected_whole_list_patch():
+    """remove returns the list without the targeted entry."""
+    current = [
+        {"id": "t1", "url": "json://a"},
+        {"id": "t2", "url": "json://b"},
+    ]
+    patch = _build_remove_patch(current, "t1")
+    new_list = patch["externalNotificationTargets"]
+    assert len(new_list) == 1
+    assert new_list[0]["id"] == "t2"
+
+
+def test_remove_raises_for_missing_id():
+    """remove raises TargetNotFound for an unknown id."""
+    from twicc.cli.settings._targets import TargetNotFound
+
+    with pytest.raises(TargetNotFound):
+        _build_remove_patch([{"id": "t1"}], "nonexistent")
+
+
+# ---------------------------------------------------------------------------
+# Task 12 — notifications test + add --test
+# ---------------------------------------------------------------------------
+
+
+def test_notifications_test_missing_id_raises_target_not_found():
+    """find_target raises TargetNotFound for an id that does not exist (pure guard)."""
+    from twicc.cli.settings._targets import TargetNotFound, find_target
+
+    targets = [{"id": "t1", "url": "json://x"}]
+    with pytest.raises(TargetNotFound):
+        find_target(targets, "nonexistent-id")
+
+
+def test_notifications_test_existing_id_does_not_raise():
+    """find_target returns the target when the id exists (pure guard — no error)."""
+    from twicc.cli.settings._targets import find_target
+
+    targets = [{"id": "t1", "url": "json://x"}, {"id": "t2", "url": "json://y"}]
+    target = find_target(targets, "t2")
+    assert target["id"] == "t2"
