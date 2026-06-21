@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "twicc"
-version = "1.8.3"
+version = "1.9.0"
 description = "Claude Code and Codex Web UI"
 readme = "README.md"
 license = "MIT"
@@ -75,7 +75,7 @@ twicc = "twicc:main"
 # platform-agnostic `py3-none-any` wheel again.
 packages = ["src/twicc", "src/openai_codex"]
 artifacts = [
-    "src/twicc/static/frontend/**",
+    "src/twicc/static/**",
 ]
 
 [tool.hatch.build.targets.sdist]
@@ -85,7 +85,7 @@ artifacts = [
 # invocations (e.g. building the wheel from the extracted sdist) early-return
 # because index.html already exists.
 artifacts = [
-    "src/twicc/static/frontend/**",
+    "src/twicc/static/**",
 ]
 
 # Build hook (hatch_build.py) runs npm ci + npm run build before packaging so

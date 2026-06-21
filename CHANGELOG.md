@@ -4,16 +4,24 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). As a small deviation, each release opens with a one-line **Summary** recapping its highlights, and some entries include illustrative screenshots in nested sub-lists.
 
-## [Unreleased]
+## [1.9.0] - 2026-06-22
+
+### Summary
+
+- **v1.9.0: Layouts and Artifacts** — dock tool tabs into custom multi-pane layouts, render agent-made artifacts and rich file previews in-app, and recover from provider errors in one click.
 
 ### Added
 
 - **Dockable layout** — dock a session's tool tabs (Files, Git, Terminal, …) into a multi-pane layout around the chat — resize and maximize panes, and save named layouts with per-project and global defaults.
+  - ![Layout example](frontend/public/whats-new/v1.9/layout-example.webp)
 - **Artifacts** — agents can create artifacts (images, interactive playgrounds that make network calls you approve, …) rendered inside TwiCC and bookmarkable in a dedicated view (+CLI/skill/API).
+  - ![Artifacts example](frontend/public/whats-new/v1.9/artifacts-example.webp)
 - **File previews** — the file viewer renders HTML pages, Mermaid diagrams, PDFs, audio and video, with a full-window view.
 - **Error recovery** — after a provider error, a one-click resend or retry gets a stuck conversation moving again.
 - **Sidebar separators** — separators now group the session and artifacts lists by date and set off the sidebar's sections.
+  - ![Sidebar separators](frontend/public/whats-new/v1.9/sidebar-separators.webp)
 - **Attach parent terminals** — a session's terminal panel can show terminals shared from a higher scope.
+  - ![Terminal attachment](frontend/public/whats-new/v1.9/attach-terminal.webp)
 - **CLI session messages** — can now be filtered by text (`--contains`) from the CLI, skills and API.
 - **Terminal copy-on-select** — an optional setting to copy selected text to the clipboard automatically.
 - **Sidebar toggle** — show or hide the sidebar with `Alt+Shift+B`.
