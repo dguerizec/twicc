@@ -19,11 +19,15 @@ from __future__ import annotations
 
 import typer
 
+from twicc.cli.settings.provider import provider_app
+
 settings_app = typer.Typer(
     name="settings",
     help="Read (and in later tasks, write) synced settings.",
     invoke_without_command=True,
 )
+
+settings_app.add_typer(provider_app)
 
 
 def build_settings_dump() -> dict:
