@@ -670,6 +670,7 @@ const isCenterRouteActive = computed(() => isCenterTab(activeTabId.value))
 // with — and, fired before the click, preceded — the gesture's real action.
 let paneFocusRaf = null
 let paneFocusTab = null
+let paneFocusRoute = null
 function requestPaneFocus(tabId) {
     if (!tabId) return
     // Pure route claim — it does NOT focus the panel's content. Clicking inside a pane's body (or a
@@ -677,15 +678,26 @@ function requestPaneFocus(tabId) {
     // ACTIVATION does (tab-header click / keyboard / arrival), handled by requestPanelFocus elsewhere.
     paneFocusTab = tabId
     if (paneFocusRaf != null) return
+    // Snapshot the route at the gesture's start. The claim is the FALLBACK for a plain click; if the
+    // same click also navigated (a file/artifact/subagent link or a tree/commit/terminal selection in
+    // the chat or a pane), the route changes before this rAF resolves — drop the now-stale claim so it
+    // can't bounce the URL back to the center tab. This enforces "a navigating click wins" at the
+    // source instead of relying on every navigating handler to remember cancelPaneFocus (those calls
+    // stay valid and just short-circuit earlier). A plain focus claim leaves the route untouched until
+    // the rAF's own switchToTab, so it still goes through.
+    paneFocusRoute = route.fullPath
     paneFocusRaf = requestAnimationFrame(() => {
         paneFocusRaf = null
         const tab = paneFocusTab
+        const claimedAt = paneFocusRoute
         paneFocusTab = null
-        if (tab) switchToTab(tab)
+        paneFocusRoute = null
+        if (tab && route.fullPath === claimedAt) switchToTab(tab)
     })
 }
 function cancelPaneFocus() {
     paneFocusTab = null
+    paneFocusRoute = null
     if (paneFocusRaf != null) {
         cancelAnimationFrame(paneFocusRaf)
         paneFocusRaf = null
