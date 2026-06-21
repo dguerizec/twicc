@@ -4,6 +4,7 @@ import { useDataStore } from '../../stores/data.js'
 import { useSettingsStore } from '../../stores/settings.js'
 import { fetchChangelog, resolveImageLocalUrl, resolveImageGitHubUrl } from '../../utils/changelog.js'
 import { renderMarkdown } from '../../utils/markdown.js'
+import { openMediaPreview } from '../../composables/useMediaPreview'
 import { SPONSOR_URL } from '../../constants'
 
 const emit = defineEmits(['close'])
@@ -220,6 +221,21 @@ function onImageError(event, img) {
     }
 }
 
+// Open the clicked image in the shared full-size preview dialog (pan/zoom +
+// prev/next navigation across the slide's images). Items are built from the
+// rendered <img> siblings so each src reflects any local→GitHub fallback that
+// already happened inline (onImageError), matching MarkdownContent's behaviour.
+function onImageClick(event) {
+    const clicked = event.currentTarget
+    const imgs = Array.from(clicked.parentElement.querySelectorAll('img.changelog-image'))
+    const items = imgs.map(el => ({
+        type: 'image',
+        src: el.src,
+        name: el.getAttribute('alt') || 'Image',
+    }))
+    openMediaPreview(items, Math.max(0, imgs.indexOf(clicked)))
+}
+
 function versionOptionLabel(v) {
     if (v.version === COMBINED_VERSION_KEY) {
         return `v${v._previousVersion} → v${v._currentVersion}`
@@ -339,6 +355,7 @@ defineExpose({ open, close })
                             loading="lazy"
                             class="changelog-image"
                             @error="onImageError($event, img)"
+                            @click="onImageClick"
                         />
                     </div>
                 </div>
@@ -522,6 +539,7 @@ defineExpose({ open, close })
     border-radius: 8px;
     border: 1px solid var(--wa-color-neutral-200);
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    cursor: pointer;
 }
 
 html.wa-dark .changelog-image {
