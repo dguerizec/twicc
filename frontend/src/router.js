@@ -6,6 +6,7 @@ import LoginView from './views/LoginView.vue'
 import JsonTestView from './views/JsonTestView.vue'
 import GitLogTestView from './views/GitLogTestView.vue'
 import { useAuthStore } from './stores/auth'
+import { registerScopeMemory } from './utils/scopeMemory'
 
 const routes = [
     {
@@ -165,3 +166,7 @@ router.afterEach((to) => {
         window.history.replaceState(history.state, '', to.path + (search ? '?' + search : '') + (to.hash || ''))
     }
 })
+
+// Per-scope last-location memory — restore a scope's last screen when re-entering it.
+// Registered last so it sees the workspace-finalized `to` and records settled routes.
+registerScopeMemory(router)
