@@ -64,7 +64,8 @@ async def start_usage_sync_task() -> None:
     interval = CodexHelpers.USAGE_SYNC_INTERVAL
     stop_event = get_usage_sync_stop_event()
     wake_event = get_usage_wake_event()
-    # Reset for hot-restart support — see auth_task.start_auth_task().
+    # Reset for hot-restart support: clear the stop event so a relaunched
+    # task isn't killed by a stale set() left by the prior shutdown.
     stop_event.clear()
 
     logger.info("Codex usage sync task started")

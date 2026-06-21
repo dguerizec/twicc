@@ -6,7 +6,7 @@ Reads OAuth credentials from the system Keychain (macOS) or
 broadcasts changes to connected WebSocket clients.
 
 This module owns all credential reading. Other modules (usage.py,
-auth_task.py, ASGI consumer) consume from here.
+ASGI consumer) consume from here.
 """
 
 from __future__ import annotations
@@ -50,13 +50,14 @@ _TOKEN_REFRESH_TIMEOUT = 30
 # Cached last known auth state (None = never checked yet)
 _last_known_authenticated: bool | None = None
 
-# Event used by the auth_task to break out of its idle (authenticated) state
-# when something (manual recheck, SDK auth_failed signal, periodic flip to
-# False) suggests the state should be re-checked or polling should resume.
-_auth_wake_event: asyncio.Event | None = None
-
 # Timeout for the `claude auth status --json` subprocess call.
 _AUTH_STATUS_TIMEOUT = 10
+
+# Timeout for the throwaway SDK probe that *validates* the credentials against
+# the real API (distinct from, and slower than, the cheap local
+# ``claude auth status`` gate). Covers the full connect + query + result
+# round-trip.
+_AUTH_PROBE_TIMEOUT = 30
 
 
 def _read_credentials_from_keychain() -> dict | None:
@@ -252,6 +253,66 @@ async def _sdk_throwaway_call() -> None:
             pass
 
 
+async def probe_auth_via_sdk() -> bool | None:
+    """Validate the OAuth credentials against the *real* API via a throwaway call.
+
+    ``claude auth status`` (the gate) only inspects the local token (present +
+    unexpired) and will happily report ``loggedIn`` for a token the server
+    rejects with 401 — that mismatch is the root of the disappearing-login bug.
+    The only authoritative check is an actual API call, so when we need certainty
+    (the user-initiated "Check again") we run a minimal throwaway turn and watch
+    for the SDK's ``authentication_failed`` signal — the same one a real agent
+    turn raises.
+
+    Returns:
+        ``True``  — the API accepted the credentials.
+        ``False`` — the API rejected them (``authentication_failed``).
+        ``None``  — inconclusive (timeout, network, or any other error); the
+                    caller should keep the current state rather than guess.
+    """
+    from claude_agent_sdk import (
+        AssistantMessage,
+        ClaudeAgentOptions,
+        ClaudeSDKClient,
+        ResultMessage,
+    )
+
+    options = ClaudeAgentOptions(
+        model="haiku",
+        permission_mode="default",
+        extra_args={"no-session-persistence": None},
+        allowed_tools=[],
+        effort="low",
+    )
+    client = ClaudeSDKClient(options=options)
+
+    result: bool | None = None
+
+    async def _execute() -> None:
+        nonlocal result
+        await client.connect()
+        await client.query("ping")
+        async for msg in client.receive_messages():
+            if isinstance(msg, AssistantMessage) and msg.error == "authentication_failed":
+                result = False
+                return
+            if isinstance(msg, ResultMessage):
+                result = True
+                return
+
+    try:
+        await asyncio.wait_for(_execute(), timeout=_AUTH_PROBE_TIMEOUT)
+    except Exception as e:
+        logger.warning("Auth probe via SDK was inconclusive: %s", e)
+    finally:
+        try:
+            await client.disconnect()
+        except Exception:
+            pass
+
+    return result
+
+
 def _build_auth_message(authenticated: bool) -> dict:
     """Build the claude_code:auth_updated message payload."""
     return {
@@ -265,17 +326,6 @@ def get_last_known_authenticated() -> bool | None:
     return _last_known_authenticated
 
 
-def get_auth_wake_event() -> asyncio.Event:
-    """
-    Get (lazily create) the wake event used to interrupt the auth_task's
-    idle state. Set whenever the state is, or may have just become, False.
-    """
-    global _auth_wake_event
-    if _auth_wake_event is None:
-        _auth_wake_event = asyncio.Event()
-    return _auth_wake_event
-
-
 async def check_auth_status() -> bool:
     """
     Run ``claude auth status --json`` (Claude Code CLI command) and return ``loggedIn``.
@@ -284,9 +334,11 @@ async def check_auth_status() -> bool:
     avoids depending on how TwiCC itself was installed (uvx, pip, etc.).
 
     Returns False on any failure (process error, timeout, missing field,
-    invalid JSON). The CLI is the source of truth: it knows whether the
-    stored token is still server-side accepted, which we cannot tell by
-    just reading the credentials file.
+    invalid JSON). This is only a *local* check (token present + not expired):
+    it can still report ``loggedIn`` for a token the server rejects with 401,
+    which is why a real ``authentication_failed`` outranks it and why
+    ``check_and_broadcast`` never lets its ``true`` resurrect an authoritative
+    ``False`` (see there).
     """
     from .bin import resolve_bundled_binary
 
@@ -338,10 +390,9 @@ async def get_auth_message_for_connection() -> dict:
     """
     Build a claude_code:auth_updated message for a single client on WS connect.
 
-    Uses the cached state populated by ``auth_task``. If the cache is still
-    unknown (very first connection in a fresh process, before the auth_task
-    has run its first check), runs one inline so the connecting client
-    doesn't briefly see a wrong "not authenticated" state.
+    Uses the cached state. If it is still unknown (very first connection in a
+    fresh process), runs one check inline so the connecting client doesn't
+    briefly see a wrong "not authenticated" state.
     """
     if _last_known_authenticated is None:
         # Populate the cache now via check_and_broadcast (which also
@@ -350,22 +401,45 @@ async def get_auth_message_for_connection() -> dict:
     return _build_auth_message(bool(_last_known_authenticated))
 
 
-async def check_and_broadcast(*, force: bool = False) -> bool:
+async def check_and_broadcast(*, force: bool = False, probe: bool = False) -> bool | None:
     """
-    Run a Claude Code auth status check and broadcast claude_code:auth_updated on change.
+    Determine the Claude Code auth state and broadcast claude_code:auth_updated on change.
 
-    When ``force`` is True, the message is always broadcast (used to answer
-    a manual "Check again" request from the client, where echoing the
-    current state to the requester is desirable even without a change).
+    The local ``claude auth status`` gate is the cheap first signal, but its
+    ``loggedIn: true`` is NOT trusted on its own — it only reflects the local
+    token and lies when the server rejects it. (That mismatch was the bug: the
+    login prompt raised by a real 401 vanished the instant the next gate poll
+    re-broadcast ``true``.) So:
 
-    Always sets the wake event when the result is False so the auth_task
-    resumes/keeps polling.
+    - gate says *not* logged in → ``False`` (trustworthy: no usable credential).
+    - gate says logged in **and** ``probe=True`` → confirm with a real throwaway
+      API call. This is the user-initiated "Check again" — the only path that
+      may promote ``False`` → ``True`` (we never auto-probe on a timer).
+    - gate says logged in and ``probe=False`` → promote only from the unknown
+      baseline; never resurrect an authoritative ``False`` (set by a real 401 or
+      a failed probe) on the strength of the local gate alone.
 
-    Returns the current authenticated bool.
+    When ``force`` is True, the message is always broadcast (used to answer a
+    manual "Check again", where echoing the current state to the requester is
+    desirable even without a change).
+
+    Returns the current authenticated tristate (``True`` / ``False`` / ``None``
+    when a forced probe was inconclusive at the unknown baseline).
     """
     global _last_known_authenticated
 
-    authenticated = await check_auth_status()
+    gate = await check_auth_status()
+    if not gate:
+        authenticated: bool | None = False
+    elif probe:
+        probed = await probe_auth_via_sdk()
+        # Inconclusive → keep the current state rather than flip either way.
+        authenticated = _last_known_authenticated if probed is None else probed
+    else:
+        # Untrusted "true": never promote an authoritative False back to True;
+        # only the unknown baseline (or a True we already hold) may read as True.
+        authenticated = _last_known_authenticated is not False
+
     changed = authenticated != _last_known_authenticated
     _last_known_authenticated = authenticated
 
@@ -375,12 +449,9 @@ async def check_and_broadcast(*, force: bool = False) -> bool:
             "updates",
             {
                 "type": "broadcast",
-                "data": _build_auth_message(authenticated),
+                "data": _build_auth_message(bool(authenticated)),
             },
         )
-
-    if not authenticated:
-        get_auth_wake_event().set()
 
     return authenticated
 
@@ -393,8 +464,6 @@ async def mark_unauthenticated_and_broadcast() -> None:
     ``authentication_failed``) tells us the credentials are no longer
     accepted, even if a fresh ``claude auth status`` would still claim
     ``loggedIn`` (race / stale token).
-
-    Wakes the auth_task so it resumes polling.
     """
     global _last_known_authenticated
 
@@ -410,5 +479,3 @@ async def mark_unauthenticated_and_broadcast() -> None:
                 "data": _build_auth_message(False),
             },
         )
-
-    get_auth_wake_event().set()

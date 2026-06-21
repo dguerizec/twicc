@@ -316,3 +316,65 @@ async def _codex_sdk_throwaway_call() -> None:
         )
         async for _event in turn_handle.stream():
             pass  # drain — we don't care about the reply, just the side effect
+
+
+async def probe_auth_via_codex_sdk() -> bool | None:
+    """Validate the Codex OAuth credentials against the *real* API via a throwaway turn.
+
+    ``codex login status`` (the gate) is a local check; like Claude's, its
+    "logged in" verdict can outlive a server-side rejection. When we need
+    certainty (the user-initiated "Check again") we run one ephemeral turn and
+    watch the stream for the same terminal auth error the live agent treats as a
+    logout (:meth:`CodexAgent._is_unauthorized_error`), instead of blindly
+    draining like :func:`_codex_sdk_throwaway_call`.
+
+    Returns:
+        ``True``  — the turn ran to completion with no terminal auth error.
+        ``False`` — an unauthorized terminal error surfaced.
+        ``None``  — inconclusive (timeout / transport / other terminal error);
+                    the caller should keep the current state rather than guess.
+    """
+    # Lazy imports: ``agent.agent`` pulls this module at import time, so reusing
+    # its classifier here can only be done at call time to avoid an import cycle.
+    from openai_codex.generated.v2_all import ErrorNotification
+
+    from .agent.agent import CodexAgent
+
+    result: bool | None = None
+
+    async def _execute() -> None:
+        nonlocal result
+        bundled_bin = resolve_bundled_binary()
+        config = CodexConfig(codex_bin=str(bundled_bin))
+        async with TwiccAsyncCodex(config=config) as codex:
+            thread = await codex.thread_start_with_policy(
+                model=_REFRESH_MODEL,
+                ephemeral=True,
+                sandbox=SandboxMode.danger_full_access,
+                approval_policy=AskForApproval.model_validate("never"),
+            )
+            turn_handle = await thread.turn_with_policy(
+                TextInput(_REFRESH_PROMPT),
+                effort=ReasoningEffort.low,
+            )
+            async for event in turn_handle.stream():
+                payload = getattr(event, "payload", None)
+                # A non-retryable ``error`` notification is terminal. Auth ones
+                # mean "not logged in"; any other terminal error is ambiguous
+                # for an auth probe, so leave the state untouched (None).
+                if (
+                    getattr(event, "method", None) == "error"
+                    and isinstance(payload, ErrorNotification)
+                    and not payload.will_retry
+                ):
+                    result = False if CodexAgent._is_unauthorized_error(payload) else None
+                    return
+            # Stream drained with no terminal error → credentials accepted.
+            result = True
+
+    try:
+        await asyncio.wait_for(_execute(), timeout=_TOKEN_REFRESH_TIMEOUT)
+    except Exception as e:
+        logger.warning("Codex auth probe via SDK turn was inconclusive: %s", e)
+
+    return result

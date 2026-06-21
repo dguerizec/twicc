@@ -38,7 +38,6 @@ from twicc.providers.claude_code.agent.original_file_cache import (
     stop_cleanup_task as stop_original_file_cache_cleanup,
 )
 from twicc.core.models import Project, Session, SessionType
-from twicc.providers.claude_code.auth_task import start_auth_task, stop_auth_task
 from twicc.providers.claude_code.cron_restart import restart_all_session_crons
 from twicc.providers.claude_code.initial_sync import scan_projects, scan_sessions, sync_all
 from twicc.providers.claude_code.model_retirement_task import (
@@ -140,7 +139,6 @@ class ClaudeCodeOrchestrator(BaseOrchestrator):
         self._sync_thread_future: asyncio.Future | None = None
         self._orch_task: asyncio.Task | None = None
         self._usage_sync_task: asyncio.Task | None = None
-        self._auth_check_task: asyncio.Task | None = None
         self._statuspage_task: asyncio.Task | None = None
         self._commands_task: asyncio.Task | None = None
         self._original_file_cache_task: asyncio.Task | None = None
@@ -186,7 +184,6 @@ class ClaudeCodeOrchestrator(BaseOrchestrator):
         self._sync_task = self._create_task(self._initial_sync_task())
         self._orch_task = self._create_task(self._dependency_orchestrator())
         self._usage_sync_task = self._create_task(start_usage_sync_task())
-        self._auth_check_task = self._create_task(start_auth_task())
         self._statuspage_task = self._create_task(start_statuspage_task())
         self._commands_task = self._create_task(start_commands_task())
         self._original_file_cache_task = self._create_task(start_original_file_cache_cleanup())
@@ -280,12 +277,6 @@ class ClaudeCodeOrchestrator(BaseOrchestrator):
             logger.info("Stopping usage sync task...")
             stop_usage_sync_task()
             await _cancel_task(self._usage_sync_task, "Usage sync task")
-
-        # Auth check
-        if self._auth_check_task is not None:
-            logger.info("Stopping auth check task...")
-            stop_auth_task()
-            await _cancel_task(self._auth_check_task, "Auth check task")
 
         # Statuspage
         if self._statuspage_task is not None:

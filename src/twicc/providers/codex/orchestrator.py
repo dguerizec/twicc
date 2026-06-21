@@ -32,7 +32,6 @@ from twicc.providers.codex.agent.original_files_cache import (
     start_cleanup_task as start_original_files_cache_cleanup,
     stop_cleanup_task as stop_original_files_cache_cleanup,
 )
-from twicc.providers.codex.auth_task import start_auth_task, stop_auth_task
 from twicc.providers.codex.commands_task import start_commands_task, stop_commands_task
 from twicc.providers.codex.initial_sync import scan_session_files, sync_all
 from twicc.providers.codex.plugin_install import ensure_twicc_plugin_installed
@@ -100,7 +99,6 @@ class CodexOrchestrator(BaseOrchestrator):
         # the wrapping coroutine cancelled.
         self._sync_thread_future: asyncio.Future | None = None
         self._orch_task: asyncio.Task | None = None
-        self._auth_check_task: asyncio.Task | None = None
         self._usage_sync_task: asyncio.Task | None = None
         self._statuspage_task: asyncio.Task | None = None
         self._commands_task: asyncio.Task | None = None
@@ -160,7 +158,6 @@ class CodexOrchestrator(BaseOrchestrator):
 
         self._sync_task = self._create_task(self._initial_sync_task())
         self._orch_task = self._create_task(self._dependency_orchestrator())
-        self._auth_check_task = self._create_task(start_auth_task())
         self._usage_sync_task = self._create_task(start_usage_sync_task())
         self._statuspage_task = self._create_task(start_statuspage_task())
         self._commands_task = self._create_task(start_commands_task())
@@ -254,11 +251,6 @@ class CodexOrchestrator(BaseOrchestrator):
             logger.info("Stopping Codex usage sync task...")
             stop_usage_sync_task()
             await _cancel_task(self._usage_sync_task, "Codex usage sync task")
-
-        if self._auth_check_task is not None:
-            logger.info("Stopping Codex auth check task...")
-            stop_auth_task()
-            await _cancel_task(self._auth_check_task, "Codex auth check task")
 
         if self._statuspage_task is not None:
             logger.info("Stopping Codex statuspage task...")

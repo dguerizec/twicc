@@ -448,10 +448,11 @@ def main():
                 _wt_linked, len(_wt_unresolved),
             )
 
-        # Each provider's auth_task handles CLI authentication detection: it logs
-        # the current state and broadcasts it to connected clients. Sending
-        # messages is disabled in the UI when the owning provider is not
-        # authenticated.
+        # Each provider tracks CLI authentication state — established on client
+        # connect, flipped to "not authenticated" by a real auth error, and
+        # re-confirmed via the UI "Check again" button — and broadcasts it to
+        # connected clients. Sending messages is disabled in the UI when the
+        # owning provider is not authenticated.
 
         # Parse port
         port = os.environ.get("TWICC_PORT", "3500")

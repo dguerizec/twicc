@@ -56,7 +56,10 @@ class CodexWSHandler:
 
         if action == "check_auth":
             # Forced re-check of Codex CLI auth state, broadcast to every client.
-            await check_and_broadcast(force=True)
+            # ``probe=True`` because this is the user-initiated "Check again": we
+            # don't trust the local ``codex login status`` "logged-in" verdict and
+            # confirm it with a real throwaway turn (a few seconds).
+            await check_and_broadcast(force=True, probe=True)
             return True
 
         if action == "check_usage":

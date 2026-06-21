@@ -152,7 +152,8 @@ async def start_commands_task() -> None:
     - Handles graceful shutdown via stop event
     """
     stop_event = get_stop_event()
-    # Reset for hot-restart support — see auth_task.start_auth_task().
+    # Reset for hot-restart support: clear the stop event so a relaunched
+    # task isn't killed by a stale set() left by the prior shutdown.
     stop_event.clear()
 
     logger.info("Commands sync task started")

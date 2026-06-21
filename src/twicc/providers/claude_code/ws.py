@@ -239,9 +239,12 @@ class ClaudeCodeWSHandler:
             return True
 
         if action == "check_auth":
-            # Forced re-check of Claude Code CLI auth state. The result is broadcast
-            # to the entire "updates" group so every connected client refreshes.
-            await check_auth_and_broadcast(force=True)
+            # Forced re-check of Claude Code CLI auth state. ``probe=True`` because
+            # this is the user-initiated "Check again": we don't trust the local
+            # ``claude auth status`` "logged-in" verdict and confirm it with a real
+            # throwaway API call (a few seconds). The result is broadcast to the
+            # entire "updates" group so every connected client refreshes.
+            await check_auth_and_broadcast(force=True, probe=True)
             return True
 
         if action == "check_usage":

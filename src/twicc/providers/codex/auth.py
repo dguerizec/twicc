@@ -5,8 +5,8 @@ Runs ``codex login status`` against the wheel-bundled Codex binary to
 determine whether the user is logged into Codex. The exit code is the
 source of truth (0 = logged in, 1 = not logged in).
 
-Mirrors the surface of ``providers.claude_code.auth`` so the auth_task
-and the WS handler can stay structurally identical between providers.
+Mirrors the surface of ``providers.claude_code.auth`` so the WS handler
+can stay structurally identical between providers.
 """
 
 from __future__ import annotations
@@ -23,11 +23,6 @@ logger = logging.getLogger(__name__)
 # Cached last known auth state (None = never checked yet).
 _last_known_authenticated: bool | None = None
 
-# Event used by the auth_task to break out of its idle (authenticated) state
-# when something (manual recheck, periodic flip to False) suggests the state
-# should be re-checked or polling should resume.
-_auth_wake_event: asyncio.Event | None = None
-
 # Timeout for the ``codex login status`` subprocess call.
 _AUTH_STATUS_TIMEOUT = 10
 
@@ -43,14 +38,6 @@ def _build_auth_message(authenticated: bool) -> dict:
 def get_last_known_authenticated() -> bool | None:
     """Return the last known auth state (None if never checked yet)."""
     return _last_known_authenticated
-
-
-def get_auth_wake_event() -> asyncio.Event:
-    """Get (lazily create) the wake event used to interrupt the auth_task's idle state."""
-    global _auth_wake_event
-    if _auth_wake_event is None:
-        _auth_wake_event = asyncio.Event()
-    return _auth_wake_event
 
 
 async def check_auth_status() -> bool:
@@ -95,28 +82,54 @@ async def check_auth_status() -> bool:
 async def get_auth_message_for_connection() -> dict:
     """Build a ``codex:auth_updated`` message for a single client on WS connect.
 
-    Uses the cached state populated by ``auth_task``. If the cache is still
-    unknown (very first connection in a fresh process), runs one inline so
-    the connecting client doesn't briefly see a wrong "not authenticated"
-    state.
+    Uses the cached state. If it is still unknown (very first connection in a
+    fresh process), runs one check inline so the connecting client doesn't
+    briefly see a wrong "not authenticated" state.
     """
     if _last_known_authenticated is None:
         await check_and_broadcast()
     return _build_auth_message(bool(_last_known_authenticated))
 
 
-async def check_and_broadcast(*, force: bool = False) -> bool:
-    """Run a Codex auth status check and broadcast ``codex:auth_updated`` on change.
+async def check_and_broadcast(*, force: bool = False, probe: bool = False) -> bool | None:
+    """Determine the Codex auth state and broadcast ``codex:auth_updated`` on change.
 
-    When ``force`` is True, the message is always broadcast (used to answer
-    a manual "Check again" request from the client).
+    Mirrors :func:`providers.claude_code.auth.check_and_broadcast`. The local
+    ``codex login status`` gate is the cheap first signal, but its "logged in"
+    verdict is NOT trusted on its own — a local check can outlive a server-side
+    rejection, so letting it re-broadcast ``true`` would clobber the login
+    prompt raised by a real 401. So:
 
-    Always sets the wake event when the result is False so the auth_task
-    resumes/keeps polling.
+    - gate says *not* logged in → ``False`` (trustworthy: no usable credential).
+    - gate says logged in **and** ``probe=True`` → confirm with a real throwaway
+      turn. Used only on the user-initiated "Check again", never on a timer.
+    - gate says logged in and ``probe=False`` → promote only from the unknown
+      baseline; never resurrect an authoritative ``False`` (set by a real auth
+      error or a failed probe) on the strength of the local gate alone.
+
+    When ``force`` is True, the message is always broadcast (used to answer a
+    manual "Check again").
+
+    (Whether ``codex login status`` actually lies after a real auth failure the
+    way Claude's does is unverified — but this gate-first shape is correct either
+    way: an honest gate is caught for free at the gate, a lying one by the probe.)
     """
     global _last_known_authenticated
 
-    authenticated = await check_auth_status()
+    gate = await check_auth_status()
+    if not gate:
+        authenticated: bool | None = False
+    elif probe:
+        from .credentials import probe_auth_via_codex_sdk
+
+        probed = await probe_auth_via_codex_sdk()
+        # Inconclusive → keep the current state rather than flip either way.
+        authenticated = _last_known_authenticated if probed is None else probed
+    else:
+        # Untrusted "true": never promote an authoritative False back to True;
+        # only the unknown baseline (or a True we already hold) may read as True.
+        authenticated = _last_known_authenticated is not False
+
     changed = authenticated != _last_known_authenticated
     _last_known_authenticated = authenticated
 
@@ -126,12 +139,9 @@ async def check_and_broadcast(*, force: bool = False) -> bool:
             "updates",
             {
                 "type": "broadcast",
-                "data": _build_auth_message(authenticated),
+                "data": _build_auth_message(bool(authenticated)),
             },
         )
-
-    if not authenticated:
-        get_auth_wake_event().set()
 
     return authenticated
 
@@ -154,8 +164,8 @@ async def mark_unauthenticated_and_broadcast() -> None:
        ``CodexErr::UnexpectedStatus(401)`` which falls through to
        ``Other`` — the typical session-resume-on-expired-token case).
 
-    Without this fast path, an expired token would only surface through
-    the next ``codex login status`` poll (up to 30s later).
+    Without this fast path, an expired token would only surface on the next
+    "Check again" (there is no background auth poll).
     """
     global _last_known_authenticated
 
@@ -171,5 +181,3 @@ async def mark_unauthenticated_and_broadcast() -> None:
                 "data": _build_auth_message(False),
             },
         )
-
-    get_auth_wake_event().set()
