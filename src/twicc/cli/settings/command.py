@@ -24,7 +24,7 @@ from twicc.cli.settings.provider import provider_app
 
 settings_app = typer.Typer(
     name="settings",
-    help="Read (and in later tasks, write) synced settings.",
+    help="Read and write synced settings.",
     invoke_without_command=True,
 )
 

@@ -66,7 +66,7 @@ Host-only commands that manage the Bearer tokens gating `/rpc/` — never expose
 ## Discovery & self-knowledge
 
 ### `twicc info [SECTION...]`
-Inspect TwiCC's per-provider catalogues. Sections: `presets`, `commands`, `models`, `agent-settings`, `all`. Output always carries `twicc_version` and `providers` (with enabled/disabled + default + orchestration flags — `orchestration` is the user's soft preference for which providers agents should pick on their own when orchestrating; an explicit user request for another enabled provider still wins); each named section adds its key.
+Inspect TwiCC's per-provider catalogues. Sections: `presets`, `commands`, `models`, `agent-settings`, `settings`, `all`. Output always carries `twicc_version` and `providers` (with enabled/disabled + default + orchestration flags — `orchestration` is the user's soft preference for which providers agents should pick on their own when orchestrating; an explicit user request for another enabled provider still wins); each named section adds its key.
 - `--provider TEXT` — filter every section by provider key (naming one bypasses the disabled-provider filter).
 - `--project TEXT` — only for the `commands` section: also list commands scoped to that project.
 - `--filter TEXT` — case-insensitive substring filter for `commands` (whitespace-separated tokens are ANDed).
@@ -84,6 +84,91 @@ Show the latest usage quota snapshot (quotas, burn rate, cost estimates) for eve
 ### `twicc whoami`
 Print details of the session that owns the calling process — `session_id`, `title`, `project_id`, `project_directory`, `current_working_directory`, `artifacts_dir`, `scratch_dir`, `orchestration_scratch_dir` (when part of an orchestration), the resolved `agent_settings`, the full `session` payload, and the live `process` row. Exits `1` from a plain terminal (only meaningful inside a session).
 - Skill: [`twicc-whoami`](src/twicc/agent/plugin/twicc/skills/twicc-whoami/SKILL.md).
+
+## Settings
+
+Human/program-facing commands for reading and writing the synced settings (`settings.json`). No agent skill — use the CLI directly. Write commands need a live backend (drop-request pattern: `--timeout` default 30 s); read commands work offline. These commands are remote-forwardable via `--remote`.
+
+### `twicc settings`
+Print the full synced settings as JSON (`_version` stripped). Offline read, no server needed.
+
+### `twicc settings get <KEY>`
+Print the value of a single synced settings key as `{key: value}`. Offline read. Exits `1` for unknown keys.
+
+### `twicc settings set <KEY> <VALUE>` / `twicc settings unset <KEY>`
+Mutate a single **generic** scalar setting. `set` type-coerces `VALUE` to match the key's default type (bool: `true`/`false`/`1`/`0`/`yes`/`no`/`on`/`off`; int: integer string; string: verbatim). `unset` reverts the key to its built-in default. Both commands validate the key first:
+- `excluded` keys (`waTheme`, `waBrand`, `defaultLayoutId`, `_version`) — UI-only visual preferences, not settable via CLI.
+- `provider` keys (`defaultProvider`, `disabledProviders`, `orchestrationDisabledProviders`, and any `claudeCode*` / `codex*` prefixed keys) — use `twicc settings provider …`.
+- `notifications` keys (`externalNotificationTargets`) — use `twicc settings notifications …`.
+- `unknown` — no such setting.
+Exit codes: `0` accepted, `1` validation, `2` server down, `3` rejected, `4` failed, `5` timeout.
+- `--timeout INTEGER` (default 30).
+
+### `twicc settings provider <PROVIDER>`
+Show or mutate one provider's settings slice.
+
+**Bare form (no flags, no sub-command):** offline read — prints `enabled`, `is_default`, `orchestration_enabled`, `agent_defaults` (the `{provider}Default*` bundle), `untrusted_permission_mode_default`, `usage_read_file`, and `usage_dump_file`.
+
+**With flags:** drops a `settings:update` patch for the provider's `{provider}Default*` synced keys. Flags accepted by both providers (Claude Code and Codex):
+- `--model TEXT` — default model for NEW sessions (aliases `max`/`strongest`/`min`/`fastest` resolved per provider).
+- `--effort TEXT` — default reasoning effort (`low`, `medium`, `high`, `xhigh`; Claude Code also `max`; aliases `min`/`max`).
+- `--permission-mode TEXT` — default tool-permission policy for trusted projects (aliases `min`/`safe`, `max`, …).
+- `--context-max TEXT` — default max context window (`200k`, `1m`, `272k`; aliases `min`/`max`).
+- `--untrusted-permission-mode TEXT` — default permission mode for NEW sessions in an **untrusted** project; restricted to the provider's untrusted-allowed set; aliases `min`/`safe`/`max` resolve within that set. This flag maps to a separate synced key (`claudeCodeDefaultUntrustedPermissionMode` / `codexDefaultUntrustedPermissionMode`), not to the closed-bundle mapping.
+
+Claude Code-only flags (rejected with a validation error for Codex):
+- `--thinking / --no-thinking` — default for extended thinking.
+- `--fast / --no-fast` — default for fast mode (Opus-tier models only).
+- `--chrome / --no-chrome` — default for the Claude-in-Chrome MCP integration.
+
+Usage-file flags (both providers):
+- `--usage-read-file PATH` — path to a JSON file TwiCC reads this provider's quota from; also sets enabled to true.
+- `--no-usage-read-file` — disable the usage read-file.
+- `--usage-dump-file PATH` — path to a JSON file TwiCC dumps this provider's quota to; also sets enabled to true.
+- `--no-usage-dump-file` — disable the usage dump-file.
+
+`--timeout INTEGER` (default 30). Exit codes mirror `settings set`.
+
+**Sub-commands** (each takes `--timeout`):
+- `enable` — remove the provider from `disabledProviders` (idempotent).
+- `disable` — add the provider to `disabledProviders` (idempotent). The server may reject this if live agents are running under the provider; corrections are printed.
+- `set-default` — set `defaultProvider` to this provider. Client-side rejection if the provider is currently disabled.
+- `orchestration-enable` — remove the provider from `orchestrationDisabledProviders` (idempotent).
+- `orchestration-disable` — add the provider to `orchestrationDisabledProviders` (idempotent).
+
+### `twicc settings notifications`
+**Bare form:** offline read — prints `externalNotificationTargets` (the full list), `publicBaseUrl`, and `notifyOnExtraUsageStart`.
+
+Each target in the list carries: `id` (stable handle for CLI operations), `name`, `url`, `enabled`, `tested` (`true`/`false`/`null`), `notifyUserTurn`, `notifyPendingRequest`, `notifyExtraUsageStart`, `awayOnly`.
+
+**Sub-commands:**
+
+- `add <URL>` — add a new notification target. Generates a stable `id`; defaults: `enabled=true`, all notify flags on, `awayOnly=true`. Options:
+  - `--name TEXT` — optional human-readable label.
+  - `--enabled / --disabled` — active state (default: enabled).
+  - `--user-turn / --no-user-turn` — notify when agent awaits user input (default: on).
+  - `--pending / --no-pending` — notify on pending permission request (default: on).
+  - `--extra-usage / --no-extra-usage` — notify when extra usage starts (default: on).
+  - `--away-only / --no-away-only` — hold notification while user is present (default: on).
+  - `--test` — after a successful add, immediately send a test notification to the new target and emit the test result.
+  - `--timeout INTEGER` (default 30).
+
+- `update <ID>` — patch an existing target. Same flag set as `add` plus `--url TEXT` (changing the URL resets `tested` to `null`). Client-side rejection if the id is not found. Requires at least one flag. `--timeout INTEGER` (default 30).
+
+- `remove <ID>` — remove a target by id. Client-side rejection if the id is not found. `--timeout INTEGER` (default 30).
+
+- `test <ID>` — send a test Apprise notification to an existing target, persist the `tested` flag, and return `tested` + `test_results` in the response. Client-side rejection if the id is not found. `--timeout INTEGER` (default 30).
+
+Exit codes for all write sub-commands: `0` accepted, `1` validation/not-found, `2` server down, `3` rejected, `4` failed, `5` timeout.
+
+### `twicc info settings`
+The `settings` section of `twicc info` emits a schema of every synced-settings key, grouped by owner (`generic`, `provider`, `notifications`, `excluded`). Each entry carries `key`, `type` (Python type name of the default), `default`, `owner`, and `hint` (the right command to use). Use this to discover the full settings surface and identify which keys are settable via `twicc settings set`.
+
+```bash
+twicc info settings
+```
+
+---
 
 ## Projects
 

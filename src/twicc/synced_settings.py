@@ -71,11 +71,14 @@ _GENERIC_SYNCED_SETTINGS_DEFAULTS: dict = {
     # is fair game. See `twicc.providers.state.get_orchestration_providers`.
     "orchestrationDisabledProviders": [],
     # External notifications (Apprise) — see twicc.external_notifications.
-    # Targets are objects: {"url": "<apprise url>", "enabled": bool,
-    # "tested": bool|None, "notifyUserTurn": bool, "notifyPendingRequest": bool,
-    # "awayOnly": bool}
-    # ("tested" reflects the last per-target test from the settings UI,
-    # null/absent = never tested; the two notify* flags pick which events the
+    # Targets are objects: {"id": "<uuid hex>", "name": "<label>",
+    # "url": "<apprise url>", "enabled": bool, "tested": bool|None,
+    # "notifyUserTurn": bool, "notifyPendingRequest": bool,
+    # "notifyExtraUsageStart": bool, "awayOnly": bool}
+    # ("id" is a uuid4().hex assigned at creation and used as a stable handle
+    # by the CLI; "name" is an optional human-readable label; "tested" reflects
+    # the last per-target test from the settings UI or CLI,
+    # null/absent = never tested; the notify* flags pick which events the
     # target receives, absent = opted in; "awayOnly" holds the notification
     # while the user is present at a TwiCC client and sends it only once they
     # are away, absent/false = always send — see twicc.presence).
