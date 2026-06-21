@@ -18,7 +18,7 @@ import { sessionPresetBucket } from '../../../utils/datePresets'
 import { formatFullDateTime } from '../../../utils/date'
 import VirtualScroller from '../../virtual-scroller/VirtualScroller.vue'
 import SessionListItem from './SessionListItem.vue'
-import SessionDateSeparator from './SessionDateSeparator.vue'
+import SessionListSeparator from './SessionListSeparator.vue'
 
 const props = defineProps({
     projectId: {
@@ -114,30 +114,9 @@ const sessionBlocks = computed(() => computeSidebarSessionBlocks({
 
 const extraSessionId = computed(() => sessionBlocks.value.extra?.id ?? null)
 
-/**
- * Ids of the last item of each top block that should be followed by a divider.
- * A divider is only rendered when the block it terminates has a non-empty
- * block somewhere below it — so the bottom-most non-empty block never gets
- * a trailing divider.
- */
-const dividerAfterIds = computed(() => {
-    const { extra, crossFilterPinned, crossFilterActive, natural } = sessionBlocks.value
-    const ids = new Set()
-    if (extra && (crossFilterPinned.length || crossFilterActive.length || natural.length)) {
-        ids.add(extra.id)
-    }
-    if (crossFilterPinned.length && (crossFilterActive.length || natural.length)) {
-        ids.add(crossFilterPinned[crossFilterPinned.length - 1].id)
-    }
-    if (crossFilterActive.length && natural.length) {
-        ids.add(crossFilterActive[crossFilterActive.length - 1].id)
-    }
-    return ids
-})
-
 // Flat list consumed by the virtual scroller:
 //   [extra?, ...crossFilterPinned, ...crossFilterActive, ...natural]
-// Dividers live in the template, keyed off `dividerAfterIds`.
+// Section separators live in the template, keyed off `separatorBeforeIds`.
 const allSessions = computed(() => {
     const { extra, crossFilterPinned, crossFilterActive, natural } = sessionBlocks.value
     const result = []
@@ -162,38 +141,60 @@ const sessions = computed(() => {
     })
 })
 
-// Date separators for the `natural` block only, and within it only for its
-// chronological tail — sessions that are neither pinned nor active. Pinned and
-// active sessions float to the top of `natural` out of date order, so they (and
-// the cross-filter / extra blocks) stay un-bucketed.
+// One labeled separator before each group of the list (replacing the old
+// inter-block wa-dividers). The top blocks each form a section; the `natural`
+// block is sub-bucketed pinned → active → date threshold (Last 24 hours, then
+// the bulk-archive "older than <X>" cutoffs — each marking exactly what the
+// matching archive option would select).
 //
-// Buckets mirror the bulk-archive "older than <X>" thresholds (rolling cutoffs),
-// so each separator marks exactly what the matching archive option would select.
-// Mirrors `dividerAfterIds`: a Map of session id -> { duration, title }, consumed
-// in the scroller slot to render a <SessionDateSeparator> *before* the matching
-// item (title = the exact cutoff datetime). Built over the filtered `sessions` so
-// a search query keeps the buckets correct. A separator is emitted before the
-// first session of each bucket except `recent` (< 24h).
-const dateSeparatorBeforeIds = computed(() => {
-    const map = new Map()
+// A Map of session id -> separator props ({ label, prefix?, title? }), consumed
+// in the scroller slot to render a <SessionListSeparator> *before* the matching
+// item. Classification is built over every session, then walked over the filtered
+// `sessions` so a separator lands on the first *visible* session of each section
+// (search stays correct). Two adjacent separators are intentionally not
+// deduplicated for now.
+const separatorBeforeIds = computed(() => {
+    const { extra, crossFilterPinned, crossFilterActive, natural } = sessionBlocks.value
     const processStates = store.processStates
-    const chronoIds = new Set(
-        sessionBlocks.value.natural
-            .filter(s => !s.pinned && processStates[s.id] == null)
-            .map(s => s.id)
-    )
-    if (chronoIds.size === 0) return map
-
     const nowMs = Date.now()
-    let prevKey = null
+
+    // id -> { sectionKey, entry } — entry is the separator to render before the
+    // section's first visible session.
+    const classified = new Map()
+    if (extra) classified.set(extra.id, { sectionKey: 'extra', entry: { label: 'Selected' } })
+    for (const s of crossFilterPinned) {
+        classified.set(s.id, { sectionKey: 'xpinned', entry: { label: 'Pinned elsewhere' } })
+    }
+    for (const s of crossFilterActive) {
+        classified.set(s.id, { sectionKey: 'xactive', entry: { label: 'Active elsewhere' } })
+    }
+    for (const s of natural) {
+        let sectionKey, entry
+        if (s.pinned) {
+            sectionKey = 'n-pinned'
+            entry = { label: 'Pinned' }
+        } else if (processStates[s.id] != null) {
+            sectionKey = 'n-active'
+            entry = { label: 'Active' }
+        } else {
+            const { key, duration, cutoffMs } = sessionPresetBucket(s.mtime, nowMs)
+            sectionKey = `n-${key}`
+            entry = key === 'recent'
+                ? { label: 'Last 24 hours' }
+                : { label: duration, prefix: 'Older than ', title: formatFullDateTime(cutoffMs) }
+        }
+        classified.set(s.id, { sectionKey, entry })
+    }
+
+    // A separator marks the first visible session of each section.
+    const map = new Map()
+    let prevSection = null
     for (const session of sessions.value) {
-        if (!chronoIds.has(session.id)) continue
-        const { key, duration, cutoffMs } = sessionPresetBucket(session.mtime, nowMs)
-        if (key !== prevKey) {
-            prevKey = key
-            if (duration !== null) {
-                map.set(session.id, { duration, title: formatFullDateTime(cutoffMs) })
-            }
+        const c = classified.get(session.id)
+        if (!c) continue
+        if (c.sectionKey !== prevSection) {
+            prevSection = c.sectionKey
+            map.set(session.id, c.entry)
         }
     }
     return map
@@ -624,10 +625,9 @@ defineExpose({
             @keydown="handleListKeydown"
         >
             <template #default="{ item: session, index }">
-                <SessionDateSeparator
-                    v-if="dateSeparatorBeforeIds.has(session.id)"
-                    :duration="dateSeparatorBeforeIds.get(session.id).duration"
-                    :title="dateSeparatorBeforeIds.get(session.id).title"
+                <SessionListSeparator
+                    v-if="separatorBeforeIds.has(session.id)"
+                    v-bind="separatorBeforeIds.get(session.id)"
                 />
                 <SessionListItem
                     :session="session"
@@ -641,10 +641,6 @@ defineExpose({
                     @drop-data="handleDropData"
                     @selection-click="handleSelectionClick"
                 />
-                <wa-divider
-                    v-if="dividerAfterIds.has(session.id)"
-                    class="session-list-group-divider"
-                ></wa-divider>
             </template>
         </VirtualScroller>
 
@@ -700,14 +696,6 @@ defineExpose({
    Targets the child component's root element via Vue's scoped CSS inheritance. */
 .session-list-container:not(.session-list-container--compact) :deep(.session-item-wrapper) {
     margin-block: var(--wa-space-3xs);
-}
-
-/* Divider rendered below the "extra" selected session at the very top of the
-   list, and below the cross-filter pinned block (pinned sessions not
-   naturally in scope) when either is present. */
-.session-list-group-divider {
-    --width: var(--divider-size);
-    --spacing: var(--wa-space-2xs);
 }
 
 .load-more-indicator {
