@@ -56,23 +56,41 @@ function reconstructResponse(serialized) {
     })
 }
 
-async function main() {
+// Penpal's connect() has no timeout by default. We arm the interceptor before
+// the handshake completes (below), so an absent host would otherwise leave every
+// queued request pending forever (a frozen page). Bound the wait: past this, the
+// queued requests fail with a clear broker error instead of hanging.
+const HANDSHAKE_TIMEOUT_MS = 10000
+
+function main() {
     const messenger = new WindowMessenger({
         remoteWindow: window.parent,
         // The host validates the artifact; same-origin in practice.
         allowedOrigins: ['*'],
     })
 
-    let host
-    try {
-        host = await connect({ messenger }).promise
-    } catch {
-        // No host answered (e.g. the artifact opened without a broker wrapper).
-        // Leave fetch/XHR untouched — the CSP blocks them, which is the correct
-        // failure: a clear network error, never a silent escape.
-        return
+    // Resolves with the host proxy once the handshake completes, rejects if no
+    // host ever answers. Requests intercepted before then await this promise —
+    // the interceptor holds them pending — and flush once it settles.
+    let resolveHost, rejectHost
+    const hostReady = new Promise((resolve, reject) => {
+        resolveHost = resolve
+        rejectHost = reject
+    })
+    hostReady.catch(() => {}) // no-op: avoid an unhandledrejection if no request ever fires
+
+    if (window.parent === window) {
+        // Top-level document (opened directly, without a broker wrapper) — no host
+        // will ever answer, so don't even wait out the timeout.
+        rejectHost(new Error('no host'))
+    } else {
+        connect({ messenger, timeout: HANDSHAKE_TIMEOUT_MS }).promise.then(resolveHost, rejectHost)
     }
 
+    // Armed SYNCHRONOUSLY, before any artifact script runs (the shim is injected
+    // as a blocking <script> first in <head>). A fetch/XHR fired during the
+    // handshake window is captured and held here, never leaked to the native
+    // fetch the CSP blocks.
     const interceptor = new BatchInterceptor({
         name: 'twicc-artifact-broker',
         interceptors: browserInterceptors,
@@ -80,6 +98,15 @@ async function main() {
     interceptor.apply()
 
     interceptor.on('request', async ({ request, controller }) => {
+        let host
+        try {
+            host = await hostReady
+        } catch {
+            // No host, or the handshake timed out. Fail with a clear broker error
+            // — never fall through to the native fetch the CSP would block.
+            controller.errorWith(new TypeError('broker: host unavailable'))
+            return
+        }
         let serialized
         try {
             serialized = await serializeRequest(request)
