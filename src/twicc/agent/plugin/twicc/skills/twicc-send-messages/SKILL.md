@@ -1,6 +1,6 @@
 ---
 name: twicc-send-messages
-description: Send the SAME message (and optional attachments) to several TwiCC sessions at once, selected by id and/or --spawned-by / --descendants / --siblings / --annotation. Use to broadcast a steering instruction, status request, or correction to a batch of sessions (e.g. every worker in an orchestration), or for a worker to message its peers with --siblings self.
+description: Send the SAME message (and optional attachments) to several TwiCC sessions, selected by id and/or --spawned-by/--descendants/--siblings/--annotation. Use to broadcast a steering instruction, status request, or correction to a batch (e.g. every worker in an orchestration), or for a worker to message peers with --siblings self.
 argument-hint: '[SESSION_ID...] --message <text> [--spawned-by X|--descendants X|--siblings X] [--annotation ...] [--attach PATH...]'
 ---
 

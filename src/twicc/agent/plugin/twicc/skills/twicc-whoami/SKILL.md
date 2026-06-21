@@ -1,6 +1,6 @@
 ---
 name: twicc-whoami
-description: Return the details of the session that owns the calling process. Use to discover your own TwiCC session_id from inside a Bash tool, when you need to reference your own session.
+description: Return the details of the session that owns the calling process. Use to discover your own TwiCC session_id from inside a Bash tool, to reference your own session.
 ---
 
 # TwiCC Whoami

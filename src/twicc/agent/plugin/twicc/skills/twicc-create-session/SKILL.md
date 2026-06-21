@@ -1,6 +1,6 @@
 ---
 name: twicc-create-session
-description: Create a new TwiCC session with a prompt and optional agent settings (provider, model, effort, permission mode, attachments, etc.). Use when you or the user want to spawn a fresh Claude Code or Codex session, kick off a sub-task in another project, or scaffold conversations from a script.
+description: Create a new TwiCC session with a prompt and optional agent settings (provider, model, effort, permission mode, etc.). Use when you or the user want to spawn a fresh Claude Code/Codex session, kick off a sub-task in another project, or scaffold from a script.
 argument-hint: <prompt>
 ---
 

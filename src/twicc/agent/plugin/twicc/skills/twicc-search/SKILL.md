@@ -1,6 +1,6 @@
 ---
 name: twicc-search
-description: Search through TwiCC's session history using its full-text search index. Use when you or the user want to find past conversations, look up what was discussed, or locate specific content across sessions.
+description: Search TwiCC's session history (full-text index). Use when you or the user want to find past conversations, look up what was discussed, or locate specific content across sessions.
 argument-hint: <query>
 ---
 

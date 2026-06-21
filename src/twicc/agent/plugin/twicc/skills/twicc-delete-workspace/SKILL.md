@@ -1,6 +1,6 @@
 ---
 name: twicc-delete-workspace
-description: Delete a TwiCC workspace by id. Projects in the workspace are NOT deleted — only the grouping disappears. Use when you or the user want to drop a workspace.
+description: Delete a TwiCC workspace by id. Projects are NOT deleted — only the grouping disappears. Use when you or the user want to drop a workspace.
 argument-hint: <workspace_id>
 ---
 

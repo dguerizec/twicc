@@ -1,6 +1,6 @@
 ---
 name: twicc-process
-description: Inspect or control (stop or wait for state) the live process of a single TwiCC session. Use when you or the user want details on a live process, need to stop a running agent, or need to block a script until a session finishes.
+description: Inspect or control (stop or wait for state) the live process of a single TwiCC session. Use when you or the user want details on a live process, stop a running agent, or block a script until a session finishes.
 argument-hint: <session_id> [stop | wait <status>...]
 ---
 

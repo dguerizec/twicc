@@ -1,6 +1,6 @@
 ---
 name: twicc-project
-description: Show details of a single project by directory path or by ID. Use when you or the user want to inspect a specific project's metadata, cost, or directory.
+description: Show details of a single project by directory path or ID. Use when you or the user want to inspect a project's metadata, cost, or directory.
 argument-hint: <project_path_or_id>
 ---
 

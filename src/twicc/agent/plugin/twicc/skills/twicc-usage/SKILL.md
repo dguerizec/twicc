@@ -1,6 +1,6 @@
 ---
 name: twicc-usage
-description: Show current API usage quotas and cost estimates for every backend provider. Use when you or the user want to check quota utilization, rate limits, or spending.
+description: Show API usage quotas and cost estimates per backend provider. Use when you or the user want to check utilization, rate limits, or spending.
 ---
 
 # TwiCC Usage

@@ -1,6 +1,6 @@
 ---
 name: twicc-status
-description: Report the live TwiCC backend's status. Use when you or the user want to know whether TwiCC is up, diagnose a failing CLI command, or grab the live PID/port.
+description: Report the live TwiCC backend's status. Use when you or the user want to know whether TwiCC is up, diagnose a failing CLI command, or grab the PID/port.
 ---
 
 # TwiCC Status

@@ -1,6 +1,6 @@
 ---
 name: twicc-orchestration-leader
-description: Act as the leader (root) of a TwiCC orchestration tree — decompose a user's task, spawn managers and/or workers, aggregate, and report back. Load when a user puts you in charge; read twicc-orchestration first.
+description: Act as the leader of a TwiCC orchestration tree — decompose a user's task, spawn managers and/or workers, aggregate, and report back. Load when a user puts you in charge; read twicc-orchestration first.
 ---
 
 # TwiCC Orchestration — Leader

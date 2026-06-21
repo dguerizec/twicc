@@ -1,6 +1,6 @@
 ---
 name: twicc-workspace
-description: Show details of a single TwiCC workspace by ID. Use when you or the user want to inspect a specific workspace's projects, color, archived state, or auto-add patterns.
+description: Show details of a single TwiCC workspace by ID. Use when you or the user want to inspect a workspace's projects, color, archived state, or auto-add patterns.
 argument-hint: <workspace_id>
 ---
 

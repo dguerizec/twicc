@@ -1,6 +1,6 @@
 ---
 name: twicc-processes
-description: List live TwiCC processes, batch-look up states for specific session_ids, batch-stop agents, or batch-wait until sessions reach a given state. Use when you or the user want to see what's running, track spawned sessions, batch-stop agents, or gate a script on multiple sessions finishing.
+description: List live TwiCC processes, batch-look up states by session_id, batch-stop agents, or batch-wait until sessions reach a given state. Use when you or the user want to see what's running, track spawned sessions, or gate a script on multiple sessions finishing.
 ---
 
 # TwiCC Processes

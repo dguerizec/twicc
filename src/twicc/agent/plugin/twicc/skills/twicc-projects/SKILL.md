@@ -1,6 +1,6 @@
 ---
 name: twicc-projects
-description: List all projects tracked by TwiCC, or batch-look up specific projects by directory path or id. Use when you or the user want to browse projects, find a project ID, or batch-fetch metadata for known projects.
+description: List all projects tracked by TwiCC, or batch-look up specific ones by directory path or id. Use when you or the user want to browse projects, find a project ID, or batch-fetch metadata for known ones.
 ---
 
 # TwiCC Projects

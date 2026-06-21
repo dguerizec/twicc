@@ -1,6 +1,6 @@
 ---
 name: twicc-send-message
-description: Send a message (and optional attachments) to an existing TwiCC session. Use when you or the user want to continue a conversation in an existing session, drop a follow-up from a script, or attach files to an ongoing session.
+description: Send a message (and optional attachments) to an existing TwiCC session. Use when you or the user want to continue a conversation, drop a follow-up from a script, or attach files.
 argument-hint: <session_id|parent> <prompt>
 ---
 

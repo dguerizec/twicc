@@ -1,6 +1,6 @@
 ---
 name: twicc-create-project
-description: Create a new TwiCC project from a directory path — optionally with a display name and a color. One project per directory (unique by realpath). Use when you or the user want to register a directory as a TwiCC project before any session has been started in it.
+description: Create a new TwiCC project from a directory path — optionally with a display name and a color. One project per directory. Use when you or the user want to register a directory as a TwiCC project before any session has run in it.
 argument-hint: <directory> [--name X] [--color X] [--create-directory]
 ---
 

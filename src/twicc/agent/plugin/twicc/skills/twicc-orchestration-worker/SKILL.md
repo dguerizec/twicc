@@ -1,6 +1,6 @@
 ---
 name: twicc-orchestration-worker
-description: Act as a worker (leaf) in a TwiCC orchestration tree — execute one concrete task and deliver the result to your parent. Load when a parent gives you a task; read twicc-orchestration first.
+description: Act as a worker in a TwiCC orchestration tree — execute one concrete task and deliver the result to your parent. Load when a parent gives you a task; read twicc-orchestration first.
 ---
 
 # TwiCC Orchestration — Worker

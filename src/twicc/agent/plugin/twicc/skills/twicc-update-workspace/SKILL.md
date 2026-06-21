@@ -1,6 +1,6 @@
 ---
 name: twicc-update-workspace
-description: Update an existing TwiCC workspace — rename, change color, add/remove projects, add/remove auto-add patterns, archive/unarchive. Use when you or the user want to tweak a workspace from the CLI.
+description: Update an existing TwiCC workspace — rename, change color, add/remove projects, add/remove auto-add patterns, archive/unarchive. Use when you or the user want to tweak a workspace.
 argument-hint: <workspace_id> [--name X] [--color X|--unset-color] [--add-project project]... [--remove-project project]... [--add-pattern P]... [--remove-pattern P]... [--archive|--unarchive]
 ---
 

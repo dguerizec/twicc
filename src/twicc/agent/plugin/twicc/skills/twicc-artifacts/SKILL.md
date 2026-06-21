@@ -1,6 +1,6 @@
 ---
 name: twicc-artifacts
-description: List bookmarked artifacts (viewable files saved from a session's Artifacts tab), or bookmark / unbookmark one. Use when you or the user want to browse bookmarked artifacts, filter them by project / workspace / scope, or add, rename, re-scope, or remove a bookmark from the CLI.
+description: List bookmarked artifacts (viewable files saved from a session's Artifacts tab), or bookmark/unbookmark one. Use when you or the user want to browse bookmarks, filter them by project/workspace/scope, or add, rename, re-scope, or remove one from the CLI.
 ---
 
 # TwiCC Artifacts

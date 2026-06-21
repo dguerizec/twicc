@@ -1,6 +1,6 @@
 ---
 name: twicc-session
-description: Inspect a single session — view metadata, read raw item content by line number, read user/assistant messages with a uniform shape, or list subagents. Use when you or the user want to examine a session, read conversation content, or explore subagent activity.
+description: Inspect a single session — view metadata, read raw item content by line number, read user/assistant messages, or list subagents. Use when you or the user want to examine a session, read conversation content, or explore subagent activity.
 argument-hint: <session_id> [content|messages|agents]
 ---
 

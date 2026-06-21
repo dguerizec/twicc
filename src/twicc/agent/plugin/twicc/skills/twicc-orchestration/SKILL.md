@@ -1,6 +1,6 @@
 ---
 name: twicc-orchestration
-description: Shared model and conventions for multi-session orchestration in TwiCC — the leader/manager/worker tree, briefing and talking to children, visibility and permission propagation. Load this first, then the skill for your own mode.
+description: Shared model and conventions for multi-session orchestration in TwiCC — the leader/manager/worker tree, talking to children, visibility/permission propagation. Load this first, then the skill for your mode.
 ---
 
 # TwiCC Orchestration

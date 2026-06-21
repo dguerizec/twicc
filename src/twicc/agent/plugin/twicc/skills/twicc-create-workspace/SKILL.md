@@ -1,6 +1,6 @@
 ---
 name: twicc-create-workspace
-description: Create a new TwiCC workspace — a user-defined group of projects, optionally with a color, auto-add directory patterns, and an initial project list. Use when you or the user want to create a new workspace.
+description: Create a new TwiCC workspace — a group of projects, optionally with a color, auto-add directory patterns, and an initial project list. Use when you or the user want to create a workspace.
 argument-hint: <name> [--color X] [--add-project project]... [--add-pattern pattern]...
 ---
 

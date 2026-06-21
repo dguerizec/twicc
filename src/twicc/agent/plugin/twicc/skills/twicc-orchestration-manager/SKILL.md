@@ -1,6 +1,6 @@
 ---
 name: twicc-orchestration-manager
-description: Act as a manager (internal node) in a TwiCC orchestration tree — take your parent's mandate, decompose it across your own children, aggregate, and report up. Load when a parent makes you a manager; read twicc-orchestration first.
+description: Act as a manager in a TwiCC orchestration tree — take your parent's mandate, decompose it across your children, aggregate, and report up. Load when a parent makes you a manager; read twicc-orchestration first.
 ---
 
 # TwiCC Orchestration — Manager

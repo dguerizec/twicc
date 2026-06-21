@@ -1,6 +1,6 @@
 ---
 name: twicc-update-project
-description: Update an existing TwiCC project — rename, change color, archive/unarchive, set its default provider or worktree directory, or edit its per-provider agent-settings defaults via the settings sub-command. The directory is immutable. No delete — projects are archived, never deleted.
+description: Update an existing TwiCC project — rename, change color, archive/unarchive, set its default provider or worktree directory, or edit per-provider agent-settings defaults. The directory is immutable; projects are archived, never deleted.
 argument-hint: <project> [--name X|--unset-name] [--color X|--unset-color] [--archive|--unarchive] [--default-provider X|--unset-default-provider] [--worktree-directory X|--unset-worktree-directory] | <project> settings --provider P [field flags]
 ---
 
