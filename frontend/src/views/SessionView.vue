@@ -20,6 +20,7 @@ import OrchestrationPanel from '../components/orchestration/OrchestrationPanel.v
 import SessionLayout from '../components/session/layout/SessionLayout.vue'
 import TabPlacementMenu from '../components/session/layout/TabPlacementMenu.vue'
 import LayoutMenu from '../components/session/layout/LayoutMenu.vue'
+import { DOCK_LABELS, PLACEMENT_OPTIONS } from '../components/session/layout/dockMeta'
 import LayoutSaveDialog from '../components/session/layout/LayoutSaveDialog.vue'
 import LayoutManagerDialog from '../components/session/layout/LayoutManagerDialog.vue'
 import { useLayoutsStore, SINGLE_PANE_ID } from '../stores/layouts'
@@ -138,7 +139,7 @@ onDeactivated(() => {
     forceNotifySessionViewed(sessionId.value, 'deactivated')
 
     // Unregister contextual session commands from the command palette
-    unregisterCommands(SESSION_COMMAND_IDS)
+    unregisterCommands([...SESSION_COMMAND_IDS, ...LAYOUT_COMMAND_IDS])
 
     // Cancel any pending drag-hover timer
     chatTabDragHover.cancel()
@@ -1259,9 +1260,17 @@ const SESSION_COMMAND_IDS = [
     'session.context',
     'session.chrome',
     'session.fast-mode',
-    'session.maximize-pane',
-    'session.minimize-pane',
-    'session.restore-pane',
+]
+
+// Layout-category command ids — registered via buildLayoutCommands(), listed
+// here so onDeactivated / onBeforeUnmount unregister them with the session ones.
+const LAYOUT_COMMAND_IDS = [
+    'layout.maximize-pane',
+    'layout.minimize-pane',
+    'layout.restore-pane',
+    'layout.move-tab',
+    'layout.save',
+    'layout.load',
 ]
 
 // Read/unread gate for the current session, mirroring SessionListItem's
@@ -1280,6 +1289,10 @@ function currentSessionReadState() {
 }
 
 function registerSessionCommands() {
+    // Layout commands go in first, as their own registerCommands call: they never
+    // depend on provider resolution, so even if the settings block below failed to
+    // build they'd already be registered (the bug this split fixes).
+    registerCommands(buildLayoutCommands())
     registerCommands([
         {
             id: 'session.rename',
@@ -1612,35 +1625,114 @@ function buildSessionSettingsCommands() {
             label: 'Change Session Fast Mode…',
             icon: 'gauge-high',
         }),
+    ]
+}
+
+// ─── Layout commands (own palette category) ─────────────────────────────────
+// Kept out of buildSessionSettingsCommands on purpose: those bail out early
+// (`if (!helpers) return []`) when the session's provider isn't resolved yet —
+// e.g. on a cold deep-link — so anything defined past that point silently fails
+// to register. Layout actions don't depend on the provider, so they live here
+// and register unconditionally.
+
+function buildLayoutCommands() {
+    // Shared guard: only the active session view, and never the mobile tab strip
+    // (no dock regions there, so layout actions are meaningless / absent).
+    const ready = () => isActive.value && !layoutTabsMode.value
+    // The focused tab can move to a dock unless it's center-only (chat / a subagent).
+    const movableTab = (id) => id !== 'main' && !id.startsWith('agent-')
+    return [
         {
-            id: 'session.maximize-pane',
+            id: 'layout.maximize-pane',
             label: 'Maximize Focused Pane',
             icon: 'expand',
-            category: 'session',
-            when: () => isActive.value && canMaximizeFocusedPane(),
+            category: 'layout',
+            when: () => ready() && canMaximizeFocusedPane(),
             action: () => maximizeFocusedPane(),
         },
         {
-            id: 'session.minimize-pane',
+            id: 'layout.minimize-pane',
             label: 'Minimize Focused Pane',
             icon: 'window-minimize',
-            category: 'session',
-            when: () => isActive.value && canMinimizeFocusedPane(),
+            category: 'layout',
+            when: () => ready() && canMinimizeFocusedPane(),
             action: () => minimizeFocusedPane(),
         },
         {
-            id: 'session.restore-pane',
+            id: 'layout.restore-pane',
             label: 'Restore Maximized Pane',
             icon: 'compress',
-            category: 'session',
-            when: () => isActive.value && !!layout.maximizedRegion.value,
+            category: 'layout',
+            when: () => ready() && !!layout.maximizedRegion.value,
             action: () => restoreMaximizedPane(),
+        },
+        {
+            id: 'layout.move-tab',
+            label: 'Move Current Tab to…',
+            icon: 'up-down-left-right',
+            category: 'layout',
+            when: () => ready() && movableTab(activeTabId.value),
+            items: () => {
+                const tabId = activeTabId.value
+                const current = layout.dockOf(tabId)
+                return PLACEMENT_OPTIONS
+                    .filter((dest) => dest !== current)
+                    .map((dest) => ({
+                        id: dest,
+                        label: DOCK_LABELS[dest],
+                        action: () => layout.place(tabId, dest),
+                    }))
+            },
+        },
+        {
+            id: 'layout.save',
+            label: 'Save Layout…',
+            icon: 'floppy-disk',
+            category: 'layout',
+            when: () => ready() && hasDocks.value,
+            action: () => onOpenSaveLayout(),
+        },
+        {
+            id: 'layout.load',
+            label: 'Load Layout…',
+            icon: 'table-columns',
+            category: 'layout',
+            when: ready,
+            // Mirrors LayoutMenu's catalog: Single pane, then the resolved scope
+            // defaults, then the remaining named layouts (deduped against them).
+            items: () => {
+                const items = [{
+                    id: SINGLE_PANE_ID,
+                    label: 'Single pane',
+                    group: 'base',
+                    action: () => onSelectLayout(SINGLE_PANE_ID),
+                }]
+                for (const d of layoutScopeDefaults.value) {
+                    items.push({
+                        id: d.layoutId,
+                        label: `${d.label} — ${d.layoutName}`,
+                        group: 'scope',
+                        action: () => onSelectLayout(d.layoutId),
+                    })
+                }
+                const scopeIds = new Set(layoutScopeDefaults.value.map((d) => d.layoutId))
+                for (const l of layoutsStore.getAllLayouts) {
+                    if (scopeIds.has(l.id)) continue
+                    items.push({
+                        id: l.id,
+                        label: l.name,
+                        group: 'named',
+                        action: () => onSelectLayout(l.id),
+                    })
+                }
+                return items
+            },
         },
     ]
 }
 
 onBeforeUnmount(() => {
-    unregisterCommands(SESSION_COMMAND_IDS)
+    unregisterCommands([...SESSION_COMMAND_IDS, ...LAYOUT_COMMAND_IDS])
     chatTabDragHover.cancel()
 })
 </script>
