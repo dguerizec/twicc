@@ -1499,6 +1499,15 @@ function registerSessionCommands() {
     ])
 }
 
+// On a cold deep-link the session — and thus its provider — resolves AFTER the
+// onActivated() that first built the command list, so buildSessionSettingsCommands()
+// returned [] and the provider-dependent settings commands (Change Model/Effort/…)
+// never registered. Re-register just those once the provider lands. (Layout commands
+// don't need this: they carry no provider dependency and register up front.)
+watch(() => session.value?.provider, (provider) => {
+    if (provider && isActive.value) registerCommands(buildSessionSettingsCommands())
+})
+
 // ─── Session settings commands (mirror of MessageInput settings popover) ────
 
 function sessionSettingsGate() {
