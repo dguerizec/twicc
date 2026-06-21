@@ -43,6 +43,7 @@ import {
 import { getAgentDisplayLabel } from '../utils/agentLabel'
 import { focusChatPrimary, gotoChatFooterPanel } from '../utils/focusChat'
 import { fileRootsFromStore } from '../utils/projectRoots'
+import { normalizePosixPath } from '../utils/worktreePath'
 
 const route = useRoute()
 const router = useRouter()
@@ -153,6 +154,13 @@ provide('sessionActive', readonly(isActive))
  * @param {string} absolutePath — the absolute filesystem path to reveal
  */
 async function viewFileInFilesTab(absolutePath, { lineNum = null } = {}) {
+    // Collapse any `.`/`..` segments up front: a caller may hand us a path with
+    // literal traversal (e.g. a tool recorded `cwd + src/twicc/../../frontend/x`
+    // without normalizing). Such a path is valid and resolves to a real file,
+    // but the tab's tree reveal walks segments literally and has no `..` node,
+    // so it would fail to locate it. Every branch below works off the clean path.
+    absolutePath = normalizePosixPath(absolutePath)
+
     // Artifacts live outside the project file roots, in their own tab.
     // artifactsDir is only set when the session has artifacts (so the tab
     // exists), which naturally gates this branch.
