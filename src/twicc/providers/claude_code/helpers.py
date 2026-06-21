@@ -133,51 +133,44 @@ def serialize_model(model: str | None) -> dict | None:
 _SYSTEM_PROMPT_STATIC_ADDENDUM = """\
 ## Receiving messages while working
 
-IMPORTANT: this section is a hard requirement, not a suggestion.
+IMPORTANT: a hard requirement, not a suggestion.
 
-If the user sends a message while you are mid-turn (between tool calls,
-during a long operation, etc.), the SDK delivers it as an interrupt
-folded into the ongoing assistant turn. TwiCC's UI does NOT display it
-as a separate user message in the transcript. The user only sees your
-reply.
+If the user sends a message while you're mid-turn (between tool calls, during a
+long operation, etc.), the SDK folds it in as an interrupt to the ongoing turn.
+TwiCC's UI does NOT display it as a separate user message — the user only sees
+your reply.
 
-YOU MUST make the interrupted user message visible yourself. At the very
-top of your next reply, before any answer, status update, summary, or
-tool result discussion, quote the incoming message using a Markdown
-blockquote (``> ...``), then respond to it.
+YOU MUST surface the interrupted message yourself: at the very top of your next
+reply, before any answer, status update, summary, or tool-result discussion,
+quote it as a Markdown blockquote (``> ...``), then respond.
 
-This is CRITICAL for conversation integrity. If you fail to quote the
-message, the user's text effectively disappears from the visible
-conversation: there is no separate transcript entry, no reliable visual
-record, and your reply can look ungrounded or confusing.
+This is CRITICAL for conversation integrity: unquoted, the user's text
+effectively disappears from the visible conversation — no separate transcript
+entry, no reliable visual record — and your reply can look ungrounded or
+confusing.
 
 ## Inserting an image returned in a tool result
 
-If a tool you called returned an image (base64) and you cannot conveniently
-save it to `{artifacts_dir}/{session_id}/` yourself (e.g. the bytes only
-exist inside the tool result, with no path to the file on disk), insert
-`<twicc:insert-screenshot />` in your reply where you want the image to
-appear. TwiCC scans your previous tool results for the most recent
-base64 image, saves it to the session's artifacts directory, and
-rewrites the tag with a markdown image link before any client renders
-the message.
+If a tool returned a base64 image you can't conveniently save to
+`{artifacts_base_dir}/{session_id}/` yourself (e.g. the bytes only exist inside
+the tool result, with no path on disk), insert `<twicc:insert-screenshot />`
+where you want it. TwiCC scans your previous tool results for the most recent
+base64 image, saves it to the session's artifacts directory, and rewrites the
+tag as a markdown image link before any client renders the message.
 
 The tag accepts two optional attributes, in any order:
 
-- `offset="N"` — 0-indexed count back from the most recent image
-  (`0` ≡ latest, `1` ≡ the one before, ...). When you include more than
-  one tag in the same message, each must carry an explicit distinct
-  `offset` — otherwise they all point to the same image.
-- `title="…"` — used as the markdown alt text in the rendered
-  `![title](url)` link, and echoed in the missing-image placeholder
-  when no image is found at the requested offset. Default alt is
-  `screenshot`. The value is double-quoted and cannot itself contain a
-  literal `"`; markdown-breaking characters (`[`, `]`, backslash) are
-  escaped automatically.
+- `offset="N"` — 0-indexed count back from the most recent image (`0` ≡ latest,
+  `1` ≡ the one before, …). With more than one tag in the same message, each
+  needs a distinct `offset`, otherwise they all point to the same image.
+- `title="…"` — the markdown alt text in the rendered `![title](url)` link, also
+  echoed in the missing-image placeholder when none is found at the offset.
+  Default alt is `screenshot`. The value is double-quoted and can't contain a
+  literal `"`; markdown-breaking chars (`[`, `]`, backslash) are escaped
+  automatically.
 
-If no image is found at the requested offset, the tag is replaced by
-`*[no screenshot available]*` (or `*[no screenshot available: <title>]*`
-when a title was provided).
+If no image is found at the offset, the tag becomes `*[no screenshot
+available]*` (or `*[no screenshot available: <title>]*` with a title).
 """
 
 

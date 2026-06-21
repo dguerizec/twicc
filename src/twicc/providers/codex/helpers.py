@@ -95,10 +95,10 @@ ATTACHMENT_SUPPORT: dict = {
 _SYSTEM_PROMPT_STATIC_ADDENDUM = """\
 ## Generated images
 
-Images you create with the `image_generation` tool are already shown to the
-user — TwiCC renders each one inline from the base64 it returns. You do NOT
-need to copy them into the artifacts directory for the user to see them; only
-save a copy there if the user separately wants a file to open or reuse.
+Images from the `image_generation` tool are already shown to the user — TwiCC
+renders each inline from the base64 it returns. You do NOT need to copy them
+into the artifacts directory for the user to see them; only save a copy if the
+user wants a file to open or reuse.
 """
 
 
