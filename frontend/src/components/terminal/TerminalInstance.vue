@@ -1,5 +1,5 @@
 <script setup>
-import { inject, onUnmounted, watch } from 'vue'
+import { inject, nextTick, onUnmounted, watch } from 'vue'
 import { useTerminal } from '../../composables/useTerminal'
 
 const emit = defineEmits(['disconnected'])
@@ -117,6 +117,22 @@ watch(
     },
     { immediate: true },
 )
+
+// When the user clicks Start / Reconnect, move focus into the terminal so they
+// can type as soon as the shell is ready. The overlay button holds focus on
+// click; without this it would fall back to <body> when the overlay is removed.
+// A single focus() is enough: once xterm's hidden textarea has focus, nothing
+// steals it back (the "Connected." writeln and the overlay removal don't blur),
+// so it persists through connect → ready.
+function handleStartClick() {
+    start()
+    nextTick(() => focus())
+}
+
+function handleReconnectClick() {
+    reconnect()
+    nextTick(() => focus())
+}
 </script>
 
 <template>
@@ -133,7 +149,7 @@ watch(
                         variant="warning"
                         appearance="outlined"
                         size="small"
-                        @click="reconnect"
+                        @click="handleReconnectClick"
                     >
                         <wa-icon slot="start" name="arrow-rotate-right"></wa-icon>
                         Reconnect
@@ -153,7 +169,7 @@ watch(
                         variant="brand"
                         appearance="outlined"
                         size="small"
-                        @click="start"
+                        @click="handleStartClick"
                     >
                         <wa-icon slot="start" name="play"></wa-icon>
                         Start terminal
