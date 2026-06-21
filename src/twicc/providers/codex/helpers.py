@@ -96,9 +96,8 @@ _SYSTEM_PROMPT_STATIC_ADDENDUM = """\
 ## Generated images
 
 Images from the `image_generation` tool are already shown to the user — TwiCC
-renders each inline from the base64 it returns. You do NOT need to copy them
-into the artifacts directory for the user to see them; only save a copy if the
-user wants a file to open or reuse.
+renders each inline from its base64. No need to copy them into the artifacts dir
+for the user to see them; only save a copy if the user asks for it.
 """
 
 

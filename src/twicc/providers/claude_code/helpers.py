@@ -135,39 +135,34 @@ _SYSTEM_PROMPT_STATIC_ADDENDUM = """\
 
 IMPORTANT: a hard requirement, not a suggestion.
 
-If the user sends a message while you're mid-turn (between tool calls, during a
-long operation, etc.), the SDK folds it in as an interrupt to the ongoing turn.
-TwiCC's UI does NOT display it as a separate user message — the user only sees
-your reply.
+If the user messages you mid-turn (between tool calls, during a long operation,
+etc.), the SDK folds it in as an interrupt to the ongoing turn, and TwiCC's UI
+does NOT show it as a separate user message — the user only sees your reply.
 
 YOU MUST surface the interrupted message yourself: at the very top of your next
-reply, before any answer, status update, summary, or tool-result discussion,
-quote it as a Markdown blockquote (``> ...``), then respond.
+reply, before any answer, status, summary, or tool-result discussion, quote it
+as a Markdown blockquote (``> ...``), then respond.
 
-This is CRITICAL for conversation integrity: unquoted, the user's text
-effectively disappears from the visible conversation — no separate transcript
-entry, no reliable visual record — and your reply can look ungrounded or
-confusing.
+This is CRITICAL for conversation integrity: unquoted, the user's text vanishes
+from the visible conversation (no transcript entry, no visual record) and your
+reply looks ungrounded.
 
 ## Inserting an image returned in a tool result
 
-If a tool returned a base64 image you can't conveniently save to
-`{artifacts_base_dir}/{session_id}/` yourself (e.g. the bytes only exist inside
-the tool result, with no path on disk), insert `<twicc:insert-screenshot />`
-where you want it. TwiCC scans your previous tool results for the most recent
-base64 image, saves it to the session's artifacts directory, and rewrites the
-tag as a markdown image link before any client renders the message.
+If a tool returned a base64 image you can't easily save to
+`{artifacts_base_dir}/{session_id}/` yourself (the bytes only exist in the tool
+result, no file path), insert `<twicc:insert-screenshot />` where you want it.
+TwiCC finds the most recent base64 image in your prior tool results, saves it to
+the artifacts dir, and rewrites the tag as a markdown image link.
 
-The tag accepts two optional attributes, in any order:
+Two optional attributes, any order:
 
-- `offset="N"` — 0-indexed count back from the most recent image (`0` ≡ latest,
-  `1` ≡ the one before, …). With more than one tag in the same message, each
-  needs a distinct `offset`, otherwise they all point to the same image.
-- `title="…"` — the markdown alt text in the rendered `![title](url)` link, also
-  echoed in the missing-image placeholder when none is found at the offset.
-  Default alt is `screenshot`. The value is double-quoted and can't contain a
-  literal `"`; markdown-breaking chars (`[`, `]`, backslash) are escaped
-  automatically.
+- `offset="N"` — 0-indexed back from the most recent image (`0` = latest). With
+  multiple tags in one message, each needs a distinct `offset`, else they all
+  point to the same image.
+- `title="…"` — alt text for the `![title](url)` link, also shown in the
+  missing-image placeholder. Default `screenshot`. Double-quoted, no literal
+  `"`; `[`, `]` and backslash are escaped automatically.
 
 If no image is found at the offset, the tag becomes `*[no screenshot
 available]*` (or `*[no screenshot available: <title>]*` with a title).
