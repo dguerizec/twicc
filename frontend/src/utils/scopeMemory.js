@@ -99,8 +99,6 @@ export function rebuild(saved, to) {
 
 const memory = new Map() // scopeKey -> { tab, params }
 
-export function _resetForTest() { memory.clear() } // test/sanity only
-
 export function registerScopeMemory(router) {
     // Back/Forward detection via Vue Router's monotonic history.state.position:
     // on a pop the browser swaps history.state to the destination BEFORE beforeEach
