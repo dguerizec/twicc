@@ -8,6 +8,9 @@ const props = defineProps({
     // resolver gutter: { edge, x, y, w, h, items: [{ dockId, tabs, action, anchor }] }
     gutter: { type: Object, required: true },
     openOverlayEdge: { type: String, default: null },
+    // (item) -> the active tab id of a single rail dock — used by empty-area clicks so they act on the
+    // dock's active (remembered) tab, exactly like clicking its active chip. See dockActiveTabId.
+    resolveActiveTab: { type: Function, default: null },
 })
 const emit = defineEmits(['action'])
 
@@ -95,11 +98,37 @@ function onClick(entry) {
     }, DOUBLE_CLICK_DELAY)
 }
 
+// The empty area of the rail (anywhere that isn't a chip) acts on the dock it points at, on that
+// dock's active tab — reusing the chip path so it gets the same deferred single/double handling. With
+// at most two docks per edge, always on opposite anchors (start = top/left, end = bottom/right), the
+// click position along the rail axis resolves the dock with no guessing: first half -> the start dock,
+// second half -> the end dock.
+function targetItemFor(event) {
+    const items = props.gutter.items
+    if (!items.length) return null
+    if (items.length === 1) return items[0]
+    const rect = event.currentTarget.getBoundingClientRect()
+    const vertical = props.gutter.edge !== 'bottom'
+    const rel = vertical
+        ? (event.clientY - rect.top) / (rect.height || 1)
+        : (event.clientX - rect.left) / (rect.width || 1)
+    const wantAnchor = rel < 0.5 ? 'start' : 'end'
+    return items.find((it) => it.anchor === wantAnchor) || items[0]
+}
+function onEmptyAreaClick(event) {
+    if (event.target.closest('.g-chip')) return // a chip handles its own click
+    const item = targetItemFor(event)
+    if (!item) return
+    const tabId = props.resolveActiveTab ? props.resolveActiveTab(item) : item.tabs[0]?.id
+    if (!tabId) return
+    onClick({ item, tab: { id: tabId } })
+}
+
 onUnmounted(cancelPending)
 </script>
 
 <template>
-    <div class="dock-gutter" :class="gutter.edge" :style="style">
+    <div class="dock-gutter" :class="gutter.edge" :style="style" @click="onEmptyAreaClick">
         <div class="g-group start">
             <button
                 v-for="entry in startIcons"

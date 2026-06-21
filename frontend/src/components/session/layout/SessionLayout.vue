@@ -214,6 +214,7 @@ onBeforeUnmount(endDrag)
                 :key="g.edge"
                 :gutter="g"
                 :open-overlay-edge="openOverlayEdge"
+                :resolve-active-tab="(item) => layout.dockActiveTabId(item.dockId, item.tabs)"
                 @action="onGutterAction"
             />
 

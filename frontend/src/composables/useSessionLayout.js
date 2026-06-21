@@ -100,6 +100,18 @@ export function useSessionLayout({ sessionId, containerRef, tabs, routeActiveTab
         return (firstContent || groupTabs[0]).id
     }
 
+    // The active tab for a single dock sitting in the rail (gutter), from its dockId + the tabs it
+    // holds. No route override (a railed dock never owns the route); memory (activeByGroup, keyed by the
+    // dockId when un-merged) then first content — mirrors regionActiveTabId. Lets the gutter's empty
+    // area act on "the active tab" of the dock it points at.
+    function dockActiveTabId(dockId, tabs) {
+        if (!tabs || !tabs.length) return null
+        const wanted = intention.value.activeByGroup[dockId]
+        if (wanted && tabs.some((t) => t.id === wanted)) return wanted
+        const firstContent = tabs.find((t) => !t.optional || t.hasContent)
+        return (firstContent || tabs[0]).id
+    }
+
     // The dock a tab is assigned to ('center' when unassigned).
     function dockOf(tabId) {
         return intention.value.assignment[tabId] || 'center'
@@ -209,7 +221,7 @@ export function useSessionLayout({ sessionId, containerRef, tabs, routeActiveTab
     return {
         width, height, measured,
         render, isDockingActive, dockingRendered,
-        regionActiveTabId, dockOf, groupKeyOf,
+        regionActiveTabId, dockActiveTabId, dockOf, groupKeyOf,
         targetKeyForTab, isToolPanelVisible, overlayEdgeForTab,
         openOverlayEdge, routeActiveTabId,
         place, minimize, restore, swapSide, rememberActive,

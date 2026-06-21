@@ -763,6 +763,10 @@ watch(() => layout.openOverlayEdge.value, (edge) => {
 // clicks that land on the nav. Listens on click (gesture end) + deferred, like the dock claim.
 function onCenterClick(event) {
     if (!layout.dockingRendered.value) return
+    // Empty area of the tab bar (a shadow part, retargeted to the host): act exactly like clicking the
+    // active tab's header. A tab header is slotted (target !== host) and handled by onCenterTabClick on
+    // its own; a click inside a panel body falls through to a route-only claim (no content focus).
+    if (event.target === event.currentTarget) { onCenterTabClick(centerActiveTab.value); return }
     if (event.target?.closest?.('[slot="nav"]')) return
     requestPaneFocus(centerActiveTab.value)
 }
@@ -876,8 +880,11 @@ function onLayoutRestoreMaximized() {
 // group's own nav tabs: closest('wa-tab') + a direct-child check so a nested wa-tab (e.g. the
 // terminal's internal tabs) or the nav cluster (layout menu / maximize button) never triggers it.
 function onCenterTabDblClick(event) {
-    const tab = event.target?.closest?.('wa-tab')
-    if (!tab || tab.getAttribute('slot') !== 'nav' || tab.parentElement !== event.currentTarget) return
+    // The empty bar area (target === the group host) counts too, alongside the group's own nav tabs.
+    if (event.target !== event.currentTarget) {
+        const tab = event.target?.closest?.('wa-tab')
+        if (!tab || tab.getAttribute('slot') !== 'nav' || tab.parentElement !== event.currentTarget) return
+    }
     if (!hasDocks.value) return
     if (isCenterMaximized.value) onLayoutRestoreMaximized()
     else onCenterMaximize()
