@@ -355,6 +355,15 @@ const openSubagentTabs = computed(() => {
 // Active tab ID ('main' for session, 'agent-xxx' for subagents, 'files'/'git'/'terminal' for tool tabs)
 // Computed from route
 const activeTabId = computed(() => {
+    // KeepAlive keeps one SessionView instance per visited session alive at once, and they all read
+    // the SAME global `route`. Only the instance the URL actually targets may derive its active tab
+    // from it; every cached instance falls back to the inert center ('main') so it never acts on
+    // another session's route — e.g. the layout's route-driven "reveal the active tab" watcher would
+    // otherwise un-minimize (and persist) the matching dock in every cached session. This mirrors the
+    // frozen `sessionId` / `filterProjectId` discipline above. 'main' (not null) because the value
+    // flows into isCenterTab(), which calls `.startsWith` and isn't null-safe; 'main' is the fixed
+    // center tab, never docked, so the reveal watcher short-circuits on it.
+    if (route.params.sessionId !== sessionId.value) return 'main'
     if (subagentId.value) {
         return `agent-${subagentId.value}`
     }
