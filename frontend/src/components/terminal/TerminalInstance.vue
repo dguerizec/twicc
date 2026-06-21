@@ -1,5 +1,5 @@
 <script setup>
-import { inject, nextTick, onUnmounted, watch } from 'vue'
+import { inject, nextTick, onUnmounted, ref, watch } from 'vue'
 import { useTerminal } from '../../composables/useTerminal'
 
 const emit = defineEmits(['disconnected'])
@@ -55,6 +55,39 @@ const {
     cwd: props.cwd,
 })
 
+// Overlay action buttons — only one is ever rendered at a time (v-if/v-else-if), so the presence of a
+// ref tells focusContent() which target is current without re-deriving the overlay conditions.
+const startBtnRef = ref(null)
+const reconnectBtnRef = ref(null)
+
+function elHoldsFocus(el) {
+    // wa-button retargets focus into its shadow DOM, so the host stays document.activeElement.
+    return !!el && (document.activeElement === el || el.shadowRoot?.activeElement != null)
+}
+
+/**
+ * Focus this instance's primary content for a tab / sub-tab activation: the visible overlay's action
+ * button (Reconnect when disconnected, Start when not started) so it can be triggered from the keyboard,
+ * otherwise the live terminal so the user types straight away. Returns whether focus now holds — drives
+ * the parent's focus-retry pump (re-evaluated each frame, so it auto-corrects as the state transitions,
+ * e.g. the overlay clearing once connected).
+ */
+function focusContent() {
+    const overlayBtn = reconnectBtnRef.value || startBtnRef.value
+    if (overlayBtn) {
+        if (!elHoldsFocus(overlayBtn)) {
+            try {
+                overlayBtn.focus()
+            } catch {
+                // wa-button.focus() can throw if its shadow DOM isn't upgraded yet. Benign — the pump retries.
+            }
+        }
+        return elHoldsFocus(overlayBtn)
+    }
+    focus()
+    return !!containerRef.value && containerRef.value.contains(document.activeElement)
+}
+
 // Register terminal API with parent (TerminalPanel) for toolbar + ExtraKeysBar routing
 const registerTerminal = inject('registerTerminal', null)
 const unregisterTerminal = inject('unregisterTerminal', null)
@@ -87,6 +120,7 @@ const terminalApi = {
     disconnect,
     reconnect,
     focus,
+    focusContent,
 }
 registerTerminal?.(props.terminalIndex, terminalApi)
 onUnmounted(() => {
@@ -146,6 +180,7 @@ function handleReconnectClick() {
                 <div class="terminal-overlay-content">
                     <div>Terminal disconnected</div>
                     <wa-button
+                        ref="reconnectBtnRef"
                         variant="warning"
                         appearance="outlined"
                         size="small"
@@ -166,6 +201,7 @@ function handleReconnectClick() {
                 <div class="terminal-overlay-content">
                     <div>Terminal not started</div>
                     <wa-button
+                        ref="startBtnRef"
                         variant="brand"
                         appearance="outlined"
                         size="small"

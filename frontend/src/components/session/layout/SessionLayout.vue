@@ -71,12 +71,17 @@ const overlay = computed(() =>
 const overlayActive = computed(() => overlay.value ? props.layout.routeActiveTabId.value : null)
 
 function onGutterAction({ edge, dockId, tabId, action }) {
+    // Clicking a gutter chip to swap a hidden column in or restore a minimized dock is an explicit
+    // activation of that tab — like a dock-tab header click — so besides claiming the route (select-tab)
+    // we emit tab-activate to focus the panel's content (the overlay branch focuses via overlay-activate).
     if (action === 'swap') {
         props.layout.swapSide(edge)
         emit('select-tab', tabId)
+        emit('tab-activate', tabId)
     } else if (action === 'restore') {
         props.layout.restore(dockId)
         emit('select-tab', tabId)
+        emit('tab-activate', tabId)
     } else {
         // The overlay is derived from the route: opening it = navigating to the tab ('activate');
         // re-clicking the tab already shown = dismissing it (navigate back to the prior tab).

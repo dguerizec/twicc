@@ -663,9 +663,9 @@ let paneFocusRaf = null
 let paneFocusTab = null
 function requestPaneFocus(tabId) {
     if (!tabId) return
-    // Pure route claim — it does NOT focus the search filter. Clicking inside a pane's body (or a
-    // terminal, a file in the tree, …) must not steal focus to the filter; only an explicit tab
-    // ACTIVATION does (tab-header click / keyboard / arrival), handled by requestFilterFocus elsewhere.
+    // Pure route claim — it does NOT focus the panel's content. Clicking inside a pane's body (or a
+    // terminal, a file in the tree, …) must not steal focus to the content; only an explicit tab
+    // ACTIVATION does (tab-header click / keyboard / arrival), handled by requestPanelFocus elsewhere.
     paneFocusTab = tabId
     if (paneFocusRaf != null) return
     paneFocusRaf = requestAnimationFrame(() => {
@@ -690,30 +690,31 @@ function onLayoutSelectTab(tabId) {
 }
 
 // A dock tab HEADER was clicked (distinct from a body/route claim) — an explicit activation, so focus
-// its filter, whether the tab was already the region's shown one or a background tab being brought up.
+// its content, whether the tab was already the region's shown one or a background tab being brought up.
 function onLayoutTabActivate(tabId) {
-    if (FILTER_FOCUS_TABS.includes(tabId)) requestFilterFocus(tabId)
+    if (ACTIVATION_FOCUS_TABS.includes(tabId)) requestPanelFocus(tabId)
 }
 
-// ─── Tool-panel search-filter focus ──────────────────────────────────────────
-// The FileTreePanel-backed tool tabs whose search input we focus when the user navigates TOWARD the
-// tab (a real switch, a keyboard shortcut, or arriving with the URL pointing at it) — never when the
-// layout merely renders the panel (a docked secondary on load, a minimized dock). Each tab carries a
-// counter passed to its panel as :focus-request; bumping it tells the panel to focus its filter.
+// ─── Tool-panel activation focus ──────────────────────────────────────────────
+// The tool tabs whose primary content we focus when the user navigates TOWARD the tab (a real switch, a
+// keyboard shortcut, or arriving with the URL pointing at it) — never when the layout merely renders the
+// panel (a docked secondary on load, a minimized dock). Each tab carries a counter passed to its panel as
+// :focus-request; bumping it tells the panel to focus its content: the tree's search filter (or the open
+// file) for Files/Git/Artifacts, the active terminal (or its Start/Reconnect overlay) for the terminal.
 // Deliberately NOT driven by onTabShow/onLayoutSelectTab (wa-tab-group emits wa-tab-show on initial
 // render too) nor by watching activeTabId (route claims from clicking inside a shown panel change it).
-// Distinct from requestPaneFocus, which claims the URL for a pane. Terminal/orchestration have no filter.
-const FILTER_FOCUS_TABS = ['files', 'git', 'artifacts']
-const filterFocusRequests = reactive({ files: 0, git: 0, artifacts: 0 })
-function requestFilterFocus(tabId) {
-    if (tabId in filterFocusRequests) filterFocusRequests[tabId]++
+// Distinct from requestPaneFocus, which only claims the URL for a pane. Orchestration has no focus target.
+const ACTIVATION_FOCUS_TABS = ['files', 'git', 'artifacts', 'terminal']
+const panelFocusRequests = reactive({ files: 0, git: 0, artifacts: 0, terminal: 0 })
+function requestPanelFocus(tabId) {
+    if (tabId in panelFocusRequests) panelFocusRequests[tabId]++
 }
 // Arriving on / returning to a session whose URL targets such a tab is an explicit navigation toward
-// it → focus its filter. Read (never watch) activeTabId here, so in-session route claims can't trigger
+// it → focus its content. Read (never watch) activeTabId here, so in-session route claims can't trigger
 // it; mouse switches and keyboard are handled by the gesture handlers.
 function focusRouteToolTabOnArrival() {
     if (!isActive.value || !session.value) return
-    if (FILTER_FOCUS_TABS.includes(activeTabId.value)) requestFilterFocus(activeTabId.value)
+    if (ACTIVATION_FOCUS_TABS.includes(activeTabId.value)) requestPanelFocus(activeTabId.value)
 }
 // Cold deep-link: the session can resolve after onActivated (the panel isn't mounted yet then) — once
 // it appears while this view is active, re-fire the arrival focus (deferred to after the panel mounts).
@@ -737,8 +738,8 @@ function onOverlayActivate(tabId) {
     }
     cancelPaneFocus()
     switchToTab(tabId)
-    // Peeking a docked tab in an overlay makes a previously-hidden tab visible → focus its filter.
-    if (FILTER_FOCUS_TABS.includes(tabId)) requestFilterFocus(tabId)
+    // Peeking a docked tab in an overlay makes a previously-hidden tab visible → focus its content.
+    if (ACTIVATION_FOCUS_TABS.includes(tabId)) requestPanelFocus(tabId)
 }
 function onOverlayDismiss() {
     // No remembered tab (overlay was opened by direct navigation, not a gesture) → fall back to the
@@ -771,9 +772,9 @@ function onCenterClick(event) {
 // that is ALREADY the center's active one (no wa-tab-show fires then) while a dock owns the route.
 // Sub-controls inside a tab (placement arrow, close icon) stop their own click, so it never lands here.
 function onCenterTabClick(tabId) {
-    // Clicking a tool tab's HEADER is an explicit activation → focus its filter (always — mouse or
+    // Clicking a tool tab's HEADER is an explicit activation → focus its content (always — mouse or
     // keyboard, already shown or not; only clicking a pane's BODY must not, see requestPaneFocus).
-    if (FILTER_FOCUS_TABS.includes(tabId)) requestFilterFocus(tabId)
+    if (ACTIVATION_FOCUS_TABS.includes(tabId)) requestPanelFocus(tabId)
     if (!layout.dockingRendered.value) return
     requestPaneFocus(tabId)
 }
@@ -952,9 +953,9 @@ function handleTabShortcut(event) {
     if (!targetTab) return
     pendingKeyboardFocus = true
     switchToTab(targetTab)
-    // Keyboard navigation toward a filter-bearing tool tab focuses its search input — whether the tab
+    // Keyboard navigation toward an activation-focus tool tab focuses its content — whether the tab
     // was hidden (a switch) or already visible (explicit keyboard intent on a shown panel).
-    if (FILTER_FOCUS_TABS.includes(targetTab)) requestFilterFocus(targetTab)
+    if (ACTIVATION_FOCUS_TABS.includes(targetTab)) requestPanelFocus(targetTab)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1706,7 +1707,7 @@ onBeforeUnmount(() => {
                         :route-file-path="activeTabId === 'files' ? filesRouteFilePath : undefined"
                         :route-owner="ownsRoute('files')"
                         :active="isActive && isToolTabShown('files')"
-                        :focus-request="filterFocusRequests.files"
+                        :focus-request="panelFocusRequests.files"
                         :is-draft="session?.draft === true"
                         @navigate="onFilesNavigate"
                     />
@@ -1727,7 +1728,7 @@ onBeforeUnmount(() => {
                         :route-file-path="activeTabId === 'git' ? gitRouteFilePath : undefined"
                         :route-owner="ownsRoute('git')"
                         :active="isActive && isToolTabShown('git')"
-                        :focus-request="filterFocusRequests.git"
+                        :focus-request="panelFocusRequests.git"
                         :is-draft="session?.draft === true"
                         @navigate="onGitNavigate"
                     />
@@ -1744,6 +1745,7 @@ onBeforeUnmount(() => {
                         :route-term-index="activeTabId === 'terminal' ? terminalRouteTermIndex : undefined"
                         :route-owner="ownsRoute('terminal')"
                         :active="isActive && isToolTabShown('terminal')"
+                        :focus-request="panelFocusRequests.terminal"
                         @navigate="onTerminalNavigate"
                     />
                 </div>
@@ -1766,7 +1768,7 @@ onBeforeUnmount(() => {
                         :route-file-path="activeTabId === 'artifacts' ? artifactsRouteFilePath : undefined"
                         :route-owner="ownsRoute('artifacts')"
                         :active="isActive && isToolTabShown('artifacts')"
-                        :focus-request="filterFocusRequests.artifacts"
+                        :focus-request="panelFocusRequests.artifacts"
                         @navigate="onArtifactsNavigate"
                     />
                 </div>

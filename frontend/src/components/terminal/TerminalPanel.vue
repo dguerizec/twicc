@@ -8,6 +8,7 @@ import { useWorkspacesStore } from '../../stores/workspaces'
 import { useTerminalTabsStore } from '../../stores/terminalTabs'
 import { useTerminalCommandStore } from '../../stores/terminalCommand'
 import { sendWsMessage } from '../../composables/useWebSocket'
+import { useFocusRetry } from '../../composables/useFocusRetry'
 import { toast } from '../../composables/useToast'
 import { getUnavailablePlaceholders } from '../../utils/snippetPlaceholders'
 import AppTooltip from '../ui/AppTooltip.vue'
@@ -52,6 +53,13 @@ const props = defineProps({
     routeOwner: {
         type: Boolean,
         default: true,
+    },
+    // Bumped by the parent (SessionView) to focus the active terminal on a real navigation TOWARD this
+    // tab (header click, keyboard, arrival) — never when the layout merely renders the panel. Mirrors the
+    // tool tabs' :focus-request; here it focuses the terminal (or its Start/Reconnect overlay button).
+    focusRequest: {
+        type: Number,
+        default: 0,
     },
 })
 const emit = defineEmits(['navigate'])
@@ -525,35 +533,34 @@ watch(
     { immediate: true },
 )
 
-// Focus the active terminal when switching terminal sub-tabs
-watch(activeIndex, () => {
-    if (isRouteTermUnavailable.value) return
-    nextTick(() => {
-        activeApi.value?.focus?.()
+// Focus the active terminal — its xterm, or the Start/Reconnect overlay button when no live terminal —
+// for an activation gesture. Routed through the shared focus-retry pump (like the tool tabs): a single
+// .focus() is unreliable here because switching a sub-tab fires a route claim + navigate whose reveal
+// frames steal focus right after, and a keyboard tab switch flips props.active before the panel is shown.
+// The pump re-asserts each frame until focus holds (focusContent returns whether it landed) — and since
+// it re-evaluates the target each frame, it follows the state as it transitions (connecting → connected).
+const requestTerminalFocus = useFocusRetry()
+function focusActiveTerminal() {
+    requestTerminalFocus(() => {
+        if (isRouteTermUnavailable.value) return true // nothing focusable — satisfy the pump so it stops
+        return activeApi.value?.focusContent?.() ?? false
     })
+}
+
+// Switching terminal sub-tabs (activeIndex change while the panel is shown) focuses the new terminal.
+watch(activeIndex, () => {
+    if (!props.active) return
+    focusActiveTerminal()
 })
 
-// Focus the active terminal when the terminal panel becomes active.
-// When switching tabs via keyboard, the route (and thus props.active) changes before
-// the wa-tab-group has actually shown the panel, so a single nextTick isn't enough.
-// We retry with requestAnimationFrame (up to ~500ms) to cover both mouse and keyboard.
-watch(() => props.active, (active) => {
-    if (!active) return
-    if (isRouteTermUnavailable.value) return
-    let attempts = 0
-    const maxAttempts = 30 // ~500ms at 60fps
-    function tryFocus() {
-        const api = activeApi.value
-        if (api) {
-            api.focus?.()
-            // Check if focus actually landed on the terminal's textarea
-            if (document.activeElement?.closest?.('.terminal-container')) return
-        }
-        if (++attempts < maxAttempts) {
-            requestAnimationFrame(tryFocus)
-        }
-    }
-    requestAnimationFrame(tryFocus)
+// A real navigation toward the terminal tab (header click, keyboard, arrival) bumps focusRequest →
+// focus the active terminal. Deliberately driven by this explicit-intent signal, NOT by props.active
+// (mere visibility), so a docked terminal merely rendered never steals focus. No props.active guard
+// here: the bump fires alongside the route change, which propagates async, so active may still be false
+// when this runs — the parent only bumps when navigating TOWARD the terminal, and the retry pump waits
+// for the panel to become focusable (focusContent no-ops while it's display:none), so it lands correctly.
+watch(() => props.focusRequest, () => {
+    focusActiveTerminal()
 })
 
 // --- Toolbar action helpers (delegate to activeApi) ---
