@@ -14,11 +14,10 @@ import { useSessionSelectionStore } from '../../../stores/sessionSelection'
 import { isWorkspaceProjectId, extractWorkspaceId } from '../../../utils/workspaceIds'
 import { computeSidebarSessionBlocks } from '../../../utils/sidebarSessions'
 import { matchQuery } from '../../../utils/textFilter'
-import { sessionPresetBucket } from '../../../utils/datePresets'
-import { formatFullDateTime } from '../../../utils/date'
+import { dateBucketSeparator } from '../../../utils/datePresets'
 import VirtualScroller from '../../virtual-scroller/VirtualScroller.vue'
 import SessionListItem from './SessionListItem.vue'
-import SessionListSeparator from './SessionListSeparator.vue'
+import SidebarListSeparator from '../../sidebar/SidebarListSeparator.vue'
 
 const props = defineProps({
     projectId: {
@@ -148,7 +147,7 @@ const sessions = computed(() => {
 // matching archive option would select).
 //
 // A Map of session id -> separator props ({ label, prefix?, title? }), consumed
-// in the scroller slot to render a <SessionListSeparator> *before* the matching
+// in the scroller slot to render a <SidebarListSeparator> *before* the matching
 // item. Classification is built over every session, then walked over the filtered
 // `sessions` so a separator lands on the first *visible* session of each section
 // (search stays correct). Two adjacent separators are intentionally not
@@ -177,11 +176,9 @@ const separatorBeforeIds = computed(() => {
             sectionKey = 'n-active'
             entry = { label: 'Active' }
         } else {
-            const { key, duration, cutoffMs } = sessionPresetBucket(s.mtime, nowMs)
-            sectionKey = `n-${key}`
-            entry = key === 'recent'
-                ? { label: 'Last 24 hours' }
-                : { label: duration, prefix: 'Older than ', title: formatFullDateTime(cutoffMs) }
+            const bucket = dateBucketSeparator(s.mtime, nowMs)
+            sectionKey = `n-${bucket.key}`
+            entry = bucket.entry
         }
         classified.set(s.id, { sectionKey, entry })
     }
@@ -625,7 +622,7 @@ defineExpose({
             @keydown="handleListKeydown"
         >
             <template #default="{ item: session, index }">
-                <SessionListSeparator
+                <SidebarListSeparator
                     v-if="separatorBeforeIds.has(session.id)"
                     v-bind="separatorBeforeIds.get(session.id)"
                 />

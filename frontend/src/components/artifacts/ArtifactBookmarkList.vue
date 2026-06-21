@@ -20,11 +20,13 @@ import { computeArtifactBookmarkList } from '../../utils/sidebarArtifactBookmark
 import { matchQuery } from '../../utils/textFilter'
 import { artifactTypeIcon } from '../../utils/artifactBookmark'
 import { formatDate } from '../../utils/date'
+import { dateBucketSeparator } from '../../utils/datePresets'
 import { SESSION_TIME_FORMAT } from '../../constants'
 import ProjectBadge from '../project/ProjectBadge.vue'
 import WorktreeBadge from '../project/WorktreeBadge.vue'
 import AppTooltip from '../ui/AppTooltip.vue'
 import ArtifactsHelpButton from './ArtifactsHelpButton.vue'
+import SidebarListSeparator from '../sidebar/SidebarListSeparator.vue'
 
 const props = defineProps({
     effectiveProjectId: { type: String, default: null },
@@ -97,6 +99,26 @@ function updatedDate(b) {
 function updatedTs(b) {
     return b.updated_at ? Math.floor(new Date(b.updated_at).getTime() / 1000) : 0
 }
+
+// Date separators: walk the recency-sorted list and mark the first bookmark of
+// each date bucket (Last 24 hours, then the "older than <X>" thresholds — the
+// same system as the session list, dates only). Keyed off `updated_at` (the sort
+// field) so the separators follow the list order. A Map of bookmark id ->
+// SidebarListSeparator props, consumed in the v-for to render one before the
+// first item of each bucket.
+const separatorBeforeIds = computed(() => {
+    const map = new Map()
+    const nowMs = Date.now()
+    let prevKey = null
+    for (const b of list.value) {
+        const { key, entry } = dateBucketSeparator(updatedTs(b), nowMs)
+        if (key !== prevKey) {
+            prevKey = key
+            map.set(b.id, entry)
+        }
+    }
+    return map
+})
 
 function onSelect(b) {
     emit('select', b)
@@ -256,9 +278,12 @@ defineExpose({ handleKeyNavigation })
             tabindex="0"
             @keydown="handleListKeydown"
         >
+            <template v-for="(b, index) in list" :key="b.id">
+            <SidebarListSeparator
+                v-if="separatorBeforeIds.has(b.id)"
+                v-bind="separatorBeforeIds.get(b.id)"
+            />
             <wa-button
-                v-for="(b, index) in list"
-                :key="b.id"
                 :appearance="isActive(b) ? 'outlined' : 'plain'"
                 :variant="isActive(b) ? 'brand' : 'neutral'"
                 class="bookmark-item"
@@ -302,6 +327,7 @@ defineExpose({ handleKeyNavigation })
                     </span>
                 </div>
             </wa-button>
+            </template>
         </div>
     </div>
 </template>

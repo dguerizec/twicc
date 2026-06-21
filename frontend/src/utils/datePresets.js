@@ -1,3 +1,5 @@
+import { formatFullDateTime } from './date'
+
 // Duration presets shared by full-text search, bulk archive, and the sidebar's
 // session-list date separators. Order matches display order in lists, from the
 // most recent threshold to the oldest.
@@ -81,4 +83,23 @@ export function sessionPresetBucket(mtime, nowMs) {
     return bucket
         ? { key: bucket.value, duration: bucket.label, cutoffMs }
         : { key: 'recent', duration: null, cutoffMs: null }
+}
+
+/**
+ * Build the date-section separator for a timestamp, shared by the sidebar's
+ * session and artifact lists. Returns the bucket key (to detect group changes
+ * while walking a recency-sorted list) and the <SidebarListSeparator> props to
+ * render before the group's first item: the freshest bucket reads "Last 24
+ * hours"; the rest read "Older than <X>" with the exact cutoff as a tooltip.
+ *
+ * @param {number} ts - Timestamp in seconds (e.g. session mtime, bookmark updated_at).
+ * @param {number} nowMs - Reference "now" in epoch milliseconds.
+ * @returns {{ key: string, entry: { label: string, prefix?: string, title?: string } }}
+ */
+export function dateBucketSeparator(ts, nowMs) {
+    const { key, duration, cutoffMs } = sessionPresetBucket(ts, nowMs)
+    const entry = key === 'recent'
+        ? { label: 'Last 24 hours' }
+        : { label: duration, prefix: 'Older than ', title: formatFullDateTime(cutoffMs) }
+    return { key, entry }
 }

@@ -1,16 +1,17 @@
 <script setup>
 /**
- * SessionListSeparator — horizontal rule with a centered label, inserted before
- * a group of sessions in the sidebar list (Selected, Pinned, Active, "Last 24
- * hours", "Older than <X>", …). Same visual treatment as the message list's
- * DaySeparator (line · label · line).
+ * SidebarListSeparator — horizontal rule with a centered label, inserted before
+ * a group of rows in a sidebar list (sessions: Selected / Pinned / Active /
+ * "Last 24 hours" / "Older than <X>"; artifacts: only the date buckets). Same
+ * visual treatment as the message list's DaySeparator (line · label · line).
  *
  * Two label modes:
  *  - Plain: just `label` (e.g. "Pinned", "Active", "Last 24 hours").
  *  - Threshold (when `prefix` is set, e.g. "Older than "): responsive, CSS-only
- *    via a container query on `.session-list-container` (named `session-list`).
- *    On a sidebar ≥ 12rem it reads "<prefix><label>" (e.g. "Older than 7 days");
- *    on a narrower one it collapses to "<label> +" (e.g. "7 days +").
+ *    via the nearest size container (the sidebar list — `.session-list-container`
+ *    or `.bookmark-list-container`). On a sidebar ≥ 12rem it reads
+ *    "<prefix><label>" (e.g. "Older than 7 days"); on a narrower one it collapses
+ *    to "<label> +" (e.g. "7 days +").
  *
  * `title` is shown as a native tooltip (used for the exact cutoff datetime of
  * the "older than" thresholds).
@@ -37,7 +38,7 @@ defineProps({
 
 <template>
     <div
-        class="session-list-separator"
+        class="sidebar-list-separator"
         role="separator"
         :aria-label="prefix ? `${prefix}${label}` : label"
         :title="title"
@@ -49,7 +50,7 @@ defineProps({
 </template>
 
 <style scoped>
-.session-list-separator {
+.sidebar-list-separator {
     display: flex;
     align-items: center;
     gap: var(--wa-space-m);
@@ -72,11 +73,12 @@ defineProps({
 }
 
 /* Threshold labels (with a prefix): default to the compact "<label> +" form,
-   expand to "<prefix><label>" once the sidebar is wide enough. */
+   expand to "<prefix><label>" once the sidebar (nearest size container) is wide
+   enough. Anonymous query so it works under both the session and artifact lists. */
 .sls-prefix { display: none; }
 .sls-suffix { display: inline; }
 
-@container session-list (min-width: 12rem) {
+@container (min-width: 12rem) {
     .sls-prefix { display: inline; }
     .sls-suffix { display: none; }
 }
