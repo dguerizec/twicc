@@ -130,6 +130,38 @@ export function formatFullDateTime(timestampMs) {
 }
 
 /**
+ * Bucket a session by its last-activity day, relative to "now", for the
+ * sidebar's date separators. Calendar-day based (local time), so boundaries
+ * fall on local midnight rather than on rolling 24h windows.
+ *
+ * Buckets (by whole-day distance from today):
+ *   - today          (0, or future via clock skew) — no separator
+ *   - yesterday      (1)
+ *   - previous7      (2–7)
+ *   - previous30     (8–30)
+ *   - older          (>30)
+ *
+ * @param {number} mtime - Last-activity Unix timestamp in seconds.
+ * @param {number} nowMs - Reference "now" in epoch milliseconds.
+ * @returns {{ key: string, label: ?string }} `label` is null for the `today`
+ *   bucket, which never renders a separator.
+ */
+export function sessionDateBucket(mtime, nowMs) {
+    const startOfDay = (ms) => {
+        const d = new Date(ms)
+        d.setHours(0, 0, 0, 0)
+        return d.getTime()
+    }
+    const diffDays = Math.round((startOfDay(nowMs) - startOfDay(mtime * 1000)) / 86400000)
+
+    if (diffDays <= 0) return { key: 'today', label: null }
+    if (diffDays === 1) return { key: 'yesterday', label: 'Yesterday' }
+    if (diffDays <= 7) return { key: 'previous7', label: 'Previous 7 days' }
+    if (diffDays <= 30) return { key: 'previous30', label: 'Previous 30 days' }
+    return { key: 'older', label: 'Older' }
+}
+
+/**
  * Format a duration in seconds to a human-readable string.
  * - < 60s: "42s"
  * - < 1h: "2m 30s"

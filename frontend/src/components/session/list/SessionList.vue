@@ -14,8 +14,10 @@ import { useSessionSelectionStore } from '../../../stores/sessionSelection'
 import { isWorkspaceProjectId, extractWorkspaceId } from '../../../utils/workspaceIds'
 import { computeSidebarSessionBlocks } from '../../../utils/sidebarSessions'
 import { matchQuery } from '../../../utils/textFilter'
+import { sessionDateBucket } from '../../../utils/date'
 import VirtualScroller from '../../virtual-scroller/VirtualScroller.vue'
 import SessionListItem from './SessionListItem.vue'
+import DaySeparator from '../detail/items/DaySeparator.vue'
 
 const props = defineProps({
     projectId: {
@@ -157,6 +159,38 @@ const sessions = computed(() => {
             : (session.title || session.id)
         return matchQuery(query, displayName)
     })
+})
+
+// Date separators for the `natural` block only, and within it only for its
+// chronological tail — sessions that are neither pinned nor active. Pinned and
+// active sessions float to the top of `natural` out of date order, so they (and
+// the cross-filter / extra blocks) stay un-bucketed.
+//
+// Mirrors `dividerAfterIds`: a Map of session id -> bucket label, consumed in
+// the scroller slot to render a <DaySeparator> *before* the matching item. Built
+// over the filtered `sessions` so a search query keeps the buckets correct.
+// A separator is emitted before the first session of each bucket except "today".
+const dateSeparatorBeforeIds = computed(() => {
+    const map = new Map()
+    const processStates = store.processStates
+    const chronoIds = new Set(
+        sessionBlocks.value.natural
+            .filter(s => !s.pinned && processStates[s.id] == null)
+            .map(s => s.id)
+    )
+    if (chronoIds.size === 0) return map
+
+    const nowMs = Date.now()
+    let prevKey = null
+    for (const session of sessions.value) {
+        if (!chronoIds.has(session.id)) continue
+        const { key, label } = sessionDateBucket(session.mtime, nowMs)
+        if (key !== prevKey) {
+            prevKey = key
+            if (label !== null) map.set(session.id, label)
+        }
+    }
+    return map
 })
 
 // Pagination state
@@ -584,6 +618,10 @@ defineExpose({
             @keydown="handleListKeydown"
         >
             <template #default="{ item: session, index }">
+                <DaySeparator
+                    v-if="dateSeparatorBeforeIds.has(session.id)"
+                    :label="dateSeparatorBeforeIds.get(session.id)"
+                />
                 <SessionListItem
                     :session="session"
                     :active="session.id === sessionId"
