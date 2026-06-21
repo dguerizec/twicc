@@ -1,0 +1,128 @@
+// frontend/src/utils/scopeMemory.js
+//
+// Per-scope last-location memory. Each "scope" — a session, a project/worktree page,
+// a workspace page, or the All Projects page — remembers the last location the user
+// was at inside it. When the user RE-ENTERS a scope by navigating to its bare
+// home/entry route, the guard redirects to that remembered location instead, so a
+// scope reopens where it was left (like switching back to a window).
+//
+// Strictly secondary to the URL (spec: 2026-06-21-scope-route-memory-design.md): the
+// memory is read at exactly one moment — a fresh (non Back/Forward) navigation that
+// ENTERS a scope home from a DIFFERENT scope. It never overrides a displayed route,
+// never reconciles, never background-syncs. Volatile: lost on a full page reload.
+//
+// No per-button wiring: a single global guard upgrades every control that pushes a
+// bare scope-home route (sidebar rows, the project button, the workspace / All
+// Projects selectors, the deselect toggle).
+
+import { buildTabRouteName, buildSubagentRouteName, pickDefined } from './granularRoutes'
+
+// --- Route-name families (authoritative; mirrors router.js) ---
+
+const SESSION_NAMES = new Set([
+    'session', 'session-files', 'session-git', 'session-terminal',
+    'session-artifacts', 'session-orchestration', 'session-subagent',
+    'projects-session', 'projects-session-files', 'projects-session-git',
+    'projects-session-terminal', 'projects-session-artifacts',
+    'projects-session-orchestration', 'projects-session-subagent',
+])
+const PROJECT_NAMES = new Set([
+    'project', 'project-files', 'project-git', 'project-terminal', 'project-artifacts',
+])
+const ALL_PROJECTS_NAMES = new Set([
+    'projects-all', 'projects-files', 'projects-git', 'projects-terminal', 'projects-artifacts',
+])
+// Bare entry routes (homes) per scope family.
+const HOME_NAMES = new Set(['session', 'projects-session', 'project', 'projects-all'])
+
+// --- Pure helpers ---
+
+// Stable per-scope key, or null for non-scope routes (home '/', login, …).
+export function scopeKey(route) {
+    const name = route?.name
+    if (!name) return null
+    if (SESSION_NAMES.has(name)) return `session:${route.params.sessionId}`
+    if (PROJECT_NAMES.has(name)) return `project:${route.params.projectId}`
+    if (ALL_PROJECTS_NAMES.has(name)) {
+        const ws = route.query?.workspace
+        return ws ? `workspace:${ws}` : 'all-projects'
+    }
+    return null
+}
+
+// True only for a scope's bare entry route (Chat / project stats / All Projects list).
+export function isScopeHome(route) {
+    return HOME_NAMES.has(route?.name)
+}
+
+// The sub-screen id within a scope: '' for the base, else the tool tab / 'subagent'.
+export function tabOf(name) {
+    if (HOME_NAMES.has(name)) return ''
+    return name.split('-').pop()
+}
+
+// The framing-independent part of a route: which tab + its granular params, dropping
+// the context params (projectId/sessionId) that are re-supplied on rebuild.
+export function scopeRelative(route) {
+    const { projectId, sessionId, ...rest } = route.params || {}
+    return { tab: tabOf(route.name), params: rest }
+}
+
+// "Nothing better than the home is remembered" — absent, or the base screen itself.
+export function isBase(saved) {
+    return !saved || saved.tab === ''
+}
+
+// Rebuild a concrete route location from a stored {tab, params}, in the framing of the
+// navigation being intercepted (`to`): its route-name family, its projectId, and its
+// live query (e.g. the current ?workspace=). The stored params are already URL-encoded
+// (captured verbatim from route.params), so no re-encoding is needed.
+export function rebuild(saved, to) {
+    const isAllProjectsMode = to.name.startsWith('projects')
+    const isSessionRoute = SESSION_NAMES.has(to.name)
+    const name = saved.tab === 'subagent'
+        ? buildSubagentRouteName(isAllProjectsMode)
+        : buildTabRouteName({ isAllProjectsMode, isSessionRoute, tab: saved.tab })
+    const params = {
+        ...saved.params,
+        ...pickDefined({ projectId: to.params.projectId, sessionId: to.params.sessionId }),
+    }
+    return { name, params, query: to.query }
+}
+
+// --- The memory + guard installer ---
+
+const memory = new Map() // scopeKey -> { tab, params }
+
+export function _resetForTest() { memory.clear() } // test/sanity only
+
+export function registerScopeMemory(router) {
+    // Back/Forward detection via Vue Router's monotonic history.state.position:
+    // on a pop the browser swaps history.state to the destination BEFORE beforeEach
+    // runs (position differs from our tracked value); on a fresh push it has not yet.
+    let currentPosition = window.history.state?.position ?? 0
+    const isHistoryNav = () => {
+        const pos = window.history.state?.position
+        return pos != null && pos !== currentPosition
+    }
+
+    // Active restore: rewrite an enter-scope navigation to the scope's last location.
+    router.beforeEach((to, from) => {
+        if (isHistoryNav()) return true                       // Back/Forward: never touch
+        if (!isScopeHome(to)) return true                     // only intercept entry routes
+        const toKey = scopeKey(to)
+        if (!toKey || toKey === scopeKey(from)) return true   // intra-scope move: leave alone
+        const saved = memory.get(toKey)
+        if (isBase(saved)) return true                        // nothing better than the home
+        return rebuild(saved, to)
+    })
+
+    // Passive recording: remember where the user is in each scope. Skip aborted /
+    // redirected intermediates so we only record settled screens.
+    router.afterEach((to, from, failure) => {
+        if (failure) return
+        currentPosition = window.history.state?.position ?? currentPosition
+        const key = scopeKey(to)
+        if (key) memory.set(key, scopeRelative(to))
+    })
+}
