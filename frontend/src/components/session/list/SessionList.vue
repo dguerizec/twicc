@@ -14,10 +14,11 @@ import { useSessionSelectionStore } from '../../../stores/sessionSelection'
 import { isWorkspaceProjectId, extractWorkspaceId } from '../../../utils/workspaceIds'
 import { computeSidebarSessionBlocks } from '../../../utils/sidebarSessions'
 import { matchQuery } from '../../../utils/textFilter'
-import { sessionDateBucket } from '../../../utils/date'
+import { sessionPresetBucket } from '../../../utils/datePresets'
+import { formatFullDateTime } from '../../../utils/date'
 import VirtualScroller from '../../virtual-scroller/VirtualScroller.vue'
 import SessionListItem from './SessionListItem.vue'
-import DaySeparator from '../detail/items/DaySeparator.vue'
+import SessionDateSeparator from './SessionDateSeparator.vue'
 
 const props = defineProps({
     projectId: {
@@ -166,10 +167,13 @@ const sessions = computed(() => {
 // active sessions float to the top of `natural` out of date order, so they (and
 // the cross-filter / extra blocks) stay un-bucketed.
 //
-// Mirrors `dividerAfterIds`: a Map of session id -> bucket label, consumed in
-// the scroller slot to render a <DaySeparator> *before* the matching item. Built
-// over the filtered `sessions` so a search query keeps the buckets correct.
-// A separator is emitted before the first session of each bucket except "today".
+// Buckets mirror the bulk-archive "older than <X>" thresholds (rolling cutoffs),
+// so each separator marks exactly what the matching archive option would select.
+// Mirrors `dividerAfterIds`: a Map of session id -> { duration, title }, consumed
+// in the scroller slot to render a <SessionDateSeparator> *before* the matching
+// item (title = the exact cutoff datetime). Built over the filtered `sessions` so
+// a search query keeps the buckets correct. A separator is emitted before the
+// first session of each bucket except `recent` (< 24h).
 const dateSeparatorBeforeIds = computed(() => {
     const map = new Map()
     const processStates = store.processStates
@@ -184,10 +188,12 @@ const dateSeparatorBeforeIds = computed(() => {
     let prevKey = null
     for (const session of sessions.value) {
         if (!chronoIds.has(session.id)) continue
-        const { key, label } = sessionDateBucket(session.mtime, nowMs)
+        const { key, duration, cutoffMs } = sessionPresetBucket(session.mtime, nowMs)
         if (key !== prevKey) {
             prevKey = key
-            if (label !== null) map.set(session.id, label)
+            if (duration !== null) {
+                map.set(session.id, { duration, title: formatFullDateTime(cutoffMs) })
+            }
         }
     }
     return map
@@ -618,9 +624,10 @@ defineExpose({
             @keydown="handleListKeydown"
         >
             <template #default="{ item: session, index }">
-                <DaySeparator
+                <SessionDateSeparator
                     v-if="dateSeparatorBeforeIds.has(session.id)"
-                    :label="dateSeparatorBeforeIds.get(session.id)"
+                    :duration="dateSeparatorBeforeIds.get(session.id).duration"
+                    :title="dateSeparatorBeforeIds.get(session.id).title"
                 />
                 <SessionListItem
                     :session="session"

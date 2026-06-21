@@ -78,6 +78,7 @@ defineExpose({ focus })
             <wa-dropdown-item value="archive-older">
                 <wa-icon slot="icon" name="box-archive"></wa-icon>
                 {{ trimmedSearchQuery ? 'Archive filtered sessions older than…' : 'Archive sessions older than…' }}
+                <wa-dropdown-item slot="submenu" value="archive-older-24h">24 hours</wa-dropdown-item>
                 <wa-dropdown-item slot="submenu" value="archive-older-3d">3 days</wa-dropdown-item>
                 <wa-dropdown-item slot="submenu" value="archive-older-7d">7 days</wa-dropdown-item>
                 <wa-dropdown-item slot="submenu" value="archive-older-10d">10 days</wa-dropdown-item>

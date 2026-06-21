@@ -582,6 +582,7 @@ defineExpose({ open })
                         with-clear
                         class="filter-select"
                     >
+                        <wa-option value="24h">Newer than 24 hours</wa-option>
                         <wa-option value="3d">Newer than 3 days</wa-option>
                         <wa-option value="7d">Newer than 7 days</wa-option>
                         <wa-option value="10d">Newer than 10 days</wa-option>
@@ -599,6 +600,7 @@ defineExpose({ open })
                         with-clear
                         class="filter-select"
                     >
+                        <wa-option value="24h">Older than 24 hours</wa-option>
                         <wa-option value="3d">Older than 3 days</wa-option>
                         <wa-option value="7d">Older than 7 days</wa-option>
                         <wa-option value="10d">Older than 10 days</wa-option>
