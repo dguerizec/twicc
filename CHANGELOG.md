@@ -8,25 +8,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
-- **Dockable layout** — arrange a session's tool tabs (Files, Git, Terminal, Artifacts, …) into a multi-pane layout: dock them around the chat to see several at once, resize and maximize panes, and save named layouts with per-project and global defaults.
-- **Artifacts** — agents can create artifacts (images, interactive playgrounds that can make network requests you approve, …) rendered inside TwiCC, bookmarkable for quick access in a dedicated view (+CLI/skill/API).
-- **Attach parent terminals** — a session's terminal panel can now show terminals shared from a higher scope (worktree → project → workspace → global).
+- **Dockable layout** — dock a session's tool tabs (Files, Git, Terminal, …) into a multi-pane layout around the chat — resize and maximize panes, and save named layouts with per-project and global defaults.
+- **Artifacts** — agents can create artifacts (images, interactive playgrounds that make network calls you approve, …) rendered inside TwiCC and bookmarkable in a dedicated view (+CLI/skill/API).
+- **File previews** — the file viewer renders HTML pages, Mermaid diagrams, PDFs, audio and video, with a full-window view.
+- **Error recovery** — after a provider error, a one-click resend or retry gets a stuck conversation moving again.
+- **Sidebar separators** — separators now group the session and artifacts lists by date and set off the sidebar's sections.
+- **Attach parent terminals** — a session's terminal panel can show terminals shared from a higher scope.
 - **CLI session messages** — can now be filtered by text (`--contains`) from the CLI, skills and API.
-- **Terminal copy-on-select** — an optional setting to copy selected text to the clipboard automatically, no click needed.
+- **Terminal copy-on-select** — an optional setting to copy selected text to the clipboard automatically.
 
 ### Changed
 
-- **Git tab** — the uncommitted-changes tree refreshes live while the tab is visible.
-- **Git status badges** — the change tree shows the full staged/unstaged code (e.g. `AM`) with a tooltip, and conflicted files are now surfaced.
-- **Git diff stats** — each changed file in the tree shows its +added / −removed line counts.
-- **Remote access** — when no password is set, TwiCC now only accepts connections from the same machine; set a password to reach it from other devices.
+- **Git tab** — the change tree now updates live and shows more at a glance: staged/unstaged status badges, surfaced conflicts, and per-file +/− line counts.
+- **Remote access** — with no password set, TwiCC accepts connections only from the same machine; set a password to reach it from other devices.
 - **Question widget** — ability to cancel or partially submit Claude's questions.
 - **Claude Agent SDK** — Upgrade from 0.2.99 to 0.2.105 (bundled Claude Code CLI: 2.1.175 → 2.1.183)
 
 ### Fixed
 
-- **Navigation** — returning to a session, project or workspace now reopens your last open tab and file instead of resetting to the start.
-- **Claude Code** — usage sync recovers when the OAuth token cache is stale.
+- **Navigation** — returning to a session, project or workspace reopens your last tab instead of resetting to the start.
+- **Provider authentication** — more reliable handling of expired or stale provider credentials.
 - **Unread sessions** — an idle device left open no longer marks your sessions read.
 
 ## [1.8.3] - 2026-06-15
