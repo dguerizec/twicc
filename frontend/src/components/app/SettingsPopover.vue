@@ -406,7 +406,9 @@ const titleSystemPromptInput = ref('')
 const terminalUseTmux = computed(() => store.isTerminalUseTmux)
 const terminalTmuxConfigPath = computed(() => store.getTerminalTmuxConfigPath)
 const terminalMacOptionIsMeta = computed(() => store.isTerminalMacOptionIsMeta)
+const terminalCopyOnSelect = computed(() => store.isTerminalCopyOnSelect)
 const isMac = computed(() => store.isMac)
+const isLinux = computed(() => store.isLinux)
 const defaultWorktreeDirectory = computed(() => store.getDefaultWorktreeDirectory)
 const compactSessionList = computed(() => store.isCompactSessionList)
 const showMessageTimestamps = computed(() => store.areMessageTimestampsShown)
@@ -786,6 +788,13 @@ function onTmuxChange(event) {
  */
 function onMacOptionIsMetaChange(event) {
     store.setTerminalMacOptionIsMeta(event.target.checked)
+}
+
+/**
+ * Toggle copy-on-select in terminals.
+ */
+function onCopyOnSelectChange(event) {
+    store.setTerminalCopyOnSelect(event.target.checked)
 }
 
 function onWorktreeDirInputChange(event) {
@@ -1407,6 +1416,25 @@ function onChangelogClose() {
                             size="small"
                             class="usage-file-validation"
                         >{{ tmuxConfigValidation.message }}</wa-callout>
+                    </div>
+                    <div class="setting-group">
+                        <label class="setting-group-label">Copy on select</label>
+                        <wa-switch
+                            :checked="terminalCopyOnSelect"
+                            @change="onCopyOnSelectChange"
+                            size="small"
+                        >Enabled</wa-switch>
+                        <span class="setting-group-hint">
+                            When enabled, selecting text in a terminal with the mouse copies it to
+                            the clipboard automatically (paste with
+                            <kbd>{{ isMac ? '⌘V' : 'Ctrl+V' }}</kbd>) — no need to click Copy. The
+                            selection stays visible.
+                            <template v-if="isLinux">
+                                The text goes to the regular clipboard, <strong>not</strong> the
+                                mouse "primary" selection (middle-click paste): browsers can't write
+                                to the primary selection, so middle-click won't paste it.
+                            </template>
+                        </span>
                     </div>
                     <div class="setting-group" v-if="isMac">
                         <label class="setting-group-label">Option key (⌥)</label>

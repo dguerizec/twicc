@@ -307,6 +307,8 @@ export function useTerminal(contextKey, terminalIndex = 0, { sessionId = null, p
     let desktopWheelAccumulator = 0
     /** @type {AbortController | null} */
     let desktopDragAbortController = null
+    /** @type {AbortController | null} */
+    let copyOnSelectAbortController = null
 
     /**
      * Check whether tmux should actually be used for this terminal.
@@ -1430,6 +1432,60 @@ export function useTerminal(contextKey, terminalIndex = 0, { sessionId = null, p
         }
     }
 
+    /**
+     * Copy-on-select handler (opt-in via the terminalCopyOnSelect setting):
+     * when the user finishes a mouse selection, copy it to the clipboard
+     * silently. Unlike the Copy button / Ctrl+C, it does NOT clear the
+     * selection and shows no toast — the selection stays visible so the user
+     * can keep working. The setting is read live here, so toggling it takes
+     * effect on already-open terminals without a reconnect. Works in both
+     * normal and tmux modes (getSelectionText covers the custom tmux buffer).
+     *
+     * The copy always targets the regular clipboard: there is no web API to
+     * write the X11 "primary" (mouse) selection, and xterm draws its selection
+     * on a canvas so the browser never populates primary for it either.
+     */
+    function onCopyOnSelectMouseUp() {
+        if (!settingsStore.isTerminalCopyOnSelect) return
+        const selection = getSelectionText()
+        if (!selection) return
+        // Use the async Clipboard API (the same path as Ctrl+C), NOT the
+        // execCommand textarea helper: document.execCommand('copy') is
+        // unreliable when fired on the very mouseup that ends a selection drag
+        // (the browser still treats the selection gesture as in progress, so it
+        // returns false) and it steals focus. navigator.clipboard.writeText has
+        // neither problem. Fall back to the textarea helper only when the async
+        // API is unavailable (non-secure contexts).
+        if (navigator.clipboard?.writeText) {
+            navigator.clipboard.writeText(selection).catch(() => {})
+        } else {
+            clipboardWrite(selection)
+        }
+    }
+
+    function attachCopyOnSelectListener() {
+        if (!containerRef.value) return
+        copyOnSelectAbortController = new AbortController()
+        // Capture phase: in tmux mode onDesktopMouseUp stops propagation in the
+        // capture phase, which would prevent a bubble-phase listener from ever
+        // running. A capture-phase listener on the same element still runs
+        // (stopPropagation, unlike stopImmediatePropagation, does not block
+        // same-node listeners), and the selection is already finalized (it is
+        // built during mousemove). Always attached; no-ops when the setting is
+        // off.
+        containerRef.value.addEventListener('mouseup', onCopyOnSelectMouseUp, {
+            capture: true,
+            signal: copyOnSelectAbortController.signal,
+        })
+    }
+
+    function detachCopyOnSelectListener() {
+        if (copyOnSelectAbortController) {
+            copyOnSelectAbortController.abort()
+            copyOnSelectAbortController = null
+        }
+    }
+
     // Hybrid CLI terminals enforce a minimum column count (HYBRID_MIN_COLS):
     // the Claude TUI degrades below it, the embedded pane drives the tmux
     // window size for every attached client (a narrow attach would shrink
@@ -1693,6 +1749,7 @@ export function useTerminal(contextKey, terminalIndex = 0, { sessionId = null, p
         // Attach touch listeners for mobile text selection
         attachTouchListeners()
         attachDesktopDragListeners()
+        attachCopyOnSelectListener()
 
         // Connect to the backend
         connectWs()
@@ -1907,6 +1964,7 @@ export function useTerminal(contextKey, terminalIndex = 0, { sessionId = null, p
 
         detachTouchListeners()
         detachDesktopDragListeners()
+        detachCopyOnSelectListener()
 
         if (resizeObserver) {
             resizeObserver.disconnect()

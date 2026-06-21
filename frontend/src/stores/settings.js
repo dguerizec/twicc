@@ -35,6 +35,7 @@ export const SETTINGS_SCHEMA = {
     diffSideBySide: true,
     editorWordWrap: true,
     terminalMacOptionIsMeta: false,
+    terminalCopyOnSelect: false,
     compactSessionList: false,
     showAllArtifacts: false,
     showMessageTimestamps: false,
@@ -116,6 +117,7 @@ const SETTINGS_VALIDATORS = {
     terminalUseTmux: (v) => typeof v === 'boolean',
     terminalTmuxConfigPath: (v) => typeof v === 'string',
     terminalMacOptionIsMeta: (v) => typeof v === 'boolean',
+    terminalCopyOnSelect: (v) => typeof v === 'boolean',
     showDiffs: (v) => typeof v === 'boolean',
     toolDiffWordWrap: (v) => typeof v === 'boolean',
     toolDiffSideBySide: (v) => typeof v === 'boolean',
@@ -302,6 +304,7 @@ export const useSettingsStore = defineStore('settings', {
         isTerminalUseTmux: (state) => state.terminalUseTmux,
         getTerminalTmuxConfigPath: (state) => state.terminalTmuxConfigPath,
         isTerminalMacOptionIsMeta: (state) => state.terminalMacOptionIsMeta,
+        isTerminalCopyOnSelect: (state) => state.terminalCopyOnSelect,
         isShowDiffs: (state) => state.showDiffs,
         isToolDiffWordWrap: (state) => state.toolDiffWordWrap,
         isToolDiffSideBySide: (state) => state.toolDiffSideBySide,
@@ -577,6 +580,19 @@ export const useSettingsStore = defineStore('settings', {
         setTerminalMacOptionIsMeta(enabled) {
             if (SETTINGS_VALIDATORS.terminalMacOptionIsMeta(enabled)) {
                 this.terminalMacOptionIsMeta = enabled
+            }
+        },
+
+        /**
+         * Set whether finishing a mouse selection in a terminal copies it to
+         * the clipboard automatically (copy-on-select). The copy targets the
+         * regular clipboard (the only one browsers can write to), not the X11
+         * "primary" (mouse) selection. Local-only: a per-device UX preference.
+         * @param {boolean} enabled
+         */
+        setTerminalCopyOnSelect(enabled) {
+            if (SETTINGS_VALIDATORS.terminalCopyOnSelect(enabled)) {
+                this.terminalCopyOnSelect = enabled
             }
         },
 
@@ -1029,6 +1045,8 @@ export function initSettings() {
             defaultWorktreeDirectory: store.defaultWorktreeDirectory,
             terminalUseTmux: store.terminalUseTmux,
             terminalTmuxConfigPath: store.terminalTmuxConfigPath,
+            terminalMacOptionIsMeta: store.terminalMacOptionIsMeta,
+            terminalCopyOnSelect: store.terminalCopyOnSelect,
             showDiffs: store.showDiffs,
             toolDiffWordWrap: store.toolDiffWordWrap,
             toolDiffSideBySide: store.toolDiffSideBySide,
