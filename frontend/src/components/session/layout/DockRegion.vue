@@ -87,7 +87,11 @@ function onTabClick(tabId) {
                  wa-tab-show handles switching to a *different* tab; the claim also covers clicking the
                  tab that is ALREADY this group's active one (no wa-tab-show fires then) while another
                  region owns the route. The placement arrow stops its own click, so it never reaches here. -->
-            <wa-tab v-for="t in tabs" :key="t.id" slot="nav" :panel="t.id" class="dock-tab" @click="onTabClick(t.id)">
+            <!-- Double-click toggles maximize for this region: maximize it (focusing the double-clicked
+                 tab), or restore it when it is already the maximized region. -->
+            <wa-tab v-for="t in tabs" :key="t.id" slot="nav" :panel="t.id" class="dock-tab"
+                @click="onTabClick(t.id)"
+                @dblclick.stop="maximized ? emit('restore') : emit('maximize', dockIds, t.id)">
                 <wa-icon v-if="t.icon" :name="t.icon" class="dock-tab-icon"></wa-icon>
                 <span class="dock-tab-label">{{ t.label }}</span>
                 <TabPlacementMenu

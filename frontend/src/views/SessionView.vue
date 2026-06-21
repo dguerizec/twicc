@@ -856,7 +856,31 @@ function onLayoutMaximize(dockIds, tabId) {
     if (tabId) switchToTab(tabId)
 }
 function onLayoutRestoreMaximized() {
+    // A region maximized straight from the rail (a minimized or swapped-out dock) keeps its
+    // underlying collapsed/swapped state, so restoring drops it back to the rail — its focused tab
+    // would then be invisible. Mirror onLayoutMinimize and hand focus back to the center.
+    const focused = activeTabId.value
+    const dock = layout.dockOf(focused)
     layout.restoreMaximized()
+    if (dock && dock !== 'center' && !layout.isToolPanelVisible(focused)) {
+        // A restoring double-click on the maximized tab queued a deferred pane-focus (from its tab-header
+        // clicks). Left to fire on the next frame, its rAF would re-route to the now-railed tab AFTER we
+        // moved off it, and the layout watch — no longer seeing it maximized — would un-minimize the dock
+        // (re-dock it). Cancel it so the dock stays minimized/swapped-out, then route to the center.
+        cancelPaneFocus()
+        switchToTab(centerActiveTab.value)
+    }
+}
+// Double-clicking the center tab bar toggles maximize for the whole central zone — only where the
+// maximize button exists (hasDocks); a no-op in single pane / the mobile tab strip. Scoped to the
+// group's own nav tabs: closest('wa-tab') + a direct-child check so a nested wa-tab (e.g. the
+// terminal's internal tabs) or the nav cluster (layout menu / maximize button) never triggers it.
+function onCenterTabDblClick(event) {
+    const tab = event.target?.closest?.('wa-tab')
+    if (!tab || tab.getAttribute('slot') !== 'nav' || tab.parentElement !== event.currentTarget) return
+    if (!hasDocks.value) return
+    if (isCenterMaximized.value) onLayoutRestoreMaximized()
+    else onCenterMaximize()
 }
 
 // Teleport target registry: logical key -> element. The center slot registers its tab-panel
@@ -1536,6 +1560,7 @@ onBeforeUnmount(() => {
             :active="centerActiveTab"
             @wa-tab-show="onTabShow"
             @click.capture="onCenterClick"
+            @dblclick="onCenterTabDblClick"
             class="session-tabs"
             :class="{ 'tabnav-dimmed': !isCenterRouteActive }"
         >

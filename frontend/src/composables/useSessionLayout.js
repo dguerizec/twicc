@@ -187,9 +187,15 @@ export function useSessionLayout({ sessionId, containerRef, tabs, routeActiveTab
         if (!id) return
         const dock = intention.value.assignment[id]
         if (!dock || !DOCKS.includes(dock)) return
-        if (intention.value.collapsed.includes(dock)) restore(dock)
-        const swapEdge = gutterEdgeForTabAction(id, 'swap')
-        if (swapEdge) swapSide(swapEdge)
+        // While this dock IS the maximized region, freeze its underlying rail state: don't un-minimize
+        // or swap its column in just because the route points into it. This is what lets a dock that was
+        // maximized straight from the rail drop back to the rail on restore (minimized → minimized,
+        // swap → re-swap). rememberActive still runs below so the region keeps its active tab.
+        if (!(intention.value.maximized || []).includes(dock)) {
+            if (intention.value.collapsed.includes(dock)) restore(dock)
+            const swapEdge = gutterEdgeForTabAction(id, 'swap')
+            if (swapEdge) swapSide(swapEdge)
+        }
         const region = render.value.regions.find((r) => r.slots.some((s) => s.tabs.some((t) => t.id === id)))
         if (region) rememberActive(groupKeyOf(region.slots), id)
     })

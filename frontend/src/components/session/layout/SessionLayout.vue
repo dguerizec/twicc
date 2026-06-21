@@ -71,6 +71,19 @@ const overlay = computed(() =>
 const overlayActive = computed(() => overlay.value ? props.layout.routeActiveTabId.value : null)
 
 function onGutterAction({ edge, dockId, tabId, action }) {
+    // Double-clicking a gutter chip maximizes its dock, focusing the double-clicked tab — same path as a
+    // dock-region's maximize button. The watch in useSessionLayout keeps the dock's rail state frozen
+    // while maximized, so restore drops it back to the rail (minimized → minimized, swap → re-swap).
+    if (action === 'maximize') {
+        emit('maximize', [dockId], tabId)
+        return
+    }
+    // An overlay chip's second rapid click: force the peek open (rather than toggling it shut) so a
+    // double-click leaves it open. Single clicks fall through to the toggle branch below.
+    if (action === 'overlay-open') {
+        emit('overlay-activate', tabId)
+        return
+    }
     // Clicking a gutter chip to swap a hidden column in or restore a minimized dock is an explicit
     // activation of that tab — like a dock-tab header click — so besides claiming the route (select-tab)
     // we emit tab-activate to focus the panel's content (the overlay branch focuses via overlay-activate).

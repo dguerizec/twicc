@@ -2,7 +2,7 @@
 // One edge gutter (thin rail) holding the icons of collapsed / responsively-hidden docks.
 // One icon PER TAB, anchored start/end mirroring the dock origin. A click dispatches the
 // item's action (swap | restore | overlay) up to the layout.
-import { computed } from 'vue'
+import { computed, onUnmounted } from 'vue'
 
 const props = defineProps({
     // resolver gutter: { edge, x, y, w, h, items: [{ dockId, tabs, action, anchor }] }
@@ -38,14 +38,64 @@ function verb(entry) {
     if (entry.item.action === 'restore') return 'restore'
     return isOpen(entry) ? 'close overlay' : 'peek overlay'
 }
-function onClick(entry) {
-    emit('action', {
-        edge: props.gutter.edge,
-        dockId: entry.item.dockId,
-        tabId: entry.tab.id,
-        action: entry.item.action,
-    })
+// Double-click on a rail chip = maximize that dock. A native dblclick is impossible on a restore/swap
+// chip: its first click moves the dock out of the rail, so the chip is gone before a dblclick could
+// fire. So we detect the double-click ourselves — hold the single action for DOUBLE_CLICK_DELAY and
+// promote it to 'maximize' if a second click on the same chip lands first. Overlay chips stay instant
+// (the peek isn't destructive); their second rapid click just forces the peek open so a double-click
+// can't toggle it shut. Keep DOUBLE_CLICK_DELAY in sync with the rest of the layout's double-click feel.
+const DOUBLE_CLICK_DELAY = 250 // ms
+
+let pendingTimer = null
+let pendingEntry = null
+let lastOverlay = { key: null, at: 0 }
+
+function chipKey(entry) { return entry.item.dockId + ':' + entry.tab.id }
+function fire(entry, action) {
+    emit('action', { edge: props.gutter.edge, dockId: entry.item.dockId, tabId: entry.tab.id, action })
 }
+function cancelPending() {
+    if (pendingTimer) { clearTimeout(pendingTimer); pendingTimer = null }
+    pendingEntry = null
+}
+function flushPending() {
+    if (!pendingTimer) return
+    clearTimeout(pendingTimer); pendingTimer = null
+    const e = pendingEntry; pendingEntry = null
+    if (e) fire(e, e.item.action)
+}
+
+function onClick(entry) {
+    if (entry.item.action === 'overlay') {
+        // A pending restore/swap from another chip shouldn't be cancelled by an overlay click — let it run.
+        flushPending()
+        const key = chipKey(entry)
+        const now = Date.now()
+        if (lastOverlay.key === key && now - lastOverlay.at < DOUBLE_CLICK_DELAY) {
+            lastOverlay = { key: null, at: 0 }
+            fire(entry, 'overlay-open') // force open: a double-click leaves the peek open, never toggled shut
+            return
+        }
+        lastOverlay = { key, at: now }
+        fire(entry, entry.item.action) // normal peek toggle (instant)
+        return
+    }
+    // restore / swap: defer the native action; a quick second click on the same chip becomes maximize.
+    if (pendingEntry && chipKey(pendingEntry) === chipKey(entry)) {
+        cancelPending()
+        fire(entry, 'maximize')
+        return
+    }
+    flushPending() // a different chip was pending — let its native action run, then defer this one
+    pendingEntry = entry
+    pendingTimer = setTimeout(() => {
+        pendingTimer = null
+        const e = pendingEntry; pendingEntry = null
+        if (e) fire(e, e.item.action)
+    }, DOUBLE_CLICK_DELAY)
+}
+
+onUnmounted(cancelPending)
 </script>
 
 <template>
