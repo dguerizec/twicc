@@ -132,6 +132,16 @@ _KIND_HANDLERS: dict[str, tuple[str, str, str]] = {
         "delete_artifact_bookmark_from_payload",
         "deleted",
     ),
+    "settings:update": (
+        "twicc.core.services.settings_mutation",
+        "update_synced_settings_from_payload",
+        "updated",
+    ),
+    "settings:notification_test": (
+        "twicc.core.services.settings_mutation",
+        "notification_test_from_payload",
+        "updated",
+    ),
 }
 
 
@@ -270,6 +280,9 @@ class DropRequestsWatcher:
                     value = getattr(result, attr, None)
                     if value is not None:
                         status_data[attr] = value
+                extra = getattr(result, "status_extra", None)
+                if isinstance(extra, dict):
+                    status_data.update(extra)
                 log_id = (
                     getattr(result, "session_id", None)
                     or getattr(result, "workspace_id", None)

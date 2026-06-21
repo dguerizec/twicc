@@ -1247,232 +1247,39 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
     async def _handle_update_synced_settings(self, content: dict) -> None:
         """Handle update_synced_settings request from client.
 
-        Uses optimistic concurrency: if the client's baseVersion is behind
-        the current version, the write is rejected and the client is resynced.
+        Thin WS wrapper over the shared ``update_synced_settings`` service
+        (the single rich write path, also used by the drop-request CLI). The
+        service performs the merge under the settings lock — optimistic
+        concurrency, per-provider consistency, the ``disabledProviders`` safety
+        rules (self-healing on live agents + transition guard), the
+        ``defaultProvider`` rebind and the ``_version`` bump — then, on
+        acceptance, applies the orchestrator transitions and broadcasts
+        ``synced_settings_updated`` to every client.
 
-        When ``disabledProviders`` changes, the function applies two safety
-        rules in the sync closure (under the settings lock):
-
-        - Self-healing: a provider with live agents cannot be disabled; the
-          offending entries are silently dropped and recorded in ``corrections``.
-        - Default-provider rebind: if the current ``defaultProvider`` is no
-          longer in the enabled set after the merge, it is rebound to the
-          first enabled provider in ``Provider`` enum order.
-
-        After the closure returns, the orchestrator transitions are split
-        in two halves outside the lock so the WS handler stays
-        non-blocking AND the transition broadcasts reach the client
-        before the ``synced_settings_updated`` broadcast at the bottom
-        (otherwise the UI toggles would flip to their new state for a
-        frame before showing the in-transition spinner):
-
-        - ``begin_start`` / ``begin_shutdown`` are awaited in parallel
-          via ``asyncio.gather`` — fast, just the transition broadcasts.
-        - ``schedule_finish_start`` / ``schedule_finish_shutdown`` queue
-          the slow bodies (``orch.start()`` / ``orch.shutdown()``) as
-          fire-and-forget background tasks.
+        This wrapper only adds the WS-specific reject path: a stale
+        ``baseVersion`` rejects the write, so this single client is resynced
+        with the authoritative clean settings. An accepted write needs nothing
+        here — the service already broadcast to all clients (including this one).
         """
         synced_settings = content.get("settings")
         if not isinstance(synced_settings, dict):
             return
         base_version = content.get("baseVersion")  # None for old clients
 
-        def _merge_and_write():
-            with _settings_lock:
-                existing_settings = read_synced_settings()
-                current_version = existing_settings.get("_version", 0)
+        # Delegate to the shared service (merge + orchestrator transitions +
+        # all-clients broadcast). Only a rejection (stale ``baseVersion``) is
+        # handled here: a targeted resync of this client.
+        from twicc.core.services.settings_mutation import update_synced_settings
 
-                # Reject stale writes (accept if baseVersion is None — safety for rolling upgrades)
-                if base_version is not None and base_version < current_version:
-                    clean, ver = prepare_settings_for_client(existing_settings)
-                    return {"status": "rejected", "clean": clean, "version": ver}
-
-                # Capture both the previous disabled set AND whether the key
-                # was physically present in the file. The latter distinguishes
-                # "running everything" from "running nothing because no
-                # initial choice has been made yet" — they are semantically
-                # different and must produce different orchestrator deltas
-                # (see the return block below).
-                old_key_present = "disabledProviders" in existing_settings
-                old_disabled = set(existing_settings.get("disabledProviders") or [])
-
-                # Accepted — merge, then enforce per-provider consistency rules.
-                existing_settings.update(synced_settings)
-
-                # Let every provider enforce its own rules on the merged dict.
-                # ``synced_settings`` is the subset the client just sent, so
-                # each provider can short-circuit when none of its keys changed.
-                get_provider_helpers_registry().enforce_synced_settings_consistency(
-                    existing_settings, synced_settings,
-                )
-
-                # Self-healing: refuse to disable a provider that still has live agents.
-                new_disabled_raw = existing_settings.get("disabledProviders")
-                corrections: dict = {}
-                if isinstance(new_disabled_raw, list):
-                    new_disabled = set(new_disabled_raw)
-                    just_disabled = new_disabled - old_disabled
-                    registry = get_agent_manager_registry()
-                    refused: set[str] = set()
-                    for value in just_disabled:
-                        try:
-                            provider = Provider(value)
-                        except ValueError:
-                            continue
-                        try:
-                            manager = registry.get(provider)
-                        except KeyError:
-                            continue
-                        if manager.get_active_agents():
-                            refused.add(value)
-                    if refused:
-                        # new_disabled is the post-correction value (refused entries removed).
-                        new_disabled -= refused
-                        existing_settings["disabledProviders"] = sorted(new_disabled)
-                        corrections["disabledProviders"] = sorted(new_disabled)
-
-                # Transition guard: refuse toggles for providers currently in
-                # transient states (STARTING / STOPPING). The frontend greys
-                # the switch during these windows but a race (e.g. double
-                # click before the WS broadcast lands) must not be allowed
-                # to corrupt the orchestrator's state machine. We only
-                # honour the intent when the state is settled:
-                # - disable allowed only from RUNNING (-> stopping -> stopped)
-                # - enable allowed only from STOPPED (-> starting -> running)
-                from twicc.providers.state import ProviderState, get_provider_state
-                final_disabled_set = set(existing_settings.get("disabledProviders") or [])
-                just_disabled_now = final_disabled_set - old_disabled
-                just_enabled_now = old_disabled - final_disabled_set
-                transition_changed = False
-                for value in just_disabled_now:
-                    try:
-                        provider = Provider(value)
-                    except ValueError:
-                        continue
-                    if get_provider_state(provider) != ProviderState.RUNNING:
-                        final_disabled_set.discard(value)  # revert: keep enabled
-                        transition_changed = True
-                for value in just_enabled_now:
-                    try:
-                        provider = Provider(value)
-                    except ValueError:
-                        continue
-                    if get_provider_state(provider) != ProviderState.STOPPED:
-                        final_disabled_set.add(value)  # revert: keep disabled
-                        transition_changed = True
-                if transition_changed:
-                    new_list = sorted(final_disabled_set)
-                    existing_settings["disabledProviders"] = new_list
-                    corrections["disabledProviders"] = new_list
-
-                # Default-provider rebind: if the current default is no longer enabled,
-                # pick the first enabled provider in Provider enum order.
-                registered = {p for p, _ in get_provider_helpers_registry().items()}
-                final_disabled_set = set(existing_settings.get("disabledProviders") or [])
-                enabled_after = {p.value for p in registered if p.value not in final_disabled_set}
-                current_default = existing_settings.get("defaultProvider")
-                if enabled_after and current_default not in enabled_after:
-                    new_default = next(p.value for p in Provider if p.value in enabled_after)
-                    existing_settings["defaultProvider"] = new_default
-                    corrections["defaultProvider"] = new_default
-
-                existing_settings["_version"] = current_version + 1
-                write_synced_settings(existing_settings)
-
-                # Compute the orchestrator transitions on "what was running"
-                # vs "what should run" — NOT on the diff of `disabledProviders`.
-                # When the key was previously absent, `start_all` had run with
-                # `get_enabled_providers() == set()`, so nothing was started;
-                # naïvely diffing the disabled sets would then yield an empty
-                # `to_start` (set() - set()) and leave everything stopped after
-                # the first dialog validation.
-                registered_values = {p.value for p, _ in get_provider_helpers_registry().items()}
-                old_running = (registered_values - old_disabled) if old_key_present else set()
-                new_running = registered_values - final_disabled_set
-                return {
-                    "status": "accepted",
-                    "version": current_version + 1,
-                    "to_start": new_running - old_running,
-                    "to_stop": old_running - new_running,
-                    "corrections": corrections,
-                }
-
-        result = await sync_to_async(_merge_and_write)()
-
-        if result["status"] == "rejected":
-            # Rejected — resync only this client
+        result = await update_synced_settings(synced_settings, base_version=base_version)
+        if result.status == "rejected":
+            # Stale write rejected — resync only this client, then stop.
             await self.send_json({
                 "type": "synced_settings_updated",
-                "settings": result["clean"],
-                "version": result["version"],
+                "settings": result.clean,
+                "version": result.version,
             })
             return
-
-        # Accepted — apply the orchestrator transitions computed under the
-        # lock. `to_start` / `to_stop` were derived from the "running" sets
-        # (not the raw disabled sets) so a first-time activation correctly
-        # starts everything the user just enabled.
-        #
-        # The transition broadcasts (``provider_state_changed:starting`` /
-        # ``:stopping``) must reach the client BEFORE the
-        # ``synced_settings_updated`` broadcast emitted below — otherwise
-        # the UI flips the toggle to its new ON/OFF state for a frame
-        # before showing the spinner/disabled-during-transition state.
-        # We split each transition in two: the fast half (``begin_*``,
-        # which only sends the transition broadcast) is awaited up front
-        # in a single ``gather``, then the slow half (``orch.start()`` /
-        # ``orch.shutdown()``) is scheduled as a background task so the
-        # handler never blocks on it.
-        from twicc.orchestrator import get_orchestrator_registry
-
-        orchestrators = get_orchestrator_registry()
-        to_stop_providers: list[Provider] = []
-        for value in result["to_stop"]:
-            try:
-                to_stop_providers.append(Provider(value))
-            except ValueError:
-                continue
-        to_start_providers: list[Provider] = []
-        for value in result["to_start"]:
-            try:
-                to_start_providers.append(Provider(value))
-            except ValueError:
-                continue
-
-        # Broadcast every transition in parallel — these are fast
-        # (one ``group_send`` each, no slow body). All broadcasts land in
-        # the Channels queues before the ``synced_settings_updated``
-        # broadcast emitted at the bottom of this handler.
-        await asyncio.gather(
-            *(orchestrators.begin_shutdown(p) for p in to_stop_providers),
-            *(orchestrators.begin_start(p) for p in to_start_providers),
-        )
-
-        # Schedule the slow bodies as fire-and-forget background tasks.
-        # They run in parallel across providers (each orchestrator owns
-        # its own isolated task graph). The state machine settles to
-        # ``stopped`` / ``running`` from inside each task once the body
-        # finishes, broadcasting the final transition then.
-        for p in to_stop_providers:
-            orchestrators.schedule_finish_shutdown(p)
-        for p in to_start_providers:
-            orchestrators.schedule_finish_start(p)
-
-        # Broadcast to all clients, overlaying any server-side corrections
-        # so every client converges to the authoritative state.
-        broadcast_settings = dict(synced_settings)
-        broadcast_settings.update(result["corrections"])
-        await self.channel_layer.group_send(
-            "updates",
-            {
-                "type": "broadcast",
-                "data": {
-                    "type": "synced_settings_updated",
-                    "settings": broadcast_settings,
-                    "version": result["version"],
-                },
-            },
-        )
 
     async def _handle_validate_usage_dump_path(self, content: dict) -> None:
         """Validate a usage dump file path and return the result to the client.
