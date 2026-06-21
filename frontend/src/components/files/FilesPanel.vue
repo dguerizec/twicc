@@ -2,6 +2,7 @@
 import { ref, computed, watch, nextTick, onMounted, onActivated, onDeactivated, onBeforeUnmount } from 'vue'
 import { apiFetch } from '../../utils/api'
 import { useContainerBreakpoint } from '../../composables/useContainerBreakpoint'
+import { usePanelContentFocus } from '../../composables/usePanelContentFocus'
 import FileTreePanel from './FileTreePanel.vue'
 import FilePane from './FilePane.vue'
 import { useCodeCommentsStore, buildCommentedPathsSet } from '../../stores/codeComments'
@@ -538,12 +539,9 @@ const selectedFile = computed(() => fileTreePanelRef.value?.selectedFile ?? null
 
 // On a tab-activation focus request from the layout (focusRequest bumped by SessionView), focus the
 // panel's primary content: the file viewer when a file is open (so keyboard nav keeps reading/scrolling
-// it), otherwise the tree's search filter. Each target self-persists its focus against the post-activation
-// reveal steal (see useFocusRetry); we just pick which one.
-watch(() => props.focusRequest, () => {
-    if (selectedFile.value && filePaneRef.value) filePaneRef.value.focusContent()
-    else fileTreePanelRef.value?.focusSearchInput()
-})
+// it), otherwise the tree's search filter. Deferred until the host sub-panel ref appears (it can mount a
+// frame or more after the request on a cold load), so the request is never dropped — see usePanelContentFocus.
+usePanelContentFocus({ focusRequest: () => props.focusRequest, selectedFile, filePaneRef, fileTreePanelRef })
 
 /**
  * Absolute path of the currently selected file.

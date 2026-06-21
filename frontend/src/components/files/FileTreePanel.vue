@@ -393,7 +393,7 @@ function holdsFocus(el) {
 function focusSearchInput() {
     requestSearchFocus(() => {
         const el = searchInputRef.value
-        if (!el) return false
+        if (!el) return null // input not rendered yet (tree still loading) — wait for it to appear
         if (!holdsFocus(el)) {
             try {
                 el.focus()

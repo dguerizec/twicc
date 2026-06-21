@@ -970,12 +970,13 @@ function focusContentOnce() {
     if (showEditor.value) {
         const ed = props.diffMode ? diffEditorRef.value : codeEditorRef.value
         const root = ed?.$el
-        if (root && root.contains(document.activeElement)) return true
+        if (!root) return null // editor not mounted yet (content still loading) — wait for it to appear
+        if (root.contains(document.activeElement)) return true
         ed?.focus?.()
-        return !!root && root.contains(document.activeElement)
+        return root.contains(document.activeElement)
     }
     const wrap = previewWrapRef.value
-    if (!wrap) return false
+    if (!wrap) return null // preview not mounted yet (content still loading) — wait for it to appear
     if (wrap.contains(document.activeElement)) return true
     // Prefer a natively-interactive element (iframe / pdf embed / media) then a scrollable container,
     // else the wrap itself made programmatically focusable. preventScroll so focusing never jumps it.

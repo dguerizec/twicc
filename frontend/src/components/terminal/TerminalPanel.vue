@@ -543,7 +543,9 @@ const requestTerminalFocus = useFocusRetry()
 function focusActiveTerminal() {
     requestTerminalFocus(() => {
         if (isRouteTermUnavailable.value) return true // nothing focusable — satisfy the pump so it stops
-        return activeApi.value?.focusContent?.() ?? false
+        const api = activeApi.value
+        if (!api) return null // active TerminalInstance not registered yet — wait for it to appear
+        return api.focusContent?.() ?? false
     })
 }
 

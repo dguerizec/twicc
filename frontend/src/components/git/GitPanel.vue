@@ -17,6 +17,7 @@ import FilePane from '../files/FilePane.vue'
 import { searchTreeFiles } from '../../utils/treeSearch'
 import { useCodeCommentsStore, buildCommentedPathsSet } from '../../stores/codeComments'
 import { usePanZoom, useSyncedPanZoom } from '../../composables/usePanZoom'
+import { usePanelContentFocus } from '../../composables/usePanelContentFocus'
 import { useDataStore } from '../../stores/data'
 import { deriveGitRoots, getWorktreeParent } from '../../utils/projectRoots'
 
@@ -446,13 +447,9 @@ const selectedFile = computed(() => fileTreePanelRef.value?.selectedFile ?? null
 
 // On a tab-activation focus request from the layout (focusRequest bumped by SessionView), focus the
 // panel's primary content: the diff viewer when a file's diff is shown (so keyboard nav keeps reading
-// it), otherwise the tree's search filter. Each target self-persists its focus against the
-// post-activation reveal steal (see useFocusRetry); we just pick which one. When a file is selected but
-// its diff isn't rendered yet (loading, or an image diff with no FilePane), we fall back to the filter.
-watch(() => props.focusRequest, () => {
-    if (selectedFile.value && filePaneRef.value) filePaneRef.value.focusContent()
-    else fileTreePanelRef.value?.focusSearchInput()
-})
+// it), otherwise the tree's search filter. The sub-panel mounts only after the git log loads (~2s on a
+// cold first activation), so this defers the request until the host ref appears — see usePanelContentFocus.
+usePanelContentFocus({ focusRequest: () => props.focusRequest, selectedFile, filePaneRef, fileTreePanelRef })
 
 /** The tree node for the currently selected file (or null) — drives its status flag. */
 const selectedFileNode = computed(() => {
