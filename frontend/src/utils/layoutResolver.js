@@ -39,7 +39,7 @@ export const DEFAULT_CONFIG = {
   bottomMergeBelowW: 600, // bottom-span width below which the two bottom siblings merge into one tab bar
   bottomComfortW: 600,    // center-col width below which the bottom flips to full width (classic)
   mobileMaxW: 520,        // at or below this width -> pure tabs (no docks)
-  overlayCoverage: 0.95,  // an opened overlay covers 95%, leaving a 5% escape strip
+  overlayCoverage: 0.9,   // an opened overlay covers 90%, leaving a 10% escape strip
   railW: 30,              // px width/height of a collapsed-dock edge gutter (the thin icon rail) (keep updated with --gutter-size in DockGutter.vue)
   // --- Splitter ratios: the user-draggable layout intention (persisted, clamped at render) ---
   leftColFrac: 0.25,

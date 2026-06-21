@@ -1,5 +1,5 @@
 <script setup>
-// A peek overlay (95% of the inner area) for an edge whose dock(s) couldn't fit as a column
+// A peek overlay (90% of the inner area) for an edge whose dock(s) couldn't fit as a column
 // or are collapsed-to-overlay. Backdrop closes it; the gutter stays visible above. Its body
 // is a Teleport target registered under 'overlay' (only the overlay-active panel targets it).
 import { computed, ref, watchEffect } from 'vue'
