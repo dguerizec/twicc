@@ -387,6 +387,15 @@ def messages(
     ctx: typer.Context,
     range: str = typer.Option(None, "--range", help="Restrict to a line number or range (e.g. '5' or '10-20')."),
     role: str = typer.Option(None, "--role", help="Filter by author: 'user' or 'assistant'."),
+    contains: list[str] = typer.Option(
+        [],
+        "--contains",
+        help=(
+            "Case-insensitive substring filter on the message text. "
+            "Repeatable, AND-combined (a message must contain every term). "
+            "Applied before --tail/--limit/--offset."
+        ),
+    ),
     limit: int = typer.Option(None, "--limit", help="Max number of messages to return (default: no limit)."),
     offset: int = typer.Option(0, "--offset", help="Skip first N messages."),
     tail: int = typer.Option(None, "--tail", help="Return the last N messages (mutually exclusive with --limit/--offset)."),
@@ -394,7 +403,7 @@ def messages(
     """Show all user/assistant messages of a session as JSON (cross-provider)."""
     from twicc.cli.session import messages as session_messages
 
-    session_messages(ctx.obj, range_str=range, role=role, limit=limit, offset=offset, tail=tail)
+    session_messages(ctx.obj, range_str=range, role=role, contains=contains, limit=limit, offset=offset, tail=tail)
 
 
 @session_app.command()

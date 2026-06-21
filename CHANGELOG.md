@@ -11,6 +11,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Dockable layout** — arrange a session's tool tabs (Files, Git, Terminal, Artifacts, …) into a multi-pane layout: dock them around the chat to see several at once, resize and maximize panes, and save named layouts with per-project and global defaults.
 - **Artifacts** — agents can create artifacts (images, interactive playgrounds that can make network requests you approve, …) rendered inside TwiCC, bookmarkable for quick access in a dedicated view (+CLI/skill/API).
 - **Attach parent terminals** — a session's terminal panel can now show terminals shared from a higher scope (worktree → project → workspace → global).
+- **CLI session messages** — can now be filtered by text (`--contains`) from the CLI, skills and API.
 
 ### Changed
 

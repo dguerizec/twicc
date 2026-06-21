@@ -10,7 +10,7 @@ Inspect a single session. Four sub-commands:
 
 - Default — full session metadata.
 - `content [LINE_OR_RANGE] [--contains TEXT ...]` — raw JSONL items by line number and/or content substring(s) (provider-specific schema).
-- `messages` — user/assistant messages only, uniform shape across providers.
+- `messages [--contains TEXT ...]` — user/assistant messages only, uniform shape across providers.
 - `agents` — list subagents spawned by this session.
 
 ## When to use
@@ -149,6 +149,7 @@ User + assistant messages only, uniform shape across providers. No tool calls, n
 
 - `--range N` or `--range N-M` — filter by JSONL line number (same numbering as `content`). Only user/assistant messages whose `line_num` falls within the range are returned — not the Nth message in the list.
 - `--role user|assistant` — keep only one side.
+- `--contains TEXT` — keep only messages whose text contains the substring. Repeatable and **AND-combined** (a message must contain every term). **Case-insensitive.** Unlike `content`'s `--contains` (which matches the raw JSONL), this matches the extracted `text` shown below — no JSON keys, no tool noise. Applied **before** `--tail`/`--limit`/`--offset`, so paging windows the matching messages.
 - `--limit N` — cap results (default: no cap).
 - `--offset N` — skip first N messages (default: 0).
 - `--tail N` — return the last N messages. Mutually exclusive with `--limit`/`--offset`.
@@ -164,6 +165,8 @@ Common patterns:
 - Last agent reply: `messages --role assistant --tail 1`
 - Last N exchanges: `messages --tail N`
 - Focused window from search: `messages --range A-B`
+- Messages mentioning a term: `messages --contains "auth"`
+- Last reply mentioning a term: `messages --role assistant --contains "auth" --tail 1`
 
 ### Agents — list subagents
 
@@ -184,6 +187,8 @@ $TWICC session abc123 content --contains TypeError --contains "auth.py"
 $TWICC session abc123 content 10-200 --contains "TypeError"
 $TWICC session abc123 messages --tail 1
 $TWICC session abc123 messages --role user
+$TWICC session abc123 messages --contains auth
+$TWICC session abc123 messages --role assistant --contains auth --tail 1
 $TWICC session abc123 agents
 $TWICC session abc123 agents --limit 50
 ```

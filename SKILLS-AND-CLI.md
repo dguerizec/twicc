@@ -151,7 +151,7 @@ List sessions, or batch-look up specific ones.
 ### `twicc session <SESSION_ID> <SUBCOMMAND>`
 Inspect a single session.
 - `content [RANGE] [--contains TEXT ...]` — raw item content by line number/range (e.g. `5`, `10-20`) and/or substring. `--contains` is case-insensitive and repeatable (AND-combined); at least one of `RANGE`/`--contains` is required, and both can combine. Each result is `{line_num, content}`.
-- `messages` — all user/assistant messages, cross-provider, uniform shape. Options: `--range`, `--role user|assistant`, `--limit`, `--offset`, `--tail N` (last N; mutually exclusive with `--limit`/`--offset`).
+- `messages [--contains TEXT ...]` — all user/assistant messages, cross-provider, uniform shape. Options: `--range`, `--role user|assistant`, `--contains TEXT` (case-insensitive substring on the extracted message text, repeatable/AND-combined, applied before paging), `--limit`, `--offset`, `--tail N` (last N; mutually exclusive with `--limit`/`--offset`).
 - `agents` — list subagents. Options: `--limit` (default 20), `--offset`.
 - Skill: [`twicc-session`](src/twicc/agent/plugin/twicc/skills/twicc-session/SKILL.md).
 

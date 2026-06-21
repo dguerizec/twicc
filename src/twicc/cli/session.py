@@ -43,6 +43,22 @@ def _parse_range_filter(range_str: str) -> dict:
     return {"line_num": line_num}
 
 
+def _slice_window(seq, total: int, *, limit: int | None, offset: int, tail: int | None):
+    """Apply ``tail``/``limit``/``offset`` windowing to a sliceable sequence.
+
+    Works on both a lazy queryset (slicing stays at the DB level) and a plain
+    list. ``total`` is only consulted for ``tail`` — callers pass ``qs.count()``
+    for a queryset (cheap, avoids materialising it) or ``len(...)`` for a list.
+    ``tail`` is assumed already validated as mutually exclusive with
+    ``limit``/``offset``.
+    """
+    if tail is not None:
+        return seq[max(0, total - tail):]
+    if limit is not None:
+        return seq[offset : offset + limit]
+    return seq[offset:]
+
+
 def main(session_id: str) -> None:
     """Fetch a single session by ID and print its JSON representation to stdout."""
     import django
@@ -101,6 +117,7 @@ def messages(
     *,
     range_str: str | None = None,
     role: str | None = None,
+    contains: list[str] | None = None,
     limit: int | None = None,
     offset: int = 0,
     tail: int | None = None,
@@ -115,6 +132,13 @@ def messages(
     whose provider-specific text extraction yields an empty string are
     silently dropped (same behaviour as the search indexer), so the
     result may contain fewer entries than ``--limit`` or ``--tail``.
+
+    ``contains`` is a list of case-insensitive substrings AND-combined (a
+    message must contain every term). Unlike ``content``'s raw-JSONL filter, it
+    matches against the extracted ``text`` — what this sub-command emits — so it
+    never matches JSON keys or tool noise. Because that text is produced in
+    Python, the filter (and, with it, the ``tail``/``limit``/``offset`` window)
+    is applied after extraction, on the matching messages.
     """
     import django
 
@@ -125,6 +149,8 @@ def messages(
     from twicc.providers.helpers import get_provider_helpers
 
     session = _get_session(session_id)
+
+    contains = contains or []
 
     if role is not None and role not in {"user", "assistant"}:
         emit_error(f"Error: invalid --role '{role}'. Use 'user' or 'assistant'.", code=1)
@@ -147,17 +173,25 @@ def messages(
         filter_kwargs |= _parse_range_filter(range_str)
 
     qs = SessionItem.objects.filter(**filter_kwargs).order_by("line_num")
-    if tail is not None:
-        count = qs.count()
-        items = list(qs[max(0, count - tail):])
-    elif limit is not None:
-        items = list(qs[offset : offset + limit])
-    elif offset:
-        items = list(qs[offset:])
-    else:
-        items = list(qs)
-
     helpers = get_provider_helpers(session.provider)
+
+    if contains:
+        # The substring filter targets the extracted text, so we materialise and
+        # extract everything in range first, filter, then window on the matches.
+        terms = [term.lower() for term in contains]
+        matched = [
+            msg
+            for msg in helpers.get_indexable_messages(list(qs))
+            if all(term in msg.text.lower() for term in terms)
+        ]
+        selected = _slice_window(matched, len(matched), limit=limit, offset=offset, tail=tail)
+    else:
+        # No text filter: window at the DB level, then extract (existing behaviour —
+        # the window counts raw items, so dropped-empty extractions may shrink the result).
+        total = qs.count() if tail is not None else 0
+        items = list(_slice_window(qs, total, limit=limit, offset=offset, tail=tail))
+        selected = list(helpers.get_indexable_messages(items))
+
     data = [
         {
             "line_num": msg.line_num,
@@ -165,7 +199,7 @@ def messages(
             "role": msg.from_role,
             "timestamp": msg.timestamp,
         }
-        for msg in helpers.get_indexable_messages(items)
+        for msg in selected
     ]
 
     emit_json(data)
