@@ -16,6 +16,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Attach parent terminals** — a session's terminal panel can show terminals shared from a higher scope.
 - **CLI session messages** — can now be filtered by text (`--contains`) from the CLI, skills and API.
 - **Terminal copy-on-select** — an optional setting to copy selected text to the clipboard automatically.
+- **Settings from the CLI** — read and change TwiCC synced settings from the command line (and API).
 
 ### Changed
 
