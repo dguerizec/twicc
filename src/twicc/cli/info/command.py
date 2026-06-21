@@ -2,9 +2,9 @@
 
 A single command that always returns ``twicc_version`` + ``providers``,
 plus zero or more sections selected by positional arguments. The valid
-section names are ``presets``, ``commands``, ``models``, and
-``agent-settings`` — passing several composes them in a single payload,
-saving the caller from issuing multiple commands.
+section names are ``presets``, ``commands``, ``models``,
+``agent-settings``, and ``settings`` — passing several composes them in
+a single payload, saving the caller from issuing multiple commands.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ import typer
 
 from twicc.cli._output import emit_error
 
-VALID_SECTIONS: tuple[str, ...] = ("presets", "commands", "models", "agent-settings")
+VALID_SECTIONS: tuple[str, ...] = ("presets", "commands", "models", "agent-settings", "settings")
 
 
 def info_cmd(
@@ -22,12 +22,12 @@ def info_cmd(
         metavar="[SECTION...]",
         help=(
             "Zero or more sections to include in the output. Valid "
-            "values: presets, commands, models, agent-settings, all "
-            "(shortcut for the four others). The output always carries "
+            "values: presets, commands, models, agent-settings, settings, "
+            "all (shortcut for all five). The output always carries "
             "twicc_version and providers; each section name listed adds "
             "the matching key. Order of the output keys is canonical "
-            "(presets, commands, models, agent-settings) regardless of "
-            "input order; duplicates are ignored."
+            "(presets, commands, models, agent-settings, settings) "
+            "regardless of input order; duplicates are ignored."
         ),
     ),
     provider: str = typer.Option(
@@ -70,7 +70,7 @@ def info_cmd(
         ),
     ),
 ) -> None:
-    """Inspect TwiCC's per-provider catalogues (presets/commands/models/agent-settings)."""
+    """Inspect TwiCC's per-provider catalogues (presets/commands/models/agent-settings/settings)."""
     sections = sections or []
     canonical_sections = _validate_sections(sections)
 
@@ -143,6 +143,11 @@ def info_cmd(
         from twicc.cli.info.agent_settings import build as build_agent_settings
 
         output["agent-settings"] = build_agent_settings(provider=provider, include_disabled=include_disabled)
+
+    if "settings" in canonical_sections:
+        from twicc.cli.info.settings import build as build_settings
+
+        output["settings"] = build_settings()
 
     emit_json(output)
 

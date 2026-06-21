@@ -599,3 +599,105 @@ def test_notifications_test_existing_id_does_not_raise():
     targets = [{"id": "t1", "url": "json://x"}, {"id": "t2", "url": "json://y"}]
     target = find_target(targets, "t2")
     assert target["id"] == "t2"
+
+
+# ---------------------------------------------------------------------------
+# Task 13 — info settings schema section
+# ---------------------------------------------------------------------------
+
+
+def _get_schema_entries(build_result: dict) -> list[dict]:
+    """Flatten all group entries from build() into a single list."""
+    entries = []
+    for group in build_result["groups"].values():
+        entries.extend(group)
+    return entries
+
+
+def test_info_settings_generic_key_has_correct_type_and_default():
+    """build() includes a known generic key with correct type, default, and owner."""
+    from twicc.cli.info.settings import build
+
+    result = build()
+    entries = _get_schema_entries(result)
+    matches = [e for e in entries if e["key"] == "autoUnpinOnArchive"]
+    assert len(matches) == 1
+    entry = matches[0]
+    assert entry["owner"] == "generic"
+    assert entry["type"] == "bool"
+    assert entry["default"] is True
+
+
+def test_info_settings_excluded_key_is_marked_excluded():
+    """build() marks waTheme as excluded (UI-only)."""
+    from twicc.cli.info.settings import build
+
+    result = build()
+    entries = _get_schema_entries(result)
+    matches = [e for e in entries if e["key"] == "waTheme"]
+    assert len(matches) == 1
+    assert matches[0]["owner"] == "excluded"
+
+
+def test_info_settings_provider_key_is_marked_provider():
+    """build() marks claudeCodeDefaultModel as provider-owned."""
+    from twicc.cli.info.settings import build
+
+    result = build()
+    entries = _get_schema_entries(result)
+    matches = [e for e in entries if e["key"] == "claudeCodeDefaultModel"]
+    assert len(matches) == 1
+    assert matches[0]["owner"] == "provider"
+
+
+def test_info_settings_notifications_key_is_marked_notifications():
+    """build() marks externalNotificationTargets as notifications-owned."""
+    from twicc.cli.info.settings import build
+
+    result = build()
+    entries = _get_schema_entries(result)
+    matches = [e for e in entries if e["key"] == "externalNotificationTargets"]
+    assert len(matches) == 1
+    assert matches[0]["owner"] == "notifications"
+
+
+def test_info_settings_disabled_providers_is_included():
+    """build() includes disabledProviders explicitly despite it being absent from defaults."""
+    from twicc.cli.info.settings import build
+
+    result = build()
+    entries = _get_schema_entries(result)
+    matches = [e for e in entries if e["key"] == "disabledProviders"]
+    assert len(matches) == 1
+    entry = matches[0]
+    assert entry["owner"] == "provider"
+    assert entry["type"] == "list"
+    # default is None (sentinel — not a real default value)
+    assert entry["default"] is None
+
+
+def test_info_settings_groups_keys_are_correct():
+    """build() returns a dict with a 'groups' key containing the expected owner buckets."""
+    from twicc.cli.info.settings import build
+
+    result = build()
+    assert "groups" in result
+    assert "__description" in result
+    groups = result["groups"]
+    assert "generic" in groups
+    assert "provider" in groups
+    assert "notifications" in groups
+    assert "excluded" in groups
+
+
+def test_info_settings_all_entries_have_required_fields():
+    """Every entry in build() carries key, type, default, owner, and hint."""
+    from twicc.cli.info.settings import build
+
+    result = build()
+    for entry in _get_schema_entries(result):
+        assert "key" in entry, f"Missing 'key' in {entry}"
+        assert "type" in entry, f"Missing 'type' in {entry!r}"
+        assert "default" in entry, f"Missing 'default' in {entry!r}"
+        assert "owner" in entry, f"Missing 'owner' in {entry!r}"
+        assert "hint" in entry, f"Missing 'hint' in {entry!r}"

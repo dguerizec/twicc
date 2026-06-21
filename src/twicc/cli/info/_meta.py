@@ -28,8 +28,12 @@ AVAILABLE_INFO_ARGUMENTS: dict[str, str] = {
         "Per-provider catalog of agent setting values and their model "
         "restrictions."
     ),
+    "settings": (
+        "Schema of every synced setting — key, type, default, owner, "
+        "and the CLI command that owns it."
+    ),
     "all": (
         "Shortcut expanding to presets + commands + models + "
-        "agent-settings."
+        "agent-settings + settings."
     ),
 }
