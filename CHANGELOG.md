@@ -25,6 +25,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- **Navigation** — returning to a session, project or workspace now reopens your last open tab and file instead of resetting to the start.
 - **Claude Code** — usage sync recovers when the OAuth token cache is stale.
 - **Unread sessions** — an idle device left open no longer marks your sessions read.
 
