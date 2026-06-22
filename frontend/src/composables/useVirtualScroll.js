@@ -19,6 +19,16 @@ const DEFAULT_BUFFER = 500
  */
 const DEFAULT_UNLOAD_BUFFER = 1000
 
+/**
+ * Minimum height delta (px) for a ResizeObserver measurement to count as a real change.
+ * Firefox reports fractional borderBox heights that wobble sub-pixel between frames (e.g.
+ * 976.70001 → 976.70003); without this guard every wobble is treated as a change and re-emits
+ * item-resized in an endless loop that never lets the scroll-stability debounce settle, leaving
+ * the chat permanently hidden after it was loaded while its tab panel was display:none. Mirrors
+ * the 0.5px guard already used on the anchor scroll correction in batchUpdateItemHeights.
+ */
+const HEIGHT_CHANGE_EPSILON_PX = 0.5
+
 
 /**
  * Composable for virtual scrolling with variable-height items.
@@ -417,7 +427,10 @@ export function useVirtualScroll(options) {
                 continue
             }
             const oldHeight = heightCache.get(key)
-            if (oldHeight !== newHeight) {
+            // Ignore sub-pixel wobble (see HEIGHT_CHANGE_EPSILON_PX): only react when the height
+            // changed by at least the epsilon. The first measurement (oldHeight === undefined) and
+            // any genuine change still go through; the precise newHeight is cached so positions stay exact.
+            if (oldHeight === undefined || Math.abs(oldHeight - newHeight) >= HEIGHT_CHANGE_EPSILON_PX) {
                 actualUpdates.set(key, { newHeight, oldHeight })
             }
         }

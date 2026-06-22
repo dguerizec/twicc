@@ -95,12 +95,21 @@ let onStabilizedCallback = null
 // Timeout ID for the stability debounce
 let stabilityTimeoutId = null
 
+// Timeout ID for the absolute upper bound on the stability wait (see scrollToBottomUntilStable).
+// Independent of the debounce above — never reset by resize events.
+let stabilityMaxWaitId = null
+
 // Promise that resolves when current scroll-to-bottom operation completes
 // Used to prevent concurrent calls to scrollToBottomUntilStable
 let scrollToBottomPromise = null
 
 // Delay in ms to wait for no more resize events before considering stable
 const STABILITY_DEBOUNCE_MS = 100
+
+// Absolute cap on the initial-reveal stability wait. The debounce above is reset on every
+// resize; if resizes never settle (e.g. a sub-pixel ResizeObserver loop), it would never fire
+// and the scroller would stay visibility:hidden forever. This bound guarantees the reveal.
+const MAX_STABILITY_WAIT_MS = 1000
 
 // Buffer: load N items before/after visible range
 const LOAD_BUFFER = 50
@@ -401,6 +410,10 @@ onDeactivated(() => {
     if (stabilityTimeoutId) {
         clearTimeout(stabilityTimeoutId)
         stabilityTimeoutId = null
+    }
+    if (stabilityMaxWaitId) {
+        clearTimeout(stabilityMaxWaitId)
+        stabilityMaxWaitId = null
     }
 
     // Capture state for reactivation: track item count and scroll position
@@ -757,6 +770,26 @@ watch(
 )
 
 /**
+ * Resolve the pending initial-scroll stability wait, if any, clearing both its debounce
+ * and its absolute max-wait timers. Idempotent — safe to call from whichever timer fires first.
+ */
+function resolveStability() {
+    if (stabilityTimeoutId) {
+        clearTimeout(stabilityTimeoutId)
+        stabilityTimeoutId = null
+    }
+    if (stabilityMaxWaitId) {
+        clearTimeout(stabilityMaxWaitId)
+        stabilityMaxWaitId = null
+    }
+    if (onStabilizedCallback) {
+        const callback = onStabilizedCallback
+        onStabilizedCallback = null
+        callback()
+    }
+}
+
+/**
  * Handle item resize events from VirtualScroller.
  * Used to detect when items have finished resizing for scroll stability detection.
  */
@@ -771,12 +804,7 @@ function onItemResized() {
         // Set new timeout - if no more resizes happen within STABILITY_DEBOUNCE_MS,
         // we consider it stable
         stabilityTimeoutId = setTimeout(() => {
-            stabilityTimeoutId = null
-            if (onStabilizedCallback) {
-                const callback = onStabilizedCallback
-                onStabilizedCallback = null
-                callback()
-            }
+            resolveStability()
         }, STABILITY_DEBOUNCE_MS)
     }
 }
@@ -827,9 +855,18 @@ async function scrollToBottomUntilStable(options = {}) {
         // scroll anchoring engages for any subsequent height growth.
         scroller.scrollToBottom({ behavior: 'auto' })
 
-        // Wait for stability: no more resize events for STABILITY_DEBOUNCE_MS
+        // Wait for stability: no more resize events for STABILITY_DEBOUNCE_MS,
+        // OR an absolute MAX_STABILITY_WAIT_MS ceiling (whichever comes first).
         await new Promise(resolve => {
             onStabilizedCallback = resolve
+
+            // Absolute upper bound on the wait. The debounce below is reset on every
+            // resize; if resizes never settle (e.g. a sub-pixel ResizeObserver loop),
+            // it would never fire and the scroller would stay visibility:hidden forever.
+            // This timer is independent — never reset by resizes — so the reveal always happens.
+            stabilityMaxWaitId = setTimeout(() => {
+                resolveStability()
+            }, MAX_STABILITY_WAIT_MS)
 
             // IMPORTANT: Don't start the timer immediately!
             // We need to wait for Vue to render and ResizeObserver to fire.
@@ -842,12 +879,7 @@ async function scrollToBottomUntilStable(options = {}) {
                     // we're already stable
                     if (!stabilityTimeoutId) {
                         stabilityTimeoutId = setTimeout(() => {
-                            stabilityTimeoutId = null
-                            if (onStabilizedCallback) {
-                                const callback = onStabilizedCallback
-                                onStabilizedCallback = null
-                                callback()
-                            }
+                            resolveStability()
                         }, STABILITY_DEBOUNCE_MS)
                     }
                 }, 0)
@@ -859,10 +891,12 @@ async function scrollToBottomUntilStable(options = {}) {
 
         isAutoScrollingToBottom.value = false
 
-        // Reveal the scroller now that we're positioned at the bottom
-        if (isInitial) {
-            isInitialScrolling.value = false
-        }
+        // Reveal the scroller now that we're positioned at the bottom. Clear UNCONDITIONALLY:
+        // isInitialScrolling may have been set by the load watcher (first load while the chat tab
+        // was hidden) while this call runs with isInitial=false — a later watcher pass can overwrite
+        // pendingScrollToBottom to { isInitial: false } without resetting the flag. Gating the reveal
+        // on isInitial would then leave the scroller visibility:hidden forever (Firefox blank-chat bug).
+        isInitialScrolling.value = false
     } finally {
         // Clear the promise and resolve it so any waiters can proceed
         scrollToBottomPromise = null
