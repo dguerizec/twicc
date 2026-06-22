@@ -138,7 +138,7 @@ defineExpose({ focus })
             class="search-advanced-button"
             @click="emit('openAdvancedSearch')"
         >
-            <wa-icon name="plus"></wa-icon>
+            <wa-icon name="magnifying-glass"></wa-icon>
         </wa-button>
         <AppTooltip for="search-advanced-button">Full-text search (Ctrl+Shift+F)</AppTooltip>
     </div>
@@ -165,6 +165,20 @@ defineExpose({ focus })
 
 .search-advanced-button {
     flex-shrink: 0;
+    position: relative;
+    wa-icon {
+        position: relative;
+        top: 3px;
+        left: -3px;
+    }
+    &::part(base)::after {
+        content: "+";
+        scale: 1.2;
+        position: absolute;
+        top: 0;
+        right: 15%;
+        font-weight: bold;
+    }
 }
 
 .session-options-dropdown {
