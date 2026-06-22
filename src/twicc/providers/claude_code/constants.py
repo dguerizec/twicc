@@ -52,6 +52,9 @@ SYNCED_SETTINGS_DEFAULTS: dict = {
     "claudeCodeUsageReadFilePath": "",
     "claudeCodeUsageDumpFileEnabled": False,
     "claudeCodeUsageDumpFilePath": "",
+    # Daily quota warm-up time as "HH:MM" in the server's local wall clock,
+    # empty = disabled. See twicc.quota_wakeup_task.
+    "claudeCodeQuotaWakeupTime": "",
 }
 
 

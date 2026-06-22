@@ -82,6 +82,19 @@ export const useCodexStore = defineStore('codex', () => {
         if (typeof value === 'string') usageDumpFilePath.value = value
     }
 
+    // ─── Daily quota warm-up ─────────────────────────────────────────────
+    //
+    // Local wall-clock time ("HH:MM", empty = disabled) at which the backend
+    // fires a tiny throwaway request to open the subscription's 5-hour quota
+    // window early in the day (see twicc.quota_wakeup_task). Synced across
+    // devices like the defaults below.
+
+    const quotaWakeupTime = ref(null)
+
+    function setQuotaWakeupTime(value) {
+        if (typeof value === 'string') quotaWakeupTime.value = value
+    }
+
     // ─── Per-session agent settings defaults ─────────────────────────────
     //
     // Default values applied to new Codex sessions and used as the fallback
@@ -155,6 +168,8 @@ export const useCodexStore = defineStore('codex', () => {
         setUsageReadFilePath,
         setUsageDumpFileEnabled,
         setUsageDumpFilePath,
+        quotaWakeupTime,
+        setQuotaWakeupTime,
         defaultModel,
         defaultEffort,
         defaultPermissionMode,

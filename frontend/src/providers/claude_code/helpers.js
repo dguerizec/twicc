@@ -79,6 +79,7 @@ const SYNCED_SETTING_KEYS_TO_STORE = {
     claudeCodeUsageReadFilePath:     { setter: 'setUsageReadFilePath',     getter: 'usageReadFilePath' },
     claudeCodeUsageDumpFileEnabled:  { setter: 'setUsageDumpFileEnabled',  getter: 'usageDumpFileEnabled' },
     claudeCodeUsageDumpFilePath:     { setter: 'setUsageDumpFilePath',     getter: 'usageDumpFilePath' },
+    claudeCodeQuotaWakeupTime:       { setter: 'setQuotaWakeupTime',       getter: 'quotaWakeupTime' },
 }
 
 // Statuspage display map: Atlassian status values → footer rendering.
@@ -262,6 +263,18 @@ export class ClaudeCodeHelpers extends BaseProviderHelpers {
         const binding = USAGE_FILE_FIELD_TO_STORE_BINDING[field]
         if (!binding) return
         useClaudeCodeStore()[binding.setter](value)
+    }
+
+    supportsQuotaWakeup() {
+        return true
+    }
+
+    getQuotaWakeupTime() {
+        return useClaudeCodeStore().quotaWakeupTime || ''
+    }
+
+    setQuotaWakeupTime(value) {
+        useClaudeCodeStore().setQuotaWakeupTime(value)
     }
 
     getServiceStatus() {

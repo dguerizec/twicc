@@ -227,6 +227,27 @@ export class BaseProviderHelpers {
      */
     setUsageFileSetting(/* field, value */) {}
 
+    // ─── Daily quota warm-up ─────────────────────────────────────────────
+    //
+    // Providers with a rolling 5-hour subscription quota can warm it up at a
+    // user-chosen daily time (see ``twicc.quota_wakeup_task``). The Settings
+    // popover renders the hour/minute selectors only for providers that
+    // return ``true`` from ``supportsQuotaWakeup`` and reads/writes the
+    // ``"HH:MM"`` value (empty = disabled) through the hooks below.
+
+    /** Whether this provider supports the daily quota warm-up. Default: no. */
+    supportsQuotaWakeup() {
+        return false
+    }
+
+    /** Read the warm-up time as ``"HH:MM"`` (empty = disabled). Default: ``''``. */
+    getQuotaWakeupTime() {
+        return ''
+    }
+
+    /** Persist the warm-up time as ``"HH:MM"`` (empty = disabled). Default: no-op. */
+    setQuotaWakeupTime(/* value */) {}
+
     // ─── Service status surface (Statuspage / health) ───────────────────
     //
     // Providers whose backend service publishes a public status (e.g.

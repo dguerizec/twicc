@@ -308,6 +308,15 @@ class BaseProviderHelpers:
     # iterate the registry (e.g. the ``twicc usage`` CLI).
     USAGE_SYNC_INTERVAL: ClassVar[int | None] = None
 
+    # Synced-settings key holding this provider's daily "quota warm-up"
+    # wall-clock time (``"HH:MM"``, empty = disabled), or ``None`` when the
+    # provider has no rolling-window quota to warm up. The cross-provider
+    # warm-up task (:mod:`twicc.quota_wakeup_task`) reads this key and, at
+    # that local time each day, calls :meth:`warm_up_quota` unless a window
+    # is already running. Only providers with a subscription 5-hour window
+    # (those that also track usage) set it.
+    QUOTA_WAKEUP_SETTING_KEY: ClassVar[str | None] = None
+
     # OpenRouter ``model_id`` prefix used both to filter the pricing API
     # response and to recognise rows that belong to this provider. E.g.
     # ``"anthropic/"`` for Claude Code, ``"openai/"`` for OpenAI. When
@@ -458,6 +467,27 @@ class BaseProviderHelpers:
         must override.
         """
         return False, "This provider does not support reading usage from a file"
+
+    # ------------------------------------------------------------------
+    # Quota warm-up
+    # ------------------------------------------------------------------
+
+    async def warm_up_quota(self) -> bool | None:
+        """Start this provider's rolling quota window with a throwaway call.
+
+        Sent by :mod:`twicc.quota_wakeup_task` at the user-configured daily
+        time so the subscription's 5-hour window opens early in the day —
+        the earlier the first request, the more 5-hour windows are usable
+        before the user stops working. The call goes through the same
+        subscription OAuth credentials as a normal session, so it consumes
+        the very window it opens (a one-token reply we discard). Providers
+        reuse their existing minimal throwaway turn.
+
+        Returns ``True`` when the call completed (window started), ``False``
+        when the provider rejected it (e.g. auth failed — nothing warmed),
+        ``None`` when inconclusive (timeout/network) or unsupported.
+        """
+        return None
 
     def resolve_agent_settings(self, source: AgentSettings) -> AgentSettings:
         """Return the effective per-agent settings, with global fallbacks.

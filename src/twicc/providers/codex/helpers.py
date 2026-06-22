@@ -131,6 +131,10 @@ class CodexHelpers(BaseProviderHelpers):
     # /status command hits) to refresh the 5-hour and weekly quotas.
     USAGE_SYNC_INTERVAL: ClassVar[int | None] = 5 * 60
 
+    # Daily quota warm-up time lives in the synced settings under this key
+    # ("HH:MM", empty = off). See :meth:`warm_up_quota`.
+    QUOTA_WAKEUP_SETTING_KEY: ClassVar[str | None] = "codexQuotaWakeupTime"
+
     # Filesystem source for Codex session JSONL files. The Codex CLI
     # writes one folder per ``YYYY/MM/DD`` (not per-project, unlike
     # Claude Code), with one ``rollout-*.jsonl`` per session. Read by
@@ -358,6 +362,18 @@ class CodexHelpers(BaseProviderHelpers):
         from .title_suggest import generate_title as _generate_title
 
         return await _generate_title(prompt, system_prompt)
+
+    async def warm_up_quota(self) -> bool | None:
+        """Open the Codex 5-hour window via the existing auth-probe throwaway turn.
+
+        ``probe_auth_via_codex_sdk`` runs one ephemeral gpt-5.4-mini turn over
+        the ChatGPT OAuth credentials and reports whether it completed — the
+        same minimal turn we want for the warm-up, and the same
+        accepted/rejected signal. Reused rather than duplicated.
+        """
+        from .credentials import probe_auth_via_codex_sdk
+
+        return await probe_auth_via_codex_sdk()
 
     async def rename_session(self, session_id: str, title: str) -> None:
         """Persist the new title in Codex's state DB via ``thread/name/set``.

@@ -21,6 +21,9 @@ SYNCED_SETTINGS_DEFAULTS: dict = {
     "codexUsageReadFilePath": "",
     "codexUsageDumpFileEnabled": False,
     "codexUsageDumpFilePath": "",
+    # Daily quota warm-up time as "HH:MM" in the server's local wall clock,
+    # empty = disabled. See twicc.quota_wakeup_task.
+    "codexQuotaWakeupTime": "",
 }
 
 

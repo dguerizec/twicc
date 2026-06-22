@@ -52,6 +52,7 @@ const SYNCED_SETTING_KEYS_TO_STORE = {
     codexUsageReadFilePath:     { setter: 'setUsageReadFilePath',     getter: 'usageReadFilePath' },
     codexUsageDumpFileEnabled:  { setter: 'setUsageDumpFileEnabled',  getter: 'usageDumpFileEnabled' },
     codexUsageDumpFilePath:     { setter: 'setUsageDumpFilePath',     getter: 'usageDumpFilePath' },
+    codexQuotaWakeupTime:       { setter: 'setQuotaWakeupTime',       getter: 'quotaWakeupTime' },
 }
 
 // Map of usage-file field names (cross-provider) → Codex store
@@ -324,6 +325,18 @@ export class CodexHelpers extends BaseProviderHelpers {
         const binding = USAGE_FILE_FIELD_TO_STORE_BINDING[field]
         if (!binding) return
         useCodexStore()[binding.setter](value)
+    }
+
+    supportsQuotaWakeup() {
+        return true
+    }
+
+    getQuotaWakeupTime() {
+        return useCodexStore().quotaWakeupTime || ''
+    }
+
+    setQuotaWakeupTime(value) {
+        useCodexStore().setQuotaWakeupTime(value)
     }
 
     // ─── Service status (OpenAI statuspage) ──────────────────────────────

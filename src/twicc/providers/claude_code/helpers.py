@@ -209,6 +209,10 @@ class ClaudeCodeHelpers(BaseProviderHelpers):
 
     USAGE_SYNC_INTERVAL: ClassVar[int | None] = 5 * 60
 
+    # Daily quota warm-up time lives in the synced settings under this key
+    # ("HH:MM", empty = off). See :meth:`warm_up_quota`.
+    QUOTA_WAKEUP_SETTING_KEY: ClassVar[str | None] = "claudeCodeQuotaWakeupTime"
+
     # Filesystem source for Claude Code session JSONL files. The CLI
     # writes one folder per project under here, with one JSONL per
     # session. Read by the initial sync and the watcher; not exposed
@@ -731,6 +735,19 @@ class ClaudeCodeHelpers(BaseProviderHelpers):
         from .title_suggest import generate_title as _generate_title
 
         return await _generate_title(prompt, system_prompt)
+
+    async def warm_up_quota(self) -> bool | None:
+        """Open the Claude 5-hour window via the existing auth-probe throwaway turn.
+
+        ``probe_auth_via_sdk`` already runs exactly the minimal turn we want —
+        a one-token Haiku ``"ping"`` over the subscription OAuth credentials,
+        no session persisted — and reports whether the API accepted it, which
+        is precisely the warm-up signal. Reusing it keeps a single throwaway
+        path rather than a near-duplicate.
+        """
+        from .auth import probe_auth_via_sdk
+
+        return await probe_auth_via_sdk()
 
     async def rename_session(self, session_id: str, title: str) -> None:
         """Append the title to the JSONL and mark it protected against CLI stale re-appends.

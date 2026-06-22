@@ -129,6 +129,19 @@ export const useClaudeCodeStore = defineStore('claudeCode', () => {
         if (typeof value === 'string') usageDumpFilePath.value = value
     }
 
+    // ─── Daily quota warm-up ─────────────────────────────────────────────
+    //
+    // Local wall-clock time ("HH:MM", empty = disabled) at which the backend
+    // fires a tiny throwaway request to open the subscription's 5-hour quota
+    // window early in the day (see twicc.quota_wakeup_task). Synced across
+    // devices like the defaults above.
+
+    const quotaWakeupTime = ref(null)
+
+    function setQuotaWakeupTime(value) {
+        if (typeof value === 'string') quotaWakeupTime.value = value
+    }
+
     // ─── Agent settings categories (live/idle/startup) ───────────────────
     //
     // Classification of the per-session agent setting fields by lifecycle
@@ -197,6 +210,8 @@ export const useClaudeCodeStore = defineStore('claudeCode', () => {
         setUsageReadFilePath,
         setUsageDumpFileEnabled,
         setUsageDumpFilePath,
+        quotaWakeupTime,
+        setQuotaWakeupTime,
         agentSettingsCategories,
         setAgentSettingsCategories,
         modelRegistry,

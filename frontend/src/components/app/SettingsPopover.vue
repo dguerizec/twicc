@@ -481,6 +481,54 @@ function dumpApplyIcon(provider) {
     return 'check'
 }
 
+// ─── Quota warm-up: hour/minute selectors (cross-provider) ───────────
+//
+// The warm-up time is stored as a single "HH:MM" string (empty = disabled)
+// via ``helpers.getQuotaWakeupTime`` / ``setQuotaWakeupTime``. The UI splits
+// it across two selects — hours 00–23 and minutes capped to 10-minute steps
+// — so there is nothing to validate and the value is saved on every change
+// (no Apply button). Picking "Off" in the hour select clears the setting.
+
+// Hour options 00–23: the stored value is always the 24h "HH"; only the label
+// is locale-aware (12h AM/PM or 24h, per the browser locale, like the app's
+// other clocks). Built once — the locale doesn't change at runtime.
+const WAKEUP_HOUR_OPTIONS = (() => {
+    const fmt = new Intl.DateTimeFormat(navigator.language, { hour: 'numeric' })
+    return Array.from({ length: 24 }, (_, h) => ({
+        value: String(h).padStart(2, '0'),
+        label: fmt.format(new Date(2000, 0, 1, h)),
+    }))
+})()
+const WAKEUP_MINUTES = ['00', '10', '20', '30', '40', '50']
+
+function supportsWakeup(provider) {
+    return !!getProviderHelpers(provider)?.supportsQuotaWakeup()
+}
+function getWakeupHour(provider) {
+    return (getProviderHelpers(provider)?.getQuotaWakeupTime() || '').split(':')[0] || ''
+}
+function getWakeupMinute(provider) {
+    const minute = (getProviderHelpers(provider)?.getQuotaWakeupTime() || '').split(':')[1]
+    return WAKEUP_MINUTES.includes(minute) ? minute : '00'
+}
+function onWakeupHourChange(provider, event) {
+    const helpers = getProviderHelpers(provider)
+    if (!helpers) return
+    const hour = event.target.value
+    // "Off" (empty) clears the whole setting; otherwise pair with the
+    // currently-selected minute (defaulting to the top of the hour).
+    helpers.setQuotaWakeupTime(hour ? `${hour}:${getWakeupMinute(provider)}` : '')
+}
+function onWakeupMinuteChange(provider, event) {
+    const helpers = getProviderHelpers(provider)
+    if (!helpers) return
+    const hour = getWakeupHour(provider)
+    // The minute select is disabled when no hour is set, so this only fires
+    // with an hour selected; guard anyway.
+    if (!hour) return
+    helpers.setQuotaWakeupTime(`${hour}:${event.target.value}`)
+}
+
 // Tmux config path — local input + validation state
 const tmuxConfigPathInput = ref('')
 const tmuxConfigValidating = ref(false)
@@ -901,7 +949,14 @@ function resetTitleSystemPrompt() {
 }
 
 /**
- * Called when popover opens - reset mobile view and refresh notification state.
+ * Called when the popover itself opens - reset mobile view and refresh
+ * notification state.
+ *
+ * Bound with ``@wa-show.self``: WA ``wa-show`` bubbles, so a nested
+ * wa-select / wa-dropdown opening its listbox (e.g. the quota wake-up hour
+ * pickers, the theme/brand selects) would otherwise re-fire this handler and
+ * slide the mobile view back to the nav while the control stays open. ``.self``
+ * restricts it to the popover's own event (target === currentTarget).
  */
 function onPopoverShow() {
     mobileShowContent.value = false
@@ -954,7 +1009,7 @@ function onChangelogClose() {
         <wa-icon name="gear"></wa-icon><span>Settings</span>
     </wa-button>
     <AppTooltip for="settings-trigger">Toggle settings</AppTooltip>
-    <wa-popover ref="popoverRef" v-popover-focus-fix for="settings-trigger" placement="top" class="settings-popover" @wa-show="onPopoverShow">
+    <wa-popover ref="popoverRef" v-popover-focus-fix for="settings-trigger" placement="top" class="settings-popover" @wa-show.self="onPopoverShow">
         <AppTooltip v-if="showLogout" :for="logoutButtonId">Logout</AppTooltip>
         <div class="settings-layout">
             <div class="settings-layout-inner" :class="{ 'showing-content': mobileShowContent }">
@@ -1501,13 +1556,35 @@ function onChangelogClose() {
                                 ></wa-icon>
                                 {{ getProviderLabel(provider) }}
                             </h4>
+                        <div v-if="supportsWakeup(provider)" class="setting-group">
+                            <label class="setting-group-label">Quota wake-up* <wa-icon name="cloud" class="synced-icon"></wa-icon></label>
+                            <div class="wakeup-time-row">
+                                <wa-select
+                                    :value="getWakeupHour(provider)"
+                                    @change="onWakeupHourChange(provider, $event)"
+                                    size="small"
+                                >
+                                    <wa-option value="">Off</wa-option>
+                                    <wa-option v-for="opt in WAKEUP_HOUR_OPTIONS" :key="opt.value" :value="opt.value">{{ opt.label }}</wa-option>
+                                </wa-select>
+                                <span class="wakeup-time-colon" :class="{ 'is-off': !getWakeupHour(provider) }">:</span>
+                                <wa-select
+                                    :value="getWakeupMinute(provider)"
+                                    @change="onWakeupMinuteChange(provider, $event)"
+                                    size="small"
+                                    :disabled="!getWakeupHour(provider)"
+                                >
+                                    <wa-option v-for="m in WAKEUP_MINUTES" :key="m" :value="m">{{ m }}</wa-option>
+                                </wa-select>
+                            </div>
+                        </div>
                         <div class="setting-group">
                             <wa-switch
                                 :checked="getReadEnabled(provider)"
                                 @change="onUsageFileEnabledChange(provider, $event)"
                                 size="small"
                                 :disabled="getDumpEnabled(provider)"
-                            >Read usage from file* <wa-icon name="cloud" class="synced-icon"></wa-icon></wa-switch>
+                            >Read usage from file** <wa-icon name="cloud" class="synced-icon"></wa-icon></wa-switch>
                             <template v-if="getReadEnabled(provider)">
                                 <div class="usage-file-input-row">
                                     <wa-input
@@ -1544,7 +1621,7 @@ function onChangelogClose() {
                                 @change="onUsageDumpEnabledChange(provider, $event)"
                                 size="small"
                                 :disabled="getReadEnabled(provider)"
-                            >Dump usage to file** <wa-icon name="cloud" class="synced-icon"></wa-icon></wa-switch>
+                            >Dump usage to file*** <wa-icon name="cloud" class="synced-icon"></wa-icon></wa-switch>
                             <template v-if="getDumpEnabled(provider)">
                                 <div class="usage-file-input-row">
                                     <wa-input
@@ -1583,7 +1660,17 @@ function onChangelogClose() {
                          switches above, where the actual settings are stored. -->
                     <wa-divider></wa-divider>
                     <div class="setting-group usage-mode-explanation">
-                        <label class="setting-group-label">* About read mode</label>
+                        <label class="setting-group-label">* About quota wake-up</label>
+                        <span class="setting-group-hint">
+                            A provider's 5-hour quota window starts on its first request and resets 5 hours
+                            later, so opening it earlier fits more windows into your working day. Pick a time
+                            and TwiCC sends a tiny throwaway request at that hour each day to start the window
+                            early — skipped if one is already running. It only fires while TwiCC is running at
+                            that time (no catch-up if it was off).
+                        </span>
+                    </div>
+                    <div class="setting-group usage-mode-explanation">
+                        <label class="setting-group-label">** About read mode</label>
                         <span class="setting-group-hint">
                             If you already maintain a JSON file with usage data outside TwiCC (typically
                             because the provider's API is rate-limited), point to it here and TwiCC will
@@ -1591,7 +1678,7 @@ function onChangelogClose() {
                         </span>
                     </div>
                     <div class="setting-group usage-mode-explanation">
-                        <label class="setting-group-label">** About dump mode</label>
+                        <label class="setting-group-label">*** About dump mode</label>
                         <span class="setting-group-hint">
                             Save the raw API response to a JSON file each time TwiCC fetches usage data.
                             Useful if you want to share the data with other tools without extra API calls.
@@ -2224,6 +2311,8 @@ wa-popover > wa-divider {
     gap: var(--wa-space-xs);
     > label ~ :not(label) {
         margin-left: var(--wa-space-s);
+        justify-content: flex-start;
+        margin-bottom: var(--wa-space-s);
     }
 }
 
@@ -2262,6 +2351,28 @@ wa-popover > wa-divider {
 
 .usage-file-validation {
     margin-top: var(--wa-space-2xs);
+}
+
+.wakeup-time-row {
+    display: flex;
+    align-items: center;
+    gap: var(--wa-space-2xs);
+
+    /* The content (an hour / a minute) is short — keep the selects compact
+       and balanced instead of letting them stretch across the row. */
+    wa-select {
+        flex: 0 0 auto;
+        width: 6rem;
+    }
+}
+
+.wakeup-time-colon {
+    font-weight: bold;
+    color: var(--wa-color-text-normal);
+}
+
+.wakeup-time-colon.is-off {
+    color: var(--wa-color-text-quiet);
 }
 
 .worktree-dir-input-row {
