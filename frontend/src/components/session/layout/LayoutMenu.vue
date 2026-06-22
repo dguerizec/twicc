@@ -1,5 +1,5 @@
 <script setup>
-// Single chevron-down menu in the main-area tab nav, combining both layout actions:
+// The overflow (⋮) menu in the main-area tab nav, combining both layout actions:
 //   • Save layout   (only when not single pane — there must be something to save)
 //   • Select layout (a disabled header), then Single pane + the named catalog
 // Lives in the tab nav, so every WA custom event is stopped from bubbling to the tab group.
@@ -56,7 +56,7 @@ function onSelect(event) {
             title="Layout"
             aria-label="Layout menu"
         >
-            <wa-icon name="chevron-down"></wa-icon>
+            <wa-icon name="ellipsis-v"></wa-icon>
         </wa-button>
 
         <template v-if="props.hasDocks">

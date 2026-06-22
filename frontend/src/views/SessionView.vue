@@ -23,8 +23,9 @@ import LayoutMenu from '../components/session/layout/LayoutMenu.vue'
 import { DOCK_LABELS, DOCK_ICONS, PLACEMENT_OPTIONS } from '../components/session/layout/dockMeta'
 import LayoutSaveDialog from '../components/session/layout/LayoutSaveDialog.vue'
 import LayoutManagerDialog from '../components/session/layout/LayoutManagerDialog.vue'
-import { useLayoutsStore, SINGLE_PANE_ID } from '../stores/layouts'
+import { useLayoutsStore, SINGLE_PANE_ID, SINGLE_PANE_NAME } from '../stores/layouts'
 import { ancestorChain } from '../utils/projectAgentDefaults'
+import { resolveProjectLayoutId } from '../utils/layoutDefaults'
 import AppTooltip from '../components/ui/AppTooltip.vue'
 import ProcessIndicator from '../components/ui/ProcessIndicator.vue'
 import CodeCommentsIndicator from '../components/ui/CodeCommentsIndicator.vue'
@@ -869,6 +870,55 @@ const layoutScopeDefaults = computed(() => {
     add('global', 'Global default', settingsStore.getDefaultLayoutId)
     return rows
 })
+
+// Scope targets for the save dialog's "set as default" checkboxes. One checkbox per applicable level
+// of the session's project chain: worktree (the project itself, only when it's a worktree), project
+// (the main repo when worktree, else the project itself), and global (settings) — always last.
+// For each, we surface the OWN (non-inherited) default: it drives the pre-check (checked iff that
+// level has no explicit non-single-pane default of its own — the global "first save" heuristic
+// generalised to every level) and the "(current / inherited: X)" hint. Order: worktree → project →
+// global. Mirrors the chain logic of layoutScopeDefaults; the dialog applies the checked ones.
+const layoutSaveScopes = computed(() => {
+    const globalId = settingsStore.getDefaultLayoutId
+    const nameForId = (id) =>
+        !id || id === SINGLE_PANE_ID ? SINGLE_PANE_NAME : layoutsStore.getLayoutById(id)?.name || SINGLE_PANE_NAME
+    // A project-backed scope (worktree / project): its own column drives the pre-check + the hint.
+    const projectScope = (key, label, target) => {
+        const ownId = target.default_layout_id ?? null
+        const inherited = ownId == null
+        const shownId = inherited ? resolveProjectLayoutId(target.id, store.projects, globalId) : ownId
+        return {
+            key,
+            label,
+            targetProjectId: target.id,
+            preChecked: (ownId || SINGLE_PANE_ID) === SINGLE_PANE_ID,
+            inherited,
+            currentName: nameForId(shownId),
+        }
+    }
+    const scopes = []
+    const self = projectId.value ? store.projects[projectId.value] : null
+    if (self) {
+        if (self.worktree_of) {
+            scopes.push(projectScope('worktree', 'In Worktree', self))
+            const parent = store.projects[self.worktree_of]
+            // Drop the project row if the parent repo isn't loaded — nothing to target.
+            if (parent) scopes.push(projectScope('project', `In Project — ${store.getProjectDisplayName(parent.id)}`, parent))
+        } else {
+            scopes.push(projectScope('project', 'In Project', self))
+        }
+    }
+    // Global (chain root): always concrete, never inherited.
+    scopes.push({
+        key: 'global',
+        label: 'Globally',
+        targetProjectId: null,
+        preChecked: (globalId || SINGLE_PANE_ID) === SINGLE_PANE_ID,
+        inherited: false,
+        currentName: nameForId(globalId),
+    })
+    return scopes
+})
 function onOpenSaveLayout() {
     layoutSaveDialogRef.value?.open()
 }
@@ -1703,7 +1753,8 @@ function buildLayoutCommands() {
             label: 'Load Layout…',
             icon: 'table-columns',
             category: 'layout',
-            when: ready,
+            // Hidden in the mobile tab strip, like the on-screen layout menu — no layout there.
+            when: () => ready() && !layoutTabsMode.value,
             // Mirrors LayoutMenu's catalog: Single pane, then the resolved scope
             // defaults, then the remaining named layouts (deduped against them).
             items: () => {
@@ -1847,8 +1898,9 @@ onBeforeUnmount(() => {
 
             <!-- Right-aligned nav cluster: [Layout menu ▾] [Maximize]. A real-box wrapper carries the
                  auto-margin (a wa-dropdown host is display:contents, so a margin on it is ignored).
-                 The layout menu (Save + Select) is always shown; Maximize only when not single pane. -->
-            <div slot="nav" class="layout-nav-cluster">
+                 The layout menu (Save + Select) shows whenever docking is available; Maximize only
+                 when not single pane. Hidden entirely in the mobile tab strip — no layout there. -->
+            <div v-if="!layoutTabsMode" slot="nav" class="layout-nav-cluster">
                 <LayoutMenu :has-docks="hasDocks" :scope-defaults="layoutScopeDefaults" @save="onOpenSaveLayout" @select="onSelectLayout" @manage="onManageLayouts" />
 
                 <wa-button
@@ -1929,7 +1981,7 @@ onBeforeUnmount(() => {
         </div>
 
         <!-- Save-layout dialog (opened from the tab nav's Save button) -->
-        <LayoutSaveDialog v-if="session" ref="layoutSaveDialogRef" :intention="currentLayoutTemplate" />
+        <LayoutSaveDialog v-if="session" ref="layoutSaveDialogRef" :intention="currentLayoutTemplate" :scopes="layoutSaveScopes" />
 
         <!-- Catalog manager (rename / delete + reassignment), opened from the layout menu's "Manage…" -->
         <LayoutManagerDialog v-if="session" ref="layoutManagerDialogRef" />

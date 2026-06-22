@@ -1,21 +1,30 @@
 <script setup>
 // Save the current session's layout to the named-layouts catalog: either overwrite an existing
-// named layout, or create a new one (name prefilled "Default"). The "set as global default"
-// convenience and the project/global default pickers come with the defaults machinery (step 3).
-import { ref, computed, nextTick, useId } from 'vue'
+// named layout, or create a new one (name prefilled "Default"). On save it can also set the layout
+// as the default for new sessions at one or more scopes — worktree / project / global — each an
+// independent, one-way checkbox (checking applies; unchecking never clears an existing default).
+// The applicable scopes + their pre-check / current-default hints are resolved by the parent
+// (SessionView's `layoutSaveScopes`) and passed in; here we just render + apply them.
+import { ref, reactive, computed, nextTick, useId } from 'vue'
 import { useLayoutsStore } from '../../../stores/layouts'
 import { useSettingsStore } from '../../../stores/settings'
+import { useDataStore } from '../../../stores/data'
+import { apiFetch } from '../../../utils/api'
 
 const props = defineProps({
     // The template intention to store (assignment / collapsed / resizeFractions) — the session's
     // current layout at save time, supplied by the parent.
     intention: { type: Object, default: () => ({}) },
+    // "Set as default" scope descriptors from the parent, in display order (worktree → project →
+    // global). Each: { key, label, targetProjectId (null = global), preChecked, inherited, currentName }.
+    scopes: { type: Array, default: () => [] },
 })
 
 const emit = defineEmits(['saved'])
 
 const layoutsStore = useLayoutsStore()
 const settingsStore = useSettingsStore()
+const dataStore = useDataStore()
 
 const dialogRef = ref(null)
 const nameInputRef = ref(null)
@@ -25,14 +34,22 @@ const saveButtonRef = ref(null)
 const NEW = '__new__'
 const target = ref(NEW)   // either NEW or an existing layout id (overwrite)
 const newName = ref('')
-const setAsDefault = ref(false)
+// Per-scope checkbox state, keyed by scope.key — seeded from each scope's `preChecked` on open().
+const checked = reactive({})
 const errorMessage = ref('')
+const isSaving = ref(false)
+// The layout id once created/overwritten — remembered so an error-retry re-applies the scope
+// defaults without creating a duplicate "New layout".
+const savedId = ref(null)
 
 const instanceId = useId()
 const formId = `layout-save-form-${instanceId}`
 
 const existingLayouts = computed(() => layoutsStore.getAllLayouts)
 const isNew = computed(() => target.value === NEW)
+// True when the session is in a worktree (the "In Worktree" checkbox is present) — drives whether the
+// help text mentions worktree defaults.
+const hasWorktreeScope = computed(() => props.scopes.some((s) => s.key === 'worktree'))
 
 function syncFormState() {
     nextTick(() => saveButtonRef.value?.setAttribute('form', formId))
@@ -55,11 +72,14 @@ function handleDialogAfterShow(e) {
 
 function open() {
     errorMessage.value = ''
+    isSaving.value = false
+    savedId.value = null
     target.value = NEW
     newName.value = ''
-    // Default-check "set as global default" only on the very first save (while the global default is
-    // still single pane) — so a fresh user's first layout becomes the default without an extra trip.
-    setAsDefault.value = (settingsStore.getDefaultLayoutId || 'single-pane') === 'single-pane'
+    // Seed each scope's checkbox from its pre-check (a level is checked when it has no explicit
+    // non-single-pane default of its own — see SessionView's `layoutSaveScopes`).
+    for (const key of Object.keys(checked)) delete checked[key]
+    for (const s of props.scopes) checked[s.key] = s.preChecked
     syncFormState()
     if (dialogRef.value) dialogRef.value.open = true
 }
@@ -68,31 +88,66 @@ function close() {
     if (dialogRef.value) dialogRef.value.open = false
 }
 
-function handleSave() {
+async function handleSave() {
+    if (isSaving.value) return   // guard against a concurrent re-submit while project PUTs are in flight
     errorMessage.value = ''
-    let savedId
-    if (isNew.value) {
-        const trimmed = newName.value.trim()
-        if (!trimmed) {
-            errorMessage.value = 'Name cannot be empty.'
-            return
+    // 1. Create / overwrite the layout once. Guarded by `savedId` so an error-retry (the dialog stays
+    //    open when a project default PUT fails) re-applies the defaults without duplicating the layout.
+    if (!savedId.value) {
+        if (isNew.value) {
+            const trimmed = newName.value.trim()
+            if (!trimmed) {
+                errorMessage.value = 'Name cannot be empty.'
+                return
+            }
+            const dup = existingLayouts.value.some((l) => l.name.trim().toLowerCase() === trimmed.toLowerCase())
+            if (dup) {
+                errorMessage.value = `A layout named "${trimmed}" already exists.`
+                return
+            }
+            savedId.value = layoutsStore.upsertLayout({ name: trimmed, intention: props.intention })
+        } else {
+            const existing = layoutsStore.getLayoutById(target.value)
+            if (!existing) {
+                errorMessage.value = 'That layout no longer exists.'
+                return
+            }
+            savedId.value = layoutsStore.upsertLayout({ id: existing.id, name: existing.name, intention: props.intention })
         }
-        const dup = existingLayouts.value.some((l) => l.name.trim().toLowerCase() === trimmed.toLowerCase())
-        if (dup) {
-            errorMessage.value = `A layout named "${trimmed}" already exists.`
-            return
-        }
-        savedId = layoutsStore.upsertLayout({ name: trimmed, intention: props.intention })
-    } else {
-        const existing = layoutsStore.getLayoutById(target.value)
-        if (!existing) {
-            errorMessage.value = 'That layout no longer exists.'
-            return
-        }
-        savedId = layoutsStore.upsertLayout({ id: existing.id, name: existing.name, intention: props.intention })
     }
-    if (setAsDefault.value && savedId) settingsStore.setDefaultLayoutId(savedId)
-    emit('saved', savedId)
+    const id = savedId.value
+    if (!id) {
+        errorMessage.value = 'Could not save the layout.'
+        return
+    }
+
+    // 2. Apply the checked scope defaults. Global is a local, auto-synced setting; project-backed
+    //    scopes (worktree / project) PUT to the project. All re-applications are idempotent (same
+    //    value), so a retry after a partial failure is safe.
+    isSaving.value = true
+    try {
+        for (const scope of props.scopes) {
+            if (!checked[scope.key]) continue
+            if (scope.targetProjectId == null) {
+                settingsStore.setDefaultLayoutId(id)
+            } else {
+                const res = await apiFetch(`/api/projects/${scope.targetProjectId}/`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ default_layout_id: id }),
+                })
+                if (!res.ok) throw new Error('project update failed')
+                dataStore.updateProject(await res.json())
+            }
+        }
+    } catch {
+        errorMessage.value = 'Could not set all defaults. Please retry.'
+        isSaving.value = false
+        return
+    }
+
+    isSaving.value = false
+    emit('saved', id)
     close()
 }
 
@@ -132,17 +187,30 @@ defineExpose({ open, close })
                 ></wa-input>
             </div>
 
-            <wa-checkbox
-                :checked="setAsDefault"
-                @change="setAsDefault = $event.target.checked"
-            >Set as global default for new sessions</wa-checkbox>
+            <div v-if="props.scopes.length" class="form-group">
+                <label class="form-label">Set as default for new sessions</label>
+                <wa-checkbox
+                    v-for="s in props.scopes"
+                    :key="s.key"
+                    :checked="checked[s.key]"
+                    :disabled="isSaving"
+                    @change="checked[s.key] = $event.target.checked"
+                >{{ s.label }}
+                    <span class="scope-current">(current{{ s.inherited ? ' (inherited)' : '' }}: {{ s.currentName }})</span>
+                </wa-checkbox>
+                <p class="dialog-help">
+                    The global default can also be changed later in Settings → Layouts, and the
+                    {{ hasWorktreeScope ? 'project / worktree defaults' : 'project default' }} in a
+                    project's edit dialog.
+                </p>
+            </div>
 
             <wa-callout v-if="errorMessage" variant="danger" size="small">{{ errorMessage }}</wa-callout>
         </form>
 
         <div slot="footer" class="dialog-footer">
-            <wa-button variant="neutral" appearance="outlined" @click="close">Cancel</wa-button>
-            <wa-button ref="saveButtonRef" type="submit" variant="brand">Save</wa-button>
+            <wa-button variant="neutral" appearance="outlined" :disabled="isSaving" @click="close">Cancel</wa-button>
+            <wa-button ref="saveButtonRef" type="submit" variant="brand" :loading="isSaving">Save</wa-button>
         </div>
     </wa-dialog>
 </template>
@@ -164,6 +232,15 @@ defineExpose({ open, close })
 .form-label {
     font-size: var(--wa-font-size-s);
     font-weight: var(--wa-font-weight-semibold);
+}
+.scope-current {
+    color: var(--wa-color-text-quiet);
+    font-size: var(--wa-font-size-s);
+}
+.dialog-help {
+    margin: var(--wa-space-2xs) 0 0;
+    color: var(--wa-color-text-quiet);
+    font-size: var(--wa-font-size-s);
 }
 .dialog-footer {
     display: flex;
