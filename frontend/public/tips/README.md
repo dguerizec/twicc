@@ -37,6 +37,21 @@ images, tables — anything the existing chat-message markdown pipeline
 supports.
 ```
 
+## Line wrapping
+
+Wrap the body however reads best in your editor — tips render with standard
+Markdown paragraph rules:
+
+- A **single line break** inside a paragraph is collapsed to a space, so you
+  can hard-wrap long sentences across several source lines without it showing
+  up as a line break in the toast.
+- A **blank line** starts a new paragraph.
+- Need a forced line break inside a paragraph anyway? End the line with **two
+  trailing spaces** or a backslash (`\`).
+
+(Tips opt into this via `renderMarkdown(..., { softBreakAsSpace: true })`; the
+chat pipeline keeps newlines as `<br>`.)
+
 ## Front-matter
 
 | Key | Required | Allowed values | Default when absent |

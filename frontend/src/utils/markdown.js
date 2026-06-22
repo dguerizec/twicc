@@ -35,6 +35,22 @@ md.renderer.rules.link_open = function (tokens, idx, options, env, self) {
     return defaultLinkOpenRender(tokens, idx, options, env, self)
 }
 
+// Per-render opt-out of `breaks: true` for soft (single-newline) line breaks.
+// The shared instance keeps newlines as <br> so chat messages preserve the
+// line breaks a user typed. Tips, however, are authored with soft line wraps
+// purely for source readability; a render that sets `env.softBreakAsSpace`
+// collapses each such wrap to a space — standard CommonMark paragraph behavior
+// (blank lines still start a new paragraph, and block constructs like lists,
+// code fences, and tables are unaffected, since they don't go through
+// softbreak). Hard breaks (two trailing spaces or a trailing `\`) still render
+// as <br>, leaving authors an explicit escape hatch for a forced line break.
+const defaultSoftbreakRender = md.renderer.rules.softbreak
+    || ((tokens, idx, options) => (options.breaks ? (options.xhtmlOut ? '<br />\n' : '<br>\n') : '\n'))
+md.renderer.rules.softbreak = function (tokens, idx, options, env, self) {
+    if (env && env.softBreakAsSpace) return ' '
+    return defaultSoftbreakRender(tokens, idx, options, env, self)
+}
+
 // Wrapper around codeToHtml that falls back to 'text' (plain) for unknown languages.
 // Shiki throws an error when encountering unsupported languages (like 'env', 'dotenv', etc.)
 // which would crash the entire markdown render. This wrapper catches those errors.
@@ -87,12 +103,14 @@ const DOMPURIFY_CONFIG = {
  * Async because shiki highlighting is async.
  *
  * @param {string} source - Raw markdown text
+ * @param {object} [env] - Optional markdown-it env. Pass `{ softBreakAsSpace: true }`
+ *   to collapse soft line breaks to spaces instead of <br> (see the softbreak rule above).
  * @returns {Promise<string>} Sanitized HTML string
  */
-export async function renderMarkdown(source) {
+export async function renderMarkdown(source, env) {
     if (!source) return ''
 
-    const rawHtml = await md.renderAsync(source)
+    const rawHtml = await md.renderAsync(source, env)
     return DOMPurify.sanitize(rawHtml, DOMPURIFY_CONFIG)
 }
 

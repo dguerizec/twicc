@@ -54,7 +54,10 @@ async function loadBody(key) {
         if (!r.ok) throw new Error(`HTTP ${r.status}`)
         const raw = await r.text()
         const body = stripFrontMatter(raw)
-        const html = await renderMarkdown(body)
+        // Tips are authored with soft line wraps for source readability; render
+        // them with CommonMark paragraph behavior (soft wrap -> space, blank line
+        // -> new paragraph) rather than the chat-style breaks: true.
+        const html = await renderMarkdown(body, { softBreakAsSpace: true })
         const finalHtml = rewriteTipAssetUrls(html)
         bodyCache.set(key, finalHtml)
         bodyHtml.value = finalHtml
