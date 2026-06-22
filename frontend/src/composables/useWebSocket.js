@@ -467,6 +467,15 @@ export function sendUpdateSeenTips(seenTips) {
 }
 
 /**
+ * Persist + broadcast the seen-help state (sibling of sendUpdateSeenTips).
+ * @param {Object} seenHelp - { <help_key>: <ISO timestamp> }
+ * @returns {boolean} True if message was sent, false if not connected.
+ */
+export function sendUpdateSeenHelp(seenHelp) {
+    return sendWsMessage({ type: 'update_seen_help', seen_help: seenHelp })
+}
+
+/**
  * Acknowledge that the user has seen the forced changelog for a version.
  * @param {string} version - The version that was displayed
  * @returns {boolean} - True if message was sent
@@ -1249,6 +1258,18 @@ export function useWebSocket() {
                 // updated the seen-state.
                 import('../stores/tips').then(({ useTipsStore }) => {
                     useTipsStore().applySeenTips(msg.seen_tips)
+                })
+                break
+            case 'help_manifest_pushed':
+                // Read-only help manifest pushed by the backend on connect.
+                import('../stores/help').then(({ useHelpStore }) => {
+                    useHelpStore().applyManifest(msg.manifest)
+                })
+                break
+            case 'seen_help_updated':
+                // Multi-device sync of the help seen-state.
+                import('../stores/help').then(({ useHelpStore }) => {
+                    useHelpStore().applySeenHelp(msg.seen_help)
                 })
                 break
             case 'terminal_list':

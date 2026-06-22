@@ -5,6 +5,8 @@ import { useSettingsStore } from '../../stores/settings'
 import { renderMarkdown } from '../../utils/markdown'
 import { stripFrontMatter } from '../../utils/frontMatter'
 import { resolvePublicAssetUrl } from '../../utils/publicAsset'
+import { rewriteAssetUrls } from '../../utils/contentAssets'
+import { handleHelpLinkClick } from '../../utils/helpLinks'
 import { TIP_COOLDOWN_MS } from '../../composables/useTipScheduler'
 
 // CustomNotification automatically injects the Notivue item as the `item` prop.
@@ -58,7 +60,7 @@ async function loadBody(key) {
         // them with CommonMark paragraph behavior (soft wrap -> space, blank line
         // -> new paragraph) rather than the chat-style breaks: true.
         const html = await renderMarkdown(body, { softBreakAsSpace: true })
-        const finalHtml = rewriteTipAssetUrls(html)
+        const finalHtml = rewriteAssetUrls(html, { folder: 'tips' })
         bodyCache.set(key, finalHtml)
         bodyHtml.value = finalHtml
     } catch (e) {
@@ -67,40 +69,6 @@ async function loadBody(key) {
     } finally {
         loading.value = false
     }
-}
-
-// Rewrite asset URLs inside a rendered tip body so authors can use any of
-// the natural shapes — `/tips/foo.png`, `./foo.png`, or bare `foo.png` —
-// and have them resolved to the runtime BASE_URL (`/` in dev, `/static/`
-// in prod). Operates on parsed HTML rather than the markdown source so
-// occurrences inside code blocks are left alone. External URLs (with a
-// scheme, protocol-relative, anchors, or any other absolute path) are
-// untouched. Covers both `<img src>` and `<a href>`.
-function rewriteTipAssetUrls(html) {
-    const tipsBase = resolvePublicAssetUrl('tips/')
-    const tmp = document.createElement('div')
-    tmp.innerHTML = html
-    const rewriteAttr = (el, attr) => {
-        const v = el.getAttribute(attr)
-        if (!v) return
-        if (/^[a-z][a-z0-9+.-]*:/i.test(v)) return   // scheme: http:, data:, mailto:, ...
-        if (v.startsWith('//')) return                // protocol-relative
-        if (v.startsWith('#')) return                 // in-page anchor
-        if (v.startsWith('/tips/')) {
-            el.setAttribute(attr, tipsBase + v.slice('/tips/'.length))
-            return
-        }
-        if (v.startsWith('/')) return                 // other absolute path — leave alone
-        if (v.startsWith('./')) {
-            el.setAttribute(attr, tipsBase + v.slice(2))
-            return
-        }
-        // Bare relative path: treat as relative to the tips folder.
-        el.setAttribute(attr, tipsBase + v)
-    }
-    tmp.querySelectorAll('img').forEach((el) => rewriteAttr(el, 'src'))
-    tmp.querySelectorAll('a').forEach((el) => rewriteAttr(el, 'href'))
-    return tmp.innerHTML
 }
 
 // Commit the current tip's seen-state based on the checkbox.
@@ -179,7 +147,7 @@ function onNextTip() {
 
         <div v-if="loading" class="tip-loading">Loading…</div>
         <div v-else-if="errored" class="tip-error">Failed to load tip content.</div>
-        <div v-else class="tip-body" v-html="bodyHtml" />
+        <div v-else class="tip-body" v-html="bodyHtml" @click="handleHelpLinkClick" />
 
         <wa-divider></wa-divider>
 

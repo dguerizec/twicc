@@ -2968,7 +2968,9 @@ async def bootstrap(request):
     terminal config, and message snippets in a single response so the
     frontend doesn't have to wait for the WebSocket connection.
     """
+    from twicc.help_manifest import manifest_to_dict as help_manifest_to_dict
     from twicc.message_snippets import read_message_snippets_config
+    from twicc.seen_help import read_seen_help
     from twicc.seen_tips import read_seen_tips
     from twicc.synced_settings import SYNCED_SETTINGS_DEFAULTS, prepare_settings_for_client, read_synced_settings
     from twicc.terminal_config import read_terminal_config
@@ -2989,6 +2991,8 @@ async def bootstrap(request):
     message_snippets = await asyncio.to_thread(read_message_snippets_config)
     seen_tips = await asyncio.to_thread(read_seen_tips)
     tips_manifest = await asyncio.to_thread(manifest_to_dict)
+    seen_help = await asyncio.to_thread(read_seen_help)
+    help_manifest = await asyncio.to_thread(help_manifest_to_dict)
     # ``helpers.get_bootstrap_data()`` does sync FS reads and sync ORM
     # work per provider — build the whole map in one worker thread hop.
     providers_data = await asyncio.to_thread(
@@ -3024,6 +3028,8 @@ async def bootstrap(request):
         "message_snippets": message_snippets,
         "seen_tips": seen_tips,
         "tips_manifest": tips_manifest,
+        "seen_help": seen_help,
+        "help_manifest": help_manifest,
         "providers": providers_data,
         "disabledProvidersPresent": disabled_providers_present,
         "disabledProviders": disabled_providers,

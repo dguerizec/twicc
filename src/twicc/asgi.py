@@ -52,6 +52,8 @@ from twicc.synced_settings import _settings_lock, prepare_settings_for_client, r
 from twicc.workspaces import read_workspaces
 from twicc.layouts import read_layouts
 from twicc.message_snippets import read_message_snippets_config, write_message_snippets_config
+from twicc.help_manifest import manifest_to_dict as help_manifest_to_dict
+from twicc.seen_help import read_seen_help, write_seen_help
 from twicc.seen_tips import read_seen_tips, write_seen_tips
 from twicc.tips_manifest import manifest_to_dict
 from twicc.terminal_config import read_terminal_config, write_terminal_config
@@ -544,6 +546,16 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
             seen_tips = await sync_to_async(read_seen_tips)()
             await self.send_json({"type": "seen_tips_updated", "seen_tips": seen_tips})
 
+        if self._should_send("help_manifest_pushed"):
+            await self.send_json({
+                "type": "help_manifest_pushed",
+                "manifest": help_manifest_to_dict(),
+            })
+
+        if self._should_send("seen_help_updated"):
+            seen_help = await sync_to_async(read_seen_help)()
+            await self.send_json({"type": "seen_help_updated", "seen_help": seen_help})
+
         # Send current startup progress (if any phase is still active)
         if self._should_send("startup_progress"):
             from twicc.startup_progress import get_startup_progress
@@ -654,6 +666,9 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
 
         elif msg_type == "update_seen_tips":
             await self._handle_update_seen_tips(content)
+
+        elif msg_type == "update_seen_help":
+            await self._handle_update_seen_help(content)
 
         elif msg_type == "session_viewed":
             await self._handle_session_viewed(content)
@@ -1540,6 +1555,33 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
                 "data": {
                     "type": "seen_tips_updated",
                     "seen_tips": state,
+                },
+            },
+        )
+
+    async def _handle_update_seen_help(self, content: dict) -> None:
+        """Persist the seen-help state and broadcast the change.
+
+        Mirrors :meth:`_handle_update_seen_tips`. Expected payload:
+        ``{"type": "update_seen_help", "seen_help": {<key>: <iso_timestamp>, ...}}``
+        Last-write-wins.
+        """
+        state = content.get("seen_help", {})
+        if not isinstance(state, dict) or not all(
+            isinstance(k, str) and isinstance(v, str) for k, v in state.items()
+        ):
+            logger.warning("Invalid update_seen_help payload, ignoring: %r", state)
+            return
+
+        await sync_to_async(write_seen_help)(state)
+
+        await self.channel_layer.group_send(
+            "updates",
+            {
+                "type": "broadcast",
+                "data": {
+                    "type": "seen_help_updated",
+                    "seen_help": state,
                 },
             },
         )

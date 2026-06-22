@@ -96,6 +96,7 @@ from twicc.search_indexing_task import (  # noqa: E402
 )
 from twicc.version_check_task import start_version_check_task, stop_version_check_task  # noqa: E402
 from twicc.tips_manifest import init_manifest, start_tips_watcher_task  # noqa: E402
+from twicc.help_manifest import init_manifest as init_help_manifest, start_help_watcher_task  # noqa: E402
 
 
 async def _cancel_task(task: asyncio.Task | None, name: str) -> None:
@@ -198,6 +199,7 @@ async def run_server(port: int):
     # just above.
     await sync_all_providers()
     init_manifest()
+    init_help_manifest()
 
     # When ``TWICC_AUTO_ENABLE_PROVIDERS=1`` (devctl worktree mode) seeds the
     # initial ``disabledProviders=[]`` choice if the file lacks one, so the
@@ -286,6 +288,7 @@ async def run_server(port: int):
     # The task short-circuits to a no-op outside TWICC_DEBUG so this is a
     # zero-cost coroutine in production.
     tips_watcher_task = asyncio.create_task(start_tips_watcher_task(shutdown_event))
+    help_watcher_task = asyncio.create_task(start_help_watcher_task(shutdown_event))
 
     # CLI drop-request plumbing (cf. docs/superpowers/specs/2026-05-17-cli-session-create-design.md)
     from twicc.heartbeat import heartbeat_loop
@@ -368,6 +371,9 @@ async def run_server(port: int):
         # off path (coroutine already returned) and any awaited wait_for.
         logger.info("Stopping tips watcher task...")
         await _cancel_task(tips_watcher_task, "Tips watcher task")
+
+        logger.info("Stopping help watcher task...")
+        await _cancel_task(help_watcher_task, "Help watcher task")
 
         logger.info("Stopping heartbeat task...")
         await _cancel_task(heartbeat_task, "Heartbeat task")

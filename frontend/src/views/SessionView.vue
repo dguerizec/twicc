@@ -3,6 +3,7 @@ import { computed, watch, ref, reactive, readonly, provide, inject, onActivated,
 import { useRoute, useRouter } from 'vue-router'
 import { useDataStore } from '../stores/data'
 import { useSettingsStore } from '../stores/settings'
+import { useHelpStore } from '../stores/help'
 import { getProviderHelpers } from '../providers'
 import { useCommandRegistry } from '../composables/useCommandRegistry'
 import { requestTitleSuggestion, notifySessionViewed, forceNotifySessionViewed, markSessionReadState, cancelSessionViewedThrottle } from '../composables/useWebSocket'
@@ -52,6 +53,7 @@ const router = useRouter()
 const store = useDataStore()
 const layoutsStore = useLayoutsStore()
 const settingsStore = useSettingsStore()
+const helpStore = useHelpStore()
 const codeCommentsStore = useCodeCommentsStore()
 const { registerCommands, unregisterCommands } = useCommandRegistry()
 
@@ -646,6 +648,21 @@ function isCenterTab(tabId) {
 // re-selects a visible tab — without touching the route.
 const lastCenterTab = ref('main')
 watch(activeTabId, (id) => { if (id && isCenterTab(id)) lastCenterTab.value = id }, { immediate: true })
+
+// First time the user opens this session's Artifacts tab, surface the
+// artifacts help (with the dismiss switch). The tab only exists once the
+// session has artifacts, so activeTabId only becomes 'artifacts' when it's
+// reachable; `immediate` also covers landing directly on the artifacts URL.
+// maybeAutoShow no-ops once seen, if disabled, or if another help is open.
+watch(activeTabId, (id) => {
+    if (id !== 'artifacts') return
+    helpStore.maybeAutoShow('what-are-artifacts', {
+        platform: settingsStore._isTouchDevice ? 'mobile' : 'desktop',
+        os: settingsStore.os,
+        enabledProviders: settingsStore.enabledProviders,
+    })
+}, { immediate: true })
+
 const centerActiveTab = computed(() => {
     if (isCenterTab(activeTabId.value)) return activeTabId.value
     return isCenterTab(lastCenterTab.value) ? lastCenterTab.value : 'main'

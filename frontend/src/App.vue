@@ -20,6 +20,7 @@ import SessionSwitcher from './components/app/SessionSwitcher.vue'
 import StopProcessConfirmDialog from './components/app/StopProcessConfirmDialog.vue'
 import ProviderActivationDialog from './components/app/ProviderActivationDialog.vue'
 import HybridAnnouncementDialog from './components/app/HybridAnnouncementDialog.vue'
+import HelpDialog from './components/help/HelpDialog.vue'
 import GlobalMediaPreview from './components/media/GlobalMediaPreview.vue'
 import ProjectTrustDialog from './components/project/ProjectTrustDialog.vue'
 import ProjectEditDialog from './components/project/ProjectEditDialog.vue'
@@ -646,6 +647,9 @@ const toastTheme = computed(() => {
          (and any other "open this media fullscreen" call site that doesn't
          own its own MediaPreviewDialog instance). -->
     <GlobalMediaPreview />
+    <!-- Single app-wide help dialog, driven by the help store (showHelp() /
+         helpStore.maybeAutoShow()). Renders help/<key>.md pages. -->
+    <HelpDialog v-if="isAppReady" />
     <!-- Global trust gate dialog, driven by composables/useTrustGate. -->
     <ProjectTrustDialog ref="trustDialogRef" />
     <!-- Global command-palette dialogs: edit any project, or open a worktree

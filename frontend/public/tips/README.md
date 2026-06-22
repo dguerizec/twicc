@@ -103,6 +103,19 @@ does not look at filenames.
 > HTML is **not** allowed in tip bodies (`html: false` in markdown-it).
 > DOMPurify also sanitizes the rendered output. Stick to markdown.
 
+### Linking to a help page
+
+A markdown link whose target is exactly `help/<key>` is intercepted and
+opens the matching **help page** (see `frontend/public/help/`) in its
+dialog, instead of navigating:
+
+```markdown
+New here? See [what artifacts are](help/what-are-artifacts).
+```
+
+Use it to point a tip at a longer explanation that lives as a help page.
+The `<key>` is the help file's name without `.md`.
+
 ## When does a tip appear?
 
 Three constants in `frontend/src/composables/useTipScheduler.js` control

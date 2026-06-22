@@ -17,6 +17,8 @@ import { useElementSize } from '@vueuse/core'
 import { resolveLayout, DOCKS } from '../utils/layoutResolver'
 import { edgeOfDock } from '../components/session/layout/dockMeta'
 import { useDataStore } from '../stores/data'
+import { useHelpStore } from '../stores/help'
+import { useSettingsStore } from '../stores/settings'
 
 const EMPTY_INTENTION = Object.freeze({
     assignment: Object.freeze({}),
@@ -38,6 +40,8 @@ export function groupKeyOf(slots) {
 
 export function useSessionLayout({ sessionId, containerRef, tabs, routeActiveTabId }) {
     const store = useDataStore()
+    const helpStore = useHelpStore()
+    const settings = useSettingsStore()
 
     // ---- Measure ----
     const { width, height } = useElementSize(containerRef)
@@ -170,7 +174,21 @@ export function useSessionLayout({ sessionId, containerRef, tabs, routeActiveTab
     const openOverlayEdge = computed(() => overlayEdgeForTab(routeActiveTabId.value))
 
     // ---- Actions (intention mutations via the store) ----
-    function place(tabId, dest) { store.setTabDock(sessionId.value, tabId, dest) }
+    function place(tabId, dest) {
+        store.setTabDock(sessionId.value, tabId, dest)
+        // First time the user manually docks a tab (anywhere but back to
+        // center): surface the layout help once. No-ops if already seen,
+        // disabled, or another help is open. place() is the single funnel for
+        // every manual placement (tab-header arrow, overlay, command palette),
+        // and is never hit by programmatic layout loads.
+        if (dest && dest !== 'center') {
+            helpStore.maybeAutoShow('layout-docks', {
+                platform: settings._isTouchDevice ? 'mobile' : 'desktop',
+                os: settings.os,
+                enabledProviders: settings.enabledProviders,
+            })
+        }
+    }
     function minimize(dockIds) {
         for (const d of [].concat(dockIds)) store.minimizeDock(sessionId.value, d)
     }

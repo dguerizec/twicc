@@ -7,11 +7,13 @@ import { useDataStore } from '../../stores/data'
 import { useLayoutsStore } from '../../stores/layouts'
 import { useAuthStore } from '../../stores/auth'
 import { useTipsStore } from '../../stores/tips'
+import { useHelpStore } from '../../stores/help'
 import { getProviderHelpers, getProviderLabel, getProviderOptions, getRegisteredProviders, getProviderIcon } from '../../providers'
 import { getActivationCharMetadata } from '../../utils/commandActivation'
 import { DISPLAY_MODE, COLOR_SCHEME, SESSION_TIME_FORMAT, DEFAULT_MAX_CACHED_SESSIONS, WA_THEME, WA_THEME_LABELS, WA_BRAND, WA_BRAND_LABELS, SPONSOR_URL } from '../../constants'
 import NotificationSettings from './NotificationSettings.vue'
 import TipsSettings from '../settings/TipsSettings.vue'
+import HelpSettings from '../settings/HelpSettings.vue'
 import AppTooltip from '../ui/AppTooltip.vue'
 import ChangelogDialog from './ChangelogDialog.vue'
 import LayoutManagerDialog from '../session/layout/LayoutManagerDialog.vue'
@@ -26,6 +28,7 @@ const dataStore = useDataStore()
 const layoutsStore = useLayoutsStore()
 const authStore = useAuthStore()
 const tipsStore = useTipsStore()
+const helpStore = useHelpStore()
 
 // Tips section is hidden from the nav (and the active-section watcher
 // below redirects away from it) when no tip matches the current
@@ -38,6 +41,15 @@ const availableTips = computed(() => tipsStore.getAvailableTips({
     enabledProviders: store.enabledProviders,
 }))
 const hasTips = computed(() => availableTips.value.length > 0)
+
+// Help section: same gating as tips — hidden from the nav when no help
+// page matches the current environment's constraints.
+const availableHelp = computed(() => helpStore.getAvailableHelp({
+    platform: store._isTouchDevice ? 'mobile' : 'desktop',
+    os: store.os,
+    enabledProviders: store.enabledProviders,
+}))
+const hasHelp = computed(() => availableHelp.value.length > 0)
 
 // Reactive set of currently enabled providers (derived from the settings store).
 const enabledProviders = computed(() => new Set(store.enabledProviders))
@@ -97,6 +109,13 @@ watch(hasTips, (now) => {
     }
 })
 
+// Same bounce for the Help section when its nav entry disappears.
+watch(hasHelp, (now) => {
+    if (!now && activeSection.value === 'help') {
+        activeSection.value = 'global'
+    }
+})
+
 function handleCloseRequest() {
     const el = popoverRef.value
     if (!el) return
@@ -124,6 +143,7 @@ const activeSectionObj = computed(() =>
 const activeSectionLabel = computed(() => {
     if (activeSection.value === 'shortcuts') return 'Keyboard shortcuts'
     if (activeSection.value === 'tips') return 'Tips'
+    if (activeSection.value === 'help') return 'Help'
     return activeSectionObj.value?.label ?? ''
 })
 
@@ -1048,6 +1068,14 @@ function onChangelogClose() {
                     >
                         Tips
                     </button>
+                    <button
+                        v-if="hasHelp"
+                        class="settings-nav-item help-nav-item"
+                        :class="{ active: activeSection === 'help' }"
+                        @click="selectSection('help')"
+                    >
+                        Help
+                    </button>
                 </nav>
 
                 <wa-divider class="settings-vertical-divider" orientation="vertical"></wa-divider>
@@ -1518,6 +1546,8 @@ function onChangelogClose() {
 
                 <!-- Tips Section -->
                 <TipsSettings v-if="activeSection === 'tips'" />
+
+                <HelpSettings v-if="activeSection === 'help'" />
 
                 <!-- Providers quotas/usage Section -->
                 <section v-if="activeSection === 'usage'" class="settings-section">

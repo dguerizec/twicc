@@ -225,6 +225,25 @@ def get_tips_assets_dir() -> Path:
     return settings.FRONTEND_DIST_DIR / "tips"
 
 
+def get_seen_help_path() -> Path:
+    """Path to the synced seen-help state file."""
+    return get_data_dir() / "seen-help.json"
+
+
+def get_help_assets_dir() -> Path:
+    """Directory holding help .md files and their image assets.
+
+    Mirrors :func:`get_tips_assets_dir`: in dev this points to
+    ``frontend/public/help/`` in the repo; in an installed wheel the help
+    folder is bundled inside ``FRONTEND_DIST_DIR / "help"`` by
+    ``hatch_build.py`` (which copies the whole ``frontend/public/`` tree).
+    """
+    from django.conf import settings
+    if settings.DEV_MODE:
+        return settings.PACKAGE_DIR.parent.parent / "frontend" / "public" / "help"
+    return settings.FRONTEND_DIST_DIR / "help"
+
+
 def path_to_project_id(path: str) -> str:
     """Convert a filesystem path to a TwiCC project ID.
 
