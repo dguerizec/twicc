@@ -1902,7 +1902,17 @@ function onChangelogClose() {
         align-items: center;
         gap: var(--wa-space-2xs);
         cursor: pointer;
-        margin-bottom: var(--wa-space-s);
+        /* Keep the back affordance reachable while the detail panel scrolls:
+           stick it to the top of the scrolling panel. The opaque popover
+           surface background hides content scrolling underneath; using
+           padding-bottom (rather than margin) keeps that masking area opaque
+           right down to the content, with no transparent strip. z-index sits
+           above the content and the scroll-shadow pseudo-elements (z-index: 2). */
+        position: sticky;
+        top: 0;
+        z-index: 3;
+        background: var(--wa-color-surface-default);
+        padding-bottom: var(--wa-space-s);
     }
 
     .settings-detail-header-title {
