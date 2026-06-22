@@ -523,9 +523,10 @@ defineExpose({ open, close })
                                     :style="item.project.color ? { '--dot-color': item.project.color } : null"
                                 ></span>
                             </template>
-                            <!-- Regular sub-item: active check, icon, or spacer -->
+                            <!-- Regular sub-item: active check, icon (FA name or custom src), or spacer -->
                             <template v-else>
                                 <wa-icon v-if="item.active" name="check" class="command-icon active-check" />
+                                <wa-icon v-else-if="item.iconSrc" :src="item.iconSrc" class="command-icon" />
                                 <wa-icon v-else-if="item.icon" :name="item.icon" class="command-icon" />
                                 <span v-else class="command-icon-spacer" />
                             </template>

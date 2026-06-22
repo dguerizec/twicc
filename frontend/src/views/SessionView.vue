@@ -20,7 +20,7 @@ import OrchestrationPanel from '../components/orchestration/OrchestrationPanel.v
 import SessionLayout from '../components/session/layout/SessionLayout.vue'
 import TabPlacementMenu from '../components/session/layout/TabPlacementMenu.vue'
 import LayoutMenu from '../components/session/layout/LayoutMenu.vue'
-import { DOCK_LABELS, PLACEMENT_OPTIONS } from '../components/session/layout/dockMeta'
+import { DOCK_LABELS, DOCK_ICONS, PLACEMENT_OPTIONS } from '../components/session/layout/dockMeta'
 import LayoutSaveDialog from '../components/session/layout/LayoutSaveDialog.vue'
 import LayoutManagerDialog from '../components/session/layout/LayoutManagerDialog.vue'
 import { useLayoutsStore, SINGLE_PANE_ID } from '../stores/layouts'
@@ -1683,6 +1683,9 @@ function buildLayoutCommands() {
                     .map((dest) => ({
                         id: dest,
                         label: DOCK_LABELS[dest],
+                        // Same position-hinting SVGs as the per-tab placement menu (TabPlacementMenu);
+                        // custom icons consumed via `src`, not an FA glyph name — hence iconSrc.
+                        iconSrc: DOCK_ICONS[dest],
                         action: () => layout.place(tabId, dest),
                     }))
             },
