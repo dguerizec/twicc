@@ -2015,6 +2015,10 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
                     ></wa-icon>
                     <wa-icon v-else name="gear"></wa-icon>
                     <AgentSettingsSummary :session="session" :settings="settings" />
+                    <!-- Affordance hinting the button opens the settings popover
+                         (upward). Kept visible in every mode, including the most
+                         compact icon-only one, via its own always-on display rule. -->
+                    <wa-icon slot="end" name="chevron-up" class="settings-chevron"></wa-icon>
                 </wa-button>
                 <AgentSettingsPopover
                     :for="settingsButtonId"
@@ -2240,6 +2244,15 @@ body.sidebar-closed .message-input-toolbar {
     wa-icon {
         display: none;
     }
+    /* The opens-upward affordance overrides every icon display rule above and
+       in the narrow-width container queries, so it shows in all modes — even
+       the icon-only one where the summary is hidden. */
+    .settings-chevron {
+        display: inline-flex;
+        flex-shrink: 0;
+        font-size: var(--wa-font-size-xs);
+        color: var(--wa-color-text-quiet);
+    }
     min-width: 0;
     flex-shrink: 1;
     &::part(label) {
@@ -2331,17 +2344,21 @@ body.sidebar-closed .message-input-toolbar {
 }
 
 /* On narrow widths, show only icons for action buttons */
-@container message-input (width < 35rem) {
+@container message-input (width < 45rem) {
     .message-input-actions {
         .settings-button {
             &::part(label) {
                 line-height: 1.1;
             }
+
             &::part(base) {
                 padding-inline: var(--wa-space-2xs);
             }
         }
-
+    }
+}
+@container message-input (width < 25rem) {
+    .message-input-actions {
         gap: var(--wa-space-2xs);
 
         .cancel-button, .reset-button, .send-button {
@@ -2359,7 +2376,7 @@ body.sidebar-closed .message-input-toolbar {
         }
     }
 }
-@container message-input (width < 24rem) {
+@container message-input (width < 35rem) {
     .message-input-actions {
         .settings-button {
             wa-icon {

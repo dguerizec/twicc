@@ -174,6 +174,7 @@ button {
     gap: var(--wa-space-2xs);
     flex-wrap: wrap;
     align-items: center;
+    margin-bottom: var(--wa-space-xs);
 }
 
 /* On a narrow composer: single-line horizontal scroll. Reacts to the composer's own
