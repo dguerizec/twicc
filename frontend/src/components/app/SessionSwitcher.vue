@@ -9,8 +9,9 @@
  * mouse hover/click to the same state machine.
  *
  * The row markup deliberately replicates the compact SessionList row (project
- * color dot · provider icon · ellipsized title · state indicator) rather than
- * sharing a component — it's a handful of elements and stays self-contained.
+ * color dot · provider icon · "Arch." tag for archived sessions · ellipsized
+ * title · state indicator) rather than sharing a component — it's a handful of
+ * elements and stays self-contained.
  */
 import { computed, ref, watch, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
@@ -108,6 +109,12 @@ watch([cursor, visible], async () => {
                             :name="row.providerIcon"
                             class="switcher-provider"
                         ></wa-icon>
+                        <wa-tag
+                            v-if="row.session.archived"
+                            size="small"
+                            variant="neutral"
+                            class="switcher-archived-tag"
+                        >Arch.</wa-tag>
                         <span class="switcher-name">{{ row.name }}</span>
                         <span class="switcher-state">
                             <wa-icon v-if="row.state.kind === 'unread'" name="eye" class="switcher-unread"></wa-icon>
@@ -225,6 +232,13 @@ watch([cursor, visible], async () => {
 
 .switcher-row--active .switcher-provider {
     color: inherit;
+}
+
+/* "Arch." marker for archived sessions — mirrors SessionListItem's archived-tag. */
+.switcher-archived-tag {
+    flex: 0 0 auto;
+    line-height: unset;
+    height: unset;
 }
 
 .switcher-name {

@@ -346,16 +346,31 @@ function computeLastToolVisible(items, lastStartedToolId, mode, expandedGroups, 
 }
 
 /**
- * Whether a session is eligible to be reached through MRU navigation — the
- * post-archive fallback and the Ctrl+` session switcher share this predicate so
- * they never diverge. Excludes sessions that no longer exist in the store,
- * hidden sessions, archived sessions, and subagents (which are reached through
- * their parent, never standalone).
+ * Base MRU eligibility: the session exists in the store, isn't hidden, and isn't
+ * a subagent (subagents are reached through their parent, never standalone).
+ * Archived state is intentionally NOT considered here — the two MRU consumers
+ * diverge on it: the Ctrl+` switcher keeps archived sessions (this predicate),
+ * the post-archive fallback drops them (`isSwitchableSession`).
+ * @param {object|undefined} session
+ * @returns {boolean}
+ */
+function isMruEligible(session) {
+    return !!session && !session.hidden && !session.parent_session_id
+}
+
+/**
+ * Whether a session is a valid target for the post-archive auto-navigation
+ * fallback (`getNextMruPath`). Like `isMruEligible` but archived sessions are
+ * excluded: after archiving the current session we must land on a *non*-archived
+ * one, never bounce onto another archived session. The Ctrl+` switcher
+ * deliberately uses the looser `isMruEligible` instead — it lets you jump back
+ * to a session you just archived (MRU = the last sessions you were on, whatever
+ * their state).
  * @param {object|undefined} session
  * @returns {boolean}
  */
 function isSwitchableSession(session) {
-    return !!session && !session.hidden && !session.archived && !session.parent_session_id
+    return isMruEligible(session) && !session.archived
 }
 
 export const useDataStore = defineStore('data', {
@@ -599,17 +614,19 @@ export const useDataStore = defineStore('data', {
          * visited sessions, newest first, one entry per session (the MRU is
          * already deduped by session, keeping the latest sub-route visited).
          * Project-page entries (no sessionId) are dropped — this is a session
-         * switcher — and invalid sessions are filtered via isSwitchableSession.
-         * Capped at MRU_SWITCHER_LIMIT. Each item is { session, path }, where
-         * `path` is the exact URL to restore (so committing lands on the last
-         * tab visited within that session).
+         * switcher — and ineligible sessions are filtered via isMruEligible
+         * (vanished / hidden / subagents). Archived sessions are kept on purpose:
+         * the MRU is state-agnostic, so you can switch straight back to a session
+         * you just archived. Capped at MRU_SWITCHER_LIMIT. Each item is
+         * { session, path }, where `path` is the exact URL to restore (so
+         * committing lands on the last tab visited within that session).
          */
         mruSwitcherSessions: (state) => {
             const out = []
             for (const entry of state.localState.mruPaths) {
                 if (!entry.sessionId) continue
                 const session = state.sessions[entry.sessionId]
-                if (!isSwitchableSession(session)) continue
+                if (!isMruEligible(session)) continue
                 out.push({ session, path: entry.path })
                 if (out.length >= MRU_SWITCHER_LIMIT) break
             }
@@ -4373,7 +4390,9 @@ export const useDataStore = defineStore('data', {
 
         /**
          * Remove all MRU entries for a given session.
-         * Called when a session is archived or a draft is deleted.
+         * Called when a session is hidden/removed from the store or a draft is
+         * deleted — NOT on archive: archived sessions stay in the MRU so the
+         * Ctrl+` switcher can switch back to them.
          * @param {string} sessionId - The session ID to remove
          */
         removeMruSession(sessionId) {
@@ -4426,10 +4445,10 @@ export const useDataStore = defineStore('data', {
                 }
             }
 
-            // Remove from MRU when archiving
-            if (archived) {
-                this.removeMruSession(sessionId)
-            }
+            // Note: archived sessions are intentionally KEPT in the MRU stack so
+            // the Ctrl+` switcher can still jump back to a session you just
+            // archived (the switcher's getter filters by isMruEligible, which
+            // allows archived; the post-archive auto-nav fallback excludes them).
 
             // Build the PATCH payload
             const patchData = { archived }
@@ -4471,9 +4490,10 @@ export const useDataStore = defineStore('data', {
 
         /**
          * Apply a bulk-archive broadcast from the backend. Local-only:
-         * marks sessions as archived in the store and removes them from MRU.
-         * Does NOT call the backend (the backend already archived them).
-         * Does NOT touch pinned sessions (the backend filtered them out).
+         * marks sessions as archived in the store. Does NOT call the backend
+         * (the backend already archived them). Does NOT touch pinned sessions
+         * (the backend filtered them out). Archived sessions stay in the MRU
+         * stack so the Ctrl+` switcher can still reach them.
          */
         applyBulkArchiveFromBroadcast(sessionIds) {
             for (const sid of sessionIds) {
@@ -4481,7 +4501,6 @@ export const useDataStore = defineStore('data', {
                 if (session) {
                     session.archived = true
                 }
-                this.removeMruSession(sid)
             }
         },
 
