@@ -307,6 +307,25 @@ function handleUnarchive() {
 }
 
 /**
+ * Open/close the in-session search bar — the clickable equivalent of Ctrl+F.
+ * Dispatches the same window event the keyboard shortcut uses; the currently
+ * active SessionItemsList toggles its search bar (prefilling from the current
+ * selection when opening). Stateless here: the button is a pure trigger, so the
+ * mobile/keyboard-less path matches Ctrl+F exactly.
+ *
+ * In compact mode the action cluster is only reachable with the header expanded,
+ * whose overlay would otherwise sit on top of the search bar that appears just
+ * below it — so collapse the header on click (no-op on wide viewports, where the
+ * cluster is always visible).
+ */
+function toggleSessionSearch() {
+    isCompactExpanded.value = false
+    window.dispatchEvent(new CustomEvent('twicc:toggle-session-search', { detail: { handled: false } }))
+}
+
+const searchTooltip = computed(() => `Search in conversation (${settingsStore.isMac ? '⌘F' : 'Ctrl+F'})`)
+
+/**
  * Label shown on the pin button tooltip, reflecting the current pin mode.
  */
 const PIN_MODE_LABELS = { project: 'Project', workspace: 'Workspace', all: 'All projects' }
@@ -347,6 +366,20 @@ defineExpose({
                 <wa-tag v-else-if="session.draft && !processState" size="small" variant="warning" class="draft-tag">Draft</wa-tag>
                 <wa-tag v-if="session.stale" :id="`session-header-${sessionId}-stale-tag`" size="small" variant="warning" class="stale-tag">Stale</wa-tag>
                 <AppTooltip v-if="session.stale" :for="`session-header-${sessionId}-stale-tag`">Session files were deleted from disk</AppTooltip>
+
+                <!-- In-session search trigger: clickable equivalent of Ctrl+F (not for drafts) -->
+                <wa-button
+                    v-if="!session.draft"
+                    :id="`session-header-${sessionId}-search-button`"
+                    variant="neutral"
+                    appearance="plain"
+                    size="small"
+                    class="search-button reduced-height"
+                    @click="toggleSessionSearch"
+                >
+                    <wa-icon name="magnifying-glass" label="Search"></wa-icon>
+                </wa-button>
+                <AppTooltip v-if="!session.draft" :for="`session-header-${sessionId}-search-button`">{{ searchTooltip }}</AppTooltip>
 
                 <!-- Pin mode dropdown (not for drafts) -->
                 <wa-dropdown
@@ -879,7 +912,8 @@ wa-divider {
 
 .pin-button,
 .archive-button,
-.rename-button {
+.rename-button,
+.search-button {
     opacity: 0.6;
     transition: opacity 0.15s;
     flex-shrink: 0;
@@ -907,7 +941,8 @@ wa-divider {
 
 .pin-button:hover,
 .archive-button:hover,
-.rename-button:hover {
+.rename-button:hover,
+.search-button:hover {
     opacity: 1;
 }
 
