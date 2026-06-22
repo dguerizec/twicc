@@ -25,15 +25,22 @@ const editError = ref('')
 
 const deletingId = ref(null)
 const deleteRefs = ref({ global: false, projects: [] }) // references to the layout being deleted
+// Sentinel for the "Auto" reassignment choice. Maps to null (inherit from parent) for projects /
+// worktrees; the global default can't inherit, so it falls back to single pane instead.
+const INHERIT = '__inherit__'
 const reassignTarget = ref(SINGLE_PANE_ID)
 const deleteError = ref('')
 const isDeleting = ref(false)
 
 const namedLayouts = computed(() => layoutsStore.getAllLayouts)
 
-// Reassignment options for a deletion: single pane + every other named layout (never the one going away).
+// Reassignment options for a deletion: single pane first, then — only when projects / worktrees
+// reference the layout — the "Auto" inherit choice, then every other named layout (never the one
+// going away). "Auto" is omitted when only the global default references the layout: the global
+// default has no parent scope to inherit from.
 const reassignOptions = computed(() => [
     { id: SINGLE_PANE_ID, name: SINGLE_PANE_NAME },
+    ...(deleteRefs.value.projects.length ? [{ id: INHERIT, name: 'Auto (inherited from parent scope)' }] : []),
     ...namedLayouts.value.filter((l) => l.id !== deletingId.value),
 ])
 
@@ -117,6 +124,10 @@ async function confirmDelete() {
     // Reassign references first (best path = nothing dangling); only remove once they succeed.
     if (hasReferences.value) {
         const target = reassignTarget.value
+        // "Auto": projects clear their explicit default (null → inherit from parent); the global
+        // default, which can't inherit, falls back to single pane.
+        const projectTarget = target === INHERIT ? null : target
+        const globalTarget = target === INHERIT ? SINGLE_PANE_ID : target
         isDeleting.value = true
         try {
             await Promise.all(
@@ -124,7 +135,7 @@ async function confirmDelete() {
                     const res = await apiFetch(`/api/projects/${projectId}/`, {
                         method: 'PUT',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ default_layout_id: target }),
+                        body: JSON.stringify({ default_layout_id: projectTarget }),
                     })
                     if (!res.ok) throw new Error('project update failed')
                     dataStore.updateProject(await res.json())
@@ -135,7 +146,7 @@ async function confirmDelete() {
             isDeleting.value = false
             return
         }
-        if (deleteRefs.value.global) settingsStore.setDefaultLayoutId(target)
+        if (deleteRefs.value.global) settingsStore.setDefaultLayoutId(globalTarget)
     }
 
     layoutsStore.deleteLayout(id)
