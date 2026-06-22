@@ -1024,9 +1024,6 @@ watch(activeTabId, (newTabId, oldTabId) => {
 // the tab is absent.
 const DIRECT_TAB_MAP = { 1: 'main', 2: 'files', 3: 'git', 4: 'terminal', 5: 'artifacts', 6: 'orchestration' }
 
-// Flag set by keyboard tab navigation to auto-focus the relevant element on tab arrival
-let pendingKeyboardFocus = false
-
 /**
  * Handle keyboard tab shortcut events dispatched from App.vue.
  * Only the active SessionView instance processes the event (KeepAlive guard).
@@ -1063,11 +1060,17 @@ function handleTabShortcut(event) {
     }
 
     if (!targetTab) return
-    pendingKeyboardFocus = true
     switchToTab(targetTab)
     // Keyboard navigation toward an activation-focus tool tab focuses its content — whether the tab
     // was hidden (a switch) or already visible (explicit keyboard intent on a shown panel).
     if (ACTIVATION_FOCUS_TABS.includes(targetTab)) requestPanelFocus(targetTab)
+    // Same intent for the Chat tab: keyboard arrival focuses its primary control — the pending-request
+    // form when one is shown, else the message input — exactly like Alt+Shift+M. Chat isn't an
+    // ACTIVATION_FOCUS_TAB (its target lives in the footer accordion, reached via focusChatPrimary's own
+    // retry loop rather than the panelFocusRequests counter), so it needs its own branch. It can't be
+    // deferred to onTabShow: that handler early-returns on the programmatic wa-tab-show this navigation
+    // triggers (the spurious-event guard), so the chat focus must fire from here.
+    else if (targetTab === 'main') nextTick(() => focusChatPrimary())
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1121,15 +1124,6 @@ function onTabShow(event) {
     if (panel === centerActiveTab.value) return
     cancelPaneFocus()
     switchToTab(panel)
-
-    // Auto-focus the chat's primary control (pending request form when active,
-    // message input otherwise) when arriving on the chat tab via keyboard navigation.
-    if (pendingKeyboardFocus) {
-        pendingKeyboardFocus = false
-        if (panel === 'main') {
-            nextTick(() => focusChatPrimary())
-        }
-    }
 }
 
 /**
