@@ -9,3 +9,5 @@ filter them together.
 Open the project selector and choose **Manage workspaces…** to create one. You
 can even set auto-add patterns so matching projects join the workspace
 automatically.
+
+More in the help dialog: [Working with workspaces](help/workspaces).

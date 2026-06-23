@@ -3,6 +3,7 @@
 import { ref, computed, nextTick, useId } from 'vue'
 import { useWorkspacesStore } from '../../stores/workspaces'
 import { useSettingsStore } from '../../stores/settings'
+import { useHelpStore } from '../../stores/help'
 import { useDataStore } from '../../stores/data'
 import ProjectBadge from '../project/ProjectBadge.vue'
 import ProjectSelectOptions from '../project/ProjectSelectOptions.vue'
@@ -11,6 +12,7 @@ import { matchPattern } from '../../utils/workspacePatterns'
 
 const workspacesStore = useWorkspacesStore()
 const settingsStore = useSettingsStore()
+const helpStore = useHelpStore()
 const dataStore = useDataStore()
 
 // -- Dialog refs --------------------------------------------------------------
@@ -315,7 +317,18 @@ function handleDialogHide(e) {
     dialogShown = false
 }
 
+// First time the user opens the workspace dialog (manage or create), surface
+// the workspaces help with the dismiss switch. No-ops once seen.
+function maybeShowWorkspaceHelp() {
+    helpStore.maybeAutoShow('workspaces', {
+        platform: settingsStore._isTouchDevice ? 'mobile' : 'desktop',
+        os: settingsStore.os,
+        enabledProviders: settingsStore.enabledProviders,
+    })
+}
+
 function open() {
+    maybeShowWorkspaceHelp()
     view.value = 'list'
     errorMessage.value = ''
     deleteConfirmId.value = null
@@ -337,6 +350,7 @@ function openForWorkspace(workspaceId) {
         open()
         return
     }
+    maybeShowWorkspaceHelp()
     errorMessage.value = ''
     deleteConfirmId.value = null
     localShowArchived.value = settingsStore.isShowArchivedWorkspaces
@@ -347,6 +361,7 @@ function openForWorkspace(workspaceId) {
 }
 
 function openNew() {
+    maybeShowWorkspaceHelp()
     errorMessage.value = ''
     deleteConfirmId.value = null
     localShowArchived.value = settingsStore.isShowArchivedWorkspaces

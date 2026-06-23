@@ -5,6 +5,7 @@ import { useSettingsStore } from '../../stores/settings'
 import { useWorkspacesStore } from '../../stores/workspaces'
 import WorkspaceCard from './WorkspaceCard.vue'
 import AppTooltip from '../ui/AppTooltip.vue'
+import HelpIconButton from '../help/HelpIconButton.vue'
 
 const settingsStore = useSettingsStore()
 const workspacesStore = useWorkspacesStore()
@@ -24,7 +25,7 @@ const visibleWorkspaces = computed(() =>
 <template>
     <div>
         <div class="section-header">
-            <span class="section-label">Workspaces</span>
+            <span class="section-label">Workspaces <HelpIconButton help-key="workspaces" label="What's a workspace?" /></span>
             <div class="header-actions">
                 <wa-switch
                     v-if="hasArchivedWorkspaces"
