@@ -353,11 +353,14 @@ class BaseAgentManager:
                         if pending_title is not None:
                             set_pending_title(agent.session_id, pending_title)
 
-                        # Same rationale for pending_session_attributes (hidden +
-                        # spawned links): the create-session service stashed them
-                        # under the draft id, but the watcher pops them when it
-                        # creates the row keyed on the canonical id Codex writes
-                        # into the JSONL. Re-key here so the pop finds them.
+                        # Same rationale for pending_session_attributes (hidden,
+                        # spawned links, system-prompt addendum, hybrid, dockable
+                        # layout): the create-session service stashed them under the
+                        # draft id, but the watcher pops them when it creates the row
+                        # keyed on the canonical id Codex writes into the JSONL.
+                        # Re-key here so the pop finds them — every field must be
+                        # forwarded, or it silently reverts to its default (the
+                        # draft's customized ``layout`` would drop to single pane).
                         from twicc.pending_session_attributes import (
                             pop_pending_session_attributes,
                             set_pending_session_attributes,
@@ -373,6 +376,7 @@ class BaseAgentManager:
                                 annotations=pending_attrs.annotations,
                                 system_prompt_addendum=pending_attrs.system_prompt_addendum,
                                 hybrid=pending_attrs.hybrid,
+                                layout=pending_attrs.layout,
                             )
 
                     await self.notify_session_bound(
