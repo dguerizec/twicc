@@ -8,6 +8,7 @@
 import { ref, computed, watch, nextTick, useId } from 'vue'
 import { useDataStore } from '../../stores/data'
 import { useSettingsStore } from '../../stores/settings'
+import { useHelpStore } from '../../stores/help'
 import { apiFetch } from '../../utils/api'
 import { composeWorktreeDir } from '../../utils/worktreePath'
 import DirectoryPickerPopup from '../files/DirectoryPickerPopup.vue'
@@ -18,6 +19,7 @@ const emit = defineEmits(['resolved'])
 
 const store = useDataStore()
 const settingsStore = useSettingsStore()
+const helpStore = useHelpStore()
 
 const dialogRef = ref(null)
 const branchInputRef = ref(null)
@@ -239,6 +241,13 @@ function resolveInitialWorktreePath(project) {
  */
 function open(project) {
     parentProject.value = project
+    // First time the user opens the worktree dialog, surface the worktree
+    // help (with the dismiss switch) over it. No-ops once seen.
+    helpStore.maybeAutoShow('worktrees', {
+        platform: settingsStore._isTouchDevice ? 'mobile' : 'desktop',
+        os: settingsStore.os,
+        enabledProviders: settingsStore.enabledProviders,
+    })
     activeTab.value = 'new'
     // New tab
     localBranch.value = ''

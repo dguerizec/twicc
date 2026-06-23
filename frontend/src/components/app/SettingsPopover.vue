@@ -14,6 +14,7 @@ import { DISPLAY_MODE, COLOR_SCHEME, SESSION_TIME_FORMAT, DEFAULT_MAX_CACHED_SES
 import NotificationSettings from './NotificationSettings.vue'
 import TipsSettings from '../settings/TipsSettings.vue'
 import HelpSettings from '../settings/HelpSettings.vue'
+import HelpIconButton from '../help/HelpIconButton.vue'
 import AppTooltip from '../ui/AppTooltip.vue'
 import ChangelogDialog from './ChangelogDialog.vue'
 import LayoutManagerDialog from '../session/layout/LayoutManagerDialog.vue'
@@ -1179,7 +1180,7 @@ function onChangelogClose() {
                     </div>
                     <wa-divider></wa-divider>
                     <div class="setting-group">
-                        <label class="setting-group-label">Default worktree directory <wa-icon name="cloud" class="synced-icon"></wa-icon></label>
+                        <label class="setting-group-label">Default worktree directory <wa-icon name="cloud" class="synced-icon"></wa-icon><HelpIconButton help-key="worktrees" label="What's a worktree?" /></label>
                         <div class="worktree-dir-input-row">
                             <span class="worktree-dir-prefix">&lt;git root&gt;/</span>
                             <wa-input

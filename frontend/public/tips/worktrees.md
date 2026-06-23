@@ -8,3 +8,5 @@ new or existing branch, and open a session right inside it.
 
 The worktree is automatically linked to its parent project, so its sessions
 roll up under the main repo.
+
+More in the help dialog: [Working with worktrees](help/worktrees).

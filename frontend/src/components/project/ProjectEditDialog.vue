@@ -11,6 +11,7 @@ import DirectoryPickerPopup from '../files/DirectoryPickerPopup.vue'
 import { composeWorktreeDir } from '../../utils/worktreePath'
 import { resolveProjectTrust } from '../../utils/trust'
 import ProjectAgentDefaultsSection from './ProjectAgentDefaultsSection.vue'
+import HelpIconButton from '../help/HelpIconButton.vue'
 import ProjectBadge from './ProjectBadge.vue'
 import WorktreeBadge from './WorktreeBadge.vue'
 
@@ -683,7 +684,7 @@ defineExpose({
                         <!-- Worktree directory (edit mode, git main repos only —
                              hidden for worktree projects, which inherit it) -->
                         <div v-if="showWorktreeDirectory" class="form-group">
-                            <label class="form-label">Worktree directory</label>
+                            <label class="form-label">Worktree directory <HelpIconButton help-key="worktrees" label="What's a worktree?" /></label>
                             <div class="directory-input-row">
                                 <wa-input
                                     :value.prop="localWorktreeDirectory"

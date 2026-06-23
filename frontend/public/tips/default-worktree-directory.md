@@ -9,3 +9,5 @@ time.
 
 Set it in **Settings → Global → Default worktree directory**, and override it
 per project from that project's edit dialog.
+
+More in the help dialog: [Working with worktrees](help/worktrees).

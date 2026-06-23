@@ -1,0 +1,41 @@
+---
+title: "Working with worktrees"
+---
+
+A worktree is a second working copy of the same repository, checked out to a
+**different branch**, in its **own folder** — sharing the repo's history. It
+lets you (or an agent) work on a feature branch without touching your main
+checkout.
+
+In TwiCC, a worktree shows up as **its own project**, automatically linked to
+the main repository. Its sessions, cost and activity **roll up into the parent
+project's view**, so you see everything together instead of siloed.
+
+### Where worktrees are created
+
+The **worktree directory** setting decides where TwiCC creates new worktrees,
+and pre-fills the path when you create one. There's a global default, and each
+project can override it — set the global one in Settings, and a project's in its
+edit dialog.
+
+### Creating one
+
+You make a worktree while starting a new session in it. In a **New session**
+menu, each project row has a worktree button — a branch with a **+** — on its
+right; click it to open the worktree dialog. (The button only shows for
+projects that are git repositories.)
+
+In the dialog:
+
+- **New branch** — TwiCC creates the worktree and its branch at the chosen
+  location.
+- **Existing worktree** — adopt a worktree already on disk that TwiCC doesn't
+  know about yet (the "Existing" tab).
+
+Either way, you can start a draft session in the new worktree right away.
+
+### Cleaning up
+
+TwiCC does **not** manage a worktree's end of life. When you're done with one,
+it's up to you to merge and remove it — a git plus filesystem operation — or to
+ask your agent to do it for you.
