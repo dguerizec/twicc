@@ -7,6 +7,7 @@ import ProjectEditDialog from './ProjectEditDialog.vue'
 import ProjectCard from './ProjectCard.vue'
 import ProjectTreeNode from './ProjectTreeNode.vue'
 import AppTooltip from '../ui/AppTooltip.vue'
+import HelpIconButton from '../help/HelpIconButton.vue'
 
 const store = useDataStore()
 const settingsStore = useSettingsStore()
@@ -63,7 +64,7 @@ function handleToggleShowArchived(event) {
 <template>
     <div>
         <div class="section-header">
-            <span class="section-label">Projects</span>
+            <span class="section-label">Projects <HelpIconButton help-key="projects" label="What's a project?" /></span>
             <div class="header-actions">
                 <wa-switch
                     v-if="hasArchivedProjects"

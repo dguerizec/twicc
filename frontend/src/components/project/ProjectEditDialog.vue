@@ -4,6 +4,7 @@ import { ref, computed, watch, nextTick, useId } from 'vue'
 import { useDataStore } from '../../stores/data'
 import { useWorkspacesStore } from '../../stores/workspaces'
 import { useSettingsStore } from '../../stores/settings'
+import { useHelpStore } from '../../stores/help'
 import { useLayoutsStore } from '../../stores/layouts'
 import { apiFetch } from '../../utils/api'
 import { matchPattern } from '../../utils/workspacePatterns'
@@ -27,6 +28,7 @@ const emit = defineEmits(['saved'])
 const store = useDataStore()
 const workspacesStore = useWorkspacesStore()
 const settingsStore = useSettingsStore()
+const helpStore = useHelpStore()
 const layoutsStore = useLayoutsStore()
 
 // Refs for the dialog and form elements
@@ -294,6 +296,13 @@ function open() {
         localDirectory.value = ''
         localName.value = ''
         localColor.value = ''
+        // First time the user opens the create-project dialog, surface the
+        // projects help with the dismiss switch. No-ops once seen.
+        helpStore.maybeAutoShow('projects', {
+            platform: settingsStore._isTouchDevice ? 'mobile' : 'desktop',
+            os: settingsStore.os,
+            enabledProviders: settingsStore.enabledProviders,
+        })
     } else if (props.project) {
         // Reset to current project values (handles reopen for same project
         // where the watch on props.project won't fire)
