@@ -19,6 +19,7 @@ import { useCodeCommentsStore, buildCommentedPathsSet } from '../../stores/codeC
 import { usePanZoom, useSyncedPanZoom } from '../../composables/usePanZoom'
 import { usePanelContentFocus } from '../../composables/usePanelContentFocus'
 import { useDataStore } from '../../stores/data'
+import { PROCESS_STATE } from '../../constants'
 import { deriveGitRoots, getWorktreeParent } from '../../utils/projectRoots'
 
 const emit = defineEmits(['navigate'])
@@ -1101,9 +1102,10 @@ watch(
 // ---------------------------------------------------------------------------
 // Live polling while the Git pane is visible
 // ---------------------------------------------------------------------------
-// While the Git pane is visible (props.active) AND we're viewing the index
-// (uncommitted changes), poll in the background so the data stays live without
-// the user pressing Refresh. Two loops share the same gate:
+// While the Git pane is visible (props.active), we're viewing the index
+// (uncommitted changes), AND an assistant is working on the project (see
+// shouldPoll), poll in the background so the data stays live without the user
+// pressing Refresh. Two loops share that gate:
 //   - every 5s:  the change tree & the open file's diff (refreshIndexFiles) —
 //                exactly what the "Refresh" options-menu item triggers.
 //   - every 30s: the commit list / selector & the header HEAD/branch
@@ -1111,9 +1113,38 @@ watch(
 // Each tick runs silently. We never poll a historical commit (immutable) and
 // pause while the browser tab is hidden. Because props.active is only ever true
 // for the one visible session/project pane, at most one set of loops runs.
+// Edges the loop can't cover (tab refocus, assistant-turn end) get a one-shot
+// catchUpRefresh instead.
 
-/** True while a background poll is warranted (visible pane, viewing the index). */
-const shouldPoll = computed(() => props.active && isViewingIndex.value)
+// Only poll while an assistant is actively working on the git directory's
+// project — when nothing is running the working tree / commits can't change, so
+// polling would just burn requests. The git root in view picks the project: the
+// 'parent' root (a worktree showing its main repo) targets the parent project,
+// every other root targets this pane's own project/worktree.
+const targetProjectId = computed(() => {
+    if (selectedRootKey.value === 'parent') {
+        return getWorktreeParent(dataStore.getProject(props.projectId), dataStore)?.id ?? null
+    }
+    return props.projectId ?? null
+})
+
+/** True while at least one session on the target project is in its assistant turn
+ *  (our own session counts — if it's the one working, git may change). */
+const hasActiveAssistant = computed(() => {
+    const pid = targetProjectId.value
+    if (!pid) return false
+    const sessions = dataStore.sessions
+    for (const [id, process] of Object.entries(dataStore.processStates)) {
+        if (process?.state === PROCESS_STATE.ASSISTANT_TURN && sessions[id]?.project_id === pid) {
+            return true
+        }
+    }
+    return false
+})
+
+/** True while a background poll is warranted (visible pane, viewing the index, an
+ *  assistant working on the project). */
+const shouldPoll = computed(() => props.active && isViewingIndex.value && hasActiveAssistant.value)
 
 /** Also gate on browser-tab visibility — no point polling a hidden tab. */
 function pollActive() {
@@ -1121,10 +1152,22 @@ function pollActive() {
 }
 
 /**
- * Build a self-rescheduling poll loop. `arm({ immediate: true })` runs a tick now
- * (used when the browser tab regains focus, to catch up on changes made while it
- * was hidden); otherwise the next tick is scheduled `intervalMs` after the
- * previous one *completes*, so a slow repo self-throttles and ticks never overlap.
+ * One-shot silent refresh of both the index and the commit list, when the pane is
+ * actually being looked at. Covers the edges the recurring poll doesn't: returning
+ * to the tab, and an assistant turn ending (the loop stops, but its final commit /
+ * edits should still appear).
+ */
+function catchUpRefresh() {
+    if (!props.active || !isViewingIndex.value || document.hidden) return
+    refreshIndexFiles({ silent: true })
+    refreshGitLog({ silent: true })
+}
+
+/**
+ * Build a self-rescheduling poll loop. The next tick is scheduled `intervalMs`
+ * after the previous one *completes*, so a slow repo self-throttles and ticks
+ * never overlap. One-shot catch-up refreshes (tab refocus, assistant-turn end)
+ * are handled by catchUpRefresh, not the loop.
  */
 function createPollLoop({ intervalMs, run }) {
     let timer = null
@@ -1137,14 +1180,10 @@ function createPollLoop({ intervalMs, run }) {
         }
     }
 
-    function arm({ immediate = false } = {}) {
+    function arm() {
         cancel()
         if (!pollActive() || inFlight) return
-        if (immediate) {
-            tick()
-        } else {
-            timer = setTimeout(tick, intervalMs)
-        }
+        timer = setTimeout(tick, intervalMs)
     }
 
     async function tick() {
@@ -1175,11 +1214,22 @@ function onPollVisibilityChange() {
     if (document.hidden) {
         indexPoll.cancel()
         gitLogPoll.cancel()
-    } else {
-        indexPoll.arm({ immediate: true })
-        gitLogPoll.arm({ immediate: true })
+        return
     }
+    // Returning to the tab: catch up once on whatever changed while it was hidden
+    // (e.g. an assistant that ran and finished meanwhile), regardless of whether
+    // one is running now — a single fetch on a deliberate return, not polling.
+    // Then resume the recurring loops only if still warranted.
+    catchUpRefresh()
+    indexPoll.arm()
+    gitLogPoll.arm()
 }
+
+// When the working assistant stops, the recurring loop stops too — do one last
+// catch-up so its final commit / edits appear without waiting for the next turn.
+watch(hasActiveAssistant, (now, was) => {
+    if (was && !now) catchUpRefresh()
+})
 
 document.addEventListener('visibilitychange', onPollVisibilityChange)
 
