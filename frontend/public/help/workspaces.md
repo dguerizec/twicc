@@ -27,6 +27,6 @@ overlap freely; they're labels, not exclusive buckets.
 ### Archiving
 
 Archive a workspace to hide it without deleting it (its projects stay put) —
-from the manage dialog, or its **⋯** menu in the project selector at the top of
+from the manage dialog, or its **⋮** menu in the project selector at the top of
 the sidebar. To see archived workspaces again, tick **Show archived** on the
 home's Workspaces section; from there you can **unarchive** them.

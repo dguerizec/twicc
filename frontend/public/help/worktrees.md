@@ -37,7 +37,7 @@ Either way, you can start a draft session in the new worktree right away.
 ### Cleaning up
 
 A worktree keeps showing in the project selector and the New session menus until
-you **archive** it — from its edit dialog, or its **⋯** menu in the project
+you **archive** it — from its edit dialog, or its **⋮** menu in the project
 selector at the top of the sidebar (archiving hides it without deleting
 anything). That only tidies it out of TwiCC, though: ending the worktree for
 real — merging the branch and removing it on disk — is up to you or your agent;

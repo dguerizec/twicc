@@ -97,7 +97,7 @@ def _extract_description(body: str, fallback: str = "Custom command") -> str:
         if stripped:
             heading_match = re.match(r"^#+\s+(.+)$", stripped)
             desc = heading_match.group(1) if heading_match else stripped
-            return desc[:97] + "..." if len(desc) > 100 else desc
+            return desc[:97] + "…" if len(desc) > 100 else desc
     return fallback
 
 

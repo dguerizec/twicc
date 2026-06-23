@@ -75,7 +75,7 @@ function onRowMenuSelect(event) {
             <span class="row-menu" @click.stop>
                 <wa-dropdown placement="bottom-end" @wa-select.stop="onRowMenuSelect">
                     <wa-button slot="trigger" appearance="plain" size="small" class="row-menu-trigger">
-                        <wa-icon name="ellipsis" label="Project actions"></wa-icon>
+                        <wa-icon name="ellipsis-v" label="Project actions"></wa-icon>
                     </wa-button>
                     <wa-dropdown-item v-if="!isStale" value="new-session">
                         <wa-icon slot="icon" name="plus"></wa-icon>

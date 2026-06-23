@@ -101,7 +101,7 @@ function handleToggleShowArchived(event) {
         </div>
         <wa-callout v-else variant="brand" class="naming-hint">
             <wa-icon slot="icon" name="lightbulb"></wa-icon>
-            Name your projects to keep them at the top of the list. Named projects are always displayed first, making your most important projects easier to find. To name a project, click the <wa-icon name="ellipsis" auto-width></wa-icon> menu on any project below.
+            Name your projects to keep them at the top of the list. Named projects are always displayed first, making your most important projects easier to find. To name a project, click the <wa-icon name="ellipsis-v" auto-width></wa-icon> menu on any project below.
         </wa-callout>
 
         <!-- Section 2: Unnamed projects (tree) -->

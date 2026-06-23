@@ -1638,7 +1638,7 @@ function updateSidebarClosedClass(closed) {
                                         <span class="row-menu" @click.stop>
                                             <wa-dropdown placement="bottom-end" @wa-select.stop="onWorkspaceRowMenuSelect($event, ws)">
                                                 <wa-button slot="trigger" appearance="plain" size="small" class="row-menu-trigger">
-                                                    <wa-icon name="ellipsis" label="Workspace actions"></wa-icon>
+                                                    <wa-icon name="ellipsis-v" label="Workspace actions"></wa-icon>
                                                 </wa-button>
                                                 <wa-dropdown-item value="edit">
                                                     <wa-icon slot="icon" name="pencil"></wa-icon>
@@ -1731,7 +1731,7 @@ function updateSidebarClosedClass(closed) {
                                     <span class="row-menu" @click.stop>
                                         <wa-dropdown placement="bottom-end" @wa-select.stop="onWorkspaceRowMenuSelect($event, ws)">
                                             <wa-button slot="trigger" appearance="plain" size="small" class="row-menu-trigger">
-                                                <wa-icon name="ellipsis" label="Workspace actions"></wa-icon>
+                                                <wa-icon name="ellipsis-v" label="Workspace actions"></wa-icon>
                                             </wa-button>
                                             <wa-dropdown-item value="edit">
                                                 <wa-icon slot="icon" name="pencil"></wa-icon>

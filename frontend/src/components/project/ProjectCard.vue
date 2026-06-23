@@ -87,7 +87,7 @@ function handleMenuSelect(event) {
                             appearance="plain"
                             size="small"
                         >
-                            <wa-icon name="ellipsis" label="Project menu"></wa-icon>
+                            <wa-icon name="ellipsis-v" label="Project menu"></wa-icon>
                         </wa-button>
                         <wa-dropdown-item value="edit">
                             <wa-icon slot="icon" name="pencil"></wa-icon>

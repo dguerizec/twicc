@@ -7,4 +7,4 @@ other devices), so you can prepare several tasks ahead. Don't worry — they wil
 still be there after a reload, or even a restart of TwiCC.
 
 Name each draft to tell them apart: the **pencil** in the session header, or
-the **Rename** entry in its **⋯** menu in the sidebar.
+the **Rename** entry in its **⋮** menu in the sidebar.

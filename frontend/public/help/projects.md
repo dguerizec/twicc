@@ -33,6 +33,6 @@ parent and worktree sessions apart.
 
 Done with a project? **Archive** it — it's hidden from the lists, but nothing is
 deleted and its sessions stay searchable. Archive it from its edit dialog, or
-from its **⋯** menu in the project selector at the top of the sidebar. To see
+from its **⋮** menu in the project selector at the top of the sidebar. To see
 archived projects again, tick **Show archived** on the home's Projects section;
 from there you can **unarchive** any of them.

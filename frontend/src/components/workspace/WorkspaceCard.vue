@@ -130,7 +130,7 @@ function handleMenuSelect(event) {
                             appearance="plain"
                             size="small"
                         >
-                            <wa-icon name="ellipsis" label="Workspace menu"></wa-icon>
+                            <wa-icon name="ellipsis-v" label="Workspace menu"></wa-icon>
                         </wa-button>
                         <wa-dropdown-item value="manage">
                             <wa-icon slot="icon" name="gear"></wa-icon>

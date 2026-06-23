@@ -589,7 +589,7 @@ function handleMenuSelect(event) {
                 size="small"
                 class="session-menu-trigger"
             >
-                <wa-icon name="ellipsis" label="Session menu"></wa-icon>
+                <wa-icon name="ellipsis-v" label="Session menu"></wa-icon>
             </wa-button>
             <!-- Standard actions -->
             <wa-dropdown-item value="rename">

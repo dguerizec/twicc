@@ -52,7 +52,7 @@ async def _call_haiku(
     """
     # Truncate long messages
     if len(user_message) > 2000:
-        user_message = user_message[:2000] + "..."
+        user_message = user_message[:2000] + "…"
 
     full_prompt = system_prompt.replace("{text}", user_message)
 
