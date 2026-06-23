@@ -9,7 +9,7 @@ import { useLayoutsStore } from '../../stores/layouts'
 import { apiFetch } from '../../utils/api'
 import { matchPattern } from '../../utils/workspacePatterns'
 import DirectoryPickerPopup from '../files/DirectoryPickerPopup.vue'
-import { composeWorktreeDir } from '../../utils/worktreePath'
+import { expandWorktreeTemplate } from '../../utils/worktreePath'
 import { resolveProjectTrust } from '../../utils/trust'
 import ProjectAgentDefaultsSection from './ProjectAgentDefaultsSection.vue'
 import HelpIconButton from '../help/HelpIconButton.vue'
@@ -53,7 +53,7 @@ const LAYOUT_INHERIT = '__inherit__'
 const localDefaultLayoutId = ref(LAYOUT_INHERIT)
 const selectableLayouts = computed(() => layoutsStore.selectableLayouts)
 // Absolute base directory for this project's git worktrees (edit mode, git
-// projects only). Empty = inherit the global defaultWorktreeDirectory.
+// projects only). Empty = inherit the global worktreeDirectoryTemplate.
 const localWorktreeDirectory = ref('')
 // Trust (edit mode): 'inherit' | 'trusted' | 'untrusted' + propagation flag.
 const localTrustChoice = ref('inherit')
@@ -367,17 +367,18 @@ const showWorktreeDirectory = computed(
     () => !isCreateMode.value && !!props.project?.git_root && !props.project?.worktree_of
 )
 
-// The global default worktree directory composed against this project's git
-// root (resolving any "../"). Empty when not in edit mode, the project is not
-// under git, or no global default is set — in which case the "use the default"
-// button is hidden.
+// The global worktree directory template expanded against this project
+// (resolving placeholders and any "../"). Empty when not in edit mode, the
+// project is not under git, or no global template is set — in which case the
+// "use the default" button is hidden. The concrete (placeholder-free) result is
+// what gets stored as this project's worktree_directory.
 const composedGlobalWorktreeDir = computed(() => {
     if (isCreateMode.value || !props.project?.git_root) return ''
-    return composeWorktreeDir(props.project.git_root, settingsStore.getDefaultWorktreeDirectory || '')
+    return expandWorktreeTemplate(settingsStore.getWorktreeDirectoryTemplate || '', props.project)
 })
 
 /**
- * Fill the worktree directory field with the composed global default. The user
+ * Fill the worktree directory field with the expanded global default. The user
  * stays free to edit it afterwards or type any other absolute path.
  */
 function useGlobalWorktreeDir() {

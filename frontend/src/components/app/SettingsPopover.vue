@@ -10,6 +10,7 @@ import { useTipsStore } from '../../stores/tips'
 import { useHelpStore } from '../../stores/help'
 import { getProviderHelpers, getProviderLabel, getProviderOptions, getRegisteredProviders, getProviderIcon } from '../../providers'
 import { getActivationCharMetadata } from '../../utils/commandActivation'
+import { validateWorktreeTemplate } from '../../utils/worktreePath'
 import { DISPLAY_MODE, COLOR_SCHEME, SESSION_TIME_FORMAT, DEFAULT_MAX_CACHED_SESSIONS, WA_THEME, WA_THEME_LABELS, WA_BRAND, WA_BRAND_LABELS, SPONSOR_URL } from '../../constants'
 import NotificationSettings from './NotificationSettings.vue'
 import TipsSettings from '../settings/TipsSettings.vue'
@@ -152,7 +153,7 @@ function selectSection(id) {
     activeSection.value = id
     mobileShowContent.value = true
     if (id === 'global') {
-        worktreeDirInput.value = defaultWorktreeDirectory.value || ''
+        worktreeDirInput.value = worktreeDirectoryTemplate.value || ''
     }
     if (id === 'notifications') {
         nextTick(() => notificationSettingsRef.value?.sync())
@@ -438,7 +439,7 @@ const terminalMacOptionIsMeta = computed(() => store.isTerminalMacOptionIsMeta)
 const terminalCopyOnSelect = computed(() => store.isTerminalCopyOnSelect)
 const isMac = computed(() => store.isMac)
 const isLinux = computed(() => store.isLinux)
-const defaultWorktreeDirectory = computed(() => store.getDefaultWorktreeDirectory)
+const worktreeDirectoryTemplate = computed(() => store.getWorktreeDirectoryTemplate)
 const compactSessionList = computed(() => store.isCompactSessionList)
 const showMessageTimestamps = computed(() => store.areMessageTimestampsShown)
 const waTheme = computed(() => store.getWaTheme)
@@ -561,10 +562,25 @@ const tmuxConfigApplyIcon = computed(() => {
     return 'check'
 })
 
-// Default worktree directory — local input, committed to the store on Apply only.
+// Worktree directory template — local input, committed to the store on Apply
+// only. Placeholders are validated live; an invalid template blocks Apply.
 const worktreeDirInput = ref('')
-const worktreeDirModified = computed(() => worktreeDirInput.value.trim() !== (defaultWorktreeDirectory.value || ''))
-const worktreeDirApplyIcon = computed(() => (worktreeDirModified.value ? 'triangle-exclamation' : 'check'))
+const worktreeDirModified = computed(() => worktreeDirInput.value.trim() !== (worktreeDirectoryTemplate.value || ''))
+const worktreeTemplateValidation = computed(() => validateWorktreeTemplate(worktreeDirInput.value.trim()))
+const worktreeTemplateError = computed(() => {
+    const v = worktreeTemplateValidation.value
+    if (v.valid) return ''
+    if (v.unknown.length) {
+        const list = v.unknown.map((n) => `{${n}}`).join(', ')
+        return `Unknown placeholder${v.unknown.length > 1 ? 's' : ''}: ${list}. `
+            + 'Allowed: {git_root}, {project_name}, {project_basedir}.'
+    }
+    return 'Malformed template: check for unmatched { or } braces.'
+})
+const worktreeDirApplyIcon = computed(() => {
+    if (!worktreeTemplateValidation.value.valid) return 'x-circle'
+    return worktreeDirModified.value ? 'triangle-exclamation' : 'check'
+})
 
 // Check if the current prompt is the default
 const isDefaultPrompt = computed(() => titleSystemPrompt.value === SETTINGS_SCHEMA.titleSystemPrompt)
@@ -879,9 +895,11 @@ function onWorktreeDirInputChange(event) {
 }
 
 // Commit to the synced setting only when the user hits Apply (mirrors the tmux
-// config path control). Trimmed; empty means "no default".
+// config path control). Trimmed; empty means "no default". A template with an
+// unknown placeholder or malformed braces is rejected (no commit).
 function onWorktreeDirApply() {
-    store.setDefaultWorktreeDirectory(worktreeDirInput.value.trim())
+    if (!worktreeTemplateValidation.value.valid) return
+    store.setWorktreeDirectoryTemplate(worktreeDirInput.value.trim())
 }
 
 function onTmuxConfigPathInputChange(event) {
@@ -981,9 +999,10 @@ function resetTitleSystemPrompt() {
  */
 function onPopoverShow() {
     mobileShowContent.value = false
-    // Seed the worktree-directory input from the persisted value (Global is the
-    // default section, so selectSection('global') may not fire on open).
-    worktreeDirInput.value = defaultWorktreeDirectory.value || ''
+    // Seed the worktree-directory template input from the persisted value
+    // (Global is the default section, so selectSection('global') may not fire
+    // on open).
+    worktreeDirInput.value = worktreeDirectoryTemplate.value || ''
     if (activeSection.value === 'notifications') {
         nextTick(() => notificationSettingsRef.value?.sync())
     }
@@ -1180,30 +1199,40 @@ function onChangelogClose() {
                     </div>
                     <wa-divider></wa-divider>
                     <div class="setting-group">
-                        <label class="setting-group-label">Default worktree directory <wa-icon name="cloud" class="synced-icon"></wa-icon><HelpIconButton help-key="worktrees" label="What's a worktree?" /></label>
+                        <label class="setting-group-label">Worktree directory template <wa-icon name="cloud" class="synced-icon"></wa-icon><HelpIconButton help-key="worktrees" label="What's a worktree?" /></label>
                         <div class="worktree-dir-input-row">
-                            <span class="worktree-dir-prefix">&lt;git root&gt;/</span>
                             <wa-input
                                 :value="worktreeDirInput"
                                 @input="onWorktreeDirInputChange"
                                 @keydown.enter="onWorktreeDirApply"
-                                placeholder=".worktrees"
+                                placeholder="{git_root}/.worktrees"
                                 size="small"
                             ></wa-input>
                             <wa-button
                                 size="small"
                                 variant="neutral"
                                 @click="onWorktreeDirApply"
+                                :disabled="!worktreeTemplateValidation.valid"
                             >
                                 <wa-icon :name="worktreeDirApplyIcon" slot="start"></wa-icon>
                                 Apply
                             </wa-button>
                         </div>
                         <span class="setting-group-hint">
-                            Base directory for new git worktrees, relative to each project's git root
-                            (<code>../</code> allowed). Pre-fills the path when creating a worktree.
+                            Template for the base directory of new git worktrees; pre-fills the path when
+                            creating one (<code>../</code> allowed). Placeholders:
+                            <code>{git_root}</code> (the project's git root),
+                            <code>{project_name}</code> (its name, or its folder name if unnamed),
+                            <code>{project_basedir}</code> (its folder name).
+                            E.g. <code>{git_root}/.worktrees</code> or <code>/home/me/worktrees/{project_name}</code>.
                             A project can override this with its own absolute directory. Leave empty for no default.
                         </span>
+                        <wa-callout
+                            v-if="worktreeDirInput.trim() && !worktreeTemplateValidation.valid"
+                            variant="danger"
+                            size="small"
+                            class="usage-file-validation"
+                        >{{ worktreeTemplateError }}</wa-callout>
                     </div>
                 </section>
 
@@ -2424,13 +2453,6 @@ wa-popover > wa-divider {
     wa-input {
         flex: 1;
     }
-}
-
-.worktree-dir-prefix {
-    color: var(--wa-color-text-quiet);
-    font-family: var(--wa-font-family-code);
-    font-size: var(--wa-font-size-s);
-    white-space: nowrap;
 }
 
 .usage-mode-explanation .setting-group-hint {

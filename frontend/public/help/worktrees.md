@@ -14,9 +14,13 @@ project's view**, so you see everything together instead of siloed.
 ### Where worktrees are created
 
 The **worktree directory** setting decides where TwiCC creates new worktrees,
-and pre-fills the path when you create one. There's a global default, and each
-project can override it — set the global one in Settings, and a project's in its
-edit dialog.
+and pre-fills the path when you create one. The global one is a **template**
+with placeholders resolved per project — `{git_root}` (its git root),
+`{project_name}` (its name, or folder name if unnamed) and `{project_basedir}`
+(its folder name) — so `{git_root}/.worktrees` keeps worktrees inside each repo
+while `/home/me/worktrees/{project_name}` gathers them all in one place. Each
+project can override it with its own absolute path — set the global one in
+Settings, and a project's in its edit dialog.
 
 ### Creating one
 

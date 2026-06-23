@@ -8,6 +8,7 @@ import { NOTIFICATION_SOUNDS } from '../utils/notificationSounds'
 import { getProviderHelpers, getRegisteredProviders } from '../providers'
 // Note: useDataStore is imported lazily to avoid circular dependency (settings.js ↔ data.js)
 import { setColorScheme as setColorSchemeOnDom, setWaTheme, setWaBrand } from '../utils/theme'
+import { validateWorktreeTemplate } from '../utils/worktreePath'
 
 const STORAGE_KEY = 'twicc-settings'
 
@@ -60,7 +61,7 @@ export const SETTINGS_SCHEMA = {
     titleAutoApply: null,
     titleSystemPrompt: null,
     autoUnpinOnArchive: null,
-    defaultWorktreeDirectory: null,
+    worktreeDirectoryTemplate: null,
     terminalUseTmux: null,
     terminalTmuxConfigPath: null,
     waTheme: null,
@@ -113,7 +114,7 @@ const SETTINGS_VALIDATORS = {
     autoUnpinOnArchive: (v) => typeof v === 'boolean',
     claudeHybridExplainerSeen: (v) => typeof v === 'boolean',
     claudeHybridDefault: (v) => typeof v === 'boolean',
-    defaultWorktreeDirectory: (v) => typeof v === 'string',
+    worktreeDirectoryTemplate: (v) => typeof v === 'string' && validateWorktreeTemplate(v).valid,
     terminalUseTmux: (v) => typeof v === 'boolean',
     terminalTmuxConfigPath: (v) => typeof v === 'string',
     terminalMacOptionIsMeta: (v) => typeof v === 'boolean',
@@ -300,7 +301,7 @@ export const useSettingsStore = defineStore('settings', {
         isClaudeHybridExplainerSeen: (state) => state.claudeHybridExplainerSeen === true,
         // Whether new Claude Code sessions should start in hybrid mode.
         isClaudeHybridDefault: (state) => state.claudeHybridDefault === true,
-        getDefaultWorktreeDirectory: (state) => state.defaultWorktreeDirectory,
+        getWorktreeDirectoryTemplate: (state) => state.worktreeDirectoryTemplate,
         isTerminalUseTmux: (state) => state.terminalUseTmux,
         getTerminalTmuxConfigPath: (state) => state.terminalTmuxConfigPath,
         isTerminalMacOptionIsMeta: (state) => state.terminalMacOptionIsMeta,
@@ -597,13 +598,16 @@ export const useSettingsStore = defineStore('settings', {
         },
 
         /**
-         * Set the default base directory for new git worktrees, relative to
-         * each project's git root. Empty string means "no default".
-         * @param {string} path
+         * Set the template for the base directory of new git worktrees (global
+         * setting). Supports the {@link WORKTREE_PLACEHOLDERS} placeholders,
+         * resolved per project at use time. Empty string means "no default".
+         * Invalid templates (unknown placeholder / malformed braces) are
+         * rejected by the validator and not stored.
+         * @param {string} template
          */
-        setDefaultWorktreeDirectory(path) {
-            if (SETTINGS_VALIDATORS.defaultWorktreeDirectory(path)) {
-                this.defaultWorktreeDirectory = path
+        setWorktreeDirectoryTemplate(template) {
+            if (SETTINGS_VALIDATORS.worktreeDirectoryTemplate(template)) {
+                this.worktreeDirectoryTemplate = template
             }
         },
 
@@ -1042,7 +1046,7 @@ export function initSettings() {
             autoUnpinOnArchive: store.autoUnpinOnArchive,
             claudeHybridExplainerSeen: store.claudeHybridExplainerSeen,
             claudeHybridDefault: store.claudeHybridDefault,
-            defaultWorktreeDirectory: store.defaultWorktreeDirectory,
+            worktreeDirectoryTemplate: store.worktreeDirectoryTemplate,
             terminalUseTmux: store.terminalUseTmux,
             terminalTmuxConfigPath: store.terminalTmuxConfigPath,
             terminalMacOptionIsMeta: store.terminalMacOptionIsMeta,

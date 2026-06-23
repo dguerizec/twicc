@@ -205,7 +205,7 @@ export const SYNCED_SETTINGS_KEYS = new Set([
     'defaultProvider', 'defaultLayoutId', 'disabledProviders', 'orchestrationDisabledProviders',
     'titleGenerationEnabled', 'titleAutoApply',
     'titleSystemPrompt', 'autoUnpinOnArchive',
-    'defaultWorktreeDirectory',
+    'worktreeDirectoryTemplate',
     'terminalUseTmux', 'terminalTmuxConfigPath',
     'waTheme', 'waBrand',
     'externalNotificationTargets', 'publicBaseUrl',

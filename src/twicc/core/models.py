@@ -148,8 +148,8 @@ class Project(models.Model):
     # are created from the UI. Free-form and intentionally unconstrained: a
     # user may keep worktrees anywhere, not necessarily under git_root.
     # NULL/empty = no project-level choice, so the worktree-create dialog
-    # falls back to the global ``defaultWorktreeDirectory`` synced setting,
-    # composed against this project's git_root. Editable from the web dialog
+    # falls back to the global ``worktreeDirectoryTemplate`` synced setting,
+    # expanded against this project. Editable from the web dialog
     # and the CLI (`update-project --worktree-directory`); worktree creation
     # itself remains web-UI only.
     worktree_directory = models.CharField(max_length=500, null=True, blank=True)

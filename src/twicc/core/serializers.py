@@ -44,7 +44,7 @@ def serialize_project(project):
         # Per-project default layout id (named-layout id / "single-pane" / None=inherit).
         "default_layout_id": project.default_layout_id,
         # Absolute base directory for new git worktrees of this project (None =
-        # inherit the global defaultWorktreeDirectory composed against git_root).
+        # inherit the global worktreeDirectoryTemplate expanded against the project).
         "worktree_directory": project.worktree_directory,
     }
 

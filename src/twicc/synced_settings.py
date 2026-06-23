@@ -63,11 +63,16 @@ _GENERIC_SYNCED_SETTINGS_DEFAULTS: dict = {
         "User message:\n{text}"
     ),
     "autoUnpinOnArchive": True,
-    # Default base directory for new git worktrees, expressed RELATIVE to each
-    # project's git root (e.g. ".worktrees"). Empty = no default (the
-    # worktree-create dialog pre-fills nothing unless a project sets its own
-    # absolute worktree_directory). A project-level value always wins.
-    "defaultWorktreeDirectory": "",
+    # Template for the base directory of new git worktrees, resolved per project
+    # on the frontend. Supported placeholders: ``{git_root}`` (the project's git
+    # root), ``{project_name}`` (its name, or its directory leaf when unnamed),
+    # ``{project_basedir}`` (its directory leaf). A template without a leading
+    # "/" or "{git_root}" stays relative to the git root (legacy behaviour).
+    # Empty = no default (the worktree-create dialog pre-fills nothing unless a
+    # project sets its own absolute worktree_directory). A project-level value
+    # always wins. Migrated from the legacy relative ``defaultWorktreeDirectory``
+    # (see :func:`_migrate_legacy_settings`).
+    "worktreeDirectoryTemplate": "",
     "terminalUseTmux": True,
     "terminalTmuxConfigPath": "",
     "waTheme": "default",
@@ -205,6 +210,19 @@ def _migrate_legacy_settings(file_data: dict) -> bool:
             del file_data[old_key]
             renamed.append(f"{old_key}→{new_key}")
             changed = True
+    # One-off VALUE-transforming migration (the plain rename map above only
+    # moves values verbatim). The legacy ``defaultWorktreeDirectory`` held a path
+    # RELATIVE to each project's git root; it is superseded by
+    # ``worktreeDirectoryTemplate``, a placeholder template. A non-empty legacy
+    # value becomes ``{git_root}/<value>`` so it expands to the same path as
+    # before; an empty value carries over as "no default". The transformed old
+    # value wins over any pre-existing template (mirrors the rename policy above).
+    if "defaultWorktreeDirectory" in file_data:
+        legacy_value = file_data.pop("defaultWorktreeDirectory")
+        legacy_value = legacy_value.strip() if isinstance(legacy_value, str) else ""
+        file_data["worktreeDirectoryTemplate"] = f"{{git_root}}/{legacy_value}" if legacy_value else ""
+        renamed.append("defaultWorktreeDirectory→worktreeDirectoryTemplate")
+        changed = True
     if changed:
         logger.info(
             "Migrated synced settings: dropped=%s renamed=%s",

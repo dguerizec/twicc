@@ -10,7 +10,7 @@ import { useDataStore } from '../../stores/data'
 import { useSettingsStore } from '../../stores/settings'
 import { useHelpStore } from '../../stores/help'
 import { apiFetch } from '../../utils/api'
-import { composeWorktreeDir } from '../../utils/worktreePath'
+import { expandWorktreeTemplate } from '../../utils/worktreePath'
 import DirectoryPickerPopup from '../files/DirectoryPickerPopup.vue'
 import ProjectBadge from './ProjectBadge.vue'
 import WorktreeBadge from './WorktreeBadge.vue'
@@ -225,14 +225,15 @@ async function fetchWorktrees() {
 }
 
 // Initial value for the path field: the project's own absolute worktree
-// directory if set, else the global default composed against the project's git
-// root (resolving any "../"), else empty. When non-empty it becomes the auto-fill
-// base, so the branch folder is appended live as the user types the branch.
+// directory if set, else the global template expanded against this project
+// (resolving placeholders and any "../"), else empty. When non-empty it becomes
+// the auto-fill base, so the branch folder is appended live as the user types
+// the branch.
 function resolveInitialWorktreePath(project) {
     if (!project) return ''
     const projDir = (project.worktree_directory || '').trim()
     if (projDir) return projDir
-    return composeWorktreeDir(project.git_root || '', settingsStore.getDefaultWorktreeDirectory || '')
+    return expandWorktreeTemplate(settingsStore.getWorktreeDirectoryTemplate || '', project)
 }
 
 /**
