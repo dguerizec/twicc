@@ -796,13 +796,23 @@ async function fetchGitLog() {
 }
 
 /**
- * Refresh the git log (called from the overlay header button).
- * Unlike the initial fetchGitLog, this sets `refreshing` instead of `loading`
- * so the overlay stays visible with its current content while refreshing.
+ * Refresh the git log (overlay header button, branch change, pane re-activation,
+ * and the background commit-list poll). Unlike the initial fetchGitLog, this sets
+ * `refreshing` instead of `loading` so the overlay stays visible with its current
+ * content while refreshing.
+ *
+ * `silent` (background poll) skips the `refreshing` spinner. In all modes we only
+ * replace `entries`/`branches`/`index_files` when their value actually changed, so
+ * a periodic poll never re-renders the commit graph — nor shifts the open
+ * selector's rows — unless a real change landed (primitives are auto-guarded by
+ * Vue's ref equality check). The `gitLogInFlight` flag is shared with the manual
+ * refresh so the two never run concurrently or double-fetch.
  */
-async function refreshGitLog() {
-    if (refreshing.value) return
-    refreshing.value = true
+let gitLogInFlight = false
+async function refreshGitLog({ silent = false } = {}) {
+    if (gitLogInFlight) return
+    gitLogInFlight = true
+    if (!silent) refreshing.value = true
 
     try {
         const res = await apiFetch(apiUrl.value)
@@ -812,7 +822,14 @@ async function refreshGitLog() {
         }
 
         const data = await res.json()
-        entries.value = data.entries || []
+        const newEntries = data.entries || []
+        if (JSON.stringify(newEntries) !== JSON.stringify(entries.value)) {
+            entries.value = newEntries
+        }
+        const newBranches = data.branches || []
+        if (JSON.stringify(newBranches) !== JSON.stringify(branches.value)) {
+            branches.value = newBranches
+        }
         currentBranch.value = data.current_branch || ''
         headCommitHash.value = data.head_commit_hash || ''
         const newIndexFiles = data.index_files || null
@@ -820,11 +837,11 @@ async function refreshGitLog() {
             indexFilesData.value = newIndexFiles
         }
         hasMore.value = data.has_more || false
-        branches.value = data.branches || []
     } catch {
         // Silently ignore — existing data stays visible
     } finally {
-        refreshing.value = false
+        if (!silent) refreshing.value = false
+        gitLogInFlight = false
     }
 }
 
@@ -1082,19 +1099,18 @@ watch(
 )
 
 // ---------------------------------------------------------------------------
-// Live polling of uncommitted changes
+// Live polling while the Git pane is visible
 // ---------------------------------------------------------------------------
 // While the Git pane is visible (props.active) AND we're viewing the index
-// (uncommitted changes), poll in the background so the change tree — and the
-// open file's diff — stay live without the user pressing Refresh. Each tick
-// runs exactly what the "Refresh" options-menu item triggers (refreshIndexFiles),
-// just silently. We never poll a historical commit (immutable) and pause while
-// the browser tab is hidden. Because props.active is only ever true for the one
-// visible session/project pane, at most one loop runs at a time.
-
-const POLL_INTERVAL_MS = 5000
-let pollTimer = null
-let pollInFlight = false
+// (uncommitted changes), poll in the background so the data stays live without
+// the user pressing Refresh. Two loops share the same gate:
+//   - every 5s:  the change tree & the open file's diff (refreshIndexFiles) —
+//                exactly what the "Refresh" options-menu item triggers.
+//   - every 30s: the commit list / selector & the header HEAD/branch
+//                (refreshGitLog) — so a commit landed in the background appears.
+// Each tick runs silently. We never poll a historical commit (immutable) and
+// pause while the browser tab is hidden. Because props.active is only ever true
+// for the one visible session/project pane, at most one set of loops runs.
 
 /** True while a background poll is warranted (visible pane, viewing the index). */
 const shouldPoll = computed(() => props.active && isViewingIndex.value)
@@ -1104,60 +1120,83 @@ function pollActive() {
     return shouldPoll.value && !document.hidden
 }
 
-function cancelPoll() {
-    if (pollTimer !== null) {
-        clearTimeout(pollTimer)
-        pollTimer = null
-    }
-}
-
 /**
- * (Re)arm the loop. `immediate` runs a tick now (used when the browser tab
- * regains focus, to catch up on changes made while it was hidden); otherwise the
- * next tick is scheduled POLL_INTERVAL_MS after the previous one *completes*, so
- * a slow repo self-throttles and ticks never overlap.
+ * Build a self-rescheduling poll loop. `arm({ immediate: true })` runs a tick now
+ * (used when the browser tab regains focus, to catch up on changes made while it
+ * was hidden); otherwise the next tick is scheduled `intervalMs` after the
+ * previous one *completes*, so a slow repo self-throttles and ticks never overlap.
  */
-function armPoll({ immediate = false } = {}) {
-    cancelPoll()
-    if (!pollActive() || pollInFlight) return
-    if (immediate) {
-        pollTick()
-    } else {
-        pollTimer = setTimeout(pollTick, POLL_INTERVAL_MS)
+function createPollLoop({ intervalMs, run }) {
+    let timer = null
+    let inFlight = false
+
+    function cancel() {
+        if (timer !== null) {
+            clearTimeout(timer)
+            timer = null
+        }
     }
+
+    function arm({ immediate = false } = {}) {
+        cancel()
+        if (!pollActive() || inFlight) return
+        if (immediate) {
+            tick()
+        } else {
+            timer = setTimeout(tick, intervalMs)
+        }
+    }
+
+    async function tick() {
+        timer = null
+        if (!pollActive()) return
+        inFlight = true
+        try {
+            await run()
+        } finally {
+            inFlight = false
+        }
+        arm()
+    }
+
+    return { arm, cancel }
 }
 
-async function pollTick() {
-    pollTimer = null
-    if (!pollActive()) return
-    pollInFlight = true
-    try {
-        await refreshIndexFiles({ silent: true })
-    } finally {
-        pollInFlight = false
-    }
-    armPoll()
-}
+const indexPoll = createPollLoop({
+    intervalMs: 5000,
+    run: () => refreshIndexFiles({ silent: true }),
+})
+const gitLogPoll = createPollLoop({
+    intervalMs: 30000,
+    run: () => refreshGitLog({ silent: true }),
+})
 
 function onPollVisibilityChange() {
     if (document.hidden) {
-        cancelPoll()
+        indexPoll.cancel()
+        gitLogPoll.cancel()
     } else {
-        armPoll({ immediate: true })
+        indexPoll.arm({ immediate: true })
+        gitLogPoll.arm({ immediate: true })
     }
 }
 
 document.addEventListener('visibilitychange', onPollVisibilityChange)
 
-// Start/stop the loop as the pane's visibility or index/commit view changes.
+// Start/stop the loops as the pane's visibility or index/commit view changes.
 // No immediate tick here: when the pane becomes active the activation watch
-// above already issues a fresh refreshIndexFiles(), and switching back from a
-// commit to the index triggers the same via the selectedCommit watch — so we
-// only schedule the *next* tick and avoid a double fetch.
-watch(shouldPoll, () => armPoll(), { immediate: true })
+// above already issues a fresh refreshIndexFiles()/refreshGitLog(), and switching
+// back from a commit to the index re-triggers the index refresh via the
+// selectedCommit watch — so we only schedule the *next* tick and avoid a double
+// fetch.
+watch(shouldPoll, () => {
+    indexPoll.arm()
+    gitLogPoll.arm()
+}, { immediate: true })
 
 onUnmounted(() => {
-    cancelPoll()
+    indexPoll.cancel()
+    gitLogPoll.cancel()
     document.removeEventListener('visibilitychange', onPollVisibilityChange)
 })
 
@@ -1574,7 +1613,7 @@ onMounted(() => {
                             appearance="filled-outlined"
                             size="small"
                             :loading="refreshing"
-                            @click="refreshGitLog"
+                            @click="refreshGitLog()"
                         >
                             <wa-icon name="arrow-rotate-right"></wa-icon>
                         </wa-button>
