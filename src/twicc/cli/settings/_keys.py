@@ -9,6 +9,29 @@ PROVIDER_KEYS = frozenset({"defaultProvider", "disabledProviders",
 NOTIFICATION_KEYS = frozenset({"externalNotificationTargets"})
 
 
+# One-line descriptions for the generic, directly-settable keys — the surface
+# of `twicc settings set/unset` (and the only keys `twicc settings`/`get`
+# expose). Surfaced in the `--help` of those commands via
+# :func:`format_settable_keys_help`. Django-free so `--help` stays fast.
+#
+# INVARIANT: the key set here must equal the set of keys that classify as
+# "generic" (every cross-provider key in ``SYNCED_SETTINGS_DEFAULTS`` that is
+# not excluded / provider / notifications). A new generic synced setting MUST
+# get an entry here — ``tests/test_settings_cli.py`` enforces this so the help
+# never drifts out of sync.
+GENERIC_KEY_DESCRIPTIONS: dict[str, str] = {
+    "titleGenerationEnabled": "Generate a session title from the first user message.",
+    "titleAutoApply": "Apply generated titles automatically (vs. only suggesting them).",
+    "titleSystemPrompt": "System prompt used to generate titles ('{text}' = the message); unset restores the default.",
+    "autoUnpinOnArchive": "Unpin a session automatically when it is archived.",
+    "defaultWorktreeDirectory": "Default base dir for new git worktrees, relative to each project's git root (empty = none).",
+    "terminalUseTmux": "Wrap terminal sessions in tmux by default.",
+    "terminalTmuxConfigPath": "Path to a custom tmux config for terminal sessions (empty = default).",
+    "publicBaseUrl": "Public URL where you reach TwiCC, appended as a deep link to external notifications (empty = no link).",
+    "notifyOnExtraUsageStart": "Master switch for the 'extra usage started' alert (in-app + external push).",
+}
+
+
 class ValueParseError(ValueError):
     pass
 
@@ -52,3 +75,23 @@ def parse_value(key: str, raw: str):
         except ValueError:
             raise ValueParseError(f"{key} expects an integer, got {raw!r}.")
     return raw
+
+
+def format_settable_keys_help() -> str:
+    """Render the settable-keys section appended to `get`/`set`/`unset` --help.
+
+    Lists every generic key with its one-line description, then points to the
+    dedicated commands for the keys this backbone does not own. Pure and
+    Django-free so it can be built at import time without slowing `--help`.
+    """
+    lines = ["Settable keys (run `twicc info settings` for types & defaults):", ""]
+    lines += [f"- {key} — {desc}" for key, desc in GENERIC_KEY_DESCRIPTIONS.items()]
+    lines += [
+        "",
+        "Other keys are read/written through their own commands: provider keys "
+        "(claudeCode*/codex*, defaultProvider, disabledProviders, "
+        "orchestrationDisabledProviders) via `twicc settings provider`; "
+        "notification keys (externalNotificationTargets) via "
+        "`twicc settings notifications`.",
+    ]
+    return "\n".join(lines)

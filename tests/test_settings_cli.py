@@ -44,6 +44,48 @@ def test_build_settings_dump_returns_defaults_without_version(temp_settings):
     assert "_version" not in result
 
 
+def test_build_settings_dump_keeps_only_generic_keys(temp_settings):
+    """The bare `settings` dump (and `get`'s source) is restricted to generic keys."""
+    from twicc.cli.settings._keys import classify_key
+    from twicc.cli.settings.command import build_settings_dump
+
+    result = build_settings_dump()
+    # Every surviving key must classify as generic.
+    assert all(classify_key(k) == "generic" for k in result), {
+        k: classify_key(k) for k in result if classify_key(k) != "generic"
+    }
+    # Non-generic keys are dropped: excluded (UI-only), provider, notifications.
+    assert "waTheme" not in result
+    assert "defaultLayoutId" not in result
+    assert "claudeCodeDefaultModel" not in result
+    assert "defaultProvider" not in result
+    assert "externalNotificationTargets" not in result
+
+
+def test_generic_key_descriptions_match_generic_keys():
+    """GENERIC_KEY_DESCRIPTIONS must list exactly the generic settable keys.
+
+    Guards against drift: a new generic synced setting added without a CLI
+    description (which would leave it out of the `set`/`unset`/`get` --help).
+    """
+    from twicc.cli.settings._keys import GENERIC_KEY_DESCRIPTIONS, classify_key
+    from twicc.synced_settings import SYNCED_SETTINGS_DEFAULTS
+
+    generic_keys = {k for k in SYNCED_SETTINGS_DEFAULTS if classify_key(k) == "generic"}
+    assert set(GENERIC_KEY_DESCRIPTIONS) == generic_keys
+
+
+def test_format_settable_keys_help_lists_every_generic_key():
+    """The --help block names each generic key and points to the other commands."""
+    from twicc.cli.settings._keys import GENERIC_KEY_DESCRIPTIONS, format_settable_keys_help
+
+    rendered = format_settable_keys_help()
+    for key in GENERIC_KEY_DESCRIPTIONS:
+        assert key in rendered
+    assert "twicc settings provider" in rendered
+    assert "twicc settings notifications" in rendered
+
+
 # ---------------------------------------------------------------------------
 # Validation helpers for set/unset key rejection
 # ---------------------------------------------------------------------------
@@ -122,6 +164,7 @@ def _empty_provider_flags(**overrides):
         "no_usage_read_file": False,
         "usage_dump_file": None,
         "no_usage_dump_file": False,
+        "quota_wakeup_time": None,
     }
     flags.update(overrides)
     return flags
@@ -173,6 +216,52 @@ def test_provider_patch_no_usage_read_file_disables(temp_settings):
         "claude_code", _empty_provider_flags(no_usage_read_file=True))
     assert errors == []
     assert patch == {"claudeCodeUsageReadFileEnabled": False}
+
+
+@pytest.mark.django_db
+def test_provider_patch_quota_wakeup_time_sets_key(temp_settings):
+    from twicc.cli.settings.provider import build_provider_patch
+
+    patch, errors = build_provider_patch(
+        "claude_code", _empty_provider_flags(quota_wakeup_time="08:30"))
+    assert errors == []
+    assert patch == {"claudeCodeQuotaWakeupTime": "08:30"}
+
+    cx_patch, cx_errors = build_provider_patch(
+        "codex", _empty_provider_flags(quota_wakeup_time="23:59"))
+    assert cx_errors == []
+    assert cx_patch == {"codexQuotaWakeupTime": "23:59"}
+
+
+@pytest.mark.django_db
+def test_provider_patch_quota_wakeup_time_empty_disables(temp_settings):
+    from twicc.cli.settings.provider import build_provider_patch
+
+    patch, errors = build_provider_patch(
+        "claude_code", _empty_provider_flags(quota_wakeup_time=""))
+    assert errors == []
+    assert patch == {"claudeCodeQuotaWakeupTime": ""}
+
+
+@pytest.mark.django_db
+def test_provider_patch_quota_wakeup_time_rejects_malformed(temp_settings):
+    from twicc.cli.settings.provider import build_provider_patch
+
+    patch, errors = build_provider_patch(
+        "claude_code", _empty_provider_flags(quota_wakeup_time="25:99"))
+    assert patch == {}
+    assert any(e.field == "--quota-wakeup-time" and e.code == "invalid_value"
+               for e in errors)
+
+
+def test_provider_show_includes_quota_wakeup_time(temp_settings):
+    from twicc.cli.settings.provider import build_provider_show
+
+    show = build_provider_show("claude_code", {"claudeCodeQuotaWakeupTime": "06:15"})
+    assert show["quota_wakeup_time"] == "06:15"
+    # Falls back to the provider default ("") when unset.
+    show_default = build_provider_show("codex", {})
+    assert show_default["quota_wakeup_time"] == ""
 
 
 @pytest.mark.django_db

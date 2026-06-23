@@ -34,6 +34,14 @@ logger = logging.getLogger(__name__)
 # defaults (e.g. claudeCode*) are contributed by each provider via
 # ``BaseProviderHelpers.SYNCED_SETTINGS_DEFAULTS`` and merged into
 # :data:`SYNCED_SETTINGS_DEFAULTS` below.
+#
+# ⚠ When ADDING/RENAMING a key here, also update the settings CLI:
+#   • a new *generic* key (settable via `twicc settings set`) needs a
+#     ``GENERIC_KEY_DESCRIPTIONS`` entry in ``twicc/cli/settings/_keys.py``
+#     (a consistency test in ``tests/test_settings_cli.py`` enforces it, and it
+#     drives the `set`/`unset`/`get` --help listing);
+#   • a key meant for a dedicated command instead belongs to the provider /
+#     notifications classification in the same ``_keys.py``.
 _GENERIC_SYNCED_SETTINGS_DEFAULTS: dict = {
     "defaultProvider": Provider.CLAUDE_CODE.value,
     # Global default dockable layout for new sessions: the id of a named layout

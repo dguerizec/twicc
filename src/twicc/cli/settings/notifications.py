@@ -39,8 +39,10 @@ import typer
 notifications_app = typer.Typer(
     name="notifications",
     help=(
-        "List notification targets (bare form), or add / update / remove a target "
-        "(sub-commands)."
+        "Manage external Apprise notification targets — list them (bare form), or "
+        "add / update / remove / test a target (sub-commands). Each target is an "
+        "Apprise URL TwiCC pushes alerts to (agent waiting, pending request, extra "
+        "usage)."
     ),
     invoke_without_command=True,
 )
@@ -62,7 +64,7 @@ def build_notifications_list(settings: dict) -> dict:
 
 @notifications_app.callback(invoke_without_command=True)
 def _notifications_default(ctx: typer.Context) -> None:
-    """Print current notification targets and global notification settings (offline read)."""
+    """Print current Apprise notification targets and global notification settings (offline read)."""
     if ctx.invoked_subcommand is not None:
         return
 
@@ -183,7 +185,7 @@ def notifications_add(
         ),
     ),
 ) -> None:
-    """Add a new notification target."""
+    """Add a new Apprise notification target (URL TwiCC pushes alerts to)."""
     import os
     os.environ.setdefault("DJANGO_SETTINGS_MODULE", "twicc.settings")
     import django
@@ -266,7 +268,7 @@ def notifications_update(
         ),
     ),
 ) -> None:
-    """Update an existing notification target."""
+    """Update an existing Apprise notification target."""
     import os
     os.environ.setdefault("DJANGO_SETTINGS_MODULE", "twicc.settings")
     import django
@@ -321,7 +323,7 @@ def notifications_remove(
         ),
     ),
 ) -> None:
-    """Remove a notification target."""
+    """Remove an Apprise notification target."""
     import os
     os.environ.setdefault("DJANGO_SETTINGS_MODULE", "twicc.settings")
     import django
@@ -363,7 +365,7 @@ def notifications_test(
         ),
     ),
 ) -> None:
-    """Send a test notification to an existing target and report the result.
+    """Send a test Apprise notification to an existing target and report the result.
 
     The server sends an Apprise test message, persists the ``tested`` flag on
     the target, and returns ``tested`` and ``test_results`` in the response.

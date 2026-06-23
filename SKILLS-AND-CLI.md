@@ -90,13 +90,13 @@ Print details of the session that owns the calling process — `session_id`, `ti
 Human/program-facing commands for reading and writing the synced settings (`settings.json`). No agent skill — use the CLI directly. Write commands need a live backend (drop-request pattern: `--timeout` default 30 s); read commands work offline. These commands are remote-forwardable via `--remote`.
 
 ### `twicc settings`
-Print the full synced settings as JSON (`_version` stripped). Offline read, no server needed.
+Print the **generic** synced settings as JSON (`_version` stripped) — only the directly-settable backbone keys this command family owns. Provider keys (`claudeCode*`/`codex*`/`defaultProvider`/…), notification keys, and UI-only `excluded` keys are not shown here (read them via their own commands / `twicc info settings`). Offline read, no server needed.
 
 ### `twicc settings get <KEY>`
-Print the value of a single synced settings key as `{key: value}`. Offline read. Exits `1` for unknown keys.
+Print the value of a single **generic** synced settings key as `{key: value}`. Only generic keys are accepted; provider and notification keys are redirected to their own commands and `excluded`/`unknown` keys rejected — the same gate as `set`/`unset` (validation error, exit `1`). Offline read.
 
 ### `twicc settings set <KEY> <VALUE>` / `twicc settings unset <KEY>`
-Mutate a single **generic** scalar setting. `set` type-coerces `VALUE` to match the key's default type (bool: `true`/`false`/`1`/`0`/`yes`/`no`/`on`/`off`; int: integer string; string: verbatim). `unset` reverts the key to its built-in default. Both commands validate the key first:
+Mutate a single **generic** scalar setting. `set` type-coerces `VALUE` to match the key's default type (bool: `true`/`false`/`1`/`0`/`yes`/`no`/`on`/`off`; int: integer string; string: verbatim). `unset` reverts the key to its built-in default. The `--help` of `get`/`set`/`unset` lists every settable generic key with a one-line description. Both commands validate the key first:
 - `excluded` keys (`waTheme`, `waBrand`, `defaultLayoutId`, `_version`) — UI-only visual preferences, not settable via CLI.
 - `provider` keys (`defaultProvider`, `disabledProviders`, `orchestrationDisabledProviders`, and any `claudeCode*` / `codex*` prefixed keys) — use `twicc settings provider …`.
 - `notifications` keys (`externalNotificationTargets`) — use `twicc settings notifications …`.
@@ -107,7 +107,7 @@ Exit codes: `0` accepted, `1` validation, `2` server down, `3` rejected, `4` fai
 ### `twicc settings provider <PROVIDER>`
 Show or mutate one provider's settings slice.
 
-**Bare form (no flags, no sub-command):** offline read — prints `enabled`, `is_default`, `orchestration_enabled`, `agent_defaults` (the `{provider}Default*` bundle), `untrusted_permission_mode_default`, `usage_read_file`, and `usage_dump_file`.
+**Bare form (no flags, no sub-command):** offline read — prints `enabled`, `is_default`, `orchestration_enabled`, `agent_defaults` (the `{provider}Default*` bundle), `untrusted_permission_mode_default`, `usage_read_file`, `usage_dump_file`, and `quota_wakeup_time`.
 
 **With flags:** drops a `settings:update` patch for the provider's `{provider}Default*` synced keys. Flags accepted by both providers (Claude Code and Codex):
 - `--model TEXT` — default model for NEW sessions (aliases `max`/`strongest`/`min`/`fastest` resolved per provider).
@@ -127,6 +127,9 @@ Usage-file flags (both providers):
 - `--usage-dump-file PATH` — path to a JSON file TwiCC dumps this provider's quota to; also sets enabled to true.
 - `--no-usage-dump-file` — disable the usage dump-file.
 
+Quota warm-up (both providers):
+- `--quota-wakeup-time TEXT` — daily quota warm-up time as `HH:MM` (24-hour, server local clock); TwiCC opens a fresh usage window at that time. Pass `''` to disable. Malformed values are rejected (validation error).
+
 `--timeout INTEGER` (default 30). Exit codes mirror `settings set`.
 
 **Sub-commands** (each takes `--timeout`):
@@ -137,6 +140,8 @@ Usage-file flags (both providers):
 - `orchestration-disable` — add the provider to `orchestrationDisabledProviders` (idempotent).
 
 ### `twicc settings notifications`
+Manage external **Apprise** notification targets (each target is an Apprise URL TwiCC pushes alerts to).
+
 **Bare form:** offline read — prints `externalNotificationTargets` (the full list), `publicBaseUrl`, and `notifyOnExtraUsageStart`.
 
 Each target in the list carries: `id` (stable handle for CLI operations), `name`, `url`, `enabled`, `tested` (`true`/`false`/`null`), `notifyUserTurn`, `notifyPendingRequest`, `notifyExtraUsageStart`, `awayOnly`.

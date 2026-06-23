@@ -39,6 +39,13 @@ class ClaudeCodeModelExtra(NamedTuple):
     supports_thinking_disabled: bool
 
 
+# ⚠ When ADDING a key here, check whether the settings CLI needs it too:
+# `twicc settings provider <p>` only surfaces keys it explicitly handles —
+# agent-defaults flow through ``AGENT_SETTINGS_FIELDS_MAPPING`` automatically,
+# but anything else (usage files, ``QuotaWakeupTime``, …) needs an explicit flag
+# in ``twicc/cli/settings/provider.py`` (``build_provider_patch``) AND a line in
+# ``build_provider_show`` to appear in the bare read. Mirror the change in the
+# Codex constants.
 SYNCED_SETTINGS_DEFAULTS: dict = {
     "claudeCodeDefaultPermissionMode": "default",
     "claudeCodeDefaultUntrustedPermissionMode": "default",

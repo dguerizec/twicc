@@ -2,13 +2,14 @@
 
 The group **callback** carries the per-provider agent-defaults patch: passing
 any of the agent-defaults flags (``--model`` / ``--effort`` / ... / the usage-file
-flags) builds a ``{provider}Default*`` synced-settings patch and drops a
-``kind="settings:update"`` request, exactly like ``twicc settings set``.
+flags / ``--quota-wakeup-time``) builds a ``{provider}Default*`` (or other
+``{provider}*``) synced-settings patch and drops a ``kind="settings:update"``
+request, exactly like ``twicc settings set``.
 
 With **no flags and no sub-command** the callback prints the provider's slice of
 the synced settings (offline read): whether it is enabled / the global default /
-orchestration-enabled, its agent defaults, the untrusted default, and the
-usage-file settings.
+orchestration-enabled, its agent defaults, the untrusted default, the
+usage-file settings, and the quota warm-up time.
 
 The provider sub-commands (``enable`` / ``disable`` / ``set-default`` /
 ``orchestration-*``) are added in a later task; this group only declares the
@@ -91,6 +92,32 @@ def _usage_key(untrusted_synced_key: str, kind: str, suffix: str) -> str:
     """
     prefix = untrusted_synced_key.split("Default", 1)[0]
     return f"{prefix}Usage{kind}File{suffix}"
+
+
+def _quota_wakeup_key(untrusted_synced_key: str) -> str:
+    """Build the ``{prefix}QuotaWakeupTime`` synced key (prefix from the untrusted key)."""
+    prefix = untrusted_synced_key.split("Default", 1)[0]
+    return f"{prefix}QuotaWakeupTime"
+
+
+def _valid_quota_wakeup_time(value: str) -> bool:
+    """Whether *value* is an acceptable quota warm-up time.
+
+    Empty string (warm-up disabled) or a ``"HH:MM"`` 24-hour wall-clock time.
+    Mirrors the canonical parse in ``twicc.quota_wakeup_task._parse_hhmm`` but
+    keeps the empty/malformed distinction the CLI needs (empty = a valid
+    "disable", malformed = a user error worth flagging).
+    """
+    if value == "":
+        return True
+    parts = value.split(":")
+    if len(parts) != 2:
+        return False
+    try:
+        hour, minute = int(parts[0]), int(parts[1])
+    except ValueError:
+        return False
+    return 0 <= hour <= 23 and 0 <= minute <= 59
 
 
 def build_provider_patch(provider: str, flags: dict) -> tuple[dict, list]:
@@ -195,6 +222,26 @@ def build_provider_patch(provider: str, flags: dict) -> tuple[dict, list]:
         elif flags.get("no_usage_dump_file"):
             patch[_usage_key(untrusted_synced_key, "Dump", "Enabled")] = False
 
+    # --- quota warm-up time ("HH:MM" or "" to disable) -----------------------
+    quota = flags.get("quota_wakeup_time")
+    if quota is not None:
+        quota_key = _quota_wakeup_key(untrusted_synced_key) if untrusted_synced_key else None
+        if quota_key is None or quota_key not in helpers.SYNCED_SETTINGS_DEFAULTS:
+            errors.append(ValidationError(
+                "--quota-wakeup-time", "unsupported_field",
+                f"--quota-wakeup-time is not supported by {provider}.",
+            ))
+        else:
+            quota = quota.strip()
+            if not _valid_quota_wakeup_time(quota):
+                errors.append(ValidationError(
+                    "--quota-wakeup-time", "invalid_value",
+                    f"--quota-wakeup-time expects 'HH:MM' (24-hour) or '' to "
+                    f"disable, got {quota!r}.",
+                ))
+            else:
+                patch[quota_key] = quota
+
     return patch, errors
 
 
@@ -245,6 +292,9 @@ def build_provider_show(provider: str, settings: dict) -> dict:
             "enabled": _get(_usage_key(untrusted_synced_key, "Dump", "Enabled")),
             "path": _get(_usage_key(untrusted_synced_key, "Dump", "Path")),
         }
+        quota_key = _quota_wakeup_key(untrusted_synced_key)
+        if quota_key in defaults:
+            out["quota_wakeup_time"] = _get(quota_key)
     return out
 
 
@@ -327,6 +377,13 @@ def provider_main(
         False, "--no-usage-dump-file",
         help="Disable the usage dump-file for this provider.",
     ),
+    quota_wakeup_time: str | None = typer.Option(
+        None, "--quota-wakeup-time",
+        help=(
+            "Daily quota warm-up time as 'HH:MM' (24-hour, server local clock) — "
+            "TwiCC opens a fresh usage window at that time. Pass '' to disable."
+        ),
+    ),
     timeout: int = typer.Option(
         30, "--timeout",
         help=(
@@ -378,6 +435,7 @@ def provider_main(
         "no_usage_read_file": no_usage_read_file,
         "usage_dump_file": usage_dump_file,
         "no_usage_dump_file": no_usage_dump_file,
+        "quota_wakeup_time": quota_wakeup_time,
     }
     any_flag = any(
         v not in (None, False) for v in flags.values()
