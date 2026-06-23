@@ -4,11 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). As a small deviation, each release opens with a one-line **Summary** recapping its highlights, and some entries include illustrative screenshots in nested sub-lists.
 
-## [Unreleased]
+## [1.9.1] - 2026-06-23
 
 ### Summary
 
-- **Wake-up, tips & fixes** — a new quota wake-up that opens your provider's 5-hour quota window early each day, over 30 new in-app tips, five help pages, and an assortment of fixes.
+- **v1.9.1: Wake-up, tips & fixes** — a new quota wake-up that opens your provider's 5-hour quota window early each day, over 30 new in-app tips, five help pages, and an assortment of fixes.
 
 ### Added
 
