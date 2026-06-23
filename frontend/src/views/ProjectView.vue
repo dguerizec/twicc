@@ -604,6 +604,18 @@ const isInitialLoading = computed(() =>
 )
 const didSessionsFailToLoad = computed(() => store.didSessionsFailToLoad(effectiveProjectId.value))
 
+// Whether the sidebar list currently renders at least one item, search filter
+// included — mode-aware: the session list in sessions mode, the artifact
+// bookmark list in artifacts mode. Both counts are published by their list
+// component (the rendered, scoped, searched list) and cleared on unmount.
+// Exposed as `data-has-items` on `.sidebar-sessions` for presence/absence-driven
+// CSS that works the same in both modes.
+const hasDisplayedItems = computed(() =>
+    isArtifactsMode.value
+        ? store.localState.displayedArtifactBookmarkCount > 0
+        : store.localState.displayedSessionIds.length > 0
+)
+
 // Filter text is independent per sidebar mode: switching modes must not carry
 // one list's filter into the other, and each keeps its own across the switch.
 const sessionsSearchQuery = ref('')
@@ -1853,7 +1865,7 @@ function updateSidebarClosedClass(closed) {
 
             <wa-divider></wa-divider>
 
-            <div class="sidebar-sessions">
+            <div class="sidebar-sessions" :data-has-items="hasDisplayedItems">
                 <!-- Multi-select mode: in-flow action bar above the list -->
                 <SessionSelectionBar
                     v-if="selectionStore.active"
@@ -2687,6 +2699,20 @@ wa-dropdown-item:hover .row-menu-trigger,
     flex-shrink: 0;
     --width: var(--divider-size);
     --spacing: 0;
+}
+
+/* When the sidebar list (sessions or artifacts) holds at least one item, the
+   list and its own section separators already provide the visual break, so the
+   header→list divider is redundant: hide it and drop the header's bottom padding
+   so the header sits flush against the list. The empty state ("No sessions" /
+   "No bookmarks…") keeps both for structure. The divider stays in the DOM
+   (display:none), so the header's `+ wa-divider +` adjacency still matches. */
+.sidebar > wa-divider:has(+ .sidebar-sessions[data-has-items="true"]) {
+    display: none;
+}
+
+.sidebar-header:has(+ wa-divider + .sidebar-sessions[data-has-items="true"]) {
+    padding-bottom: 0;
 }
 
 .sidebar-sessions {

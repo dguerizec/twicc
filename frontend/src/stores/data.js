@@ -560,6 +560,14 @@ export const useDataStore = defineStore('data', {
             // (filters, scope, search) far more simply than recomputing it.
             displayedSessionIds: [],
 
+            // Count of artifact bookmarks currently shown in the sidebar list,
+            // published by ArtifactBookmarkList.vue (its already-filtered `list`
+            // computed). The mirror of `displayedSessionIds` for the artifacts
+            // sidebar mode — read to drive the `data-has-items` presence flag on
+            // `.sidebar-sessions`. A count (not ids) since no consumer needs the
+            // ids yet.
+            displayedArtifactBookmarkCount: 0,
+
             // Optimistic messages - user messages displayed immediately after send,
             // before the backend confirms with a real user_message item.
             // { sessionId: { syntheticKind, content, kind } }
@@ -4407,6 +4415,16 @@ export const useDataStore = defineStore('data', {
          */
         setDisplayedSessionIds(ids) {
             this.localState.displayedSessionIds = ids
+        },
+
+        /**
+         * Record how many artifact bookmarks the sidebar list currently renders.
+         * Called by ArtifactBookmarkList.vue whenever its rendered list changes,
+         * so the `data-has-items` presence flag tracks the artifacts mode too.
+         * @param {number} count - Number of bookmarks shown (search-filtered).
+         */
+        setDisplayedArtifactBookmarkCount(count) {
+            this.localState.displayedArtifactBookmarkCount = count
         },
 
         /**

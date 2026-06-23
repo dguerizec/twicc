@@ -12,7 +12,7 @@
 // state for keyboard navigation. Bookmark lists are small, so there is no
 // virtual scroller — but the keyboard-navigation contract mirrors SessionList
 // (handleKeyNavigation exposed, focus-search emitted on ArrowUp from the top).
-import { computed, ref, watch, nextTick } from 'vue'
+import { computed, ref, watch, nextTick, onBeforeUnmount } from 'vue'
 import { useDataStore } from '../../stores/data'
 import { useWorkspacesStore } from '../../stores/workspaces'
 import { useSettingsStore } from '../../stores/settings'
@@ -61,6 +61,15 @@ const list = computed(() => {
     if (q) rows = rows.filter(b => matchQuery(q, b.name) || matchQuery(q, b.relative_path))
     return rows
 })
+
+// Publish the rendered count (search filter included) so ProjectView's
+// `data-has-items` presence flag tracks the artifacts mode exactly as
+// `displayedSessionIds` does for sessions. Cleared on unmount so a stale count
+// never lingers when the sidebar is gone.
+watch(() => list.value.length, (count) => {
+    dataStore.setDisplayedArtifactBookmarkCount(count)
+}, { immediate: true })
+onBeforeUnmount(() => dataStore.setDisplayedArtifactBookmarkCount(0))
 
 /** Whether a bookmark is the one currently open in the main pane. */
 function isActive(b) {
