@@ -947,6 +947,10 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
                     "title": content.get("title"),
                     "images": content.get("images") or [],
                     "documents": content.get("documents") or [],
+                    # Dockable-layout intention the web UI draft carries, frozen onto the new
+                    # ``Session.layout`` (the user's customized draft layout — not the project/global
+                    # default the service would otherwise resolve when this is absent).
+                    "layout": content.get("layout"),
                     # Hybrid CLI mode for drafts. Honored ONLY because this is
                     # the trusted human path (web UI): allow_hybrid below is
                     # what lets the service read it — every other caller

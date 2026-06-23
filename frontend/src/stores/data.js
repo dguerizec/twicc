@@ -49,6 +49,9 @@ const debouncedSaves = new Map()
 // Per-session debounced PATCH of the layout intention to the backend; mirrors `debouncedSaves`. The
 // `pending` set guards against the echoed `session_updated` re-hydrating (clobbering) a layout we just
 // changed locally — our working copy is authoritative until the PATCH settles.
+// Drafts have no backend row: instead of a PATCH, their edits are mirrored straight onto the in-memory
+// `session.layout` (so any re-hydrate — e.g. the optimistic `updateSession` from a throttled
+// `session_viewed` — is a no-op) and snapshotted to IndexedDB so they survive a reload.
 const layoutPersistDebouncers = new Map() // sessionId -> debounced fn
 const layoutPersistPending = new Set()    // sessionIds with an unsaved / in-flight layout change
 const LAYOUT_PERSIST_DEBOUNCE_MS = 500
@@ -1378,6 +1381,29 @@ export const useDataStore = defineStore('data', {
             }
         },
 
+        /** Single writer for a draft's IndexedDB record. ``saveDraftSession`` does a whole-record
+         *  ``put`` (overwrites), so every field that must survive a reload — metadata, agent settings,
+         *  and the dockable ``layout`` — is snapshotted here from the in-memory session, the single
+         *  source of truth. No-op for non-draft sessions. */
+        _saveDraftToIndexedDB(sessionId) {
+            const s = this.sessions[sessionId]
+            if (!s?.draft) return
+            saveDraftSession(sessionId, {
+                projectId: s.project_id,
+                title: s.title,
+                provider: s.provider,
+                hybrid: s.hybrid,
+                // Deep-clone to a plain object: ``s.layout`` lives in Pinia state, so reading it back
+                // yields a Vue reactive Proxy, which IndexedDB's structured clone rejects. The layout is
+                // pure JSON data (it round-trips to the backend as JSON), so this is exact. null /
+                // undefined (legacy / single-pane drafts) pass through untouched.
+                layout: s.layout == null ? s.layout : JSON.parse(JSON.stringify(s.layout)),
+                ...this._pickAgentSettings(s),
+            }).catch((err) =>
+                console.warn('Failed to save draft session to IndexedDB:', err),
+            )
+        },
+
         /**
          * Create a draft session for a project.
          * Draft sessions exist only in the frontend until the first message is sent.
@@ -1423,10 +1449,8 @@ export const useDataStore = defineStore('data', {
                 layout,
                 ...settings,
             }
-            // Persist to IndexedDB (hybrid + layout included so the seeded default survives a reload)
-            saveDraftSession(id, { projectId, provider, hybrid, layout, ...settings }).catch(err =>
-                console.warn('Failed to save draft session to IndexedDB:', err)
-            )
+            // Persist to IndexedDB (settings + layout included so the seeded default survives a reload)
+            this._saveDraftToIndexedDB(id)
             return id
         },
 
@@ -1442,15 +1466,7 @@ export const useDataStore = defineStore('data', {
             const session = this.sessions[sessionId]
             if (!session?.draft) return
             session.hybrid = !!value
-            saveDraftSession(sessionId, {
-                projectId: session.project_id,
-                title: session.title,
-                provider: session.provider,
-                hybrid: session.hybrid,
-                ...this._pickAgentSettings(session),
-            }).catch(err =>
-                console.warn('Failed to save draft session hybrid flag to IndexedDB:', err)
-            )
+            this._saveDraftToIndexedDB(sessionId)
         },
 
         /**
@@ -1478,15 +1494,7 @@ export const useDataStore = defineStore('data', {
             session.hybrid = provider === 'claude_code'
                 && useSettingsStore().isClaudeHybridEnabled
                 && useSettingsStore().isClaudeHybridDefault
-            saveDraftSession(sessionId, {
-                projectId: session.project_id,
-                title: session.title,
-                provider,
-                hybrid: session.hybrid,
-                ...settings,
-            }).catch(err =>
-                console.warn('Failed to save draft session provider to IndexedDB:', err)
-            )
+            this._saveDraftToIndexedDB(sessionId)
         },
 
         /**
@@ -3512,12 +3520,20 @@ export const useDataStore = defineStore('data', {
             this.ensureSessionLayout(sessionId).maximized = dockIds && dockIds.length ? dockIds : null
         },
 
-        /** Schedule a debounced PATCH of the layout intention to the backend (Session.layout).
-         *  Coalesces resize-drag bursts and discrete place/minimize edits. No-op for drafts (no
-         *  backend row yet — their layout, when added, lives in IndexedDB). */
+        /** Schedule a debounced persist of the layout intention (Session.layout). Coalesces resize-drag
+         *  bursts and discrete place/minimize edits. Real sessions PATCH the backend; drafts (no backend
+         *  row) get the stripped intention mirrored onto the in-memory ``session.layout`` RIGHT NOW —
+         *  before the debounce — so any layout re-hydrate (notably the optimistic ``updateSession`` from
+         *  a throttled ``session_viewed``, which fires ~30s after the draft is first viewed and then
+         *  every 30s) is a no-op instead of snapping the draft back to its frozen creation-time seed.
+         *  The slower IndexedDB snapshot (reload durability) rides the debounced flush below. */
         persistSessionLayoutDebounced(sessionId) {
             const session = this.sessions[sessionId]
-            if (!session || session.draft) return
+            if (!session) return
+            if (session.draft) {
+                const intention = this.localState.sessionLayout[sessionId]
+                if (intention) session.layout = stripLayoutForPersist(intention)
+            }
             layoutPersistPending.add(sessionId)
             if (!layoutPersistDebouncers.has(sessionId)) {
                 layoutPersistDebouncers.set(
@@ -3528,15 +3544,29 @@ export const useDataStore = defineStore('data', {
             layoutPersistDebouncers.get(sessionId)(sessionId)
         },
 
-        /** PATCH the stripped intention (no transient ``maximized``) onto Session.layout. */
+        /** Flush the stripped intention (no transient ``maximized``) to its store: a backend PATCH for a
+         *  real session, the IndexedDB draft record for a draft (whose ``session.layout`` mirror is kept
+         *  up to date synchronously in ``persistSessionLayoutDebounced``). */
         async persistSessionLayout(sessionId) {
             const session = this.sessions[sessionId]
             const intention = this.localState.sessionLayout[sessionId]
-            if (!session || session.draft || !session.project_id || !intention) {
+            if (!session || !intention) {
                 layoutPersistPending.delete(sessionId)
                 return
             }
             const payload = stripLayoutForPersist(intention)
+            if (session.draft) {
+                // No backend row — re-affirm the mirror (in case the debounce coalesced several edits)
+                // and snapshot the whole draft to IndexedDB so the customization survives a reload.
+                session.layout = payload
+                layoutPersistPending.delete(sessionId)
+                this._saveDraftToIndexedDB(sessionId)
+                return
+            }
+            if (!session.project_id) {
+                layoutPersistPending.delete(sessionId)
+                return
+            }
             try {
                 const response = await apiFetch(
                     `/api/projects/${session.project_id}/sessions/${sessionId}/`,
@@ -4648,16 +4678,10 @@ export const useDataStore = defineStore('data', {
             const session = this.sessions[sessionId]
             if (!session?.draft) return
 
-            // Persist projectId, title, provider + the frozen agent-settings
-            // snapshot (so a title edit doesn't drop them). Fire and forget.
-            saveDraftSession(sessionId, {
-                projectId: session.project_id,
-                title,
-                provider: session.provider,
-                ...this._pickAgentSettings(session),
-            }).catch(err =>
-                console.warn('Failed to save draft session title to IndexedDB:', err)
-            )
+            // Mirror the title in-memory, then snapshot the whole draft (settings, hybrid, layout) so a
+            // rename doesn't drop the other fields from the IndexedDB record. Fire and forget.
+            session.title = title
+            this._saveDraftToIndexedDB(sessionId)
         },
 
         /**
@@ -4698,7 +4722,8 @@ export const useDataStore = defineStore('data', {
          * Load all draft sessions from IndexedDB into the sessions store.
          * Called at app startup, BEFORE hydrateDraftMessages.
          * Recreates session objects with: id, project_id, title (or 'New session'),
-         * mtime=now, last_line=0, draft=true.
+         * mtime=now, last_line=0, draft=true, plus the persisted dockable ``layout``
+         * (legacy drafts saved before layout persistence carry none → single pane).
          */
         async hydrateDraftSessions() {
             try {
@@ -4730,6 +4755,10 @@ export const useDataStore = defineStore('data', {
                         // hybrid draft hydrates as a normal (sendable) draft while
                         // hybrid mode is off, rather than a stuck hybrid one.
                         hybrid: !!draft.hybrid && useSettingsStore().isClaudeHybridEnabled,
+                        // Restore the persisted dockable layout (frozen at creation, then kept in sync
+                        // with the user's edits). Undefined for legacy drafts → ensureSessionLayout
+                        // seeds an empty (single-pane) intention.
+                        layout: draft.layout,
                         ...settings,
                     }
                 }
