@@ -4,6 +4,33 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). As a small deviation, each release opens with a one-line **Summary** recapping its highlights, and some entries include illustrative screenshots in nested sub-lists.
 
+## [Unreleased]
+
+### Summary
+
+- **Wake-up, tips & fixes** — a new quota wake-up that opens your provider's 5-hour quota window early each day, over 30 new in-app tips, five help pages, and an assortment of fixes.
+
+### Added
+
+- **Quota wake-up** — a per-provider daily time that opens your 5-hour quota window early, so more windows fit into a working day.
+  - ![Wake Up Settings](frontend/public/whats-new/v1.9.1/wake-up-settings.webp)
+  - ![Wake Up Tips](frontend/public/whats-new/v1.9.1/wake-up-tips.webp)
+- **In-app tips & help** — lots of new contextual tips across the UI, plus help pages (projects, workspaces, worktrees, layouts, artifacts…) that open the first time you reach a feature.
+- **Session search button** — a header button that opens the in-session search where only the Ctrl+F shortcut worked before (e.g. on mobile).
+
+### Changed
+
+- **Worktree directory** — the "default worktree directory" setting is now a template with placeholders (`{git_root}`, `{project_name}`, `{project_basedir}`), replacing the previous system that could only place worktrees under the git root — worktrees can now live anywhere.
+- **Dockable layouts** — several small improvements.
+- **Git tab** — the commit list now refreshes live, so commits made in the background show up without a manual refresh.
+- **Session switcher** — archived sessions stay reachable (tagged "Arch."), so you can jump straight back to one you just archived.
+- **Settings CLI** — reading settings now returns only the keys you can actually change, and `--help` is clearer about what each key accepts and what it's for.
+
+### Fixed
+
+- **Drafts** — a draft's dockable layout and agent settings are now saved and applied to the session created from it.
+- **Chat focus** — arriving on the Chat tab via keyboard navigation focuses the message input again.
+
 ## [1.9.0] - 2026-06-22
 
 ### Summary
