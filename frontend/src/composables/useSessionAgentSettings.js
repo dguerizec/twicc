@@ -504,6 +504,29 @@ export function useSessionAgentSettings(sessionIdSource) {
         { immediate: true }
     )
 
+    // Drafts have no "Apply" step — every popover change is live. Mirror each selection onto the draft's
+    // session fields and persist them to IndexedDB so they survive a reload (real sessions instead commit
+    // on Send/Apply via the WS payload, and a draft's provider/hybrid persist through their own actions).
+    // NOT immediate: the baseline is the just-synced session values, so opening a draft writes nothing;
+    // only a genuine change (user edit, or the consistency watcher correcting a value) persists. Writing
+    // the same values back via the store is idempotent — the session→ref watchers above don't re-loop.
+    watch(
+        [selectedPermissionMode, selectedModel, selectedEffort, selectedThinking,
+            selectedClaudeInChrome, selectedFastMode, selectedContextMax],
+        () => {
+            if (!session.value?.draft) return
+            store.setDraftAgentSettings(sessionId.value, {
+                permission_mode: selectedPermissionMode.value,
+                selected_model: selectedModel.value,
+                effort: selectedEffort.value,
+                thinking_enabled: selectedThinking.value,
+                claude_in_chrome: selectedClaudeInChrome.value,
+                fast_mode: selectedFastMode.value,
+                context_max: selectedContextMax.value,
+            })
+        },
+    )
+
     return {
         // context
         sessionId,

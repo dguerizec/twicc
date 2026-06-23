@@ -1498,6 +1498,21 @@ export const useDataStore = defineStore('data', {
         },
 
         /**
+         * Write the closed agent-settings bundle onto a draft session and persist it to IndexedDB.
+         * Drafts have no "Apply" step — every popover change is live — and unlike real sessions (whose
+         * choices ride the WS Send/Apply payload) a draft must persist them itself, or they reset to the
+         * creation-time snapshot on reload. No-op for non-draft sessions.
+         * @param {string} sessionId
+         * @param {Object} settings - The 7-field bundle (extra keys ignored by ``_pickAgentSettings``).
+         */
+        setDraftAgentSettings(sessionId, settings) {
+            const session = this.sessions[sessionId]
+            if (!session?.draft) return
+            Object.assign(session, this._pickAgentSettings(settings))
+            this._saveDraftToIndexedDB(sessionId)
+        },
+
+        /**
          * Delete a draft session from IndexedDB, and optionally from store.
          * Only deletes if the session exists and has draft: true.
          * @param {string} sessionId - The session ID to delete
