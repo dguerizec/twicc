@@ -13,6 +13,16 @@ Selecting a workspace **filters** your projects and sessions down to the ones it
 contains, so you can focus on a subset of your work. Give it a color to spot it
 at a glance.
 
+### Opening a workspace
+
+Open a workspace by clicking it on the home page, or in the project selector at
+the top of the sidebar — even the one already selected. And from a project's
+home, the workspaces it belongs to sit above the tab bar; click one to jump to
+it.
+
+To edit a workspace, open the **Manage workspaces** dialog (the gear in the
+home's Workspaces section) or its **⋮** menu in the project selector.
+
 ### Auto-add patterns
 
 Beyond adding projects by hand, a workspace can define **directory patterns**:

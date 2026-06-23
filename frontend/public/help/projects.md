@@ -12,6 +12,15 @@ also add a project yourself by pointing TwiCC at a folder.
 Every session that runs in that folder is grouped under the project — so you can
 find your work by where it happened.
 
+### Opening a project
+
+Open a project's **home** by clicking it on the home page, or in the project
+selector at the top of the sidebar — even the one already selected. From inside a
+session, the project's name in the header takes you back up to it.
+
+To rename a project or change its settings, open its **⋮** menu (on the home or
+in the project selector) and choose **Edit**.
+
 ### Make it yours
 
 Give a project a **name** and **color**, and set **per-project defaults**
