@@ -96,7 +96,7 @@ function onEmptyBarDblClick(event) {
 
 <template>
     <div class="dock-region" :class="region.kind" :data-rid="region.id" :style="style">
-        <wa-tab-group class="dock-tabnav" :class="{ 'tabnav-dimmed': !isRouteActive }" :active="activeTabId" @wa-tab-show.stop="onShow" @click="onEmptyBarClick" @dblclick="onEmptyBarDblClick">
+        <wa-tab-group class="dock-tabnav" :class="{ 'tabnav-dimmed': !isRouteActive }" :active="activeTabId" :title="maximized ? 'Double-click to restore' : 'Double-click to maximize'" @wa-tab-show.stop="onShow" @click="onEmptyBarClick" @dblclick="onEmptyBarDblClick">
             <!-- Clicking a tab header activates it: focuses its filter + claims the route (onTabClick).
                  wa-tab-show handles switching to a *different* tab; the claim also covers clicking the
                  tab that is ALREADY this group's active one (no wa-tab-show fires then) while another
@@ -209,6 +209,11 @@ function onEmptyBarDblClick(event) {
 }
 .dock-tabnav::part(base) {
     overflow: hidden;
+}
+/* The bar is double-clickable to maximize/restore (empty area + tabs); pointer signals it. The
+   min/max/restore buttons keep their own cursor + richer titles. */
+.dock-tabnav::part(nav) {
+    cursor: pointer;
 }
 .dock-tabnav::part(body) {
     display: none;

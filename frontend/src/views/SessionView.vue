@@ -1842,7 +1842,8 @@ onBeforeUnmount(() => {
             @click.capture="onCenterClick"
             @dblclick="onCenterTabDblClick"
             class="session-tabs"
-            :class="{ 'tabnav-dimmed': !isCenterRouteActive }"
+            :class="{ 'tabnav-dimmed': !isCenterRouteActive, 'tabbar-maximizable': hasDocks }"
+            :title="hasDocks ? (isCenterMaximized ? 'Double-click to restore' : 'Double-click to maximize') : null"
         >
             <!-- Tab navigation -->
             <wa-tab slot="nav" panel="main"
@@ -2185,6 +2186,11 @@ wa-tab::part(base) {
 }
 .session-tabs::part(nav) {
     transition: opacity var(--wa-transition-fast, 0.15s) var(--wa-transition-easing, ease);
+}
+/* Double-click the center bar to maximize/restore — only when there are docks (otherwise it's a
+   no-op, so no pointer/title is bound either). Pointer signals the bar is interactive. */
+.session-tabs.tabbar-maximizable::part(nav) {
+    cursor: pointer;
 }
 
 /* Active tab panel needs to fill available space and handle overflow */

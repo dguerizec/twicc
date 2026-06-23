@@ -41,6 +41,20 @@ function verb(entry) {
     if (entry.item.action === 'restore') return 'restore'
     return isOpen(entry) ? 'close overlay' : 'peek overlay'
 }
+// A restore/swap chip's double-click maximizes its dock (see onClick); advertise it in the chip's
+// title. Overlay chips don't maximize on double-click (their second click just forces the peek open),
+// so they keep the plain single-action title.
+function chipTitle(entry) {
+    const base = `${entry.tab.label} — ${verb(entry)}`
+    return entry.item.action === 'overlay' ? base : `${base} · double-click to maximize`
+}
+// Title for the rail's empty area (clicking anywhere acts on the pointed dock). The double-click hint
+// only holds when a restore/swap dock is here — an overlay-only rail double-click just forces the peek.
+const emptyAreaTitle = computed(() =>
+    props.gutter.items.some((it) => it.action !== 'overlay')
+        ? 'Click to open · double-click to maximize'
+        : 'Click to open'
+)
 // Double-click on a rail chip = maximize that dock. A native dblclick is impossible on a restore/swap
 // chip: its first click moves the dock out of the rail, so the chip is gone before a dblclick could
 // fire. So we detect the double-click ourselves — hold the single action for DOUBLE_CLICK_DELAY and
@@ -128,7 +142,7 @@ onUnmounted(cancelPending)
 </script>
 
 <template>
-    <div class="dock-gutter" :class="gutter.edge" :style="style" @click="onEmptyAreaClick">
+    <div class="dock-gutter" :class="gutter.edge" :style="style" :title="emptyAreaTitle" @click="onEmptyAreaClick">
         <div class="g-group start">
             <button
                 v-for="entry in startIcons"
@@ -136,7 +150,7 @@ onUnmounted(cancelPending)
                 type="button"
                 class="g-chip"
                 :class="{ open: isOpen(entry) }"
-                :title="`${entry.tab.label} — ${verb(entry)}`"
+                :title="chipTitle(entry)"
                 :aria-label="`${entry.tab.label} — ${verb(entry)}`"
                 @click="onClick(entry)"
             >
@@ -151,7 +165,7 @@ onUnmounted(cancelPending)
                 type="button"
                 class="g-chip"
                 :class="{ open: isOpen(entry) }"
-                :title="`${entry.tab.label} — ${verb(entry)}`"
+                :title="chipTitle(entry)"
                 :aria-label="`${entry.tab.label} — ${verb(entry)}`"
                 @click="onClick(entry)"
             >
@@ -171,6 +185,8 @@ onUnmounted(cancelPending)
     justify-content: space-between;
     gap: var(--gutter-padding);
     padding: var(--gutter-padding);
+    /* The whole rail is clickable (empty area opens the pointed dock; chips carry their own action). */
+    cursor: pointer;
     background: var(--wa-color-surface-default, transparent); /* match .dock-region */
     z-index: 12; /* above an open overlay backdrop, so gutters stay clickable */
     --gutter-border: var(--divider-size) solid var(--wa-color-surface-border, rgba(0, 0, 0, 0.12));
