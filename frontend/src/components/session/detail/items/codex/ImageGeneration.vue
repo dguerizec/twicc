@@ -162,6 +162,9 @@ function onPromptHide() {
     padding-top: var(--wa-space-m);
     word-break: break-word;
 }
+.virtual-scroller-item > .session-item:not(.is-block-end) .image-generation-content {
+    padding-bottom: var(--wa-space-m);
+}
 
 .image-generation-image-wrapper {
     display: flex;
