@@ -131,13 +131,12 @@ onMounted(() => {
     if (instantOpen.value) {
         nextTick(() => { instantOpen.value = false })
     }
-    // When result details starts open (restoration), ensure data is fetched
-    if (isResultOpen.value) {
-        const shouldFetch = resultState.value === 'idle' ||
-            (resultState.value === 'loaded' && (!resultData.value || resultData.value.length < requiredDisplayCount.value))
-        if (shouldFetch) {
-            fetchResult()
-        }
+    // Fetch the result when it's already meant to be visible at mount:
+    // either the "Result" disclosure was restored open, or this is an
+    // inline-result tool (e.g. view_image) whose card is open — its
+    // result renders directly in the body, so it must be fetched up front.
+    if (isResultOpen.value || (rendersResultInline.value && isOpen.value && showResultDetails.value)) {
+        ensureResultFetched()
     }
 })
 
@@ -238,19 +237,26 @@ function stopPolling() {
 }
 
 /**
+ * Fetch the result if it isn't loaded yet, or was loaded but came back
+ * short of ``requiredDisplayCount`` (retry). Shared by the "Result"
+ * disclosure handlers and the inline-result auto-fetch path.
+ */
+function ensureResultFetched() {
+    const shouldFetch = resultState.value === 'idle' ||
+        (resultState.value === 'loaded' && (!resultData.value || resultData.value.length < requiredDisplayCount.value))
+    if (shouldFetch) {
+        fetchResult()
+    }
+}
+
+/**
  * Handler for when the result details section is opened.
  * Fetches if idle, or if loaded but empty (to retry).
  */
 function onResultOpen() {
     isResultOpen.value = true
     dataStore.setDetailOpen(props.sessionId, `result:${props.toolId}`, true)
-    // Fetch if idle, or if loaded but no data (retry)
-    const shouldFetch = resultState.value === 'idle' ||
-        (resultState.value === 'loaded' && (!resultData.value || resultData.value.length < requiredDisplayCount.value))
-
-    if (shouldFetch) {
-        fetchResult()
-    }
+    ensureResultFetched()
 }
 
 /**
@@ -282,14 +288,11 @@ function onToolUseClose() {
 function onToolUseOpen() {
     isOpen.value = true
     dataStore.setDetailOpen(props.sessionId, props.toolId, true)
-    // Check if result details is open and needs data
-    if (isResultOpen.value) {
-        const shouldFetch = resultState.value === 'idle' ||
-            (resultState.value === 'loaded' && (!resultData.value || resultData.value.length < requiredDisplayCount.value))
-
-        if (shouldFetch) {
-            fetchResult()
-        }
+    // Fetch the result when it needs to be visible: the "Result" disclosure
+    // is open, or this is an inline-result tool that renders its result
+    // directly in the body as soon as the card opens.
+    if (isResultOpen.value || (rendersResultInline.value && showResultDetails.value)) {
+        ensureResultFetched()
     }
 }
 
@@ -554,6 +557,11 @@ const showResultDetailsOnError = computed(() => {
     if (!isToolError.value) return false
     return !!toolHelpers.value?.showsResultOnError(props.name) || toolErrorText.value === 'Unknown error'
 })
+
+// Whether this tool's result renders inline (in the card body, in place
+// of the "Result" disclosure) rather than behind a collapsible section.
+// Drives both the template branch and the auto-fetch on card open.
+const rendersResultInline = computed(() => !!toolHelpers.value?.rendersResultInline(props.name))
 
 // Central guard for Result details visibility
 const showResultDetails = computed(() => {
@@ -953,9 +961,11 @@ function handleStopAgent() {
                 <MarkdownContent v-if="errorAsMarkdown" :source="toolErrorText" />
                 <template v-else>{{ toolErrorText }}</template>
             </wa-callout>
-            <wa-details v-if="showResultDetails" ref="resultDetailsRef" :open="isResultOpen" :style="instantOpen ? { '--show-duration': '0ms', '--hide-duration': '0ms' } : null" class="tool-result" @wa-show="onResultOpen" @wa-hide="onResultClose">
-                <span slot="summary">Result</span>
-                <div class="tool-result-content">
+            <template v-if="showResultDetails">
+                <!-- Inline-result tools (e.g. view_image): the result IS the
+                     body — render it directly in place of the "Result"
+                     disclosure, fetched as soon as the card opened. -->
+                <div v-if="rendersResultInline" class="tool-result-inline">
                     <div v-if="resultState === 'loading'" class="tool-result-loading">
                         <wa-spinner></wa-spinner>
                         <span>Loading result...</span>
@@ -983,7 +993,38 @@ function handleStopAgent() {
                         />
                     </div>
                 </div>
-            </wa-details>
+                <wa-details v-else ref="resultDetailsRef" :open="isResultOpen" :style="instantOpen ? { '--show-duration': '0ms', '--hide-duration': '0ms' } : null" class="tool-result" @wa-show="onResultOpen" @wa-hide="onResultClose">
+                    <span slot="summary">Result</span>
+                    <div class="tool-result-content">
+                        <div v-if="resultState === 'loading'" class="tool-result-loading">
+                            <wa-spinner></wa-spinner>
+                            <span>Loading result...</span>
+                        </div>
+                        <div v-else-if="resultState === 'error'" class="tool-result-error">
+                            Error loading result: {{ resultError }}
+                        </div>
+                        <div v-else-if="resultState === 'loaded' && !displayResult && isPolling" class="tool-result-polling">
+                            <wa-spinner></wa-spinner>
+                            <span>Result not yet available. Checking again shortly...</span>
+                        </div>
+                        <div v-else-if="resultState === 'loaded' && !displayResult" class="tool-result-empty">
+                            No result available
+                        </div>
+                        <div v-else-if="resultState === 'loaded' && displayResult" class="tool-result-data">
+                            <component
+                                v-if="resultRendering"
+                                :is="resultRendering.component"
+                                v-bind="resultRendering.props"
+                            />
+                            <JsonHumanView
+                                v-else
+                                :value="displayResult"
+                                :overrides="resultOverrides"
+                            />
+                        </div>
+                    </div>
+                </wa-details>
+            </template>
         </template>
     </wa-details>
 </template>
@@ -1085,6 +1126,12 @@ wa-details {
 }
 
 .tool-result {
+    margin-top: calc(var(--card-spacing, var(--wa-space-l)) / 2);
+}
+
+/* Inline-result body (in place of the "Result" disclosure) — same top
+ * gap as the collapsible so the card spacing stays consistent. */
+.tool-result-inline {
     margin-top: calc(var(--card-spacing, var(--wa-space-l)) / 2);
 }
 

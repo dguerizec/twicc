@@ -38,6 +38,7 @@ import ExecResultContent from '../../components/session/detail/items/codex/ExecR
 import ReadResultContent from '../../components/session/detail/items/codex/ReadResultContent.vue'
 import ApplyPatchContent from '../../components/session/detail/items/codex/ApplyPatchContent.vue'
 import SpawnAgentResult from '../../components/session/detail/items/codex/SpawnAgentResult.vue'
+import ViewImageResult from '../../components/session/detail/items/codex/ViewImageResult.vue'
 import TodoContent from '../../components/session/detail/items/TodoContent.vue'
 
 // Tool names that produce / consume a shell process and share the
@@ -174,6 +175,36 @@ const MCP_TOOL_NAME_PREFIX = 'mcp__'
 const SPAWN_AGENT_TOOL_NAME = 'spawn_agent'
 const SUBAGENT_NOTIFICATION_START = '<subagent_notification>'
 const SUBAGENT_NOTIFICATION_END = '</subagent_notification>'
+
+// ``view_image`` loads a local image file and feeds it back to the model.
+// Its ``function_call_output`` carries the bytes inline as ``input_image``
+// part(s) (``{type:"input_image", image_url:"data:image/…;base64,…"}``).
+// ``getResultRendering`` pulls those data URLs out and hands them to
+// ``ViewImageResult`` so the Result section shows the actual image instead
+// of dumping the base64 blob through JsonHumanView. Everything else (the
+// tool card, the ``{path, detail}`` input JSON) is the default tool path.
+const VIEW_IMAGE_TOOL_NAME = 'view_image'
+
+/**
+ * Extract the base64 ``data:`` URLs from a ``view_image``
+ * ``function_call_output`` payload's ``output`` array. Returns ``[]``
+ * when the row carries no usable ``input_image`` part.
+ */
+function extractViewImageUrls(result) {
+    const output = result?.output
+    if (!Array.isArray(output)) return []
+    const urls = []
+    for (const part of output) {
+        if (
+            part && typeof part === 'object' &&
+            part.type === 'input_image' &&
+            typeof part.image_url === 'string' && part.image_url
+        ) {
+            urls.push(part.image_url)
+        }
+    }
+    return urls
+}
 
 // Per-tool ``JsonHumanView`` overrides used when the Result/Input
 // fallback rendering kicks in. Mirrors Claude Code's pattern: a tiny
@@ -952,6 +983,9 @@ export class CodexToolHelpers extends BaseToolHelpers {
         // snippet as a sandboxed code cell. "Run code" reads better
         // than the bare ``exec`` for users.
         if (name === 'exec') return 'Run code'
+        // ``view_image`` loads a local image for the model — show the
+        // clean "Image" header instead of the raw ``view_image`` name.
+        if (name === VIEW_IMAGE_TOOL_NAME) return 'Image'
         if (!FUNCTION_CALL_EXEC_TOOLS.has(name)) return null
         const parsed = resolveParsedCommand(name, input)
         if (!parsed) return null
@@ -1188,6 +1222,24 @@ export class CodexToolHelpers extends BaseToolHelpers {
                 props: { message, statusLabel, nickname: result.nickname },
             }
         }
+        // ``view_image``: render the image(s) the tool fed back to the
+        // model (carried inline as base64 ``input_image`` data URLs)
+        // instead of the raw ``function_call_output`` JSON.
+        if (name === VIEW_IMAGE_TOOL_NAME) {
+            const images = extractViewImageUrls(result)
+            if (images.length === 0) return null
+            // Title for the preview dialog — the input path basename.
+            let imageName = 'Image'
+            const path = input?.path
+            if (typeof path === 'string' && path) {
+                const idx = path.lastIndexOf('/')
+                imageName = idx >= 0 ? path.slice(idx + 1) : path
+            }
+            return {
+                component: ViewImageResult,
+                props: { images, name: imageName },
+            }
+        }
         if (!FUNCTION_CALL_EXEC_TOOLS.has(name)) return null
         // The shell precomputed the chain aggregate when
         // :meth:`shouldAggregateExecOutput` returned ``true``; reach
@@ -1374,6 +1426,14 @@ export class CodexToolHelpers extends BaseToolHelpers {
             }
         }
         return Object.keys(out).length > 0 ? out : null
+    }
+
+    rendersResultInline(name) {
+        // ``view_image``'s result is the image itself — show it directly in
+        // the card body (in place of the "Result" disclosure) and fetch it
+        // as soon as the card opens, rather than hiding it behind an extra
+        // click. The ``{path, detail}`` input JSON still renders above.
+        return name === VIEW_IMAGE_TOOL_NAME
     }
 
     isFileChangeTool(name) {

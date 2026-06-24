@@ -1300,6 +1300,19 @@ export class BaseToolHelpers {
         return false
     }
 
+    /**
+     * Whether the tool's result should be rendered **inline** — directly in
+     * the tool card body, in place of the collapsible "Result" disclosure —
+     * and fetched as soon as the card opens (rather than on a separate click
+     * to expand "Result"). Used for tools whose result *is* the content the
+     * user came to see, with no useful intermediate "Result" step (e.g.
+     * Codex's ``view_image``, whose result is the image itself). The input
+     * JSON is unaffected — it still renders above, as usual. Default: false.
+     */
+    rendersResultInline(/* name */) {
+        return false
+    }
+
     // ─── File-change stats (header ``+N -N``) ────────────────────────────
     //
     // The shell does the layout (``+N -N``); the helper provides the values.
