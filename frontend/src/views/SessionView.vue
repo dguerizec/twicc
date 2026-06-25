@@ -610,6 +610,10 @@ function switchToTab(panel) {
 // Root element of the docking area, measured by the composable.
 const sessionLayoutRef = ref(null)
 
+// The center tab group (chat + tool/subagent tabs). Reffed so we can carry the "double-click to
+// maximize/restore" native title on its nav strip only — see syncCenterBarTitle below.
+const sessionTabsRef = ref(null)
+
 // Resolver input: chat is the fixed center anchor; the present tool tabs come from the TOOL_TABS
 // registry above (subagents are center-only and not dockable, so they're excluded here).
 const layoutTabs = computed(() => [
@@ -981,6 +985,26 @@ function onCenterTabDblClick(event) {
     if (isCenterMaximized.value) onLayoutRestoreMaximized()
     else onCenterMaximize()
 }
+
+// Advertise the double-click maximize/restore via a native title, scoped to the tab strip ONLY. The
+// title can't live on the wa-tab-group host: it's the flat-tree ancestor of both the nav strip AND the
+// `part="body"` slot that holds the panels, so a host title leaks the tooltip into every tab's content.
+// We set it on the `part="nav"` container instead (the same strip the ::part(nav) cursor targets) — the
+// common ancestor of the bar region and nothing else, so the tooltip covers the whole bar (empty area +
+// tabs, found via flat-tree traversal) and never the panel content below.
+async function syncCenterBarTitle() {
+    const group = sessionTabsRef.value
+    if (!group) return
+    if (group.updateComplete) await group.updateComplete
+    const nav = group.shadowRoot?.querySelector('[part~="nav"]')
+    if (!nav) return
+    const title = hasDocks.value
+        ? (isCenterMaximized.value ? 'Double-click to restore' : 'Double-click to maximize')
+        : null
+    if (title) nav.setAttribute('title', title)
+    else nav.removeAttribute('title')
+}
+watch([hasDocks, isCenterMaximized, sessionTabsRef], syncCenterBarTitle, { immediate: true })
 
 // ─── Layout actions on the focused pane (keyboard shortcuts + palette) ───────
 // These drive the SAME handlers as the on-screen maximize / minimize / restore
@@ -1837,13 +1861,13 @@ onBeforeUnmount(() => {
             @overlay-dismiss="onOverlayDismiss"
         >
         <wa-tab-group
+            ref="sessionTabsRef"
             :active="centerActiveTab"
             @wa-tab-show="onTabShow"
             @click.capture="onCenterClick"
             @dblclick="onCenterTabDblClick"
             class="session-tabs"
             :class="{ 'tabnav-dimmed': !isCenterRouteActive, 'tabbar-maximizable': hasDocks }"
-            :title="hasDocks ? (isCenterMaximized ? 'Double-click to restore' : 'Double-click to maximize') : null"
         >
             <!-- Tab navigation -->
             <wa-tab slot="nav" panel="main"
