@@ -152,6 +152,11 @@ def serialize_session(session):
         },
         # Whether the session has been compacted at least once
         "compacted": session.compacted,
+        # Whether the session has at least one Claude Code workflow run
+        # (``wf_*.json`` in its ``<session_id>/workflows/`` folder). Monotonic /
+        # one-way; latched live by the watcher and backfilled by the background
+        # compute. See ``Session.has_workflows``.
+        "has_workflows": session.has_workflows,
         # Per-session artifacts (files under <data_dir>/artifacts/<id>/). The
         # frontend shows an Artifacts tab when ``has_artifacts`` is true and
         # mounts it on ``artifacts_dir``. ``has_artifacts`` is monotonic and

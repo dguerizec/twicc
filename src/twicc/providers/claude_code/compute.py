@@ -8,6 +8,7 @@ and the watcher (single item).
 
 from __future__ import annotations
 
+import os
 import re
 
 import orjson
@@ -20,7 +21,7 @@ import xmltodict
 from django.db.models import Q
 
 from twicc.core.enums import ItemKind, Provider
-from twicc.core.models import Session, SessionItem
+from twicc.core.models import Session, SessionItem, SessionType
 from twicc.paths import get_artifacts_dir
 from twicc.pricing import calculate_line_context_usage
 from twicc.providers.compute_base import (
@@ -82,6 +83,45 @@ _TASK_NOTIFICATION_CLOSE_TAG = '</task-notification>'
 INTERRUPTION_MARKER_PREFIX = '[Request interrupted by user'
 
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# Workflow detection
+# =============================================================================
+
+# Claude Code's Workflow tool writes a run artifact named ``wf_*.json`` at the
+# root of the session's ``<session_id>/workflows/`` folder (alongside a
+# ``scripts/`` subfolder we ignore). The presence of such a file is what flips
+# ``Session.has_workflows``. Both the watcher (path-shape match) and the batch
+# probe below key off the same ``wf_`` prefix + ``.json`` suffix.
+WORKFLOW_FILE_PREFIX = "wf_"
+WORKFLOW_FILE_SUFFIX = ".json"
+
+
+def session_folder_has_workflow_json(session_folder: Path) -> bool:
+    """True if ``session_folder/workflows/`` holds at least one ``wf_*.json``
+    file directly at its root.
+
+    ``session_folder`` is the directory sitting next to a top-level session's
+    JSONL (``<projects_dir>/<project_id>/<session_id>/``). The scan is lazy and
+    stops at the first match; a missing ``workflows/`` folder (the common case)
+    returns ``False`` without raising. Subfolders (e.g. ``workflows/scripts/``)
+    are not descended into — only root entries count.
+    """
+    workflows_dir = session_folder / "workflows"
+    try:
+        with os.scandir(workflows_dir) as entries:
+            for entry in entries:
+                name = entry.name
+                if (
+                    name.startswith(WORKFLOW_FILE_PREFIX)
+                    and name.endswith(WORKFLOW_FILE_SUFFIX)
+                    and entry.is_file()
+                ):
+                    return True
+    except (FileNotFoundError, NotADirectoryError):
+        pass
+    return False
 
 
 # =============================================================================
@@ -488,6 +528,28 @@ class ClaudeCodeSessionCompute(BaseSessionCompute):
     def end_session_compute(self, session_id: str) -> None:
         self._monitor_task_to_tool_use_id.pop(session_id, None)
         self._session_task_states.pop(session_id, None)
+
+    def extra_session_fields(self, session: Session) -> dict:
+        # Detect whether this session has any workflow run (a ``wf_*.json`` at
+        # the root of its ``<session_id>/workflows/`` folder). Only top-level
+        # sessions own such a folder — subagents live under
+        # ``<session_id>/subagents/`` and are explicitly out of scope.
+        #
+        # ``has_workflows`` is emitted ONLY when found, so a later recompute
+        # never resets an already-True flag (one-way latch). The watcher latches
+        # the same flag live when a ``wf_*.json`` first appears.
+        if session.type != SessionType.SESSION:
+            return {}
+        # ``file_path`` is ``<project_id>/<session_id>.jsonl`` relative to
+        # PROJECTS_DIR; dropping the ``.jsonl`` suffix yields the session's
+        # sibling folder. Local import dodges the compute↔helpers cycle
+        # (``helpers`` imports this module at top level).
+        from .helpers import ClaudeCodeHelpers
+
+        session_folder = ClaudeCodeHelpers.PROJECTS_DIR / Path(session.file_path).with_suffix("")
+        if session_folder_has_workflow_json(session_folder):
+            return {"has_workflows": True}
+        return {}
 
     # ------------------------------------------------------------------
     # In-memory task state machinery

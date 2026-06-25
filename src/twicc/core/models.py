@@ -551,6 +551,16 @@ class Session(models.Model):
     # Whether the session's context has been compacted at least once
     compacted = models.BooleanField(default=False)
 
+    # Whether this Claude Code session has at least one workflow run: a file
+    # named ``wf_*.json`` at the root of its ``<session_id>/workflows/`` folder
+    # (the folder sitting next to the session's JSONL). Monotonic / one-way —
+    # once True it never flips back to False (a workflow's artifacts may later
+    # be cleaned up, but the session stays "a workflow session"). Filled by the
+    # background compute (a filesystem probe in ``extra_session_fields``) and
+    # latched live by the watcher when such a file appears. Claude-Code-specific
+    # by meaning; other providers leave it at the default False.
+    has_workflows = models.BooleanField(default=False)
+
     class Meta:
         ordering = ["-mtime"]
         indexes = [

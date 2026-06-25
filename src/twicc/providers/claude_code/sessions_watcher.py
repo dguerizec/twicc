@@ -20,9 +20,13 @@ from asgiref.sync import sync_to_async
 from watchfiles import Change
 
 from twicc.core.models import SessionType
-from twicc.core.serializers import serialize_project
+from twicc.core.serializers import serialize_project, serialize_session
 
-from .compute import get_compute as _get_compute
+from .compute import (
+    WORKFLOW_FILE_PREFIX,
+    WORKFLOW_FILE_SUFFIX,
+    get_compute as _get_compute,
+)
 from .helpers import ClaudeCodeHelpers
 from twicc.providers.compute_base import BaseSessionCompute, ToolResultUpdate
 from twicc.providers.sessions_watcher import (
@@ -30,6 +34,7 @@ from twicc.providers.sessions_watcher import (
     ParsedSessionFile,
     broadcast_message,
     get_project_by_id,
+    get_session_by_id,
 )
 
 logger = logging.getLogger(__name__)
@@ -109,13 +114,73 @@ class ClaudeCodeSessionsWatcher(BaseSessionsWatcher):
         change_type: Change,
         channel_layer,
     ) -> bool:
-        """Handle direct children of :attr:`projects_dir` as project dirs."""
+        """Handle workflow run files and project directories.
+
+        Two non-``.jsonl`` patterns the base loop would otherwise skip:
+
+        - ``<project>/<session>/workflows/wf_*.json`` — a workflow run
+          artifact. Its appearance latches the owning session's
+          ``has_workflows`` flag (one-way; deletions are ignored).
+        - direct children of :attr:`projects_dir` — project directories,
+          whose creation/deletion refreshes the project ``stale`` flag.
+        """
+        # Workflow run file: a cheap path-shape check (no I/O) runs on every
+        # event, so keep it first and bail fast for the overwhelmingly common
+        # ``.jsonl`` append. Deletions never reset the flag.
+        if change_type != Change.deleted:
+            workflow_session_id = self._workflow_json_session_id(path)
+            if workflow_session_id is not None:
+                await self._latch_session_workflows(workflow_session_id, channel_layer)
+                return True
+
+        # Direct children of projects_dir are project dirs.
         if path.parent != self.projects_dir:
             return False
         if not (path.is_dir() or change_type == Change.deleted):
             return False
         await self._sync_project_and_broadcast(path, channel_layer)
         return True
+
+    def _workflow_json_session_id(self, path: Path) -> str | None:
+        """Owning session id if ``path`` is a workflow run file.
+
+        Matches ``<project_id>/<session_id>/workflows/wf_*.json`` relative to
+        :attr:`projects_dir` — a ``wf_*.json`` directly at the root of a
+        top-level session's ``workflows/`` folder. Returns ``None`` for
+        anything else (including nested paths like ``workflows/scripts/*`` or
+        ``subagents/workflows/*``, which have a different depth). Pure path
+        inspection, no filesystem access.
+        """
+        try:
+            parts = path.relative_to(self.projects_dir).parts
+        except ValueError:
+            return None
+        if (
+            len(parts) == 4
+            and parts[2] == "workflows"
+            and parts[3].startswith(WORKFLOW_FILE_PREFIX)
+            and parts[3].endswith(WORKFLOW_FILE_SUFFIX)
+        ):
+            return parts[1]
+        return None
+
+    async def _latch_session_workflows(self, session_id: str, channel_layer) -> None:
+        """Set ``has_workflows=True`` on a session and broadcast the change.
+
+        No-op when the session is unknown (the row isn't synced yet — the
+        background compute's filesystem probe backfills it on the next boot)
+        or already latched. One-way: never resets the flag.
+        """
+        session = await get_session_by_id(session_id)
+        if session is None or session.has_workflows:
+            return
+        session.has_workflows = True
+        await sync_to_async(session.save)(update_fields=["has_workflows"])
+        if not session.hidden:
+            await broadcast_message(channel_layer, {
+                "type": "session_updated",
+                "session": serialize_session(session),
+            })
 
     async def _sync_project_and_broadcast(
         self,

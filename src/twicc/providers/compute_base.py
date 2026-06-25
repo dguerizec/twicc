@@ -2057,6 +2057,23 @@ class BaseSessionCompute:
     # Batch orchestration — concrete in later steps
     # ------------------------------------------------------------------
 
+    def extra_session_fields(self, session: Session) -> dict:  # noqa: ARG002
+        """Provider hook: filesystem-derived session-level fields.
+
+        Merged verbatim into the ``session_fields`` of the
+        ``session_complete`` payload by :meth:`compute_session_metadata`,
+        so the keys returned here are written by
+        :meth:`apply_session_complete` like any other session field.
+
+        Runs in the background-compute worker process (it may touch the
+        filesystem). The default returns an empty dict — providers that
+        derive nothing from disk inherit it unchanged. Implementations
+        should emit a key ONLY when they want it written: an omitted key
+        is left untouched on the row, which keeps monotonic flags (e.g.
+        Claude Code's ``has_workflows``) from being reset on a recompute.
+        """
+        return {}
+
     def compute_session_metadata(self, session_id: str, result_queue, run_id: int) -> None:
         """
         Compute metadata for every item in a session and push the result on ``result_queue``.
@@ -2459,6 +2476,12 @@ class BaseSessionCompute:
             if cwd_git:
                 last_resolved_git_directory, last_resolved_git_branch = cwd_git
 
+        # Provider-specific filesystem-derived session fields merged into
+        # ``session_fields`` below (e.g. Claude Code's ``has_workflows``). The
+        # default hook returns ``{}``; providers emit a key only when they want
+        # it written, so a recompute never clobbers a value they choose to omit.
+        extra_session_fields = self.extra_session_fields(session)
+
         result_queue.put(orjson.dumps({
             'type': 'session_complete',
             'provider': self.provider.value,
@@ -2515,6 +2538,9 @@ class BaseSessionCompute:
                     if session.mtime
                     else None
                 ),
+                # Provider-specific filesystem-derived fields (Claude Code:
+                # ``has_workflows``). Empty for providers without the hook.
+                **extra_session_fields,
             },
             'titles': session_titles,
             'project_directory': project_directory,
