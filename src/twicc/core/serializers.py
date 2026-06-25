@@ -139,6 +139,8 @@ def serialize_session(session):
         "archived": session.archived,  # Whether the session is archived
         "pinned": session.pinned,  # Whether the session is pinned
         "layout": session.layout,  # Per-session dockable-layout intention (UI state; {} = single pane)
+        "tasks": session.tasks,  # Latest task/todo/plan snapshot (common shape; {} = none). Not consumed by the UI yet
+
         "hybrid": session.hybrid,  # Hybrid CLI mode (one-way, see models.Session.hybrid)
         # Closed AgentSettings bundle (cross-provider). Fields listed in
         # ``AGENT_SETTINGS_HIDDEN_FROM_FRONTEND`` are filtered out so they

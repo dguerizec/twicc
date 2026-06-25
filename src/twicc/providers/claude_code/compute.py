@@ -368,6 +368,72 @@ def _iter_task_tool_use_blocks(parsed_json: dict):
             yield block
 
 
+# Legacy task tracking: older Claude Code sessions use the ``TodoWrite`` tool
+# (a full-list replacement) rather than the incremental ``Task*`` tools. Only
+# the frontend renders it; the backend keeps no state for it.
+_TODO_WRITE_TOOL_NAME = 'TodoWrite'
+
+
+def _normalize_todos(todos) -> list[dict] | None:
+    """Normalise a ``TodoWrite.todos`` array to the cross-provider task shape.
+
+    All-or-nothing (mirrors the frontend ``isValidTodos``): every entry must
+    carry a string ``status`` plus at least one of ``content`` / ``activeForm``
+    — a single bad entry invalidates the whole list (``None``). The array is
+    already in the common shape, so this only validates and drops extra keys.
+    """
+    if not isinstance(todos, list) or not todos:
+        return None
+    normalized: list[dict] = []
+    for todo in todos:
+        if not isinstance(todo, dict):
+            return None
+        status = todo.get('status')
+        content = todo.get('content')
+        active_form = todo.get('activeForm')
+        if not isinstance(status, str):
+            return None
+        if not isinstance(content, str) and not isinstance(active_form, str):
+            return None
+        item: dict = {'status': status}
+        if isinstance(content, str):
+            item['content'] = content
+        if isinstance(active_form, str):
+            item['activeForm'] = active_form
+        normalized.append(item)
+    return normalized
+
+
+def _tasks_data_to_todos(tasks_data) -> list[dict] | None:
+    """Map a spliced ``twiccTasksData`` snapshot to the common task shape.
+
+    Mirrors the frontend ``tasksDataToTodos``: project each task's ``subject``
+    onto ``content`` (and pass ``activeForm`` through), skipping malformed
+    entries individually (not all-or-nothing). Returns ``None`` when nothing
+    usable remains.
+    """
+    if not isinstance(tasks_data, list):
+        return None
+    normalized: list[dict] = []
+    for task in tasks_data:
+        if not isinstance(task, dict):
+            continue
+        status = task.get('status')
+        if not isinstance(status, str):
+            continue
+        content = task.get('subject')
+        active_form = task.get('activeForm')
+        if not isinstance(content, str) and not isinstance(active_form, str):
+            continue
+        item: dict = {'status': status}
+        if isinstance(content, str):
+            item['content'] = content
+        if isinstance(active_form, str):
+            item['activeForm'] = active_form
+        normalized.append(item)
+    return normalized or None
+
+
 # =============================================================================
 # Live Sync — watcher entry point
 # =============================================================================
@@ -653,6 +719,44 @@ class ClaudeCodeSessionCompute(BaseSessionCompute):
             mutated = True
 
         return mutated
+
+    def extract_tasks_payload(self, parsed_json: dict) -> dict | None:
+        """Latest task/todo state on an assistant line, in the common shape.
+
+        Two sources, both already materialised on the line by the time this
+        runs (after :meth:`_transform_inline_provider`):
+
+          * the incremental ``Task*`` tools — each enriched block carries a
+            full ``twiccTasksData`` snapshot (see
+            :meth:`_enrich_task_tool_uses`), mapped via :func:`_tasks_data_to_todos`;
+          * the legacy ``TodoWrite`` tool — ``input.todos`` is already a full
+            list, validated via :func:`_normalize_todos`.
+
+        A single assistant message rarely mixes both; we walk the blocks in
+        document order and keep the last task-bearing one, so the result is the
+        message's final state. Returns ``None`` for non-assistant lines or
+        lines without a valid task block.
+        """
+        content = get_message_content_list(parsed_json, 'assistant')
+        if content is None:
+            return None
+        items: list[dict] | None = None
+        source: str | None = None
+        for block in content:
+            if not isinstance(block, dict) or block.get('type') != 'tool_use':
+                continue
+            name = block.get('name')
+            if name in _TASK_TOOL_NAMES:
+                snapshot = _tasks_data_to_todos(block.get('twiccTasksData'))
+                if snapshot is not None:
+                    items, source = snapshot, name
+            elif name == _TODO_WRITE_TOOL_NAME:
+                todos = _normalize_todos((block.get('input') or {}).get('todos'))
+                if todos is not None:
+                    items, source = todos, _TODO_WRITE_TOOL_NAME
+        if items is None:
+            return None
+        return {'source': source, 'items': items, 'explanation': None}
 
     def _substitute_screenshots_in_content(
         self,

@@ -465,6 +465,19 @@ class Session(models.Model):
     # frontend (debounced ``PATCH /api/projects/<id>/sessions/<id>/``). Excludes the
     # transient ``maximized`` view state, which is never persisted.
     layout = models.JSONField(default=dict, blank=True)
+    # Latest complete task/todo/plan snapshot for the session, in the
+    # cross-provider common shape, refreshed by the compute pipeline on every
+    # task-bearing JSONL line (Claude Code ``TodoWrite`` / ``Task*``, Codex
+    # ``update_plan``). ``{}`` means no task state was ever seen. Every
+    # task-bearing line carries the FULL list — a full replacement for
+    # ``TodoWrite`` / ``update_plan``, or a full ``twiccTasksData`` snapshot
+    # for Claude's incremental ``Task*`` tools — so the latest such line is
+    # the complete current state. Shape: ``{provider, source, line,
+    # updated_at, explanation, items: [{status, content?, activeForm?}]}``.
+    # Written by both compute paths (watcher live sync + background recompute)
+    # and synced to the frontend in ``serialize_session`` like ``layout``.
+    # Not consumed by the UI yet — stored for future use.
+    tasks = models.JSONField(default=dict, blank=True)
     # TwiCC system-prompt addendum frozen at session creation time. Composed by
     # ``core.services.session_creation`` and stashed via
     # ``pending_session_attributes``; the watcher copies it here when it

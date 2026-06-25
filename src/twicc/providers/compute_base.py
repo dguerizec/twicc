@@ -886,6 +886,48 @@ class BaseSessionCompute:
         """Determine the :class:`ItemKind` for a parsed JSONL line, or ``None``."""
         raise NotImplementedError
 
+    def extract_tasks_payload(self, parsed_json: dict) -> dict | None:
+        """Return the task/todo/plan state carried by this JSONL line, in the
+        cross-provider common shape, or ``None`` when the line carries none.
+
+        Returned payload (provider-agnostic core; the caller wraps it with
+        ``provider`` / ``line`` / ``updated_at`` via
+        :meth:`build_tasks_snapshot`)::
+
+            {"source": <tool name>,
+             "items": [{"status": str, "content"?: str, "activeForm"?: str}, ...],
+             "explanation": <str | None>}
+
+        Every task-bearing line carries the FULL list (a full replacement for
+        Claude ``TodoWrite`` / Codex ``update_plan``, or a full snapshot for
+        Claude's incremental ``Task*`` tools), so the caller keeps the last
+        non-``None`` result as the session's current complete state. Called on
+        every line in both compute paths, after ``transform_inline`` (so Claude
+        Code's ``twiccTasksData`` enrichment is already present).
+
+        Default: the provider has no task model — returns ``None``.
+        """
+        return None
+
+    def build_tasks_snapshot(
+        self, parsed_json: dict, *, line_num: int, timestamp: datetime | None
+    ) -> dict | None:
+        """Wrap :meth:`extract_tasks_payload` with the storage envelope used by
+        :attr:`Session.tasks` (``provider`` + ``line`` + ``updated_at`` meta).
+
+        Returns ``None`` when the line carries no task/plan state, so callers
+        keep the previous snapshot untouched.
+        """
+        payload = self.extract_tasks_payload(parsed_json)
+        if payload is None:
+            return None
+        return {
+            'provider': self.provider.value,
+            'line': line_num,
+            'updated_at': timestamp.isoformat() if timestamp else None,
+            **payload,
+        }
+
     def compute_item_display_level(
         self, parsed_json: dict, kind: ItemKind | None
     ) -> int:
@@ -2126,6 +2168,9 @@ class BaseSessionCompute:
         last_context_max: int | None = None
         last_resolved_git_directory: str | None = None
         last_resolved_git_branch: str | None = None
+        # Latest task/todo/plan snapshot across the whole session (this full
+        # recompute is authoritative — it resets stale state to {}).
+        last_tasks_snapshot: dict | None = None
         found_compact_summary = False
         agent_tool_result_counts: dict[str, tuple[int, datetime | None]] = {}
         agent_stopped_list: list[dict] = []
@@ -2194,6 +2239,13 @@ class BaseSessionCompute:
                 last_updated_at = item.timestamp
             if item.timestamp is not None and self.is_session_start_marker(parsed):
                 last_started_at = item.timestamp
+
+            # Refresh the running task/todo/plan snapshot (keep last non-None).
+            tasks_snapshot = self.build_tasks_snapshot(
+                parsed, line_num=item.line_num, timestamp=item.timestamp,
+            )
+            if tasks_snapshot is not None:
+                last_tasks_snapshot = tasks_snapshot
 
             # Extract runtime environment fields
             runtime = self.extract_runtime_fields(parsed)
@@ -2447,6 +2499,9 @@ class BaseSessionCompute:
                 # key — otherwise the bulk update would clobber the
                 # user-set value coming from the agent settings dialog.
                 **({'context_max': last_context_max} if last_context_max is not None else {}),
+                # Full recompute is authoritative for the whole file: reset to
+                # {} when the session carries no task/plan state at all.
+                'tasks': last_tasks_snapshot if last_tasks_snapshot is not None else {},
                 'compacted': found_compact_summary,
                 'created_at': first_timestamp.isoformat() if first_timestamp else None,
                 'last_started_at': last_started_at.isoformat() if last_started_at else None,
@@ -2792,6 +2847,9 @@ class BaseSessionCompute:
         last_model: str | None = None
         last_slug: str | None = None
         last_context_max: int | None = None
+        # Latest task/todo/plan snapshot seen in this batch of new lines
+        # (None = no task line here, keep the stored Session.tasks untouched).
+        last_tasks_snapshot: dict | None = None
 
         # Updates to broadcast after processing
         agent_link_updates: list[AgentLinkUpdate] = []
@@ -2888,6 +2946,13 @@ class BaseSessionCompute:
             # Track compact summary for session.compacted flag
             if item.kind == ItemKind.COMPACT_SUMMARY:
                 found_compact_summary = True
+
+            # Refresh the running task/todo/plan snapshot (keep last non-None).
+            tasks_snapshot = self.build_tasks_snapshot(
+                parsed, line_num=current_line_num, timestamp=item.timestamp,
+            )
+            if tasks_snapshot is not None:
+                last_tasks_snapshot = tasks_snapshot
 
             # Track lifecycle timestamps
             if item.timestamp is not None:
@@ -3169,12 +3234,18 @@ class BaseSessionCompute:
         if is_new_session and session.type == SessionType.SESSION and first_timestamp:
             affected_days.add(first_timestamp.date())
 
-        session.save(update_fields=[
+        session_update_fields = [
             "last_offset", "last_line", "mtime", "user_message_count", "context_usage",
             "self_cost", "subagents_cost", "total_cost", "cwd", "cwd_git_branch",
             "git_directory", "git_branch", "model", "slug", "created_at",
             "last_started_at", "last_updated_at", "last_new_content_at", "compacted",
-        ])
+        ]
+        # Persist a refreshed task snapshot only when this batch carried one, so
+        # a batch with no task line leaves the stored Session.tasks intact.
+        if last_tasks_snapshot is not None:
+            session.tasks = last_tasks_snapshot
+            session_update_fields.append("tasks")
+        session.save(update_fields=session_update_fields)
 
         # Recalculate activities after session.save (needs created_at in DB for session_count)
         from twicc.core.models import PeriodicActivity

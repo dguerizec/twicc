@@ -579,6 +579,34 @@ def _extract_write_stdin_exec_command_id(parsed_json: dict) -> int | None:
     return sid if isinstance(sid, int) else None
 
 
+# Codex's ``update_plan`` is the moral equivalent of Claude Code's ``TodoWrite``
+# (a full-list replacement). Source spec: ``codex-rs/core/src/tools/handlers/
+# plan_spec.rs``.
+_UPDATE_PLAN_FUNCTION_NAME = "update_plan"
+
+
+def _plan_to_todos(plan) -> list[dict] | None:
+    """Map a Codex ``update_plan.plan`` array to the cross-provider task shape.
+
+    All-or-nothing (mirrors the frontend ``isValidPlan`` + ``planToTodos``):
+    every entry must carry a string ``step`` and a string ``status``; a single
+    bad entry invalidates the whole list (``None``). ``step`` maps to
+    ``content`` (Codex has no ``activeForm``).
+    """
+    if not isinstance(plan, list) or not plan:
+        return None
+    normalized: list[dict] = []
+    for entry in plan:
+        if not isinstance(entry, dict):
+            return None
+        step = entry.get("step")
+        status = entry.get("status")
+        if not isinstance(step, str) or not isinstance(status, str):
+            return None
+        normalized.append({"content": step, "status": status})
+    return normalized
+
+
 def _event_msg_call_id(parsed_json: dict) -> str | None:
     """Return ``payload.call_id`` for a persisted Codex ``event_msg`` line.
 
@@ -1322,6 +1350,40 @@ class CodexSessionCompute(BaseSessionCompute):
             return None
         payload["message"] = new_message
         return orjson.dumps(parsed_json).decode("utf-8")
+
+    def extract_tasks_payload(self, parsed_json: dict) -> dict | None:
+        """Latest plan state on a Codex ``update_plan`` line, in the common shape.
+
+        ``update_plan`` is a ``response_item`` ``function_call`` whose
+        ``arguments`` is a JSON-encoded string ``{plan: [{step, status}, ...],
+        explanation?}`` — a full replacement each call. Returns ``None`` for any
+        other line or a malformed / empty plan.
+        """
+        if parsed_json.get("type") != _TYPE_RESPONSE_ITEM:
+            return None
+        payload = _payload(parsed_json)
+        if payload is None or payload.get("type") != "function_call":
+            return None
+        if payload.get("name") != _UPDATE_PLAN_FUNCTION_NAME:
+            return None
+        raw_args = payload.get("arguments")
+        if not isinstance(raw_args, str):
+            return None
+        try:
+            args = orjson.loads(raw_args)
+        except orjson.JSONDecodeError:
+            return None
+        if not isinstance(args, dict):
+            return None
+        items = _plan_to_todos(args.get("plan"))
+        if items is None:
+            return None
+        explanation = args.get("explanation")
+        return {
+            "source": _UPDATE_PLAN_FUNCTION_NAME,
+            "items": items,
+            "explanation": explanation if isinstance(explanation, str) else None,
+        }
 
     def compute_item_kind(self, parsed_json: dict) -> ItemKind | None:
         # NOTE: any change to this classification MUST bump

@@ -290,8 +290,8 @@ LOGGING = {
 # Bump the relevant constant when the corresponding provider's parsing/compute
 # rules change to trigger recomputation. ``None`` declares "no compute pipeline
 # yet" — sessions of that provider are reported up-to-date as-is.
-CLAUDE_CODE_COMPUTE_VERSION = 99
-CODEX_COMPUTE_VERSION = 29
+CLAUDE_CODE_COMPUTE_VERSION = 100
+CODEX_COMPUTE_VERSION = 30
 
 # Search index version
 # Bumped when the schema or document layout changes — forces a full
