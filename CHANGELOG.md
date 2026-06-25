@@ -10,6 +10,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Codex `view_image` tool** — dedicated display that shows the viewed image instead of a raw tool result.
 
+### Changed
+
+- **Image preview** — small images now open in a roomier view, so zooming in actually shows the detail.
+
 ## [1.9.2] - 2026-06-24
 
 ### Fixed

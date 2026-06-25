@@ -21,8 +21,8 @@ const emit = defineEmits(['remove', 'close'])
 
 const dialogRef = ref(null)
 const currentIndex = ref(0)
-const imageRef = ref(null)
-const { reset: resetZoom } = usePanZoom(imageRef)
+const panzoomRef = ref(null)
+const { reset: resetZoom } = usePanZoom(panzoomRef)
 
 watch(currentIndex, () => {
     resetZoom()
@@ -182,7 +182,7 @@ defineExpose({ open, close })
     <wa-dialog
         ref="dialogRef"
         :label="dialogTitle"
-        class="media-preview-dialog"
+        :class="['media-preview-dialog', { 'is-image': currentItem?.type === 'image' }]"
         light-dismiss
         @wa-hide="onWaHide"
     >
@@ -201,13 +201,26 @@ defineExpose({ open, close })
             <AppTooltip :for="prevButtonId">Previous (Left arrow)</AppTooltip>
 
             <!-- Image preview -->
-            <img
+            <!--
+              Panzoom is attached to this wrapper (not the <img>) so its element
+              fills the parent stage at origin (0,0). zoomWithWheel computes its
+              focal point assuming the panzoomed element's box coincides with the
+              parent's; a small <img> centered directly by flex sits offset inside
+              the large stage, which breaks the focal math (zoom stops tracking
+              the cursor). The wrapper rides the transform while the <img> stays
+              centered, at natural size, inside it.
+            -->
+            <div
                 v-if="currentItem?.type === 'image'"
-                ref="imageRef"
-                :src="currentItem.src"
-                :alt="currentItem.name || 'Image'"
-                class="preview-image"
-            />
+                ref="panzoomRef"
+                class="preview-image-stage"
+            >
+                <img
+                    :src="currentItem.src"
+                    :alt="currentItem.name || 'Image'"
+                    class="preview-image"
+                />
+            </div>
 
             <!-- Text preview -->
             <pre
@@ -269,16 +282,28 @@ defineExpose({ open, close })
 <style scoped>
 /*
  * Dialog sizing strategy:
- * - The dialog panel uses fit-content so it wraps tightly around the image.
- * - The wa-dialog's native .dialog element already has
- *   max-width: calc(100% - spacing) and max-height: calc(100% - spacing),
- *   so we don't need to set our own viewport constraints on the panel.
- * - The image constrains itself to the available space inside the dialog
- *   using max-width/max-height with 100%.
- * - The preview-content container uses overflow:hidden to clip zoomed images.
+ * - For text/PDF previews the panel uses fit-content so it wraps tightly
+ *   around the content.
+ * - For images (.is-image) the preview-content becomes a large, fixed "stage"
+ *   sized to a generous fraction of the viewport, decoupled from the image's
+ *   natural size. This is what makes zoom usable on small images: a tiny image
+ *   no longer collapses the dialog to its own size, so the zoomed/panned result
+ *   has room to be displayed instead of being clipped to a few pixels.
+ * - Inside that stage the image stays at its natural size (pixel-perfect, never
+ *   upscaled), only shrinking via max-width/max-height: 100% when larger than
+ *   the stage. It is centered, and zoom (@panzoom) grows it into the surrounding
+ *   space; overflow:hidden clips whatever spills past the stage edges.
+ * - The wa-dialog's native .dialog element already caps itself at
+ *   max-width/max-height: calc(100% - spacing), so the stage can never overflow
+ *   the viewport even on small screens.
  */
 .media-preview-dialog {
     --width: fit-content;
+}
+
+.media-preview-dialog.is-image .preview-content {
+    width: min(90vw, 1400px);
+    height: min(80dvh, 920px);
 }
 
 .media-preview-dialog::part(header) {
@@ -303,10 +328,23 @@ defineExpose({ open, close })
     overflow: hidden;
 }
 
+/*
+ * Panzoom target: fills the stage so the wheel-zoom focal point stays aligned
+ * with the cursor (see the template comment). The <img> is centered inside it
+ * and keeps its natural size.
+ */
+.preview-image-stage {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
 .preview-image {
     display: block;
     max-width: 100%;
-    max-height: calc(90dvh - 100px);
+    max-height: 100%;
     object-fit: contain;
     touch-action: none;
 }
