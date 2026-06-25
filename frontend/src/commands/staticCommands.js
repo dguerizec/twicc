@@ -429,7 +429,7 @@ export function initStaticCommands(router) {
     const DISPLAY_MODE_LABELS = {
         [DISPLAY_MODE.CONVERSATION]: 'Conversation',
         [DISPLAY_MODE.SIMPLIFIED]: 'Simplified',
-        [DISPLAY_MODE.NORMAL]: 'Normal',
+        [DISPLAY_MODE.NORMAL]: 'Detailed',
         [DISPLAY_MODE.DEBUG]: 'Debug',
     }
 
