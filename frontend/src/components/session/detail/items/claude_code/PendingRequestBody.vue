@@ -21,7 +21,7 @@ import AppTooltip from '../../../../ui/AppTooltip.vue'
 import { getLanguageFromPath } from '../../../../../utils/languages'
 import { canStealFocus } from '../../../../../utils/focusGuard'
 
-// Per-tool overrides for JsonHumanView display types.
+// Per-tool overrides for JsonHumanView (display type or visibility).
 // Only keys that need an override (not auto-detected) are listed.
 // Language is added dynamically by toolOverrides based on the file path in tool input.
 const TOOL_OVERRIDES_BASE = {
@@ -37,6 +37,15 @@ const TOOL_OVERRIDES_BASE = {
     },
     NotebookEdit: {
         new_source: { valueType: 'string-code' },
+    },
+    // ExitPlanMode: the CLI injects ``planFilePath`` (the internal plan-file
+    // location) into the tool input alongside ``plan``. It's an implementation
+    // detail the user has no reason to see or edit — and editing it has no
+    // effect anyway (the backend plan-file write reads the *original* path).
+    // Hide it so only the plan content is shown and, in "Approve with changes",
+    // is the only editable field.
+    ExitPlanMode: {
+        planFilePath: { hidden: true },
     },
 }
 
