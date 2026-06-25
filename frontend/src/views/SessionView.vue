@@ -20,6 +20,7 @@ import TerminalPanel from '../components/terminal/TerminalPanel.vue'
 import OrchestrationPanel from '../components/orchestration/OrchestrationPanel.vue'
 import PlanPane from '../components/plan/PlanPane.vue'
 import TaskPane from '../components/tasks/TaskPane.vue'
+import WorkflowsPane from '../components/workflows/WorkflowsPane.vue'
 import SessionLayout from '../components/session/layout/SessionLayout.vue'
 import TabPlacementMenu from '../components/session/layout/TabPlacementMenu.vue'
 import LayoutMenu from '../components/session/layout/LayoutMenu.vue'
@@ -378,6 +379,12 @@ const hasPlan = computed(() => !!session.value?.has_plan)
 // (``{}`` -> null) so presence is just truthiness.
 const hasTasks = computed(() => !!store.getSessionTasks(sessionId.value))
 
+// Whether the session has at least one Claude Code workflow run (a wf_*.json in
+// its <session_id>/workflows/ folder). Drives the Workflows tab's visibility.
+// Monotonic (one-way) on the backend: the flag never flips back to false once
+// set, so unlike Plan the tab never disappears once it has appeared.
+const hasWorkflows = computed(() => !!session.value?.has_workflows)
+
 // Code comments counts per tab
 const filesCommentsCount = computed(() =>
     codeCommentsStore.countBySource(projectId.value, sessionId.value, 'files')
@@ -431,6 +438,7 @@ const activeTabId = computed(() => {
     if (name === 'session-orchestration' || name === 'projects-session-orchestration') return 'orchestration'
     if (name === 'session-plan' || name === 'projects-session-plan') return 'plan'
     if (name === 'session-tasks' || name === 'projects-session-tasks') return 'tasks'
+    if (name === 'session-workflows' || name === 'projects-session-workflows') return 'workflows'
     return 'main'
 })
 
@@ -449,6 +457,7 @@ const TOOL_TABS = [
     { id: 'plan', label: 'Plan', icon: 'list-check', present: () => hasPlan.value, redirectReady: () => !!session.value },
     { id: 'artifacts', label: 'Artifacts', icon: 'shapes', present: () => hasArtifacts.value, redirectReady: () => !!session.value },
     { id: 'orchestration', label: 'Orchestration', icon: 'diagram-project', present: () => hasSpawnRoot.value, redirectReady: () => !!session.value },
+    { id: 'workflows', label: 'Workflows', icon: 'sitemap', present: () => hasWorkflows.value, redirectReady: () => !!session.value },
 ]
 function toolTabById(tabId) { return TOOL_TABS.find((t) => t.id === tabId) || null }
 // Non-tool tabs (main, agent-*) are never gated → treated as present.
@@ -546,7 +555,7 @@ function onTerminalNavigate({ termIndex, replace }) {
     navigateInTab('terminal', params, replace ? 'replace' : 'push')
 }
 
-const TOOL_TAB_IDS = ['files', 'artifacts', 'git', 'terminal', 'orchestration', 'plan', 'tasks']
+const TOOL_TAB_IDS = ['files', 'artifacts', 'git', 'terminal', 'orchestration', 'plan', 'tasks', 'workflows']
 
 // Keep the last granular URL visited for each tool tab so switching away and back
 // restores the previous state instead of resetting the panel to its base route.
@@ -555,11 +564,12 @@ const rememberedToolTabRoutes = {
     artifacts: null,
     git: null,
     terminal: null,
-    // Orchestration, Plan and Tasks have no granular sub-route; kept here so the
-    // generic tool-tab navigation in switchToTab treats them uniformly.
+    // Orchestration, Plan, Tasks and Workflows have no granular sub-route; kept
+    // here so the generic tool-tab navigation in switchToTab treats them uniformly.
     orchestration: null,
     plan: null,
     tasks: null,
+    workflows: null,
 }
 
 function getCurrentToolTabRouteParams(tabId) {
@@ -1165,10 +1175,10 @@ watch(activeTabId, (newTabId, oldTabId) => {
     if (oldTabId) pushTabHistory(oldTabId)
 })
 
-// Direct tab mapping: Alt+Shift+{1..8} → fixed tabs (subagents are skipped).
-// Tasks (5), Plan (6), Artifacts (7) and Orchestration (8) are conditional — the
-// handler no-ops when the tab is absent.
-const DIRECT_TAB_MAP = { 1: 'main', 2: 'files', 3: 'git', 4: 'terminal', 5: 'tasks', 6: 'plan', 7: 'artifacts', 8: 'orchestration' }
+// Direct tab mapping: Alt+Shift+{1..9} → fixed tabs (subagents are skipped).
+// Tasks (5), Plan (6), Artifacts (7), Orchestration (8) and Workflows (9) are
+// conditional — the handler no-ops when the tab is absent.
+const DIRECT_TAB_MAP = { 1: 'main', 2: 'files', 3: 'git', 4: 'terminal', 5: 'tasks', 6: 'plan', 7: 'artifacts', 8: 'orchestration', 9: 'workflows' }
 
 /**
  * Handle keyboard tab shortcut events dispatched from App.vue.
@@ -2014,6 +2024,11 @@ onBeforeUnmount(() => {
                 Orchestration
                 <TabPlacementMenu v-if="showCenterPlacementArrows" tab-id="orchestration" current="center" @place="(dest) => layout.place('orchestration', dest)" />
             </wa-tab>
+            <wa-tab v-if="isToolTabPresent('workflows') && showInCenter('workflows')" slot="nav" panel="workflows" @click="onCenterTabClick('workflows')">
+                <wa-icon :name="TAB_ICONS.workflows"></wa-icon>
+                Workflows
+                <TabPlacementMenu v-if="showCenterPlacementArrows" tab-id="workflows" current="center" @place="(dest) => layout.place('workflows', dest)" />
+            </wa-tab>
 
             <!-- Right-aligned nav cluster: [Layout menu ▾] [Maximize]. A real-box wrapper carries the
                  auto-margin (a wa-dropdown host is display:contents, so a margin on it is ignored).
@@ -2082,6 +2097,9 @@ onBeforeUnmount(() => {
             </wa-tab-panel>
             <wa-tab-panel v-if="isToolTabPresent('orchestration') && showInCenter('orchestration')" name="orchestration">
                 <div :ref="centerTargetSetters.orchestration" class="layout-center-target"></div>
+            </wa-tab-panel>
+            <wa-tab-panel v-if="isToolTabPresent('workflows') && showInCenter('workflows')" name="workflows">
+                <div :ref="centerTargetSetters.workflows" class="layout-center-target"></div>
             </wa-tab-panel>
         </wa-tab-group>
         </SessionLayout>
@@ -2220,6 +2238,15 @@ onBeforeUnmount(() => {
                         :session-id="session.id"
                         :project-id="session.project_id"
                         :active="isActive && isToolTabShown('orchestration')"
+                    />
+                </div>
+            </Teleport>
+
+            <Teleport v-if="isToolTabPresent('workflows')" :to="toolTarget('workflows')" :disabled="!toolTarget('workflows')">
+                <div class="layout-tool-wrap" v-show="layout.isToolPanelVisible('workflows')">
+                    <WorkflowsPane
+                        :session-id="session.id"
+                        :active="isActive && isToolTabShown('workflows')"
                     />
                 </div>
             </Teleport>

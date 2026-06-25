@@ -734,6 +734,30 @@ export function initStaticCommands(router) {
                 })
             },
         },
+        {
+            id: 'nav.tab.workflows',
+            label: 'Switch to Workflows Tab',
+            icon: 'sitemap',
+            category: 'navigation',
+            // Only sessions with at least one workflow run expose the tab
+            // (mirrors SessionView's `hasWorkflows`).
+            when: () => {
+                const sessionId = routeSessionId()
+                if (!sessionId) return false
+                return !!data.getSession(sessionId)?.has_workflows
+            },
+            action: () => {
+                const name = isAllProjectsMode() ? 'projects-session-workflows' : 'session-workflows'
+                router.push({
+                    name,
+                    params: {
+                        projectId: route.params.projectId,
+                        sessionId: route.params.sessionId,
+                    },
+                    query: route.query,
+                })
+            },
+        },
 
         // Project detail panel tabs
         {
