@@ -526,6 +526,25 @@ function onArtifactFilesChanged(paths) {
     artifactFlushTimer = setTimeout(flushArtifactChanges, 250)
 }
 
+/**
+ * Full live-refresh after a WebSocket reconnection. Unlike onArtifactFilesChanged
+ * (which knows exactly which files moved), a reconnect can have missed any number
+ * of changes during the outage, so we refresh the tree softly and reload the
+ * currently-displayed file / HTML preview unconditionally. No-op until the panel
+ * has been opened once (it fetches fresh on first open anyway).
+ */
+async function reloadAll() {
+    if (!started.value) return
+    await refreshTreeSoft()
+    const renderedRel = selectedFile.value
+    if (!renderedRel) return
+    if (filePaneRef.value?.isHtmlPreviewActive) {
+        filePaneRef.value.reloadHtmlPreview()
+    } else {
+        filePaneRef.value?.reload()
+    }
+}
+
 onBeforeUnmount(() => {
     if (artifactFlushTimer) clearTimeout(artifactFlushTimer)
 })
@@ -880,7 +899,7 @@ async function revealFile(absolutePath, { lineNum = null } = {}) {
     return !!found
 }
 
-defineExpose({ revealFile, setRootByPath, onArtifactFilesChanged })
+defineExpose({ revealFile, setRootByPath, onArtifactFilesChanged, reloadAll })
 </script>
 
 <template>

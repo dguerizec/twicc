@@ -692,6 +692,30 @@ export function initStaticCommands(router) {
                 })
             },
         },
+        {
+            id: 'nav.tab.plan',
+            label: 'Switch to Plan Tab',
+            icon: 'list-check',
+            category: 'navigation',
+            // Only sessions whose provider has a plan file on disk expose the
+            // tab (mirrors SessionView's `hasPlan`).
+            when: () => {
+                const sessionId = routeSessionId()
+                if (!sessionId) return false
+                return !!data.getSession(sessionId)?.has_plan
+            },
+            action: () => {
+                const name = isAllProjectsMode() ? 'projects-session-plan' : 'session-plan'
+                router.push({
+                    name,
+                    params: {
+                        projectId: route.params.projectId,
+                        sessionId: route.params.sessionId,
+                    },
+                    query: route.query,
+                })
+            },
+        },
 
         // Project detail panel tabs
         {

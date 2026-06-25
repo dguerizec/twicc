@@ -55,6 +55,7 @@ const routes = [
                     { path: 'git/:rootKey?/:commitRef?/:filePath?', name: 'session-git', component: { render: () => null } },
                     { path: 'terminal/:termIndex?', name: 'session-terminal', component: { render: () => null } },
                     { path: 'orchestration', name: 'session-orchestration', component: { render: () => null } },
+                    { path: 'plan', name: 'session-plan', component: { render: () => null } },
                 ]
             }
         ]
@@ -84,6 +85,7 @@ const routes = [
                     { path: 'git/:rootKey?/:commitRef?/:filePath?', name: 'projects-session-git', component: { render: () => null } },
                     { path: 'terminal/:termIndex?', name: 'projects-session-terminal', component: { render: () => null } },
                     { path: 'orchestration', name: 'projects-session-orchestration', component: { render: () => null } },
+                    { path: 'plan', name: 'projects-session-plan', component: { render: () => null } },
                 ]
             }
         ]

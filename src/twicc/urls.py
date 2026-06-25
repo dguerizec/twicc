@@ -20,6 +20,7 @@ urlpatterns = [
     # `bulk-archive` is consumed as a session_id and matched by session_by_id.
     path("api/sessions/bulk-archive/", views.bulk_archive_sessions),
     path("api/sessions/<str:session_id>/", views.session_by_id),
+    path("api/sessions/<str:session_id>/plan/", views.session_plan_content),
     path("api/search/", views.search_sessions),
     path("api/usage-history/", views.usage_history),
     path("api/external-notifications/test/", views.external_notifications_test),

@@ -45,6 +45,7 @@ from twicc.providers.claude_code.model_retirement_task import (
     stop_model_retirement_task,
 )
 from twicc.providers.claude_code.sessions_watcher import get_watcher
+from twicc.providers.claude_code.plans_watcher import get_claude_code_plans_watcher
 from twicc.providers.claude_code.commands_task import (
     start_commands_task,
     stop_commands_task,
@@ -143,6 +144,7 @@ class ClaudeCodeOrchestrator(BaseOrchestrator):
         self._commands_task: asyncio.Task | None = None
         self._original_file_cache_task: asyncio.Task | None = None
         self._retirement_task: asyncio.Task | None = None
+        self._plans_watcher_task: asyncio.Task | None = None
 
         # Tasks started by the internal orchestrator coroutine (may stay None
         # if shutdown is requested before their prerequisites complete).
@@ -188,6 +190,10 @@ class ClaudeCodeOrchestrator(BaseOrchestrator):
         self._commands_task = self._create_task(start_commands_task())
         self._original_file_cache_task = self._create_task(start_original_file_cache_cleanup())
         self._retirement_task = self._create_task(start_model_retirement_task())
+        # Plan files watcher — powers the session view's Plan tab. Filesystem
+        # only (like the artifacts watcher), so it starts immediately with no
+        # dependency on the initial JSONL sync or background compute.
+        self._plans_watcher_task = self._create_task(get_claude_code_plans_watcher().start())
 
     async def shutdown(self) -> None:
         """Stop all Claude Code tasks in dependency-safe order."""
@@ -255,6 +261,12 @@ class ClaudeCodeOrchestrator(BaseOrchestrator):
             await _cancel_task(self._watcher_task, "Watcher")
         else:
             logger.info("Watcher was not started, skipping")
+
+        # Plans watcher (independent of the JSONL watcher above)
+        if self._plans_watcher_task is not None:
+            logger.info("Stopping plans watcher...")
+            get_claude_code_plans_watcher().stop()
+            await _cancel_task(self._plans_watcher_task, "Plans watcher")
 
         # Background compute (may not have started yet)
         if self._compute_task is not None:

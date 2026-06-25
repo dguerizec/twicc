@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- **Plan tab** — a Claude session with a plan now shows it in a dedicated, read-only tab.
 - **Codex `view_image` tool** — dedicated display that shows the viewed image instead of a raw tool result.
 
 ### Changed

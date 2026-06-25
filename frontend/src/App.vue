@@ -161,10 +161,10 @@ const TRIPLE_ESCAPE_COOLDOWN_MS = 1000  // after a trigger, ignore Escape for th
 let escapeTimestamps = []  // rolling window of recent Escape presses
 let lastTripleEscapeAt = 0
 
-// All session route names (for tab keyboard shortcuts: Alt+Shift+{1-6, ←, →, ↑})
+// All session route names (for tab keyboard shortcuts: Alt+Shift+{1-7, ←, →, ↑})
 const SESSION_ROUTES = new Set([
-    'session', 'session-subagent', 'session-files', 'session-artifacts', 'session-git', 'session-terminal', 'session-orchestration',
-    'projects-session', 'projects-session-subagent', 'projects-session-files', 'projects-session-artifacts', 'projects-session-git', 'projects-session-terminal', 'projects-session-orchestration',
+    'session', 'session-subagent', 'session-files', 'session-artifacts', 'session-git', 'session-terminal', 'session-orchestration', 'session-plan',
+    'projects-session', 'projects-session-subagent', 'projects-session-files', 'projects-session-artifacts', 'projects-session-git', 'projects-session-terminal', 'projects-session-orchestration', 'projects-session-plan',
 ])
 
 // Project detail route names (for tab keyboard shortcuts: Alt+Shift+{1-4, ←, →, ↑})
@@ -288,14 +288,14 @@ function handleGlobalKeydown(e) {
             window.dispatchEvent(new CustomEvent('twicc:terminal-tab-shortcut', { detail: tabAction }))
         }
     }
-    // Alt+Shift+{1-6, ←, →, ↑, ↓}: tab navigation within a session or project detail panel.
+    // Alt+Shift+{1-7, ←, →, ↑, ↓}: tab navigation within a session or project detail panel.
     // Dispatches a custom event handled by the active SessionView or ProjectDetailPanel instance.
-    // (Indices 5/6 are the session-only Artifacts/Orchestration tabs; project-detail panels ignore them.)
+    // (Indices 5/6/7 are the session-only Artifacts/Orchestration/Plan tabs; project-detail panels ignore them.)
     if (e.altKey && e.shiftKey && !e.ctrlKey && !e.metaKey && (SESSION_ROUTES.has(route.name) || PROJECT_DETAIL_ROUTES.has(route.name))) {
         let tabAction = null
         // Use e.code (physical key) for digits — e.key depends on keyboard layout
         // and modifiers (e.g. French AZERTY: Alt+Shift+number row produces unexpected e.key values).
-        const digitMatch = e.code.match(/^(?:Digit|Numpad)([1-6])$/)
+        const digitMatch = e.code.match(/^(?:Digit|Numpad)([1-7])$/)
         if (digitMatch) {
             tabAction = { type: 'direct', index: parseInt(digitMatch[1]) }
         } else if (e.key === 'ArrowLeft') {

@@ -188,6 +188,34 @@ async def session_by_id(request, session_id):
     return JsonResponse(serialize_session(session))
 
 
+async def session_plan_content(request, session_id):
+    """GET /api/sessions/<session_id>/plan/ — the session's plan markdown.
+
+    The plan file lives outside the project / artifacts roots that the generic
+    ``file-content`` endpoint confines reads to (Claude Code stores it under
+    ``~/.claude/plans/<slug>.md``), so the path is resolved server-side from the
+    session's provider — the client passes only a session id, never a filesystem
+    path. The provider helper returns ``None`` for providers with no plan concept
+    (or a session with no slug), and a missing file 404s, so the frontend only
+    fetches this when ``has_plan`` is true.
+    """
+    try:
+        session = await Session.objects.aget(id=session_id)
+    except Session.DoesNotExist:
+        raise Http404("Session not found")
+
+    plan_path = get_provider_helpers(session.provider).resolve_plan_path(session)
+    if plan_path is None:
+        raise Http404("No plan for this session")
+
+    try:
+        content = await asyncio.to_thread(plan_path.read_text, encoding="utf-8")
+    except OSError:
+        raise Http404("Plan file not found")
+
+    return JsonResponse({"content": content})
+
+
 async def project_list(request):
     """GET /api/projects/ - List all projects.
     POST /api/projects/ - Create a new project from a directory path.

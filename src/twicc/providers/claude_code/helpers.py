@@ -32,6 +32,7 @@ from twicc.providers.helpers import (
 
 from .compute import extract_command, get_message_content, get_message_content_list, strip_markdown
 from .constants import (
+    PLANS_DIR,
     AGENT_SETTINGS_ALIASES as _AGENT_SETTINGS_ALIASES,
     AGENT_SETTINGS_CATEGORIES as _AGENT_SETTINGS_CATEGORIES,
     AGENT_SETTINGS_DESCRIPTIONS as _AGENT_SETTINGS_DESCRIPTIONS,
@@ -53,7 +54,7 @@ from .titles import protect_title, rename_session_in_jsonl
 __all__ = ["ClaudeCodeHelpers", "ClaudeCodeModelExtra"]
 
 if TYPE_CHECKING:
-    from twicc.core.models import SessionItem
+    from twicc.core.models import Session, SessionItem
 
 logger = logging.getLogger(__name__)
 
@@ -263,6 +264,33 @@ class ClaudeCodeHelpers(BaseProviderHelpers):
         triggers the background compute task to recompute their metadata.
         """
         return settings.CLAUDE_CODE_COMPUTE_VERSION
+
+    # ------------------------------------------------------------------
+    # Plans — detection for the session view's *Plan* tab.
+    # ------------------------------------------------------------------
+    def resolve_plan_path(self, session: Session) -> Path | None:
+        """``~/.claude/plans/<slug>.md``, or ``None`` when the session has no slug.
+
+        The slug (``Session.slug``) is the plan filename; a session without one
+        simply has no plan. Pure path resolution — existence is not checked here
+        (see :meth:`session_has_plan` / the plan-content endpoint).
+        """
+        if not session.slug:
+            return None
+        return PLANS_DIR / f"{session.slug}.md"
+
+    def session_has_plan(self, session: Session) -> bool:
+        """True when ``~/.claude/plans/<slug>.md`` currently exists.
+
+        O(1): reads the plans watcher's in-memory slug set. Outside the running
+        server (CLI, background compute) the watcher never started, so this is
+        False — acceptable, as the Plan tab is a live-server, web-UI concern.
+        """
+        if not session.slug:
+            return False
+        from twicc.providers.claude_code.plans_watcher import get_claude_code_plans_watcher
+
+        return get_claude_code_plans_watcher().has_slug(session.slug)
 
     def extract_family_and_version(
         self, model_id: str,

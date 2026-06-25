@@ -1,0 +1,182 @@
+"""Watcher for Claude Code plan files.
+
+Claude Code writes one markdown plan per session under
+``~/.claude/plans/<slug>.md`` (the slug is :attr:`Session.slug`). Their
+presence drives the session view's *Plan* tab. Unlike Artifacts, presence is
+**not** monotonic: deleting the plan file hides the tab again — by design (the
+frontend's absent-tab redirect handles an active Plan tab disappearing).
+
+The watcher keeps an in-memory ``set`` of plan slugs (file stems) currently
+present in the directory. ``serialize_session`` reads it in O(1) via the
+provider helper ``session_has_plan`` (``slug in set``). On every transition it
+broadcasts over the ``updates`` group so an already-open session view reveals
+or hides its Plan tab and an open Plan pane reloads:
+
+- ``plan_available`` — a plan file appeared (false->true)
+- ``plan_changed``   — an existing plan file's content changed
+- ``plan_gone``      — a plan file was deleted (true->false)
+
+Each broadcast carries the affected ``session_id``(s). The watcher resolves the
+file stem to sessions via :attr:`Session.slug` — the one place this provider
+watcher touches the ORM. Unlike :class:`twicc.artifacts_watcher.ArtifactsWatcher`
+(whose directory *is* the session id), the plan file is named by slug, so a
+pure-filesystem session mapping is impossible.
+
+This is the Claude Code *detection* half of an otherwise provider-agnostic Plan
+tab: a future provider plugs in its own watcher plus ``resolve_plan_path`` /
+``session_has_plan`` without touching the serializer or the frontend.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+from pathlib import Path
+
+from channels.layers import get_channel_layer
+from watchfiles import awatch
+
+from twicc.providers.claude_code.constants import PLANS_DIR
+
+logger = logging.getLogger(__name__)
+
+_PLAN_SUFFIX = ".md"
+
+
+class ClaudeCodePlansWatcher:
+    def __init__(self) -> None:
+        self.directory = Path(PLANS_DIR)
+        self._slugs: set[str] = set()
+        self._stop = asyncio.Event()
+
+    # ------------------------------------------------------------------
+    # Read API — used by ClaudeCodeHelpers.session_has_plan (sync, O(1)).
+    # ------------------------------------------------------------------
+    def has_slug(self, slug: str) -> bool:
+        return slug in self._slugs
+
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
+    async def start(self) -> None:
+        self.directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        # Reset state in case this is a hot-restart (the provider was toggled off
+        # then back on): ``stop()`` set the event and left the slug set populated.
+        # Clear both so awatch doesn't exit immediately and the boot scan rebuilds
+        # presence from disk (dropping plans deleted while the provider was off).
+        self._stop.clear()
+        self._slugs.clear()
+        # Start awatch FIRST so plans written during the boot scan are not
+        # missed, then take the initial snapshot.
+        watch_task = asyncio.ensure_future(self._watch_loop())
+        await asyncio.to_thread(self._scan_existing)
+        try:
+            await watch_task
+        except asyncio.CancelledError:
+            raise
+
+    def stop(self) -> None:
+        self._stop.set()
+
+    # ------------------------------------------------------------------
+    # Boot snapshot — populate the set, no broadcast (nobody is listening
+    # for a transition yet; the serializer carries the initial state).
+    # ------------------------------------------------------------------
+    def _scan_existing(self) -> None:
+        try:
+            entries = list(self.directory.iterdir())
+        except FileNotFoundError:
+            return
+        for entry in entries:
+            if entry.suffix == _PLAN_SUFFIX and entry.is_file():
+                self._slugs.add(entry.stem)
+        logger.info("[ClaudeCodePlansWatcher] boot snapshot: %d plan(s)", len(self._slugs))
+
+    # ------------------------------------------------------------------
+    # Watch loop
+    # ------------------------------------------------------------------
+    async def _watch_loop(self) -> None:
+        async for changes in awatch(self.directory, stop_event=self._stop):
+            # Collect the plan slugs touched this tick (only ``*.md`` files
+            # directly under the watched dir — the plans dir is flat).
+            touched: set[str] = set()
+            for _change_type, raw_path in changes:
+                slug = self._slug_for(raw_path)
+                if slug is not None:
+                    touched.add(slug)
+            for slug in touched:
+                await self._reconcile(slug)
+
+    def _slug_for(self, raw_path: str) -> str | None:
+        """Return the plan slug for a changed path, or ``None`` if irrelevant."""
+        p = Path(raw_path)
+        if p.suffix != _PLAN_SUFFIX:
+            return None
+        try:
+            rel = p.relative_to(self.directory)
+        except ValueError:
+            return None
+        if len(rel.parts) != 1:  # nested file — not a top-level plan
+            return None
+        return p.stem
+
+    async def _reconcile(self, slug: str) -> None:
+        """Re-stat the slug's file and broadcast the resulting transition."""
+        plan_file = self.directory / f"{slug}{_PLAN_SUFFIX}"
+        present = await asyncio.to_thread(plan_file.is_file)
+        was = slug in self._slugs
+        if present and not was:
+            self._slugs.add(slug)
+            logger.info("[ClaudeCodePlansWatcher] plan appeared: %s", slug)
+            await self._broadcast(slug, "plan_available")
+        elif not present and was:
+            self._slugs.discard(slug)
+            logger.info("[ClaudeCodePlansWatcher] plan removed: %s", slug)
+            await self._broadcast(slug, "plan_gone")
+        elif present and was:
+            await self._broadcast(slug, "plan_changed")
+        # not present and not was: transient flicker (e.g. an editor's temp
+        # file) — nothing to do.
+
+    # ------------------------------------------------------------------
+    # Broadcasts — resolve the slug to its session(s) and notify each.
+    # ------------------------------------------------------------------
+    async def _broadcast(self, slug: str, message_type: str) -> None:
+        channel_layer = get_channel_layer()
+        if channel_layer is None:
+            return
+        for session_id in await self._sessions_for_slug(slug):
+            await channel_layer.group_send(
+                "updates",
+                {
+                    "type": "broadcast",
+                    "data": {"type": message_type, "session_id": session_id},
+                },
+            )
+
+    @staticmethod
+    async def _sessions_for_slug(slug: str) -> list[str]:
+        from asgiref.sync import sync_to_async
+
+        from twicc.core.enums import Provider
+        from twicc.core.models import Session
+
+        @sync_to_async
+        def _query() -> list[str]:
+            return list(
+                Session.objects.filter(
+                    provider=Provider.CLAUDE_CODE.value, slug=slug
+                ).values_list("id", flat=True)
+            )
+
+        return await _query()
+
+
+_watcher_instance: ClaudeCodePlansWatcher | None = None
+
+
+def get_claude_code_plans_watcher() -> ClaudeCodePlansWatcher:
+    global _watcher_instance
+    if _watcher_instance is None:
+        _watcher_instance = ClaudeCodePlansWatcher()
+    return _watcher_instance

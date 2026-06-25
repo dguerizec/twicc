@@ -21,10 +21,10 @@ import { buildTabRouteName, buildSubagentRouteName, pickDefined } from './granul
 
 const SESSION_NAMES = new Set([
     'session', 'session-files', 'session-git', 'session-terminal',
-    'session-artifacts', 'session-orchestration', 'session-subagent',
+    'session-artifacts', 'session-orchestration', 'session-plan', 'session-subagent',
     'projects-session', 'projects-session-files', 'projects-session-git',
     'projects-session-terminal', 'projects-session-artifacts',
-    'projects-session-orchestration', 'projects-session-subagent',
+    'projects-session-orchestration', 'projects-session-plan', 'projects-session-subagent',
 ])
 const PROJECT_NAMES = new Set([
     'project', 'project-files', 'project-git', 'project-terminal', 'project-artifacts',

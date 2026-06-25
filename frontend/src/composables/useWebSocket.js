@@ -955,6 +955,37 @@ export function useWebSocket() {
                 }))
                 break
             }
+            case 'plan_available': {
+                // The provider's plans watcher saw the session's plan file
+                // appear. Flip has_plan on so an open session view reveals its
+                // Plan tab live. Ignored if the session isn't in the store yet —
+                // a later fetch carries has_plan via the serializer. NOT
+                // monotonic (see plan_gone).
+                const s = store.getSession(msg.session_id)
+                if (s && !s.has_plan) {
+                    store.updateSession({ ...s, has_plan: true })
+                }
+                break
+            }
+            case 'plan_gone': {
+                // The plan file was deleted — drop has_plan so the Plan tab
+                // disappears (the SessionView absent-tab redirect navigates away
+                // if it was active). Unlike artifacts, plan presence is two-way.
+                const s = store.getSession(msg.session_id)
+                if (s && s.has_plan) {
+                    store.updateSession({ ...s, has_plan: false })
+                }
+                break
+            }
+            case 'plan_changed': {
+                // The plan file's content changed. Forward to the matching
+                // PlanPane (which filters on its own session_id) so an open Plan
+                // tab live-refreshes.
+                window.dispatchEvent(new CustomEvent('twicc:plan-changed', {
+                    detail: { sessionId: msg.session_id },
+                }))
+                break
+            }
             case 'artifact_bookmarks_updated': {
                 // Full snapshot pushed on every WS connect (incl. reconnects):
                 // replace the whole set so changes missed while disconnected
@@ -1403,6 +1434,15 @@ export function useWebSocket() {
             const isReconnection = wasConnected && oldStatus === 'CLOSED'
             console.log(`WebSocket ${isReconnection ? 'reconnected' : 'connected'}, starting reconciliation...`)
             onReconnected(currentProjectId, currentSessionId)
+            // After a real reconnection, the reconciliation re-syncs session
+            // payloads (so presence flags like has_artifacts / has_plan are
+            // fresh), but the transient tool-pane content events
+            // (artifact_files_changed / plan_changed) emitted during the outage
+            // are gone. Signal open panes to refresh their content. Not on the
+            // first connect — panes load on mount, and there was no outage.
+            if (isReconnection) {
+                window.dispatchEvent(new CustomEvent('twicc:ws-reconnected'))
+            }
             wasConnected = true
         } else if (newStatus === 'CLOSED') {
             // Clear send function when disconnected

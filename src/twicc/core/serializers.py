@@ -157,6 +157,13 @@ def serialize_session(session):
         # ``artifacts_dir`` is only sent when present so list payloads stay lean.
         "has_artifacts": has_artifacts,
         "artifacts_dir": str(get_session_artifacts_dir(session.id)) if has_artifacts else None,
+        # Provider plan file (Claude Code: ``~/.claude/plans/<slug>.md``). The
+        # frontend shows a read-only Plan tab when ``has_plan`` is true and
+        # fetches the markdown from ``/api/sessions/<id>/plan/``. Provider-
+        # agnostic: ``session_has_plan`` is backed by each provider's plans
+        # watcher (O(1), no I/O here). NOT monotonic — flips both ways live via
+        # the ``plan_available`` / ``plan_gone`` WS messages.
+        "has_plan": provider_helpers.session_has_plan(session),
         # Hidden + spawned tree links (cf. hidden-sessions design spec). The
         # frontend never sees a hidden session via REST (filtered server
         # side); the CLI uses these fields when it explicitly opts into

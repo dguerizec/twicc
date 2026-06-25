@@ -52,6 +52,8 @@ class AgentSettingCategory(StrEnum):
     STARTUP = "startup"
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from twicc.core.models import Session, SessionItem
 
 
@@ -376,6 +378,32 @@ class BaseProviderHelpers:
         pipeline override this to return their settings constant.
         """
         return None
+
+    # ------------------------------------------------------------------
+    # Plans
+    # ------------------------------------------------------------------
+    # Detection seam for the session view's *Plan* tab. The serializer field
+    # ``has_plan`` and the whole frontend are provider-agnostic; each provider
+    # that has a plan concept implements these two methods (and ships a watcher
+    # that keeps ``session_has_plan`` live). The base returns "no plan".
+
+    def resolve_plan_path(self, session: Session) -> Path | None:
+        """Absolute path of the session's plan file, or ``None`` if it has none.
+
+        Pure path resolution — does not check existence. Read by the
+        ``/api/sessions/<id>/plan/`` endpoint to serve the markdown. The base
+        provider has no plan concept.
+        """
+        return None
+
+    def session_has_plan(self, session: Session) -> bool:
+        """Whether the session's plan file currently exists (O(1), no I/O).
+
+        Read by ``serialize_session`` for every session, so it must be cheap:
+        providers back it with their plans watcher's in-memory set rather than
+        a stat. The base provider has no plan concept.
+        """
+        return False
 
     # ------------------------------------------------------------------
     # Per-provider data files

@@ -18,6 +18,7 @@ import FilesPanel from '../components/files/FilesPanel.vue'
 import GitPanel from '../components/git/GitPanel.vue'
 import TerminalPanel from '../components/terminal/TerminalPanel.vue'
 import OrchestrationPanel from '../components/orchestration/OrchestrationPanel.vue'
+import PlanPane from '../components/plan/PlanPane.vue'
 import SessionLayout from '../components/session/layout/SessionLayout.vue'
 import TabPlacementMenu from '../components/session/layout/TabPlacementMenu.vue'
 import LayoutMenu from '../components/session/layout/LayoutMenu.vue'
@@ -69,6 +70,9 @@ const filesPanelRef = ref(null)
 // Reference to the Artifacts tab's FilesPanel (fixed root = session artifacts dir)
 const artifactsPanelRef = ref(null)
 
+// Reference to the Plan tab's pane (read-only plan markdown)
+const planPaneRef = ref(null)
+
 const gitPanelRef = ref(null)
 const terminalPanelRef = ref(null)
 
@@ -87,12 +91,19 @@ onMounted(() => {
     window.addEventListener('twicc:layout-shortcut', handleLayoutShortcut)
     // Listen for live artifact file changes (dispatched by useWebSocket)
     window.addEventListener('twicc:artifact-files-changed', handleArtifactFilesChanged)
+    // Listen for live plan content changes (dispatched by useWebSocket)
+    window.addEventListener('twicc:plan-changed', handlePlanChanged)
+    // Listen for WebSocket reconnections to refresh open tool panes whose live
+    // updates (artifact_files_changed / plan_changed) may have been missed.
+    window.addEventListener('twicc:ws-reconnected', handleWsReconnected)
 })
 
 onBeforeUnmount(() => {
     window.removeEventListener('twicc:tab-shortcut', handleTabShortcut)
     window.removeEventListener('twicc:layout-shortcut', handleLayoutShortcut)
     window.removeEventListener('twicc:artifact-files-changed', handleArtifactFilesChanged)
+    window.removeEventListener('twicc:plan-changed', handlePlanChanged)
+    window.removeEventListener('twicc:ws-reconnected', handleWsReconnected)
     cancelPaneFocus()
 })
 
@@ -105,6 +116,30 @@ onBeforeUnmount(() => {
 function handleArtifactFilesChanged(e) {
     if (e.detail?.sessionId !== sessionId.value || !isActive.value) return
     artifactsPanelRef.value?.onArtifactFilesChanged(e.detail.paths || [])
+}
+
+/**
+ * The plans watcher relayed a plan content change for some session. Reload this
+ * session's Plan pane when it's the matching, active session view (mirrors
+ * handleArtifactFilesChanged). Tab presence (has_plan) is handled separately via
+ * the session payload; this only refreshes the rendered markdown.
+ */
+function handlePlanChanged(e) {
+    if (e.detail?.sessionId !== sessionId.value || !isActive.value) return
+    planPaneRef.value?.reload()
+}
+
+/**
+ * The WebSocket reconnected: live tool-pane updates (artifact_files_changed /
+ * plan_changed) emitted during the outage are not replayed, so refresh the open
+ * Artifacts and Plan panes now. Presence flags (has_artifacts / has_plan) are
+ * already reconciled by the forced session reload in useReconciliation. Only the
+ * active session view acts (cached background instances refresh when reactivated).
+ */
+function handleWsReconnected() {
+    if (!isActive.value) return
+    artifactsPanelRef.value?.reloadAll()
+    planPaneRef.value?.reload()
 }
 
 onActivated(() => {
@@ -329,6 +364,12 @@ const hasGitRepo = computed(() =>
 // is a topology worth showing. Drives the Orchestration tab's visibility.
 const hasSpawnRoot = computed(() => !!session.value?.spawn_root)
 
+// Whether the session has a provider plan file on disk (Claude Code:
+// ~/.claude/plans/<slug>.md). Drives the read-only Plan tab's visibility.
+// Unlike artifacts, this is NOT monotonic — it flips back to false (and the tab
+// disappears) when the plan file is deleted, via the plan_gone WS message.
+const hasPlan = computed(() => !!session.value?.has_plan)
+
 // Code comments counts per tab
 const filesCommentsCount = computed(() =>
     codeCommentsStore.countBySource(projectId.value, sessionId.value, 'files')
@@ -380,6 +421,7 @@ const activeTabId = computed(() => {
     if (name === 'session-git' || name === 'projects-session-git') return 'git'
     if (name === 'session-terminal' || name === 'projects-session-terminal') return 'terminal'
     if (name === 'session-orchestration' || name === 'projects-session-orchestration') return 'orchestration'
+    if (name === 'session-plan' || name === 'projects-session-plan') return 'plan'
     return 'main'
 })
 
@@ -396,6 +438,7 @@ const TOOL_TABS = [
     { id: 'terminal', label: 'Terminal', icon: 'terminal', present: () => true },
     { id: 'artifacts', label: 'Artifacts', icon: 'shapes', present: () => hasArtifacts.value, redirectReady: () => !!session.value },
     { id: 'orchestration', label: 'Orchestration', icon: 'diagram-project', present: () => hasSpawnRoot.value, redirectReady: () => !!session.value },
+    { id: 'plan', label: 'Plan', icon: 'list-check', present: () => hasPlan.value, redirectReady: () => !!session.value },
 ]
 function toolTabById(tabId) { return TOOL_TABS.find((t) => t.id === tabId) || null }
 // Non-tool tabs (main, agent-*) are never gated → treated as present.
@@ -493,7 +536,7 @@ function onTerminalNavigate({ termIndex, replace }) {
     navigateInTab('terminal', params, replace ? 'replace' : 'push')
 }
 
-const TOOL_TAB_IDS = ['files', 'artifacts', 'git', 'terminal', 'orchestration']
+const TOOL_TAB_IDS = ['files', 'artifacts', 'git', 'terminal', 'orchestration', 'plan']
 
 // Keep the last granular URL visited for each tool tab so switching away and back
 // restores the previous state instead of resetting the panel to its base route.
@@ -502,9 +545,10 @@ const rememberedToolTabRoutes = {
     artifacts: null,
     git: null,
     terminal: null,
-    // Orchestration has no granular sub-route; kept here so the generic
-    // tool-tab navigation in switchToTab treats it uniformly.
+    // Orchestration and Plan have no granular sub-route; kept here so the
+    // generic tool-tab navigation in switchToTab treats them uniformly.
     orchestration: null,
+    plan: null,
 }
 
 function getCurrentToolTabRouteParams(tabId) {
@@ -1110,10 +1154,10 @@ watch(activeTabId, (newTabId, oldTabId) => {
     if (oldTabId) pushTabHistory(oldTabId)
 })
 
-// Direct tab mapping: Alt+Shift+{1..6} → fixed tabs (subagents are skipped).
-// Artifacts (5) and Orchestration (6) are conditional — the handler no-ops when
-// the tab is absent.
-const DIRECT_TAB_MAP = { 1: 'main', 2: 'files', 3: 'git', 4: 'terminal', 5: 'artifacts', 6: 'orchestration' }
+// Direct tab mapping: Alt+Shift+{1..7} → fixed tabs (subagents are skipped).
+// Artifacts (5), Orchestration (6) and Plan (7) are conditional — the handler
+// no-ops when the tab is absent.
+const DIRECT_TAB_MAP = { 1: 'main', 2: 'files', 3: 'git', 4: 'terminal', 5: 'artifacts', 6: 'orchestration', 7: 'plan' }
 
 /**
  * Handle keyboard tab shortcut events dispatched from App.vue.
@@ -1937,6 +1981,11 @@ onBeforeUnmount(() => {
                 Orchestration
                 <TabPlacementMenu v-if="showCenterPlacementArrows" tab-id="orchestration" current="center" @place="(dest) => layout.place('orchestration', dest)" />
             </wa-tab>
+            <wa-tab v-if="isToolTabPresent('plan') && showInCenter('plan')" slot="nav" panel="plan" @click="onCenterTabClick('plan')">
+                <wa-icon :name="TAB_ICONS.plan"></wa-icon>
+                Plan
+                <TabPlacementMenu v-if="showCenterPlacementArrows" tab-id="plan" current="center" @place="(dest) => layout.place('plan', dest)" />
+            </wa-tab>
 
             <!-- Right-aligned nav cluster: [Layout menu ▾] [Maximize]. A real-box wrapper carries the
                  auto-margin (a wa-dropdown host is display:contents, so a margin on it is ignored).
@@ -1996,6 +2045,9 @@ onBeforeUnmount(() => {
             </wa-tab-panel>
             <wa-tab-panel v-if="isToolTabPresent('orchestration') && showInCenter('orchestration')" name="orchestration">
                 <div :ref="centerTargetSetters.orchestration" class="layout-center-target"></div>
+            </wa-tab-panel>
+            <wa-tab-panel v-if="isToolTabPresent('plan') && showInCenter('plan')" name="plan">
+                <div :ref="centerTargetSetters.plan" class="layout-center-target"></div>
             </wa-tab-panel>
         </wa-tab-group>
         </SessionLayout>
@@ -2118,6 +2170,16 @@ onBeforeUnmount(() => {
                         :session-id="session.id"
                         :project-id="session.project_id"
                         :active="isActive && isToolTabShown('orchestration')"
+                    />
+                </div>
+            </Teleport>
+
+            <Teleport v-if="isToolTabPresent('plan')" :to="toolTarget('plan')" :disabled="!toolTarget('plan')">
+                <div class="layout-tool-wrap" v-show="layout.isToolPanelVisible('plan')">
+                    <PlanPane
+                        ref="planPaneRef"
+                        :session-id="session.id"
+                        :active="isActive && isToolTabShown('plan')"
                     />
                 </div>
             </Teleport>
