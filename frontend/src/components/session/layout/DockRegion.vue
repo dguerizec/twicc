@@ -115,11 +115,15 @@ function onEmptyBarDblClick(event) {
                     @place="(dest) => emit('place', t.id, dest)"
                 />
             </wa-tab>
+            <!-- Maximized cue: the restore button is the only exit, and the rest of the layout is gone —
+                 so it wears a loud brand-accent fill (not the plain min/max styling) to flag "you are
+                 maximized, click here to come back" against the otherwise-neutral bar. -->
             <wa-button
                 v-if="maximized"
                 slot="nav"
                 class="dock-winbtn dock-restore reduced-height"
-                appearance="plain"
+                variant="brand"
+                appearance="accent"
                 size="small"
                 title="Restore (Alt+Shift+Enter)"
                 aria-label="Restore"

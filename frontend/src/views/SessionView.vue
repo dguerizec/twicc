@@ -1994,10 +1994,13 @@ onBeforeUnmount(() => {
             <div v-if="!layoutTabsMode" slot="nav" class="layout-nav-cluster">
                 <LayoutMenu :has-docks="hasDocks" :scope-defaults="layoutScopeDefaults" @save="onOpenSaveLayout" @select="onSelectLayout" @manage="onManageLayouts" />
 
+                <!-- While maximized the button wears a loud brand-accent fill (the docks are hidden and
+                     this is the only way back); plain otherwise so the maximize affordance stays quiet. -->
                 <wa-button
                     v-if="hasDocks"
                     class="layout-winbtn reduced-height"
-                    appearance="plain"
+                    :variant="isCenterMaximized ? 'brand' : 'neutral'"
+                    :appearance="isCenterMaximized ? 'accent' : 'plain'"
                     size="small"
                     :title="isCenterMaximized ? 'Restore (Alt+Shift+Enter)' : 'Maximize main area (Alt+Shift+Enter)'"
                     :aria-label="isCenterMaximized ? 'Restore' : 'Maximize main area'"
