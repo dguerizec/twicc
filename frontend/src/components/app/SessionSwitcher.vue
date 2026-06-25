@@ -9,9 +9,9 @@
  * mouse hover/click to the same state machine.
  *
  * The row markup deliberately replicates the compact SessionList row (project
- * color dot · provider icon · "Arch." tag for archived sessions · ellipsized
- * title · state indicator) rather than sharing a component — it's a handful of
- * elements and stays self-contained.
+ * color dot · provider icon · "Arch." tag for archived sessions / "Draft" tag
+ * for drafts · ellipsized title · state indicator) rather than sharing a
+ * component — it's a handful of elements and stays self-contained.
  */
 import { computed, ref, watch, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
@@ -57,15 +57,21 @@ function stateOf(session) {
 }
 
 const rows = computed(() =>
-    items.value.map(({ session, path }, index) => ({
-        session,
-        path,
-        index,
-        dotColor: projectDotColor(session),
-        providerIcon: getProviderIcon(session.provider),
-        name: displayName(session),
-        state: stateOf(session),
-    }))
+    items.value.map(({ session, path }, index) => {
+        const state = stateOf(session)
+        return {
+            session,
+            path,
+            index,
+            dotColor: projectDotColor(session),
+            providerIcon: getProviderIcon(session.provider),
+            name: displayName(session),
+            state,
+            // Mirrors SessionListItem: a "Draft" tag for not-yet-started sessions
+            // that have no live process (archived takes priority over draft).
+            isDraft: session.draft && !state.processState,
+        }
+    })
 )
 
 // Keep the highlighted row in view as the cursor moves (or when the panel first
@@ -115,6 +121,12 @@ watch([cursor, visible], async () => {
                             variant="neutral"
                             class="switcher-archived-tag"
                         >Arch.</wa-tag>
+                        <wa-tag
+                            v-else-if="row.isDraft"
+                            size="small"
+                            variant="warning"
+                            class="switcher-draft-tag"
+                        >Draft</wa-tag>
                         <span class="switcher-name">{{ row.name }}</span>
                         <span class="switcher-state">
                             <wa-icon v-if="row.state.kind === 'unread'" name="eye" class="switcher-unread"></wa-icon>
@@ -234,8 +246,9 @@ watch([cursor, visible], async () => {
     color: inherit;
 }
 
-/* "Arch." marker for archived sessions — mirrors SessionListItem's archived-tag. */
-.switcher-archived-tag {
+/* "Arch."/"Draft" markers — mirror SessionListItem's archived-tag/draft-tag. */
+.switcher-archived-tag,
+.switcher-draft-tag {
     flex: 0 0 auto;
     line-height: unset;
     height: unset;
