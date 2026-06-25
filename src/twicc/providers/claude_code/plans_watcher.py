@@ -48,12 +48,26 @@ class ClaudeCodePlansWatcher:
         self.directory = Path(PLANS_DIR)
         self._slugs: set[str] = set()
         self._stop = asyncio.Event()
+        # True only while the watch loop is live and ``_slugs`` is an accurate
+        # mirror of the directory. False in any process that never ran the
+        # watcher (the standalone CLI, background compute) and during the boot
+        # scan / after ``stop()`` — there the in-memory set is empty or stale, so
+        # ``session_has_plan`` reads the disk directly instead of trusting it.
+        self._active = False
 
     # ------------------------------------------------------------------
     # Read API — used by ClaudeCodeHelpers.session_has_plan (sync, O(1)).
     # ------------------------------------------------------------------
     def has_slug(self, slug: str) -> bool:
         return slug in self._slugs
+
+    def is_active(self) -> bool:
+        """Whether the watch loop is live and ``_slugs`` can be trusted.
+
+        When False, callers must fall back to an on-disk check (see
+        ``ClaudeCodeHelpers.session_has_plan``).
+        """
+        return self._active
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -65,11 +79,14 @@ class ClaudeCodePlansWatcher:
         # Clear both so awatch doesn't exit immediately and the boot scan rebuilds
         # presence from disk (dropping plans deleted while the provider was off).
         self._stop.clear()
+        self._active = False
         self._slugs.clear()
         # Start awatch FIRST so plans written during the boot scan are not
         # missed, then take the initial snapshot.
         watch_task = asyncio.ensure_future(self._watch_loop())
         await asyncio.to_thread(self._scan_existing)
+        # Snapshot ready and the loop is live: ``_slugs`` can now be trusted.
+        self._active = True
         try:
             await watch_task
         except asyncio.CancelledError:
@@ -77,6 +94,7 @@ class ClaudeCodePlansWatcher:
 
     def stop(self) -> None:
         self._stop.set()
+        self._active = False
 
     # ------------------------------------------------------------------
     # Boot snapshot — populate the set, no broadcast (nobody is listening

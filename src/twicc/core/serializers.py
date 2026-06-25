@@ -162,9 +162,11 @@ def serialize_session(session):
         # Provider plan file (Claude Code: ``~/.claude/plans/<slug>.md``). The
         # frontend shows a read-only Plan tab when ``has_plan`` is true and
         # fetches the markdown from ``/api/sessions/<id>/plan/``. Provider-
-        # agnostic: ``session_has_plan`` is backed by each provider's plans
-        # watcher (O(1), no I/O here). NOT monotonic — flips both ways live via
-        # the ``plan_available`` / ``plan_gone`` WS messages.
+        # agnostic: ``session_has_plan`` reads each provider's live plans-watcher
+        # set in the server (O(1)); off the server (CLI, background compute) it
+        # falls back to an on-disk check so the flag stays accurate there too — a
+        # read, within the serializer's no-write contract. NOT monotonic — flips
+        # both ways live via the ``plan_available`` / ``plan_gone`` WS messages.
         "has_plan": provider_helpers.session_has_plan(session),
         # Hidden + spawned tree links (cf. hidden-sessions design spec). The
         # frontend never sees a hidden session via REST (filtered server

@@ -418,6 +418,16 @@ def agents(
     session_agents(ctx.obj, limit=limit, offset=offset)
 
 
+@session_app.command()
+def plan(
+    ctx: typer.Context,
+) -> None:
+    """Show the session's plan markdown as JSON (provider-specific; Claude Code only for now)."""
+    from twicc.cli.session import plan as session_plan
+
+    session_plan(ctx.obj)
+
+
 artifacts_app = typer.Typer(
     name="artifacts",
     help="List bookmarked artifacts, or bookmark / unbookmark one.",

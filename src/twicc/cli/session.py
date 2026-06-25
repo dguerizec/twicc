@@ -223,3 +223,36 @@ def agents(session_id: str, *, limit: int = 20, offset: int = 0) -> None:
     data = [serialize_session(s) for s in subagents]
 
     emit_json(data)
+
+
+def plan(session_id: str) -> None:
+    """Fetch the session's plan markdown and print it as ``{"content": ...}`` to stdout.
+
+    Mirrors the ``/api/sessions/<id>/plan/`` endpoint: the plan file lives outside
+    the project tree (Claude Code stores it under ``~/.claude/plans/<slug>.md``),
+    so the path is resolved from the session's provider — never a caller-supplied
+    path — and read off disk, the same source the serializer's ``has_plan`` flag
+    reflects in the CLI.
+
+    Errors (exit 1) when the provider has no plan concept (e.g. Codex) or the
+    session never produced a plan (``resolve_plan_path`` → ``None``), or when the
+    resolved file is missing on disk.
+    """
+    import django
+
+    django.setup()
+
+    from twicc.providers.helpers import get_provider_helpers
+
+    session = _get_session(session_id)
+
+    plan_path = get_provider_helpers(session.provider).resolve_plan_path(session)
+    if plan_path is None:
+        emit_error(f"Error: no plan available for session '{session_id}'.", code=1)
+
+    try:
+        plan_content = plan_path.read_text(encoding="utf-8")
+    except OSError:
+        emit_error(f"Error: plan file not found for session '{session_id}'.", code=1)
+
+    emit_json({"content": plan_content})

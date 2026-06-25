@@ -282,15 +282,24 @@ class ClaudeCodeHelpers(BaseProviderHelpers):
     def session_has_plan(self, session: Session) -> bool:
         """True when ``~/.claude/plans/<slug>.md`` currently exists.
 
-        O(1): reads the plans watcher's in-memory slug set. Outside the running
-        server (CLI, background compute) the watcher never started, so this is
-        False — acceptable, as the Plan tab is a live-server, web-UI concern.
+        In the live server this is O(1): it reads the plans watcher's in-memory
+        slug set, kept accurate by the watch loop (which also powers the live
+        ``plan_available`` / ``plan_gone`` transitions). Outside the server (the
+        standalone CLI, background compute) the watcher never started and that set
+        is empty, so we fall back to a direct on-disk check — a read, like the DB
+        and JSONL reads these processes already do — rather than wrongly report
+        ``False``. The fast path avoids stat-ing one file per session on every
+        list serialization where a live cache already has the answer.
         """
         if not session.slug:
             return False
         from twicc.providers.claude_code.plans_watcher import get_claude_code_plans_watcher
 
-        return get_claude_code_plans_watcher().has_slug(session.slug)
+        watcher = get_claude_code_plans_watcher()
+        if watcher.is_active():
+            return watcher.has_slug(session.slug)
+        plan_path = self.resolve_plan_path(session)
+        return plan_path is not None and plan_path.is_file()
 
     def extract_family_and_version(
         self, model_id: str,

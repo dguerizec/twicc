@@ -1,23 +1,25 @@
 ---
 name: twicc-session
-description: Inspect a single session — view metadata, read raw item content by line number, read user/assistant messages, or list subagents. Use when you or the user want to examine a session, read conversation content, or explore subagent activity.
-argument-hint: <session_id> [content|messages|agents]
+description: Inspect a single session — view metadata, read raw item content by line number, read user/assistant messages, list subagents, or read its plan. Use when you or the user want to examine a session, read conversation content, or explore subagent activity.
+argument-hint: <session_id> [content|messages|agents|plan]
 ---
 
 # TwiCC Session
 
-Inspect a single session. Four sub-commands:
+Inspect a single session. Five sub-commands:
 
 - Default — full session metadata.
 - `content [LINE_OR_RANGE] [--contains TEXT ...]` — raw JSONL items by line number and/or content substring(s) (provider-specific schema).
 - `messages [--contains TEXT ...]` — user/assistant messages only, uniform shape across providers.
 - `agents` — list subagents spawned by this session.
+- `plan` — the session's plan markdown (provider-specific; Claude Code only for now).
 
 ## When to use
 
 - You or the user want details about a specific session.
 - You want to read conversation content (raw items or clean messages).
 - You want to see which subagents were spawned by a session.
+- You want to read the session's plan (e.g. inspect what a worker session planned).
 
 ## How to invoke
 
@@ -176,6 +178,20 @@ $TWICC session <SESSION_ID> agents [--limit N] [--offset N]
 
 Only valid on parent sessions (errors on subagents). Returns provider-internal subagents, not sessions created via `create-session`; use `$TWICC topology <ID|self>` for the `spawned_by` tree (skill: `twicc-topology`). Ordered by most recently active.
 
+### Plan — the session's plan markdown
+
+```bash
+$TWICC session <SESSION_ID> plan
+```
+
+The session's plan document (what Claude Code's *plan mode* writes), as a single JSON object:
+
+```json
+{"content": "# Plan\n\n## Context\n..."}
+```
+
+Provider-specific — a **Claude Code** concept; **Codex** has none. Errors (exit 1) when the session has no plan. The default view's `has_plan` boolean says whether one exists; check it first, or just call `plan` and handle the error.
+
 ## Examples
 
 ```bash
@@ -191,6 +207,7 @@ $TWICC session abc123 messages --contains auth
 $TWICC session abc123 messages --role assistant --contains auth --tail 1
 $TWICC session abc123 agents
 $TWICC session abc123 agents --limit 50
+$TWICC session abc123 plan
 ```
 
 ## Related commands
@@ -207,5 +224,6 @@ $TWICC session abc123 agents --limit 50
 2. Content: show items in readable form, distinguishing user vs assistant vs tool.
 3. Messages: render transcript in order, prefixing each entry with its role.
 4. Agents: list with titles; offer to inspect any specific subagent.
-5. You are in TwiCC — link to a session: `[link text](/project/{project_id}/session/{session_id})`.
+5. Plan: render the `content` markdown as-is.
+6. You are in TwiCC — link to a session: `[link text](/project/{project_id}/session/{session_id})`.
 6. Only include cost information if explicitly asked.

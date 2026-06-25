@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
-- **Plan tab** — a Claude session with a plan now shows it in a dedicated, read-only tab.
+- **Plan tab** — a Claude session with a plan now shows it in a dedicated, read-only tab; the plan is also retrievable from the CLI (+skill/API).
 - **Tasks tab** — a session with a task list now shows its latest state in a dedicated tab.
 - **Codex `view_image` tool** — dedicated display that shows the viewed image instead of a raw tool result.
 

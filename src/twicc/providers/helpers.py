@@ -397,11 +397,14 @@ class BaseProviderHelpers:
         return None
 
     def session_has_plan(self, session: Session) -> bool:
-        """Whether the session's plan file currently exists (O(1), no I/O).
+        """Whether the session's plan file currently exists.
 
-        Read by ``serialize_session`` for every session, so it must be cheap:
-        providers back it with their plans watcher's in-memory set rather than
-        a stat. The base provider has no plan concept.
+        Read by ``serialize_session`` for every session, so it must be cheap: in
+        the live server providers back it with their plans watcher's in-memory
+        set (O(1), no stat per session). When that watcher isn't running (the
+        standalone CLI, background compute) they fall back to a direct on-disk
+        check so the flag stays accurate outside the server. The base provider
+        has no plan concept.
         """
         return False
 
