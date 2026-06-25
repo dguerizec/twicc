@@ -716,6 +716,30 @@ export function initStaticCommands(router) {
                 })
             },
         },
+        {
+            id: 'nav.tab.tasks',
+            label: 'Switch to Tasks Tab',
+            icon: 'square-check',
+            category: 'navigation',
+            // Only sessions that carry a task/todo/plan snapshot expose the tab
+            // (mirrors SessionView's `hasTasks`).
+            when: () => {
+                const sessionId = routeSessionId()
+                if (!sessionId) return false
+                return !!data.getSessionTasks(sessionId)
+            },
+            action: () => {
+                const name = isAllProjectsMode() ? 'projects-session-tasks' : 'session-tasks'
+                router.push({
+                    name,
+                    params: {
+                        projectId: route.params.projectId,
+                        sessionId: route.params.sessionId,
+                    },
+                    query: route.query,
+                })
+            },
+        },
 
         // Project detail panel tabs
         {

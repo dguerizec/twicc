@@ -19,6 +19,7 @@ import GitPanel from '../components/git/GitPanel.vue'
 import TerminalPanel from '../components/terminal/TerminalPanel.vue'
 import OrchestrationPanel from '../components/orchestration/OrchestrationPanel.vue'
 import PlanPane from '../components/plan/PlanPane.vue'
+import TaskPane from '../components/tasks/TaskPane.vue'
 import SessionLayout from '../components/session/layout/SessionLayout.vue'
 import TabPlacementMenu from '../components/session/layout/TabPlacementMenu.vue'
 import LayoutMenu from '../components/session/layout/LayoutMenu.vue'
@@ -370,6 +371,13 @@ const hasSpawnRoot = computed(() => !!session.value?.spawn_root)
 // disappears) when the plan file is deleted, via the plan_gone WS message.
 const hasPlan = computed(() => !!session.value?.has_plan)
 
+// Whether the session carries a task/todo/plan snapshot (Session.tasks, synced
+// like every other field). Drives the read-only Tasks tab's visibility. Like
+// Plan, this is NOT monotonic — a recompute that finds no task state flips it
+// back to empty and the tab disappears. Read through the normalised store getter
+// (``{}`` -> null) so presence is just truthiness.
+const hasTasks = computed(() => !!store.getSessionTasks(sessionId.value))
+
 // Code comments counts per tab
 const filesCommentsCount = computed(() =>
     codeCommentsStore.countBySource(projectId.value, sessionId.value, 'files')
@@ -422,6 +430,7 @@ const activeTabId = computed(() => {
     if (name === 'session-terminal' || name === 'projects-session-terminal') return 'terminal'
     if (name === 'session-orchestration' || name === 'projects-session-orchestration') return 'orchestration'
     if (name === 'session-plan' || name === 'projects-session-plan') return 'plan'
+    if (name === 'session-tasks' || name === 'projects-session-tasks') return 'tasks'
     return 'main'
 })
 
@@ -436,9 +445,10 @@ const TOOL_TABS = [
     { id: 'files', label: 'Files', icon: 'folder', present: () => true },
     { id: 'git', label: 'Git', icon: 'code-branch', present: () => hasGitRepo.value, redirectReady: () => !!store.getProject(session.value?.project_id) },
     { id: 'terminal', label: 'Terminal', icon: 'terminal', present: () => true },
+    { id: 'tasks', label: 'Tasks', icon: 'square-check', present: () => hasTasks.value, redirectReady: () => !!session.value },
+    { id: 'plan', label: 'Plan', icon: 'list-check', present: () => hasPlan.value, redirectReady: () => !!session.value },
     { id: 'artifacts', label: 'Artifacts', icon: 'shapes', present: () => hasArtifacts.value, redirectReady: () => !!session.value },
     { id: 'orchestration', label: 'Orchestration', icon: 'diagram-project', present: () => hasSpawnRoot.value, redirectReady: () => !!session.value },
-    { id: 'plan', label: 'Plan', icon: 'list-check', present: () => hasPlan.value, redirectReady: () => !!session.value },
 ]
 function toolTabById(tabId) { return TOOL_TABS.find((t) => t.id === tabId) || null }
 // Non-tool tabs (main, agent-*) are never gated → treated as present.
@@ -536,7 +546,7 @@ function onTerminalNavigate({ termIndex, replace }) {
     navigateInTab('terminal', params, replace ? 'replace' : 'push')
 }
 
-const TOOL_TAB_IDS = ['files', 'artifacts', 'git', 'terminal', 'orchestration', 'plan']
+const TOOL_TAB_IDS = ['files', 'artifacts', 'git', 'terminal', 'orchestration', 'plan', 'tasks']
 
 // Keep the last granular URL visited for each tool tab so switching away and back
 // restores the previous state instead of resetting the panel to its base route.
@@ -545,10 +555,11 @@ const rememberedToolTabRoutes = {
     artifacts: null,
     git: null,
     terminal: null,
-    // Orchestration and Plan have no granular sub-route; kept here so the
+    // Orchestration, Plan and Tasks have no granular sub-route; kept here so the
     // generic tool-tab navigation in switchToTab treats them uniformly.
     orchestration: null,
     plan: null,
+    tasks: null,
 }
 
 function getCurrentToolTabRouteParams(tabId) {
@@ -1154,10 +1165,10 @@ watch(activeTabId, (newTabId, oldTabId) => {
     if (oldTabId) pushTabHistory(oldTabId)
 })
 
-// Direct tab mapping: Alt+Shift+{1..7} → fixed tabs (subagents are skipped).
-// Artifacts (5), Orchestration (6) and Plan (7) are conditional — the handler
-// no-ops when the tab is absent.
-const DIRECT_TAB_MAP = { 1: 'main', 2: 'files', 3: 'git', 4: 'terminal', 5: 'artifacts', 6: 'orchestration', 7: 'plan' }
+// Direct tab mapping: Alt+Shift+{1..8} → fixed tabs (subagents are skipped).
+// Tasks (5), Plan (6), Artifacts (7) and Orchestration (8) are conditional — the
+// handler no-ops when the tab is absent.
+const DIRECT_TAB_MAP = { 1: 'main', 2: 'files', 3: 'git', 4: 'terminal', 5: 'tasks', 6: 'plan', 7: 'artifacts', 8: 'orchestration' }
 
 /**
  * Handle keyboard tab shortcut events dispatched from App.vue.
@@ -1971,6 +1982,16 @@ onBeforeUnmount(() => {
                 Terminal
                 <TabPlacementMenu v-if="showCenterPlacementArrows" tab-id="terminal" current="center" @place="(dest) => layout.place('terminal', dest)" />
             </wa-tab>
+            <wa-tab v-if="isToolTabPresent('tasks') && showInCenter('tasks')" slot="nav" panel="tasks" @click="onCenterTabClick('tasks')">
+                <wa-icon :name="TAB_ICONS.tasks"></wa-icon>
+                Tasks
+                <TabPlacementMenu v-if="showCenterPlacementArrows" tab-id="tasks" current="center" @place="(dest) => layout.place('tasks', dest)" />
+            </wa-tab>
+            <wa-tab v-if="isToolTabPresent('plan') && showInCenter('plan')" slot="nav" panel="plan" @click="onCenterTabClick('plan')">
+                <wa-icon :name="TAB_ICONS.plan"></wa-icon>
+                Plan
+                <TabPlacementMenu v-if="showCenterPlacementArrows" tab-id="plan" current="center" @place="(dest) => layout.place('plan', dest)" />
+            </wa-tab>
             <wa-tab v-if="isToolTabPresent('artifacts') && showInCenter('artifacts')" slot="nav" panel="artifacts" @click="onCenterTabClick('artifacts')">
                 <wa-icon :name="TAB_ICONS.artifacts"></wa-icon>
                 Artifacts
@@ -1980,11 +2001,6 @@ onBeforeUnmount(() => {
                 <wa-icon :name="TAB_ICONS.orchestration"></wa-icon>
                 Orchestration
                 <TabPlacementMenu v-if="showCenterPlacementArrows" tab-id="orchestration" current="center" @place="(dest) => layout.place('orchestration', dest)" />
-            </wa-tab>
-            <wa-tab v-if="isToolTabPresent('plan') && showInCenter('plan')" slot="nav" panel="plan" @click="onCenterTabClick('plan')">
-                <wa-icon :name="TAB_ICONS.plan"></wa-icon>
-                Plan
-                <TabPlacementMenu v-if="showCenterPlacementArrows" tab-id="plan" current="center" @place="(dest) => layout.place('plan', dest)" />
             </wa-tab>
 
             <!-- Right-aligned nav cluster: [Layout menu ▾] [Maximize]. A real-box wrapper carries the
@@ -2043,14 +2059,17 @@ onBeforeUnmount(() => {
             <wa-tab-panel v-if="showInCenter('terminal')" name="terminal">
                 <div :ref="centerTargetSetters.terminal" class="layout-center-target"></div>
             </wa-tab-panel>
+            <wa-tab-panel v-if="isToolTabPresent('tasks') && showInCenter('tasks')" name="tasks">
+                <div :ref="centerTargetSetters.tasks" class="layout-center-target"></div>
+            </wa-tab-panel>
+            <wa-tab-panel v-if="isToolTabPresent('plan') && showInCenter('plan')" name="plan">
+                <div :ref="centerTargetSetters.plan" class="layout-center-target"></div>
+            </wa-tab-panel>
             <wa-tab-panel v-if="isToolTabPresent('artifacts') && showInCenter('artifacts')" name="artifacts">
                 <div :ref="centerTargetSetters.artifacts" class="layout-center-target"></div>
             </wa-tab-panel>
             <wa-tab-panel v-if="isToolTabPresent('orchestration') && showInCenter('orchestration')" name="orchestration">
                 <div :ref="centerTargetSetters.orchestration" class="layout-center-target"></div>
-            </wa-tab-panel>
-            <wa-tab-panel v-if="isToolTabPresent('plan') && showInCenter('plan')" name="plan">
-                <div :ref="centerTargetSetters.plan" class="layout-center-target"></div>
             </wa-tab-panel>
         </wa-tab-group>
         </SessionLayout>
@@ -2144,6 +2163,22 @@ onBeforeUnmount(() => {
                 </div>
             </Teleport>
 
+            <Teleport v-if="isToolTabPresent('tasks')" :to="toolTarget('tasks')" :disabled="!toolTarget('tasks')">
+                <div class="layout-tool-wrap" v-show="layout.isToolPanelVisible('tasks')">
+                    <TaskPane :session-id="session.id" />
+                </div>
+            </Teleport>
+
+            <Teleport v-if="isToolTabPresent('plan')" :to="toolTarget('plan')" :disabled="!toolTarget('plan')">
+                <div class="layout-tool-wrap" v-show="layout.isToolPanelVisible('plan')">
+                    <PlanPane
+                        ref="planPaneRef"
+                        :session-id="session.id"
+                        :active="isActive && isToolTabShown('plan')"
+                    />
+                </div>
+            </Teleport>
+
             <Teleport v-if="isToolTabPresent('artifacts')" :to="toolTarget('artifacts')" :disabled="!toolTarget('artifacts')">
                 <div class="layout-tool-wrap" v-show="layout.isToolPanelVisible('artifacts')">
                     <FilesPanel
@@ -2173,16 +2208,6 @@ onBeforeUnmount(() => {
                         :session-id="session.id"
                         :project-id="session.project_id"
                         :active="isActive && isToolTabShown('orchestration')"
-                    />
-                </div>
-            </Teleport>
-
-            <Teleport v-if="isToolTabPresent('plan')" :to="toolTarget('plan')" :disabled="!toolTarget('plan')">
-                <div class="layout-tool-wrap" v-show="layout.isToolPanelVisible('plan')">
-                    <PlanPane
-                        ref="planPaneRef"
-                        :session-id="session.id"
-                        :active="isActive && isToolTabShown('plan')"
                     />
                 </div>
             </Teleport>

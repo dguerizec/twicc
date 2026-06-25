@@ -799,6 +799,21 @@ export const useDataStore = defineStore('data', {
         getSession: (state) => (id) => state.sessions[id],
         getSessionProvider: (state) => (sessionId) => state.sessions[sessionId]?.provider ?? null,
         getSessionItems: (state) => (sessionId) => state.sessionItems[sessionId] || [],
+        /**
+         * Latest task/todo/plan snapshot for a session, normalised across
+         * providers (Claude Code ``TodoWrite`` / ``Task*``, Codex
+         * ``update_plan``). Returns ``null`` when the session has no task state
+         * (backend default ``{}``), so consumers can ``v-if`` on the result.
+         * Shape: ``{provider, source, line, updated_at, explanation, items:
+         * [{status, content?, activeForm?}]}``. Carried on the serialized
+         * Session like every other field (see ``serialize_session`` backend +
+         * ``updateSession``), so it stays reactive through ``session_updated``.
+         * Not rendered anywhere yet — exposed for future consumers.
+         */
+        getSessionTasks: (state) => (sessionId) => {
+            const tasks = state.sessions[sessionId]?.tasks
+            return tasks && tasks.items ? tasks : null
+        },
 
         /**
          * What recovery (if any) to offer on a terminal API-error item — returns
