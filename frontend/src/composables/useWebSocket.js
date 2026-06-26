@@ -1118,6 +1118,11 @@ export function useWebSocket() {
                 }
                 break
             }
+            case 'workflow_changed': {
+                // A wf_*.json was created/updated → let an open Workflows tab refetch.
+                window.dispatchEvent(new CustomEvent('twicc:workflow-changed', { detail: { sessionId: msg.session_id } }))
+                break
+            }
             case 'tool_state': {
                 // Update tool state for spinner/running display
                 store.setToolState(msg.session_id, msg.tool_use_id, msg.result_count, msg.completed_at, msg.error || null, msg.extra || null, Array.isArray(msg.tool_result_line_nums) ? msg.tool_result_line_nums : [])

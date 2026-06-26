@@ -202,7 +202,16 @@ class ClaudeCodeSessionsWatcher(BaseSessionsWatcher):
         if session is None:
             return
         await self._latch_session_workflows(session, channel_layer)
-        await self._upsert_workflow_run(session.id, path)
+        saved = await self._upsert_workflow_run(session.id, path)
+        # Tell open Workflows tabs to refetch — the run was created or its
+        # envelope changed (the engine rewrites the file on each progress tick).
+        if saved and not session.hidden:
+            await broadcast_message(channel_layer, {
+                "type": "workflow_changed",
+                "session_id": session.id,
+                "project_id": session.project_id,
+                "run_id": path.stem,
+            })
 
     async def _latch_session_workflows(self, session, channel_layer) -> None:
         """Set ``has_workflows=True`` on a session and broadcast the change.
@@ -219,24 +228,26 @@ class ClaudeCodeSessionsWatcher(BaseSessionsWatcher):
                 "session": serialize_session(session),
             })
 
-    async def _upsert_workflow_run(self, session_id: str, path: Path) -> None:
+    async def _upsert_workflow_run(self, session_id: str, path: Path) -> bool:
         """Mirror a ``wf_*.json`` file into its :class:`Workflow` row (upsert by run_id).
 
         ``run_id`` is the filename stem (``wf_<hex>``). The file is read off the
         event loop and validated with ``orjson`` before storing — a partial
         write caught mid-flush fails to parse and is skipped (the next tick
-        rewrites it and re-triggers this path).
+        rewrites it and re-triggers this path). Returns ``True`` when the row was
+        written, so the caller knows to broadcast.
         """
         run_id = path.stem
         try:
             raw = await asyncio.to_thread(path.read_text, encoding="utf-8")
         except OSError:
-            return
+            return False
         try:
             orjson.loads(raw)
         except orjson.JSONDecodeError:
-            return
+            return False
         await sync_to_async(self._save_workflow_run)(session_id, run_id, raw)
+        return True
 
     @staticmethod
     def _save_workflow_run(session_id: str, run_id: str, raw: str) -> None:

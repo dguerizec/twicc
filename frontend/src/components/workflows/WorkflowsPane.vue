@@ -39,10 +39,16 @@ async function load() {
         if (!response.ok) throw new Error(`HTTP ${response.status}`)
         const data = await response.json()
         workflows.value = data
-        // Auto-open the first (newest) run; focus overrides if a run was targeted.
-        openRuns.value = new Set(data.length ? [data[0].run_id] : [])
+        // Preserve open runs across live refetches; auto-open the newest only
+        // when nothing is open; focus the targeted run when it's present.
+        const ids = new Set(data.map(w => w.run_id))
+        openRuns.value = new Set([...openRuns.value].filter(id => ids.has(id)))
+        if (!openRuns.value.size && data.length) openRuns.value.add(data[0].run_id)
         hasLoaded.value = true
-        if (props.focusRunId) focusRun(props.focusRunId)
+        if (props.focusRunId && ids.has(props.focusRunId)) {
+            openRuns.value.add(props.focusRunId)
+            scrollToRun(props.focusRunId)
+        }
     } catch (e) {
         if (e.name === 'AbortError') return
         error.value = e.message || 'Failed to load workflows'
@@ -59,21 +65,47 @@ function onRunToggle(event, runId, open) {
     else openRuns.value.delete(runId)
 }
 
-// Open the targeted run and scroll it into view (from a "View Workflow" click).
-function focusRun(runId) {
-    if (!runId) return
-    openRuns.value.add(runId)
+function scrollToRun(runId) {
     nextTick(() => {
         const el = paneRef.value?.querySelector(`section[data-run-id="${CSS.escape(runId)}"]`)
         el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
     })
 }
 
-onMounted(load)
+// Open + scroll the targeted run (from a "View Workflow" click). If it isn't in
+// the loaded list yet — a brand-new run whose row just appeared — refetch; the
+// reload opens it once present (the live workflow_changed event also refetches).
+function focusRun(runId) {
+    if (!runId) return
+    openRuns.value.add(runId)
+    if (hasLoaded.value && !workflows.value.some(w => w.run_id === runId)) {
+        load()
+        return
+    }
+    scrollToRun(runId)
+}
+
+// Live refresh: the watcher broadcasts workflow_changed when a wf_*.json is
+// created/updated; debounce bursts (the engine rewrites the file each tick).
+let reloadTimer = null
+function onWorkflowChanged(event) {
+    if (event.detail?.sessionId !== props.sessionId) return
+    clearTimeout(reloadTimer)
+    reloadTimer = setTimeout(() => { if (hasLoaded.value) load() }, 400)
+}
+
+onMounted(() => {
+    load()
+    window.addEventListener('twicc:workflow-changed', onWorkflowChanged)
+})
 watch(() => props.active, (active) => { if (active) load() })
 watch(() => props.sessionId, () => { hasLoaded.value = false; load() })
 watch(() => props.focusRunId, (runId) => { if (runId && hasLoaded.value) focusRun(runId) })
-onBeforeUnmount(() => { if (controller) controller.abort() })
+onBeforeUnmount(() => {
+    window.removeEventListener('twicc:workflow-changed', onWorkflowChanged)
+    clearTimeout(reloadTimer)
+    if (controller) controller.abort()
+})
 </script>
 
 <template>
