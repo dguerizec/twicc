@@ -19,7 +19,7 @@ import orjson
 from twicc import search
 from twicc.agent.registry import get_agent_manager_registry
 from twicc.core.enums import ItemKind, Provider
-from twicc.core.models import AgentLink, ArtifactBookmark, Command, DailyActivity, PinMode, Project, Session, SessionItem, SessionType, ToolResultLink, UsageSnapshot, WeeklyActivity
+from twicc.core.models import AgentLink, ArtifactBookmark, Command, DailyActivity, PinMode, Project, Session, SessionItem, SessionType, ToolResultLink, UsageSnapshot, WeeklyActivity, Workflow
 from twicc.core.serializers import (
     serialize_artifact_bookmark,
     serialize_project,
@@ -1486,6 +1486,35 @@ async def session_topology(request, project_id, session_id):
         twicc_pid=os.getpid(),
     )
     return JsonResponse(data)
+
+
+async def session_workflows(request, project_id, session_id):
+    """GET /api/projects/<id>/sessions/<session_id>/workflows/
+
+    Return every Claude Code workflow run persisted for this session, newest
+    first. Each entry is ``{run_id, updated_at, raw}`` where ``raw`` is the
+    parsed ``wf_*.json`` envelope (the runtime's verbatim run state). Reads
+    straight from the ``Workflow`` rows ingestion fills — no filesystem access —
+    so a finished run stays available after Claude Code sublimates its files.
+    """
+    await _resolve_session_or_404(session_id, project_id, None)
+
+    workflows = await sync_to_async(list)(
+        Workflow.objects.filter(session_id=session_id)
+    )
+    data = [
+        {
+            "run_id": w.run_id,
+            "updated_at": w.updated_at.isoformat(),
+            "raw": orjson.loads(w.raw_json),
+        }
+        for w in workflows
+    ]
+    data.sort(
+        key=lambda d: (d["raw"].get("startTime") or 0) if isinstance(d["raw"], dict) else 0,
+        reverse=True,
+    )
+    return JsonResponse(data, safe=False)
 
 
 async def directory_tree(request, project_id, session_id=None):

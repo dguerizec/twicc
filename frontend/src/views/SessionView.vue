@@ -2246,6 +2246,7 @@ onBeforeUnmount(() => {
                 <div class="layout-tool-wrap" v-show="layout.isToolPanelVisible('workflows')">
                     <WorkflowsPane
                         :session-id="session.id"
+                        :project-id="session.project_id"
                         :active="isActive && isToolTabShown('workflows')"
                     />
                 </div>
