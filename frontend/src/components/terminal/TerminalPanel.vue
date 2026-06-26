@@ -1119,7 +1119,7 @@ watch(activeAttachedKey, (key) => {
 // tmux ones persist server-side / in the pool).
 watchEffect(() => {
     if (!props.active) {
-        for (const key of publishedKeys) poolStore.clearSlot(key)
+        for (const key of publishedKeys) poolStore.clearSlot(key, slotEls[key])
         publishedKeys.clear()
         seenOwnKeys.clear()
         return
@@ -1173,7 +1173,7 @@ watchEffect(() => {
     }
     for (const key of [...publishedKeys]) {
         if (!wanted.has(key)) {
-            poolStore.clearSlot(key)
+            poolStore.clearSlot(key, slotEls[key])
             publishedKeys.delete(key)
         }
     }
@@ -1200,7 +1200,7 @@ watch(
 )
 
 onBeforeUnmount(() => {
-    for (const key of publishedKeys) poolStore.clearSlot(key)
+    for (const key of publishedKeys) poolStore.clearSlot(key, slotEls[key])
     publishedKeys.clear()
 })
 

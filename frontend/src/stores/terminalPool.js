@@ -79,7 +79,14 @@ export const useTerminalPoolStore = defineStore('terminalPool', {
         },
 
         /** A panel releases a slot (inactive / unmount / tab removed). */
-        clearSlot(key) {
+        clearSlot(key, el) {
+            // Release the slot only if this caller is still the one displaying the
+            // key. A shared key (a pinned/forced terminal teleported between panels)
+            // may have been reclaimed by another panel that now owns the target; the
+            // panel we're leaving must NOT clobber it — otherwise the reclaiming
+            // panel is left with a parked, target-less (blank) instance. `el`
+            // omitted → clear unconditionally (own, non-shared tabs).
+            if (el != null && this.targets[key] !== el) return
             delete this.targets[key]
             delete this.activeFlags[key]
             this._gc(key)
