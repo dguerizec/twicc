@@ -1540,14 +1540,23 @@ export const useDataStore = defineStore('data', {
          * Only deletes if the session exists and has draft: true.
          * @param {string} sessionId - The session ID to delete
          * @param {Object} options - Options
-         * @param {boolean} options.keepInStore - If true, only delete from IndexedDB (keep in store)
+         * @param {boolean} options.keepInStore - If true (the draft is being
+         *   promoted to a real session on send), only drop the IndexedDB record:
+         *   keep the live session in the store AND its MRU slot — it stays a
+         *   valid navigation target.
          */
         deleteDraftSession(sessionId, { keepInStore = false } = {}) {
             if (this.sessions[sessionId]?.draft) {
                 if (!keepInStore) {
+                    // Removing the MRU entry is the navigational half of "this
+                    // session leaves the store" — keep it paired with the delete
+                    // (same as removeSession). When keepInStore promotes the draft
+                    // to a real session, the slot must survive, so it is NEVER
+                    // dropped here; the canonical-id rekey happens in
+                    // bindDraftSession for providers that reassign the id (Codex).
                     delete this.sessions[sessionId]
+                    this.removeMruSession(sessionId)
                 }
-                this.removeMruSession(sessionId)
                 // Delete from IndexedDB
                 deleteDraftSessionFromDb(sessionId).catch(err =>
                     console.warn('Failed to delete draft session from IndexedDB:', err)
@@ -1616,6 +1625,15 @@ export const useDataStore = defineStore('data', {
             // draft id long after this bind has finished, so register a
             // forwarding alias that ``handleTitleSuggested`` will resolve.
             this.localState.draftAliases[draftId] = sessionId
+
+            // Carry the draft's MRU slot over to the canonical id (the id segment
+            // is rewritten inside the stored path) so the freshly-created session
+            // stays reachable in the Ctrl+` switcher no matter where the user is.
+            // The router.replace below only re-touches the MRU while still on the
+            // draft, so without this a navigated-away session would be orphaned.
+            // Runs before the replace: touchMruPath dedups by id, collapsing the
+            // two into a single canonical entry in the on-draft case.
+            this.rekeyMruSession(draftId, sessionId)
 
             const { router } = await import('../router')
             const onDraft = router.currentRoute.value.params.sessionId === draftId
@@ -4477,6 +4495,34 @@ export const useDataStore = defineStore('data', {
             this.localState.mruPaths = this.localState.mruPaths.filter(
                 entry => entry.sessionId !== sessionId
             )
+        },
+
+        /**
+         * Rekey an MRU entry from one session id to another, rewriting the id
+         * segment inside its stored path. Used when a draft is promoted to a
+         * provider-assigned canonical id (Codex) so the session keeps its MRU
+         * slot under the new id rather than being orphaned by the draft cleanup.
+         * No-op when there is no entry for ``oldId``. If an entry for ``newId``
+         * already exists (e.g. a router.replace has already touched it), the
+         * stale ``oldId`` entry is dropped instead of duplicated.
+         * @param {string} oldId - The draft (local) session id.
+         * @param {string} newId - The canonical (provider) session id.
+         */
+        rekeyMruSession(oldId, newId) {
+            if (oldId === newId) return
+            const mru = this.localState.mruPaths
+            const index = mru.findIndex(entry => entry.sessionId === oldId)
+            if (index === -1) return
+            if (mru.some(entry => entry.sessionId === newId)) {
+                // A fresher canonical entry already exists — drop the stale one.
+                mru.splice(index, 1)
+                return
+            }
+            const entry = mru[index]
+            mru.splice(index, 1, {
+                path: entry.path.replaceAll(oldId, newId),
+                sessionId: newId,
+            })
         },
 
         /**
