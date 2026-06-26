@@ -1574,7 +1574,7 @@ defineExpose({ activeIndex })
                         variant="neutral"
                         :appearance="activeOwnAutoAttach ? 'filled' : 'plain'"
                         size="small"
-                        class="autoattach-button reduced-height"
+                        :class="['autoattach-button', 'reduced-height', { 'autoattach-button--active': activeOwnAutoAttach }]"
                         @click="toggleAutoAttach"
                     >
                         <wa-icon name="thumbtack" :label="activeOwnAutoAttach ? 'Disable auto-attach in children' : 'Auto-attach in children'"></wa-icon>
@@ -1840,6 +1840,16 @@ defineExpose({ activeIndex })
 .copy-button,
 .paste-button {
     flex-shrink: 0;
+}
+
+/* Auto-attach (pin) toggle: same look as today, but the thumbtack is rotated
+   like the session pin, and turns yellow (instead of relying only on the filled
+   background) when active. */
+.autoattach-button::part(label) {
+    transform: rotate(30deg);
+}
+.autoattach-button--active::part(base) {
+    color: var(--wa-color-yellow-80);
 }
 
 /* ── Terminal panels ─────────────────────────────────────── */
