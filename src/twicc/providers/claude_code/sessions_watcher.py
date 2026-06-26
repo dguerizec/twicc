@@ -19,7 +19,7 @@ import orjson
 from asgiref.sync import sync_to_async
 from watchfiles import Change
 
-from twicc.core.models import SessionType
+from twicc.core.models import SessionType, Workflow
 from twicc.core.serializers import serialize_project, serialize_session
 
 from .compute import (
@@ -54,6 +54,9 @@ class ClaudeCodeSessionsWatcher(BaseSessionsWatcher):
     - ``project_id/session_id/subagents/agent-a<hex>.jsonl`` →
       :class:`SessionType.SUBAGENT` (sidechain files like
       ``agent-acompact-*`` or ``agent-aprompt_suggestion-*`` are skipped).
+    - ``project_id/session_id/subagents/workflows/<run_id>/agent-a<hex>.jsonl``
+      → :class:`SessionType.SUBAGENT` with the composite id
+      ``<run_id>:<agent_id>`` (a workflow subagent).
 
     Direct children of :attr:`projects_dir` are project directories: their
     creation/deletion is handled by :meth:`maybe_handle_special_change`,
@@ -103,6 +106,29 @@ class ClaudeCodeSessionsWatcher(BaseSessionsWatcher):
                     parent_session_id=parent_session_id,
                 )
 
+        elif len(parts) == 6:
+            # Format: project_id/session_id/subagents/workflows/<run_id>/agent-a<hex>.jsonl
+            # A workflow subagent (spawned by the workflow engine, not by a Task
+            # tool, so it has no AgentLink and never appears in the parent's
+            # conversation flow). Its Session.id is the composite
+            # ``<run_id>:<agent_id>`` — unique across runs and distinguishable
+            # from a normal subagent (whose id is the bare agent hex). Sidechain
+            # files are excluded by the same name regex.
+            project_id, parent_session_id, subdir, wf_subdir, run_id, filename = parts
+            if (
+                subdir == "subagents"
+                and wf_subdir == "workflows"
+                and _REAL_SUBAGENT_RE.match(filename) is not None
+            ):
+                agent_id = filename.removeprefix("agent-").removesuffix(".jsonl")
+                return ParsedSessionFile(
+                    project_id,
+                    f"{run_id}:{agent_id}",
+                    SessionType.SUBAGENT,
+                    file_path=str(relative),
+                    parent_session_id=parent_session_id,
+                )
+
         return None
 
     def get_compute(self) -> BaseSessionCompute:
@@ -120,7 +146,9 @@ class ClaudeCodeSessionsWatcher(BaseSessionsWatcher):
 
         - ``<project>/<session>/workflows/wf_*.json`` — a workflow run
           artifact. Its appearance latches the owning session's
-          ``has_workflows`` flag (one-way; deletions are ignored).
+          ``has_workflows`` flag (one-way; deletions are ignored) and upserts
+          the :class:`Workflow` row mirroring the file (the runtime rewrites it
+          on every progress tick, so writes flow through here live).
         - direct children of :attr:`projects_dir` — project directories,
           whose creation/deletion refreshes the project ``stale`` flag.
         """
@@ -130,7 +158,7 @@ class ClaudeCodeSessionsWatcher(BaseSessionsWatcher):
         if change_type != Change.deleted:
             workflow_session_id = self._workflow_json_session_id(path)
             if workflow_session_id is not None:
-                await self._latch_session_workflows(workflow_session_id, channel_layer)
+                await self._handle_workflow_run(workflow_session_id, path, channel_layer)
                 return True
 
         # Direct children of projects_dir are project dirs.
@@ -164,15 +192,24 @@ class ClaudeCodeSessionsWatcher(BaseSessionsWatcher):
             return parts[1]
         return None
 
-    async def _latch_session_workflows(self, session_id: str, channel_layer) -> None:
-        """Set ``has_workflows=True`` on a session and broadcast the change.
+    async def _handle_workflow_run(self, session_id: str, path: Path, channel_layer) -> None:
+        """React to a ``wf_*.json`` write: latch ``has_workflows`` + persist the run.
 
-        No-op when the session is unknown (the row isn't synced yet — the
-        background compute's filesystem probe backfills it on the next boot)
-        or already latched. One-way: never resets the flag.
+        No-op when the owning session row isn't synced yet (the boot backfill in
+        ``initial_sync`` picks it up). One session fetch shared by both steps.
         """
         session = await get_session_by_id(session_id)
-        if session is None or session.has_workflows:
+        if session is None:
+            return
+        await self._latch_session_workflows(session, channel_layer)
+        await self._upsert_workflow_run(session.id, path)
+
+    async def _latch_session_workflows(self, session, channel_layer) -> None:
+        """Set ``has_workflows=True`` on a session and broadcast the change.
+
+        No-op when already latched. One-way: never resets the flag.
+        """
+        if session.has_workflows:
             return
         session.has_workflows = True
         await sync_to_async(session.save)(update_fields=["has_workflows"])
@@ -181,6 +218,32 @@ class ClaudeCodeSessionsWatcher(BaseSessionsWatcher):
                 "type": "session_updated",
                 "session": serialize_session(session),
             })
+
+    async def _upsert_workflow_run(self, session_id: str, path: Path) -> None:
+        """Mirror a ``wf_*.json`` file into its :class:`Workflow` row (upsert by run_id).
+
+        ``run_id`` is the filename stem (``wf_<hex>``). The file is read off the
+        event loop and validated with ``orjson`` before storing — a partial
+        write caught mid-flush fails to parse and is skipped (the next tick
+        rewrites it and re-triggers this path).
+        """
+        run_id = path.stem
+        try:
+            raw = await asyncio.to_thread(path.read_text, encoding="utf-8")
+        except OSError:
+            return
+        try:
+            orjson.loads(raw)
+        except orjson.JSONDecodeError:
+            return
+        await sync_to_async(self._save_workflow_run)(session_id, run_id, raw)
+
+    @staticmethod
+    def _save_workflow_run(session_id: str, run_id: str, raw: str) -> None:
+        Workflow.objects.update_or_create(
+            run_id=run_id,
+            defaults={"session_id": session_id, "raw_json": raw},
+        )
 
     async def _sync_project_and_broadcast(
         self,

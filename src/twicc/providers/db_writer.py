@@ -183,6 +183,21 @@ class ResolveProjectGitRootsPayload(NamedTuple):
     provider: Provider
 
 
+class UpsertWorkflowPayload(NamedTuple):
+    """Producer found a ``wf_*.json`` run file; persist it as a Workflow row.
+
+    The DB writer issues one ``Workflow.objects.update_or_create`` keyed on
+    ``run_id``. ``raw_json`` is the file content verbatim (already validated as
+    JSON by the producer). No-op when the owning session row does not exist
+    (an upstream session payload was rejected, or the file is an orphan).
+    """
+
+    provider: Provider
+    session_id: str
+    run_id: str
+    raw_json: str
+
+
 class InitialSyncDoneMarker(NamedTuple):
     """Sentinel pushed last by an initial-sync producer.
 
@@ -2237,6 +2252,8 @@ async def _process_thread_message(msg) -> None:
             await sync_to_async(_apply_update_project_metadata_payload)(msg)
         elif isinstance(msg, ResolveProjectGitRootsPayload):
             await sync_to_async(_apply_resolve_git_roots_payload)(msg)
+        elif isinstance(msg, UpsertWorkflowPayload):
+            await sync_to_async(_apply_upsert_workflow_payload)(msg)
         else:
             logger.error(
                 f"Unexpected initial-sync message type: {type(msg).__name__} => {msg!r:.300}"
@@ -2436,6 +2453,29 @@ def _apply_resolve_git_roots_payload(payload: ResolveProjectGitRootsPayload) -> 
     with transaction.atomic():
         for project in Project.objects.filter(directory__isnull=False, stale=False):
             ensure_project_git_root(project.id, project.directory)
+
+
+def _apply_upsert_workflow_payload(payload: UpsertWorkflowPayload) -> None:
+    """Persist a workflow run envelope (upsert by ``run_id``).
+
+    Skips cleanly when the owning session row is absent (an upstream session
+    payload was rejected, or the run file is an orphan) — same guard as
+    subagent creation, to avoid an opaque IntegrityError on the FK.
+    """
+    from twicc.core.models import Session, Workflow
+
+    if not Session.objects.filter(id=payload.session_id).exists():
+        logger.warning(
+            "Skipping workflow %s: session %s does not exist",
+            payload.run_id, payload.session_id,
+        )
+        return
+
+    with transaction.atomic():
+        Workflow.objects.update_or_create(
+            run_id=payload.run_id,
+            defaults={"session_id": payload.session_id, "raw_json": payload.raw_json},
+        )
 
 
 # =============================================================================

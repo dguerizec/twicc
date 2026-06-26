@@ -805,6 +805,37 @@ class AgentLink(models.Model):
         return f"{self.session_id}:{self.tool_use_line_num} -> agent {self.agent_id} ({self.tool_use_id})"
 
 
+class Workflow(models.Model):
+    """A single Claude Code workflow run, persisted from its ``wf_*.json``.
+
+    One row per run. The runtime writes a ``wf_*.json`` file at the root of a
+    session's ``workflows/`` folder and rewrites it on every progress tick; we
+    mirror it verbatim in ``raw_json``. That file is an **undocumented,
+    version-evolving** internal schema (fields get added across CLI versions),
+    so we deliberately keep the whole envelope rather than normalising columns
+    that may come and go — everything the UI needs is extracted from
+    ``raw_json`` at read time. Only the two access keys are promoted: the
+    ``session`` FK (list a session's runs) and ``run_id`` (upsert / identify).
+
+    Survives the session being sublimated: Claude Code prunes old session
+    folders, but the row (and the workflow subagents' own :class:`Session`
+    rows) stay, so a finished run remains inspectable after its files vanish.
+    Claude-Code-specific by meaning; other providers have no equivalent yet.
+    """
+
+    session = models.ForeignKey(
+        Session,
+        on_delete=models.CASCADE,
+        related_name="workflows",
+    )
+    run_id = models.CharField(max_length=255, unique=True)  # e.g. "wf_cd590ff1-f54" — filename stem, resume handle
+    raw_json = models.TextField()  # The wf_*.json file content, verbatim (parse with orjson at the edges)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.run_id} ({self.session_id})"
+
+
 class ModelPrice(models.Model):
     """Historical pricing for AI models, scoped per backend ``provider``.
 

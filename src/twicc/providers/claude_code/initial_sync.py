@@ -22,14 +22,17 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import orjson
+
 from twicc.core.enums import Provider
-from twicc.core.models import Project, Session, SessionType
+from twicc.core.models import Project, Session, SessionType, Workflow
 from twicc.providers.db_writer import (
     CreateSessionPayload,
     MarkSessionsStalePayload,
     ResolveProjectGitRootsPayload,
     UpdateProjectMetadataPayload,
     UpdateSessionPayload,
+    UpsertWorkflowPayload,
 )
 from twicc.sync_helpers import BackpressureSyncQueue, check_file_has_content, read_session_items_from_file
 from .helpers import ClaudeCodeHelpers
@@ -93,15 +96,50 @@ def scan_subagents(project_id: str, session_id: str) -> dict[str, Path]:
     """
     Scan a session's subagents folder and return subagent files.
 
-    Returns a dict mapping agent_id (e.g., "a6c7d21") to Path.
+    Returns a dict mapping the subagent's ``Session.id`` to its Path:
+    - normal subagents → the bare agent_id (e.g. ``"a6c7d21"``);
+    - workflow subagents (one level deeper, under
+      ``subagents/workflows/<run_id>/``) → the composite ``"<run_id>:<agent_id>"``.
+    Keying by the eventual ``Session.id`` lets the caller diff against the DB
+    rows uniformly, whatever their kind.
     """
     subagents_dir = ClaudeCodeHelpers.PROJECTS_DIR / project_id / session_id / "subagents"
     if not subagents_dir.exists():
         return {}
-    return {
+    result = {
         f.stem.removeprefix("agent-"): f
         for f in subagents_dir.iterdir()
         if f.is_file() and is_subagent_file(f)
+    }
+    # Workflow subagents: subagents/workflows/<run_id>/agent-a<hex>.jsonl.
+    # is_subagent_file() (parent.name == "subagents") excludes them above, so
+    # there is no double counting.
+    workflows_dir = subagents_dir / "workflows"
+    if workflows_dir.is_dir():
+        for run_dir in workflows_dir.iterdir():
+            if not run_dir.is_dir():
+                continue
+            for f in run_dir.iterdir():
+                if f.is_file() and _REAL_SUBAGENT_RE.match(f.name) is not None:
+                    agent_id = f.stem.removeprefix("agent-")
+                    result[f"{run_dir.name}:{agent_id}"] = f
+    return result
+
+
+def scan_workflow_files(project_id: str, session_id: str) -> dict[str, Path]:
+    """Scan a session's ``workflows/`` folder and return run files.
+
+    Returns a dict mapping ``run_id`` (the filename stem, e.g.
+    ``"wf_cd590ff1-f54"``) to the ``wf_*.json`` Path. The ``workflows/scripts/``
+    subdirectory is skipped (only files at the root, ``is_file()``).
+    """
+    workflows_dir = ClaudeCodeHelpers.PROJECTS_DIR / project_id / session_id / "workflows"
+    if not workflows_dir.is_dir():
+        return {}
+    return {
+        f.stem: f
+        for f in workflows_dir.iterdir()
+        if f.is_file() and f.name.startswith("wf_") and f.suffix == ".json"
     }
 
 
@@ -204,6 +242,41 @@ def _sync_session_subagents(
         stats["sessions_stale"] += len(stale_subagent_ids)
 
 
+def _sync_session_workflows(
+    session: Session,
+    sync_queue: BackpressureSyncQueue,
+) -> None:
+    """Push ``UpsertWorkflowPayload``s for a session's not-yet-persisted runs.
+
+    Backfill for runs that finished before this sync: the live watcher mirrors
+    every ``wf_*.json`` write, but a file not rewritten after boot would never
+    reach the DB otherwise. Read-only on the write side. Only runs whose
+    ``run_id`` is not already stored are read + emitted, so large completed
+    envelopes are not re-read on every sync (the live watcher keeps a stored
+    run fresh while it is still being written).
+    """
+    wf_files = scan_workflow_files(session.project_id, session.id)
+    if not wf_files:
+        return
+    existing_run_ids = set(
+        Workflow.objects.filter(session_id=session.id).values_list("run_id", flat=True)
+    )
+    for run_id, file_path in wf_files.items():
+        if run_id in existing_run_ids:
+            continue
+        try:
+            raw = file_path.read_text(encoding="utf-8")
+            orjson.loads(raw)  # validate — skip a partial write caught mid-flush
+        except (OSError, orjson.JSONDecodeError):
+            continue
+        sync_queue.put(UpsertWorkflowPayload(
+            provider=Provider.CLAUDE_CODE,
+            session_id=session.id,
+            run_id=run_id,
+            raw_json=raw,
+        ))
+
+
 def sync_project(
     project_id: str,
     sync_queue: BackpressureSyncQueue,
@@ -295,6 +368,7 @@ def sync_project(
                 ))
 
             _sync_session_subagents(project, session, stats, sync_queue)
+            _sync_session_workflows(session, sync_queue)
 
             if on_session_progress:
                 on_session_progress(session_id, idx, total_sessions)
@@ -354,6 +428,7 @@ def sync_project(
             project if project is not None else Project(id=project_id),
             session, stats, sync_queue,
         )
+        _sync_session_workflows(session, sync_queue)
 
         if on_session_progress:
             on_session_progress(session_id, idx, total_sessions)
